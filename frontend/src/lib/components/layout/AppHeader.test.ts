@@ -362,6 +362,37 @@ describe("AppHeader export actions", () => {
     expect(labels).not.toContain("Friction Log");
   });
 
+  for (const readable of [false, true]) {
+    it(`marks ${readable ? "the Friction tab" : "no tab"} current on /friction when its tab is ${readable ? "shown" : "hidden"}`, async () => {
+      sync.serverVersion = {
+        api_version: 1,
+        data_version: 1,
+        insight_generation_available: false,
+        friction_available: false,
+        friction_build_allowed: false,
+        friction_readable: readable,
+        session_stats_available: false,
+        kata_available: false,
+        version: "dev",
+        commit: "unknown",
+        build_date: "",
+        read_only: true,
+      };
+      router.route = "friction";
+      component = mount(AppHeader, { target: document.body });
+      await tick();
+
+      const bar = document.querySelector(".kit-top-bar")!;
+      expect(bar.classList.contains("no-current-tab")).toBe(!readable);
+      // The bar shows the current destination as a pressed tab, or as the
+      // collapsed menu's value when the tabs do not fit.
+      const current =
+        document.querySelector('.kit-top-bar__tabs [aria-current="page"]') ??
+        document.querySelector(".kit-top-bar__nav-select .kit-select-dropdown__value");
+      expect(current?.textContent?.trim()).toBe(readable ? "Friction Log" : "Sessions");
+    });
+  }
+
   it("distinguishes global sync from page refresh controls", async () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
