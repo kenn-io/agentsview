@@ -88,11 +88,22 @@ and spool result bodies one archived message at a time. Restored source events
 keep their order around shared events. Raw summary participation remains distinct
 from sanitized text, so a cleared result cannot revive older output. Spawn links
 also survive when their output records disappear.
+Summary-only saved results keep their text and lengths when the source still
+contains the call but omits its output. Blocked results retain their permitted
+length metadata across repeated staged writes.
+
+Saved replay filtering stops at the first child turn, including when later child
+turns have no ID. Pre-turn replay leaves the transcript and preview when the
+parent returns. Known source occurrences claim their matches before legacy rows.
+When fewer identical legacy occurrences return, their ownership remains unknown:
+keep those rows and their uncounted usage separately instead of assigning parent
+usage to a child. Repeating the same source does not add more occurrences.
 
 Independently imported usage events survive resolved refreshes and rebuilds.
 Their non-summary usage adds to message totals, and context uses the highest
 measurement from either source. Retained history keeps chronological activity
 bounds even when its only remaining rows are usage events.
+Ordinal-only usage reconciliation reads message metadata without result bodies.
 
 If the parent never appears, available messages continue updating across retries,
 restarts, and rebuilds. Usage for unverified messages remains unavailable. If the

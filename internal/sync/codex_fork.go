@@ -55,7 +55,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 		needsHistory = needsHistory || event.MessageOrdinal != nil
 	}
 	loadHistory := store.GetAllMessages
-	if staged != nil {
+	if staged != nil || !retainMessages {
 		loadHistory = reader.GetCodexForkMessageMetadata
 	}
 	var prior []db.Message
@@ -169,7 +169,14 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 	next := 0
 	priorOrdinals := make(map[int]int)
 	sourceOrdinals := make(map[int]int)
-	for _, m := range prior {
+	priorKeys := make([][32]byte, len(prior))
+	priorOrigins := make([]db.CodexForkMessage, len(prior))
+	inheritedPrior := make([]bool, len(prior))
+	legacyCounts := make(map[[32]byte]int)
+	reserved := make([]bool, len(incoming))
+	priorMatches := make(map[int]int)
+	archivedReplaying := state.ParentKnown
+	for i, m := range prior {
 		if err := ctx.Err(); err != nil {
 			return c, nil, nil, err
 		}
@@ -183,6 +190,16 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 				old = previous.Messages[m.Ordinal]
 			}
 		}
+		// Classify saved replay before reserving source occurrences. Pre-turn
+		// replay and idless child turns share an empty turn ID.
+		if archivedReplaying && old.Origin.Line > 0 {
+			_, inherited := state.ParentTurns[old.Origin.TurnID]
+			if inherited || (old.Origin.TurnID == "" && !old.Origin.InTurn) {
+				inheritedPrior[i] = true
+				continue
+			}
+			archivedReplaying = false
+		}
 		_, projected := e.db.ProjectSessionForStorage(c.Session, []db.Message{m})
 		if len(projected) > 0 {
 			key, err = db.CodexForkMessageKey(projected[0])
@@ -190,24 +207,61 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 				return c, nil, nil, err
 			}
 		}
+		priorKeys[i], priorOrigins[i] = key, old
+		if old.Origin.Line == 0 {
+			legacyCounts[key]++
+			continue
+		}
+		for _, index := range byOrigin[old.Origin] {
+			if !reserved[index] && key == contentKeys[index] {
+				reserved[index] = true
+				priorMatches[i] = index
+				break
+			}
+		}
+	}
+	for i, old := range priorOrigins {
+		if _, matched := priorMatches[i]; matched || inheritedPrior[i] || old.Origin.Line == 0 {
+			continue
+		}
+		for _, index := range byContent[priorKeys[i]] {
+			if !reserved[index] && old.Origin.TurnID == incoming[index].provenance.Origin.TurnID {
+				reserved[index], priorMatches[i] = true, index
+				break
+			}
+		}
+	}
+	// Existing source occurrences own their matches before legacy rows can
+	// claim them. Fewer returning legacy occurrences cannot identify which
+	// saved usage belongs to a child rather than copied parent history.
+	legacyIncoming := make(map[[32]byte]int)
+	for i, key := range contentKeys {
+		if !reserved[i] {
+			legacyIncoming[key]++
+		}
+	}
+	for i, m := range prior {
+		if err := ctx.Err(); err != nil {
+			return c, nil, nil, err
+		}
+		if inheritedPrior[i] {
+			continue
+		}
+		key, old := priorKeys[i], priorOrigins[i]
+		ambiguousLegacy := old.Origin.Line == 0 && legacyCounts[key] != legacyIncoming[key]
 		match := -1
-		if old.Origin.Line > 0 {
-			for _, index := range byOrigin[old.Origin] {
-				if !used[index] && key == contentKeys[index] {
-					match = index
-					break
-				}
-			}
+		if index, matched := priorMatches[i]; matched {
+			match = index
 		}
-		if match < 0 {
+		if match < 0 && old.Origin.Line == 0 && !ambiguousLegacy {
 			for _, index := range byContent[key] {
-				if !used[index] && (old.Origin.Line == 0 || old.Origin.TurnID == incoming[index].provenance.Origin.TurnID) {
+				if !used[index] && !reserved[index] {
 					match = index
 					break
 				}
 			}
 		}
-		if staged != nil && len(m.ToolCalls) > 0 {
+		if staged != nil && retainMessages && len(m.ToolCalls) > 0 {
 			loaded, err := store.GetMessages(ctx, priorID, m.Ordinal, 1, true)
 			if err != nil {
 				return c, nil, nil, err
@@ -245,6 +299,16 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 						break
 					}
 					call, saved := &current.message.ToolCalls[j], m.ToolCalls[j]
+					if len(saved.ResultEvents) == 0 && (saved.ResultContent != "" || saved.ResultContentLength > 0) &&
+						len(call.ResultEvents) == 0 && call.ResultContent == "" && call.ResultContentLength == 0 {
+						call.ResultContent, call.ResultContentLength = saved.ResultContent, saved.ResultContentLength
+						state.PreserveHistory = true
+						if staged != nil {
+							if err := staged.stageForkCall(ctx, sourceToolKeys[current.source][j], call); err != nil {
+								return c, nil, nil, err
+							}
+						}
+					}
 					if call.SubagentSessionID == "" && saved.SubagentSessionID != "" {
 						call.SubagentSessionID = saved.SubagentSessionID
 						state.PreserveHistory = true
@@ -301,9 +365,6 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 		// Remove only records positively identified as inherited replay. Source
 		// truncation alone never erases archived child messages or tool results.
 		if state.ParentKnown && old.Origin.Line > 0 {
-			if _, inherited := state.ParentTurns[old.Origin.TurnID]; inherited {
-				continue
-			}
 			if old.Provisional && (old.Origin.TurnID != "" || old.Origin.InTurn) && old.PendingUsage != nil {
 				usage := old.PendingUsage
 				m.TokenUsage, m.ContextTokens, m.OutputTokens = usage.TokenUsage, usage.ContextTokens, usage.OutputTokens
@@ -314,7 +375,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 		// A pre-provenance row missing from this source cannot prove whether
 		// its usage is child work or replay. Retain the figures without counting
 		// them until returning source records establish that ownership.
-		if !state.ParentKnown && old.Origin.Line == 0 && !old.Provisional {
+		if (!state.ParentKnown || ambiguousLegacy) && old.Origin.Line == 0 && !old.Provisional {
 			old.Provisional = true
 			old.PendingUsage = &db.CodexForkUsage{TokenUsage: m.TokenUsage, ContextTokens: m.ContextTokens, OutputTokens: m.OutputTokens, HasContextTokens: m.HasContextTokens, HasOutputTokens: m.HasOutputTokens}
 			m.TokenUsage = nil

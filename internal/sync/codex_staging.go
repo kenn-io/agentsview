@@ -911,7 +911,7 @@ func (s *codexStagingSink) stageForkCall(ctx context.Context, key string, call *
 		s.addEventFindings(key, i, content)
 		event.Content = ""
 	}
-	if len(call.ResultEvents) == 0 && call.ResultContent != "" {
+	if len(call.ResultEvents) == 0 && (call.ResultContent != "" || call.ResultContentLength > 0) {
 		// Summary-only archive calls have no event rows to supply their display.
 		if _, err := s.scratch.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS stage_fork_summaries
  (call_key TEXT PRIMARY KEY, content TEXT NOT NULL, length INTEGER NOT NULL)`); err != nil {

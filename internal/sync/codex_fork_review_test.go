@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -141,13 +142,29 @@ func TestCodexForkReviewRetainedActivityBounds(t *testing.T) {
 }
 
 func TestCodexForkReviewHealthySkipsArchivedPayload(t *testing.T) {
-	e, d, cp, pp, meta := forkReviewEngine(t, 1, parser.AgentCodex)
-	require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))), 0o600))
-	require.NoError(t, os.WriteFile(cp, []byte(meta+testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime), testjsonl.CodexMsgJSON("assistant", "answer", forkReviewTime))), 0o600))
-	require.Zero(t, e.SyncAll(t.Context(), nil).Failed)
-	before := d.MessagesLoadCount()
-	require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+forkReviewChild))
-	assert.Equal(t, before, d.MessagesLoadCount(), "authoritative full parses must not hydrate archived outputs")
+	for _, stage := range []int64{1, 1 << 30} {
+		for _, ordinalUsage := range []bool{false, true} {
+			t.Run(strconv.FormatInt(stage, 10)+"/ordinalUsage="+strconv.FormatBool(ordinalUsage), func(t *testing.T) {
+				e, d, cp, pp, meta := forkReviewEngine(t, stage, parser.AgentCodex)
+				require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))), 0o600))
+				require.NoError(t, os.WriteFile(cp, []byte(meta+testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime), testjsonl.CodexFunctionCallJSON("exec_command", "", forkReviewTime), testjsonl.CodexFunctionCallOutputJSON("call_test", strings.Repeat("x", 32<<10), forkReviewTime))), 0o600))
+				require.Zero(t, e.SyncAll(t.Context(), nil).Failed)
+				id := "codex:" + forkReviewChild
+				if ordinalUsage {
+					require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), id, []db.UsageEvent{{SessionID: id, MessageOrdinal: new(0), Source: "turn", Model: "gpt-5", OutputTokens: 5, OccurredAt: forkReviewTime, DedupKey: "historical"}}))
+				}
+				before := d.MessagesLoadCount()
+				require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+				assert.Equal(t, before, d.MessagesLoadCount(), "authoritative full parses must not hydrate archived outputs")
+				if ordinalUsage {
+					events, err := d.GetUsageEvents(t.Context(), id)
+					require.NoError(t, err)
+					require.Len(t, events, 1)
+					assert.Equal(t, new(0), events[0].MessageOrdinal)
+				}
+			})
+		}
+	}
 }
 
 func TestCodexForkReviewBlockedRetainedResults(t *testing.T) {

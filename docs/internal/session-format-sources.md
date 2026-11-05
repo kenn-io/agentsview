@@ -801,6 +801,15 @@ fixtures retain this field; missing identities remain source-local.
   updates. The accounting fixtures exercise independently imported usage accepted
   by `ApplyArtifactImportedSession`; current native Codex rollouts still provide
   message usage rather than these archive event rows.
+  `TestCodexForkRetainsSummaryWithoutOutput` covers summary-only archived output
+  and blocked length retention with the call present or absent.
+  `TestCodexForkArchivedIdlessAfterChildBoundary` and
+  `TestCodexForkArchivedPreTurnReplayRecovery` cover saved replay boundaries and
+  the resulting transcript and preview.
+  `TestCodexForkLegacyDuplicateUsageOwnership` seeds pre-provenance rows through
+  the real parser, row preparation, and archive writer. Identical parent and
+  child occurrences retain unknown usage until source evidence identifies it;
+  complete occurrence sets, distinct timestamps, and current usage are controls.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
