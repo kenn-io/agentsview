@@ -166,7 +166,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 	start := time.Now()
 	applyServeMemoryLimit()
-	applyServeMallocTuning()
 
 	if err := validateServeConfig(cfg); err != nil {
 		fatal("invalid serve config: %v", err)

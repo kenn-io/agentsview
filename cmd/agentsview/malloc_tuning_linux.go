@@ -3,26 +3,12 @@
 package main
 
 /*
+#define _GNU_SOURCE
 #include <stdlib.h>
+#include <string.h>
 #ifdef __GLIBC__
 #include <malloc.h>
-#endif
-
-static void set_malloc_arena_max(int value) {
-#ifdef __GLIBC__
-	mallopt(M_ARENA_MAX, value);
-#endif
-}
-
-static void set_malloc_trim_threshold(int value) {
-#ifdef __GLIBC__
-	mallopt(M_TRIM_THRESHOLD, value);
-#endif
-}
-*/
-import "C"
-
-import "os"
+#include <stdio.h>
 
 // The Go soft memory limit only bounds the Go heap. The serve daemon's
 // other large allocator is glibc malloc, which the cgo SQLite driver
@@ -46,23 +32,48 @@ import "os"
 // the usage and session load in #1585 with no measurable query latency
 // cost; the static 128 KiB default would trim more often for no
 // observed RSS gain.
-const (
-	mallocArenaMax      = 2
-	mallocTrimThreshold = 1 << 20
-)
+//
+// The constructor runs before main because Go's runtime threads already own
+// arenas by then. glibc latches its arena limit before a later mallopt can cap it.
+// Every process is capped because full sync and resync rebuilds showed no
+// measurable time cost.
 
-// applyServeMallocTuning caps the glibc arena count and trim threshold
-// for the long-running serve daemon. Other Linux C libraries get a no-op.
-// Only the daemon is tuned:
-// one-shot CLI commands exit before fragmentation can accumulate, and
-// the resync worker child returns everything to the OS when it exits,
-// so restricting its arenas would only slow the rebuild down.
-func applyServeMallocTuning() {
-	plan := planMallocTuning(os.Getenv)
-	if plan.SetArenaMax {
-		C.set_malloc_arena_max(C.int(mallocArenaMax))
-	}
-	if plan.SetTrimThreshold {
-		C.set_malloc_trim_threshold(C.int(mallocTrimThreshold))
-	}
+enum {
+	mallocArenaMax = 2,
+	mallocTrimThreshold = 1 << 20
+};
+
+static int env_unset(const char *name) {
+	const char *value = getenv(name);
+	return value == NULL || value[0] == '\0';
 }
+
+__attribute__((constructor)) static void tune_malloc(void) {
+	if (env_unset("MALLOC_ARENA_MAX")) mallopt(M_ARENA_MAX, mallocArenaMax);
+	if (env_unset("MALLOC_TRIM_THRESHOLD_")) mallopt(M_TRIM_THRESHOLD, mallocTrimThreshold);
+}
+#endif
+
+static int malloc_arena_count(void) {
+#ifdef __GLIBC__
+	char *buf = NULL;
+	size_t size = 0;
+	FILE *stream = open_memstream(&buf, &size);
+	if (stream == NULL) return -1;
+	int result = malloc_info(0, stream);
+	int closed = fclose(stream);
+	int count = -1;
+	if (result == 0 && closed == 0) {
+		count = 0;
+		for (char *p = buf; (p = strstr(p, "<heap nr=")) != NULL; p++) count++;
+	}
+	free(buf);
+	return count;
+#else
+	return -1;
+#endif
+}
+*/
+import "C"
+
+func mallocArenaCount() int { return int(C.malloc_arena_count()) }
