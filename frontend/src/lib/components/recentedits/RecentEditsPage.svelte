@@ -7,7 +7,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
-  import { formatRelativeTime } from "../../utils/format.js";
+  import { formatCount, formatRelativeTime } from "../../utils/format.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
   import StateNotice from "../shared/StateNotice.svelte";
@@ -210,8 +210,15 @@
             <span class="re-path" title={f.file_path}
               >{shortPath(f.file_path)}</span
             >
+            <!-- The Edits header labels the column, so wide layouts show the
+                 bare number and the digits line up on the right. Phones hide
+                 the header and keep the worded count. -->
             <span class="re-count"
-              >{m.recent_edits_count({ count: f.edit_count })}</span
+              ><span class="re-count-num" aria-hidden="true"
+                >{formatCount(f.edit_count)}</span
+              ><span class="re-count-full"
+                >{m.recent_edits_count({ count: f.edit_count })}</span
+              ></span
             >
             {#if f.last_edited_at}
               <span class="re-time"
@@ -402,6 +409,21 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .re-count {
+    position: relative;
+  }
+
+  /* The worded count stays available to screen readers on wide layouts,
+     where the column header already says what the number counts. */
+  .re-count-full {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   /* A wider gap between the two right-aligned columns, so "Edits" and
      "Last edit" read as two headers, not one label. */
   .re-time {
@@ -448,6 +470,18 @@
     .re-count {
       grid-area: count;
       min-width: 0;
+    }
+
+    .re-count-num {
+      display: none;
+    }
+
+    .re-count-full {
+      position: static;
+      width: auto;
+      height: auto;
+      overflow: visible;
+      clip-path: none;
     }
 
     .re-time {
