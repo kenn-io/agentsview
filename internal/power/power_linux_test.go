@@ -23,6 +23,8 @@ func TestOnBattery(t *testing.T) {
 		{name: "fixed USB", files: map[string]string{"USB/type": "USB", "USB/scope": "System", "USB/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
 		{name: "programmable USB", files: map[string]string{"USB/type": "USB", "USB/scope": "System", "USB/online": "2", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
 		{name: "adjustable USB", files: map[string]string{"USB/type": "USB", "USB/scope": "System", "USB/online": "3", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
+		{name: "USB PD", files: map[string]string{"USB/type": "USB_PD", "USB/scope": "System", "USB/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
+		{name: "USB C", files: map[string]string{"USB/type": "USB_C", "USB/scope": "System", "USB/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()

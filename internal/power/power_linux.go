@@ -24,13 +24,13 @@ func onBattery() bool {
 			continue
 		}
 		switch read("type") {
-		case "Mains", "USB":
-			if online, err := strconv.Atoi(read("online")); err == nil && online > 0 {
-				return false
-			}
 		case "Battery":
 			if read("status") == "Discharging" {
 				discharging = true
+			}
+		default:
+			if online, err := strconv.Atoi(read("online")); err == nil && online > 0 {
+				return false
 			}
 		}
 	}

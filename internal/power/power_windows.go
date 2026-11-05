@@ -18,5 +18,5 @@ func onBattery() bool {
 		BatteryFullLifeTime uint32
 	}
 	ok, _, _ := getSystemPowerStatus.Call(uintptr(unsafe.Pointer(&status)))
-	return ok != 0 && status.ACLineStatus == 0
+	return ok != 0 && status.ACLineStatus == 0 && status.BatteryFlag&128 == 0
 }
