@@ -343,7 +343,9 @@ func (s *Server) runSyncWhenReady(
 		if in.StartupOnly && (s.archiveStale() || engine == nil || engine.StartupReconciled()) {
 			return syncpkg.SyncStats{}, nil
 		}
-		stats, err := s.runSyncWithResyncFallback(ctx, engine, progress)
+		stats, err := s.runIngestionSync(ctx, func(ctx context.Context) (syncpkg.SyncStats, error) {
+			return s.runSyncWithResyncFallback(ctx, engine, progress)
+		})
 		if !in.Wait || !errors.Is(err, syncpkg.ErrSyncInProgress) {
 			return stats, err
 		}
@@ -548,11 +550,25 @@ func (s *Server) runResyncRoute(
 	ctx context.Context, engine *syncpkg.Engine,
 	progress func(syncpkg.Progress),
 ) (syncpkg.SyncStats, error) {
-	stats, err := s.runResyncWithFallback(ctx, engine, progress)
-	if err != nil {
-		return stats, err
+	return s.runIngestionSync(ctx, func(ctx context.Context) (syncpkg.SyncStats, error) {
+		stats, err := s.runResyncWithFallback(ctx, engine, progress)
+		if err != nil {
+			return stats, err
+		}
+		return stats, s.requireArchiveRebuilt()
+	})
+}
+
+func (s *Server) runIngestionSync(ctx context.Context, run func(context.Context) (syncpkg.SyncStats, error)) (stats syncpkg.SyncStats, err error) {
+	if s.ingestionFreshness == nil {
+		return run(ctx)
 	}
-	return stats, s.requireArchiveRebuilt()
+	err = s.ingestionFreshness.RunSync(ctx, func(ctx context.Context) error {
+		var err error
+		stats, err = run(ctx)
+		return err
+	})
+	return stats, err
 }
 
 func (s *Server) humaSyncRemotes(

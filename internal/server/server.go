@@ -629,6 +629,7 @@ func WithInsightLogDrainTimeouts(drain, stopWait time.Duration) Option {
 type IngestionFreshness interface {
 	EnsureFresh(context.Context) bool
 	Pending() bool
+	RunSync(context.Context, func(context.Context) error) error
 }
 
 // WithIngestionFreshness waits for local ingestion before archive operations.
@@ -1001,7 +1002,11 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 			probe := archiveFreshnessProbe(r.URL.Path)
 			pending := false
 			if !probe && s.ingestionFreshness != nil {
-				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
+				if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/sync" || r.URL.Path == "/api/v1/resync") {
+					pending = s.ingestionFreshness.Pending()
+				} else {
+					pending = !s.ingestionFreshness.EnsureFresh(r.Context())
+				}
 			}
 			if !probe && (s.archiveStale() || pending) {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")

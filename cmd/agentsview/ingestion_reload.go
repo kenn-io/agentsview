@@ -225,47 +225,81 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 	}
 }
 
-func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
+func (d *daemonIngestion) restoreCollection() error {
 	d.applyMu.Lock()
+	defer d.applyMu.Unlock()
 	d.mu.Lock()
 	active, stopped := d.watchers != nil, d.stopped
 	d.mu.Unlock()
-	var watchers *ingestionWatchers
-	if !active && !stopped {
-		watchers = d.startWatchers(d.Config())
+	if stopped {
+		return errIngestionStopped
 	}
-	d.mu.Lock()
-	if watchers != nil {
+	if !active {
+		watchers := d.startWatchers(d.Config())
+		d.mu.Lock()
 		d.installWatchersLocked(watchers, d.liveEnabled)
+		d.mu.Unlock()
 	}
-	d.mu.Unlock()
-	d.applyMu.Unlock()
-	defer finish()
-	complete := false
-	if !stopped {
-		// Include older queued local retries; remote imports keep their schedule.
-		var stats agentsync.SyncStats
-		cfg := d.Config()
-		var roots []string
-		for _, factory := range cfg.LocalProviderFactories() {
-			roots = append(roots, rawSyncFilesystemRoots(cfg.ResolveDirs(factory.Definition().Type))...)
-		}
-		if len(roots) > 0 {
-			stats = d.engine.SyncRootsSince(d.ctx, roots, time.Time{}, nil)
-		}
-		complete = d.ctx.Err() == nil && stats.ProcessingComplete()
-		if !complete {
-			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
-		}
-	}
+	return nil
+}
+
+func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if complete && !d.stopped {
+	if complete && !d.stopped && d.pending {
 		d.pending = false
 		close(d.resumed)
 	}
 	d.catchup = nil
 	close(done)
+}
+
+// RunSync makes a requested pass satisfy the shared idle catch-up obligation.
+func (d *daemonIngestion) RunSync(ctx context.Context, run func(context.Context) error) (err error) {
+	finish, ok := d.idleTracker.BeginWork()
+	if !ok {
+		return context.Canceled
+	}
+	defer finish()
+	d.mu.Lock()
+	if d.stopped || d.catchup != nil {
+		d.mu.Unlock()
+		return agentsync.ErrSyncInProgress
+	}
+	done := make(chan struct{})
+	d.catchup = done
+	d.applying.Add(1)
+	d.mu.Unlock()
+	defer d.applying.Done()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(d.ctx, cancel)
+	defer stop()
+	defer func() { d.finishCatchup(done, err == nil && ctx.Err() == nil && d.ctx.Err() == nil) }()
+	if err = d.restoreCollection(); err == nil {
+		err = run(ctx)
+	}
+	return err
+}
+
+func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
+	defer finish()
+	err := d.restoreCollection()
+	if err == nil {
+		roots, unwatched, symlinks, persistent := collectWatchRoots(d.Config())
+		obligations := watchPollingObligations(roots, nil, unwatched, persistent)
+		obligations = append(obligations, symlinkPollingObligations(symlinks)...)
+		polling := make([]pollingObligation, 0, len(obligations))
+		for _, obligation := range obligations {
+			polling = append(polling, syncObligationToPoller(obligation))
+		}
+		groups, _ := availableUnwatchedPollScopes(polling)
+		err = pollUnwatchedScopesOnce(d.ctx, d.engine, groups)
+	}
+	if err != nil {
+		log.Printf("idle catch-up incomplete: %v", err)
+	}
+	d.finishCatchup(done, err == nil && d.ctx.Err() == nil)
 }
 
 // Reload reads the saved configuration and applies it in the background. It

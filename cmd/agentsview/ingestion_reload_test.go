@@ -60,6 +60,16 @@ func searchIngestionArchive(t *testing.T, endpoint, query string) (http.Header, 
 	return response.Header, string(body)
 }
 
+func serveIngestionArchive(t *testing.T, cfg config.Config, database *db.DB, engine *agentsync.Engine, ingestion *daemonIngestion) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(nil)
+	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
+	ts.Config.Handler = server.New(cfg, database, engine, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion)).Handler()
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts
+}
+
 func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	base := t.TempDir()
@@ -188,8 +198,9 @@ func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
 }
 
 func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
-	for _, reload := range []bool{false, true} {
-		t.Run(fmt.Sprintf("reload=%t", reload), func(t *testing.T) {
+	for _, mode := range []string{"automatic", "reload", "requested", "failed", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			reload := mode == "reload"
 			database := dbtest.OpenTestDB(t)
 			root := t.TempDir()
 			writeReloadGeminiSession(t, root, "retained")
@@ -213,6 +224,27 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 				_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
 			}()
 			<-entered
+			requested := make(chan error, 1)
+			requestedCtx, cancelRequested := context.WithCancel(t.Context())
+			defer cancelRequested()
+			if mode == "requested" || mode == "failed" || mode == "canceled" {
+				registered := make(chan struct{})
+				go func() {
+					requested <- ingestion.RunSync(requestedCtx, func(ctx context.Context) error {
+						close(registered)
+						<-release
+						if mode == "failed" {
+							return os.ErrPermission
+						}
+						if err := ctx.Err(); err != nil {
+							return err
+						}
+						engine.SyncAll(ctx, nil)
+						return nil
+					})
+				}()
+				<-registered
+			}
 			query := "overnight"
 			if reload {
 				_, err := ingestion.Reload(t.Context())
@@ -244,11 +276,22 @@ func TestDaemonIngestionSharedCatchupKeepsWaitActiveBlocked(t *testing.T) {
 				require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
 			}
 			assert.Empty(t, active, "WaitActive waits for catch-up, not just watcher setup")
+			require.ErrorIs(t, ingestion.RunSync(t.Context(), func(context.Context) error { return nil }), agentsync.ErrSyncInProgress)
 			canceled, stop := context.WithCancel(t.Context())
 			stop()
 			assert.False(t, ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
+			if mode == "canceled" {
+				cancelRequested()
+			}
 			releaseOnce()
 			<-finished
+			switch mode {
+			case "requested":
+				require.NoError(t, <-requested)
+			case "failed", "canceled":
+				require.Error(t, <-requested)
+				require.True(t, ingestion.Pending(), "an unsuccessful requested pass leaves catch-up pending")
+			}
 			require.True(t, ingestion.EnsureFresh(t.Context()))
 			headers, freshBody := searchIngestionArchive(t, ts.URL, query)
 			assert.Contains(t, freshBody, "hello from "+query)
@@ -273,49 +316,74 @@ func TestDaemonIngestionFailedCatchupRetriesOnRead(t *testing.T) {
 	ingestion.applying.Wait()
 	assert.False(t, ingestion.EnsureFresh(t.Context()))
 	assert.True(t, ingestion.Pending())
+	// Recovery shares the engine's cached terminal parse-failure policy.
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	assert.False(t, sessionImported(t, database, "gemini:retry"))
+	ingestion.Suspend()
+	ingestion.applying.Wait()
 	writeReloadGeminiSession(t, root, "retry")
 	require.True(t, ingestion.EnsureFresh(t.Context()))
 	assert.True(t, sessionImported(t, database, "gemini:retry"))
 }
 
 func TestDaemonIngestionStopWaitsForCatchup(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
-	stop := sync.OnceFunc(ingestion.Stop)
-	t.Cleanup(stop)
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	writeReloadGeminiSession(t, root, "overnight")
-	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	releaseOnce := sync.OnceFunc(func() { close(release) })
-	t.Cleanup(releaseOnce)
-	go func() {
-		defer close(finished)
-		_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
-	}()
-	<-entered
-	require.False(t, ingestion.EnsureFresh(t.Context()))
-	ingestion.mu.Lock()
-	catchupDone := ingestion.catchup
-	ingestion.mu.Unlock()
-	stopped := make(chan struct{})
-	go func() { stop(); close(stopped) }()
-	assert.Never(t, func() bool {
-		select {
-		case <-stopped:
-			return true
-		default:
-			return false
-		}
-	}, 100*time.Millisecond, time.Millisecond, "Stop must retain the archive until catch-up leaves the engine")
-	releaseOnce()
-	<-finished
-	<-catchupDone
-	<-stopped
+	for _, requested := range []bool{false, true} {
+		t.Run(fmt.Sprintf("requested=%v", requested), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+			t.Cleanup(engine.Close)
+			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+			stop := sync.OnceFunc(ingestion.Stop)
+			t.Cleanup(stop)
+			ingestion.Suspend()
+			ingestion.applying.Wait()
+			writeReloadGeminiSession(t, root, "overnight")
+			entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			releaseOnce := sync.OnceFunc(func() { close(release) })
+			t.Cleanup(releaseOnce)
+			go func() {
+				defer close(finished)
+				_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
+			}()
+			<-entered
+			pass := make(chan error, 1)
+			if requested {
+				registered := make(chan struct{})
+				go func() {
+					pass <- ingestion.RunSync(t.Context(), func(ctx context.Context) error {
+						close(registered)
+						engine.SyncAll(ctx, nil)
+						return nil
+					})
+				}()
+				<-registered
+			} else {
+				require.False(t, ingestion.EnsureFresh(t.Context()))
+			}
+			ingestion.mu.Lock()
+			catchupDone := ingestion.catchup
+			ingestion.mu.Unlock()
+			stopped := make(chan struct{})
+			go func() { stop(); close(stopped) }()
+			assert.Never(t, func() bool {
+				select {
+				case <-stopped:
+					return true
+				default:
+					return false
+				}
+			}, 100*time.Millisecond, time.Millisecond, "Stop must retain the archive until catch-up leaves the engine")
+			releaseOnce()
+			<-finished
+			<-catchupDone
+			<-stopped
+			if requested {
+				require.NoError(t, <-pass)
+			}
+		})
+	}
 }
 
 func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
@@ -338,25 +406,34 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 }
 
 func TestDaemonIngestionWakeReconcilesOlderQueuedRetry(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	writeReloadGeminiSession(t, root, "before")
-	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	engine.SyncAll(t.Context(), nil)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
-	t.Cleanup(ingestion.Stop)
-	writeReloadGeminiSession(t, root, "older-retry")
-	path := filepath.Join(root, "tmp", "project", "chats", "session-older-retry.json")
-	older := time.Now().Add(-time.Hour)
-	require.NoError(t, os.Chtimes(path, older, older))
-	ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{path}})
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	require.False(t, sessionImported(t, database, "gemini:older-retry"))
-	require.True(t, ingestion.EnsureFresh(t.Context()))
-	require.True(t, sessionImported(t, database, "gemini:older-retry"), "catch-up must include the retry queued before the quiet cutoff")
+	for _, linked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("symlink=%v", linked), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			if linked {
+				link := filepath.Join(t.TempDir(), "sessions")
+				requireSymlinkOrSkip(t, root, link)
+				root = link
+			}
+			writeReloadGeminiSession(t, root, "before")
+			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+			t.Cleanup(engine.Close)
+			engine.SyncAll(t.Context(), nil)
+			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+			t.Cleanup(ingestion.Stop)
+			writeReloadGeminiSession(t, root, "older-retry")
+			path := filepath.Join(root, "tmp", "project", "chats", "session-older-retry.json")
+			older := time.Now().Add(-time.Hour)
+			require.NoError(t, os.Chtimes(path, older, older))
+			ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{path}})
+			ingestion.Suspend()
+			ingestion.applying.Wait()
+			require.False(t, sessionImported(t, database, "gemini:older-retry"))
+			require.True(t, ingestion.EnsureFresh(t.Context()))
+			require.True(t, sessionImported(t, database, "gemini:older-retry"), "catch-up must include the retry queued before the quiet cutoff")
+		})
+	}
 }
 
 func TestDaemonIngestionWakeLeavesRemoteImportsScheduled(t *testing.T) {
@@ -390,12 +467,7 @@ func TestDaemonIngestionWakeLeavesRemoteImportsScheduled(t *testing.T) {
 			if local {
 				dbtest.WriteTestFile(t, filepath.Join(root, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
 			}
-			ts := httptest.NewUnstartedServer(nil)
-			cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
-			srv := server.New(cfg, database, engine, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion))
-			ts.Config.Handler = srv.Handler()
-			ts.Start()
-			t.Cleanup(ts.Close)
+			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
 			headers, body := searchIngestionArchive(t, ts.URL, "morning")
 			if local {
 				assert.Contains(t, body, "hello from morning")
@@ -430,16 +502,85 @@ func TestDaemonIngestionWakeCoversAvailableOverlappingProviders(t *testing.T) {
 			ingestion.applying.Wait()
 			require.NoError(t, os.RemoveAll(filepath.Join(gemini, "tmp")))
 			dbtest.WriteTestFile(t, filepath.Join(root, "project", "morning.jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-02T00:00:00Z", "hello from morning", "morning").String()))
-			ts := httptest.NewUnstartedServer(nil)
-			cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
-			srv := server.New(cfg, database, engine, server.WithBaseContext(t.Context()), server.WithIngestionFreshness(ingestion))
-			ts.Config.Handler = srv.Handler()
-			ts.Start()
-			t.Cleanup(ts.Close)
+			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
 			headers, body := searchIngestionArchive(t, ts.URL, "morning")
 			assert.Contains(t, body, "hello from morning")
 			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 			assert.True(t, sessionImported(t, database, "gemini:retained"), "unavailable provider history stays archived")
+		})
+	}
+}
+
+type countingIngestionFactory struct {
+	parser.ProviderFactory
+	calls *atomic.Int32
+}
+
+func (f countingIngestionFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	provider := f.ProviderFactory.NewProvider(cfg)
+	return countingIngestionProvider{Provider: provider, ReconciliationSourceResolver: provider.(parser.ReconciliationSourceResolver), calls: f.calls}
+}
+
+type countingIngestionProvider struct {
+	parser.Provider
+	parser.ReconciliationSourceResolver
+	calls *atomic.Int32
+}
+
+func (p countingIngestionProvider) Discover(ctx context.Context) ([]parser.SourceRef, error) {
+	p.calls.Add(1)
+	return p.Provider.Discover(ctx)
+}
+
+func (p countingIngestionProvider) DiscoverEach(ctx context.Context, yield func(parser.SourceRef) error) error {
+	p.calls.Add(1)
+	return p.Provider.(parser.StreamingDiscoverer).DiscoverEach(ctx, yield)
+}
+
+func TestDaemonIngestionRequestedSyncOwnsCatchup(t *testing.T) {
+	for _, route := range []string{"/sync", "/sync?wait=true", "/resync", "/sync?startup_only=true"} {
+		t.Run(route, func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			writeReloadGeminiSession(t, root, "before")
+			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+			var calls atomic.Int32
+			var factory parser.ProviderFactory
+			for _, candidate := range parser.ProviderFactories() {
+				if candidate.Definition().Type == parser.AgentGemini {
+					factory = candidate
+				}
+			}
+			require.NotNil(t, factory)
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine", ProviderFactories: []parser.ProviderFactory{countingIngestionFactory{factory, &calls}}})
+			t.Cleanup(engine.Close)
+			engine.SyncAll(t.Context(), nil)
+			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+			t.Cleanup(ingestion.Stop)
+			ingestion.Suspend()
+			ingestion.applying.Wait()
+			writeReloadGeminiSession(t, root, "morning")
+			calls.Store(0)
+			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1"+route, nil)
+			require.NoError(t, err)
+			request.Header.Set("Origin", ts.URL)
+			response, err := http.DefaultClient.Do(request)
+			require.NoError(t, err)
+			body, err := io.ReadAll(response.Body)
+			require.NoError(t, response.Body.Close())
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
+			if route == "/sync?startup_only=true" {
+				assert.Zero(t, calls.Load())
+				assert.True(t, ingestion.Pending())
+				assert.False(t, sessionImported(t, database, "gemini:morning"))
+				searchIngestionArchive(t, ts.URL, "morning")
+			} else {
+				assert.EqualValues(t, 1, calls.Load(), "the requested pass also satisfies idle catch-up")
+			}
+			assert.True(t, sessionImported(t, database, "gemini:morning"))
+			assert.False(t, ingestion.Pending())
 		})
 	}
 }
