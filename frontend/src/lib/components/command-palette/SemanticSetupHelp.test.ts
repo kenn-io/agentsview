@@ -116,6 +116,29 @@ describe("SemanticSetupHelp", () => {
     return { component, onResolved };
   }
 
+  it("keeps build polling quiet while hidden and resumes when visible", async () => {
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1, 10));
+    const { component } = mountHelp();
+    try {
+      await settle();
+      expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledOnce();
+      visibility.mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await settle(15 * 60_000);
+      expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledOnce();
+      visibility.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await settle(2000);
+      expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      unmount(component);
+    }
+    await settle(4000);
+    expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("shows the config walkthrough when the daemon has no embeddings manager", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
       new ApiError(501, "embeddings manager not available"),
