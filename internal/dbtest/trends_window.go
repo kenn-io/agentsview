@@ -79,14 +79,22 @@ func AssertTrendsWindow(t *testing.T, store db.Store) {
 		model    string
 		want     want
 	}{
-		{name: "far east", timezone: "Pacific/Kiritimati",
-			want: want{messages: 5, kiri: 3, fallback: 1, prompt: 1}},
-		{name: "far east project", timezone: "Pacific/Kiritimati", project: "trends-window",
-			want: want{messages: 4, kiri: 2, fallback: 1, prompt: 1}},
-		{name: "far west", timezone: "Etc/GMT+12",
-			want: want{messages: 2, baker: 2}},
-		{name: "model reply after range", timezone: "UTC", model: "gpt-boundary",
-			want: want{messages: 1, prompt: 1}},
+		{
+			name: "far east", timezone: "Pacific/Kiritimati",
+			want: want{messages: 5, kiri: 3, fallback: 1, prompt: 1},
+		},
+		{
+			name: "far east project", timezone: "Pacific/Kiritimati", project: "trends-window",
+			want: want{messages: 4, kiri: 2, fallback: 1, prompt: 1},
+		},
+		{
+			name: "far west", timezone: "Etc/GMT+12",
+			want: want{messages: 2, baker: 2},
+		},
+		{
+			name: "model reply after range", timezone: "UTC", model: "gpt-boundary",
+			want: want{messages: 1, prompt: 1},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := day
