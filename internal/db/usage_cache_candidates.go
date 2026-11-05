@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -388,54 +387,6 @@ func loadUsageQuerySessionRecords(
 		return records[i].session.ID < records[j].session.ID
 	})
 	return records, nil
-}
-
-func (db *DB) markUsageSessionsPassing(ctx context.Context, sessions []usageQuerySession, filter UsageFilter) ([]usageQuerySession, error) {
-	where, filterArgs := filter.appendUsageSessionFilterClauses("1=1", nil)
-	if where == "1=1" {
-		return sessions, nil
-	}
-	release, err := db.acquireBulkRead(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	result := slices.Clone(sessions)
-	ids := make([]string, len(result))
-	for i := range result {
-		ids[i] = result[i].ID
-		result[i].PassesFilter = false
-	}
-	passing := make(map[string]bool)
-	err = QueryChunkedSize(ids, 900, func(ids []string) error {
-		placeholders := make([]string, len(ids))
-		args := make([]any, 0, len(ids)+len(filterArgs))
-		for i, id := range ids {
-			placeholders[i] = "?"
-			args = append(args, id)
-		}
-		args = append(args, filterArgs...)
-		rows, err := db.getReader().QueryContext(ctx, `SELECT s.id FROM sessions s WHERE s.id IN (`+strings.Join(placeholders, ",")+`) AND (`+where+`)`, args...)
-		if err != nil {
-			return fmt.Errorf("marking usage session filters: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return err
-			}
-			passing[id] = true
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, err
-	}
-	for i := range result {
-		result[i].PassesFilter = passing[result[i].ID]
-	}
-	return result, nil
 }
 
 func usageQueryIntervals(filter UsageFilter) []usageQueryInterval {

@@ -111,6 +111,12 @@ An aggregate request:
 1. verifies all required installs inside one pinned cache read transaction
    before assembling the result.
 
+Concurrent aggregate requests with the same window and session predicate share
+one capture, fill check, and rollup check. A joining request may use a capture
+started before its own request, up to one preparation earlier. Each request
+reads rollups with its own filter. Cache retirement or a changed install
+triggers a fresh capture that bypasses the shared result.
+
 The pricing generation uses the canonical, order-independent effective-pricing
 digest. Daily rows also retain the resolved per-model rate hash. Pricing changes
 therefore invalidate the appropriate derived data without relying on a

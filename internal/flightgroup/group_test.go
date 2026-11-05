@@ -35,7 +35,7 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 		firstCtx, cancelFirst := context.WithCancel(t.Context())
 		firstDone := make(chan error, 1)
 		go func() {
-			_, err := group.Do(firstCtx, "same", build, nil)
+			_, err := group.Do(firstCtx, "same", build)
 			firstDone <- err
 		}()
 		<-started
@@ -45,7 +45,7 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 		}
 		secondDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.Do(t.Context(), "same", build, nil)
+			artifacts, err := group.Do(t.Context(), "same", build)
 			secondDone <- result{artifacts: artifacts, err: err}
 		}()
 		synctest.Wait()
@@ -81,7 +81,7 @@ func TestActivityReportBuildGroupCancelsAbandonedBuild(t *testing.T) {
 				<-ctx.Done()
 				close(buildCanceled)
 				return activity.CandidateArtifacts{}, ctx.Err()
-			}, nil)
+			})
 			done <- err
 		}()
 		cancel()
@@ -133,7 +133,7 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 		firstCtx, cancelFirst := context.WithCancel(t.Context())
 		firstDone := make(chan error, 1)
 		go func() {
-			_, err := group.Do(firstCtx, "same", build, nil)
+			_, err := group.Do(firstCtx, "same", build)
 			firstDone <- err
 		}()
 		synctest.Wait()
@@ -162,7 +162,7 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 		}
 		secondDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.Do(t.Context(), "same", build, nil)
+			artifacts, err := group.Do(t.Context(), "same", build)
 			secondDone <- result{artifacts: artifacts, err: err}
 		}()
 		synctest.Wait()
@@ -192,7 +192,7 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 
 		thirdDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.Do(t.Context(), "same", build, nil)
+			artifacts, err := group.Do(t.Context(), "same", build)
 			thirdDone <- result{artifacts: artifacts, err: err}
 		}()
 		synctest.Wait()

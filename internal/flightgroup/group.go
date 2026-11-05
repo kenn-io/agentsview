@@ -20,13 +20,11 @@ type Group[T any] struct {
 	flights map[string]*flight[T]
 }
 
-// Do joins or starts a build for key. The optional joined hook runs after
-// this caller attaches to the flight.
+// Do joins or starts a build for key.
 func (group *Group[T]) Do(
 	ctx context.Context,
 	key string,
 	build func(context.Context) (T, error),
-	joined func(),
 ) (T, error) {
 	group.mu.Lock()
 	if group.flights == nil {
@@ -56,9 +54,6 @@ func (group *Group[T]) Do(
 		active.waiters++
 	}
 	group.mu.Unlock()
-	if joined != nil {
-		joined()
-	}
 
 	select {
 	case <-active.done:
@@ -69,6 +64,16 @@ func (group *Group[T]) Do(
 		var zero T
 		return zero, ctx.Err()
 	}
+}
+
+// Waiters returns the number of callers attached to the active build for key.
+func (group *Group[T]) Waiters(key string) int {
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if active := group.flights[key]; active != nil {
+		return active.waiters
+	}
+	return 0
 }
 
 func (group *Group[T]) release(

@@ -234,7 +234,7 @@ func (s *Server) buildActivityArtifacts(
 	if s.activityReportFlights == nil {
 		s.activityReportFlights = &flightgroup.Group[activity.CandidateArtifacts]{}
 	}
-	return s.activityReportFlights.Do(ctx, string(keyPayload), build, nil)
+	return s.activityReportFlights.Do(ctx, string(keyPayload), build)
 }
 
 func (s *Server) prepareActivityReport(

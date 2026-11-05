@@ -17,9 +17,9 @@ import (
 const usageRollupSlowRequestThreshold = 2 * time.Second
 
 type usageRollupRequestTimings struct {
-	capture, sweep, fill, read time.Duration
-	rollup                     usageRollupMetrics
-	candidates                 int
+	capture, sweep, fill time.Duration
+	rollup               usageRollupMetrics
+	candidates           int
 }
 
 func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
@@ -30,12 +30,12 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 	round := func(value time.Duration) time.Duration {
 		return value.Round(time.Millisecond)
 	}
-	log.Printf("usage rollup read took %s: capture %s, deletion sweep %s, "+
-		"fact fill %s, rollup build %s, rollup install %s, cache read %s "+
+	log.Printf("usage window preparation took %s: capture %s, deletion sweep %s, "+
+		"fact fill %s, rollup build %s, rollup install %s "+
 		"(%d candidate sessions; built %d daily rows, %d exception rows in %d groups)",
 		round(total), round(timings.capture), round(timings.sweep),
 		round(timings.fill), round(timings.rollup.BuildDuration),
-		round(timings.rollup.InstallDuration), round(timings.read),
+		round(timings.rollup.InstallDuration),
 		timings.candidates, timings.rollup.DailyRows,
 		timings.rollup.ExceptionRows, timings.rollup.ExceptionGroups)
 }
@@ -43,16 +43,15 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 type usagePreparedWindow struct {
 	snapshot usageQuerySnapshot
 	installs map[string]usageRollupInstall
-	timings  usageRollupRequestTimings
 }
 
 // usageWindowObserver provides deterministic synchronization for tests.
 type usageWindowObserver struct {
 	beforePrepare func(context.Context)
-	joined        func()
 }
 
 type usageWindowMemoKey struct{}
+
 type usageWindowMemo struct {
 	mu      sync.Mutex
 	windows map[string]usagePreparedWindow
@@ -65,7 +64,7 @@ func WithUsageWindowMemo(ctx context.Context) context.Context {
 	})
 }
 
-func (memo *usageWindowMemo) load(key string) (usagePreparedWindow, bool) {
+func (memo *usageWindowMemo) get(key string) (usagePreparedWindow, bool) {
 	if memo == nil {
 		return usagePreparedWindow{}, false
 	}
@@ -75,37 +74,45 @@ func (memo *usageWindowMemo) load(key string) (usagePreparedWindow, bool) {
 	return value, ok
 }
 
-func (memo *usageWindowMemo) store(key string, value usagePreparedWindow, err error) {
+func (memo *usageWindowMemo) put(key string, value usagePreparedWindow) {
 	if memo == nil {
 		return
 	}
 	memo.mu.Lock()
 	defer memo.mu.Unlock()
-	if err != nil {
-		delete(memo.windows, key)
-	} else {
-		memo.windows[key] = value
+	memo.windows[key] = value
+}
+
+func (memo *usageWindowMemo) drop(key string) {
+	if memo == nil {
+		return
 	}
+	memo.mu.Lock()
+	defer memo.mu.Unlock()
+	delete(memo.windows, key)
 }
 
-func usageWindowKey(filter UsageFilter, kind usageQueryKind) string {
-	return fmt.Sprintf("%d|%s|%s|%s", kind, filter.From, filter.To, filter.Timezone)
+func usageWindowKey(filter UsageFilter, kind usageQueryKind, cursor bool) string {
+	where, args := filter.appendUsageSessionFilterClauses("1=1", nil)
+	return fmt.Sprintf("%d|%q|%q|%q|%t|%q|%q", kind, filter.From, filter.To, filter.Timezone, cursor, where, args)
 }
 
-func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind) (usagePreparedWindow, error) {
-	key := usageWindowKey(filter, kind)
+func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool) (usagePreparedWindow, error) {
+	key := usageWindowKey(filter, kind, cursor)
 	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
-	if prepared, ok := memo.load(key); ok {
+	if prepared, ok := memo.get(key); ok {
 		return prepared, nil
 	}
 	prepared, err := db.usageWindows.Do(ctx, key, func(ctx context.Context) (usagePreparedWindow, error) {
-		return db.prepareUsageWindow(ctx, filter, kind, nil)
-	}, db.usageWindowObserver.joined)
-	memo.store(key, prepared, err)
+		return db.prepareUsageWindow(ctx, filter, kind, cursor, nil)
+	})
+	if err == nil {
+		memo.put(key, prepared)
+	}
 	return prepared, err
 }
 
-func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, report func(string)) (usagePreparedWindow, error) {
+func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool, report func(string)) (usagePreparedWindow, error) {
 	if db.usageWindowObserver.beforePrepare != nil {
 		db.usageWindowObserver.beforePrepare(ctx)
 	}
@@ -114,9 +121,13 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 	}
 	started := time.Now()
 	report("Reading archived sessions for this report")
-	snapshot, err := db.captureUsageQuery(ctx, UsageFilter{From: filter.From, To: filter.To, Timezone: filter.Timezone}, kind)
+	filter.Progress = nil
+	snapshot, err := db.captureUsageQuery(ctx, filter, kind)
 	if err != nil {
 		return usagePreparedWindow{}, err
+	}
+	if !cursor {
+		snapshot.CursorHighWater = 0
 	}
 	timings := usageRollupRequestTimings{capture: time.Since(started), candidates: len(snapshot.Versions)}
 	report("Checking the usage cache for this report")
@@ -145,7 +156,8 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 		return usagePreparedWindow{}, err
 	}
 	timings.rollup = metrics
-	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}, nil
+	timings.logIfSlow(started)
+	return usagePreparedWindow{snapshot: snapshot, installs: installs}, nil
 }
 
 func (db *DB) queryUsageRollups(
@@ -155,44 +167,43 @@ func (db *DB) queryUsageRollups(
 	// Retirement and cache-side install invalidation require a fresh capture.
 	var lastErr error
 	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
-	key := usageWindowKey(filter, kind)
+	cursor := usageCursorIncluded(filter)
+	key := usageWindowKey(filter, kind, cursor)
 	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
+		if attempt > 1 {
+			memo.drop(key)
+		}
 		started := time.Now()
 		var prepared usagePreparedWindow
 		var err error
 		if attempt == 1 && filter.Progress == nil {
-			prepared, err = db.sharedUsageWindow(ctx, filter, kind)
+			prepared, err = db.sharedUsageWindow(ctx, filter, kind, cursor)
 		} else {
-			prepared, err = db.prepareUsageWindow(ctx, filter, kind, filter.Progress)
-			memo.store(key, prepared, err)
+			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, filter.Progress)
+			if err == nil {
+				memo.put(key, prepared)
+			}
 		}
 		if err != nil {
 			if errors.Is(err, errUsageCacheSourceChanged) {
-				memo.store(key, usagePreparedWindow{}, err)
 				lastErr = err
 				continue
 			}
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, err
 		}
 		snapshot := prepared.snapshot
-		snapshot.Sessions, err = db.markUsageSessionsPassing(ctx, snapshot.Sessions, filter)
-		if err != nil {
-			return usageQuerySnapshot{}, usageFactsResult{}, nil, err
-		}
-		if !includeCursor || !usageCursorIncluded(filter) {
+		if !includeCursor {
 			snapshot.CursorHighWater = 0
 		}
 		resolver := export.NewPricingResolver(snapshot.PricingRows)
 		cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
 		if err != nil {
 			if errors.Is(err, errUsageCacheSourceChanged) {
-				memo.store(key, usagePreparedWindow{}, err)
 				lastErr = err
 				continue
 			}
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, err
 		}
-		timings := prepared.timings
 		readStarted := time.Now()
 		if filter.Progress != nil {
 			filter.Progress("Reading cached daily totals")
@@ -206,18 +217,20 @@ func (db *DB) queryUsageRollups(
 		} else {
 			facts, queryErr = cache.usageRollupQuery(ctx, snapshot, filter, prepared.installs, resolver)
 		}
-		timings.read = time.Since(readStarted)
+		readDuration := time.Since(readStarted)
 		if queryErr == nil {
 			cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
 			release()
-			timings.logIfSlow(started)
+			if total := time.Since(started); total >= usageRollupSlowRequestThreshold {
+				log.Printf("usage rollup read took %s: preparation wait %s, cache read %s",
+					total.Round(time.Millisecond), readStarted.Sub(started).Round(time.Millisecond), readDuration.Round(time.Millisecond))
+			}
 			return snapshot, facts, resolver, nil
 		}
 		release()
 		if !usageCacheReadShouldRecapture(queryErr) {
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, queryErr
 		}
-		memo.store(key, usagePreparedWindow{}, queryErr)
 		lastErr = queryErr
 	}
 	return usageQuerySnapshot{}, usageFactsResult{}, nil, lastErr

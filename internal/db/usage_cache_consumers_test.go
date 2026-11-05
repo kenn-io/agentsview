@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -171,15 +172,15 @@ func TestDailyUsageFactsDoesNotDeduplicateSourceUUIDWithoutAgent(t *testing.T) {
 	assert.Equal(t, legacy.Totals, facts.Totals)
 }
 
-func TestUsageWindowMemoPreparesOnceAcrossFilters(t *testing.T) {
+func TestUsageWindowMemoPreparesOncePerPredicate(t *testing.T) {
 	database := openDailyUsageFixtureDB(t)
 	var prepares atomic.Int32
 	database.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
 	ctx := WithUsageWindowMemo(t.Context())
 	filters := []UsageFilter{
 		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago"},
-		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", Project: "proj-a", Model: "model-a"},
-		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", ExcludeAgent: "codex"},
+		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", Model: "model-a"},
+		{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", Project: "proj-a"},
 	}
 	for _, filter := range filters {
 		want := getDailyUsageLegacyForRollupTest(t, database, filter)
@@ -192,14 +193,14 @@ func TestUsageWindowMemoPreparesOnceAcrossFilters(t *testing.T) {
 	got, err := database.GetTopSessionsByCost(ctx, filters[0], 3)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
-	assert.Equal(t, int32(1), prepares.Load())
+	assert.Equal(t, int32(2), prepares.Load())
 }
 
 func TestConcurrentUsageReadsShareOneWindow(t *testing.T) {
 	database := openDailyUsageFixtureDB(t)
 	filters := []UsageFilter{
 		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"},
-		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Agent: "claude"},
+		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Model: "model-b"},
 		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Model: "model-a"},
 	}
 	wants := make([]DailyUsageResult, len(filters))
@@ -208,7 +209,6 @@ func TestConcurrentUsageReadsShareOneWindow(t *testing.T) {
 	}
 	wantTop, err := database.getTopSessionsByCostLegacy(t.Context(), filters[0], 3)
 	require.NoError(t, err)
-	joined := make(chan struct{}, 4)
 	release := make(chan struct{})
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
@@ -216,7 +216,6 @@ func TestConcurrentUsageReadsShareOneWindow(t *testing.T) {
 	var prepares atomic.Int32
 	database.usageWindowObserver = usageWindowObserver{
 		beforePrepare: func(context.Context) { prepares.Add(1); <-release },
-		joined:        func() { joined <- struct{}{} },
 	}
 	type dailyResult struct {
 		daily DailyUsageResult
@@ -245,9 +244,8 @@ func TestConcurrentUsageReadsShareOneWindow(t *testing.T) {
 		top, err := database.GetTopSessionsByCost(t.Context(), filters[0], 3)
 		topDone <- topResult{top, err}
 	}()
-	for range 4 {
-		<-joined
-	}
+	key := usageWindowKey(filters[0], usageQueryKindToken, usageCursorIncluded(filters[0]))
+	require.Eventually(t, func() bool { return database.usageWindows.Waiters(key) == 4 }, 10*time.Second, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, (<-done[0]).err, context.Canceled)
 	unblock()
@@ -293,7 +291,6 @@ func TestConcurrentUsageReadsCancelAbandonedWindow(t *testing.T) {
 	database := openDailyUsageFixtureDB(t)
 	filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"}
 	want := getDailyUsageLegacyForRollupTest(t, database, filter)
-	joined := make(chan struct{}, 4)
 	canceled := make(chan struct{})
 	var prepares atomic.Int32
 	database.usageWindowObserver = usageWindowObserver{
@@ -303,7 +300,6 @@ func TestConcurrentUsageReadsCancelAbandonedWindow(t *testing.T) {
 				close(canceled)
 			}
 		},
-		joined: func() { joined <- struct{}{} },
 	}
 	cancels := make([]context.CancelFunc, 4)
 	done := make(chan error, 4)
@@ -316,9 +312,8 @@ func TestConcurrentUsageReadsCancelAbandonedWindow(t *testing.T) {
 			done <- err
 		}()
 	}
-	for range 4 {
-		<-joined
-	}
+	key := usageWindowKey(filter, usageQueryKindToken, usageCursorIncluded(filter))
+	require.Eventually(t, func() bool { return database.usageWindows.Waiters(key) == 4 }, 10*time.Second, time.Millisecond)
 	for _, cancel := range cancels {
 		cancel()
 	}
