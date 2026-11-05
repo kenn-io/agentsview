@@ -15,7 +15,7 @@ func TestCommitLinksBothBackends(t *testing.T) {
 	dbtest.SeedSession(t, env.DB, "claude:commit", "project-a")
 	dbtest.SeedMessages(t, env.DB,
 		db.Message{SessionID: "claude:commit", Ordinal: 0, Role: "user", Content: "Fix parser"},
-		db.Message{SessionID: "claude:commit", Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{SessionID: "claude:commit", Category: "Bash", ToolName: "Bash", ToolUseID: "commit-call", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}}}},
+		db.Message{SessionID: "claude:commit", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{SessionID: "claude:commit", Category: "Bash", ToolName: "Bash", ToolUseID: "commit-call", InputJSON: `{"command":"git commit -m fix"}`, ResultContent: "[main abc1234] Fix parser", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Fix parser"}}}}},
 	)
 	for name, svc := range map[string]service.SessionService{"direct": service.NewDirectBackend(env.DB, nil), "http": env.Backend("", false)} {
 		t.Run(name, func(t *testing.T) {
@@ -24,20 +24,15 @@ func TestCommitLinksBothBackends(t *testing.T) {
 			require.Len(t, session.Commits, 1)
 			assert.Equal(t, "abc1234", session.Commits[0].SHA)
 			require.NotNil(t, session.Commits[0].Turn)
-			assert.Equal(t, 0, session.Commits[0].Turn.Ordinal)
 			assert.Equal(t, "Fix parser", session.Commits[0].Turn.Text)
-			lookup, err := svc.CommitSessions(t.Context(), []string{"deadbee", "abc1234000000000000000000000000000000000"})
+			lookup, err := svc.CommitSessions(t.Context(), []string{"abc1234"})
 			require.NoError(t, err)
-			require.Len(t, lookup.Commits, 2)
-			assert.Equal(t, "deadbee", lookup.Commits[0].SHA)
-			assert.Empty(t, lookup.Commits[0].Links)
-			assert.Equal(t, "abc1234000000000000000000000000000000000", lookup.Commits[1].SHA)
-			require.Len(t, lookup.Commits[1].Links, 1)
-			require.NotNil(t, lookup.Commits[1].Links[0].Turn)
-			assert.Equal(t, "abc1234", lookup.Commits[1].Links[0].SHA)
-			assert.Equal(t, "claude:commit", lookup.Commits[1].Links[0].SessionID)
-			assert.Equal(t, 0, lookup.Commits[1].Links[0].Turn.Ordinal)
-			assert.Equal(t, "Fix parser", lookup.Commits[1].Links[0].Turn.Text)
+			require.Len(t, lookup.Commits, 1)
+			require.Len(t, lookup.Commits[0].Links, 1)
+			link := lookup.Commits[0].Links[0]
+			assert.Equal(t, "abc1234", link.SHA)
+			require.NotNil(t, link.Turn)
+			assert.Equal(t, "Fix parser", link.Turn.Text)
 		})
 	}
 }

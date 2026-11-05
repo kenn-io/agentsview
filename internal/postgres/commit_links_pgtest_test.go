@@ -93,7 +93,7 @@ func TestPGIncrementalPushRetainsDeletedCommitLink(t *testing.T) {
 	dbtest.SeedSession(t, local, "deleted", "project")
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "deleted", []db.Message{
 		{SessionID: "deleted", Ordinal: 0, Role: "user", Content: "Save the change"},
-		{SessionID: "deleted", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"git commit -m change"}`, ResultContent: "[main abc1234] Save the change"}}},
+		{SessionID: "deleted", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: `{"command":"git commit -m change"}`, ResultContent: "[main abc1234] Save the change", ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234] Save the change"}}}}},
 	}))
 	require.NoError(t, local.DeleteSession(ctx, "deleted"))
 	localLinks, err := local.SessionCommitLinks(ctx, "deleted")
@@ -156,6 +156,13 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.NotNil(t, links.Commits[0].Turn)
 	assert.False(t, links.Commits[0].Missing)
 	assert.Equal(t, "Record the parser fix", links.Commits[0].Turn.Text)
+}
+
+func TestPGCommitLinksBeforeUpgradePush(t *testing.T) {
+	syncer, _, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_links_old_test")
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	_, err = pg.ExecContext(ctx, `DROP TABLE commit_links`)
 	require.NoError(t, err)
 	_, err = store.SessionCommitLinks(ctx, "commit-live")
