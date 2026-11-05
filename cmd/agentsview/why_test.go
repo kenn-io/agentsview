@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	gitlog "go.kenn.io/agentsview/internal/db/git"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/testutil"
 )
@@ -110,6 +111,37 @@ func TestWhyHumanCommitEvidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWhyHumanCommitMessageEvidence(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSession(t, dataDir, "s-commit", "project-a")
+	d, err := db.Open(t.Context(), sessionsDBPath(dataDir))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		{SessionID: "s-commit", Ordinal: 0, Role: "user", Content: "Fix the parser", Timestamp: "2026-10-30T10:09:00Z"},
+	}))
+	_, err = d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{
+		{SHA: strings.Repeat("e", 40), Subject: "Editor commit", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:s-commit"}},
+		{SHA: strings.Repeat("f", 40), Subject: "Idle commit", CommittedAt: "2026-10-30T12:00:00Z", Sessions: []string{"claude:s-commit"}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	t.Run("nearby message is an estimated prompt", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "why", "--commit", strings.Repeat("e", 12))
+		require.NoError(t, err)
+		assert.Contains(t, out, "  commit message  s-commit  repo  Editor commit")
+		assert.Contains(t, out, "2026-10-30T10:10:00Z  message 0\n")
+		assert.Contains(t, out, "    Fix the parser (estimated)\n")
+	})
+	t.Run("no nearby message omits unknown positions", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "why", "--commit", strings.Repeat("f", 12))
+		require.NoError(t, err)
+		assert.Contains(t, out, "  commit message  s-commit  repo  Idle commit")
+		assert.Contains(t, out, "2026-10-30T12:00:00Z\n")
+	})
 }
 
 func TestSplitWhyPath(t *testing.T) {

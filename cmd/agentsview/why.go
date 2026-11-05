@@ -111,21 +111,39 @@ func newWhyCommand() *cobra.Command {
 					fmt.Fprintln(w, "  No recorded session.")
 				}
 				for _, link := range c.Links {
-					line := fmt.Sprintf("  %s  %s  %s", link.Source, link.SessionID, link.Repository)
+					source := link.Source
+					if source == "trailer" {
+						source = "commit message"
+					}
+					line := fmt.Sprintf("  %s  %s  %s", source, link.SessionID, link.Repository)
 					if c.Lines == nil || link.Subject != c.Subject {
 						line += "  " + link.Subject
 					}
 					if link.Ambiguous {
 						line += "  (ambiguous: prefix matches several commits)  " + link.SHA
 					}
-					line += fmt.Sprintf("  %s  %s  message %d  call %d  %s", link.Branch, link.CommittedAt, link.MessageOrdinal, link.CallIndex, link.ToolUseID)
+					line += fmt.Sprintf("  %s  %s", link.Branch, link.CommittedAt)
+					// Commit-message links have no tool call, and may have no nearby message.
+					if link.MessageOrdinal >= 0 {
+						line += fmt.Sprintf("  message %d", link.MessageOrdinal)
+					}
+					if link.CallIndex >= 0 {
+						line += fmt.Sprintf("  call %d", link.CallIndex)
+					}
+					if link.ToolUseID != "" {
+						line += "  " + link.ToolUseID
+					}
 					if link.Missing {
 						fmt.Fprintln(w, sanitizeTerminal(line+"  (deleted or in trash)"))
 						continue
 					}
 					fmt.Fprintln(w, sanitizeTerminal(line))
 					if link.Turn != nil {
-						for text := range strings.SplitSeq(sanitizeTerminal(link.Turn.Text), "\n") {
+						turn := sanitizeTerminal(link.Turn.Text)
+						if link.Turn.Heuristic {
+							turn += " (estimated)"
+						}
+						for text := range strings.SplitSeq(turn, "\n") {
 							fmt.Fprintln(w, "    "+text)
 						}
 					}
