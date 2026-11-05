@@ -236,6 +236,11 @@ impl DeepLinkDispatch {
             DeepLinkDispatch::Deferred(_) | DeepLinkDispatch::Redirecting(_) => false,
         }
     }
+
+    // Runtime recovery must not race startup's own redirect and error handling.
+    fn is_live(&self) -> bool {
+        matches!(self, DeepLinkDispatch::Live(_))
+    }
 }
 
 impl Default for DeepLinkState {
@@ -1689,8 +1694,20 @@ fn restart_backend_after_stop_timeout_if_terminated(
     if !sidecar_generation_terminated(state, generation) {
         return;
     }
-    if take_restart_after_stop_timeout_for_terminated_sidecar(state, generation) {
-        restart_backend_after_update(app.clone());
+    restart_backend_after_stop_timeout(app, generation);
+}
+
+// Holds the launch gate across the check and the launch so runtime recovery
+// cannot start a second backend for the same stopped launch.
+fn restart_backend_after_stop_timeout(app: &AppHandle, generation: u64) {
+    let state = app.state::<SidecarState>();
+    let Ok(_gate) = state.launch_gate.lock() else {
+        return;
+    };
+    if take_restart_after_stop_timeout_for_terminated_sidecar(&state, generation) {
+        if let Err(err) = launch_backend_from_handle(app) {
+            eprintln!("[agentsview] failed to restart backend after update: {err}");
+        }
     }
 }
 
@@ -1890,11 +1907,7 @@ fn forward_sidecar_logs(
                             .as_str(),
                         );
                     }
-                    let restart_after_stop_timeout =
-                        take_restart_after_stop_timeout_for_terminated_sidecar(&state, generation);
-                    if restart_after_stop_timeout {
-                        restart_backend_after_update(handle);
-                    }
+                    restart_backend_after_stop_timeout(&handle, generation);
                     break;
                 }
                 CommandEvent::Error(err) => {
@@ -4167,35 +4180,50 @@ fn backend_recovery_action(
             }
         }
         BackendStatusProbe::NotRunning(_) => BackendRecoveryAction::Relaunch,
-        _ => BackendRecoveryAction::None,
+        BackendStatusProbe::Starting(_)
+        | BackendStatusProbe::Unhealthy(_)
+        | BackendStatusProbe::Incompatible(_)
+        | BackendStatusProbe::ReadOnly(_)
+        | BackendStatusProbe::Unusable(_)
+        | BackendStatusProbe::Unavailable => BackendRecoveryAction::None,
     }
 }
 
-fn recover_backend_after_failed_probe(window: &WebviewWindow, handle: &AppHandle, stale_port: u16) {
+fn reload_if_backend_returned(
+    dispatch: &mut DeepLinkDispatch,
+    window: &WebviewWindow,
+    port: u16,
+    reachable: bool,
+) {
+    if dispatch.observe_backend(port, reachable) {
+        eprintln!("[agentsview] backend returned on port {port}, reloading window");
+        if let Err(err) = window.reload() {
+            eprintln!("[agentsview] backend recovery reload failed: {err}");
+        }
+    }
+}
+
+fn recover_backend_after_failed_probe(
+    window: &WebviewWindow,
+    handle: &AppHandle,
+    stale_port: u16,
+    log_sender: &SyncSender<SidecarLogRecord>,
+) {
     let state = handle.state::<SidecarState>();
     let generation = state.next_generation.load(Ordering::SeqCst);
     if !launch_is_current(&state, generation) || sidecar_port(&state) != Some(stale_port) {
         return;
     }
 
-    let log_sender = spawn_sidecar_log_writer(handle.clone());
     let status =
-        tauri::async_runtime::block_on(probe_backend_status(handle, &log_sender, generation));
-    let action = backend_recovery_action(stale_port, &status, backend_liveness_ready);
-    match action {
+        tauri::async_runtime::block_on(probe_backend_status(handle, log_sender, generation));
+    match backend_recovery_action(stale_port, &status, backend_liveness_ready) {
         BackendRecoveryAction::None => {}
         BackendRecoveryAction::Reload => {
             let _ = act_if_current_backend(&state, generation, stale_port, || {
                 let deep_link_state = handle.state::<DeepLinkState>();
                 if let Ok(mut dispatch) = deep_link_state.dispatch.lock() {
-                    if dispatch.observe_backend(stale_port, true) {
-                        eprintln!(
-                            "[agentsview] backend returned on port {stale_port}, reloading window"
-                        );
-                        if let Err(err) = window.reload() {
-                            eprintln!("[agentsview] backend recovery reload failed: {err}");
-                        }
-                    }
+                    reload_if_backend_returned(&mut dispatch, window, stale_port, true);
                 };
             });
         }
@@ -4210,11 +4238,38 @@ fn recover_backend_after_failed_probe(window: &WebviewWindow, handle: &AppHandle
                     port,
                     generation,
                     "runtime serve status",
-                    log_sender,
+                    log_sender.clone(),
                 );
             });
         }
         BackendRecoveryAction::Relaunch => {
+            // Same archive gate as the first launch: a newer CLI may have
+            // migrated the data before its daemon went away.
+            match tauri::async_runtime::block_on(run_data_version_preflight(handle)) {
+                Ok(()) => {}
+                Err(DataVersionPreflightError::TooNew(message)) => {
+                    // Forget the port so the probe stops retrying a launch that cannot work.
+                    let stopped = act_if_current_backend(&state, generation, stale_port, || {
+                        clear_sidecar_port(handle)
+                    });
+                    if stopped.is_some() {
+                        eprintln!(
+                            "[agentsview] data version preflight rejected archive, not relaunching backend: {message}"
+                        );
+                        let handle = handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            check_for_updates(&handle, false).await;
+                        });
+                    }
+                    return;
+                }
+                Err(DataVersionPreflightError::Failed(message)) => {
+                    eprintln!(
+                        "[agentsview] data version preflight failed, retrying backend recovery later: {message}"
+                    );
+                    return;
+                }
+            }
             let launched = act_if_current_backend(&state, generation, stale_port, || {
                 eprintln!(
                     "[agentsview] backend on port {stale_port} stopped, starting a replacement"
@@ -4238,6 +4293,7 @@ fn recover_backend_after_failed_probe(window: &WebviewWindow, handle: &AppHandle
 /// started again. This probe runs on the side that keeps executing.
 fn spawn_backend_probe(window: WebviewWindow, handle: AppHandle) {
     thread::spawn(move || {
+        let log_sender = spawn_sidecar_log_writer(handle.clone());
         loop {
             if let Some(port) = current_backend_port(&handle) {
                 let reachable = backend_liveness_ready(port);
@@ -4248,19 +4304,12 @@ fn spawn_backend_probe(window: WebviewWindow, handle: AppHandle) {
                     // Hold dispatch through the asynchronous reload request so
                     // a new deep link or startup redirect always follows it.
                     if current_backend_port(&handle) == Some(port) {
-                        if dispatch.observe_backend(port, reachable) {
-                            eprintln!(
-                                "[agentsview] backend returned on port {port}, reloading window"
-                            );
-                            if let Err(err) = window.reload() {
-                                eprintln!("[agentsview] backend recovery reload failed: {err}");
-                            }
-                        }
-                        should_recover = !reachable;
+                        reload_if_backend_returned(&mut dispatch, &window, port, reachable);
+                        should_recover = !reachable && dispatch.is_live();
                     }
                 };
                 if should_recover {
-                    recover_backend_after_failed_probe(&window, &handle, port);
+                    recover_backend_after_failed_probe(&window, &handle, port, &log_sender);
                 }
             }
             thread::sleep(BACKEND_PROBE_INTERVAL);
@@ -7166,6 +7215,18 @@ agentsview running at http://127.0.0.1:18082
     }
 
     #[test]
+    fn backend_recovery_waits_for_startup_redirect_to_finish() {
+        let mut dispatch = DeepLinkDispatch::Deferred(None);
+        assert!(!dispatch.is_live());
+        dispatch.take_pending();
+        assert!(!dispatch.is_live());
+        dispatch.finish_redirect();
+        assert!(dispatch.is_live());
+        dispatch.defer();
+        assert!(!dispatch.is_live());
+    }
+
+    #[test]
     fn backend_probe_preserves_startup_deep_link() {
         let mut dispatch = DeepLinkDispatch::Deferred(Some("/sessions/a".to_string()));
         assert!(!dispatch.observe_backend(8080, false));
@@ -7510,7 +7571,8 @@ mod claude_sync_tests {
             detail.replace("22222222-2222-4222-8222-222222222222", ".."),
             detail.replace("22222222-2222-4222-8222-222222222222", "%2e%2e"),
             detail.replace("22222222-2222-4222-8222-222222222222", "one/../../settings"),
-            detail.replace("tree=True", "tree=False"), format!("{detail}&extra=true"),
+            detail.replace("tree=True", "tree=False"),
+            format!("{detail}&extra=true"),
         ] {
             assert!(super::validate_claude_fetch_path(&path).is_err(), "{path}");
         }
