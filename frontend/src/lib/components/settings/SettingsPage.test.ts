@@ -199,7 +199,7 @@ describe("SettingsPage", () => {
     expect(nav!.textContent).toContain("Preferences");
     expect(nav!.textContent).toContain("Data");
     expect(nav!.textContent).toContain("Connections");
-    expect(nav!.textContent).toContain("Session Providers");
+    expect(nav!.textContent).toContain("Session providers");
     expect(nav!.textContent).not.toContain("Agent Directories");
 
     // Every destination carries an icon so the list scans by shape.

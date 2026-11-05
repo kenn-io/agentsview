@@ -166,30 +166,34 @@
 <div class="tool-image-cleanup">
   <p class="intro">{m.settings_image_cleanup_intro()}</p>
 
-  <div class="filter-row">
-    <label class="filter-label" for="tic-project">
-      {m.settings_image_cleanup_project_label()}
-    </label>
-    <TextInput
-      id="tic-project"
-      placeholder={m.settings_image_cleanup_project_placeholder()}
-      bind:value={projectFilter}
-      disabled={phase === "applying"}
-      oninput={onFilterInput}
-    />
-    <label class="filter-label" for="tic-before">
-      {m.settings_image_cleanup_before_label()}
-    </label>
-    <TextInput
-      id="tic-before"
-      placeholder={m.settings_image_cleanup_before_placeholder()}
-      bind:value={beforeFilter}
-      disabled={phase === "applying"}
-      oninput={onFilterInput}
-    />
+  <div class="filter-rows">
+    <div class="setting-row">
+      <label class="setting-label" for="tic-project">
+        {m.settings_image_cleanup_project_label()}
+      </label>
+      <TextInput
+        id="tic-project"
+        placeholder={m.settings_image_cleanup_project_placeholder()}
+        bind:value={projectFilter}
+        disabled={phase === "applying"}
+        oninput={onFilterInput}
+      />
+    </div>
+    <div class="setting-row">
+      <label class="setting-label" for="tic-before">
+        {m.settings_image_cleanup_before_label()}
+      </label>
+      <TextInput
+        id="tic-before"
+        placeholder={m.settings_image_cleanup_before_placeholder()}
+        bind:value={beforeFilter}
+        disabled={phase === "applying"}
+        oninput={onFilterInput}
+      />
+    </div>
   </div>
 
-  <div class="action-row">
+  <div class="action-row control-offset">
     <Button onclick={runPreview} disabled={previewBusy}>
       {phase === "previewing"
         ? m.settings_image_cleanup_previewing()
@@ -343,19 +347,29 @@
     margin: 0;
   }
 
-  .filter-row {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    column-gap: 12px;
-    row-gap: 8px;
-    align-items: center;
+  /* Filter rows use the shared settings grid from SettingsPage, so the
+     inputs start on the same control column as every other panel. */
+  .filter-rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
   }
 
-  .filter-label {
+  .setting-label {
     font-size: 12px;
     font-weight: 500;
     color: var(--text-secondary);
-    white-space: nowrap;
+  }
+
+  /* The Preview action starts on the control column's edge. */
+  .control-offset {
+    padding-left: calc(var(--setting-label-width, 148px) + 12px);
+  }
+
+  @media (max-width: 640px) {
+    .control-offset {
+      padding-left: 0;
+    }
   }
 
   .action-row {
@@ -379,8 +393,9 @@
 
   .status-grid {
     display: grid;
-    grid-template-columns: auto 1fr;
-    column-gap: 16px;
+    /* Same label column as the other settings rows. */
+    grid-template-columns: var(--setting-label-width, 148px) minmax(0, 1fr);
+    column-gap: 12px;
     row-gap: 6px;
     align-items: start;
   }

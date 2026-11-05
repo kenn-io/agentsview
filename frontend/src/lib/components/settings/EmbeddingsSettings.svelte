@@ -371,8 +371,9 @@
 
   .status-grid {
     display: grid;
-    grid-template-columns: auto 1fr;
-    column-gap: 16px;
+    /* Same label column as the other settings rows. */
+    grid-template-columns: var(--setting-label-width, 148px) minmax(0, 1fr);
+    column-gap: 12px;
     row-gap: 6px;
     align-items: center;
   }
