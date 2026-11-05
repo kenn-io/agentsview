@@ -478,6 +478,7 @@
   "sidebar_row_star_session": "スターセッション",
   "sidebar_row_unstar_session": "セッションのスターを外す",
   "sidebar_row_rename": "名前の変更",
+  "sidebar_row_user_message_count": [{"declarations": ["input count", "input countLabel", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=other": "ユーザーメッセージ {countLabel} 件"}}],
   "sidebar_row_open_in_new_tab": "新しいタブで開く",
   "sidebar_row_delete": "消去",
   "sidebar_row_change_project": "プロジェクトを変更…",

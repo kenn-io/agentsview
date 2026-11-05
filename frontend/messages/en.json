@@ -479,6 +479,7 @@
   "sidebar_row_star_session": "Star session",
   "sidebar_row_unstar_session": "Unstar session",
   "sidebar_row_rename": "Rename",
+  "sidebar_row_user_message_count": [{"declarations": ["input count", "input countLabel", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "{countLabel} user message", "countPlural=other": "{countLabel} user messages"}}],
   "sidebar_row_open_in_new_tab": "Open in new tab",
   "sidebar_row_delete": "Delete",
   "sidebar_row_change_project": "Change project…",

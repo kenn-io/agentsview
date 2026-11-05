@@ -465,6 +465,7 @@
   "sidebar_row_star_session": "釘選對話",
   "sidebar_row_unstar_session": "取消釘選對話",
   "sidebar_row_rename": "重新命名",
+  "sidebar_row_user_message_count": [{"declarations": ["input count", "input countLabel", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=other": "{countLabel} 則使用者訊息"}}],
   "sidebar_row_open_in_new_tab": "在新分頁開啟",
   "sidebar_row_delete": "刪除",
   "sidebar_row_change_project": "變更專案…",

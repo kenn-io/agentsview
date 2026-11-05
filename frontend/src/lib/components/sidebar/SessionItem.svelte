@@ -10,7 +10,7 @@
     readProgress,
   } from "../../stores/read-progress.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
-  import { formatRelativeTime, truncate } from "../../utils/format.js";
+  import { formatCount, formatRelativeTime } from "../../utils/format.js";
   import { sessionMachineDisplay } from "../../utils/machines.js";
   import { agentColor as getAgentColor, agentLabel, entrypointBadge } from "../../utils/agents.js";
   import {
@@ -156,6 +156,7 @@
     return { text: session.project, isShell: false };
   });
 
+  const userMessageCount = $derived(session.user_message_count ?? 0);
   let timeStr = $derived(
     formatRelativeTime(session.ended_at ?? session.started_at),
   );
@@ -421,9 +422,9 @@
       aria-label={expanded ? m.sidebar_row_collapse() : m.sidebar_row_expand()}
     >
       {#if expanded}
-        <ChevronDownIcon class="tree-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
+        <ChevronDownIcon class="tree-arrow" size="14" strokeWidth="2.25" aria-hidden="true" />
       {:else}
-        <ChevronRightIcon class="tree-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
+        <ChevronRightIcon class="tree-arrow" size="14" strokeWidth="2.25" aria-hidden="true" />
       {/if}
     </button>
   {:else if depth > 0}
@@ -481,33 +482,31 @@
         href={sessionHref}
         onclick={handleSessionClick}
       >
-        <!-- Compact child rows keep two lines (title, then meta) to fit their slot. -->
-        {#if !compact}
-          <div class="session-top-row">
-            {#if !hideProject}
-              <span class="session-project" title={session.project}>{session.project}</span>
+        <!-- Two lines: the title with its time, then project, message count,
+             machine, and agent. Compact child rows put the time on the meta line. -->
+        <div class="session-name-row">
+          <div
+            class="session-name"
+            class:shell={displayLabel.isShell}
+            title={displayLabel.text}
+            ondblclick={handleDblClick}
+          >
+            {#if displayLabel.isShell}
+              <code>{displayLabel.text}</code>
+            {:else}
+              {displayLabel.text}
             {/if}
-            <span class="session-time">{timeStr}</span>
           </div>
-        {/if}
-        <div
-          class="session-name"
-          class:shell={displayLabel.isShell}
-          title={displayLabel.text}
-          ondblclick={handleDblClick}
-        >
-          {#if displayLabel.isShell}
-            <code>{displayLabel.text}</code>
-          {:else}
-            {displayLabel.text}
+          {#if !compact}
+            <span class="session-time">{timeStr}</span>
           {/if}
         </div>
         {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
         <div class="session-meta">
+          {#if !hideProject}
+            <span class="session-project" title={session.project}>{session.project}</span>
+          {/if}
           {#if compact}
-            {#if !hideProject}
-              <span class="session-project" title={session.project}>{session.project}</span>
-            {/if}
             <span class="session-time">{timeStr}</span>
           {/if}
           {#if hasUnread}
@@ -518,7 +517,13 @@
               title={m.read_progress_unread_messages()}
             ></span>
           {/if}
-          <span class="session-count">{session.user_message_count}</span>
+          <span
+            class="session-count"
+            title={m.sidebar_row_user_message_count({
+              count: userMessageCount,
+              countLabel: formatCount(userMessageCount),
+            })}
+          >{formatCount(userMessageCount)}</span>
           {#if hasSubagents}
             <UserRoundIcon class="group-hint-icon" size="9" strokeWidth="2" aria-hidden="true" />
           {/if}
@@ -528,11 +533,23 @@
           {#if childCount > 0 && !onToggleExpand}
             <span class="continuation-badge">x{continuationCount}</span>
           {/if}
-          {#if !compact && !hideAgent && entrypointBadge(session.entrypoint)}
-            <span
-              class="entrypoint-tag"
-              title={entrypointBadge(session.entrypoint)}
-            >{entrypointBadge(session.entrypoint)}</span>
+          {#if !compact && (!hideAgent || showMachine)}
+            <span class="meta-end">
+              {#if showMachine}
+                <span class="machine-tag" title={machineDisplay.title}>{machineDisplay.label}</span>
+              {/if}
+              {#if !hideAgent}
+                <!-- The entrypoint (for example sdk-ts) is detail, so it lives in
+                     the tooltip rather than on the row. -->
+                <span
+                  class="agent-tag"
+                  style:--agent-color={agentColor}
+                  title={entrypointBadge(session.entrypoint)
+                    ? `${agentLabel(session.agent, session.agent_label)} · ${entrypointBadge(session.entrypoint)}`
+                    : agentLabel(session.agent, session.agent_label)}
+                >{agentLabel(session.agent, session.agent_label)}</span>
+              {/if}
+            </span>
           {/if}
         </div>
       </a>
@@ -553,22 +570,6 @@
         <StarIcon size="12" strokeWidth="1.4" aria-hidden="true" />
       {/if}
     </button>
-  {/if}
-  {#if !compact && (!hideAgent || showMachine)}
-    <div class="side-meta">
-      {#if !hideAgent}
-        <span
-          class="agent-tag"
-          style:--agent-color={agentColor}
-          title={agentLabel(session.agent, session.agent_label)}
-        >{agentLabel(session.agent, session.agent_label)}</span>
-      {/if}
-      {#if showMachine}
-        <span class="machine-tag" title={machineDisplay.title}>
-          {truncate(machineDisplay.label, 18)}
-        </span>
-      {/if}
-    </div>
   {/if}
 </div>
 
@@ -668,7 +669,7 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    height: 52px;
+    height: 42px;
     padding: 0 10px;
     padding-right: 10px;
     text-align: left;
@@ -729,21 +730,37 @@
   }
 
   /* Tree toggle */
+  /* A real button on the title line: a visible chevron with a hover
+     surface, so it reads as "expand" rather than a stray mark. */
   .tree-toggle {
     all: unset;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 100%;
+    width: 18px;
+    height: 18px;
+    align-self: flex-start;
+    margin-top: 4px;
+    border-radius: var(--radius-sm);
     flex-shrink: 0;
     cursor: pointer;
-    color: var(--text-muted);
-    transition: color 0.1s;
+    color: var(--text-secondary);
+    transition: color 0.1s, background 0.1s;
   }
 
   .tree-toggle:hover {
     color: var(--text-primary);
+    background: var(--bg-surface-hover);
+  }
+
+  .tree-toggle:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
+  }
+
+  .compact .tree-toggle {
+    margin-top: 0;
+    align-self: center;
   }
 
   :global(.tree-arrow) {
@@ -752,95 +769,14 @@
 
   /* Spacer for leaf nodes — same width as toggle to align text */
   .tree-dash {
-    width: 16px;
+    width: 18px;
     flex-shrink: 0;
   }
 
   /* Empty spacer for root items without children */
   .tree-spacer {
-    width: 16px;
+    width: 18px;
     flex-shrink: 0;
-  }
-
-  /* Agent and machine share one fixed slot on the meta line, so the title
-     keeps the full row width. */
-  .side-meta {
-    position: absolute;
-    right: 10px;
-    bottom: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 4px;
-    width: var(--side-meta-width);
-    font-size: 11px;
-    line-height: 13px;
-    color: var(--text-muted);
-    pointer-events: auto;
-  }
-
-  .session-item {
-    /* Scales with the sidebar so wide rows show full agent names. */
-    --side-meta-width: 40%;
-  }
-
-  /* Clip the meta line to its box so nothing paints under the slot. */
-  .session-item:has(.side-meta) .session-meta {
-    overflow: hidden;
-    /* A margin, not padding, so the clip edge stops before the slot. */
-    margin-right: calc(44% + 10px);
-  }
-
-  /* Agent identity: a small colored mark plus the agent name. */
-  .agent-tag {
-    display: block;
-    min-width: 0;
-    flex-shrink: 0;
-    max-width: 100%;
-    font-weight: 500;
-    color: var(--text-secondary);
-    white-space: nowrap;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .agent-tag::before {
-    content: "";
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    margin-right: 4px;
-    vertical-align: 1px;
-    border-radius: 2px;
-    background: var(--agent-color, var(--text-muted));
-  }
-
-  .machine-tag {
-    min-width: 0;
-    flex: 0 1 auto;
-    flex-shrink: 20;
-    max-width: none;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  /* Project names win the space; the entrypoint truncates first. */
-  .agent-tag + .machine-tag::before {
-    content: "\00b7";
-    margin-right: 4px;
-  }
-
-  .entrypoint-tag {
-    min-width: 0;
-    flex-shrink: 100;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .session-info {
@@ -848,12 +784,12 @@
     flex: 1;
   }
 
-  /* Small, even gaps keep the three lines apart without growing the row
-     past one glance. */
+  /* Two lines with a small, even gap: the title with its time, then the
+     project, count, machine, and agent. */
   .session-item:not(.compact) .session-info-link {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 3px;
   }
 
   .session-info-link {
@@ -863,14 +799,23 @@
     min-width: 0;
   }
 
+  .session-name-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+
   .session-name {
+    flex: 1;
+    min-width: 0;
     font-size: 13px;
     font-weight: 450;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    line-height: 15px;
+    line-height: 16px;
     letter-spacing: -0.005em;
   }
 
@@ -906,46 +851,64 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
     font-size: 11px;
+    line-height: 13px;
     color: var(--text-muted);
-    line-height: 1.3;
-    letter-spacing: 0.01em;
   }
 
   .compact .session-meta {
     font-size: 9px;
   }
 
+  /* The project truncates first, so counts, machine, and agent stay whole. */
   .session-project {
+    min-width: 0;
+    flex: 0 1 auto;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 110px;
+  }
+
+  .meta-end {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
     min-width: 0;
     flex-shrink: 1;
+    max-width: 60%;
   }
 
-  /* Three lines, after the T3 Code pattern: project and time, the title
-     at full width, then counts and the agent slot. */
-  .session-top-row {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
+  /* The machine gives way first, then the agent label keeps a readable
+     prefix with an ellipsis; the full text is in each tooltip. */
+  .machine-tag {
     min-width: 0;
-    font-size: 11px;
-    line-height: 12px;
-    color: var(--text-muted);
+    flex-shrink: 20;
+    font-size: 10.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  .session-top-row .session-project {
-    flex: 1 1 auto;
-    max-width: none;
+  /* The agent in its color, small capitals, as on main. */
+  .agent-tag {
+    min-width: 0;
+    flex-shrink: 1;
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--agent-color, var(--text-muted));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .session-time {
     white-space: nowrap;
     flex-shrink: 0;
-    font-size: 10.5px;
+    font-size: 11px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }

@@ -479,6 +479,7 @@
   "sidebar_row_star_session": "Ajouter la session aux favoris",
   "sidebar_row_unstar_session": "Retirer la session des favoris",
   "sidebar_row_rename": "Renommer",
+  "sidebar_row_user_message_count": [{"declarations": ["input count", "input countLabel", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "{countLabel} message de l'utilisateur", "countPlural=other": "{countLabel} messages de l'utilisateur", "countPlural=many": "{countLabel} messages de l'utilisateur"}}],
   "sidebar_row_open_in_new_tab": "Ouvrir dans un nouvel onglet",
   "sidebar_row_delete": "Supprimer",
   "sidebar_row_change_project": "Changer de projet…",

@@ -481,6 +481,7 @@
   "sidebar_row_star_session": "Sessiyanı ulduzla",
   "sidebar_row_unstar_session": "Sessiyanın ulduzunu çıxar",
   "sidebar_row_rename": "Adını dəyişdir",
+  "sidebar_row_user_message_count": [{"declarations": ["input count", "input countLabel", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "{countLabel} istifadəçi mesajı", "countPlural=other": "{countLabel} istifadəçi mesajı"}}],
   "sidebar_row_open_in_new_tab": "Yeni vərəqdə aç",
   "sidebar_row_delete": "Sil",
   "sidebar_row_change_project": "Layihəni dəyişdir…",

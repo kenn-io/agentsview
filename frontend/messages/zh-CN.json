@@ -465,6 +465,7 @@
   "sidebar_row_star_session": "固定会话",
   "sidebar_row_unstar_session": "取消固定会话",
   "sidebar_row_rename": "重命名",
+  "sidebar_row_user_message_count": [{"declarations": ["input count", "input countLabel", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=other": "{countLabel} 条用户消息"}}],
   "sidebar_row_open_in_new_tab": "在新标签页打开",
   "sidebar_row_delete": "删除",
   "sidebar_row_change_project": "更改项目…",

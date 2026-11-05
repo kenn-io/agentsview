@@ -465,6 +465,7 @@
   "sidebar_row_star_session": "세션 고정",
   "sidebar_row_unstar_session": "세션 고정 해제",
   "sidebar_row_rename": "이름 변경",
+  "sidebar_row_user_message_count": [{"declarations": ["input count", "input countLabel", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=other": "사용자 메시지 {countLabel}개"}}],
   "sidebar_row_open_in_new_tab": "새 탭에서 열기",
   "sidebar_row_delete": "삭제",
   "sidebar_row_change_project": "프로젝트 변경…",

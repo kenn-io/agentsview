@@ -700,9 +700,11 @@ describe("SessionList visible hydration", () => {
     component = mount(SessionList, { target: document.body });
     await tick();
 
-    const sideMeta = document.querySelector<HTMLElement>(".side-meta");
-    expect(sideMeta).not.toBeNull();
-    sideMeta!.click();
+    // The star and status sit outside the session link; clicking the row
+    // itself still selects the session.
+    const row = document.querySelector<HTMLElement>(".session-item");
+    expect(row).not.toBeNull();
+    row!.click();
 
     expect(selectSession).toHaveBeenCalledWith("row-session");
   });
