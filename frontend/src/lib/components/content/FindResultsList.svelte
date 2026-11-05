@@ -61,7 +61,8 @@
 
 <style>
   /* Results sit on the transcript's shared reading column, shifted like the
-     find bar when the overview rail reserves its 12px gutter. */
+     find bar when the overview rail reserves its gutter: up to 12px, and
+     none on wide panes (the same clamp as SessionFindView .has-find). */
   .find-results {
     --find-rail: 0px;
     --find-side: max(12px, calc((100% - var(--reading-column) - var(--find-rail)) / 2));
@@ -70,7 +71,7 @@
     padding-inline: var(--find-side) calc(var(--find-side) + var(--find-rail));
     border-bottom: 1px solid var(--border-muted);
   }
-  .find-results.has-find { --find-rail: 12px; }
+  .find-results.has-find { --find-rail: clamp(0px, calc(var(--reading-column) + 44px - 100%), 12px); }
   h2 { margin: 0; padding: 6px 0; font-size: 12px; color: var(--text-secondary); }
   .result-group { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; font-size: 11px; color: var(--text-muted); }
   .result-count { margin-inline-start: auto; }
