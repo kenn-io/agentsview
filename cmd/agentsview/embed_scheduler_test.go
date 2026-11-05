@@ -1997,9 +1997,6 @@ func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				dataDir := t.TempDir()
 				database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-				dbtest.SeedSessionWithMessages(t, database, "session", "project", []db.Message{
-					dbtest.UserMsg("session", 0, "Synced while scheduled embeddings were deferred."),
-				})
 				cfg := vectorTestConfig(dataDir)
 				cfg.Vector.Embed.Recall = false
 				if tc.deferred {
