@@ -109,9 +109,9 @@ describe("RecentEditsPage", () => {
     await tick();
     await tick();
 
-    const head = document.querySelector(".re-list > .re-head");
+    const head = document.querySelectorAll(".re-list thead th");
     expect(
-      Array.from(head?.children ?? [], (cell) => cell.textContent),
+      Array.from(head, (cell) => cell.textContent?.trim()),
     ).toEqual(["Project", "File", "Edits", "Last edit"]);
   });
 

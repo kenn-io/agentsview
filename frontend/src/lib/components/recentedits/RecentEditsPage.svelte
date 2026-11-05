@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { SearchInput } from "@kenn-io/kit-ui";
+  import { SearchInput, TableHeaderCell, VirtualTable } from "@kenn-io/kit-ui";
+  import { MediaQuery } from "svelte/reactivity";
   import { PencilIcon, RefreshCwIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import { RecentEditsService } from "../../api/generated/index";
@@ -12,6 +13,11 @@
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
   import StateNotice from "../shared/StateNotice.svelte";
   import { LatestRead } from "../../utils/latest-read.js";
+  import {
+    loadColumnWidths,
+    mergeColumnWidths,
+    saveColumnWidths,
+  } from "./columnWidths.js";
 
   interface Edit {
     session_id: string;
@@ -46,6 +52,75 @@
   // Debounce timer for the file-path search box; plain, gates control flow.
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   const pageRead = new LatestRead();
+
+  // Phones stack the project above the path in one File column, so the
+  // file name keeps the row's width.
+  const stacked = new MediaQuery("max-width: 520px");
+  const columns = $derived(
+    stacked.current
+      ? ["file", "edits", "time"]
+      : ["project", "file", "edits", "time"],
+  );
+  // Starting widths for columns nobody resized. The project column takes a
+  // quarter of the list up to 220px, and the file column what is left.
+  const DEFAULT_WIDTHS: Record<string, number> = { edits: 72, time: 104 };
+  const STACKED_WIDTHS: Record<string, number> = { edits: 52, time: 76 };
+  // Widths the user set by dragging or fitting a column edge, kept across
+  // visits. Plain: the table owns the live widths once it has sized them.
+  let keptWidths = loadColumnWidths();
+  const resizedColumns = new Set<string>();
+
+  // The toolbar spans the list's width, and it is laid out before the
+  // first rows arrive, when the table sizes its columns.
+  let listWidth = $state(0);
+
+  function columnWidth(column: string): number | undefined {
+    const widths = stacked.current
+      ? STACKED_WIDTHS
+      : {
+          ...DEFAULT_WIDTHS,
+          project: Math.round(Math.min(220, Math.max(100, listWidth * 0.25))),
+          ...keptWidths,
+        };
+    if (column !== "file") return widths[column];
+    if (widths.file !== undefined) return widths.file;
+    // The file column starts with what the other columns leave inside the
+    // list's border, so the table opens without sideways scrolling.
+    if (listWidth <= 0) return undefined;
+    const others = columns
+      .filter((c) => c !== "file")
+      .reduce((sum, c) => sum + (widths[c] ?? 0), 0);
+    return Math.max(160, listWidth - 2 - others);
+  }
+
+  // A drag, key press, or double-click on a header's resize handle marks
+  // that column as user-sized, so only its width is kept.
+  function noteResize(event: Event) {
+    const handle = (event.target as Element | null)?.closest?.(".kit-th__resize");
+    const cell = handle?.closest("th");
+    const column = cell ? columns[cell.cellIndex] : undefined;
+    if (column) resizedColumns.add(column);
+  }
+
+  function keepWidths(widths: number[]) {
+    // Phone widths fit the phone; they are not kept for wider windows.
+    if (stacked.current) return;
+    keptWidths = mergeColumnWidths(keptWidths, columns, widths, resizedColumns);
+    saveColumnWidths(keptWidths);
+  }
+
+  type ListRow =
+    | { kind: "file"; file: FileRow }
+    | { kind: "edits"; file: FileRow };
+
+  // An expanded file's edits render as a full-width row right below it.
+  const rows = $derived(
+    files.flatMap((file): ListRow[] =>
+      expanded.has(key(file))
+        ? [{ kind: "file", file }, { kind: "edits", file }]
+        : [{ kind: "file", file }],
+    ),
+  );
 
   // The last few characters of a long project name, kept visible when the
   // name truncates, so date-prefixed names stay distinguishable.
@@ -149,6 +224,15 @@
   });
 </script>
 
+<!-- Long names truncate in the middle: the head shrinks with an ellipsis
+     and the distinguishing tail stays visible. -->
+{#snippet projectName(project: string, tail: string)}
+  <span class="re-project" title={project}
+    ><span class="re-project-head">{project.slice(0, project.length - tail.length)}</span
+    ><span class="re-project-tail">{tail}</span></span
+  >
+{/snippet}
+
 <div class="recent-edits-page">
   <LibraryPageHeader title={m.recent_edits_title()}>
     {#snippet actions()}
@@ -164,7 +248,7 @@
     {/snippet}
   </LibraryPageHeader>
 
-  <div class="re-toolbar">
+  <div class="re-toolbar" bind:clientWidth={listWidth}>
     <ProjectTypeahead
       projects={sessions.projects}
       value={sessions.filters.project}
@@ -190,67 +274,112 @@
       {/snippet}
     </StateNotice>
   {:else}
-    <div class="re-list">
-      <div class="re-head">
-        <span class="re-project">{m.recent_edits_col_project()}</span>
-        <span class="re-path">{m.recent_edits_col_file()}</span>
-        <span class="re-count">{m.recent_edits_col_edits()}</span>
-        <span class="re-time">{m.recent_edits_col_last_edit()}</span>
-      </div>
-      {#each files as f (key(f))}
-        {@const tail = projectTail(f.project)}
-        <div class="re-file">
-          <button class="re-file-row" onclick={() => toggle(f)}>
-            <!-- Long names truncate in the middle: the head shrinks with an
-                 ellipsis and the distinguishing tail stays visible. -->
-            <span class="re-project" title={f.project}
-              ><span class="re-project-head">{f.project.slice(0, f.project.length - tail.length)}</span
-              ><span class="re-project-tail">{tail}</span></span
-            >
-            <span class="re-path" title={f.file_path}
-              >{shortPath(f.file_path)}</span
-            >
-            <!-- The Edits header labels the column, so wide layouts show the
-                 bare number and the digits line up on the right. Phones hide
-                 the header and keep the worded count. -->
-            <span class="re-count"
-              ><span class="re-count-num" aria-hidden="true"
-                >{formatCount(f.edit_count)}</span
-              ><span class="re-count-full"
-                >{m.recent_edits_count({ count: f.edit_count })}</span
-              ></span
-            >
-            {#if f.last_edited_at}
-              <span class="re-time"
-                >{formatRelativeTime(f.last_edited_at)}</span
-              >
-            {/if}
-          </button>
-          {#if expanded.has(key(f))}
-            <div class="re-edits">
-              {#each f.edits as e}
-                <button class="re-edit" onclick={() => jump(e)}>
-                  <span class="re-edit-tool">{e.tool_name}</span>
-                  <span class="re-edit-session">{e.session_id}</span>
-                  {#if e.timestamp}
-                    <span class="re-edit-time"
-                      >{formatRelativeTime(e.timestamp)}</span
-                    >
-                  {/if}
-                </button>
-              {/each}
-              {#if f.edits_truncated}
-                <div class="re-truncated">
-                  {m.recent_edits_truncated({
-                    shown: f.edits.length,
-                    total: f.edit_count,
-                  })}
-                </div>
-              {/if}
-            </div>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="re-list"
+      onpointerdowncapture={noteResize}
+      onkeydowncapture={noteResize}
+      ondblclickcapture={noteResize}
+    >
+      <VirtualTable
+        items={rows}
+        rowKey={(row) => `${row.kind}:${key(row.file)}`}
+        scroll="page"
+        zebra={false}
+        unsorted
+        estimateRowHeight={33}
+        ariaLabel={m.recent_edits_title()}
+        oncolumnwidthschange={keepWidths}
+      >
+        {#snippet header()}
+          {#if !stacked.current}
+            <TableHeaderCell
+              class="re-project-col"
+              label={m.recent_edits_col_project()}
+              width={columnWidth("project")}
+              minWidth={80}
+              maxWidth={640}
+            />
           {/if}
-        </div>
-      {/each}
+          <TableHeaderCell
+            class="re-file-col"
+            label={m.recent_edits_col_file()}
+            width={columnWidth("file")}
+            minWidth={120}
+          />
+          <TableHeaderCell
+            class="re-count-col"
+            numeric
+            label={m.recent_edits_col_edits()}
+            width={columnWidth("edits")}
+            minWidth={48}
+            maxWidth={200}
+          />
+          <TableHeaderCell
+            class="re-time-col"
+            numeric
+            label={m.recent_edits_col_last_edit()}
+            width={columnWidth("time")}
+            minWidth={64}
+            maxWidth={240}
+          />
+        {/snippet}
+        {#snippet row(item: ListRow)}
+          {@const f = item.file}
+          {#if item.kind === "file"}
+            {@const tail = projectTail(f.project)}
+            {@const open = expanded.has(key(f))}
+            <tr class="re-file-row" class:open onclick={() => toggle(f)}>
+              {#if !stacked.current}
+                <td>{@render projectName(f.project, tail)}</td>
+              {/if}
+              <td>
+                {#if stacked.current}{@render projectName(f.project, tail)}{/if}
+                <!-- The row toggles on click; the button gives keyboard
+                     and screen reader users the same toggle. -->
+                <button
+                  type="button"
+                  class="re-path"
+                  title={f.file_path}
+                  aria-expanded={open}
+                >{shortPath(f.file_path)}</button>
+              </td>
+              <td class="re-num"><span class="re-count">{formatCount(f.edit_count)}</span></td>
+              <td class="re-num">
+                {#if f.last_edited_at}
+                  <span class="re-time">{formatRelativeTime(f.last_edited_at)}</span>
+                {/if}
+              </td>
+            </tr>
+          {:else}
+            <tr class="re-edits-row">
+              <td colspan={columns.length}>
+                <div class="re-edits">
+                  {#each f.edits as e}
+                    <button class="re-edit" onclick={() => jump(e)}>
+                      <span class="re-edit-tool">{e.tool_name}</span>
+                      <span class="re-edit-session">{e.session_id}</span>
+                      {#if e.timestamp}
+                        <span class="re-edit-time"
+                          >{formatRelativeTime(e.timestamp)}</span
+                        >
+                      {/if}
+                    </button>
+                  {/each}
+                  {#if f.edits_truncated}
+                    <div class="re-truncated">
+                      {m.recent_edits_truncated({
+                        shown: f.edits.length,
+                        total: f.edit_count,
+                      })}
+                    </div>
+                  {/if}
+                </div>
+              </td>
+            </tr>
+          {/if}
+        {/snippet}
+      </VirtualTable>
     </div>
     {#if hasMore}
       <button class="re-load-more" onclick={loadMore} disabled={loading}>
@@ -313,79 +442,44 @@
     font-size: 13px;
   }
 
-  /* One list with hairline rows, not a stack of cards. The header and
-     every row are subgrids of one set of column tracks, so translated
-     headings, large counts, and rows without a time stay aligned. The
-     project column gives way on narrow lists so the file name keeps
-     room. */
+  /* One table with hairline rows. kit-ui's VirtualTable owns the column
+     widths: drag a header edge to resize a column (double-click it to fit
+     the content); wider columns than the page scroll sideways. Clip, not
+     hidden, so the sticky header still follows the page scroll; the table's
+     last row border tucks under the frame's own edge. */
   .re-list {
-    display: grid;
-    grid-template-columns: minmax(0, min(240px, 25%)) minmax(0, 1fr) max-content max-content;
-    column-gap: var(--space-4);
     border: 1px solid var(--border-muted);
     border-radius: var(--radius-md);
-    overflow: hidden;
+    overflow: clip;
     background: var(--bg-surface);
   }
 
-  .re-head,
-  .re-file,
-  .re-file-row {
-    grid-column: 1 / -1;
-    display: grid;
-    grid-template-columns: subgrid;
+  .re-list :global(.kit-table) {
+    margin-bottom: -1px;
   }
 
-  .re-edits {
-    grid-column: 1 / -1;
-  }
-
-  /* Column labels over the rows: the same tracks and padding as a row,
-     in small uppercase muted type. */
-  .re-head {
-    align-items: center;
-    padding: 6px 14px;
-    border-bottom: 1px solid var(--border-muted);
-  }
-
-  .re-head > span {
-    font-family: inherit;
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-
-  .re-file + .re-file {
-    border-top: 1px solid var(--border-muted);
-  }
-
-  .re-file-row {
-    align-items: center;
-    width: 100%;
+  .re-list :global(tbody td) {
     padding: 7px 14px;
-    text-align: left;
-    background: transparent;
-    border: none;
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .re-list :global(.kit-th) {
+    padding-inline: 14px;
+  }
+
+  .re-file-row {
     cursor: pointer;
-    transition: background 0.12s;
   }
 
-  .re-file-row:hover {
-    background: var(--bg-surface-hover);
-  }
-
-  /* Project names sit in a fixed muted column and truncate before the
-     path does. The trailing padding keeps a clear gutter before the mono
-     path, so a hash tail never reads as part of the file name. */
+  /* Project names sit in a muted column and truncate before the path
+     does. */
   .re-project {
     display: flex;
     min-width: 0;
-    padding-right: 16px;
     font-size: 12px;
     color: var(--text-muted);
-    flex-shrink: 0;
     white-space: nowrap;
     overflow: hidden;
   }
@@ -401,7 +495,14 @@
   }
 
   .re-path {
+    display: block;
+    width: 100%;
     min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: left;
+    cursor: pointer;
     font-size: 12.5px;
     font-weight: 400;
     color: var(--text-primary);
@@ -411,110 +512,45 @@
     text-overflow: ellipsis;
   }
 
+  .re-num {
+    text-align: right;
+  }
+
   .re-count,
   .re-time {
-    min-width: 64px;
     font-size: 12px;
     color: var(--text-muted);
-    flex-shrink: 0;
     white-space: nowrap;
-    text-align: right;
     font-variant-numeric: tabular-nums;
   }
 
-  .re-count {
-    position: relative;
+  /* The edits of an expanded file span the whole row. */
+  .re-list :global(tbody tr.re-edits-row td) {
+    padding: 0;
+    white-space: normal;
   }
 
-  /* The worded count stays available to screen readers on wide layouts,
-     where the column header already says what the number counts. */
-  .re-count-full {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
+  .re-list :global(tbody tr.re-edits-row:hover) {
+    background: none;
   }
 
-  /* A wider gap between the two right-aligned columns, so "Edits" and
-     "Last edit" read as two headers, not one label. */
-  .re-time {
-    min-width: 72px;
-    margin-left: 20px;
-  }
-
-  /* Phones: the project moves above the path so the file name keeps the
-     row's width, and count and time take only what they need. */
+  /* Phones: the project moves above the path inside the File column. */
   @media (max-width: 520px) {
-    /* Rows stack project over path here, so the column labels no longer
-       line up with anything. */
-    .re-head {
-      display: none;
-    }
-
     .recent-edits-page {
       padding: 20px 12px;
     }
 
-    .re-list {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .re-file {
-      display: block;
-    }
-
-    .re-file-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto auto;
-      grid-template-areas:
-        "project project project"
-        "path count time";
-      column-gap: var(--space-3);
-      row-gap: 2px;
-      padding: 7px 10px;
+    .re-list :global(tbody td),
+    .re-list :global(.kit-th) {
+      padding-inline: 10px;
     }
 
     .re-project {
-      grid-area: project;
-      width: auto;
-      padding-right: 0;
-      min-width: 0;
-    }
-
-    .re-path {
-      grid-area: path;
-      min-width: 0;
-    }
-
-    .re-count {
-      grid-area: count;
-      min-width: 0;
-    }
-
-    .re-count-num {
-      display: none;
-    }
-
-    .re-count-full {
-      position: static;
-      width: auto;
-      height: auto;
-      overflow: visible;
-      clip-path: none;
-    }
-
-    .re-time {
-      grid-area: time;
-      min-width: 0;
-      margin-left: 0;
+      margin-bottom: 2px;
     }
   }
 
   .re-edits {
-    border-top: 1px solid var(--border-muted);
     background: var(--bg-inset);
     display: flex;
     flex-direction: column;
