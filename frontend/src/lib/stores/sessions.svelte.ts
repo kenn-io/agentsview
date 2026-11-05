@@ -612,6 +612,8 @@ class SessionsStore {
     void this.load();
   }
 
+  private firstReadWaiting = false;
+
   private async loadSidebarPage(params: SidebarIndexParams, signal: AbortSignal) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
@@ -620,6 +622,11 @@ class SessionsStore {
     // pages are still being fetched after page 1 is published.
     this.loading = true;
     try {
+      if (this.sidebarIndexVersion === 0) {
+        this.firstReadWaiting = true;
+        await events.whenReady(1000);
+        this.firstReadWaiting = false;
+      }
       const index = await SessionsService.getApiV1SessionsSidebarIndex(params, { signal });
       if (this.loadVersion !== version) return;
 
@@ -1736,7 +1743,8 @@ class SessionsStore {
   }
 
   private scheduleIndexRefresh() {
-    if (this.sidebarConsumers === 0) return;
+    // The read waiting on events_ready starts after this event and covers it.
+    if (this.sidebarConsumers === 0 || this.firstReadWaiting) return;
     if (this.liveRefreshTimer !== null) {
       clearTimeout(this.liveRefreshTimer);
     }

@@ -15,6 +15,7 @@ import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
 import { router } from "./router.svelte.js";
+import { events } from "./events.svelte.js";
 import { ApiError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
 
@@ -36,7 +37,7 @@ const api = vi.hoisted(() => ({
     machine_count: 0,
     earliest_session: null,
   }),
-  watchEvents: vi.fn(() => ({ close: () => {} })),
+  watchEvents: vi.fn((_onEvent: (event: { scope: string }) => void) => ({ close: () => {} })),
 }));
 
 type SidebarIndexParams = Parameters<typeof api.getSidebarSessionIndex>[0];
@@ -205,6 +206,10 @@ function generatedParams(params: Partial<Record<string, unknown>>): Record<strin
     Object.entries(params).map(([key, value]) => [names[key] ?? key, value]),
   );
 }
+
+beforeEach(() => {
+  events.setAvailable(false);
+});
 
 describe("SessionsStore", () => {
   let sessions: ReturnType<typeof createSessionsStore>;
@@ -968,12 +973,13 @@ describe("SessionsStore", () => {
       const detach = sessions.attachSidebar();
       const first = sessions.load();
       const second = sessions.load();
-      await Promise.resolve();
-
-      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      });
 
       resolvePage({ sessions: [], total: 0, next_cursor: null });
       await Promise.all([first, second]);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
       detach();
     });
 
@@ -988,10 +994,12 @@ describe("SessionsStore", () => {
 
       const detach = sessions.attachSidebar();
       void sessions.load();
-      await Promise.resolve();
-      expect(
-        vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mock.calls[0]?.[1]?.signal?.aborted,
-      ).toBe(false);
+      await vi.waitFor(() => {
+        expect(
+          vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mock.calls[0]?.[1]?.signal
+            ?.aborted,
+        ).toBe(false);
+      });
 
       sessions.filters.project = "changed";
       await sessions.load();
@@ -2585,7 +2593,7 @@ describe("SessionsStore", () => {
 
       expect(sessions.selectedMachines).toEqual(["host-b"]);
       expect(sessions.isMachineSelected("host-b")).toBe(true);
-      expectSidebarIndexCalledWith({ machine: "host-b" });
+      await vi.waitFor(() => expectSidebarIndexCalledWith({ machine: "host-b" }));
     });
   });
 
@@ -3143,7 +3151,7 @@ describe("SessionsStore", () => {
       expect(api.getMachines.mock.calls.filter(([p]) => p.machine)).toHaveLength(2);
       sessions.toggleMachineFilter("id-b");
       expect(sessions.filters.machine).toBe("id-b");
-      expectSidebarIndexCalledWith({ machine: "id-b" });
+      await vi.waitFor(() => expectSidebarIndexCalledWith({ machine: "id-b" }));
     });
 
     it("preserves a stale saved selector until the user clears it", async () => {
@@ -4675,6 +4683,52 @@ it("keeps grouping on equal status ticks and reorders when a tier changes", asyn
     expect(store.groupedSessions.map((group) => group.key)).toEqual(["waiting", "working"]);
     store.dispose();
   } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+it("waits for events_ready before reading once, then catches changes during that read", async () => {
+  vi.useFakeTimers();
+  vi.resetModules();
+  const { events } = await import("./events.svelte.js");
+  const { createSessionsStore } = await import("./sessions.svelte.js");
+  class FakeEventSource extends EventTarget {
+    readyState = 1;
+    close() {
+      this.readyState = 2;
+    }
+  }
+  const stream = new FakeEventSource();
+  api.watchEvents.mockImplementationOnce((onEvent) => {
+    stream.addEventListener("data_changed", () => onEvent({ scope: "sessions" }));
+    return stream;
+  });
+  api.getSidebarSessionIndex.mockClear();
+  const response = Promise.withResolvers<{ sessions: SkinnySessionRow[]; total: number }>();
+  api.getSidebarSessionIndex.mockReturnValueOnce(response.promise);
+  mockSidebarIndex([makeSkinnyRow({ id: "saved-during-read" })]);
+  const sessions = createSessionsStore();
+  const detach = sessions.attachSidebar();
+  try {
+    const first = sessions.load();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.getSidebarSessionIndex).not.toHaveBeenCalled();
+    events.setAvailable(true);
+    stream.dispatchEvent(new Event("events_ready"));
+    expect(api.getSidebarSessionIndex).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+    stream.dispatchEvent(new Event("data_changed"));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+    response.resolve({ sessions: [], total: 0 });
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+    expect(sessions.sessions.map((session) => session.id)).toEqual(["saved-during-read"]);
+  } finally {
+    detach();
     vi.clearAllTimers();
     vi.useRealTimers();
   }
