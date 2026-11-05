@@ -154,7 +154,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			return false
 		}
 		if periodic || !batteryWaiting {
-			started, _, err := s.tryPassWithLease(ctx, s.mgr, extract.PassOptions{ReconcileOnly: true})
+			started, _, err := s.tryPassWithLease(ctx, extract.PassOptions{ReconcileOnly: true})
 			if err != nil {
 				log.Printf("extract scheduler: reconciliation failed: %v", err)
 			}
@@ -180,7 +180,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			if deferOnBattery(false) {
 				continue
 			}
-			started, ok, err := s.tryPassWithLease(ctx, s.mgr,
+			started, ok, err := s.tryPassWithLease(ctx,
 				extract.PassOptions{Full: pendingFull})
 			if !ok {
 				// Draining: the daemon is shutting down, so no new pass
@@ -214,7 +214,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 				pendingFull = full
 				continue
 			}
-			started, ok, err := s.tryPassWithLease(ctx, s.mgr,
+			started, ok, err := s.tryPassWithLease(ctx,
 				extract.PassOptions{Full: full})
 			if !ok {
 				continue
@@ -224,6 +224,9 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			if started {
 				startupDone()
+				if err == nil {
+					stopTimer(debounceTimer)
+				}
 			}
 			if full {
 				// A dropped incremental catchup tick needs no carry: the
@@ -241,14 +244,14 @@ func (s *extractScheduler) Run(ctx context.Context) {
 // draining, in which case no pass was attempted: work started after the
 // idle decision would race the shutdown it triggered.
 func (s *extractScheduler) tryPassWithLease(
-	ctx context.Context, mgr extractPassManager, opts extract.PassOptions,
+	ctx context.Context, opts extract.PassOptions,
 ) (started, ok bool, err error) {
 	release, ok := s.idle.BeginWork()
 	if !ok {
 		return false, false, nil
 	}
 	defer release()
-	started, _, err = mgr.TryPass(ctx, opts)
+	started, _, err = s.mgr.TryPass(ctx, opts)
 	if started && s.onPassFinished != nil {
 		s.onPassFinished()
 	}

@@ -105,20 +105,20 @@ func TestExtractSchedulerNotifiesDownstreamAfterEveryStartedPass(t *testing.T) {
 	var notified int
 	s.onPassFinished = func() { notified++ }
 
-	started, ok, err := s.tryPassWithLease(t.Context(), mgr, extract.PassOptions{})
+	started, ok, err := s.tryPassWithLease(t.Context(), extract.PassOptions{})
 	assert.False(t, started)
 	assert.True(t, ok)
 	require.NoError(t, err)
 	assert.Zero(t, notified)
 
-	started, ok, err = s.tryPassWithLease(t.Context(), mgr, extract.PassOptions{})
+	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
 	assert.True(t, started)
 	assert.True(t, ok)
 	require.EqualError(t, err, "later extraction failed")
 	assert.Equal(t, 1, notified,
 		"partial commits must refresh downstream indexes despite a later error")
 
-	started, ok, err = s.tryPassWithLease(t.Context(), mgr, extract.PassOptions{})
+	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
 	assert.True(t, started)
 	assert.True(t, ok)
 	require.NoError(t, err)
@@ -475,6 +475,44 @@ func TestExtractSchedulerBatteryShortBackstopReleasesStartupLease(t *testing.T) 
 			assert.Fail(t, "battery reconciliation kept the startup lease")
 		}
 	})
+}
+
+func TestExtractSchedulerACBackstopConsumesBatteryRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result fakeTryPassResult
+		retry  bool
+	}{
+		{name: "success", result: fakeTryPassResult{started: true}},
+		{name: "failure", result: fakeTryPassResult{started: true, err: errors.New("model unavailable")}, retry: true},
+		{name: "collision", retry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				mgr := &fakePassManager{results: []fakeTryPassResult{{started: true}, {started: true}, tc.result, {started: true}}}
+				var battery atomic.Bool
+				battery.Store(true)
+				s := newExtractScheduler(mgr, 30*time.Second, 45*time.Second, 0, nil)
+				s.onBattery = battery.Load
+				go s.Run(t.Context())
+				defer s.Stop()
+				synctest.Sleep(50 * time.Second)
+				synctest.Wait()
+				require.Equal(t, []extract.PassOptions{{ReconcileOnly: true}, {ReconcileOnly: true}}, mgr.callsSnapshot())
+				battery.Store(false)
+				synctest.Sleep(40 * time.Second)
+				synctest.Wait()
+				require.Equal(t, 3, mgr.callCount())
+				synctest.Sleep(25 * time.Second)
+				synctest.Wait()
+				want := []extract.PassOptions{{ReconcileOnly: true}, {ReconcileOnly: true}, {Full: true}}
+				if tc.retry {
+					want = append(want, extract.PassOptions{Full: true})
+				}
+				assert.Equal(t, want, mgr.callsSnapshot())
+			})
+		})
+	}
 }
 
 func TestExtractSchedulerBatteryRetractsAfterLateSignalBackfill(t *testing.T) {
