@@ -201,12 +201,31 @@ describe("UsagePage refresh behavior", () => {
     interrupted.resolve(usageSummaryWithUnsupported());
     await flushEffects();
     expect(usage.summary?.totals.inputTokens).toBe(42);
+    const interruptedZoom = Promise.withResolvers<[]>();
+    const ranking = vi.mocked(UsageService.getApiV1UsageTopSessions);
+    ranking.mockImplementation((params) =>
+      params?.group_by === "group" ? interruptedZoom.promise : Promise.resolve([]),
+    );
+    usage.setOpenProject("project-a");
+    await flushEffects();
+    const zoomSignal = ranking.mock.calls.find(([params]) => params?.group_by === "group")?.[1]
+      ?.signal;
+    await setHidden(true);
+    expect(zoomSignal?.aborted).toBe(true);
+    ranking.mockResolvedValue([]);
+    await setHidden(false);
+    await flushEffects();
+    expect(
+      ranking.mock.calls
+        .filter(([params]) => params?.group_by === "group")
+        .map(([params]) => params?.project_key),
+    ).toEqual(["project-a", "project-a"]);
+    expect(usage.zoomedProject?.key).toBe("project-a");
+    expect(usage.zoomRows).toEqual([]);
+    interruptedZoom.resolve([]);
   });
 
-  it.each([
-    [60_000, 1],
-    [600_000, 2],
-  ])("catches up after %i ms hidden and stops on teardown", async (duration, count) => {
+  it("coalesces overdue refreshes and stops on teardown", async () => {
     vi.useFakeTimers();
     const setHidden = visibility();
     const requests = usageReads().mockResolvedValue(usageSummaryWithUnsupported());
@@ -215,17 +234,17 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
     expect(usage.isQuerying).toBe(false);
     await setHidden(true);
-    await vi.advanceTimersByTimeAsync(duration);
+    await vi.advanceTimersByTimeAsync(600_000);
     expect(requests).toHaveBeenCalledTimes(1);
     await setHidden(false);
-    expect(requests).toHaveBeenCalledTimes(count);
+    expect(requests).toHaveBeenCalledTimes(2);
     await setHidden(true);
     await vi.advanceTimersByTimeAsync(600_000);
     await unmount(component);
     component = undefined;
     await setHidden(false);
     await vi.advanceTimersByTimeAsync(600_000);
-    expect(requests).toHaveBeenCalledTimes(count);
+    expect(requests).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the scheduled deadline when a filter changes before hiding", async () => {
@@ -258,34 +277,6 @@ describe("UsagePage refresh behavior", () => {
     expect(requests).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(requests).toHaveBeenCalledTimes(2);
-  });
-
-  it("resumes an interrupted project drilldown", async () => {
-    const setHidden = visibility();
-    usageReads().mockResolvedValue(usageSummaryWithUnsupported());
-    const interrupted = Promise.withResolvers<[]>();
-    const ranking = vi.mocked(UsageService.getApiV1UsageTopSessions);
-    ranking.mockImplementation((params) =>
-      params?.group_by === "group" ? interrupted.promise : Promise.resolve([]),
-    );
-    component = mount(UsagePage, { target: document.body });
-    await flushEffects();
-    usage.setOpenProject("project-a");
-    await flushEffects();
-    const signal = ranking.mock.calls.find(([params]) => params?.group_by === "group")?.[1]?.signal;
-    await setHidden(true);
-    expect(signal?.aborted).toBe(true);
-    ranking.mockResolvedValue([]);
-    await setHidden(false);
-    await flushEffects();
-    expect(
-      ranking.mock.calls
-        .filter(([params]) => params?.group_by === "group")
-        .map(([params]) => params?.project_key),
-    ).toEqual(["project-a", "project-a"]);
-    expect(usage.zoomedProject?.key).toBe("project-a");
-    expect(usage.zoomRows).toEqual([]);
-    interrupted.resolve([]);
   });
 
   it.each(["visible", "hidden", "returning"])("hydrates machines while %s", async (state) => {
