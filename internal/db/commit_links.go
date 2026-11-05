@@ -30,6 +30,7 @@ var (
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(.+?) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
+	commitQuietReadbackRE     = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)git\s+commit((?:\s+` + commitCommandToken + `)*?\s+(?:-q|--quiet)(?:\s+` + commitCommandToken + `)*?)\s*&&\s*git\s+(?:rev-parse\s+HEAD|log\s+(?:-1\s+--oneline|--oneline\s+-1))\s*(?:$|&&)`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
 	commitArgumentListRE      = regexp.MustCompile(`\[\s*["']git["']\s*,\s*["']commit["']`)
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
@@ -290,6 +291,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				pending[process] = singleOwner
 			}
 		}
+		summaryMatched := false
 		for _, output := range outputs {
 			owner := cmp.Or(pending[output.process], call)
 			if singlePoll {
@@ -306,6 +308,7 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				owner = original
 			}
 			for _, match := range commitSummaryRE.FindAllStringSubmatch(output.text, -1) {
+				summaryMatched = true
 				if seen[match[2]] {
 					continue
 				}
@@ -315,6 +318,42 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 				link.Repository = commitRepository(owner.input, cwd)
 				links = append(links, link)
 			}
+		}
+		if !isCommit || len(pollIDs) != 0 || summaryMatched {
+			continue
+		}
+		quiet := commitQuietReadbackRE.FindStringSubmatch(command)
+		if quiet == nil {
+			continue
+		}
+		for arg := range strings.FieldsSeq(quiet[1]) {
+			if arg == "--dry-run" || arg == "-n" {
+				quiet = nil
+				break
+			}
+		}
+		if quiet == nil {
+			continue
+		}
+		var quietSHA, quietSubject string
+		var quietOwner commitCall
+		quietCount := 0
+		for _, output := range outputs {
+			for line := range strings.SplitSeq(output.text, "\n") {
+				sha, subject, _ := strings.Cut(line, " ")
+				if commitSHARE.MatchString(sha) {
+					quietSHA, quietSubject = sha, subject
+					quietOwner = cmp.Or(pending[output.process], call)
+					quietCount++
+				}
+			}
+		}
+		if quietCount == 1 && !seen[quietSHA] {
+			seen[quietSHA] = true
+			link := quietOwner.CommitLink
+			link.SHA, link.Branch, link.Subject = quietSHA, "", quietSubject
+			link.Repository = commitRepository(quietOwner.input, cwd)
+			links = append(links, link)
 		}
 	}
 	return links

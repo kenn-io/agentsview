@@ -121,6 +121,53 @@ func TestCommitLinksParsing(t *testing.T) {
 	}
 }
 
+func TestCommitLinksQuietReadback(t *testing.T) {
+	for _, tt := range []struct {
+		name, command, output, sha, subject string
+	}{
+		{"rev parse", "git commit -q -m fix && git rev-parse HEAD", "abc1234\n", "abc1234", ""},
+		{"log oneline", "git commit --quiet -m fix && git log --oneline -1", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
+		{"log reverse options", "git commit -q -m fix && git log -1 --oneline", "abc1234 Fix parser\n", "abc1234", "Fix parser"},
+		{"commit other repo", "git -C /other commit -q -m fix && git rev-parse HEAD", "abc1234", "", ""},
+		{"readback other repo", "git commit -q -m fix && git -C /other rev-parse HEAD", "abc1234", "", ""},
+		{"dry run", "git commit -q --dry-run && git rev-parse HEAD", "abc1234", "", ""},
+		{"short dry run", "git commit -n -q && git rev-parse HEAD", "abc1234", "", ""},
+		{"fallback", "git commit -q || true && git rev-parse HEAD", "abc1234", "", ""},
+		{"printed", "echo 'git commit -q && git rev-parse HEAD'", "abc1234", "", ""},
+		{"quoted", "printf '%s' \"git commit -q && git rev-parse HEAD\"", "abc1234", "", ""},
+		{"multiple shas", "git commit -q && git rev-parse HEAD", "abc1234\ndef5678 Other", "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			input, err := json.Marshal(map[string]string{"command": tt.command})
+			require.NoError(t, err)
+			insertMessages(t, d, commitMessages("s1", string(input), tt.output)...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			if tt.sha == "" {
+				assert.Empty(t, got.Commits)
+				return
+			}
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, tt.sha, got.Commits[0].SHA)
+			assert.Equal(t, tt.subject, got.Commits[0].Subject)
+			assert.Empty(t, got.Commits[0].Branch)
+			assert.Equal(t, "/work", got.Commits[0].Repository)
+		})
+	}
+	t.Run("summary takes precedence", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "s1", "project-a")
+		insertMessages(t, d, commitMessages("s1", `{"command":"git commit -q && git rev-parse HEAD"}`, "[main abc1234] Fix parser\ndef5678")...)
+		got, err := d.SessionCommitLinks(t.Context(), "s1")
+		require.NoError(t, err)
+		require.Len(t, got.Commits, 1)
+		assert.Equal(t, "abc1234", got.Commits[0].SHA)
+		assert.Equal(t, "main", got.Commits[0].Branch)
+	})
+}
+
 func TestReviewRepeatedGitC(t *testing.T) {
 	skipIfNoGit(t)
 	base := t.TempDir()
