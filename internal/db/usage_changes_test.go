@@ -234,6 +234,44 @@ func TestUsageChangeJournal(t *testing.T) {
 	}
 }
 
+func TestUsageChangeJournalUsageEventUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mutation string
+		wantIDs  []string
+	}{
+		{"token correction", `UPDATE usage_events SET input_tokens = 20 WHERE session_id = 'source'`, []string{"source"}},
+		{"identical update", `UPDATE usage_events SET input_tokens = 10 WHERE session_id = 'source'`, nil},
+		{"move session", `UPDATE usage_events SET session_id = 'target' WHERE session_id = 'source'`, []string{"source", "target"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "source", "project-a")
+			insertSession(t, d, "target", "project-a")
+			require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "source", []UsageEvent{{Source: "session", Model: "model-x", InputTokens: 10}}))
+			before, err := d.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+
+			result, err := d.getWriter().ExecContext(ctx, tc.mutation)
+			require.NoError(t, err)
+			rows, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.EqualValues(t, 1, rows)
+			after, err := d.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			if len(tc.wantIDs) == 0 {
+				assert.Equal(t, before, after)
+			} else {
+				assert.Greater(t, after, before)
+			}
+			ids, err := d.LoadUsageChanges(ctx, before, after)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.wantIDs, ids)
+		})
+	}
+}
+
 func TestUsageChangeJournalPersistsForOtherWriters(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
