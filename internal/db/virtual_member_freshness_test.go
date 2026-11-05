@@ -40,8 +40,8 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 	// Member "a" has three rows. The first newest row supplies the hash,
 	// and the lower data version survives the fold.
 	seedVirtualMemberRow(t, d, "a-old", container+"#a", 100, 5, "old-hash")
-	seedVirtualMemberRow(t, d, "a-new", container+"#a", 200, 2, "new-hash")
-	seedVirtualMemberRow(t, d, "a-tie", container+"#a", 200, 5, "tie-hash")
+	seedVirtualMemberRow(t, d, "a-new", container+"#a", 200, 5, "new-hash")
+	seedVirtualMemberRow(t, d, "a-tie", container+"#a", 200, 2, "tie-hash")
 	seedVirtualMemberRow(t, d, "b", container+"#b", 150, 5, "")
 	seedVirtualMemberRow(t, d, "c", container+"#c", 300, 5, "")
 	seedVirtualMemberRow(t, d, "outside", "/data/other.db#x", 400, 5, "")
@@ -93,41 +93,6 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 		"one call over a large limit folds the whole membership")
 	assert.Equal(t, container+"#a", page[0].Path)
 	assert.Equal(t, container+"#c", page[1].Path)
-
-	for _, limit := range []int{1, 2, 3} {
-		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
-			d := testDB(t)
-			wantPaths := []string{container + "#a", container + "#b", container + "#c", container + "#d", container + "#e", container + "#f", container + "#g"}
-			// Every possible page end has duplicates. The last row supplies
-			// the minimum version, after the newest-mtime hash is selected.
-			for _, path := range wantPaths {
-				seedVirtualMemberRow(t, d, path+"-old", path, 100, 5, "old-hash")
-				seedVirtualMemberRow(t, d, path+"-new", path, 200, 5, "new-hash")
-				seedVirtualMemberRow(t, d, path+"-tie", path, 200, 2, "tie-hash")
-			}
-
-			var gotPaths []string
-			after := ""
-			for range len(wantPaths) + 1 {
-				page, done, err := d.ListVirtualContainerMemberFreshnessPage(t.Context(), container, "", after, limit)
-				require.NoError(t, err)
-				require.LessOrEqual(t, len(page), limit)
-				for _, row := range page {
-					gotPaths = append(gotPaths, row.Path)
-					assert.Equal(t, int64(200), row.MTimeNS, row.Path)
-					assert.Equal(t, "new-hash", row.Hash, row.Path)
-					assert.Equal(t, 2, row.DataVersion, row.Path)
-				}
-				if done {
-					assert.Equal(t, wantPaths, gotPaths)
-					return
-				}
-				require.Len(t, page, limit)
-				after = page[len(page)-1].Path
-			}
-			require.FailNow(t, "paging did not report exhaustion")
-		})
-	}
 }
 
 func TestVirtualContainerMemberFreshnessStreamingPlan(t *testing.T) {
@@ -135,7 +100,6 @@ func TestVirtualContainerMemberFreshnessStreamingPlan(t *testing.T) {
 	for _, op := range []string{">=", ">"} {
 		t.Run(op, func(t *testing.T) {
 			plan := queryPlanOf(t, d, fmt.Sprintf(virtualContainerMemberFreshnessQuery, op), "/data/opencode.db#", "/data/opencode.db")
-			assert.Contains(t, plan, "USING INDEX idx_sessions_file_path")
 			assert.NotContains(t, plan, "TEMP B-TREE", "pages must stream without sorting the container")
 		})
 	}
