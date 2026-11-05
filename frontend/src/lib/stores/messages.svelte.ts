@@ -41,6 +41,17 @@ function isRevisionChange(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
 }
 
+// A network failure or 5xx answer may succeed on a later try.
+function isTransient(err: unknown): boolean {
+  return (
+    (err instanceof TypeError &&
+      /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed)$/.test(
+        err.message,
+      )) ||
+    (err instanceof ApiError && err.status >= 500 && err.status < 600)
+  );
+}
+
 export class MessagesStore {
   messages: Message[] = $state([]);
   loading: boolean = $state(false);
@@ -171,9 +182,9 @@ export class MessagesStore {
     } catch (err) {
       if (isAbortError(err)) return;
       if (this.sessionId === id) this.historyComplete = false;
-      if (this.loadGeneration === generation) {
-        sessions.markActiveSessionMissing(id, err);
-      }
+      if (this.loadGeneration === generation) sessions.markActiveSessionMissing(id, err);
+      // A reload queued behind this load retries a transient failure with the reload's bounded backoff.
+      if (this.loadGeneration === generation && isTransient(err)) void this.reload();
       console.warn("Failed to load session messages:", err);
     } finally {
       if (this.sessionId === id && this.loadingOwner === owner) {
@@ -839,12 +850,7 @@ export class MessagesStore {
       }
     } catch (err) {
       if (isAbortError(err)) return;
-      const transient =
-        (err instanceof TypeError &&
-          /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed)$/.test(
-            err.message,
-          )) ||
-        (err instanceof ApiError && err.status >= 500 && err.status < 600);
+      const transient = isTransient(err);
       if (this.sessionId === id && (isRevisionChange(err) || transient)) {
         if (++this.reloadFailures < MAX_LOAD_ATTEMPTS) {
           if (transient) await new Promise((resolve) => setTimeout(resolve, 300));
