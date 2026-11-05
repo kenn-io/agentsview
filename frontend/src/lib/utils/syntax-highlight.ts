@@ -47,16 +47,17 @@ function getHighlighter(): Promise<HighlighterCore> {
 
   highlighterPromise = (async () => {
     // Grammars do not depend on the core modules, so every chunk loads at once.
-    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme, langModules] =
+    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme, lightTheme, langModules] =
       await Promise.all([
         import("shiki/core"),
         import("shiki/engine/javascript"),
         import("shiki/themes/catppuccin-mocha.mjs"),
+        import("shiki/themes/github-light.mjs"),
         Promise.all(Object.values(GRAMMAR_LOADERS).map((load) => load())),
       ]);
 
     const hl = await createHighlighterCore({
-      themes: [theme.default ?? theme],
+      themes: [theme.default ?? theme, lightTheme.default ?? lightTheme],
       langs: langModules.map((m) => m.default),
       engine: createJavaScriptRegexEngine(),
     });
@@ -78,17 +79,40 @@ function resolveLanguage(lang: string): string | null {
   return PRELOADED_LANGS.includes(resolved) ? resolved : null;
 }
 
-export async function highlightInline(code: string, lang: string): Promise<string | null> {
+export interface HighlightOptions {
+  /**
+   * Also emit github-light token colors as `--shiki-light` (and
+   * `--shiki-light-font-style`) on each token, for a container that is
+   * light in the light theme. The inline color stays catppuccin-mocha, but
+   * its italics move to `--shiki-dark-font-style`, so the container must
+   * apply the font-style variable for the active theme.
+   */
+  lightTheme?: boolean;
+}
+
+export async function highlightInline(
+  code: string,
+  lang: string,
+  options: HighlightOptions = {},
+): Promise<string | null> {
   const lineEndings = code.match(/\r\n|\r|\n/g) ?? [];
 
   try {
     const hl = await getHighlighter();
 
-    const html = hl.codeToHtml(code.replace(/\r\n?/g, "\n"), {
-      lang,
-      theme: "catppuccin-mocha",
-      structure: "inline",
-    });
+    const source = code.replace(/\r\n?/g, "\n");
+    const html = options.lightTheme
+      ? hl.codeToHtml(source, {
+          lang,
+          themes: { dark: "catppuccin-mocha", light: "github-light" },
+          defaultColor: "dark",
+          structure: "inline",
+        })
+      : hl.codeToHtml(source, {
+          lang,
+          theme: "catppuccin-mocha",
+          structure: "inline",
+        });
 
     // Shiki's inline layout emits <br>, which is absent from textContent.
     // Restore source separators in our preformatted code containers. Literal
@@ -109,6 +133,7 @@ const pending = new Map<
   {
     code: string;
     lang: string;
+    options: HighlightOptions;
     resolve: (html: string | null | PromiseLike<string | null>) => void;
   }
 >();
@@ -117,8 +142,8 @@ function failWorker() {
   workerFailed = true;
   worker?.terminate();
   worker = null;
-  for (const { code, lang, resolve } of pending.values()) {
-    resolve(highlightInline(code, lang));
+  for (const { code, lang, options, resolve } of pending.values()) {
+    resolve(highlightInline(code, lang, options));
   }
   pending.clear();
 }
@@ -130,12 +155,16 @@ function failWorker() {
  * Callers insert the result via `{@html}` — Shiki escapes the code text itself.
  * Line endings remain text nodes so copying and search retain source offsets.
  */
-export async function highlightToHtml(code: string, lang: string): Promise<string | null> {
+export async function highlightToHtml(
+  code: string,
+  lang: string,
+  options: HighlightOptions = {},
+): Promise<string | null> {
   const resolved = resolveLanguage(lang);
   if (resolved === null || code.length > HIGHLIGHT_MAX_BYTES) return null;
   // Reject large blocks before starting either highlighting runtime.
   if ((code.match(/\r\n|\r|\n/g)?.length ?? 0) + 1 > HIGHLIGHT_MAX_LINES) return null;
-  if (workerFailed || typeof Worker === "undefined") return highlightInline(code, resolved);
+  if (workerFailed || typeof Worker === "undefined") return highlightInline(code, resolved, options);
 
   if (worker === null) {
     try {
@@ -150,13 +179,13 @@ export async function highlightToHtml(code: string, lang: string): Promise<strin
       worker.onmessageerror = failWorker;
     } catch {
       failWorker();
-      return highlightInline(code, resolved);
+      return highlightInline(code, resolved, options);
     }
   }
 
   return new Promise((resolve) => {
     const id = nextId++;
-    pending.set(id, { code, lang: resolved, resolve });
-    worker!.postMessage({ id, code, lang: resolved });
+    pending.set(id, { code, lang: resolved, options, resolve });
+    worker!.postMessage({ id, code, lang: resolved, options });
   });
 }

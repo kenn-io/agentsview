@@ -182,7 +182,7 @@ test.describe("Appearance accessibility", () => {
     );
 
     await page.goto("/quality");
-    await expect(page.getByRole("heading", { name: "Quality Patterns" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Quality patterns" })).toBeVisible();
     await page.locator(".driver-row").first().click();
     await expect(page.locator(".evidence-panel-live")).toBeVisible();
 
@@ -403,8 +403,8 @@ test.describe("Appearance accessibility", () => {
     await page.goto("/sessions/test-session-small-5");
     const rail = page.locator(".parallel-group").first();
     await expect(rail).toBeVisible();
-    await expect(rail).toHaveCSS("border-left-style", "solid");
-    await expect(rail).toHaveCSS("border-left-width", "2px");
+    // By default the message card's rail is the only rule; the group adds none.
+    await expect(rail).toHaveCSS("border-left-style", "none");
 
     await page.evaluate(() =>
       localStorage.setItem(
