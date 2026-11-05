@@ -439,7 +439,7 @@ export class MessagesStore {
       this.loadedRevision = revision;
 
       const newest = loaded[loaded.length - 1];
-      this.messageCount = messageCountHint ?? (newest ? newest.ordinal + 1 : loaded.length);
+      this.messageCount = newest ? newest.ordinal + 1 : loaded.length;
       this.hasOlder = false;
 
       if (res.messages.length < MESSAGE_PAGE_SIZE) {

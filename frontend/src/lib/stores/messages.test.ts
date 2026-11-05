@@ -262,6 +262,35 @@ describe("MessagesStore", () => {
     }
   });
 
+  it("recovers all rows after a transient second-page failure with an unchanged revision", async () => {
+    const rows = Array.from({ length: 1500 }, (_, i) => makeMessage(i));
+    api.getSession.mockResolvedValue(makeSession("s1", 1500));
+    api.getMessages
+      .mockResolvedValueOnce({
+        ...makeMessagesResponse(rows.slice(0, 1000)),
+        transcript_revision: "r1",
+      })
+      .mockRejectedValueOnce(new ApiError(503, "unavailable"))
+      .mockImplementation(async (_id, params) => ({
+        ...makeMessagesResponse(rows.slice(params.from, params.from + params.limit)),
+        transcript_revision: "r1",
+      }));
+
+    await messages.loadSession("s1", Promise.resolve());
+    await messages.reload();
+
+    expect(api.getMessages.mock.calls[1]).toEqual([
+      "s1",
+      { from: 1000, limit: 1000, direction: "asc", expected_revision: "r1" },
+      expect.anything(),
+    ]);
+    expect(messages.messages).toHaveLength(1500);
+    expect(messages.messages).toEqual(rows);
+    expect(messages.messageCount).toBe(1500);
+    expect(messages.historyComplete).toBe(true);
+    expect(messages.hasOlder).toBe(false);
+  });
+
   it("keeps catch-up reloads once the initial read starts", async () => {
     const firstRead = createDeferred<MessagesResponse>();
     const started = createDeferred<void>();
