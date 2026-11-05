@@ -48,7 +48,11 @@ export function overviewY(offset: number, totalSize: number, height: number): nu
   return Math.max(0, Math.min(height - 1, (offset / totalSize) * height));
 }
 
-/** At least four pixels per tick; near ticks merge into one density region. */
+const TICK_HEIGHT = 2;
+const TICK_GAP = 1;
+
+/** Uniform two-pixel ticks. A tick that would touch the previous one is
+ *  dropped, so dense runs read as evenly spaced stripes, never solid blocks. */
 export function overviewTicks(
   locations: readonly OverviewLocation[],
   totalSize: number,
@@ -57,14 +61,13 @@ export function overviewTicks(
   if (!(height > 0) || !(totalSize > 0)) return [];
   let pixels = locations.map(({ offset }) => overviewY(offset, totalSize, height));
   if (pixels.length > 1000) pixels = [...new Set(pixels.map(Math.floor))];
+  const size = Math.min(TICK_HEIGHT, height);
   const ticks: OverviewTick[] = [];
   for (const pixel of pixels.sort((a, b) => a - b)) {
-    const y = Math.max(0, Math.min(height - Math.min(4, height), pixel - 2));
-    const end = Math.min(height, y + 4);
+    const y = Math.max(0, Math.min(height - size, Math.round(pixel - size / 2)));
     const last = ticks[ticks.length - 1];
-    if (last && y <= last.y + last.height + 2)
-      last.height = Math.max(last.y + last.height, end) - last.y;
-    else ticks.push({ y, height: end - y });
+    if (last && y < last.y + size + TICK_GAP) continue;
+    ticks.push({ y, height: size });
   }
   return ticks;
 }
