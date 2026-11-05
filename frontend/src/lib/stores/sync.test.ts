@@ -118,6 +118,21 @@ describe("hidden status polling", () => {
 });
 
 describe("idle catch-up", () => {
+  it("doesn't report catch-up completion for parser-stale responses", async () => {
+    const refresh = vi.spyOn(sync, "loadStats").mockResolvedValue();
+    const notify = vi.spyOn(sync, "notifySyncComplete");
+    (sync as unknown as { statusHydrated: boolean }).statusHydrated = false;
+    api.getVersion.mockResolvedValue({ version: "test", commit: "unknown", build_date: "" });
+    api.getSyncStatus.mockResolvedValue({ archive_stale: true, sync_pending: false, last_sync: "" });
+    await sync.loadStatus();
+    window.dispatchEvent(new Event("agentsview:archive-stale"));
+    await sync.loadStatus();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    refresh.mockRestore();
+    notify.mockRestore();
+  });
+
   it("refreshes results when catch-up finishes without advancing last_sync", async () => {
     const refresh = vi.spyOn(sync, "loadStats").mockResolvedValue();
     const notify = vi.spyOn(sync, "notifySyncComplete");

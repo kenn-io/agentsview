@@ -132,9 +132,9 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	assert.True(t, sessionImported(t, database, "gemini:alternate"))
 }
 
-func TestDaemonIngestionIdleSearchAndDirectRead(t *testing.T) {
-	for _, mode := range []struct{ direct, idle bool }{{false, true}, {true, true}, {false, false}} {
-		t.Run(fmt.Sprintf("direct=%t/idle=%t", mode.direct, mode.idle), func(t *testing.T) {
+func TestDaemonIngestionIdleSearchAndCLIRead(t *testing.T) {
+	for _, mode := range []struct{ cli, idle bool }{{false, true}, {true, true}, {false, false}} {
+		t.Run(fmt.Sprintf("cli=%t/idle=%t", mode.cli, mode.idle), func(t *testing.T) {
 			var watchAttempts atomic.Int32
 			originalLog := log.Writer()
 			log.SetOutput(observedOutput{Writer: io.Discard, observe: func(p []byte) {
@@ -186,11 +186,14 @@ func TestDaemonIngestionIdleSearchAndDirectRead(t *testing.T) {
 				} else {
 					assert.EqualValues(t, 1, quietAttempts)
 				}
-				if mode.direct {
-					ensureFreshData(t.Context(), cfg, database, false)
-					stored, err := database.GetSessionFull(t.Context(), "gemini:"+id)
+				if mode.cli {
+					backend, closeBackend, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, defaultArchiveQueryPolicy(nil))
 					require.NoError(t, err)
-					require.NotNil(t, stored)
+					require.IsType(t, daemonArchiveQueryBackend{}, backend)
+					_, err = backend.DailyUsage(t.Context(), dailyUsageQuery{NoDefaultRange: true})
+					closeBackend()
+					require.NoError(t, err)
+					require.True(t, sessionImported(t, database, "gemini:"+id))
 				}
 				headers, body := searchIngestionArchive(t, ts.URL, id)
 				assert.Contains(t, body, "hello from "+id)
@@ -308,4 +311,63 @@ func TestDaemonIngestionFailedCatchupRetriesOnRead(t *testing.T) {
 	writeReloadGeminiSession(t, root, "retry")
 	require.True(t, ingestion.EnsureFresh(t.Context()))
 	assert.True(t, sessionImported(t, database, "gemini:retry"))
+}
+
+func TestDaemonIngestionStopWaitsForCatchup(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	stop := sync.OnceFunc(ingestion.Stop)
+	t.Cleanup(stop)
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	writeReloadGeminiSession(t, root, "overnight")
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
+	go func() {
+		defer close(finished)
+		_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	require.False(t, ingestion.EnsureFresh(t.Context()))
+	ingestion.mu.Lock()
+	catchupDone := ingestion.catchup
+	ingestion.mu.Unlock()
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
+	assert.Never(t, func() bool {
+		select {
+		case <-stopped:
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, time.Millisecond, "Stop must retain the archive until catch-up leaves the engine")
+	releaseOnce()
+	<-finished
+	<-catchupDone
+	<-stopped
+}
+
+func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	writeReloadGeminiSession(t, root, "before")
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	writeReloadGeminiSession(t, root, "before-startup-ack")
+	assert.Never(t, func() bool { return sessionImported(t, database, "gemini:before-startup-ack") }, time.Second, 20*time.Millisecond, "watch events wait for startup acknowledgment after wake too")
+	ingestion.OpenWatcherDispatch()
+	require.Eventually(t, func() bool { return sessionImported(t, database, "gemini:before-startup-ack") }, 5*time.Second, 20*time.Millisecond)
 }

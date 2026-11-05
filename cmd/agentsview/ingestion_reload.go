@@ -238,34 +238,28 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	}
 	d.mu.Lock()
 	if watchers != nil {
-		d.watchers = watchers
-		watchers.openDispatch()
-		if d.liveEnabled {
-			d.stopLive = startLiveActivityPoller(d.ctx, d.Config(), d.database, d.engine, d.idleTracker)
-		}
+		d.installWatchersLocked(watchers, d.liveEnabled)
 	}
 	since := d.quietSince.Add(-quickSyncMargin)
 	d.mu.Unlock()
 	d.applyMu.Unlock()
-	go func() {
-		defer finish()
-		complete := false
-		if !stopped {
-			stats := d.engine.SyncAllSince(d.ctx, since, func(agentsync.Progress) {})
-			complete = stats.ProcessingComplete()
-			if !complete {
-				log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
-			}
+	defer finish()
+	complete := false
+	if !stopped {
+		stats := d.engine.SyncAllSince(d.ctx, since, func(agentsync.Progress) {})
+		complete = stats.ProcessingComplete()
+		if !complete {
+			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
 		}
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		if complete && !d.stopped {
-			d.pending = false
-			close(d.resumed)
-		}
-		d.catchup = nil
-		close(done)
-	}()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if complete && !d.stopped {
+		d.pending = false
+		close(d.resumed)
+	}
+	d.catchup = nil
+	close(done)
 }
 
 // Reload reads the saved configuration and applies it in the background. It
@@ -342,13 +336,7 @@ func (d *daemonIngestion) applySaved() {
 	d.mu.Lock()
 	old, oldLive := d.watchers, d.stopLive
 	if watchers != nil && old != nil && !d.stopped {
-		d.watchers = watchers
-		if d.dispatchOpen {
-			watchers.openDispatch()
-		}
-		if oldLive != nil {
-			d.stopLive = startLiveActivityPoller(d.ctx, next, d.database, d.engine, d.idleTracker)
-		}
+		d.installWatchersLocked(watchers, oldLive != nil)
 		watchers = nil
 	} else {
 		old, oldLive = nil, nil
@@ -366,6 +354,18 @@ func (d *daemonIngestion) applySaved() {
 
 	log.Printf("applied session provider settings: disabled=%v",
 		next.DisabledAgents)
+}
+
+// installWatchersLocked makes watchers current. Dispatch opens only once
+// startup has opened it, so a replacement never delivers batches early.
+func (d *daemonIngestion) installWatchersLocked(watchers *ingestionWatchers, live bool) {
+	d.watchers = watchers
+	if d.dispatchOpen {
+		watchers.openDispatch()
+	}
+	if live {
+		d.stopLive = startLiveActivityPoller(d.ctx, d.Config(), d.database, d.engine, d.idleTracker)
+	}
 }
 
 func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {

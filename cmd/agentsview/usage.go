@@ -411,8 +411,15 @@ func applyCustomPricing(database *db.DB, cfg config.Config) {
 // ensureFreshData makes sure the database reflects recent
 // session file changes before serving a usage query.
 //
-// An active daemon owns refreshes, including waking paused collection. Without
-// one, rebuild stale parser data or sync files changed since the last pass.
+// Decision tree:
+//  1. If the stored data version is stale (parser changes on
+//     upgrade), run a full resync.
+//  2. If a server process is active (via kit runtime record), trust
+//     its file watcher and skip on-demand sync. This avoids
+//     duplicate work and write contention.
+//  3. Otherwise, run a quick incremental sync scoped to files
+//     modified since the last recorded sync start time, with
+//     a small safety margin.
 //
 // Callers that need stale data (e.g. offline benchmarks) can
 // bypass via skip=true.
@@ -434,18 +441,6 @@ func ensureFreshData(
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(origLog)
 
-	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
-		ctx, stale := apiclient.TrackArchiveFreshness(ctx, nil)
-		tr, err := detectTransportContext(ctx, appCfg.DataDir, appCfg.AuthToken, 0)
-		if err == nil && tr.Mode == transportHTTP {
-			_, _ = postDaemonPush[sync.SyncStats](ctx, tr, appCfg.AuthToken, startupSyncOperation, apiclient.DaemonPushRequest{}, func(sync.Progress) {})
-		}
-		if stale() {
-			fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
-		}
-		return
-	}
-
 	if database.NeedsResync() {
 		engine := sync.NewEngine(ctx, database, sync.EngineConfig{
 			AgentDirs:          appCfg.AgentDirs,
@@ -465,6 +460,14 @@ func ensureFreshData(
 		stats := engine.ResyncAll(ctx, progress.Print)
 		progress.Finish()
 		printSyncSummaryStderr(stats, t)
+		return
+	}
+
+	// Skip on-demand sync only when a writable local daemon is
+	// already keeping the SQLite archive fresh. pg serve daemons
+	// (read-only) do not sync the local DB, so we still want to
+	// run our own sync when only one of those is present.
+	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
 		return
 	}
 
