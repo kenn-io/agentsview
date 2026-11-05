@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/json/v2"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -117,6 +118,25 @@ func TestCommitLinksParsing(t *testing.T) {
 	}
 }
 
+func TestReviewRepeatedGitC(t *testing.T) {
+	skipIfNoGit(t)
+	base := t.TempDir()
+	repo := filepath.Join(base, "root", "child")
+	statsInitRepoAt(t, repo)
+	cmd := exec.CommandContext(t.Context(), "git", "-C", "root", "-C", "child", "commit", "--allow-empty", "-m", "Fix parser")
+	cmd.Dir = base
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = base })
+	insertMessages(t, d, commitMessages("s1", `{"command":"git -C root -C child commit --allow-empty -m 'Fix parser'"}`, string(output))...)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	assert.Equal(t, repo, got.Commits[0].Repository)
+}
+
 func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 	type repositoryCase struct{ cwd, command, repository string }
 	for _, tt := range []struct {
@@ -129,6 +149,9 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		{"quoted directory", []repositoryCase{{"/work", `git -C "/tmp/my repo" commit -m fix`, "/tmp/my repo"}}},
 		{"quoted operators", []repositoryCase{{"/work", `git -C "/tmp/a;b" commit -m "x && y"`, "/tmp/a;b"}}},
 		{"directory after global options", []repositoryCase{{"/work", `git -c 'user.name=Example User' --no-pager -C /repo commit -m fix`, "/repo"}}},
+		{"successive directories with global options", []repositoryCase{{"/work", `git -C root -c 'user.name=-C decoy' --no-pager -C 'child repo' commit -m fix`, "/work/root/child repo"}}},
+		{"absolute directory resets previous directory", []repositoryCase{{"/work", `git -C root -C /repo -C child commit -m fix`, "/repo/child"}}},
+		{"separate git invocations", []repositoryCase{{"/work", `git -C /other add . && git -C root -C child commit -m fix`, "/work/root/child"}}},
 		{"directory text in message", []repositoryCase{{"/work", `git commit -m "Document git -C /other commit"`, "/work"}}},
 		{"relative directory", []repositoryCase{{"/work", "cd sub && git -C child commit -m fix", "/work/sub/child"}}},
 		{"global directory option", []repositoryCase{{"/work", `git --git-dir=/repo/.git commit -m fix`, "/work"}}},

@@ -36,7 +36,7 @@ var (
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
 	commitCDRE                = regexp.MustCompile(`^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
-	commitGitDirRE            = regexp.MustCompile(`\bgit\s+(?:` + commitGlobalOption + `\s+)*?-C\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
+	commitGlobalOptionRE      = regexp.MustCompile(commitGlobalOption)
 	commitPollRE              = regexp.MustCompile(`\btools\.write_stdin\s*\(\s*\{[^{}]*["']?session_id["']?\s*:\s*([0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
 	commitCellRE              = regexp.MustCompile(`(?m)^Script running with cell ID (\S+)\r?$`)
@@ -80,7 +80,7 @@ type CommitSessionList struct {
 	Commits []CommitSessionMatch `json:"commits"`
 }
 
-// commitRepository records the first directory described by a call.
+// commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
 	resolve := func(base, dir string) string {
 		dir = strings.Trim(dir, "\"'")
@@ -156,8 +156,10 @@ func commitRepository(input, cwd string) string {
 	if match := commitCDRE.FindStringSubmatch(command); match != nil {
 		cwd = resolve(cwd, match[1])
 	}
-	if match := commitGitDirRE.FindStringSubmatch(commitInvocationRE.FindString(command)); match != nil {
-		cwd = resolve(cwd, match[1])
+	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
+		if strings.HasPrefix(option, "-C") {
+			cwd = resolve(cwd, strings.TrimSpace(option[2:]))
+		}
 	}
 	return cwd
 }
