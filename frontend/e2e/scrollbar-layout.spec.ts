@@ -181,8 +181,8 @@ test.describe("Scrollbar layout", () => {
     expect(await overflows(scroller)).toBe(false);
     const before = await leftEdge(panel);
 
-    await nav.locator("button", { hasText: "Session Providers" }).click();
-    await expect(page.getByRole("heading", { name: "Session Providers" })).toBeVisible();
+    await nav.locator("button", { hasText: "Session providers" }).click();
+    await expect(page.getByRole("heading", { name: "Session providers" })).toBeVisible();
     await expectScrollbarAppeared(scroller);
 
     expect(await leftEdge(panel)).toBe(before);

@@ -135,14 +135,14 @@
 <div class="appearance-settings">
   <div class="setting-row">
     <span class="setting-label">{m.appearance_theme()}</span>
-    <Button size="sm" onclick={() => ui.toggleTheme()}>
+    <Button onclick={() => ui.toggleTheme()}>
       {ui.theme === "light" ? m.appearance_light() : m.appearance_dark()}
     </Button>
   </div>
 
   <div class="setting-row">
     <span class="setting-label">{m.appearance_high_contrast()}</span>
-    <Button size="sm" onclick={() => ui.toggleHighContrast()}>
+    <Button onclick={() => ui.toggleHighContrast()}>
       {ui.highContrast ? m.appearance_on() : m.appearance_off()}
     </Button>
   </div>
@@ -209,7 +209,6 @@
         }}
       />
       <Button
-        size="sm"
         disabled={messageColors.isDefault}
         onclick={() => messageColors.applyPreset("default")}
       >

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { TextInput } from "@kenn-io/kit-ui";
+  import { Button, TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { ConfigService } from "../../api/generated/index";
@@ -30,14 +30,14 @@
 </script>
 
 <div class="github-settings">
-  <div class="status-row">
-    <span class="status-label">{m.settings_github_status()}</span>
+  <div class="setting-row">
+    <span class="setting-label">{m.settings_github_status()}</span>
     <span class="status-value" class:configured={settings.githubConfigured}>
       {settings.githubConfigured ? m.settings_github_configured() : m.settings_github_not_configured()}
     </span>
   </div>
 
-  <div class="token-row">
+  <div class="token-row control-offset">
     <TextInput
       class="setting-input"
       size="md"
@@ -45,20 +45,21 @@
       placeholder="ghp_..."
       bind:value={tokenInput}
     />
-    <button
-      class="save-btn"
+    <Button
+      tone="info"
+      surface="solid"
       disabled={saving || settings.saving || !tokenInput.trim()}
       onclick={handleSave}
     >
       {saving ? m.settings_github_saving() : m.settings_github_save_token()}
-    </button>
+    </Button>
   </div>
 
   {#if error}
-    <p class="msg error">{error}</p>
+    <p class="msg error control-offset">{error}</p>
   {/if}
   {#if success}
-    <p class="msg success">{success}</p>
+    <p class="msg success control-offset">{success}</p>
   {/if}
 </div>
 
@@ -69,13 +70,9 @@
     gap: var(--space-5);
   }
 
-  .status-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .status-label {
+  /* The status row uses the shared settings grid from SettingsPage; the
+     token field and its action start on the same control column. */
+  .setting-label {
     font-size: 12px;
     font-weight: 500;
     color: var(--text-secondary);
@@ -90,6 +87,10 @@
     color: var(--accent-green);
   }
 
+  .control-offset {
+    padding-left: calc(var(--setting-label-width, 148px) + 12px);
+  }
+
   .token-row {
     display: flex;
     gap: 8px;
@@ -100,29 +101,6 @@
   .token-row :global(.setting-input.kit-text-input) {
     flex: 1;
     font-family: var(--font-mono, monospace);
-  }
-
-  .save-btn {
-    height: 30px;
-    padding: 0 14px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--accent-blue-foreground);
-    background: var(--accent-blue);
-    border: none;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: opacity 0.12s;
-  }
-
-  .save-btn:hover:not(:disabled) {
-    opacity: 0.9;
-  }
-
-  .save-btn:disabled {
-    opacity: var(--opacity-disabled);
-    cursor: default;
   }
 
   .msg {
@@ -136,5 +114,11 @@
 
   .msg.success {
     color: var(--accent-green, #22c55e);
+  }
+
+  @media (max-width: 640px) {
+    .control-offset {
+      padding-left: 0;
+    }
   }
 </style>

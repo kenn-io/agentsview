@@ -42,8 +42,8 @@ test.describe("Settings layout", () => {
       .poll(() => host.evaluate((element) => element.scrollHeight))
       .toBe(await host.evaluate((element) => element.clientHeight));
 
-    await nav.locator("button", { hasText: "Session Providers" }).click();
-    await expect(page.getByRole("heading", { name: "Session Providers" })).toBeVisible();
+    await nav.locator("button", { hasText: "Session providers" }).click();
+    await expect(page.getByRole("heading", { name: "Session providers" })).toBeVisible();
 
     const scroller = page.locator(".kit-settings__scroll");
     await expect
@@ -109,6 +109,65 @@ test.describe("Settings layout", () => {
         buttonTextFits: true,
       });
     }
+  });
+
+  test("starts every panel's controls on one column at one height", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await openSettledSettings(page);
+    const nav = page.getByRole("navigation", { name: "Settings" });
+    const panel = page.locator(".settings-panel:not([hidden])");
+
+    async function openPanel(name: string) {
+      await nav.locator("button", { hasText: name }).click();
+      await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    }
+    const leftOf = (selector: string) =>
+      panel.locator(selector).evaluateAll((elements) =>
+        elements.map((element) => Math.round(element.getBoundingClientRect().left)),
+      );
+    // Row controls only: the per-role color pickers are a dense sub-list.
+    const rowControlHeights = () =>
+      panel
+        .locator(
+          ".kit-button, .kit-text-input, .kit-segmented:not(.kit-segmented--borderless), .kit-typeahead__trigger",
+        )
+        .evaluateAll((elements) =>
+          elements
+            .filter((element) => !element.closest(".role-colors"))
+            .map((element) => Math.round(element.getBoundingClientRect().height)),
+        );
+
+    await openPanel("Appearance");
+    const [column] = await leftOf(".setting-row.option-row .kit-segmented");
+    expect(column).toBeGreaterThan(0);
+    const appearanceHeights = await rowControlHeights();
+    expect(appearanceHeights.length).toBeGreaterThan(0);
+    expect(new Set(appearanceHeights)).toEqual(new Set([28]));
+
+    await openPanel("Session providers");
+    const switches = await leftOf(".provider-row > .kit-toggle");
+    expect(switches.length).toBeGreaterThan(0);
+    expect(new Set(switches)).toEqual(new Set([column]));
+    const nameOnSwitchLine = await panel.locator(".provider-row").evaluateAll((rows) =>
+      rows.map((row) => {
+        const name = row.querySelector(".provider-name")!.getBoundingClientRect();
+        const track = row.querySelector(".kit-toggle__track")!.getBoundingClientRect();
+        return Math.abs(name.top + name.height / 2 - (track.top + track.height / 2)) <= 1;
+      }),
+    );
+    expect(new Set(nameOnSwitchLine)).toEqual(new Set([true]));
+    expect(new Set(await rowControlHeights())).toEqual(new Set([28]));
+
+    await openPanel("Remote access");
+    expect(await leftOf(".setting-row > .kit-toggle")).toEqual([column]);
+    expect(await leftOf(".setting-row > .kit-text-input")).toEqual([column, column]);
+    expect(await leftOf(".actions .kit-button:first-child")).toEqual([column]);
+    expect(new Set(await rowControlHeights())).toEqual(new Set([28]));
+
+    await openPanel("Tool-result images");
+    expect(await leftOf(".setting-row > .kit-text-input")).toEqual([column, column]);
+    expect(await leftOf(".action-row .kit-button")).toEqual([column]);
+    expect(new Set(await rowControlHeights())).toEqual(new Set([28]));
   });
 
   test("wraps a long translated label inside the label column", async ({ page }) => {

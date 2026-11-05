@@ -325,9 +325,19 @@
      Panels keep their own markup; this replaces their per-panel
      space-between rows so controls start on a shared edge everywhere.
      Rows with a single child (checkboxes, notes) span both columns. */
+  .settings-page :global(.kit-settings__panel) {
+    /* Panels with their own row grids (providers, remote access, tool-result
+       images) read the same label width. */
+    --setting-label-width: 148px;
+    /* One control height for every settings control: buttons, inputs, and
+       typeahead triggers read this through kit-ui. */
+    --kit-control-height: 28px;
+    --typeahead-control-height: 28px;
+  }
+
   .settings-page :global(.kit-settings__panel .setting-row:not(.column)) {
     display: grid;
-    grid-template-columns: 148px minmax(0, 1fr);
+    grid-template-columns: var(--setting-label-width) minmax(0, 1fr);
     align-items: center;
     justify-items: start;
     gap: 12px;
@@ -359,6 +369,50 @@
     .settings-page :global(.kit-settings__panel .setting-row.option-row > .setting-label) {
       justify-self: start;
     }
+  }
+
+  /* Segments sit inside the track's 2px padding, so the track itself
+     lands on the shared control height. */
+  .settings-page :global(.kit-settings__panel .kit-segmented:not(.kit-segmented--borderless) .kit-segmented__btn) {
+    min-height: calc(var(--kit-control-height) - 4px);
+  }
+
+  /* Disabled and read-only controls stay legible: full opacity with muted
+     ink (above 3:1 in both themes) instead of halving their contrast. */
+  .settings-page :global(.kit-settings__panel button:disabled),
+  .settings-page :global(.kit-settings__panel .kit-segmented__btn:disabled),
+  .settings-page :global(.kit-settings__panel .kit-toggle--disabled),
+  .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
+    opacity: 1;
+    color: var(--text-muted);
+  }
+
+  .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
+    background: var(--bg-inset);
+  }
+
+  .settings-page :global(.kit-settings__panel .kit-text-input--disabled .kit-text-input__control) {
+    color: var(--text-muted);
+  }
+
+  /* Every disabled button, primary and destructive included, reads as the
+     same neutral outline: no fill, muted ink, not a pale accent. */
+  .settings-page :global(.kit-settings__panel .kit-button:disabled) {
+    background: transparent;
+    border-color: var(--border-default);
+    box-shadow: none;
+    color: var(--text-muted);
+  }
+
+  /* The selected segment of a disabled control keeps its raised fill and
+     edge, and stronger ink than its unselected neighbors. */
+  .settings-page :global(.kit-settings__panel .kit-segmented__btn.active:disabled) {
+    color: var(--text-secondary);
+  }
+
+  /* A disabled switch keeps its on/off state readable. */
+  .settings-page :global(.kit-settings__panel .kit-toggle--disabled .kit-toggle__input:checked + .kit-toggle__track) {
+    background: color-mix(in srgb, var(--accent-blue) 55%, var(--border-default));
   }
 
   /* Room below the panel so the sticky footer never clips the preview. */

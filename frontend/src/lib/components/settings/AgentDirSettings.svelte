@@ -87,8 +87,20 @@
 <div class="provider-list">
   {#each settings.sessionProviders as provider (provider.id)}
     <div class="provider-row">
+      <span class="provider-name">{provider.display_name}</span>
+      <Toggle
+        checked={providerEnabled(provider.id)}
+        disabled={busy()}
+        ariaLabel={m.settings_session_providers_enable_aria({
+          provider: provider.display_name,
+        })}
+        onchange={(enabled) => setProviderEnabled(provider.id, enabled)}
+      >
+        {providerEnabled(provider.id)
+          ? m.settings_session_providers_enabled()
+          : m.settings_session_providers_disabled()}
+      </Toggle>
       <div class="provider-details">
-        <span class="provider-name">{provider.display_name}</span>
         <div class="provider-paths">
           {#if provider.dirs.length === 0}
             <span class="provider-not-configured">
@@ -123,7 +135,7 @@
             {/each}
             <div class="provider-home-add">
               <TextInput
-                size="sm"
+                size="md"
                 block
                 disabled={busy()}
                 placeholder={m.settings_session_providers_homes_placeholder({
@@ -141,7 +153,6 @@
                 }}
               />
               <Button
-                size="sm"
                 disabled={busy() || !(homeDrafts[provider.id] ?? "").trim()}
                 onclick={() => void addHome(provider.id, provider.homes)}
               >
@@ -156,18 +167,6 @@
           </div>
         {/if}
       </div>
-      <Toggle
-        checked={providerEnabled(provider.id)}
-        disabled={busy()}
-        ariaLabel={m.settings_session_providers_enable_aria({
-          provider: provider.display_name,
-        })}
-        onchange={(enabled) => setProviderEnabled(provider.id, enabled)}
-      >
-        {providerEnabled(provider.id)
-          ? m.settings_session_providers_enabled()
-          : m.settings_session_providers_disabled()}
-      </Toggle>
     </div>
   {/each}
 
@@ -189,13 +188,16 @@
     flex-direction: column;
   }
 
+  /* Same geometry as the shared settings row: the provider name sits in
+     the label column, its switch on that first line in the control column,
+     and the paths and alternate homes below the switch. */
   .provider-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-5);
-    min-height: 50px;
-    padding: 8px 0;
+    display: grid;
+    grid-template-columns: var(--setting-label-width, 148px) minmax(0, 1fr);
+    align-items: start;
+    column-gap: 12px;
+    row-gap: var(--space-2);
+    padding: var(--space-4) 0;
     border-bottom: 1px solid var(--border-muted);
   }
 
@@ -203,17 +205,26 @@
     padding-top: 0;
   }
 
+  .provider-row > :global(.kit-toggle) {
+    justify-self: start;
+  }
+
   .provider-details {
+    grid-column: 2;
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
     min-width: 0;
   }
 
+  /* Matches the panel label style; the 20px line box centers it on the
+     switch track beside it. */
   .provider-name {
-    color: var(--text-primary);
+    color: var(--text-secondary);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
+    line-height: 20px;
+    overflow-wrap: anywhere;
   }
 
   .provider-paths {
@@ -247,9 +258,9 @@
   }
 
   .provider-homes-title {
-    color: var(--text-secondary);
+    color: var(--text-muted);
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 400;
   }
 
   .provider-home {
@@ -289,9 +300,14 @@
     color: var(--accent-red);
   }
 
+  /* Phones: one column, matching the shared settings rows. */
   @media (max-width: 640px) {
     .provider-row {
-      align-items: flex-start;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .provider-details {
+      grid-column: 1;
     }
   }
 </style>
