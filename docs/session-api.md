@@ -1260,7 +1260,7 @@ A missing daemon ID returns a retry error while
 all three are clear, it returns exit 2. Scheduled ingestion owns retries.
 
 `sync_pending` stays true while ingestion catches up after an idle period.
-It clears when the pass ends; source failures are logged.
+It clears when the pass succeeds; source failures are logged and keep it true.
 
 HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
 missing IDs. Direct mode still refreshes the named transcript. Combined HTTP

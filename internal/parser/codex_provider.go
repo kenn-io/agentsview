@@ -938,7 +938,11 @@ func (s codexSourceSet) discoverEachRoot(
 		if !s.ownsCodexSidecars() {
 			return nil
 		}
-		for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
+		files, err := s3PrefixScan(root, codexS3Scanner())
+		if err != nil {
+			return err
+		}
+		for _, file := range codexS3PreferredFiles(files) {
 			if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
 				return err
 			}
@@ -990,7 +994,11 @@ func (s codexSourceSet) discover(
 			if !s.ownsCodexSidecars() {
 				continue
 			}
-			for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
+			files, err := s3PrefixScan(root, codexS3Scanner())
+			if err != nil {
+				return nil, err
+			}
+			for _, file := range codexS3PreferredFiles(files) {
 				source := s3SourceRefFromDiscoveredFile(root, file)
 				if _, ok := byKey[source.Key]; ok {
 					continue

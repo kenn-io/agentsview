@@ -252,10 +252,10 @@ func (d *daemonIngestion) restoreCollection() error {
 	return nil
 }
 
-func (d *daemonIngestion) finishCatchup(done chan struct{}) {
+func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if !d.stopped && d.pending {
+	if complete && !d.stopped && d.pending {
 		d.pending = false
 		close(d.resumed)
 	}
@@ -272,7 +272,7 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	if err != nil {
 		log.Printf("idle catch-up incomplete: %v", err)
 	}
-	d.finishCatchup(done)
+	d.finishCatchup(done, err == nil && d.ctx.Err() == nil)
 }
 
 // catchUpSources syncs what changed while collection was released: local
@@ -292,12 +292,12 @@ func (d *daemonIngestion) catchUpSources(cfg config.Config) error {
 // catchUpScheduledSources runs the remote and attached-source passes the
 // scheduled tick skips while collection is released.
 func (d *daemonIngestion) catchUpScheduledSources(cfg config.Config) error {
-	runRemoteSourceSyncPass(d.ctx, d.engine, remoteSourceSyncRoots(cfg))
+	remoteErr := runRemoteSourceSyncPass(d.ctx, d.engine, remoteSourceSyncRoots(cfg))
 	if attached := d.attached; attached != nil {
 		_, err := attached.DrainScheduled(d.ctx)
-		return err
+		return errors.Join(remoteErr, err)
 	}
-	return nil
+	return remoteErr
 }
 
 // syncScheduled runs the existing periodic passes while collection is active.

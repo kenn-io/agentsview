@@ -483,7 +483,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 					synctest.Sleep(archiveAuditInterval + batteryRecheckInterval)
 					synctest.Wait()
 					assert.Empty(t, attempts, "the due audit waits for catch-up")
-					ingestion.finishCatchup(make(chan struct{}))
+					ingestion.finishCatchup(make(chan struct{}), true)
 					synctest.Wait()
 				}
 				if tc.battery && !tc.stale {

@@ -540,7 +540,8 @@ func projectJSONLSessionFiles(
 	wanted map[string]struct{},
 ) []DiscoveredFile {
 	if strings.HasPrefix(projectsDir, "s3://") {
-		return s3PrefixScan(projectsDir, scanner())
+		files, _ := s3PrefixScan(projectsDir, scanner())
+		return files
 	}
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {

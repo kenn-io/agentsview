@@ -560,7 +560,11 @@ func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		for _, file := range s.spec.listFiles(root) {
+		files, err := s.discoverFiles(root)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range files {
 			source, ok := s.discoveredSourceRef(root, file)
 			if !ok {
 				continue
@@ -592,7 +596,11 @@ func (s claudeSourceSet) discoverEachRoot(
 	yield func(SourceRef) error,
 ) error {
 	if strings.HasPrefix(root, "s3://") {
-		for _, file := range s.spec.listFiles(root) {
+		files, err := s.discoverFiles(root)
+		if err != nil {
+			return err
+		}
+		for _, file := range files {
 			source, ok := s.discoveredSourceRef(root, file)
 			if ok {
 				if err := yield(source); err != nil {
@@ -603,6 +611,15 @@ func (s claudeSourceSet) discoverEachRoot(
 		return nil
 	}
 	return s.streamLocalRoot(ctx, root, yield)
+}
+
+func (s claudeSourceSet) discoverFiles(root string) ([]DiscoveredFile, error) {
+	if !isS3URI(root) {
+		return s.spec.listFiles(root), nil
+	}
+	scanner := claudeS3Scanner()
+	scanner.Agent = s.spec.agent
+	return s3PrefixScan(root, scanner)
 }
 
 func (s claudeSourceSet) streamLocalRoot(

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -62,15 +62,16 @@ func isRemoteSourceRoot(dir string) bool {
 // 15-minute SyncAll behavior for these roots.
 func runRemoteSourceSyncPass(
 	ctx context.Context, engine remoteSourceSyncEngine, roots []string,
-) {
+) error {
 	if len(roots) == 0 {
-		return
+		return nil
 	}
 	stats := engine.SyncRootsSince(ctx, roots, time.Time{}, nil)
 	if !stats.ProcessingComplete() {
-		log.Printf(
+		return fmt.Errorf(
 			"scheduled remote source sync: %d synced, %d failed, aborted=%v",
 			stats.Synced, stats.Failed, stats.Aborted,
 		)
 	}
+	return nil
 }
