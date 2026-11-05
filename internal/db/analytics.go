@@ -5459,8 +5459,7 @@ func (db *DB) GetAnalyticsTopSessions(
 	}
 	defer release()
 
-	// Unary + preserves the ranking index walk instead of sorting by date.
-	dateCol := "+COALESCE(NULLIF(started_at, ''), created_at)"
+	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	if !f.canUseSQLiteTimeSQL() || strings.TrimSpace(f.Model) != "" {
 		return db.getAnalyticsTopSessionsGo(ctx, f, metric)
 	}
@@ -5533,8 +5532,7 @@ func (db *DB) getAnalyticsTopSessionsGo(
 	ctx context.Context, f AnalyticsFilter, metric string,
 ) (TopSessionsResponse, error) {
 	loc := f.location()
-	// Unary + preserves the ranking index walk instead of sorting by date.
-	dateCol := "+COALESCE(NULLIF(started_at, ''), created_at)"
+	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhere(dateCol)
 
 	var timeIDs map[string]bool
