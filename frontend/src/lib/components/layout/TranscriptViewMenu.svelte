@@ -243,14 +243,11 @@
       0 0 0 5px var(--border-default);
   }
 
-  /* The chosen layout and content mode carry a neutral row fill and a
-     heavier name, not only the radio dot. */
-  :global(.view-menu .kit-menu__radio-item[aria-checked="true"]) {
-    background: color-mix(in srgb, var(--text-primary) 7%, transparent);
-  }
-
+  /* The chosen layout and content mode are marked by the radio dot and a
+     medium-weight name. Rows keep the plain item styling of the Resume and
+     More menus, so a row fill only ever means hover or keyboard focus. */
   :global(.view-menu .kit-menu__radio-item[aria-checked="true"]) .option-name {
-    font-weight: 600;
+    font-weight: var(--selected-strong-weight);
   }
 
   :global(.view-trigger) {

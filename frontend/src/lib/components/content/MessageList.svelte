@@ -1256,18 +1256,42 @@
     pointer-events: none;
   }
 
-  /* Standalone tool rows start on the prose edge (the message bar plus its
-     16px padding); tools inside a message keep the one 12px nested inset
-     from that edge, over their own row background. */
+  /* Every tool row, standalone or inside a message, is one full-width
+     band with its name on the prose edge (the message bar plus its 16px
+     padding). Rows inside a message bleed through the message's 16px
+     padding to its bar, so both kinds share one indent and one fill. */
   .layout-skim .virtual-row > :global(:not(.message) .tool-header) {
     padding-inline-start: calc(var(--role-assistant-bar-width) + 16px);
   }
 
+  .layout-skim :global(.message .tool-block),
+  .layout-skim :global(.message .parallel-group) {
+    margin-inline: -16px;
+  }
+
+  /* A parallel group bleeds as a whole; its members then sit flush in it. */
+  .layout-skim :global(.message .parallel-group .tool-block) {
+    margin-inline: 0;
+  }
+
+  .layout-skim :global(.message .tool-header) {
+    padding-inline-start: 16px;
+  }
+
+  /* A standalone Thinking row puts its label on the same edge as the tool
+     names, with its chevron in the gutter before it. */
+  .layout-skim .virtual-row > :global(:not(.message) .thinking-header) {
+    padding-inline-start: calc(var(--role-assistant-bar-width) + 16px - 16px);
+  }
+
   /* Skim is read by scanning tool names down the left, so they carry the
-     tool color and weight and share a minimum width: commands start on a
-     common edge and the names read as their own column. */
+     tool color and weight. Names take their own width, so short ones such
+     as Bash sit right beside their command, and very long MCP names end in
+     an ellipsis instead of crowding out the command. */
   .layout-skim :global(.tool-label) {
-    min-width: 4.5em;
+    max-width: 28ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--role-tool-accent);
     font-weight: 600;
   }

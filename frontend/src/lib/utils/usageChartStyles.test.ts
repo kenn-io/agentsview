@@ -144,6 +144,43 @@ describe("usageChartStyleMaps", () => {
     expect(oklabDistance(separated.get("model-golf")!.color, green)).toBeGreaterThan(0.1);
   });
 
+  it("separates the closest dark pastel series more than chroma calming did", () => {
+    // Dark accents from the shipped theme, in palette order.
+    const dark: Record<string, string> = {
+      "var(--accent-blue)": "#60a5fa",
+      "var(--accent-purple)": "#a78bfa",
+      "var(--accent-amber)": "#fbbf24",
+      "var(--usage-series-teal)": "#2dd4bf",
+      "var(--accent-teal)": "#2dd4bf",
+      "var(--accent-rose)": "#fb7185",
+      "var(--accent-green)": "#4ade80",
+      "var(--accent-indigo)": "#818cf8",
+      "var(--accent-orange)": "#f0a050",
+      "var(--accent-sky)": "#38bdf8",
+      "var(--accent-pink)": "#f472b6",
+    };
+    const resolveColor = (color: string) => dark[color] ?? color;
+    const closestPair = (styles: ReadonlyMap<string, { color: string }>) => {
+      const colors = [...styles.values()].map((style) => style.color);
+      let min = Infinity;
+      for (let i = 0; i < colors.length; i++) {
+        for (let j = i + 1; j < colors.length; j++) {
+          min = Math.min(min, oklabDistance(colors[i]!, colors[j]!));
+        }
+      }
+      return min;
+    };
+
+    const calmedOnly = usageChartStyleMaps(tenModelSummary(), "agentsview", { resolveColor }).model;
+    const darkStyles = usageChartStyleMaps(tenModelSummary(), "agentsview", {
+      resolveColor,
+      dark: true,
+    }).model;
+
+    expect(closestPair(calmedOnly)).toBeLessThan(0.05);
+    expect(closestPair(darkStyles)).toBeGreaterThan(0.06);
+  });
+
   it("keeps the color-blind safe palette exact", () => {
     const calmed = usageChartStyleMaps(tenModelSummary(), "colorblind").model;
     const exact = usageChartStyleMaps(tenModelSummary(), "colorblind", { calm: false }).model;

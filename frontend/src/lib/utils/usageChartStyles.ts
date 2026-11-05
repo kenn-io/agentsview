@@ -24,6 +24,8 @@ export interface UsageChartColorOptions {
   resolveColor?: (color: string) => string;
   /** False keeps the palette's exact colors, as high contrast mode needs. */
   calm?: boolean;
+  /** Dark theme: see DARK_LIGHTNESS. */
+  dark?: boolean;
 }
 
 const MUTED = "var(--text-muted)";
@@ -45,10 +47,22 @@ function resolveUsageColor(color: string, resolveColor?: (color: string) => stri
   return resolveColor?.(color) || color;
 }
 
-function calmColor(color: string, resolveColor?: (color: string) => string): string {
+// Dark accents are light pastels, and calming their chroma made neighbouring
+// blues and violets blur together. Dark keeps their full chroma, steps them
+// down to mid-tone fills, and alternates two lightness steps by rank, so
+// adjacent stacked series always differ in lightness as well as hue.
+const DARK_LIGHTNESS = [0.94, 0.82] as const;
+
+function calmColor(
+  color: string,
+  rank: number,
+  options: UsageChartColorOptions,
+): string {
   if (color === MUTED) return color;
-  const resolved = resolveUsageColor(color, resolveColor);
-  const calmed = calmSeriesColor(resolved);
+  const resolved = resolveUsageColor(color, options.resolveColor);
+  const calmed = options.dark
+    ? calmSeriesColor(resolved, 1, DARK_LIGHTNESS[rank % 2])
+    : calmSeriesColor(resolved);
   return calmed === resolved ? color : calmed;
 }
 
@@ -63,9 +77,9 @@ function usageStyleMap(
   const styles = orderedChartSeriesStyleMap(ids, palette);
   if (palette === "colorblind" || options.calm === false) return styles;
   return new Map(
-    [...styles].map(([id, style]) => [
+    [...styles].map(([id, style], rank) => [
       id,
-      { ...style, color: calmColor(style.color, options.resolveColor) },
+      { ...style, color: calmColor(style.color, rank, options) },
     ]),
   );
 }

@@ -69,7 +69,7 @@ describe("SkillTrend", () => {
     const component = mountWithData();
     await tick();
 
-    expect(document.body.textContent).toContain("Skill Usage Over Time");
+    expect(document.body.textContent).toContain("Skill usage over time");
 
     const chips = document.querySelectorAll<HTMLButtonElement>(".legend-chip");
     expect(chips).toHaveLength(3);

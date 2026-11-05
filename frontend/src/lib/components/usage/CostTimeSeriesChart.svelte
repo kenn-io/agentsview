@@ -363,8 +363,12 @@
     marker: "circle",
   };
 
+  // The folded tail recedes as a quiet grey in both themes; the named
+  // series carry the chart.
+  const OTHER_STYLE: SeriesStyle = { ...MUTED_STYLE, color: "var(--usage-series-other)" };
+
   function seriesStyle(key: string): SeriesStyle {
-    return key === "__other__" ? MUTED_STYLE : styleMap.get(key) ?? MUTED_STYLE;
+    return key === "__other__" ? OTHER_STYLE : styleMap.get(key) ?? MUTED_STYLE;
   }
 
   function seriesFill(key: string): string {
@@ -959,7 +963,7 @@
   /* Near-solid fills in both themes, so each layer matches its legend
      swatch; the surface seam keeps the layers apart. */
   .chart-container :global(.cost-area) {
-    fill-opacity: 0.92;
+    fill-opacity: 1;
   }
 
   .chart-container :global(.cost-seg.selected) {

@@ -462,24 +462,27 @@
   .segment-toggle {
     display: flex;
     gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-md);
     background: var(--bg-inset);
-    border-radius: var(--radius-sm);
-    padding: 1px;
   }
 
   .toggle-btn {
     padding: 2px 8px;
     font-size: 11px;
+    font-weight: 500;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;
     transition: background 0.1s, color 0.1s;
   }
 
+  /* Shared selected-segment idiom (app.css): raised pill, medium weight. */
   .toggle-btn.active {
-    background: var(--bg-surface);
+    background: var(--selected-strong-bg);
+    box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
-    font-weight: 500;
+    font-weight: var(--selected-strong-weight);
   }
 
   .toggle-btn:hover:not(.active) {

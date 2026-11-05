@@ -2,7 +2,7 @@
   import { onDestroy, onMount, untrack } from "svelte";
   import { Button, Card, EmptyState, IconButton, Typeahead } from "@kenn-io/kit-ui";
   import { formatDateTime, m } from "../../i18n/index.js";
-  import { ChevronLeftIcon, ChevronRightIcon, TriangleAlertIcon } from "../../icons.js";
+  import { ChevronLeftIcon, ChevronRightIcon, InfoIcon } from "../../icons.js";
   import { friction } from "../../stores/friction.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -155,7 +155,7 @@
     {#if friction.errors.dates && frictionUnreadable}
       <div class="state-notice" role="status">
         <span class="state-notice-icon" aria-hidden="true">
-          <TriangleAlertIcon size="16" strokeWidth="2" />
+          <InfoIcon size="16" strokeWidth="2" />
         </span>
         <div class="state-notice-body">
           <strong>{m.friction_load_error()}</strong>
@@ -319,10 +319,9 @@
     gap: 10px;
     max-width: 640px;
     padding: 12px 14px;
+    /* An unavailable feature is information, not a fault: the plain card
+       edge with no status color, and a muted info icon. */
     border: 1px solid var(--card-border);
-    /* A thin amber status edge marks an unavailable feature, the same
-       calm amber the session panels use when the backend lacks one. */
-    border-left: 3px solid color-mix(in srgb, var(--accent-amber) 70%, var(--card-border));
     border-radius: var(--radius-md);
     background: var(--bg-surface);
     color: var(--text-secondary);
@@ -333,7 +332,7 @@
     display: inline-flex;
     flex-shrink: 0;
     margin-top: 1px;
-    color: color-mix(in srgb, var(--accent-amber) 80%, var(--text-secondary));
+    color: var(--text-muted);
   }
   .state-notice-body {
     display: flex;
@@ -351,7 +350,7 @@
   }
   .state-notice strong {
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: 500;
   }
   .empty-hint {
     max-width: 60ch;

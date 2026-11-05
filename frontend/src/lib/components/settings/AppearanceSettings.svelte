@@ -4,6 +4,7 @@
     Checkbox,
     ColorInput,
     SegmentedControl,
+    Toggle,
     Typeahead,
     type ColorInputSwatch,
   } from "@kenn-io/kit-ui";
@@ -141,9 +142,13 @@
 
   <div class="setting-row">
     <span class="setting-label">{m.appearance_high_contrast()}</span>
-    <Button onclick={() => ui.toggleHighContrast()}>
+    <Toggle
+      checked={ui.highContrast}
+      ariaLabel={m.appearance_high_contrast()}
+      onchange={() => ui.toggleHighContrast()}
+    >
       {ui.highContrast ? m.appearance_on() : m.appearance_off()}
-    </Button>
+    </Toggle>
   </div>
 
   <div class="setting-row option-row">
@@ -185,7 +190,7 @@
   </div>
 
   <div class="setting-row">
-    <Checkbox
+    <Toggle
       checked={ui.renderUnknownXmlBlocksAsPreformatted}
       onchange={() => ui.toggleUnknownXmlBlocksAsPreformatted()}
       ariaLabel={m.appearance_render_unknown_xml_blocks()}
@@ -214,7 +219,7 @@
         {m.appearance_message_colors_reset_all()}
       </Button>
     </div>
-    <Checkbox
+    <Toggle
       checked={messageColors.patterns}
       onchange={() => messageColors.setPatterns(!messageColors.patterns)}
       label={m.appearance_message_colors_patterns()}

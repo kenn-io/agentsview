@@ -100,6 +100,9 @@
   --chart-series-5: #4a3aa7; /* kit-ui-check-ignore: app token definition */
   --chart-series-6: #e34948; /* kit-ui-check-ignore: app token definition */
   --chart-series-other: #898781; /* kit-ui-check-ignore: app token definition */
+  /* The folded "Other" tail in Usage's stacked cost chart: a quiet light
+     grey that recedes behind the named series in both themes. */
+  --usage-series-other: color-mix(in srgb, var(--text-muted) 32%, var(--bg-surface));
   /* Duration UX state colors */
   --slow-fg: #f29070; /* kit-ui-check-ignore: app token definition */
   --slow-bg: rgba(242, 144, 112, 0.12); /* kit-ui-check-ignore: app token definition */
@@ -163,6 +166,7 @@
   --chart-series-5: #9085e9; /* kit-ui-check-ignore: app token definition */
   --chart-series-6: #e66767; /* kit-ui-check-ignore: app token definition */
   --chart-series-other: #898781; /* kit-ui-check-ignore: app token definition */
+  --usage-series-other: color-mix(in srgb, var(--text-muted) 42%, var(--bg-surface));
   --user-bg: color-mix(in srgb, var(--accent-blue) 7%, var(--bg-primary));
   --assistant-bg: color-mix(in srgb, var(--text-primary) 2%, var(--bg-primary));
   --thinking-bg: color-mix(in srgb, var(--accent-purple) 6%, var(--bg-primary));
@@ -247,26 +251,32 @@
   --selected-list-bg: var(--bg-surface-hover);
 }
 
-/* The chosen option of a choice group (segmented controls, date presets,
- * the search palette's sort, the Activity view toggle) sits beside
- * neighbours that already carry an inset or surface fill. A surface-colored
- * pill reads as empty there, so the chosen option takes a clearly stronger
- * neutral fill and a visible edge: darker than its neighbours in light,
- * lighter in dark. Accent blue stays reserved for focus and live state. */
+/* The chosen option of a choice group (segmented controls, chart toggles,
+ * date presets, the search palette's sort, top-bar tabs) uses one calm
+ * idiom everywhere: a raised pill. In light it is the white surface lifted
+ * off the grey track by a hairline and a soft shadow; in dark it is a
+ * lighter surface with a faint edge. Selected text is primary ink at
+ * medium weight, so selection never comes from a heavy border or bold.
+ * Accent blue stays reserved for focus and live state. */
 :root {
-  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 13%, var(--bg-surface));
-  --selected-strong-edge: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 30%, transparent);
+  --selected-strong-bg: var(--bg-surface);
+  --selected-strong-edge:
+    0 0 0 1px color-mix(in srgb, var(--text-primary) 9%, transparent),
+    0 1px 2px color-mix(in srgb, var(--text-primary) 14%, transparent);
+  --selected-strong-weight: var(--font-weight-medium, 500);
 }
 
 :root.dark {
-  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 19%, var(--bg-surface));
-  --selected-strong-edge: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 34%, transparent);
+  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 15%, var(--bg-surface));
+  --selected-strong-edge:
+    inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 12%, transparent),
+    0 1px 2px rgba(0, 0, 0, 0.35); /* kit-ui-check-ignore: dark raised pill shadow, upstream later */
 }
 
 :root .kit-date-range-picker__pills .kit-date-range-picker__pill.active {
   background: var(--selected-strong-bg);
   color: var(--text-primary);
-  font-weight: var(--font-weight-semibold, 600);
+  font-weight: var(--selected-strong-weight);
   box-shadow: var(--selected-strong-edge);
 }
 
@@ -324,8 +334,10 @@ html:root .kit-modal-panel {
 html:root.dark .kit-popover-card {
   background: var(--popover-bg);
   border-color: color-mix(in srgb, var(--text-primary) 20%, var(--bg-surface));
-  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 30%, var(--bg-surface));
-  --selected-strong-edge: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 50%, transparent);
+  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 24%, var(--bg-surface));
+  --selected-strong-edge:
+    inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 20%, transparent),
+    0 1px 2px rgba(0, 0, 0, 0.4); /* kit-ui-check-ignore: dark raised pill shadow, upstream later */
 }
 
 /* Outranks kit-ui's scoped active rule (three classes). */
@@ -348,7 +360,9 @@ html:root.dark .kit-popover-card {
 :root .kit-segmented .kit-segmented__btn.active {
   background: var(--selected-strong-bg);
   box-shadow: var(--selected-strong-edge);
-  font-weight: var(--font-weight-semibold, 600);
+  color: var(--text-primary);
+  font-weight: var(--selected-strong-weight);
+  opacity: 1;
 }
 
 :root .kit-top-bar .kit-top-bar__tab {
@@ -365,14 +379,10 @@ html:root.dark .kit-popover-card {
   color: var(--text-primary);
 }
 
-/* Only the selected destination keeps the medium weight. */
+/* The selected destination keeps the same weight as the others, so the
+   tabs after it never shift between pages; the shared raised pill and
+   primary ink mark it in both themes. */
 :root .kit-top-bar .kit-top-bar__tab.active {
-  font-weight: 500;
-}
-
-/* Dark: kit-ui's surface-colored pill is almost the track color there, so
-   the selected destination takes the shared strong selected fill. */
-:root.dark .kit-top-bar .kit-top-bar__tab.active {
   background: var(--selected-strong-bg);
   box-shadow: var(--selected-strong-edge);
 }
@@ -461,21 +471,26 @@ button:disabled {
 
 /* One disabled look for secondary actions: faded muted ink, a faint edge,
    and no fill, so a disabled control never reads as a clickable outline
-   button. */
+   button. Dark needs a larger share of muted ink for the label to stay
+   readable on the near-black surface. */
 :root {
   --disabled-ink: color-mix(in srgb, var(--text-muted) 58%, var(--bg-surface));
   --disabled-edge: var(--border-muted);
 }
 
+:root.dark {
+  --disabled-ink: color-mix(in srgb, var(--text-muted) 78%, var(--bg-surface));
+}
+
 /* A disabled primary (Save token, Connect on a read-only server) keeps a
-   muted accent fill so it still reads as the panel's main action, distinct
-   from the empty outline of a disabled secondary. The ink mixes accent with
-   primary text so it stays readable on the tint in both themes. */
+   faint accent fill and edge so it still reads as the panel's main action,
+   but its label uses the same disabled ink as a disabled secondary, so the
+   two read as equally unavailable side by side. */
 :root .kit-button--solid.kit-button--info:disabled {
   opacity: 1;
-  background: color-mix(in srgb, var(--accent-blue) 30%, var(--bg-surface));
-  border-color: color-mix(in srgb, var(--accent-blue) 30%, var(--bg-surface));
-  color: color-mix(in srgb, var(--accent-blue) 40%, var(--text-primary));
+  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent-blue) 24%, var(--disabled-edge));
+  color: color-mix(in srgb, var(--accent-blue) 18%, var(--disabled-ink));
   box-shadow: none;
   cursor: not-allowed;
 }

@@ -638,8 +638,8 @@ describe("CostTimeSeriesChart", () => {
     const dots = Array.from(document.querySelectorAll<HTMLElement>(".legend-dot"));
     expect(marks).toHaveLength(11);
     expect(dots).toHaveLength(11);
-    expect(marks.at(-1)!.getAttribute("fill")).toBe("var(--text-muted)");
-    expect(dots.at(-1)!.style.background).toBe("var(--text-muted)");
+    expect(marks.at(-1)!.getAttribute("fill")).toBe("var(--usage-series-other)");
+    expect(dots.at(-1)!.style.background).toBe("var(--usage-series-other)");
     unmount(component);
   });
 

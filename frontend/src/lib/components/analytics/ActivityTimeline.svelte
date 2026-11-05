@@ -732,11 +732,12 @@
     cursor: not-allowed;
   }
 
+  /* Shared selected-segment idiom (app.css): raised pill, medium weight. */
   .toggle-btn.active {
     background: var(--selected-strong-bg);
     box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: var(--selected-strong-weight);
   }
 
   .segment-legend {

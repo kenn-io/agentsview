@@ -87,7 +87,7 @@ describe("ToolUsage", () => {
     const component = mount(ToolUsage, { target: document.body });
     await tick();
 
-    expect(document.body.textContent).toContain("Tool Usage");
+    expect(document.body.textContent).toContain("Tool usage");
     expect(document.body.textContent).toContain("6 calls");
     expect(document.body.textContent).toContain("Top tools");
     expect(document.body.textContent).toContain("Read");

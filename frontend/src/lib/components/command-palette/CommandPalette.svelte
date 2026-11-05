@@ -655,7 +655,7 @@
     background: var(--selected-strong-bg);
     box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: var(--selected-strong-weight);
   }
 
   .item-snippet :global(mark) {

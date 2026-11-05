@@ -67,7 +67,7 @@ describe("TopSkills", () => {
     const component = mountWithData();
     await tick();
 
-    expect(document.body.textContent).toContain("Top Skills");
+    expect(document.body.textContent).toContain("Top skills");
     expect(document.body.textContent).toContain("9 calls");
     expect(document.body.textContent).toContain("2 skills");
     expect(document.body.textContent).toContain("skill-creator");

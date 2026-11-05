@@ -2,7 +2,7 @@
   import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import type { ErrorKind } from "../../utils/telemetry.js";
-  import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
+  import { Button, type ChipTone } from "@kenn-io/kit-ui";
   import { SvelteSet } from "svelte/reactivity";
   import type {
     DbSessionTiming,
@@ -259,9 +259,15 @@
                 <span class="facts">{flags.join(" · ")}</span>
               {/if}
               <span class="where">{messageRange(sequence)}</span>
-              <Chip size="xs" uppercase={false} tone={ENDING_TONES[sequence.ending]} title={endingExplanation(sequence.ending)} class="ending">
+              <span class="ending" title={endingExplanation(sequence.ending)}>
+                <i
+                  class="ending-dot"
+                  class:hollow={sequence.ending === "unknown"}
+                  data-kit-tone={ENDING_TONES[sequence.ending]}
+                  aria-hidden="true"
+                ></i>
                 {endingLabel(sequence.ending)}
-              </Chip>
+              </span>
             </button>
             {#if open}
               <div class="calls" id="{uid}-seq-{index}">
@@ -463,6 +469,35 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
+  }
+
+  /* A sequence's ending uses the same status idiom as the legend and the
+     transcript's tool status: a small dot in the status tone (a hollow
+     ring for unknown) beside a sentence-case label, with no filled pill. */
+  .ending {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-secondary);
+    font-size: var(--font-size-xs);
+    white-space: nowrap;
+  }
+
+  .ending-dot {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--kit-tone, var(--text-muted));
+  }
+
+  .ending-dot.hollow {
+    width: 7px;
+    height: 7px;
+    border: 1.5px solid var(--text-muted);
+    background: transparent;
   }
 
   .box {
@@ -743,7 +778,7 @@
       margin-left: 0;
     }
 
-    .sequence-row :global(.ending) {
+    .sequence-row .ending {
       margin-left: auto;
     }
 

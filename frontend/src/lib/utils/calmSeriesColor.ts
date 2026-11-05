@@ -20,7 +20,15 @@ function toHexByte(channel: number): string {
   return byte.toString(16).padStart(2, "0");
 }
 
-export function calmSeriesColor(color: string, scale = CALM_CHROMA_SCALE): string {
+/**
+ * Scales a hex color's OKLCH chroma by `scale` and its lightness by
+ * `lightnessScale`, keeping its hue.
+ */
+export function calmSeriesColor(
+  color: string,
+  scale = CALM_CHROMA_SCALE,
+  lightnessScale = 1,
+): string {
   const match = /^#([0-9a-f]{6})$/i.exec(color.trim());
   if (!match) return color;
   const value = Number.parseInt(match[1]!, 16);
@@ -32,7 +40,7 @@ export function calmSeriesColor(color: string, scale = CALM_CHROMA_SCALE): strin
   const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
   const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
   const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-  const lightness = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
+  const lightness = (0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s) * lightnessScale;
   const a = (1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s) * scale;
   const bAxis = (0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s) * scale;
 

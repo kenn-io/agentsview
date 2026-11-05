@@ -196,15 +196,17 @@
     flex-direction: column;
   }
 
-  /* Each provider is a block: a compact header line with the name on the
-     left and its switch on the right, then the paths and alternate homes
-     across the full inner width below, so long paths wrap less. */
+  /* Each provider uses the label-column grid shared by every settings
+     panel: the name sits in the label column and its switch starts the
+     control column on the same header line, so each provider still has one
+     scannable header line. Paths, alternate homes and help text continue in
+     the control column below the switch. */
   .provider-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: var(--setting-label-width, 148px) minmax(0, 1fr);
     align-items: center;
     column-gap: 12px;
-    row-gap: 6px;
+    row-gap: 4px;
     padding: var(--space-3) 0;
     border-bottom: 1px solid var(--border-muted);
   }
@@ -214,23 +216,24 @@
   }
 
   .provider-row > :global(.kit-toggle) {
-    justify-self: end;
+    justify-self: start;
   }
 
   .provider-details {
-    grid-column: 1 / -1;
+    grid-column: 2;
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
     min-width: 0;
   }
 
-  /* Provider names head each block, so they read heavier than the
-     shared field labels; the 20px line box matches the switch track. */
+  /* Provider names use the shared field-label size and weight with
+     primary ink, since each one heads a block; the 20px line box matches
+     the switch track. */
   .provider-name {
     color: var(--text-primary);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 20px;
     overflow-wrap: anywhere;
   }

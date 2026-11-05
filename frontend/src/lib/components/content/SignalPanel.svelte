@@ -63,6 +63,7 @@
 </script>
 
 <div class="signal-panel">
+  <div class="signal-panel-label">{m.analytics_session_health_title()}</div>
   {#if !hasUsefulData}
     <div class="no-signal-note">
       {m.signal_panel_not_enough_activity()}
@@ -172,6 +173,13 @@
      band, as the inset fill does in light. */
   :global(:root.dark) .signal-panel {
     background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-surface));
+  }
+  /* A small section label names the band, in the same voice as its
+     Friction findings subsection header. */
+  .signal-panel-label {
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+    font-weight: 600;
   }
   .signal-row {
     display: flex;
