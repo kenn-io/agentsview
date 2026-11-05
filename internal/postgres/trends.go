@@ -45,6 +45,14 @@ func (s *Store) GetTrendsTerms(
 		}
 		preds = append(preds, rowWindow)
 	}
+	// A model filter credits a prompt to the next assistant reply, so the
+	// scope reducer needs rows in order. Without one, rows count on their
+	// own, and the sort spills to disk on large ranges.
+	tail := ""
+	if modelFiltering {
+		tail = `
+		ORDER BY m.session_id, m.ordinal`
+	}
 	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
 			COALESCE(m.model, ''), ` + content + `,
 			COALESCE(TO_CHAR(m.timestamp AT TIME ZONE 'UTC',
@@ -58,8 +66,7 @@ func (s *Store) GetTrendsTerms(
 		WHERE ` + strings.Join(preds, " AND ") + `
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = FALSE
-			AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role") + `
-		ORDER BY m.session_id, m.ordinal`
+			AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role") + tail
 
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {

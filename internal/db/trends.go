@@ -93,6 +93,14 @@ func (db *DB) GetTrendsTerms(
 		args = append(args, wargs...)
 	}
 	args = append(selectArgs, args...)
+	// A model filter credits a prompt to the next assistant reply, so the
+	// scope reducer needs rows in order. Without one, rows count on their
+	// own, and sorting full message content is a large part of the cost.
+	tail := ""
+	if modelFiltering {
+		tail = `
+		ORDER BY m.session_id, m.ordinal`
+	}
 	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
 			COALESCE(m.model, ''), ` + content + `, COALESCE(m.timestamp, ''),
 			COALESCE(s.started_at, ''), s.created_at
@@ -101,8 +109,7 @@ func (db *DB) GetTrendsTerms(
 		WHERE ` + where + `
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = 0
-			AND ` + SystemPrefixSQL("m.content", "m.role") + `
-		ORDER BY m.session_id, m.ordinal`
+			AND ` + SystemPrefixSQL("m.content", "m.role") + tail
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
