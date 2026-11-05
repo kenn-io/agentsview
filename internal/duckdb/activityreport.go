@@ -598,13 +598,22 @@ func (s *Store) activityReportCandidateSource(
 			ctx context.Context,
 			yield func(activity.IntervalCandidate) error,
 		) error {
-			query := `SELECT
+			// Every subquery reads the requested sessions only. DuckDB turns
+			// the correlated subqueries into joins over their whole source,
+			// so reading messages here made each report scan and join the
+			// entire archive before the session filter applied.
+			query := `WITH scoped AS (
+				SELECT session_id, ordinal, timestamp, role, model
+				FROM messages
+				WHERE session_id IN (SELECT unnest(?))
+			)
+			SELECT
 				m.session_id, m.ordinal, successor.ordinal,
 				m.timestamp, successor.timestamp,
 				successor.role, successor.model,
 				COALESCE((
 					SELECT prior.model
-					FROM messages prior
+					FROM scoped prior
 					WHERE prior.session_id = m.session_id
 						AND prior.ordinal <= m.ordinal
 						AND prior.role = 'assistant'
@@ -612,7 +621,7 @@ func (s *Store) activityReportCandidateSource(
 						AND prior.timestamp IS NOT NULL
 						AND prior.timestamp > (
 							SELECT prior_previous.timestamp
-							FROM messages prior_previous
+							FROM scoped prior_previous
 							WHERE prior_previous.session_id = prior.session_id
 								AND prior_previous.ordinal < prior.ordinal
 								AND prior_previous.timestamp IS NOT NULL
@@ -622,20 +631,19 @@ func (s *Store) activityReportCandidateSource(
 					ORDER BY prior.ordinal DESC
 					LIMIT 1
 				), 'unknown')
-			FROM messages m
-			JOIN messages successor
+			FROM scoped m
+			JOIN scoped successor
 				ON successor.session_id = m.session_id
 				AND successor.ordinal = (
 					SELECT next.ordinal
-					FROM messages next
+					FROM scoped next
 					WHERE next.session_id = m.session_id
 						AND next.ordinal > m.ordinal
 						AND next.timestamp IS NOT NULL
 					ORDER BY next.ordinal
 					LIMIT 1
 				)
-			WHERE m.session_id IN (SELECT unnest(?))
-				AND m.timestamp IS NOT NULL
+			WHERE m.timestamp IS NOT NULL
 				AND m.timestamp >= CAST(? AS TIMESTAMP)
 				AND m.timestamp < CAST(? AS TIMESTAMP)
 			ORDER BY m.timestamp, m.session_id, m.ordinal`
