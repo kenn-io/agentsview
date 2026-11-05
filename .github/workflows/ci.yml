@@ -1219,6 +1219,7 @@ jobs:
         run: |
           AGENTSVIEW_E2E_PORT=8095 bash scripts/e2e-server.sh > "$RUNNER_TEMP/first-paint-server.log" 2>&1 &
           echo "$!" > "$RUNNER_TEMP/first-paint-server.pid"
+          # workflowretry: allow Local readiness probe; the loop retries while the server starts.
           until curl -sf http://127.0.0.1:8095/ > /dev/null; do
             kill -0 "$!" 2> /dev/null || { cat "$RUNNER_TEMP/first-paint-server.log"; exit 1; }
             sleep 1
