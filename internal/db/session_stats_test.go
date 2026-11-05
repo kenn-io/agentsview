@@ -1936,11 +1936,9 @@ func TestPickPrimaryAgent(t *testing.T) {
 	}
 }
 
-// hoursAgoAt returns an RFC3339 timestamp for (now - hours, shifted to
-// the given minute and second of that hour). Used by temporal tests
-// that need to place messages inside a specific UTC hour boundary.
-func hoursAgoAt(hours, minute, second int) string {
-	t := time.Now().UTC().
+// hoursAgoAt places a timestamp within a UTC hour relative to one test anchor.
+func hoursAgoAt(now time.Time, hours, minute, second int) string {
+	t := now.UTC().
 		Add(-time.Duration(hours) * time.Hour).
 		Truncate(time.Hour).
 		Add(time.Duration(minute) * time.Minute).
@@ -1948,10 +1946,9 @@ func hoursAgoAt(hours, minute, second int) string {
 	return t.Format(time.RFC3339)
 }
 
-// utcHourBoundary returns the UTC-hour-boundary TS string (what
-// Temporal.HourlyUTC entries use) for (now - hours).
-func utcHourBoundary(hours int) string {
-	t := time.Now().UTC().
+// utcHourBoundary returns the UTC hour relative to the same test anchor.
+func utcHourBoundary(now time.Time, hours int) string {
+	t := now.UTC().
 		Add(-time.Duration(hours) * time.Hour).
 		Truncate(time.Hour)
 	return t.Format("2006-01-02T15:00:00Z")
@@ -1973,6 +1970,7 @@ func findHourlyUTC(
 func TestGetSessionStats_Temporal_HourlyGrouping(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// Three hours of activity: H-5 (2 user msgs in one session),
 	// H-4 (1 user msg in a different session), H-3 (2 user msgs
@@ -1990,12 +1988,12 @@ func TestGetSessionStats_Temporal_HourlyGrouping(t *testing.T) {
 		id: "s4", userMsgs: 1, startedAt: hoursAgo(4),
 	})
 	insertMessages(t, d,
-		userMsgAt("s1", 0, "a", hoursAgoAt(5, 5, 0)),
-		userMsgAt("s1", 1, "b", hoursAgoAt(5, 45, 0)),
-		asstMsgAt("s1", 2, "ignored", hoursAgoAt(5, 50, 0)),
-		userMsgAt("s2", 0, "c", hoursAgoAt(4, 10, 0)),
-		userMsgAt("s3", 0, "d", hoursAgoAt(3, 30, 0)),
-		userMsgAt("s4", 0, "e", hoursAgoAt(3, 45, 0)),
+		userMsgAt("s1", 0, "a", hoursAgoAt(now, 5, 5, 0)),
+		userMsgAt("s1", 1, "b", hoursAgoAt(now, 5, 45, 0)),
+		asstMsgAt("s1", 2, "ignored", hoursAgoAt(now, 5, 50, 0)),
+		userMsgAt("s2", 0, "c", hoursAgoAt(now, 4, 10, 0)),
+		userMsgAt("s3", 0, "d", hoursAgoAt(now, 3, 30, 0)),
+		userMsgAt("s4", 0, "e", hoursAgoAt(now, 3, 45, 0)),
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
@@ -2011,20 +2009,20 @@ func TestGetSessionStats_Temporal_HourlyGrouping(t *testing.T) {
 	}
 
 	// H-5: 2 user messages, 1 distinct session.
-	if e := findHourlyUTC(hours, utcHourBoundary(5)); assert.NotNilf(t, e,
-		"missing hour entry %q", utcHourBoundary(5)) {
+	if e := findHourlyUTC(hours, utcHourBoundary(now, 5)); assert.NotNilf(t, e,
+		"missing hour entry %q", utcHourBoundary(now, 5)) {
 		assert.Equal(t, 2, e.UserMessages, "H-5 user_messages")
 		assert.Equal(t, 1, e.Sessions, "H-5 sessions: got")
 	}
 	// H-4: 1 user message, 1 session.
-	if e := findHourlyUTC(hours, utcHourBoundary(4)); assert.NotNilf(t, e,
-		"missing hour entry %q", utcHourBoundary(4)) {
+	if e := findHourlyUTC(hours, utcHourBoundary(now, 4)); assert.NotNilf(t, e,
+		"missing hour entry %q", utcHourBoundary(now, 4)) {
 		assert.Equal(t, 1, e.UserMessages, "H-4 user_messages")
 		assert.Equal(t, 1, e.Sessions, "H-4 sessions: got")
 	}
 	// H-3: 2 user messages from 2 distinct sessions.
-	if e := findHourlyUTC(hours, utcHourBoundary(3)); assert.NotNilf(t, e,
-		"missing hour entry %q", utcHourBoundary(3)) {
+	if e := findHourlyUTC(hours, utcHourBoundary(now, 3)); assert.NotNilf(t, e,
+		"missing hour entry %q", utcHourBoundary(now, 3)) {
 		assert.Equal(t, 2, e.UserMessages, "H-3 user_messages")
 		assert.Equal(t, 2, e.Sessions, "H-3 sessions: got")
 	}
@@ -2075,6 +2073,7 @@ func TestGetSessionStats_Temporal_MidnightBoundary(t *testing.T) {
 func TestGetSessionStats_Temporal_OutOfWindowExcluded(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// One session inside the window, one outside. With Since=2d, the
 	// out-of-window session should not contribute sessionIDs, so its
@@ -2090,9 +2089,9 @@ func TestGetSessionStats_Temporal_OutOfWindowExcluded(t *testing.T) {
 			Add(-40 * 24 * time.Hour).Format(time.RFC3339),
 	})
 	insertMessages(t, d,
-		userMsgAt("in", 0, "ok", hoursAgoAt(10, 0, 0)),
+		userMsgAt("in", 0, "ok", hoursAgoAt(now, 10, 0, 0)),
 		userMsgAt("out", 0, "nope",
-			hoursAgoAt(10, 30, 0)), // same hour as "in"
+			hoursAgoAt(now, 10, 30, 0)), // same hour as "in"
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "2d"})
@@ -2108,6 +2107,7 @@ func TestGetSessionStats_Temporal_OutOfWindowExcluded(t *testing.T) {
 func TestGetSessionStats_Temporal_SessionsDistinctPerHour(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// Same session sends 3 user messages in H-6 (counts as 1 session,
 	// 3 user_messages) and 1 user message in H-5 (counts as 1 session,
@@ -2116,23 +2116,23 @@ func TestGetSessionStats_Temporal_SessionsDistinctPerHour(t *testing.T) {
 		id: "s1", userMsgs: 4, startedAt: hoursAgo(7),
 	})
 	insertMessages(t, d,
-		userMsgAt("s1", 0, "a", hoursAgoAt(6, 5, 0)),
-		userMsgAt("s1", 1, "b", hoursAgoAt(6, 25, 0)),
-		userMsgAt("s1", 2, "c", hoursAgoAt(6, 55, 0)),
-		userMsgAt("s1", 3, "d", hoursAgoAt(5, 15, 0)),
+		userMsgAt("s1", 0, "a", hoursAgoAt(now, 6, 5, 0)),
+		userMsgAt("s1", 1, "b", hoursAgoAt(now, 6, 25, 0)),
+		userMsgAt("s1", 2, "c", hoursAgoAt(now, 6, 55, 0)),
+		userMsgAt("s1", 3, "d", hoursAgoAt(now, 5, 15, 0)),
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 	if e := findHourlyUTC(
-		stats.Temporal.HourlyUTC, utcHourBoundary(6),
+		stats.Temporal.HourlyUTC, utcHourBoundary(now, 6),
 	); assert.NotNil(t, e, "missing H-6 entry") {
 		assert.Equal(t, 3, e.UserMessages, "H-6 user_messages")
 		assert.Equal(t, 1, e.Sessions,
 			"H-6 sessions (same session 3 msgs)")
 	}
 	if e := findHourlyUTC(
-		stats.Temporal.HourlyUTC, utcHourBoundary(5),
+		stats.Temporal.HourlyUTC, utcHourBoundary(now, 5),
 	); assert.NotNil(t, e, "missing H-5 entry") {
 		assert.Equal(t, 1, e.UserMessages, "H-5 user_messages")
 		assert.Equal(t, 1, e.Sessions, "H-5 sessions: got")
@@ -2265,6 +2265,7 @@ func TestGetSessionStatsReportsPlatformTimezone(t *testing.T) {
 func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// Two sessions, same hour, different agents. Filter=claude must
 	// leave the codex session's messages out of hourly_utc.
@@ -2277,8 +2278,8 @@ func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
 		startedAt: hoursAgo(4),
 	})
 	insertMessages(t, d,
-		userMsgAt("c1", 0, "hi", hoursAgoAt(3, 10, 0)),
-		userMsgAt("x1", 0, "hi", hoursAgoAt(3, 20, 0)),
+		userMsgAt("c1", 0, "hi", hoursAgoAt(now, 3, 10, 0)),
+		userMsgAt("x1", 0, "hi", hoursAgoAt(now, 3, 20, 0)),
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{
@@ -2286,7 +2287,7 @@ func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
 	})
 	require.NoError(t, err, "GetSessionStats")
 	if e := findHourlyUTC(
-		stats.Temporal.HourlyUTC, utcHourBoundary(3),
+		stats.Temporal.HourlyUTC, utcHourBoundary(now, 3),
 	); assert.NotNil(t, e, "missing H-3 entry") {
 		assert.Equal(t, 1, e.UserMessages,
 			"filter=claude user_messages")
@@ -2297,6 +2298,7 @@ func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
 func TestGetSessionStats_Temporal_IgnoresAssistantMessages(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// Only assistant messages in a session — hourly_utc must be empty.
 	insertSessionFixture(t, d, sessionFixture{
@@ -2304,8 +2306,8 @@ func TestGetSessionStats_Temporal_IgnoresAssistantMessages(t *testing.T) {
 		startedAt: hoursAgo(3),
 	})
 	insertMessages(t, d,
-		asstMsgAt("only-asst", 0, "a", hoursAgoAt(2, 5, 0)),
-		asstMsgAt("only-asst", 1, "b", hoursAgoAt(2, 10, 0)),
+		asstMsgAt("only-asst", 0, "a", hoursAgoAt(now, 2, 5, 0)),
+		asstMsgAt("only-asst", 1, "b", hoursAgoAt(now, 2, 10, 0)),
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
@@ -2317,6 +2319,7 @@ func TestGetSessionStats_Temporal_IgnoresAssistantMessages(t *testing.T) {
 func TestGetSessionStats_Temporal_SkipsEmptyTimestamps(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// User message with empty timestamp must not bucket to epoch or
 	// anywhere else — strftime returns NULL for empty strings and we
@@ -2325,7 +2328,7 @@ func TestGetSessionStats_Temporal_SkipsEmptyTimestamps(t *testing.T) {
 		id: "s1", userMsgs: 2, startedAt: hoursAgo(3),
 	})
 	insertMessages(t, d,
-		userMsgAt("s1", 0, "good", hoursAgoAt(2, 15, 0)),
+		userMsgAt("s1", 0, "good", hoursAgoAt(now, 2, 15, 0)),
 		userMsgAt("s1", 1, "blank", ""),
 	)
 
