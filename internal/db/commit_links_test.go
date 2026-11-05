@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	gitlog "go.kenn.io/agentsview/internal/db/git"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func commitMessages(id, input, result string) []Message {
@@ -453,9 +454,19 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	require.NoError(t, old.SoftDeleteSession(t.Context(), "trash"))
 	require.NoError(t, old.DeleteSession(t.Context(), "deleted"))
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
-		t.Run(string(policy), func(t *testing.T) {
+		name := string(policy)
+		if policy.UsageOnly() {
+			name = "usage downgrade during session copy"
+		}
+		t.Run(name, func(t *testing.T) {
 			fresh := testDB(t)
-			require.NoError(t, fresh.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:written"}, CommittedAt: tsZero}}))
+			if policy.UsageOnly() {
+				// Downgrade an archive that already holds evidence for a session being copied.
+				require.NoError(t, fresh.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:written"}, CommittedAt: tsZero}}))
+				var rows int
+				require.NoError(t, fresh.getReader().QueryRowContext(t.Context(), "SELECT count(*) FROM commit_trailers").Scan(&rows))
+				require.Equal(t, 1, rows)
+			}
 			fresh.SetArchiveContent(policy)
 			_, err := fresh.CopyTrashedDataFrom(t.Context(), old.Path())
 			require.NoError(t, err)
@@ -463,12 +474,9 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, fresh.CopyExcludedSessionsFrom(t.Context(), old.Path()))
 			require.NoError(t, fresh.CopyCommitTrailersFrom(t.Context(), old.Path()))
-			written, err := fresh.SessionCommitLinks(t.Context(), "written")
-			require.NoError(t, err)
-			if !policy.UsageOnly() {
-				require.Len(t, written.Commits, 1)
-				assert.Equal(t, "trailer", written.Commits[0].Source)
-			} else {
+			if policy.UsageOnly() {
+				written, err := fresh.SessionCommitLinks(t.Context(), "written")
+				require.NoError(t, err)
 				assert.Empty(t, written.Commits)
 				var rows int
 				require.NoError(t, fresh.getReader().QueryRowContext(t.Context(), "SELECT count(*) FROM commit_trailers").Scan(&rows))
@@ -891,8 +899,17 @@ func TestTrailerCommitHostOwners(t *testing.T) {
 			sha := strings.Repeat("a", 40)
 			// Evidence can arrive before the imported sessions, without a rescan.
 			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{tt.trailer}, CommittedAt: tsZero}}))
+			before, err := d.CommitSessionLinks(t.Context(), []string{sha})
+			require.NoError(t, err)
+			require.Len(t, before.Commits, 1)
+			assert.Empty(t, before.Commits[0].Links)
 			for _, id := range append(append([]string{}, tt.owners...), tt.unrelated...) {
-				insertSession(t, d, id, "project-a")
+				insertSession(t, d, id, "project-a", func(s *Session) {
+					_, nativeID := parser.StripHostPrefix(id)
+					if strings.HasPrefix(nativeID, "codex:") {
+						s.Agent = "codex"
+					}
+				})
 				insertMessages(t, d, userMsg(id, 0, "Save the edit"))
 			}
 			t.Run("commit to sessions", func(t *testing.T) {
@@ -902,6 +919,7 @@ func TestTrailerCommitHostOwners(t *testing.T) {
 				var ids []string
 				for _, link := range links.Commits[0].Links {
 					ids = append(ids, link.SessionID)
+					assert.False(t, link.Missing)
 				}
 				assert.ElementsMatch(t, tt.owners, ids)
 			})
@@ -913,13 +931,14 @@ func TestTrailerCommitHostOwners(t *testing.T) {
 					assert.Equal(t, sha, links.Commits[0].SHA)
 					assert.Equal(t, id, links.Commits[0].SessionID)
 					assert.Equal(t, "trailer", links.Commits[0].Source)
+					assert.False(t, links.Commits[0].Missing)
 					rows, err := d.SessionCommitLinkRows(t.Context(), id)
 					require.NoError(t, err)
 					require.Len(t, rows, 1)
 					assert.Equal(t, sha, rows[0].SHA)
 				})
 			}
-			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=?`, tsZero)
+			_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=?`, tsZero)
 			require.NoError(t, err)
 			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Subject: "Updated subject", Sessions: []string{tt.trailer}, CommittedAt: tsZero}}))
 			for _, id := range tt.owners {

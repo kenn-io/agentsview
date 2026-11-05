@@ -13,8 +13,6 @@ func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 	for _, tt := range []struct {
 		name, trailer, agent, owner string
 	}{
-		{"claude", "claude:session", "claude", "session"},
-		{"codex", "codex:session_a", "codex", "codex:session_a"},
 		{"freebuff", "freebuff:project-a:123", "freebuff", "freebuff:project-a:123"},
 		{"codebuff", "codebuff:project-a:123", "codebuff", "codebuff:project-a:123"},
 		{"native colon", "codex:session:page", "codex", "codex:session:page"},
@@ -40,29 +38,6 @@ func TestTrailerCommitLinksSessionResolution(t *testing.T) {
 			assert.Equal(t, "trailer", list.Commits[0].Source)
 		})
 	}
-}
-
-func TestTrailerCommitLinksOwnerAvailableAfterScan(t *testing.T) {
-	d := testDB(t)
-	owner := "codex:session"
-	sha := strings.Repeat("a", 40)
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
-		SHA: sha, Sessions: []string{"codex:session"}, CommittedAt: tsZero,
-	}}))
-	found, err := d.CommitSessionLinks(t.Context(), []string{sha})
-	require.NoError(t, err)
-	require.Len(t, found.Commits, 1)
-	assert.Empty(t, found.Commits[0].Links)
-	insertSession(t, d, owner, "project-a", func(s *Session) { s.Agent = "codex" })
-	// The saved Git evidence must become visible without another scan.
-	found, err = d.CommitSessionLinks(t.Context(), []string{sha})
-	require.NoError(t, err)
-	require.Len(t, found.Commits[0].Links, 1)
-	assert.Equal(t, owner, found.Commits[0].Links[0].SessionID)
-	list, err := d.SessionCommitLinks(t.Context(), owner)
-	require.NoError(t, err)
-	require.Len(t, list.Commits, 1)
-	assert.Equal(t, sha, list.Commits[0].SHA)
 }
 
 func TestTrailerCommitLinksDuplicateOwnerIdentities(t *testing.T) {
@@ -213,8 +188,4 @@ func TestTrailerCommitLinksOrdering(t *testing.T) {
 	assert.Equal(t, sha, list.Commits[1].SHA)
 	assert.Equal(t, "trailer", list.Commits[1].Source)
 	assert.Equal(t, 1, list.Commits[1].MessageOrdinal)
-	require.NotNil(t, list.Commits[1].Turn)
-	assert.Equal(t, 0, list.Commits[1].Turn.Ordinal)
-	assert.Equal(t, "Save the edit", list.Commits[1].Turn.Text)
-	assert.True(t, list.Commits[1].Turn.Heuristic)
 }

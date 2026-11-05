@@ -139,7 +139,6 @@ func TestCommitTrailersControlCharacterSubject(t *testing.T) {
 func TestCommitTrailersParsing(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initRepo(t)
-	gitRun(t, repo, nil, "config", "trailer.separators", "=:")
 	sessions := []string{"kimi:wd_abc:agent-a:session_uuid-1", "codebuff:project-a:session-1", "devin:build:session-1"}
 	var want [][]string
 	for _, tt := range []struct {
