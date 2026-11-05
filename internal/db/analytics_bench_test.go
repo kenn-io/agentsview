@@ -203,3 +203,66 @@ func shuffleAnalyticsSessions(b *testing.B, d *DB) {
 		UPDATE sessions SET rowid = (SELECT shuffled FROM shuffled WHERE old = sessions.rowid)`)
 	require.NoError(b, err)
 }
+
+// seedToolHistoryBenchmark spreads 3,000 sessions of 40 messages over a year,
+// with a tool call on every other assistant turn. Tool and skill analytics
+// for one month should not pay for the other eleven.
+func seedToolHistoryBenchmark(b *testing.B) *DB {
+	b.Helper()
+	d := testDB(b)
+	for _, stmt := range []string{
+		`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 2999)
+		INSERT INTO sessions(id, project, agent, started_at, ended_at, created_at,
+			message_count, user_message_count)
+		SELECT printf('tools-%04d', i), 'project-' || (i % 20), 'claude',
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2025-11-01T00:00:00Z', printf('+%d minutes', i * 175)),
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2025-11-01T00:39:00Z', printf('+%d minutes', i * 175)),
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2025-11-01T00:00:00Z', printf('+%d minutes', i * 175)),
+			40, 20
+		FROM n`,
+		`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 39)
+		INSERT INTO messages(session_id, ordinal, role, content, timestamp, model, has_tool_use)
+		SELECT s.id, n.i,
+			CASE WHEN n.i % 2 = 0 THEN 'user' ELSE 'assistant' END,
+			'benchmark message',
+			strftime('%Y-%m-%dT%H:%M:%SZ', s.started_at, printf('+%d minutes', n.i)),
+			CASE WHEN n.i % 2 = 1 THEN 'claude-sonnet-4-5' ELSE '' END,
+			CASE WHEN n.i % 4 = 1 THEN 1 ELSE 0 END
+		FROM sessions s CROSS JOIN n`,
+		`INSERT INTO tool_calls(message_id, session_id, tool_name, category, skill_name)
+		SELECT m.id, m.session_id,
+			CASE WHEN m.ordinal % 8 = 1 THEN 'Skill' ELSE 'Read' END,
+			CASE WHEN m.ordinal % 8 = 1 THEN 'Skill' ELSE 'Read' END,
+			CASE WHEN m.ordinal % 8 = 1 THEN 'review' END
+		FROM messages m WHERE m.has_tool_use = 1`,
+		`ANALYZE`,
+	} {
+		_, err := d.getWriter().Exec(b.Context(), stmt)
+		require.NoError(b, err)
+	}
+	return d
+}
+
+var toolHistoryMonthFilter = AnalyticsFilter{
+	From: "2026-06-01", To: "2026-06-30", Timezone: "UTC",
+}
+
+func BenchmarkGetAnalyticsToolsMonthOfYear(b *testing.B) {
+	d := seedToolHistoryBenchmark(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		resp, err := d.GetAnalyticsTools(b.Context(), toolHistoryMonthFilter)
+		require.NoError(b, err)
+		require.Positive(b, resp.TotalCalls)
+	}
+}
+
+func BenchmarkGetAnalyticsSkillsMonthOfYear(b *testing.B) {
+	d := seedToolHistoryBenchmark(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		resp, err := d.GetAnalyticsSkills(b.Context(), toolHistoryMonthFilter, "day")
+		require.NoError(b, err)
+		require.Positive(b, resp.TotalSkillCalls)
+	}
+}
