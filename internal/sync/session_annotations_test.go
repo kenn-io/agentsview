@@ -1,7 +1,10 @@
 package sync
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -9,6 +12,150 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+func TestSessionAnnotationWritesDuringSync(t *testing.T) {
+	fx := newEngineFixture(t)
+	for _, id := range []string{"manager", "worker"} {
+		require.NoError(t, fx.db.UpsertSession(t.Context(), db.Session{
+			ID: id, Project: "proj", Machine: "local",
+			Agent: string(parser.AgentClaude), MessageCount: 1,
+		}))
+	}
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	releaseLock := sync.OnceFunc(func() { close(release) })
+	exclusive := make(chan error, 1)
+	go func() {
+		exclusive <- fx.engine.RunExclusive(func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	t.Cleanup(func() {
+		releaseLock()
+		require.NoError(t, <-exclusive)
+	})
+	<-held
+
+	for _, tc := range []struct {
+		name    string
+		write   func(context.Context) error
+		labels  []string
+		parent  string
+		project string
+	}{
+		{"set labels", func(ctx context.Context) error {
+			_, err := fx.engine.SetSessionLabels(ctx, "worker", []string{"first"})
+			return err
+		}, []string{"first"}, "", "proj"},
+		{"update labels", func(ctx context.Context) error {
+			_, err := fx.engine.UpdateSessionLabels(ctx, "worker", []string{"second"}, []string{"first"})
+			return err
+		}, []string{"second"}, "", "proj"},
+		{"set parent", func(ctx context.Context) error {
+			_, err := fx.engine.SetSessionExternalParent(ctx, "worker", "manager")
+			return err
+		}, []string{"second"}, "manager", "proj"},
+		{"clear parent", func(ctx context.Context) error {
+			_, err := fx.engine.ClearSessionExternalParent(ctx, "worker")
+			return err
+		}, []string{"second"}, "", "proj"},
+		{"assign project", func(ctx context.Context) error {
+			_, err := fx.engine.AssignSessionProject(ctx, "worker", "assigned")
+			return err
+		}, []string{"second"}, "", "assigned"},
+		{"clear project", func(ctx context.Context) error {
+			_, err := fx.engine.ClearSessionProjectAssignment(ctx, "worker")
+			return err
+		}, []string{"second"}, "", "proj"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- tc.write(ctx) }()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(2 * time.Second):
+				cancel()
+				releaseLock()
+				<-done
+				require.FailNow(t, "annotation waited for the sync pass")
+			}
+			session, err := fx.db.GetSession(t.Context(), "worker")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, tc.labels, session.Labels)
+			assert.Equal(t, tc.project, session.Project)
+			if tc.parent == "" {
+				assert.Nil(t, session.ParentSessionID)
+			} else {
+				require.NotNil(t, session.ParentSessionID)
+				assert.Equal(t, tc.parent, *session.ParentSessionID)
+			}
+		})
+	}
+}
+
+func TestSessionAnnotationWaitsForWriter(t *testing.T) {
+	for _, cancelWrite := range []bool{false, true} {
+		name := "reopen"
+		if cancelWrite {
+			name = "cancel"
+		}
+		t.Run(name, func(t *testing.T) {
+			fx := newEngineFixture(t)
+			require.NoError(t, fx.db.CloseWriter())
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := fx.engine.UpdateSessionLabels(ctx, "worker", []string{"queued"}, nil)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				require.FailNow(t, "annotation returned before the writer reopened", "error: %v", err)
+			case <-time.After(200 * time.Millisecond): //nolint:kennlint // deadlinetest: assert no return while the writer is closed.
+			}
+			if cancelWrite {
+				cancel()
+			} else {
+				require.NoError(t, fx.db.ReopenWriter())
+			}
+			select {
+			case err := <-done:
+				if cancelWrite {
+					require.ErrorIs(t, err, context.Canceled)
+				} else {
+					require.NoError(t, err)
+				}
+			case <-time.After(5 * time.Second):
+				cancel()
+				<-done
+				require.FailNow(t, "annotation kept waiting after reopen or cancellation")
+			}
+			if cancelWrite {
+				require.NoError(t, fx.db.ReopenWriter())
+			}
+			require.NoError(t, fx.db.UpsertSession(t.Context(), db.Session{
+				ID: "worker", Project: "proj", Machine: "local",
+				Agent: string(parser.AgentClaude), MessageCount: 1,
+			}))
+			session, err := fx.db.GetSession(t.Context(), "worker")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			if cancelWrite {
+				assert.Empty(t, session.Labels, "canceled edits must stay unwritten after reopen")
+			} else {
+				assert.Equal(t, []string{"queued"}, session.Labels)
+			}
+		})
+	}
+}
 
 func TestSessionAnnotationWritesEmitOnlyOnChange(t *testing.T) {
 	fx := newEngineFixture(t)
