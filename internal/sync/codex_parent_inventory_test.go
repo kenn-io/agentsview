@@ -181,6 +181,12 @@ func TestRebuildPreservesForksWhenParentInventoryChanges(t *testing.T) {
 	for _, fork := range forks {
 		assert.Equal(t, []string{"new answer"}, messageContents(t, database, "codex:"+fork))
 	}
+	// The second fork's archived row becomes a placeholder without messages or
+	// usage. The rebuild must not restore that empty row over its transcript.
+	placeholder := "codex:" + forks[1]
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), placeholder, nil))
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), placeholder, nil))
+	require.Empty(t, messageContents(t, database, placeholder))
 	engine.Close()
 	require.NoError(t, os.Remove(pagePath))
 	delegate, ok := parser.ProviderFactoryByType(parser.AgentCodex)
@@ -193,8 +199,10 @@ func TestRebuildPreservesForksWhenParentInventoryChanges(t *testing.T) {
 	stats := engine.ResyncAll(t.Context(), nil)
 	require.True(t, stats.ArchiveRebuilt)
 	require.Positive(t, stats.Deferred)
+	assert.Equal(t, []string{"new answer"}, messageContents(t, database, "codex:"+forks[0]))
+	assert.NotEmpty(t, messageContents(t, database, placeholder),
+		"an empty placeholder must not replace the fork's transcript")
 	for _, fork := range forks {
-		assert.Equal(t, []string{"new answer"}, messageContents(t, database, "codex:"+fork))
 		assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+fork), db.CurrentDataVersion())
 	}
 	recovered := engine.SyncAll(t.Context(), nil)
