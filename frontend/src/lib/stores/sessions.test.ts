@@ -541,6 +541,79 @@ describe("SessionsStore", () => {
   });
 
   describe("sidebar loading", () => {
+    it("updates index facts when selecting an indexed session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "parent" }), makeSkinnyRow({ id: "child" })]);
+      await sessions.load();
+      api.getSession.mockResolvedValueOnce(
+        makeSession({
+          id: "child",
+          message_count: 12,
+          user_message_count: 4,
+          ended_at: "2026-01-01T12:00:00Z",
+          termination_status: "awaiting_user",
+          transcript_revision: "rev-2",
+          parent_session_id: "parent",
+          parent_session_ids: ["parent"],
+          relationship_type: "subagent",
+        }),
+      );
+
+      await sessions.navigateToSession("child");
+
+      expect(sessions.activeSession).toMatchObject({
+        message_count: 12,
+        user_message_count: 4,
+        ended_at: "2026-01-01T12:00:00Z",
+        termination_status: "awaiting_user",
+        transcript_revision: "rev-2",
+        parent_session_id: "parent",
+        parent_session_ids: ["parent"],
+        relationship_type: "subagent",
+      });
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.totalMessages).toBe(13);
+    });
+
+    it("keeps index facts when hydrating a visible title", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row", message_count: 1 })]);
+      await sessions.load();
+      api.getSession.mockResolvedValueOnce(
+        makeSession({
+          id: "row",
+          first_message: "Title",
+          message_count: 12,
+        }),
+      );
+
+      await sessions.hydrateVisibleSessions(["row"]);
+
+      expect(sessions.view(sessions.sessions[0]!)).toMatchObject({
+        first_message: "Title",
+        message_count: 1,
+      });
+    });
+
+    it("ignores pending hydration after an index rejects a filter", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      await sessions.load();
+      const old = Promise.withResolvers<Session>();
+      api.getSession.mockReturnValueOnce(old.promise);
+      const hydration = sessions.hydrateVisibleSessions(["row"]);
+      api.getSidebarSessionIndex.mockRejectedValueOnce(new ApiError(400, "invalid filter"));
+      await sessions.load();
+      old.resolve(makeSession({ id: "row", first_message: "Obsolete title" }));
+      await hydration;
+
+      await sessions.load();
+      api.getSession.mockResolvedValueOnce(
+        makeSession({ id: "row", first_message: "Current title" }),
+      );
+      await sessions.navigateToSession("row");
+
+      expect(sessions.activeSession?.first_message).toBe("Current title");
+      expect(api.getSession).toHaveBeenCalledTimes(2);
+    });
+
     it("hydrates the selected session after signal detail arrives first", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
       await sessions.load();
@@ -594,12 +667,15 @@ describe("SessionsStore", () => {
       await sessions.assignSessionProject("row", "assigned");
       expect(sessions.groupedSessions[0]?.project).toBe("assigned");
       await sessions.clearSessionProjectAssignment("row");
-      request.resolve(makeSession({ id: "row", project: "old", first_message: "Title" }));
+      request.resolve(
+        makeSession({ id: "row", project: "old", first_message: "Title", message_count: 12 }),
+      );
       await navigation;
       expect(sessions.activeSession).toMatchObject({
         project: "restored",
         project_assigned: false,
         first_message: "Title",
+        message_count: 12,
       });
       expect(
         SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId,

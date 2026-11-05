@@ -642,6 +642,7 @@ class SessionsStore {
       // filter's rows under it would mislabel them.
       if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
         this.resetPagination();
+        this.invalidateHydratedSessionDetails();
         this.details.clear();
         this.sidebarIndexIds = new Set();
         this.sidebarLoadError = error.message;
@@ -1106,6 +1107,15 @@ class SessionsStore {
     const existing = this.byId.get(id);
     if (!existing?.is_index_only || this.details.has(id)) return;
     await this.hydrateVisibleSessions([id]);
+    const detail = this.details.get(id);
+    const current = this.byId.get(id);
+    if (!detail || !current || this.activeSessionId !== id) return;
+    // Keep index edits made while the detail request was in flight.
+    const previousFields = indexFields(existing);
+    const changedFields = Object.entries(indexFields(current)).filter(
+      ([key, value]) => !sameField(previousFields[key as keyof typeof previousFields], value),
+    );
+    this.updateActiveIndex({ ...detail, ...Object.fromEntries(changedFields) });
   }
 
   deselectSession() {
