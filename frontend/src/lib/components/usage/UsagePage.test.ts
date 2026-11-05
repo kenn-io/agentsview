@@ -153,7 +153,144 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
-  it("loads usage once with the resolved machine from a label deep link", async () => {
+  function visibility() {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    return async (value: boolean) => {
+      hidden = value;
+      document.dispatchEvent(new Event("visibilitychange"));
+      await flushEffects();
+    };
+  }
+
+  function usageReads() {
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
+    vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({
+      priorFrom: "2024-05-01",
+      priorTo: "2024-05-31",
+      priorTotalCost: testMoney(0),
+      deltaPct: 0,
+    });
+    router.route = "usage";
+    return vi.spyOn(UsageService, "getApiV1UsageSummary");
+  }
+
+  it("aborts hidden reads and resumes once even when a refresh is overdue", async () => {
+    vi.useFakeTimers();
+    const setHidden = visibility();
+    const interrupted = Promise.withResolvers<UsageSummaryResponse>();
+    const replacement = usageSummaryWithUnsupported();
+    replacement.totals.inputTokens = 42;
+    const requests = usageReads()
+      .mockReturnValueOnce(interrupted.promise)
+      .mockResolvedValue(replacement);
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    const signal = requests.mock.calls[0]?.[1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    await setHidden(true);
+    expect(signal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(requests).toHaveBeenCalledTimes(1);
+    await setHidden(false);
+    await flushEffects();
+    expect(requests).toHaveBeenCalledTimes(2);
+    expect(requests.mock.calls[1]?.[0]).toEqual(requests.mock.calls[0]?.[0]);
+    expect(usage.summary?.totals.inputTokens).toBe(42);
+    interrupted.resolve(usageSummaryWithUnsupported());
+    await flushEffects();
+    expect(usage.summary?.totals.inputTokens).toBe(42);
+  });
+
+  it.each([
+    [60_000, 1],
+    [600_000, 2],
+  ])("catches up after %i ms hidden and stops on teardown", async (duration, count) => {
+    vi.useFakeTimers();
+    const setHidden = visibility();
+    const requests = usageReads().mockResolvedValue(usageSummaryWithUnsupported());
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    await flushEffects();
+    expect(usage.isQuerying).toBe(false);
+    await setHidden(true);
+    await vi.advanceTimersByTimeAsync(duration);
+    expect(requests).toHaveBeenCalledTimes(1);
+    await setHidden(false);
+    expect(requests).toHaveBeenCalledTimes(count);
+    await setHidden(true);
+    await vi.advanceTimersByTimeAsync(600_000);
+    await unmount(component);
+    component = undefined;
+    await setHidden(false);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(requests).toHaveBeenCalledTimes(count);
+  });
+
+  it("keeps the scheduled deadline when a filter changes before hiding", async () => {
+    vi.useFakeTimers();
+    const setHidden = visibility();
+    const requests = usageReads().mockResolvedValue(usageSummaryWithUnsupported());
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    await vi.advanceTimersByTimeAsync(240_000);
+    router.params = { exclude_model: "model-alpha" };
+    await flushEffects();
+    expect(requests).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await setHidden(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await setHidden(false);
+    expect(requests).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the original refresh deadline after a short hide", async () => {
+    vi.useFakeTimers();
+    const setHidden = visibility();
+    const requests = usageReads().mockResolvedValue(usageSummaryWithUnsupported());
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    await vi.advanceTimersByTimeAsync(120_000);
+    await setHidden(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await setHidden(false);
+    expect(requests).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(requests).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes an interrupted project drilldown", async () => {
+    const setHidden = visibility();
+    usageReads().mockResolvedValue(usageSummaryWithUnsupported());
+    const interrupted = Promise.withResolvers<[]>();
+    const ranking = vi.mocked(UsageService.getApiV1UsageTopSessions);
+    ranking.mockImplementation((params) =>
+      params?.group_by === "group" ? interrupted.promise : Promise.resolve([]),
+    );
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    usage.setOpenProject("project-a");
+    await flushEffects();
+    const signal = ranking.mock.calls.find(([params]) => params?.group_by === "group")?.[1]?.signal;
+    await setHidden(true);
+    expect(signal?.aborted).toBe(true);
+    ranking.mockResolvedValue([]);
+    await setHidden(false);
+    await flushEffects();
+    expect(
+      ranking.mock.calls
+        .filter(([params]) => params?.group_by === "group")
+        .map(([params]) => params?.project_key),
+    ).toEqual(["project-a", "project-a"]);
+    expect(usage.zoomedProject?.key).toBe("project-a");
+    expect(usage.zoomRows).toEqual([]);
+    interrupted.resolve([]);
+  });
+
+  it.each(["visible", "hidden", "returning"])("hydrates machines while %s", async (state) => {
+    const setHidden = visibility();
+    if (state !== "visible") await setHidden(true);
     const requests = vi
       .spyOn(UsageService, "getApiV1UsageSummary")
       .mockResolvedValue(usageSummaryWithUnsupported());
@@ -177,6 +314,8 @@ describe("UsagePage refresh behavior", () => {
       component = mount(UsagePage, { target: document.body });
       await flushEffects();
 
+      if (state === "returning") await setHidden(false);
+      expect(requests).toHaveBeenCalledTimes(0);
       metadata.resolve({
         machines: ["id-a"],
         resolved_machines: ["id-a"],
@@ -185,6 +324,10 @@ describe("UsagePage refresh behavior", () => {
       });
       await sessions.loadMachines();
       await flushEffects();
+      if (state === "hidden") {
+        expect(requests).toHaveBeenCalledTimes(0);
+        await setHidden(false);
+      }
       await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
 
       expect(requests.mock.calls.map(([params]) => params?.machine)).toEqual(["id-a"]);

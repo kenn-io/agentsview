@@ -60,6 +60,25 @@
 
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
+  let pendingRefresh = false;
+
+  function refreshUsage(): void {
+    if (document.hidden || !urlInitRan || !urlWritebackReady || sessions.machineFilterPending) {
+      pendingRefresh = true;
+      return;
+    }
+    pendingRefresh = false;
+    void usage.fetchAll({ preserveTimeRange: true });
+  }
+
+  function onVisibilityChange(): void {
+    if (document.hidden) {
+      if (usage.isQuerying) {
+        pendingRefresh = true;
+        usage.cancelInFlightReads();
+      }
+    } else if (pendingRefresh) refreshUsage();
+  }
 
   const chartStyleMaps = $derived(
     usageChartStyleMaps(
@@ -432,12 +451,13 @@
       if (!initialFetchDone) {
         initialFetchDone = true;
       }
-      usage.fetchAll({ preserveTimeRange: true });
+      refreshUsage();
     });
   });
 
   onMount(() => {
     mounted = true;
+    document.addEventListener("visibilitychange", onVisibilityChange);
     // The Agent dropdown reads sessions.agents, which is otherwise loaded
     // lazily by the sidebar filter control; a direct /usage visit needs it too.
     sessions.loadAgents();
@@ -451,6 +471,7 @@
   });
 
   onDestroy(() => {
+    document.removeEventListener("visibilitychange", onVisibilityChange);
     usage.cancelInFlightReads();
     unsubEvents?.();
   });
@@ -532,7 +553,7 @@
         querySteps={usage.lastQuerySteps}
         liveQuery={usage.liveQuery}
         busy={usage.isQuerying}
-        onRefresh={() => usage.fetchAll({ preserveTimeRange: true })}
+        onRefresh={refreshUsage}
         label={m.usage_refresh()}
         title={m.shared_refresh()}
       />
