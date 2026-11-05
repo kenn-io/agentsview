@@ -226,13 +226,7 @@ func TestIdleTrackerSyncSuspensionRepeatsAfterExternalRequests(t *testing.T) {
 		tracker := NewIdleTracker(0, func() { assert.Fail(t, "foreground serve must remain running") })
 		suspended := make(chan struct{}, 4)
 		tracker.SetSyncIdle(time.Minute, func() { suspended <- struct{}{} })
-		finish := requireBeginWork(t, tracker)
-		defer finish()
 		go tracker.Run(ctx)
-		time.Sleep(time.Minute)
-		require.Empty(t, suspended, "active work keeps ingestion installed")
-		finish()
-		synctest.Wait()
 		<-suspended
 		for range 2 {
 			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -267,5 +261,26 @@ func TestIdleSyncIgnoresBasePathPing(t *testing.T) {
 		}
 		synctest.Wait()
 		require.Equal(t, 1, suspensions)
+	})
+}
+
+func TestIdleSyncSuspendsDuringOutsideConsumerWork(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		exits, suspensions := 0, 0
+		tracker := NewIdleTracker(20*time.Minute, func() { exits++ })
+		tracker.SetSyncIdle(10*time.Minute, func() { suspensions++ })
+		// Codex Cloud capture holds this daemon-exit lease until its join ends.
+		finish := requireBeginWork(t, tracker)
+		defer finish()
+		go tracker.Run(ctx)
+		time.Sleep(21 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, 1, suspensions, "outside capture must allow local collection to suspend")
+		assert.Zero(t, exits, "the daemon must keep the outside capture alive")
+		finish()
+		synctest.Wait()
+		assert.Equal(t, 1, exits, "the daemon can exit after capture releases its lease")
 	})
 }

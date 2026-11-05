@@ -174,25 +174,24 @@ func (t *IdleTracker) nextWait() (time.Duration, bool) {
 		return 0, true
 	}
 	wait := time.Hour
-	if t.activeExternal == 0 && t.activeWork == 0 {
-		if t.syncTimeout > 0 && !t.syncIdle {
-			remaining := t.syncTimeout - time.Since(t.lastSyncActivity)
-			if remaining <= 0 {
-				t.syncIdle = true
-				t.onSyncIdle()
-			} else {
-				wait = min(wait, remaining)
-			}
-		}
-		if t.timeout > 0 {
-			remaining := t.timeout - time.Since(t.lastExternal)
-			if remaining <= 0 {
-				t.draining = true
-				go t.onIdle()
-				return 0, true
-			}
+	// Internal work holds only the exit lease; local collection may suspend.
+	if t.activeExternal == 0 && t.syncTimeout > 0 && !t.syncIdle {
+		remaining := t.syncTimeout - time.Since(t.lastSyncActivity)
+		if remaining <= 0 {
+			t.syncIdle = true
+			t.onSyncIdle()
+		} else {
 			wait = min(wait, remaining)
 		}
+	}
+	if t.activeExternal == 0 && t.activeWork == 0 && t.timeout > 0 {
+		remaining := t.timeout - time.Since(t.lastExternal)
+		if remaining <= 0 {
+			t.draining = true
+			go t.onIdle()
+			return 0, true
+		}
+		wait = min(wait, remaining)
 	}
 	return wait, false
 }
