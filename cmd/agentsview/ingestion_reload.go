@@ -35,7 +35,7 @@ type daemonIngestion struct {
 
 	cfg atomic.Pointer[config.Config]
 	// attached drains configured archive sources during an idle catch-up.
-	attached atomic.Pointer[archivesource.Manager]
+	attached *archivesource.Manager
 
 	// applyMu serializes reloads. Each reload reads the saved configuration
 	// under it, so the last one to run applies the latest settings.
@@ -307,7 +307,7 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 func (d *daemonIngestion) attachSources(cfg config.Config) (*archivesource.Manager, error) {
 	attached, err := archivesource.NewManager(d.ctx, cfg, d.database, d.engine, d.FlushPending)
 	if err == nil {
-		d.attached.Store(attached)
+		d.attached = attached
 	}
 	return attached, err
 }
@@ -330,7 +330,7 @@ func (d *daemonIngestion) catchUpSources(cfg config.Config) error {
 // scheduled tick skips while collection is released.
 func (d *daemonIngestion) catchUpScheduledSources(cfg config.Config) error {
 	remoteErr := runRemoteSourceSyncPass(d.ctx, d.engine, remoteSourceSyncRoots(cfg))
-	if attached := d.attached.Load(); attached != nil {
+	if attached := d.attached; attached != nil {
 		_, err := attached.DrainScheduled(d.ctx)
 		return errors.Join(remoteErr, err)
 	}

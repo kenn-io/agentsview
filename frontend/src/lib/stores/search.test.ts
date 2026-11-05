@@ -10,7 +10,20 @@ import {
   type SearchMode,
 } from "./search.svelte.js";
 import { sync } from "./sync.svelte.js";
+import { events } from "./events.svelte.js";
+import type { DataChangedEvent } from "../api/client.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
+
+const wire = vi.hoisted(() => ({
+  deliver: undefined as ((event: DataChangedEvent) => void) | undefined,
+}));
+vi.mock("../api/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/client.js")>()),
+  watchEvents: vi.fn((callback) => {
+    wire.deliver = callback;
+    return { readyState: 1, addEventListener: vi.fn(), close: vi.fn() };
+  }),
+}));
 
 vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn(), reportErrorShown: vi.fn() }));
 
@@ -116,60 +129,96 @@ describe("SearchStore", () => {
 
   afterEach(() => {
     searchStore.clear();
+    searchStore.setMode("fulltext");
+    searchStore.resetSort();
+    searchStore.resetRange();
+    events.setAvailable(false);
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it("refreshes the open search when the last sync changes", async () => {
-    vi.spyOn(MetadataService, "getApiV1Version").mockResolvedValue({
-      version: "dev",
-      commit: "unknown",
-      build_date: "",
-      api_version: 0,
-      data_version: 0,
-      friction_available: false,
-      friction_build_allowed: false,
-      insight_generation_available: false,
-      kata_available: false,
-      session_stats_available: false,
-    });
-    vi.spyOn(MetadataService, "getApiV1Stats").mockResolvedValue({
-      session_count: 1,
-      message_count: 1,
-      project_count: 1,
-      machine_count: 1,
-      earliest_session: null,
-    });
-    const status = vi.spyOn(SyncService, "getApiV1SyncStatus");
-    const initialStatus = {
-      last_sync: "2026-07-01T00:00:00Z",
-      sync_pending: false,
-      archive_stale: false,
-      startup_pending: false,
-      stats: { total_sessions: 0, synced: 0, skipped: 0, failed: 0 },
-    };
-    status.mockResolvedValueOnce(initialStatus);
-    await sync.loadStatus();
-    searchService.getApiV1Search
-      .mockResolvedValueOnce(fullTextResponse("needle", 0))
-      .mockResolvedValueOnce(fullTextResponse("needle"));
-    searchStore.search("needle", "alpha");
-    await runDebounce();
-    expect(searchStore.results).toEqual([]);
+  it.each(["fulltext", "hybrid"] as const)(
+    "refreshes an open %s search after partial recovery without a new sync timestamp",
+    async (mode) => {
+      vi.spyOn(MetadataService, "getApiV1Version").mockResolvedValue({
+        version: "dev",
+        commit: "unknown",
+        build_date: "",
+        api_version: 0,
+        data_version: 0,
+        friction_available: false,
+        friction_build_allowed: false,
+        insight_generation_available: false,
+        kata_available: false,
+        session_stats_available: false,
+      });
+      vi.spyOn(MetadataService, "getApiV1Stats").mockResolvedValue({
+        session_count: 1,
+        message_count: 1,
+        project_count: 1,
+        machine_count: 1,
+        earliest_session: null,
+      });
+      const status = vi.spyOn(SyncService, "getApiV1SyncStatus");
+      const initialStatus = {
+        last_sync: "2026-07-01T00:00:00Z",
+        sync_pending: false,
+        archive_stale: false,
+        startup_pending: false,
+        stats: { total_sessions: 0, synced: 0, skipped: 0, failed: 0 },
+      };
+      status.mockResolvedValueOnce(initialStatus);
+      await sync.loadStatus();
+      events.setAvailable(true);
+      const unsubscribe = events.subscribe(() => {});
+      searchStore.setMode(mode);
+      searchStore.setSort("recency");
+      searchStore.setRange({ mode: "custom", from: "2026-06-01", to: "2026-07-31" });
+      searchService.getApiV1Search
+        .mockResolvedValueOnce(fullTextResponse("needle", 0))
+        .mockResolvedValueOnce(fullTextResponse("needle"));
+      searchService.getApiV1SearchContent
+        .mockResolvedValueOnce(contentResult([]))
+        .mockResolvedValueOnce(contentResult([contentMatch("full-0", 4, 0.9)]));
+      searchStore.search("needle", "alpha");
+      await runDebounce();
+      expect(searchStore.results).toEqual([]);
 
-    status.mockResolvedValueOnce({
-      ...initialStatus,
-      last_sync: "2026-07-02T00:00:00Z",
-    });
-    await sync.loadStatus();
-    await runDebounce();
+      // A healthy transcript committed while another failed. The status polls
+      // miss the whole pass, so last_sync and progress never announce completion.
+      status.mockResolvedValueOnce({ ...initialStatus, sync_pending: true });
+      await sync.loadStatus();
+      expect(wire.deliver).toBeTypeOf("function");
+      wire.deliver!({ scope: "sessions" });
+      await vi.advanceTimersByTimeAsync(200);
+      wire.deliver!({ scope: "sessions" });
+      await vi.advanceTimersByTimeAsync(299);
+      const query =
+        mode === "fulltext" ? searchService.getApiV1Search : searchService.getApiV1SearchContent;
+      expect(query).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
 
-    expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
-    expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
-      { q: "needle", project: "alpha", limit: 30, sort: "relevance" },
-      expect.objectContaining({ signal: expect.anything() }),
-    );
-  });
+      expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(query).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          project: "alpha",
+          date_from: "2026-06-01",
+          date_to: "2026-07-31",
+          ...(mode === "fulltext" ? { q: "needle", sort: "recency" } : { pattern: "needle", mode }),
+        }),
+        expect.objectContaining({ signal: expect.anything() }),
+      );
+      expect(sync.syncPending).toBe(true);
+      expect(searchStore.mode).toBe(mode);
+      expect(searchStore.sort).toBe("recency");
+      searchStore.clear();
+      wire.deliver!({ scope: "sessions" });
+      await runDebounce();
+      expect(query).toHaveBeenCalledTimes(2);
+      unsubscribe();
+    },
+  );
 
   it.each([
     [undefined, "fulltext"],
