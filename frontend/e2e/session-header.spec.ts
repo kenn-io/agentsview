@@ -160,3 +160,32 @@ test("the View trigger shows its full label and keeps its width across layouts a
   // Switching layouts or modes does not move the trigger's neighbors.
   expect([...widths]).toHaveLength(1);
 });
+
+for (const width of [600, 760]) {
+  // On phones the transcript controls move into the top bar beside its
+  // actions.
+  test(`every top bar control stays on screen with a session open at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const listed = await page.request.get("/api/v1/sessions?limit=1");
+    const id = (await listed.json()).sessions[0].id;
+    await page.goto(`/sessions/${id}`);
+    await expect(page.locator(".virtual-row").first()).toBeVisible();
+    const header = page.locator(".kit-top-bar");
+    await expect(header.locator(".view-trigger")).toBeVisible();
+    const offscreen = await header.evaluate((element) => {
+      const pane = element.getBoundingClientRect();
+      const right = Math.min(pane.right, window.innerWidth);
+      return [...element.querySelectorAll<HTMLElement>("button, summary, a[href]")]
+        .filter((control) => {
+          const r = control.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && getComputedStyle(control).visibility !== "hidden";
+        })
+        .filter((control) => {
+          const r = control.getBoundingClientRect();
+          return r.left < pane.left - 0.5 || r.right > right + 0.5;
+        })
+        .map((control) => control.getAttribute("aria-label") ?? control.textContent?.trim() ?? control.className);
+    });
+    expect(offscreen).toEqual([]);
+  });
+}
