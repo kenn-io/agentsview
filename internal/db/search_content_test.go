@@ -531,6 +531,37 @@ func TestSearchContentTermsRequiresOneExchange(t *testing.T) {
 		"terms in different exchanges of one session must not match")
 }
 
+func TestSearchContentTermsKeepsWholeExchangeAroundOneHit(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "terms-one-hit", "proj", func(s *Session) {
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "terms-one-hit", []Message{
+		{SessionID: "terms-one-hit", Ordinal: 0, Role: "user", Content: "unrelated opener"},
+		{SessionID: "terms-one-hit", Ordinal: 1, Role: "assistant", Content: "unrelated reply"},
+		{SessionID: "terms-one-hit", Ordinal: 2, Role: "user", Content: "first question"},
+		{SessionID: "terms-one-hit", Ordinal: 3, Role: "assistant", Content: "the deploy step"},
+		{SessionID: "terms-one-hit", Ordinal: 4, Role: "assistant", Content: "closing remark"},
+	}))
+
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "deploy", Mode: "terms", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, 2, got.Matches[0].Ordinal)
+	assert.Equal(t, [2]int{2, 4}, got.Matches[0].OrdinalRange,
+		"the match covers every message of its exchange, not only the hit")
+
+	split, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "question remark", Mode: "terms", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, split.Matches, 1,
+		"terms in different messages of one exchange still match")
+	assert.Equal(t, [2]int{2, 4}, split.Matches[0].OrdinalRange)
+}
+
 func TestSearchContentTermsIgnoresAssistantPrelude(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "terms-prelude", "proj", func(s *Session) {
