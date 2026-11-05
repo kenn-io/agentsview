@@ -177,7 +177,7 @@ func TestCodexForkNativeResultIdentity(t *testing.T) {
 
 func TestCodexForkImportedMultiAgentSummaryLength(t *testing.T) {
 	for _, stage := range []int64{1, 1 << 30} {
-		for _, replacement := range []string{"none", "reordered", "length-only"} {
+		for _, replacement := range []string{"none", "reordered", "length-only", "participation-only"} {
 			t.Run(strconv.FormatInt(stage, 10)+"/"+replacement, func(t *testing.T) {
 				root := t.TempDir()
 				cp := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+forkReviewChild+".jsonl")
@@ -282,7 +282,11 @@ func TestCodexForkImportedMultiAgentSummaryLength(t *testing.T) {
 					} else {
 						rows.Messages, err = d.GetAllMessages(t.Context(), id)
 						require.NoError(t, err)
-						rows.Messages[0].ToolCalls[0].ResultEvents[0].ContentLength = 2
+						if replacement == "length-only" {
+							rows.Messages[0].ToolCalls[0].ResultEvents[0].ContentLength = 2
+						}
+						// A replacement can blank an equal-length result under its source
+						// policy while keeping every event identity field unchanged.
 						rows.Messages[0].ToolCalls[0].ResultContentLength = 4
 						output = `{"status":{"agent-b":{"completed":"new beta result"}}}`
 						wantLength = 15

@@ -113,6 +113,13 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 	state.PreserveHistory = !info.Resolved
 	sourceContexts, classifyReplay := prepareCodexForkContexts(state, info.TurnContexts)
 	contextMatches := make(map[[2]int]bool)
+	contextAnchors := make([]string, len(state.TurnContexts)+1)
+	for i, turn := range state.TurnContexts {
+		contextAnchors[i+1] = turn.TurnID
+		if turn.TurnID == "" {
+			contextAnchors[i+1] = contextAnchors[turn.Parent]
+		}
+	}
 
 	// Capture original scratch occurrence identities before replay removal or
 	// insertion of archived-only messages changes the final ordinal stream.
@@ -216,21 +223,34 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			continue
 		}
 		for _, index := range byOrigin[old.Origin] {
-			if !reserved[index] && key == contentKeys[index] {
+			if !reserved[index] && key == contentKeys[index] && old.TurnContext == incoming[index].provenance.TurnContext {
 				reserved[index] = true
 				priorMatches[i] = index
 				break
 			}
 		}
 	}
-	for i, old := range priorOrigins {
-		if _, matched := priorMatches[i]; matched || inheritedPrior[i] || old.Origin.Line == 0 {
-			continue
-		}
-		for _, index := range byContent[priorKeys[i]] {
-			origin := incoming[index].provenance.Origin
-			// An empty turn ID can mean pre-turn replay or an idless child.
-			if !reserved[index] && old.Origin.TurnID == origin.TurnID && old.Origin.InTurn == origin.InTurn {
+	// A shortened source can move an idless child beside identical parent
+	// content. Reserve matches supported by its saved prefix first. A restored
+	// longer prefix can match only if it keeps the same nearest named turn;
+	// adding a new boundary cannot transfer parent usage to an idless child.
+	for _, requireContext := range []bool{true, false} {
+		for i, old := range priorOrigins {
+			if _, matched := priorMatches[i]; matched || inheritedPrior[i] || old.Origin.Line == 0 {
+				continue
+			}
+			for _, index := range byContent[priorKeys[i]] {
+				current := incoming[index].provenance
+				if reserved[index] || old.Origin.TurnID != current.Origin.TurnID || old.Origin.InTurn != current.Origin.InTurn {
+					continue
+				}
+				if requireContext && !codexForkContextContains(state.TurnContexts, old.TurnContext, current.TurnContext, contextMatches) {
+					continue
+				}
+				if !requireContext && (contextAnchors[old.TurnContext] != contextAnchors[current.TurnContext] ||
+					!codexForkContextContains(state.TurnContexts, current.TurnContext, old.TurnContext, contextMatches)) {
+					continue
+				}
 				reserved[index], priorMatches[i] = true, index
 				break
 			}

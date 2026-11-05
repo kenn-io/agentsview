@@ -19,13 +19,14 @@ func TestCodexForkMatchedMessageKeepsSourceBoundary(t *testing.T) {
 			firstBoundary, secondBoundary string
 			secondChild, parentIdless     bool
 			parentBoundary                string
+			ambiguousReplacement          bool
 		}{
-			{"shortened_matching_child", "message-free-child", "", true, true, ""},
-			{"child_absent_control", "message-free-child", "", false, true, ""},
-			{"boundary_present_control", "message-free-child", "message-free-child", true, true, ""},
-			{"named_parent_control", "message-free-child", "", true, false, ""},
-			{"returning_boundary_control", "", "message-free-child", true, true, ""},
-			{"changed_boundary_control", "earlier-turn", "new-child-turn", true, true, "earlier-turn"},
+			{"shortened_matching_child", "message-free-child", "", true, true, "", false},
+			{"child_absent_control", "message-free-child", "", false, true, "", false},
+			{"boundary_present_control", "message-free-child", "message-free-child", true, true, "", false},
+			{"named_parent_control", "message-free-child", "", true, false, "", false},
+			{"returning_boundary_control", "", "message-free-child", true, true, "", true},
+			{"changed_boundary_control", "earlier-turn", "new-child-turn", true, true, "earlier-turn", true},
 		} {
 			t.Run(fmt.Sprintf("stage=%d/%s", stage, tc.name), func(t *testing.T) {
 				e, d, cp, pp, meta := forkReviewEngine(t, stage, parser.AgentCodex)
@@ -55,7 +56,15 @@ func TestCodexForkMatchedMessageKeepsSourceBoundary(t *testing.T) {
 				}
 				require.NoError(t, os.WriteFile(cp, []byte(second), 0o600))
 				require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
-				require.Equal(t, []string{"parent replay", "retained idless child"}, messageContents(t, d, id))
+				wantUnresolved := []string{"parent replay", "retained idless child"}
+				wantTokens := 5
+				if tc.ambiguousReplacement {
+					// A different named boundary cannot establish that the new
+					// occurrence owns the saved usage. Keep both until recovery.
+					wantUnresolved = append(wantUnresolved, "retained idless child")
+					wantTokens = 0
+				}
+				require.Equal(t, wantUnresolved, messageContents(t, d, id))
 				parent := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime)) + replay
 				if tc.parentBoundary != "" {
 					parent += testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", tc.parentBoundary, forkReviewTime))
@@ -80,7 +89,7 @@ func TestCodexForkMatchedMessageKeepsSourceBoundary(t *testing.T) {
 					require.NoError(t, err)
 					require.NotNil(t, usage)
 					assert.Equal(t, []string{"retained idless child"}, got)
-					assert.Equal(t, 5, usage.TotalOutputTokens)
+					assert.Equal(t, wantTokens, usage.TotalOutputTokens)
 				}
 			})
 		}

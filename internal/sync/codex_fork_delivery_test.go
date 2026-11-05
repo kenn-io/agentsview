@@ -90,50 +90,66 @@ func TestCodexForkStagedPreservesOptionalResultMetadata(t *testing.T) {
 }
 
 func TestCodexForkStagedRetryKeepsPayloadsInScratch(t *testing.T) {
-	e, d, cp, _, meta := forkReviewEngine(t, 1, parser.AgentCodex)
-	var body strings.Builder
-	body.WriteString(meta)
-	body.WriteString(testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime)))
-	for i := range 4 {
-		id := "call-" + strconv.Itoa(i)
-		body.WriteString(testjsonl.JoinJSONL(testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", id, map[string]any{"cmd": "echo fixture"}, forkReviewTime), testjsonl.CodexFunctionCallOutputJSON(id, strings.Repeat("x", 32<<10), forkReviewTime)))
-	}
-	require.NoError(t, os.WriteFile(cp, []byte(body.String()), 0o600))
-	require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
-	cfg := parser.ProviderConfig{Roots: []string{filepath.Dir(cp)}, Machine: "local"}
-	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
-	require.True(t, ok)
-	source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{FullSessionID: "codex:" + forkReviewChild})
-	require.NoError(t, err)
-	require.True(t, found)
-	sink, err := newCodexStagingSink(t.Context(), t.TempDir(), nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sink.Close()) })
-	sess, msgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(t.Context(), cfg, source, sink)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	before := d.MessagesLoadCount()
-	prepared, verdict, err := e.prepareSessionNormalizedContext(t.Context(), pendingWrite{sess: *sess, msgs: msgs, staged: sink}, nil, false)
-	require.NoError(t, err)
-	require.Equal(t, sessionWriteOK, verdict)
-	assert.Equal(t, before, d.MessagesLoadCount(), "staging must not hydrate all archived results")
-	bytes := 0
-	for _, m := range prepared.Messages {
-		for _, call := range m.ToolCalls {
-			bytes += len(call.ResultContent)
-			for _, event := range call.ResultEvents {
-				bytes += len(event.Content)
+	for _, threshold := range []int64{1, 64 << 10} {
+		t.Run(strconv.FormatInt(threshold, 10), func(t *testing.T) {
+			e, d, cp, _, meta := forkReviewEngine(t, threshold, parser.AgentCodex)
+			var body strings.Builder
+			body.WriteString(meta)
+			body.WriteString(testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime)))
+			for i := range 4 {
+				id := "call-" + strconv.Itoa(i)
+				body.WriteString(testjsonl.JoinJSONL(testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", id, map[string]any{"cmd": "echo fixture"}, forkReviewTime), testjsonl.CodexFunctionCallOutputJSON(id, strings.Repeat("x", 32<<10), forkReviewTime)))
 			}
-		}
-	}
-	assert.Less(t, bytes, 128, "reconciled staged rows must retain metadata rather than the 128 KiB payload")
-	require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
-	stored, err := d.GetAllMessages(t.Context(), "codex:"+forkReviewChild)
-	require.NoError(t, err)
-	require.Len(t, stored, 4)
-	for _, m := range stored {
-		require.Len(t, m.ToolCalls, 1)
-		assert.Equal(t, strings.Repeat("x", 32<<10), m.ToolCalls[0].ResultContent)
+			require.NoError(t, os.WriteFile(cp, []byte(body.String()), 0o600))
+			require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
+			// The retry source now falls below the threshold, but its retained
+			// archive still contains the four large result bodies.
+			require.NoError(t, os.WriteFile(cp, []byte(meta), 0o600))
+			e.Close()
+			e = NewEngine(t.Context(), d, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {filepath.Dir(cp)}}, Machine: "local", DisableFilesystemProjectDiscovery: true, StagedCodexParseMinBytes: threshold})
+			t.Cleanup(e.Close)
+			info, err := os.Stat(cp)
+			require.NoError(t, err)
+			result := e.processFile(t.Context(), parser.DiscoveredFile{Agent: parser.AgentCodex, Path: cp, SourceSize: info.Size(), ForceParse: true})
+			defer result.releaseStaged()
+			defer result.retentionLease.Release()
+			require.NoError(t, result.err)
+			require.Len(t, result.results, 1)
+			assert.NotNil(t, result.staged, "retained fork history requires scratch staging even after source shortening")
+			before := d.MessagesLoadCount()
+			prepared, verdict, err := e.prepareSessionNormalizedContext(t.Context(), pendingWrite{sess: result.results[0].Session, msgs: result.results[0].Messages, staged: result.staged}, nil, false)
+			require.NoError(t, err)
+			require.Equal(t, sessionWriteOK, verdict)
+			assert.Equal(t, before, d.MessagesLoadCount(), "staging must not hydrate all archived results")
+			bytes := 0
+			for _, m := range prepared.Messages {
+				for _, call := range m.ToolCalls {
+					bytes += len(call.ResultContent)
+					for _, event := range call.ResultEvents {
+						bytes += len(event.Content)
+					}
+				}
+			}
+			assert.Less(t, bytes, 128, "reconciled staged rows must retain metadata rather than the 128 KiB payload")
+			for _, rebuild := range []bool{false, true} {
+				before := d.MessagesLoadCount()
+				if rebuild {
+					stats := e.ResyncAll(t.Context(), nil)
+					require.True(t, stats.ArchiveRebuilt)
+					require.Zero(t, stats.Failed)
+				} else {
+					require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
+				}
+				assert.Equal(t, before, d.MessagesLoadCount(), "retries and rebuilds must not hydrate all archived results")
+				stored, err := d.GetAllMessages(t.Context(), "codex:"+forkReviewChild)
+				require.NoError(t, err)
+				require.Len(t, stored, 4)
+				for _, m := range stored {
+					require.Len(t, m.ToolCalls, 1)
+					assert.Equal(t, strings.Repeat("x", 32<<10), m.ToolCalls[0].ResultContent)
+				}
+			}
+		})
 	}
 }
 

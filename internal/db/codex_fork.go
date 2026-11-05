@@ -138,6 +138,33 @@ func writeCodexForkStateTx(ctx context.Context, tx *sql.Tx, id string, state *Co
 	return err
 }
 
+// Artifact replacement changes the result observations even when every event's
+// metadata matches. Preserve fork origins and pending usage, but require fresh
+// evidence before counting imported results as summary contributors again.
+func clearCodexForkSummaryParticipantsTx(ctx context.Context, tx *sql.Tx, id string) error {
+	var encoded string
+	err := tx.QueryRowContext(ctx, `SELECT state_json FROM codex_fork_state WHERE session_id = ?`, id).Scan(&encoded)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var state CodexForkState
+	if err := json.Unmarshal([]byte(encoded), &state); err != nil {
+		return err
+	}
+	changed := false
+	for i := range state.Messages {
+		changed = changed || len(state.Messages[i].ResultSummaryParticipants) > 0
+		state.Messages[i].ResultSummaryParticipants = nil
+	}
+	if !changed {
+		return nil
+	}
+	return writeCodexForkStateTx(ctx, tx, id, &state)
+}
+
 // CodexForkMessageKey identifies storage-normalized message content, excluding usage and results.
 func CodexForkMessageKey(m Message) ([32]byte, error) {
 	// Legacy archives can lack model, length and rendering metadata. Match

@@ -796,7 +796,8 @@ fixtures retain this field; missing identities remain source-local.
   they do not establish that Codex rewrites a rollout in that shape.
   `TestCodexForkRetainsSpawnLinkWithoutOutput` covers the spawn output's link
   metadata without result events. `TestCodexForkStagedRetryKeepsPayloadsInScratch`
-  checks the staged retry's bounded payload representation. Result-order and
+  checks the staged retry's bounded payload representation, including when the
+  source shrinks below the staging threshold. Result-order and
   summary-participation fixtures cover restored prefixes and sanitized empty
   updates. The accounting fixtures exercise independently imported usage accepted
   by `ApplyArtifactImportedSession`; current native Codex rollouts still provide
@@ -826,12 +827,14 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexForkMatchedContextSurvivesResolvedRefreshes` retains context-only
   evidence through resolved refreshes before a delayed idless parent page.
   `TestCodexForkReplayCannotClaimIdlessChild` distinguishes identical pre-turn
-  replay and idless child messages through unresolved shortened-source retries;
+  or idless parent replay and idless child messages through unresolved
+  shortened-source retries;
   their separate 40- and 5-token fixtures recover only the child's five tokens.
   `TestCodexForkImportedMultiAgentSummaryLength` preserves imported participant
   evidence through blocked retries, an orphan archive copy, database reopen, a
   partial agent update, and parent recovery, without changing raw NULL metadata.
-  Reordered and length-only artifact replacements invalidate mismatched hints.
+  Reordered, length-only, and participation-only artifact replacements clear
+  saved contributor hints atomically while preserving other fork provenance.
   `TestCodexForkNativeResultIdentity` also verifies that archive copies retain
   known raw metadata and deduplicate returning source events after a rebuild.
   `TestCodexForkIdlessResultSignalsKeepOccurrences` preserves distinct result

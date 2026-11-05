@@ -83,8 +83,9 @@ tool results obey the current category and archive-content policies. Retained
 messages keep their activity bounds and supply the child preview; retained usage
 events follow the final child identity and message ordinals. Restored metadata
 continues to survive full parses until it returns in the source itself.
-Staged retries load archived message and call metadata separately, then reconcile
-and spool result bodies one archived message at a time. Restored source events
+Known Codex fork retries use staging even when the source shrinks below the
+size threshold. They load archived message and call metadata separately, then
+reconcile and spool result bodies one archived message at a time. Restored source events
 keep their order around shared events. Raw summary participation remains distinct
 from sanitized text, so a cleared result cannot revive older output. Spawn links
 also survive when their output records disappear.
@@ -94,8 +95,10 @@ length metadata across repeated staged writes, including imported events whose
 raw summary participation is unknown. Local provenance records imported events
 observed contributing readable text, so an update from one agent retains other
 agents' length contributions. Each hint includes its archived event position,
-agent, source, status, timestamp, and length, so later artifact replacements
-cannot reuse a hint for a different event. Raw nullable metadata stays unchanged.
+agent, source, status, timestamp, and length. Artifact message replacements clear
+these hints in the same transaction, since even unchanged event metadata cannot
+prove that replacement content contributes. Other fork provenance survives.
+Raw nullable metadata stays unchanged.
 Blank unknown content establishes no participation. Archived calls without provider
 IDs use occurrence keys to publish their staged summaries, events, findings, and
 failure signals.
@@ -115,6 +118,11 @@ across resolved refreshes until the source supplies it again. One reconciliation
 shares context-containment results for common prefixes.
 Content matches also preserve whether a record appeared before or inside a turn.
 A missing turn ID alone cannot identify pre-turn replay as an idless child.
+Saved prefixes claim matching content before less specific occurrence matches,
+so identical idless parent and child messages keep their separate usage.
+A returning longer prefix must keep the nearest named turn to claim saved
+usage. A different boundary keeps the occurrences separate until ownership can
+be established; identical content and timestamps alone cannot transfer usage.
 When fewer identical legacy occurrences return, their ownership remains unknown:
 keep those rows and their uncounted usage separately instead of assigning parent
 usage to a child. Repeating the same source does not add more occurrences.

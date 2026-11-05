@@ -105,34 +105,49 @@ func TestCodexForkArchivedPreTurnReplayRecovery(t *testing.T) {
 func TestCodexForkReplayCannotClaimIdlessChild(t *testing.T) {
 	for _, stage := range []int64{1, 1 << 30} {
 		for _, unresolvedRetries := range []int{0, 2} {
-			t.Run(fmt.Sprintf("stage=%d/unresolvedRetries=%d", stage, unresolvedRetries), func(t *testing.T) {
-				e, d, cp, pp, meta := forkReviewEngine(t, stage, parser.AgentCodex)
-				id := "codex:" + forkReviewChild
-				replay := testjsonl.JoinJSONL(testjsonl.CodexMsgJSON("assistant", "same answer", forkReviewTime))
-				child := testjsonl.JoinJSONL(testjsonl.CodexTurnContextJSON("gpt-5", forkReviewTime), testjsonl.CodexMsgJSON("assistant", "same answer", forkReviewTime))
-				full := meta + replay + testjsonl.JoinJSONL(testjsonl.CodexTokenCountJSON(forkReviewTime, 100, 40, 0)) + child + testjsonl.JoinJSONL(testjsonl.CodexTokenCountJSON(forkReviewTime, 20, 5, 0))
-				require.NoError(t, os.WriteFile(cp, []byte(full), 0o600))
-				require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
-				require.Equal(t, []string{"same answer", "same answer"}, messageContents(t, d, id))
-				require.NoError(t, os.WriteFile(cp, []byte(meta+child), 0o600))
-				for range unresolvedRetries {
-					require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
-					assert.Equal(t, []string{"same answer", "same answer"}, messageContents(t, d, id), "unresolved retries preserve both observed occurrences")
-					usage, err := d.GetSessionUsage(t.Context(), id, true)
-					require.NoError(t, err)
-					require.NotNil(t, usage)
-					assert.Zero(t, usage.TotalOutputTokens, "usage remains withheld while ownership is unresolved")
+			for _, parentIdless := range []bool{false, true} {
+				for _, archivedChild := range []bool{true, false} {
+					t.Run(fmt.Sprintf("stage=%d/unresolvedRetries=%d/parentIdless=%v/archivedChild=%v", stage, unresolvedRetries, parentIdless, archivedChild), func(t *testing.T) {
+						e, d, cp, pp, meta := forkReviewEngine(t, stage, parser.AgentCodex)
+						id := "codex:" + forkReviewChild
+						replay := testjsonl.JoinJSONL(testjsonl.CodexMsgJSON("assistant", "same answer", forkReviewTime))
+						child := testjsonl.JoinJSONL(testjsonl.CodexTurnContextJSON("gpt-5", forkReviewTime), testjsonl.CodexMsgJSON("assistant", "same answer", forkReviewTime))
+						if parentIdless {
+							replay = testjsonl.JoinJSONL(testjsonl.CodexTurnContextJSON("gpt-5", forkReviewTime)) + replay
+							child = testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-boundary", forkReviewTime)) + child
+						}
+						full := meta + replay + testjsonl.JoinJSONL(testjsonl.CodexTokenCountJSON(forkReviewTime, 100, 40, 0))
+						initialContents := []string{"same answer"}
+						wantTokens := 0
+						if archivedChild {
+							full += child + testjsonl.JoinJSONL(testjsonl.CodexTokenCountJSON(forkReviewTime, 20, 5, 0))
+							initialContents = append(initialContents, "same answer")
+							wantTokens = 5
+						}
+						require.NoError(t, os.WriteFile(cp, []byte(full), 0o600))
+						require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
+						require.Equal(t, initialContents, messageContents(t, d, id))
+						require.NoError(t, os.WriteFile(cp, []byte(meta+child), 0o600))
+						for range unresolvedRetries {
+							require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+							assert.Len(t, messageContents(t, d, id), 2, "unresolved retries preserve both observed occurrences")
+							usage, err := d.GetSessionUsage(t.Context(), id, true)
+							require.NoError(t, err)
+							require.NotNil(t, usage)
+							assert.Zero(t, usage.TotalOutputTokens, "usage remains withheld while ownership is unresolved")
+						}
+						require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))+replay), 0o600))
+						for range 2 {
+							require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+							assert.Equal(t, []string{"same answer"}, messageContents(t, d, id), "only the genuine child occurrence remains")
+							usage, err := d.GetSessionUsage(t.Context(), id, true)
+							require.NoError(t, err)
+							require.NotNil(t, usage)
+							assert.Equal(t, wantTokens, usage.TotalOutputTokens, "parent usage must not transfer to the child")
+						}
+					})
 				}
-				require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))+replay), 0o600))
-				for range 2 {
-					require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
-					assert.Equal(t, []string{"same answer"}, messageContents(t, d, id), "only the genuine child occurrence remains")
-					usage, err := d.GetSessionUsage(t.Context(), id, true)
-					require.NoError(t, err)
-					require.NotNil(t, usage)
-					assert.Equal(t, 5, usage.TotalOutputTokens, "parent usage must not transfer to the child")
-				}
-			})
+			}
 		}
 	}
 }
