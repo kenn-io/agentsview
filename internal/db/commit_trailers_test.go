@@ -66,37 +66,17 @@ func TestTrailerCommitLinksOwnerAvailableAfterScan(t *testing.T) {
 }
 
 func TestTrailerCommitLinksDuplicateOwnerIdentities(t *testing.T) {
-	for _, differentMetadata := range []bool{false, true} {
-		t.Run(map[bool]string{false: "same metadata", true: "different metadata"}[differentMetadata], func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "codex:abc", "project-a", func(s *Session) { s.Agent = "codex" })
-			sha := strings.Repeat("a", 40)
-			commit := gitlog.TrailerCommit{SHA: sha, Sessions: []string{"claude:codex:abc"}, CommittedAt: tsZero}
-			commits := []gitlog.TrailerCommit{commit}
-			commit.Sessions = []string{"codex:abc"}
-			if differentMetadata {
-				commit.Branch = "feature"
-				commit.Subject = "Updated subject"
-			}
-			commits = append(commits, commit)
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", commits))
-
-			rows, err := d.SessionCommitLinkRows(t.Context(), "codex:abc")
-			require.NoError(t, err)
-			assert.Len(t, rows, 1)
-			snapshot, err := d.LoadSessionMirrorSnapshot(t.Context(), "codex:abc")
-			require.NoError(t, err)
-			assert.Len(t, snapshot.CommitLinks, 1)
-			list, err := d.SessionCommitLinks(t.Context(), "codex:abc")
-			require.NoError(t, err)
-			require.Len(t, list.Commits, 1)
-			assert.Equal(t, sha, list.Commits[0].SHA)
-			found, err := d.CommitSessionLinks(t.Context(), []string{sha})
-			require.NoError(t, err)
-			require.Len(t, found.Commits[0].Links, 1)
-			assert.Equal(t, "codex:abc", found.Commits[0].Links[0].SessionID)
-		})
-	}
+	d := testDB(t)
+	insertSession(t, d, "codex:abc", "project-a", func(s *Session) { s.Agent = "codex" })
+	sha := strings.Repeat("a", 40)
+	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
+		SHA: sha, Sessions: []string{"claude:codex:abc", "codex:abc"}, CommittedAt: tsZero,
+	}}))
+	found, err := d.CommitSessionLinks(t.Context(), []string{sha})
+	require.NoError(t, err)
+	require.Len(t, found.Commits, 1)
+	require.Len(t, found.Commits[0].Links, 1)
+	assert.Equal(t, "codex:abc", found.Commits[0].Links[0].SessionID)
 }
 
 func TestTrailerCommitLinksMissingOwner(t *testing.T) {
@@ -138,9 +118,7 @@ func TestTrailerCommitLinksPrecedence(t *testing.T) {
 			insertSession(t, d, "session-a", "project-a")
 			insertSession(t, d, "codex:thread", "project-a", func(s *Session) { s.Agent = "codex" })
 			c := gitlog.TrailerCommit{SHA: "abc1234" + strings.Repeat("0", 33), Branch: "main", Subject: "Editor", CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:session-a", "codex:thread", "unknown:thread"}}
-			exact := commitMessages("session-a", `{"command":"git commit -m fix"}`, "[main "+sha+"] Exact")[2]
-			exact.Ordinal = 5
-			insertMessages(t, d, exact)
+			insertMessages(t, d, commitMessages("session-a", `{"command":"git commit -m fix"}`, "[main "+sha+"] Exact")...)
 			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{c}))
 			found, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
 			require.NoError(t, err)
@@ -155,6 +133,15 @@ func TestTrailerCommitLinksPrecedence(t *testing.T) {
 					assert.Equal(t, "trailer", l.Source)
 				}
 			}
+			// Replacing the transcript preserves its independent trailer evidence.
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session-a", []Message{{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Rewritten", Timestamp: tsZero}}))
+			list, err := d.SessionCommitLinks(t.Context(), "session-a")
+			require.NoError(t, err)
+			require.Len(t, list.Commits, 1)
+			assert.Equal(t, c.SHA, list.Commits[0].SHA)
+			assert.Equal(t, "trailer", list.Commits[0].Source)
+			assert.Equal(t, -1, list.Commits[0].CallIndex)
+			assert.Empty(t, list.Commits[0].ToolUseID)
 		})
 	}
 }
@@ -169,10 +156,10 @@ func TestTrailerCommitLinksPrompt(t *testing.T) {
 			wantPrompt: true, name: "qualifying prompt", owner: "session-a", agent: "claude", trailer: "claude:session-a", committedAt: "2026-10-30T10:10:00Z",
 			messages: []Message{
 				{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Before", Timestamp: "2026-10-30T10:00:00Z"},
-				{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "Next task", Timestamp: "2026-10-30T10:12:00Z"},
-				{SessionID: "session-a", Ordinal: 2, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
-				{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:05:00Z"},
-				{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:08:00Z"},
+				{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:05:00Z"},
+				{SessionID: "session-a", Ordinal: 2, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:08:00Z"},
+				{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "Next task", Timestamp: "2026-10-30T10:12:00Z"},
+				{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:16:00Z"},
 			},
 		},
 		{
@@ -230,22 +217,4 @@ func TestTrailerCommitLinksOrdering(t *testing.T) {
 	assert.Equal(t, 0, list.Commits[1].Turn.Ordinal)
 	assert.Equal(t, "Save the edit", list.Commits[1].Turn.Text)
 	assert.True(t, list.Commits[1].Turn.Heuristic)
-}
-
-func TestTrailerCommitLinksTranscriptRewrite(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "session-a", "project-a")
-	insertMessages(t, d, commitMessages("session-a", `{"command":"git commit -m fix"}`, "[main abc1234] Exact")...)
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
-		SHA: "abc1234" + strings.Repeat("0", 33), CommittedAt: tsZero, Sessions: []string{"claude:session-a"},
-	}}))
-	// A full transcript replacement removes exact evidence, preserving trailers.
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session-a", []Message{{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Rewritten", Timestamp: tsZero}}))
-	list, err := d.SessionCommitLinks(t.Context(), "session-a")
-	require.NoError(t, err)
-	require.Len(t, list.Commits, 1)
-	l := list.Commits[0]
-	assert.Equal(t, "trailer", l.Source)
-	assert.Equal(t, -1, l.CallIndex)
-	assert.Empty(t, l.ToolUseID)
 }

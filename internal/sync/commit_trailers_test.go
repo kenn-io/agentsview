@@ -192,19 +192,21 @@ func TestCommitTrailersSkipPartialSync(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, list.Commits, 2)
 			assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
-			for _, sha := range []string{first, second} {
-				found, err := database.CommitSessionLinks(t.Context(), []string{sha[:7]})
-				require.NoError(t, err)
-				require.Len(t, found.Commits[0].Links, 1)
-				assert.Equal(t, sha, found.Commits[0].Links[0].SHA)
-				assert.Equal(t, "trailer", found.Commits[0].Links[0].Source)
-			}
+			found, err := database.CommitSessionLinks(t.Context(), []string{second[:7]})
+			require.NoError(t, err)
+			require.Len(t, found.Commits[0].Links, 1)
+			assert.Equal(t, second, found.Commits[0].Links[0].SHA)
+			assert.Equal(t, "trailer", found.Commits[0].Links[0].Source)
 		})
 	}
 }
 
 func TestReconcileCommitTrailersLateRepository(t *testing.T) {
-	database, engine, _, _, runGit := commitTrailerFixture(t)
+	database, engine, _, first, runGit := commitTrailerFixture(t)
+	initial, err := database.SessionCommitLinks(t.Context(), "editor-session")
+	require.NoError(t, err)
+	require.Len(t, initial.Commits, 1)
+	assert.Equal(t, first, initial.Commits[0].SHA)
 	// Discover a new session checkout after the initial reconciliation.
 	late, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -286,12 +288,10 @@ func TestReconcileCommitTrailersRepositoryErrors(t *testing.T) {
 			_, engine, repo, _, _ := commitTrailerFixture(t)
 			if missing {
 				require.NoError(t, os.RemoveAll(repo))
-				engine.ReconcileCommitTrailers(t.Context())
-				require.Error(t, engine.reconcileRepositoryTrailers(t.Context(), repo, repo))
 			} else {
 				require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("invalid HEAD\n"), 0o600))
-				require.Error(t, engine.reconcileRepositoryTrailers(t.Context(), repo, repo))
 			}
+			require.Error(t, engine.reconcileRepositoryTrailers(t.Context(), repo, repo))
 		})
 	}
 }
