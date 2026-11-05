@@ -313,22 +313,37 @@
     font-size: 13px;
   }
 
-  /* One list with hairline rows, not a stack of cards. */
+  /* One list with hairline rows, not a stack of cards. The header and
+     every row are subgrids of one set of column tracks, so translated
+     headings, large counts, and rows without a time stay aligned. The
+     project column gives way on narrow lists so the file name keeps
+     room. */
   .re-list {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(0, min(240px, 25%)) minmax(0, 1fr) max-content max-content;
+    column-gap: var(--space-4);
     border: 1px solid var(--border-muted);
     border-radius: var(--radius-md);
     overflow: hidden;
     background: var(--bg-surface);
   }
 
-  /* Column labels over the rows: same flex columns and padding as a row,
+  .re-head,
+  .re-file,
+  .re-file-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+  }
+
+  .re-edits {
+    grid-column: 1 / -1;
+  }
+
+  /* Column labels over the rows: the same tracks and padding as a row,
      in small uppercase muted type. */
   .re-head {
-    display: flex;
     align-items: center;
-    gap: var(--space-4);
     padding: 6px 14px;
     border-bottom: 1px solid var(--border-muted);
   }
@@ -347,9 +362,7 @@
   }
 
   .re-file-row {
-    display: flex;
     align-items: center;
-    gap: var(--space-4);
     width: 100%;
     padding: 7px 14px;
     text-align: left;
@@ -368,7 +381,7 @@
      path, so a hash tail never reads as part of the file name. */
   .re-project {
     display: flex;
-    width: 240px;
+    min-width: 0;
     padding-right: 16px;
     font-size: 12px;
     color: var(--text-muted);
@@ -388,7 +401,7 @@
   }
 
   .re-path {
-    flex: 1;
+    min-width: 0;
     font-size: 12.5px;
     font-weight: 400;
     color: var(--text-primary);
@@ -442,6 +455,15 @@
 
     .recent-edits-page {
       padding: 20px 12px;
+    }
+
+    .re-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .re-file {
+      display: block;
     }
 
     .re-file-row {

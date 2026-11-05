@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { clickNavTab } from "./helpers/nav";
 
 // The fixture session created by createRecentEditsFixture in
@@ -7,6 +7,33 @@ import { clickNavTab } from "./helpers/nav";
 // filter (category IN ('Edit','Write') AND file_path IS NOT NULL)
 // returns a row.
 const FIXTURE_SESSION_ID = "test-session-recent-edits";
+
+function fileRow(project: string, file: string, count: number, lastEditedAt?: string) {
+  return {
+    project,
+    file_path: file,
+    edit_count: count,
+    ...(lastEditedAt ? { last_edited_at: lastEditedAt } : {}),
+    last_session_id: "s1",
+    edits: [],
+    edits_truncated: false,
+  };
+}
+
+async function withRecentEdits(page: Page) {
+  await page.route("**/api/v1/recent-edits?*", (route) =>
+    route.fulfill({
+      json: {
+        has_more: false,
+        files: [
+          fileRow("2026-03-04-agentsview-long-project-name", "/src/server/handler.go", 3, "2026-11-05T10:00:00Z"),
+          fileRow("tools", "/cmd/agentsview/main.go", 123456, "2026-11-01T10:00:00Z"),
+          fileRow("tools", "/internal/db/sessions.go", 7),
+        ],
+      },
+    }),
+  );
+}
 
 test.describe("Recent Edits feed", () => {
   test.beforeEach(async ({ page }) => {
@@ -42,6 +69,51 @@ test.describe("Recent Edits feed", () => {
       expect(layout.pathWidth).toBeGreaterThan(80);
       expect(layout.projectAbovePath).toBe(true);
       expect(layout.countInsideRow).toBe(true);
+    });
+  }
+
+  test("header and rows share columns with long headings and rows without a time", async ({ page }) => {
+    // French has the longest column headings ("Dernière modification").
+    await page.addInitScript(() => localStorage.setItem("agentsview-locale", "fr"));
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+
+    const edges = (selector: string) =>
+      page.locator(selector).evaluateAll((els) =>
+        els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: Math.round(r.left), right: Math.round(r.right) };
+        }),
+      );
+    const head = {
+      path: (await edges(".re-head .re-path"))[0]!,
+      count: (await edges(".re-head .re-count"))[0]!,
+      time: (await edges(".re-head .re-time"))[0]!,
+    };
+    for (const path of await edges(".re-file-row .re-path")) expect(path.left).toBe(head.path.left);
+    // Every count, including the six-digit one and the one in the row
+    // with no time, ends at the Edits column's edge.
+    const counts = await edges(".re-file-row .re-count");
+    expect(counts).toHaveLength(3);
+    for (const count of counts) expect(count.right).toBe(head.count.right);
+    const times = await edges(".re-file-row .re-time");
+    expect(times).toHaveLength(2);
+    for (const time of times) expect(time.right).toBe(head.time.right);
+  });
+
+  for (const width of [521, 600]) {
+    test(`keeps file names readable just above the stacked layout at ${width}px`, async ({ page }) => {
+      await withRecentEdits(page);
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/recent-edits");
+      const path = page.locator(".re-file-row .re-path").first();
+      await expect(path).toBeVisible();
+      await expect(page.locator(".re-head")).toBeVisible();
+      const widthPx = await path.evaluate((el) => el.getBoundingClientRect().width);
+      // Enough for "server/handler.go" in the 12.5px mono face.
+      expect(widthPx).toBeGreaterThanOrEqual(130);
     });
   }
 
