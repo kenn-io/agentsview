@@ -196,7 +196,7 @@
             class="toggle-check"
             class:on={groupMode === "agent"}
           ></span>
-          {m.sidebar_filters_group_by_agent()}
+          <span class="toggle-label" title={m.sidebar_filters_group_by_agent()}>{m.sidebar_filters_group_by_agent()}</span>
         </button>
         <button
           class="filter-toggle"
@@ -207,7 +207,7 @@
             class="toggle-check"
             class:on={groupMode === "project"}
           ></span>
-          {m.sidebar_filters_group_by_project()}
+          <span class="toggle-label" title={m.sidebar_filters_group_by_project()}>{m.sidebar_filters_group_by_project()}</span>
         </button>
       </div>
     {/if}
@@ -223,7 +223,7 @@
             class="toggle-check"
             class:on={starred.filterOnly}
           ></span>
-          {m.sidebar_filters_starred_only()}
+          <span class="toggle-label" title={m.sidebar_filters_starred_only()}>{m.sidebar_filters_starred_only()}</span>
           {#if starred.count > 0}
             <span class="starred-count">{starred.count}</span>
           {/if}
@@ -244,7 +244,7 @@
           class="toggle-check"
           class:on={isRecentlyActiveOn}
         ></span>
-        {m.sidebar_filters_recently_active()}
+        <span class="toggle-label" title={m.sidebar_filters_recently_active()}>{m.sidebar_filters_recently_active()}</span>
       </button>
     </div>
     <div class="filter-section">
@@ -263,7 +263,7 @@
           class="toggle-check"
           class:on={isHideSingleTurnOn}
         ></span>
-        {m.sidebar_filters_hide_single_turn()}
+        <span class="toggle-label" title={m.sidebar_filters_hide_single_turn()}>{m.sidebar_filters_hide_single_turn()}</span>
       </button>
       <button
         class="filter-toggle"
@@ -277,7 +277,7 @@
           class="toggle-check"
           class:on={isIncludeAutomatedOn}
         ></span>
-        {m.sidebar_filters_include_automated()}
+        <span class="toggle-label" title={m.sidebar_filters_include_automated()}>{m.sidebar_filters_include_automated()}</span>
       </button>
     </div>
     <div class="filter-section">
@@ -294,7 +294,7 @@
           class="toggle-check"
           class:on={isHideUnknownOn}
         ></span>
-        {m.sidebar_filters_hide_unknown()}
+        <span class="toggle-label" title={m.sidebar_filters_hide_unknown()}>{m.sidebar_filters_hide_unknown()}</span>
       </button>
     </div>
     <div class="filter-section">
@@ -522,14 +522,20 @@
     top: 100%;
     right: 0;
     margin-top: 4px;
-    width: 220px;
+    /* Wide enough to keep every option on one line. The sidebar stretches
+       it across its own width. */
+    width: 240px;
     max-height: min(560px, calc(100vh - 128px));
     overflow-y: auto;
     overflow-x: hidden;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-    /* card chrome comes from the shared kit-popover-card class */
-    padding: 8px;
+    /* Card chrome comes from the shared kit-popover-card class; a deeper
+       shadow lifts it clear of the rows underneath. */
+    padding: 6px;
+    box-shadow:
+      var(--shadow-lg),
+      0 1px 3px color-mix(in srgb, var(--text-primary) 12%, transparent);
     z-index: var(--z-popover);
     text-transform: none;
     letter-spacing: normal;
@@ -576,14 +582,21 @@
   .filter-toggle {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 6px;
     width: 100%;
-    padding: 3px 8px;
+    padding: 3px 6px;
     font-size: 12.5px;
     color: var(--text-secondary);
     text-align: left;
     border-radius: 4px;
     transition: background 0.1s, color 0.1s;
+  }
+
+  .toggle-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .filter-toggle:hover {
@@ -656,9 +669,9 @@
   .agent-select-row {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 6px;
     width: 100%;
-    padding: 3px 8px;
+    padding: 3px 6px;
     font-size: 12.5px;
     color: var(--text-secondary);
     text-align: left;

@@ -148,10 +148,10 @@
 </div>
 
 <style>
-  /* The band spans the pane; its content sits on the transcript's 960px
+  /* The band spans the pane; its content sits on the transcript's shared
      reading column (see MessageList .virtual-row). */
   .signal-panel {
-    padding: 10px max(12px, calc((100% - 960px) / 2));
+    padding: 10px max(12px, calc((100% - var(--reading-column)) / 2));
     background: var(--bg-inset);
     border-bottom: 1px solid var(--border-muted);
     font-size: 12px;
