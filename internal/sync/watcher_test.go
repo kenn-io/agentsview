@@ -879,6 +879,44 @@ func TestWatcherSchedulerSustainedEventsProgress(t *testing.T) {
 	})
 }
 
+func TestWatcherDispatchFloorFollowsInterval(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		interval time.Duration
+		want     int
+	}{
+		{name: "one minute", interval: time.Minute, want: 3},
+		{name: "five seconds", interval: 5 * time.Second, want: 36},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				backend := newFakeWatchBackend()
+				var calls int
+				w, err := newWatcherWithBackend(
+					500*time.Millisecond, tt.interval,
+					func(context.Context, WatchBatch) error {
+						calls++
+						return nil
+					},
+					backend, 8, 1_000,
+				)
+				require.NoError(t, err)
+				w.Start()
+				t.Cleanup(w.Stop)
+
+				start := time.Now()
+				for time.Since(start) < 3*time.Minute {
+					backend.sendEvent(t, "/sessions/active.jsonl")
+					synctest.Wait()
+					time.Sleep(time.Second)
+				}
+				synctest.Wait()
+				assert.Equal(t, tt.want, calls)
+			})
+		})
+	}
+}
+
 func TestWatcherSustainedWritesProgress(t *testing.T) {
 	const (
 		batchDelay  = 50 * time.Millisecond

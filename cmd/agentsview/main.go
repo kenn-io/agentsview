@@ -57,7 +57,6 @@ const (
 	telemetryDailyCheckInterval    = time.Hour
 	unwatchedPollInterval          = 2 * time.Minute
 	watcherBatchDelay              = 500 * time.Millisecond
-	watcherSyncMinInterval         = 5 * time.Second
 	deferredStartupSyncGracePeriod = 30 * time.Second
 )
 
@@ -2404,7 +2403,7 @@ func startFileWatcher(
 	roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents := collectWatchRoots(cfg)
 	watcher, err := sync.NewWatcherWithCallback(
 		watcherBatchDelay,
-		watcherSyncMinInterval,
+		cfg.SyncInterval,
 		onChange,
 		cfg.WatchExcludePatterns,
 		options,
