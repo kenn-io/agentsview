@@ -58,9 +58,9 @@ describe("OutcomeTotals", () => {
       },
     });
     expect(metric(target, "Repositories")).toBe("12");
-    expect(metric(target, "Commits")).toBe("1,254");
+    expect(metric(target, "Commits")).toBe("1.3K");
     expect(metric(target, "Lines added")).toBe("54.3K");
-    expect(metric(target, "Lines removed")).toBe("1,823");
+    expect(metric(target, "Lines removed")).toBe("1.8K");
     expect(metric(target, "Files changed")).toBe("127");
   });
 

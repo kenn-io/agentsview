@@ -306,7 +306,7 @@ describe("GeneratedInsightsPanel", () => {
     const chips = [...document.querySelectorAll(".generated-meta-chip")].map((c) =>
       c.textContent?.trim(),
     );
-    expect(chips).toContain("1,234 calls judged");
+    expect(chips).toContain("1.2K calls judged");
   });
 
   it("cancels archive reads without canceling generation tasks", async () => {

@@ -96,7 +96,7 @@ describe("EmbeddingsSettings", () => {
     expect(text()).toContain("test-embed-model");
     expect(text()).toContain("256");
     expect(text()).toContain("Embedding");
-    expect(text()).toContain("200 / 1,000 chunks");
+    expect(text()).toContain("200 / 1.0K chunks");
     expect(text()).toContain("20%");
     expect(text()).toContain("50 chunks/s");
     expect(text()).toContain("ETA 16s");

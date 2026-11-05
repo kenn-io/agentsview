@@ -188,7 +188,7 @@ describe("SubagentInline", () => {
     document.querySelector<HTMLButtonElement>(".subagent-toggle")?.click();
     await vi.waitFor(() => {
       expect(document.querySelector(".toggle-tokens")?.textContent).toContain(
-        "2,400 ctx / 180 out",
+        "2.4K ctx / 180 out",
       );
     });
 

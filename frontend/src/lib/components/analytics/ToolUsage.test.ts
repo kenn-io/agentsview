@@ -222,18 +222,18 @@ describe("ToolUsage", () => {
     const component = mount(ToolUsage, { target: document.body });
     await tick();
     expect(document.querySelector(".tool-rate")?.textContent).toMatch(/70,0\s%/u);
-    expect(document.body.textContent).toMatch(/1\s100\/1\s200/u);
-    expect(document.querySelector(".tool-count")?.textContent).toMatch(/1\s200/u);
-    expect(document.querySelector(".tool-sessions")?.textContent).toMatch(/1\s000/u);
+    expect(document.body.textContent).toContain("1,1\u00a0k/1,2\u00a0k");
+    expect(document.querySelector(".tool-count")?.textContent?.trim()).toBe("1,2\u00a0k");
+    expect(document.querySelector(".tool-sessions")?.textContent).toContain("1,0\u00a0k");
     expect(document.querySelectorAll(".tool-rate")[1]?.textContent).toMatch(/0,0\s%/u);
     document.querySelector<HTMLButtonElement>(".tool-rate button")!.click();
     await tick();
     await tick();
-    expect(document.querySelector(".tool-evidence .rate-note")?.textContent).toMatch(
-      /1\s200 sessions/u,
+    expect(document.querySelector(".tool-evidence .rate-note")?.textContent).toContain(
+      "1,2\u00a0k sessions",
     );
-    expect(document.querySelector(".evidence-count")?.textContent).toMatch(
-      /Matching calls: 1\s100/u,
+    expect(document.querySelector(".evidence-count")?.textContent).toContain(
+      "Matching calls: 1,1\u00a0k",
     );
     await unmount(component);
   });

@@ -77,8 +77,8 @@ describe("SessionItem identity", () => {
   it("explains the message count on hover", () => {
     mountSession({ id: "count", user_message_count: 1200 });
     const count = document.querySelector<HTMLElement>(".session-count");
-    expect(count?.textContent).toBe("1,200");
-    expect(count?.title).toBe("1,200 user messages");
+    expect(count?.textContent).toBe("1.2K");
+    expect(count?.title).toBe("1.2K user messages");
   });
 
   it("uses the singular for one message", () => {

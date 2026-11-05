@@ -1168,7 +1168,7 @@ describe("SessionBreadcrumb", () => {
 
     await tick();
     const tokenBadge = document.querySelector(".token-badge");
-    expect(tokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2,400 ctx / 180 out");
+    expect(tokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2.4K ctx / 180 out");
 
     unmount(component);
   });
@@ -1287,7 +1287,7 @@ describe("SessionBreadcrumb", () => {
     await tick();
 
     const mobileTokenBadge = document.querySelector(".token-badge--mobile");
-    expect(mobileTokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2,400 ctx / 180 out");
+    expect(mobileTokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2.4K ctx / 180 out");
 
     unmount(component);
   });
@@ -2059,7 +2059,7 @@ describe("SessionBreadcrumb", () => {
       const second = renderedRows[1]!;
       expect(first.textContent).toContain("Prompt 1");
       expect(first.textContent).toContain("claude-opus-4-6");
-      expect(first.textContent).toContain("1,500 ctx");
+      expect(first.textContent).toContain("1.5K ctx");
       expect(first.textContent).toContain("500 out");
       expect(second.textContent).toContain("session");
       expect(second.textContent).toContain("gpt-5.4");

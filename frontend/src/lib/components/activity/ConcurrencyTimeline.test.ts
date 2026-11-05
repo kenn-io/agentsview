@@ -697,8 +697,8 @@ describe("ConcurrencyTimeline", () => {
       "Subagent peak 0",
       "Automated peak 1",
       "Agent-min 7.5K",
-      "Uncached Input 120K",
-      "Output Tokens 9,000",
+      "Uncached Input 120.0K",
+      "Output Tokens 9.0K",
       "Cost $0.90",
     ]);
     unmount(c);
@@ -1074,7 +1074,7 @@ describe("ConcurrencyTimeline", () => {
     const tokenLabels = Array.from(target.querySelectorAll("text.overlay-y-label")).map(
       (el) => el.textContent?.trim() ?? "",
     );
-    expect(tokenLabels).toContain("9,000");
+    expect(tokenLabels).toContain("9.0K");
 
     unmount(c);
     target.remove();
@@ -1114,7 +1114,7 @@ describe("ConcurrencyTimeline", () => {
       "Automated peak 3",
       "Agent-min 15",
       "Uncached Input 0",
-      "Output Tokens 3,000",
+      "Output Tokens 3.0K",
       "Cost $0.30",
     ]);
 

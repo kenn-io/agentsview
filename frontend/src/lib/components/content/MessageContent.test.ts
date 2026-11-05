@@ -393,7 +393,7 @@ describe("MessageContent", () => {
         has_output_tokens: true,
       }),
     );
-    expect(text(".message-tokens").replace(/\s+/g, " ")).toBe("2,400 ctx / 180 out");
+    expect(text(".message-tokens").replace(/\s+/g, " ")).toBe("2.4K ctx / 180 out");
   });
   it("uses the assistant accent foreground", async () => {
     await render();
