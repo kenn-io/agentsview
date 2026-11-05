@@ -399,7 +399,9 @@ describe("AppHeader export actions", () => {
 
     expect(refreshButton).not.toBeNull();
     expect(refreshButton?.textContent?.trim()).toBe("Refresh");
-    expect(refreshButton?.querySelector("svg.lucide-database-backup")).not.toBeNull();
+    // Same glyph as the page refresh controls: both mean "refresh data".
+    expect(refreshButton?.querySelector("svg.lucide-refresh-cw")).not.toBeNull();
+    expect(refreshButton?.querySelector("svg.lucide-database-backup")).toBeNull();
     expect(document.body.textContent).toContain("Recall");
   });
 

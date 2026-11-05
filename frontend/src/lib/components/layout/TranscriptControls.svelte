@@ -25,7 +25,7 @@
     aria-label={m.header_actions_follow_latest()}
     aria-pressed={ui.followLatest}
   >
-    <ArrowDownToLineIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+    <ArrowDownToLineIcon size="14" aria-hidden="true" />
   </button>
   <button
     class="control-btn"
@@ -34,9 +34,9 @@
     aria-label={m.header_actions_toggle_sort()}
   >
     {#if ui.sortNewestFirst}
-      <ArrowDownWideNarrowIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+      <ArrowDownWideNarrowIcon size="14" aria-hidden="true" />
     {:else}
-      <ArrowUpNarrowWideIcon size="16" strokeWidth="1.75" aria-hidden="true" />
+      <ArrowUpNarrowWideIcon size="14" aria-hidden="true" />
     {/if}
   </button>
 </span>

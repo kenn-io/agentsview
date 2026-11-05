@@ -30,7 +30,7 @@
     }}
   >
     <span class="thinking-chevron" class:open={!collapsed}>
-      <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
+      <ChevronRightIcon size="12" aria-hidden="true" />
     </span>
     <span class="thinking-label">{m.thinking_block_label()}</span>
     <SearchMatchCount {searchKey} />

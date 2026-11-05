@@ -393,6 +393,60 @@ html:root.dark .kit-popover-card {
   margin-inline-start: 16px;
 }
 
+/*
+ * Icon system. Sizes follow a small scale by context: 12px inside chips,
+ * pills, and dense rows; 14px in toolbars, menus, and icon buttons; 16px in
+ * the top bar; 24px for page empty states. Lucide strokes scale with the icon, so
+ * one strokeWidth renders thinner on small icons and heavier on large ones.
+ * These rules pick the stroke per size so every icon draws at about the
+ * same 1.1-1.2px line, whatever strokeWidth its call site (or kit-ui)
+ * passed. CSS stroke-width beats the SVG attribute. Filled marks
+ * (strokeWidth 0) keep their fill only. kit-ui's identity themes set their
+ * own `--icon-stroke` rule with higher specificity and still win there.
+ */
+svg.lucide {
+  flex-shrink: 0;
+}
+
+svg.lucide:where(:is([width="8"], [width="9"]):not([stroke-width="0"])) {
+  stroke-width: 2.75;
+}
+
+svg.lucide:where(:is([width="10"], [width="11"]):not([stroke-width="0"])) {
+  stroke-width: 2.5;
+}
+
+svg.lucide:where([width="12"]:not([stroke-width="0"])) {
+  stroke-width: 2.25;
+}
+
+svg.lucide:where([width="13"]:not([stroke-width="0"])) {
+  stroke-width: 2.1;
+}
+
+svg.lucide:where([width="14"]:not([stroke-width="0"])) {
+  stroke-width: 2;
+}
+
+svg.lucide:where(:is([width="16"], [width="18"]):not([stroke-width="0"])) {
+  stroke-width: 1.75;
+}
+
+svg.lucide:where(:is([width="20"], [width="24"]):not([stroke-width="0"])) {
+  stroke-width: 1.5;
+}
+
+svg.lucide:where(:is([width="28"], [width="32"], [width="36"]):not([stroke-width="0"])) {
+  stroke-width: 1.25;
+}
+
+/* Overflow dots are three 1-unit circles; at the shared line weight they
+   read smaller and fainter than the gear and theme glyphs beside them.
+   A heavier stroke grows the dots to the same optical size. */
+svg.lucide:where(.lucide-ellipsis, .lucide-ellipsis-vertical) {
+  stroke-width: 2.75;
+}
+
 html,
 body {
   height: 100%;

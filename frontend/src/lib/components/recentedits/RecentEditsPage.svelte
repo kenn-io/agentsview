@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SearchInput } from "@kenn-io/kit-ui";
-  import { PencilIcon } from "../../icons.js";
+  import { PencilIcon, RefreshCwIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import { RecentEditsService } from "../../api/generated/index";
   import { isAbortError } from "../../api/runtime.js";
@@ -158,6 +158,7 @@
         disabled={loading}
         title={m.recent_edits_refresh()}
       >
+        <RefreshCwIcon size="12" aria-hidden="true" />
         {m.recent_edits_refresh()}
       </button>
     {/snippet}
@@ -260,7 +261,11 @@
     padding: 28px 24px;
   }
 
+  /* Same refresh glyph as the top bar and page refresh controls. */
   .re-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
     font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
