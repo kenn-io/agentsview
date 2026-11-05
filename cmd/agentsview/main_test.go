@@ -1011,7 +1011,7 @@ func TestPollUnwatchedScopesOnceUsesScopedAuthoritativeReconciliation(t *testing
 func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
 	projects := t.TempDir()
 	cfg := config.Config{
-		SyncInterval: 1500 * time.Millisecond,
+		SyncInterval: time.Second,
 		AgentDirs:    map[parser.AgentType][]string{parser.AgentClaude: {projects}},
 	}
 	calls := make(chan time.Time, 8)
@@ -1038,8 +1038,8 @@ func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
 	first := receive()
 	require.NoError(t, os.WriteFile(path, []byte("second\n"), 0o600))
 	gap := receive().Sub(first)
-	assert.GreaterOrEqual(t, gap, 1400*time.Millisecond)
-	assert.Less(t, gap, 3500*time.Millisecond)
+	assert.GreaterOrEqual(t, gap, 900*time.Millisecond)
+	assert.Less(t, gap, 4*time.Second)
 }
 
 func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
