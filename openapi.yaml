@@ -25021,13 +25021,12 @@ paths:
             default: true
             description: Include distinct session counts
             type: boolean
-        - description: Current period total cost in microdollars
+        - description: Current period total cost in microdollars; when provided, computes deltaPct
           explode: false
           in: query
           name: current_microdollars
-          required: true
           schema:
-            description: Current period total cost in microdollars
+            description: Current period total cost in microdollars; when provided, computes deltaPct
             format: int64
             minimum: 0
             type: integer

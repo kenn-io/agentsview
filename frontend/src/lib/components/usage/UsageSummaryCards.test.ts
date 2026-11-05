@@ -115,6 +115,29 @@ afterEach(() => {
 });
 
 describe("UsageSummaryCards", () => {
+  it.each([
+    { current: 3, prior: 1, expected: "+200% vs prior" },
+    { current: 3, prior: 0, expected: "+0% vs prior" },
+    { current: 1, prior: 2, expected: "-50% vs prior" },
+  ])(
+    "compares $current dollars with $prior prior dollars",
+    async ({ current, prior, expected }) => {
+      const data = summary();
+      data.totals.totalCost = testMoney(current);
+      data.comparison = {
+        priorFrom: "2026-06-30",
+        priorTo: "2026-06-30",
+        priorTotalCost: testMoney(prior),
+        deltaPct: 0,
+      };
+      usage.summary = data;
+      component = mount(UsageSummaryCards, { target: document.body });
+      await tick();
+
+      expect(cardSub("Total Cost")).toBe(expected);
+    },
+  );
+
   it("reports the analytics kind for a displayed summary failure", async () => {
     const { UsageService } = await import("../../api/generated/index.js");
     vi.mocked(reportErrorShown).mockClear();

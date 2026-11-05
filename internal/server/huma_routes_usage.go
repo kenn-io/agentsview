@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -89,7 +90,25 @@ type usageTopSessionsInput struct {
 
 type usageComparisonInput struct {
 	UsageFilterInput
-	CurrentMicrodollars int64 `query:"current_microdollars" required:"true" minimum:"0" doc:"Current period total cost in microdollars"`
+	CurrentMicrodollars optionalInt64Param `query:"current_microdollars" minimum:"0" doc:"Current period total cost in microdollars; when provided, computes deltaPct"`
+}
+
+//nolint:recvcheck // Huma discovers Schema on values and mutates parameters through pointers.
+type optionalInt64Param struct {
+	Value int64
+	IsSet bool
+}
+
+func (p optionalInt64Param) Schema(r huma.Registry) *huma.Schema {
+	return huma.SchemaFromType(r, reflect.TypeFor[int64]())
+}
+
+func (p *optionalInt64Param) Receiver() reflect.Value {
+	return reflect.ValueOf(p).Elem().FieldByName("Value")
+}
+
+func (p *optionalInt64Param) OnParamSet(isSet bool, _ any) {
+	p.IsSet = isSet
 }
 
 type usagePairwiseComparisonInput struct {
@@ -266,9 +285,11 @@ func (s *Server) humaUsageComparison(
 			"usage comparison requires from and to when no_default_range is true",
 		)
 	}
-	comparison, err := s.computeUsageComparison(ctx, f, money.Money{
-		Microdollars: in.CurrentMicrodollars,
-	})
+	var currentMicrodollars *int64
+	if in.CurrentMicrodollars.IsSet {
+		currentMicrodollars = &in.CurrentMicrodollars.Value
+	}
+	comparison, err := s.computeUsageComparison(ctx, f, currentMicrodollars)
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled
@@ -320,7 +341,7 @@ func usageInputAPIError(err *service.UsageInputError) error {
 func (s *Server) computeUsageComparison(
 	ctx context.Context,
 	f db.UsageFilter,
-	currentCost money.Money,
+	currentMicrodollars *int64,
 ) (*Comparison, error) {
 	fromT, err := time.Parse("2006-01-02", f.From)
 	if err != nil {
@@ -348,8 +369,8 @@ func (s *Server) computeUsageComparison(
 		PriorTo:        priorFilter.To,
 		PriorTotalCost: priorResult.Totals.TotalCost,
 	}
-	if c.PriorTotalCost.Microdollars > 0 {
-		delta, err := money.Sub(currentCost, c.PriorTotalCost)
+	if currentMicrodollars != nil && c.PriorTotalCost.Microdollars > 0 {
+		delta, err := money.Sub(money.Money{Microdollars: *currentMicrodollars}, c.PriorTotalCost)
 		if err != nil {
 			return nil, fmt.Errorf("computing usage comparison delta: %w", err)
 		}

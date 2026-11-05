@@ -1035,6 +1035,7 @@ class UsageStore {
       params,
       contextParams,
     });
+    const comparisonPromise = this.fetchComparison(this.versions.summary, params, summaryPromise);
     void this.fetchPairwise(
       params,
       refreshScopeKey(params) !== this.pairwiseScope || this.pairwiseComparison === null,
@@ -1066,6 +1067,7 @@ class UsageStore {
       }
     }
     if (!loadedSummary) {
+      this.abortPanel("comparison");
       await Promise.all([topSessionsPromise, zoomPromise]);
       if (fetchVersion !== this.fetchAllVersion) return "aborted";
       if (rangeRestored) {
@@ -1092,10 +1094,20 @@ class UsageStore {
           return this.fetchZoom(loadedSummary.params);
         })
       : zoomPromise;
+    const currentComparisonPromise = loadedSummary.projectScopeRecovered
+      ? comparisonPromise.then(() => {
+          if (fetchVersion !== this.fetchAllVersion) return "aborted";
+          return this.fetchComparison(
+            loadedSummary.version,
+            loadedSummary.params,
+            Promise.resolve(loadedSummary),
+          );
+        })
+      : comparisonPromise;
     const [topSessionsResult, loadedZoomResult, comparisonResult] = await Promise.all([
       currentTopSessionsPromise,
       currentZoomPromise,
-      this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
+      currentComparisonPromise,
     ]);
     let pairwiseResult = await this.awaitPairwise();
     if (
@@ -1237,7 +1249,7 @@ class UsageStore {
           projectScopeRecovered: false,
         };
         if (loadComparison) {
-          void this.fetchComparison(v, data, params);
+          void this.fetchComparison(v, params, Promise.resolve(loaded));
           void this.fetchPairwise(params, this.pairwiseSelectionUnavailable());
         }
         return loaded;
@@ -1339,8 +1351,8 @@ class UsageStore {
 
   private async fetchComparison(
     summaryVersion: number,
-    summary: UsageSummaryResponse,
     params: UsageParams,
+    summary: Promise<LoadedUsageSummary | null>,
   ): Promise<FetchResult> {
     if (this.versions.summary !== summaryVersion) return "aborted";
     const signal = this.nextAbortSignal("comparison");
@@ -1348,16 +1360,17 @@ class UsageStore {
     const liveStep = this.liveQuery.start("comparison", started);
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = await UsageService.getApiV1UsageComparison(
-        {
-          ...params,
-          current_microdollars: summary.totals.totalCost.microdollars,
-        },
-        { signal },
-      );
-      if (this.versions.summary === summaryVersion) {
-        this.summary = { ...summary, comparison };
-        this.noteStep("comparison", liveStep, started, comparison);
+      const [comparison, loaded] = await Promise.all([
+        UsageService.getApiV1UsageComparison(params, { signal }),
+        summary,
+      ]);
+      if (loaded?.version === summaryVersion && this.versions.summary === summaryVersion) {
+        this.summary = { ...loaded.summary, comparison };
+        const bodies = [comparison, loaded.summary]
+          .map((body) => responseTimingOf(body)?.bodyAt)
+          .filter((at): at is number => at !== undefined);
+        const applyStartedAt = bodies.length > 0 ? Math.max(...bodies) : undefined;
+        this.noteStep("comparison", liveStep, started, comparison, applyStartedAt);
         return "ok";
       }
       return "aborted";

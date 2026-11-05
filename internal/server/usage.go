@@ -13,7 +13,8 @@ type Comparison struct {
 	PriorFrom      string      `json:"priorFrom"`
 	PriorTo        string      `json:"priorTo"`
 	PriorTotalCost money.Money `json:"priorTotalCost"`
-	DeltaPct       float64     `json:"deltaPct"`
+	// DeltaPct is computed only when current_microdollars is provided.
+	DeltaPct float64 `json:"deltaPct"`
 }
 
 // ProjectTotal holds range-wide token and cost totals per project.

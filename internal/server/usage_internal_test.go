@@ -309,14 +309,18 @@ func TestUsageComparisonCopiesResolvedProjectExclusionToPriorPeriod(
 		spy.filters[0].ExcludeProjectLabels)
 }
 
-func TestUsageComparisonRequiresCurrentCost(t *testing.T) {
+func TestUsageComparisonAllowsOmittedCurrentCost(t *testing.T) {
 	spy := &usageSummaryCountsSpy{}
 	s := newRoutedTestServerWithStore(t, spy)
 
 	w := serveGet(t, s, "/api/v1/usage/comparison?"+oneDayUsageRange)
-	assertRecorderStatus(t, w, http.StatusBadRequest)
+	assertRecorderStatus(t, w, http.StatusOK)
 
-	assertUsageQueryCalls(t, spy, 0, 0, 0)
+	assertUsageQueryCalls(t, spy, 1, 0, 0)
+	var out Comparison
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.Equal(t, money.MustParseDollars("1"), out.PriorTotalCost)
+	assert.Zero(t, out.DeltaPct)
 }
 
 func TestUsageComparisonNoDefaultRangeRequiresConcreteRange(t *testing.T) {
@@ -341,6 +345,9 @@ func TestUsageComparisonAllowsZeroCurrentCost(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	assertUsageQueryCalls(t, spy, 1, 0, 0)
+	var out Comparison
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.Equal(t, -1.0, out.DeltaPct)
 }
 
 func TestUsageComparisonRejectsNegativeCurrentCost(t *testing.T) {

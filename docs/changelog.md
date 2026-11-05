@@ -146,6 +146,8 @@ The latest release is
 - Large Usage and Activity pages no longer stall in garbage collection on big
   archives; peak memory during large requests can be higher, and a lower
   `GOMEMLIMIT` can reduce it by overriding the 4 GiB default.
+- The Usage page's vs-prior change now arrives with the totals instead of after
+  them.
 - Codex code-mode `wait` calls now show their script output. The next sync
   restores missing results in previously imported sessions. Subagent waits
   keep their existing behavior.
