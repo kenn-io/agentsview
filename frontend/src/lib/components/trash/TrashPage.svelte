@@ -106,7 +106,7 @@
   {#if loading}
     <div class="loading-state">{m.trash_loading()}</div>
   {:else if trashedSessions.length === 0}
-    <StateNotice title={m.trash_empty()} description={m.trash_empty_desc()}>
+    <StateNotice variant="empty" title={m.trash_empty()} description={m.trash_empty_desc()}>
       {#snippet icon()}
         <TrashIcon size="16" strokeWidth="2" />
       {/snippet}

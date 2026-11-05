@@ -132,7 +132,8 @@ describe("SessionVitals", () => {
       const category = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
         (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Bash",
       );
-      expect(category?.querySelector(".agg-val")?.textContent?.trim()).toBe(label);
+      // An unmeasured row shows a dash with "Not measured" for screen readers.
+      expect(category?.querySelector(".agg-val")?.textContent).toContain(label);
       category!.click();
       await tick();
       expect(document.querySelector(".filter-chip")?.textContent).toContain("Bash");

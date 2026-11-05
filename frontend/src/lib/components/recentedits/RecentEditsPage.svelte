@@ -47,6 +47,16 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   const pageRead = new LatestRead();
 
+  // The last few characters of a long project name, kept visible when the
+  // name truncates, so date-prefixed names stay distinguishable.
+  const PROJECT_TAIL_CHARS = 8;
+  function projectTail(project: string): string {
+    const chars = Array.from(project);
+    return chars.length > PROJECT_TAIL_CHARS * 2
+      ? chars.slice(-PROJECT_TAIL_CHARS).join("")
+      : "";
+  }
+
   function key(f: FileRow) {
     return JSON.stringify([f.project, f.file_path]);
   }
@@ -187,9 +197,15 @@
         <span class="re-time">{m.recent_edits_col_last_edit()}</span>
       </div>
       {#each files as f (key(f))}
+        {@const tail = projectTail(f.project)}
         <div class="re-file">
           <button class="re-file-row" onclick={() => toggle(f)}>
-            <span class="re-project" title={f.project}>{f.project}</span>
+            <!-- Long names truncate in the middle: the head shrinks with an
+                 ellipsis and the distinguishing tail stays visible. -->
+            <span class="re-project" title={f.project}
+              ><span class="re-project-head">{f.project.slice(0, f.project.length - tail.length)}</span
+              ><span class="re-project-tail">{tail}</span></span
+            >
             <span class="re-path" title={f.file_path}
               >{shortPath(f.file_path)}</span
             >
@@ -338,13 +354,23 @@
   /* Project names sit in a fixed muted column and truncate before the
      path does. */
   .re-project {
-    width: 160px;
+    display: flex;
+    width: 180px;
     font-size: 12px;
     color: var(--text-muted);
     flex-shrink: 0;
     white-space: nowrap;
     overflow: hidden;
+  }
+
+  .re-project-head {
+    min-width: 0;
+    overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .re-project-tail {
+    flex-shrink: 0;
   }
 
   .re-path {

@@ -48,7 +48,7 @@
 
   const uid = $props.id();
   const ENDING_TONES: Record<Ending, ChipTone> = {
-    recovered: "neutral",
+    recovered: "success",
     abandoned: "danger",
     open: "warning",
     unknown: "neutral",

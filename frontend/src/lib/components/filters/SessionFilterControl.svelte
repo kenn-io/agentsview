@@ -559,7 +559,7 @@
     display: block;
     height: 14px;
     margin-inline: -6px;
-    background: linear-gradient(transparent, var(--bg-surface));
+    background: linear-gradient(transparent, var(--popover-bg, var(--bg-surface)));
     pointer-events: none;
   }
 

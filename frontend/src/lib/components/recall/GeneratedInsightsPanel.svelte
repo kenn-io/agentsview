@@ -573,6 +573,8 @@
     max-width: none;
   }
 
+  /* Labels are medium weight; the values inside the controls stay
+     regular, so a label never reads as loud as its value. */
   .scope-field {
     display: flex;
     min-width: 0;
@@ -580,7 +582,28 @@
     gap: 0.35rem;
     color: var(--text-secondary);
     font-size: 0.72rem;
-    font-weight: 600;
+    font-weight: 400;
+  }
+
+  .scope-field > span {
+    font-weight: 500;
+  }
+
+  /* The date range trigger takes the same chrome as the select triggers
+     beside it: height, fill, edge, radius, and value size. */
+  .date-field :global(.kit-date-range-picker__trigger) {
+    height: var(--typeahead-control-height, 26px);
+    padding: 0 8px;
+    background: var(--bg-raised, var(--bg-inset));
+    border-color: var(--border-muted);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-xs);
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  .date-field :global(.kit-date-range-picker__trigger.open) {
+    border-color: var(--accent-blue);
   }
 
   .focus-field {
@@ -590,9 +613,9 @@
   .focus-field textarea {
     min-height: 3.75rem;
     resize: vertical;
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    background: var(--bg-surface);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--bg-raised, var(--bg-inset));
     color: var(--text-primary);
     font: inherit;
     font-weight: 400;

@@ -275,8 +275,11 @@
   --overlay-bg: rgba(0, 0, 0, 0.42); /* kit-ui-check-ignore: light backdrop strength; dark keeps kit-ui's value */
 }
 
+/* Dark: a deeper backdrop so page text stops competing with the dialog,
+   and a shadow dark enough to read against the dark page. */
 :root.dark {
-  --overlay-bg: rgba(0, 0, 0, 0.6); /* kit-ui-check-ignore: matches kit-ui's dark backdrop */
+  --overlay-bg: rgba(0, 0, 0, 0.7); /* kit-ui-check-ignore: dark backdrop strength, upstream later */
+  --overlay-shadow: 0 14px 36px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.45); /* kit-ui-check-ignore: dark overlay elevation, upstream later */
 }
 
 html:root .kit-popover-card,
@@ -284,6 +287,20 @@ html:root .kit-modal-panel {
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--overlay-shadow);
+}
+
+/* Dark popovers (pickers, menus) sit one surface step above the page so
+   they read as raised, not as part of the page beneath. */
+:root {
+  --popover-bg: var(--bg-surface);
+}
+
+:root.dark {
+  --popover-bg: color-mix(in srgb, var(--text-primary) 4%, var(--bg-surface));
+}
+
+html:root.dark .kit-popover-card {
+  background: var(--popover-bg);
 }
 
 /* Outranks kit-ui's scoped active rule (three classes). */

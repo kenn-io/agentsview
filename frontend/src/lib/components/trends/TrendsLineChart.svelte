@@ -147,8 +147,8 @@
 </div>
 
 <style>
-  /* Grows to fill the chart panel; the chart measures this box. Below
-     the two-column breakpoint the page sets a fixed height instead. */
+  /* Starts at the page's chart height and grows with a taller chart
+     panel; the chart measures this box. */
   .chart-wrap {
     position: relative;
     flex: 1 1 auto;
