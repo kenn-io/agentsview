@@ -46,11 +46,12 @@ for (const { remote, action } of [
   }) => {
     const server = await visitServer(baseURL!, remote);
     try {
+      // The screen request starts after the app has consumed the enabled open receipt.
       const enabled = page.waitForResponse(
         (response) =>
           response.request().method() === "POST" &&
           new URL(response.url()).pathname === "/api/v1/telemetry/events" &&
-          response.request().postDataJSON()?.event === "app_opened",
+          response.request().postDataJSON()?.event === "screen_viewed",
       );
       if (remote) {
         await page.addInitScript(
