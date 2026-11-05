@@ -192,22 +192,7 @@ func replaceSessionUsageEventsTx(
 		}
 	}
 
-	for _, ev := range events[prefix:] {
-		if ev.SessionID == "" {
-			ev.SessionID = sessionID
-		}
-		var ordinal any
-		if ev.MessageOrdinal != nil {
-			ordinal = *ev.MessageOrdinal
-		}
-		var cost any
-		if ev.Cost != nil {
-			cost = ev.Cost.Microdollars
-		}
-		var occurredAt any
-		if ev.OccurredAt != "" {
-			occurredAt = ev.OccurredAt
-		}
+	for _, r := range incoming[prefix:] {
 		if _, err := tx.Exec(`
 			INSERT INTO usage_events (
 				session_id, message_ordinal, source, model,
@@ -216,11 +201,11 @@ func replaceSessionUsageEventsTx(
 				reasoning_tokens, cost_microdollars, cost_status, cost_source,
 				occurred_at, dedup_key
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			ev.SessionID, ordinal, ev.Source, ev.Model,
-			ev.InputTokens, ev.OutputTokens, ev.ProviderID,
-			ev.CacheCreationInputTokens, ev.CacheReadInputTokens,
-			ev.ReasoningTokens, cost, ev.CostStatus, ev.CostSource,
-			occurredAt, ev.DedupKey,
+			sessionID, r.ordinal, r.source, r.model,
+			r.input, r.output, r.providerID,
+			r.cacheCreation, r.cacheRead,
+			r.reasoning, r.cost, r.costStatus, r.costSource,
+			r.occurredAt, r.dedupKey,
 		); err != nil {
 			return fmt.Errorf("inserting usage event: %w", err)
 		}
