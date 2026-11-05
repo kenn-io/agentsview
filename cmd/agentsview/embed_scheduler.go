@@ -826,7 +826,7 @@ func setupVectorServing(
 		server.WithEmbeddingsIncludeAutomatedDefault(cfg.Vector.IncludeAutomated),
 	}
 	scheduler.batteryDeferredPath = path + ".battery-deferred"
-	if _, err := os.Stat(scheduler.batteryDeferredPath); err == nil && cfg.Vector.Embed.RunAfterSyncEnabled() {
+	if _, err := os.Stat(scheduler.batteryDeferredPath); err == nil && (cfg.Vector.Embed.RunAfterSyncEnabled() || backstop > 0) {
 		scheduler.Notify()
 	}
 	if cfg.Vector.Embed.RunAfterSyncEnabled() {

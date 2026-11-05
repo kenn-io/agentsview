@@ -1955,8 +1955,17 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 }
 
 func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
-	for _, deferred := range []bool{false, true} {
-		t.Run(fmt.Sprintf("deferred=%t", deferred), func(t *testing.T) {
+	for _, tc := range []struct {
+		name                              string
+		deferred, runAfterSync, wantBuild bool
+		backstop                          string
+	}{
+		{name: "ordinary startup", runAfterSync: true, backstop: "24h"},
+		{name: "deferred sync", deferred: true, runAfterSync: true, backstop: "0", wantBuild: true},
+		{name: "deferred backstop", deferred: true, backstop: "24h", wantBuild: true},
+		{name: "automatic builds disabled", deferred: true, backstop: "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				dataDir := t.TempDir()
 				database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
@@ -1965,7 +1974,7 @@ func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 				})
 				cfg := vectorTestConfig(dataDir)
 				cfg.Vector.Embed.Recall = false
-				if deferred {
+				if tc.deferred {
 					func() {
 						vs, err := setupVectorServing(t.Context(), cfg, database, nil)
 						require.NoError(t, err)
@@ -1982,6 +1991,8 @@ func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 						require.FileExists(t, vs.Scheduler.batteryDeferredPath)
 					}()
 				}
+				cfg.Vector.Embed.RunAfterSync = new(tc.runAfterSync)
+				cfg.Vector.Embed.BackstopInterval = tc.backstop
 				vs, err := setupVectorServing(t.Context(), cfg, database, nil)
 				require.NoError(t, err)
 				defer vs.Close()
@@ -1993,10 +2004,14 @@ func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 				synctest.Sleep(embedDebounceInterval + time.Second)
 				synctest.Wait()
 				var want []vector.BuildRequest
-				if deferred {
+				if tc.wantBuild {
 					want = []vector.BuildRequest{{}}
 				}
-				assert.NoFileExists(t, vs.Scheduler.batteryDeferredPath)
+				if tc.deferred && !tc.wantBuild {
+					assert.FileExists(t, vs.Scheduler.batteryDeferredPath)
+				} else {
+					assert.NoFileExists(t, vs.Scheduler.batteryDeferredPath)
+				}
 				assert.Equal(t, want, mgr.callsSnapshot(),
 					"startup must catch up an unchanged archive without another sync notification")
 			})
