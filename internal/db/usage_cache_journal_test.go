@@ -5,6 +5,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,9 @@ func TestUsageJournaledWindowDiscoverySeeksDates(t *testing.T) {
 	seedJournaledUsage(t, database, "session")
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
 	cache := warmJournaledUsage(t, database, filter)
+	// Pin the tiny-table statistics that can make a join prefer an install scan.
+	_, err := cache.db.ExecContext(t.Context(), `ANALYZE`)
+	require.NoError(t, err)
 	zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
 	require.NoError(t, err)
 	capture := &sessionExportQueryCapture{inner: cache.db}
@@ -32,12 +36,14 @@ func TestUsageJournaledWindowDiscoverySeeksDates(t *testing.T) {
 	for _, query := range capture.queries {
 		rows, err := cache.db.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query.query, query.args...)
 		require.NoError(t, err)
+		defer rows.Close()
 		plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
 		require.NoError(t, rows.Close())
 		// A zone-index search still visits every unrelated install. Bounded
 		// discovery must seek dates first, then look up matching install IDs.
 		assert.NotContains(t, plan, "timezone_id=?", plan)
 		assert.NotContains(t, plan, "SCAN i", plan)
+		assert.Contains(t, plan, "SEARCH i USING INTEGER PRIMARY KEY (rowid=?)", plan)
 		assert.Contains(t, plan, "local_date>? AND local_date<?", plan)
 	}
 }
@@ -76,6 +82,13 @@ func TestUsageJournaledWindowDiscoveryBoundaries(t *testing.T) {
 			assert.ElementsMatch(t, tc.want, got)
 		})
 	}
+	t.Run("missing timezone", func(t *testing.T) {
+		var missingTimezoneID int64
+		require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT MAX(id)+1 FROM usage_rollup_timezones`).Scan(&missingTimezoneID))
+		got, err := usageRollupWindowSessions(t.Context(), cache.db, missingTimezoneID, UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"})
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
 }
 
 func seedJournaledUsage(t *testing.T, database *DB, id string) {
@@ -240,7 +253,7 @@ func TestUsageJournaledPartialRefresh(t *testing.T) {
 
 func TestUsageJournaledForeignInstall(t *testing.T) {
 	for _, empty := range []bool{false, true} {
-		t.Run(fmt.Sprint(empty), func(t *testing.T) {
+		t.Run(strconv.FormatBool(empty), func(t *testing.T) {
 			database := testDB(t)
 			seedJournaledUsage(t, database, "session")
 			filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
@@ -332,7 +345,7 @@ func TestUsageJournaledOlderRollupCannotReplaceNewer(t *testing.T) {
 
 func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
 	for _, revert := range []bool{false, true} {
-		t.Run(fmt.Sprint(revert), func(t *testing.T) {
+		t.Run(strconv.FormatBool(revert), func(t *testing.T) {
 			database := testDB(t)
 			seedJournaledUsage(t, database, "session")
 			require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 1_000_000}}}))
@@ -464,7 +477,7 @@ func TestUsageJournaledTopSharesSummary(t *testing.T) {
 		assert.Equal(t, want, got)
 	})
 	for _, topFirst := range []bool{false, true} {
-		t.Run(fmt.Sprint(topFirst), func(t *testing.T) {
+		t.Run(strconv.FormatBool(topFirst), func(t *testing.T) {
 			database := openDailyUsageFixtureDB(t)
 			filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Agent: "claude"}
 			warmJournaledUsage(t, database, filter)
@@ -619,6 +632,7 @@ func TestUsageJournaledConcurrentWriter(t *testing.T) {
 		}
 	}()
 	t.Cleanup(func() { close(writes); <-done })
+	readerErrors := make(chan error, 10) // Three peer writes and seven readers.
 	var reads, conflicts atomic.Int64
 	filter.Progress = func(phase string) {
 		if phase != "Reading cached daily totals" {
@@ -630,7 +644,7 @@ func TestUsageJournaledConcurrentWriter(t *testing.T) {
 		}
 		// Hold prepared readers until the peer has replaced their installs.
 		writes <- int(ordinal)
-		assert.NoError(t, <-results)
+		readerErrors <- <-results
 		conflicts.Add(1)
 	}
 	var readers sync.WaitGroup
@@ -638,7 +652,8 @@ func TestUsageJournaledConcurrentWriter(t *testing.T) {
 		readers.Go(func() {
 			for range 10 {
 				got, err := database.GetDailyUsage(t.Context(), filter)
-				if !assert.NoError(t, err) {
+				if err != nil {
+					readerErrors <- err
 					return
 				}
 				assert.GreaterOrEqual(t, got.Totals.InputTokens, 3000)
@@ -647,6 +662,10 @@ func TestUsageJournaledConcurrentWriter(t *testing.T) {
 		})
 	}
 	readers.Wait()
+	close(readerErrors)
+	for err := range readerErrors {
+		require.NoError(t, err)
+	}
 	assert.EqualValues(t, 3, conflicts.Load())
 	filter.Progress = nil
 	got, err := database.GetDailyUsage(t.Context(), filter)

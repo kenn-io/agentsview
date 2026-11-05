@@ -67,7 +67,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	if err != nil {
 		return usagePreparedWindow{}, false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	zone, err := readUsageZoneCoverage(ctx, tx, identity.Key)
 	if err != nil {
 		return usagePreparedWindow{}, false, err
@@ -118,7 +118,8 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		if err != nil {
 			return err
 		}
-		refreshIDs = append(changes, lost...)
+		refreshIDs = append(refreshIDs, changes...)
+		refreshIDs = append(refreshIDs, lost...)
 		slices.Sort(refreshIDs)
 		refreshIDs = slices.Compact(refreshIDs)
 		refresh = *snapshot
@@ -236,7 +237,6 @@ func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, time
 	args := []any{timezoneID}
 	if from != "" || to != "" {
 		var branches []string
-		args = nil
 		for _, table := range []string{"usage_daily_rollups", "usage_rollup_exceptions"} {
 			branch := `SELECT rollup_install_id FROM ` + table + ` WHERE 1=1`
 			if from != "" {
@@ -249,12 +249,11 @@ func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, time
 			}
 			branches = append(branches, branch)
 		}
-		// CROSS JOIN keeps date seeks outermost, so discovery never enumerates
-		// unrelated installs in the zone.
-		// NOT INDEXED selects install row IDs instead of scanning a zone index.
-		query = `SELECT DISTINCT i.session_id FROM (` + strings.Join(branches, ` UNION ALL `) + `) r
- CROSS JOIN usage_rollup_installs i NOT INDEXED ON i.id=r.rollup_install_id WHERE i.timezone_id=?`
-		args = append(args, timezoneID)
+		// Keep date seeks outermost. The scalar lookup seeks the install's
+		// primary key even when ANALYZE makes a tiny install table cheap to scan.
+		query = `SELECT DISTINCT (
+ SELECT i.session_id FROM usage_rollup_installs i WHERE i.id=r.rollup_install_id AND i.timezone_id=?
+) FROM (` + strings.Join(branches, ` UNION ALL `) + `) r`
 	}
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -263,12 +262,13 @@ func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, time
 	defer rows.Close()
 	var ids []string
 	for rows.Next() {
-		var id string
+		var id sql.NullString
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		if id != usageRollupCursorSessionID {
-			ids = append(ids, id)
+		// A matching date in another timezone has no install in this zone.
+		if id.Valid && id.String != usageRollupCursorSessionID {
+			ids = append(ids, id.String)
 		}
 	}
 	return ids, rows.Err()
@@ -297,6 +297,7 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 	if err != nil {
 		return 0, err
 	}
+	defer rows.Close()
 	var sessions map[string]*usageQuerySession
 	for rows.Next() {
 		var id string

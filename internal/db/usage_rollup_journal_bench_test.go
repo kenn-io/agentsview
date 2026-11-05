@@ -43,18 +43,23 @@ func BenchmarkUsageRollupJournaled(b *testing.B) {
 							continue
 						}
 						var wg sync.WaitGroup
+						errors := make(chan error, readers)
 						for range readers {
 							wg.Go(func() {
 								got, err := database.GetDailyUsage(b.Context(), filter)
 								// Fatal assertions belong to the benchmark goroutine.
 								if err != nil {
-									b.Error(err)
+									errors <- err
 									return
 								}
 								assert.Equal(b, want, got)
 							})
 						}
 						wg.Wait()
+						close(errors)
+						for err := range errors {
+							require.NoError(b, err)
+						}
 					}
 				})
 			}

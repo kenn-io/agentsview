@@ -122,7 +122,7 @@ func TestUsageJournaledRetryHonorsBulkLane(t *testing.T) {
 			case "counts":
 				_, err = database.GetUsageSessionCounts(ctx, filter)
 			}
-			assert.ErrorIs(t, err, context.DeadlineExceeded)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
 			for _, release := range releases {
 				release()
 			}
