@@ -566,23 +566,31 @@
             <span class="agg-val">{formatDuration(cat.duration_ms)}</span>
           </button>
         {/each}
-        <!-- Categories without a reading share one muted line instead of a
-             row of dashes each; their names still toggle the filter. -->
+        <!-- Categories without a reading: "Not measured" once as a muted
+             note, then their names as one wrapping row of neutral chips that
+             still toggle the filter. -->
         {#if unmeasuredRows.length > 0}
-          <p class="unmeasured-line">
+          <div class="unmeasured-line">
             <span class="unmeasured-label">{m.session_vitals_not_measured()}</span>
-            {#each unmeasuredRows as cat (cat.category)}
-              {@const isActive = categoryFilter === cat.category}
-              <button
-                class="unmeasured-cat"
-                class:active={isActive}
-                class:dimmed={categoryFilter !== null && !isActive}
-                style={isActive ? `--ring: ${categoryToken(cat.category)};` : ""}
-                onclick={() => toggleCategory(cat.category)}
-                type="button"
-              >{cat.category}</button>
-            {/each}
-          </p>
+            <div class="unmeasured-chips">
+              {#each unmeasuredRows as cat (cat.category)}
+                {@const isActive = categoryFilter === cat.category}
+                <Chip
+                  size="xs"
+                  tone="neutral"
+                  uppercase={false}
+                  interactive
+                  class={[
+                    "unmeasured-cat",
+                    isActive && "active",
+                    categoryFilter !== null && !isActive && "dimmed",
+                  ].filter(Boolean).join(" ")}
+                  style={isActive ? `--ring: ${categoryToken(cat.category)};` : undefined}
+                  onclick={() => toggleCategory(cat.category)}
+                >{cat.category}</Chip>
+              {/each}
+            </div>
+          </div>
         {/if}
       </section>
     {/if}
@@ -1099,41 +1107,33 @@
     height: 100%;
     border-radius: 1px;
   }
-  /* Categories with no reading: one muted line, "Not measured" then the
-     category names, which stay filter buttons. */
+  /* Categories with no reading: a muted "Not measured" note, then the
+     category names as neutral chips that stay filter buttons. */
   .unmeasured-line {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 2px 8px;
-    margin: 2px 0 0;
-    padding: 0 4px;
+    display: grid;
+    gap: 6px;
+    margin: 4px 0 0;
+  }
+  .unmeasured-label {
     font-size: 11px;
-    line-height: 1.5;
+    line-height: 1.4;
     color: var(--text-muted);
   }
-  .unmeasured-cat {
-    padding: 0 3px;
-    margin: 0 -3px;
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
-    background: transparent;
+  .unmeasured-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .unmeasured-chips :global(.unmeasured-cat) {
     font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: background 0.12s, opacity 0.18s, border-color 0.12s;
+    transition: opacity 0.18s, border-color 0.12s, background 0.12s;
   }
-  .unmeasured-cat:hover {
-    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+  .unmeasured-chips :global(.unmeasured-cat.active) {
+    background: color-mix(in srgb, var(--ring, transparent) 12%, transparent);
+    border-color: color-mix(in srgb, var(--ring, transparent) 45%, transparent);
     color: var(--text-primary);
   }
-  .unmeasured-cat.active {
-    background: color-mix(in srgb, var(--ring, transparent) 10%, transparent);
-    border-color: color-mix(in srgb, var(--ring, transparent) 30%, transparent);
-    color: var(--text-primary);
-  }
-  .unmeasured-cat.dimmed {
+  .unmeasured-chips :global(.unmeasured-cat.dimmed) {
     opacity: 0.4;
   }
   .agg-val {
