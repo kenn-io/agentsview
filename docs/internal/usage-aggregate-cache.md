@@ -118,6 +118,10 @@ worklist in the same transaction. Reinstalling it clears that entry, and
 deleting its cached facts removes it. Requests read window IDs and that worklist
 in one cache transaction, then capture archive revisions, pricing, current
 session metadata, and changed-session fingerprints in one archive transaction.
+Deletion sweeps and notifications lower claims to the revision captured before
+their archive deletion check in the same transaction that removes cached facts.
+That preserves journal replay if another handle has already restored or
+reimported the session.
 
 Every install records the archive revision and catalog digest used to build it.
 Installing a build older than the timezone's claim lowers the claim in the same
@@ -127,13 +131,17 @@ timezone claim records both an archive revision and an install counter. A
 compare-and-set advances the claim from actual installed stamps; concurrent
 claim losers leave it alone. A completed pass uses the revision and install
 counter captured at its start. It records its catalog only when no intervening
-install used another catalog.
+install used another catalog. An unchanged revision, install counter, and
+catalog need no claim write, so warm reads can proceed while another cache
+writer holds its transaction.
 
 A timezone without a completed pass, a new cache generation, a changed pricing
 catalog, or coverage outside the archive's revision range takes the full path.
 An untrusted request starts a coverage pass when background backfill is enabled
-and idle. Catalog checks include handle-specific custom pricing. The captured
-catalog digest determines whether a pass can vouch for the current rates.
+and idle, and the pass retains its timezone. Other zones use the full path;
+serving a request updates their recency for the next pass. Catalog checks
+include handle-specific custom pricing. The captured catalog digest determines
+whether a pass can vouch for the current rates.
 
 Before reading rows, the pinned cache transaction checks timezone coverage,
 pricing, intervening installs for captured sessions, and missing installs. Empty

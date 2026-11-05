@@ -277,6 +277,55 @@ func TestUsageJournaledRestoreBeforePendingDelete(t *testing.T) {
 	}
 }
 
+func TestUsageJournaledReimportDuringDeletionSweep(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	deleted, err := database.DeleteParserExcludedSessions(t.Context(), []string{"session"})
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted)
+	other, err := OpenIsolatedContext(t.Context(), database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	cache.fill.observer.beforeDeletionSweep = func() {
+		// The sweep has captured the tombstone, but has yet to take the cache
+		// writer. Another handle reimports and serves the same source first.
+		seedJournaledUsage(t, other, "session")
+		got, err := other.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		require.Equal(t, 100, got.Totals.InputTokens)
+	}
+	require.NoError(t, cache.sweepDeletionJournal(t.Context(), database))
+	for range 2 {
+		got, err := database.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, 100, got.Totals.InputTokens)
+		assertJournaledUsageLegacy(t, database, filter)
+	}
+}
+
+func TestUsageJournaledWarmReadWhileCacheWriterBusy(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	conn, err := cache.db.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	_, err = conn.ExecContext(t.Context(), `BEGIN IMMEDIATE`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := conn.ExecContext(context.WithoutCancel(t.Context()), `ROLLBACK`)
+		require.NoError(t, err)
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	got, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err, "unchanged warm reports must remain readable while a cache writer is busy")
+	assert.Equal(t, 100, got.Totals.InputTokens)
+}
+
 func TestUsageJournaledRefreshDiagnostics(t *testing.T) {
 	database := testDB(t)
 	seedJournaledUsage(t, database, "session")
@@ -844,4 +893,29 @@ func TestUsageJournaledUntrustedReadsSharePass(t *testing.T) {
 		assert.True(t, prepared.journaled)
 	}
 	assert.EqualValues(t, 1, starts.Load())
+}
+
+func TestUsageJournaledUnretainedZoneBoundsPasses(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	zones := []string{"Pacific/Honolulu", "America/Anchorage", "America/Los_Angeles", "America/Denver", "America/Chicago", "America/New_York", "Europe/London", "Europe/Paris", "Asia/Tokyo", "Australia/Sydney"}
+	for _, zone := range zones {
+		got, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: zone})
+		require.NoError(t, err)
+		require.Equal(t, 100, got.Totals.InputTokens)
+	}
+	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
+	t.Cleanup(database.StopUsageCacheBackfill)
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	var starts atomic.Int64
+	database.SetUsageCacheBackfillStarted(func() { starts.Add(1) })
+	// This zone is older than the eight explicit zones retained by a pass.
+	// Preparation itself doesn't refresh recency; serving the fallback does.
+	for range 3 {
+		_, trusted, err := database.prepareJournaledUsageWindow(t.Context(), UsageFilter{Timezone: zones[0]}, usageQueryKindToken, false, func(string) {})
+		require.NoError(t, err)
+		assert.False(t, trusted)
+		require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	}
+	assert.LessOrEqual(t, starts.Load(), int64(1), "one untrusted zone must not repeatedly rescan the archive")
 }

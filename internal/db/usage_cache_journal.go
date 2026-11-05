@@ -22,30 +22,54 @@ type usageZoneCoverage struct {
 
 func readUsageZoneCoverage(ctx context.Context, q sessionExportQuerier, key string) (usageZoneCoverage, error) {
 	var zone usageZoneCoverage
-	err := q.QueryRowContext(ctx, `SELECT id, change_revision, change_install_revision, change_pricing,
- EXISTS(SELECT 1 FROM usage_rollup_installs WHERE timezone_id=z.id AND install_revision>=z.change_install_revision AND source_pricing<>z.change_pricing)
- FROM usage_rollup_timezones z WHERE timezone_key=?`, key).Scan(&zone.id, &zone.revision, &zone.installRevision, &zone.pricing, &zone.foreignPricing)
+	err := q.QueryRowContext(ctx, `
+		SELECT id, change_revision, change_install_revision, change_pricing,
+			EXISTS(SELECT 1 FROM usage_rollup_installs
+				WHERE timezone_id = z.id
+				AND install_revision >= z.change_install_revision
+				AND source_pricing <> z.change_pricing)
+		FROM usage_rollup_timezones z WHERE timezone_key = ?`, key,
+	).Scan(&zone.id, &zone.revision, &zone.installRevision, &zone.pricing, &zone.foreignPricing)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return zone, err
 	}
-	err = q.QueryRowContext(ctx, `SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key=?`, usageCacheMetadataNextRollupRevision).Scan(&zone.installSeq)
+	err = q.QueryRowContext(ctx, `
+		SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key = ?`,
+		usageCacheMetadataNextRollupRevision).Scan(&zone.installSeq)
 	return zone, err
 }
 
 // A request only advances an existing claim. A completed archive pass can
 // establish one. The compare-and-set makes concurrent claim losers harmless.
 func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimezoneIdentity, zone usageZoneCoverage, revision int64, catalog string) error {
+	if zone.revision.Valid && zone.revision.Int64 == revision &&
+		zone.installRevision == zone.installSeq && zone.pricing == catalog {
+		return nil
+	}
 	// Cap coverage at the oldest source revision installed since capture, so
 	// a delayed build cannot make the claim newer than its stored facts.
 	// WHERE NOT EXISTS refuses a claim if those installs used another catalog.
 	// ON CONFLICT advances only the claim we captured; a concurrent winner's
 	// revision or install boundary makes this compare-and-set a no-op.
-	_, err := cache.db.ExecContext(ctx, `INSERT INTO usage_rollup_timezones
- (timezone_key, timezone_name, interval_fingerprint, last_requested_at, change_revision, change_install_revision, change_pricing)
- SELECT ?, ?, ?, '', MIN(?, COALESCE((SELECT MIN(source_change_revision) FROM usage_rollup_installs WHERE timezone_id=(SELECT id FROM usage_rollup_timezones WHERE timezone_key=?) AND install_revision>=?), ?)), ?, ?
- WHERE NOT EXISTS (SELECT 1 FROM usage_rollup_installs WHERE timezone_id=(SELECT id FROM usage_rollup_timezones WHERE timezone_key=?) AND install_revision>=? AND source_pricing<>?)
- ON CONFLICT(timezone_key) DO UPDATE SET change_revision=excluded.change_revision, change_install_revision=excluded.change_install_revision, change_pricing=excluded.change_pricing
- WHERE usage_rollup_timezones.change_revision IS ? AND usage_rollup_timezones.change_install_revision=?`,
+	_, err := cache.db.ExecContext(ctx, `
+		INSERT INTO usage_rollup_timezones (
+			timezone_key, timezone_name, interval_fingerprint, last_requested_at,
+			change_revision, change_install_revision, change_pricing)
+		SELECT ?, ?, ?, '', MIN(?, COALESCE((
+			SELECT MIN(source_change_revision) FROM usage_rollup_installs
+			WHERE timezone_id = (
+				SELECT id FROM usage_rollup_timezones WHERE timezone_key = ?)
+			AND install_revision >= ?), ?)), ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM usage_rollup_installs WHERE timezone_id = (
+				SELECT id FROM usage_rollup_timezones WHERE timezone_key = ?)
+			AND install_revision >= ? AND source_pricing <> ?)
+		ON CONFLICT(timezone_key) DO UPDATE SET
+			change_revision = excluded.change_revision,
+			change_install_revision = excluded.change_install_revision,
+			change_pricing = excluded.change_pricing
+		WHERE usage_rollup_timezones.change_revision IS ?
+			AND usage_rollup_timezones.change_install_revision = ?`,
 		identity.Key, identity.Name, identity.IntervalFingerprint, revision, identity.Key, zone.installSeq, revision, zone.installSeq, catalog,
 		identity.Key, zone.installSeq, catalog, zone.revision, zone.installRevision)
 	return err
@@ -68,15 +92,32 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		return usagePreparedWindow{}, false, err
 	}
 	fallback := func() error {
-		// The pass belongs to the archive and StopUsageCacheBackfill joins it.
-		if db.isUsageBackfillEnabled() {
-			return db.startUsageCacheBackfill(context.Background(), false)
+		if !db.isUsageBackfillEnabled() {
+			return nil
+		}
+		locations, err := usageBackfillLocations(ctx, cache, time.Local) //nolint:forbidigo // Match the pass's process-local zone and retained explicit zones.
+		if err != nil {
+			return err
+		}
+		// An unretained zone cannot gain coverage from this pass. Serving its
+		// fallback updates recency, making a later request eligible instead.
+		for _, location := range locations {
+			if usageTimezoneIdentityFor(location, nil).Key == identity.Key {
+				// The pass belongs to the archive; StopUsageCacheBackfill joins it.
+				return db.startUsageCacheBackfill(context.Background(), false)
+			}
 		}
 		return nil
 	}
 	if !zone.revision.Valid || zone.foreignPricing {
 		if zone.id == 0 {
-			_, err = cache.db.ExecContext(ctx, `INSERT INTO usage_rollup_timezones(timezone_key,timezone_name,interval_fingerprint,last_requested_at) VALUES(?,?,?,?) ON CONFLICT(timezone_key) DO NOTHING`, identity.Key, identity.Name, identity.IntervalFingerprint, time.Now().UTC().Format(time.RFC3339Nano))
+			_, err = cache.db.ExecContext(ctx, `
+				INSERT INTO usage_rollup_timezones (
+					timezone_key, timezone_name, interval_fingerprint, last_requested_at)
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT(timezone_key) DO NOTHING`,
+				identity.Key, identity.Name, identity.IntervalFingerprint,
+				time.Now().UTC().Format(time.RFC3339Nano))
 			if err != nil {
 				return usagePreparedWindow{}, false, err
 			}
@@ -228,7 +269,9 @@ func (cache *usageCache) refreshJournaledUsageWindow(ctx context.Context, snapsh
 }
 
 func usageSessionsWithoutRollup(ctx context.Context, q sessionExportQuerier, timezoneID int64, limit int) ([]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT session_id FROM usage_rollup_invalidations WHERE timezone_id=? LIMIT ?`, timezoneID, limit)
+	rows, err := q.QueryContext(ctx, `
+		SELECT session_id FROM usage_rollup_invalidations
+		WHERE timezone_id = ? LIMIT ?`, timezoneID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -265,8 +308,9 @@ func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, time
 		// Keep date seeks outermost. The scalar lookup seeks the install's
 		// primary key even when ANALYZE makes a tiny install table cheap to scan.
 		query = `SELECT DISTINCT (
- SELECT i.session_id FROM usage_rollup_installs i WHERE i.id=r.rollup_install_id AND i.timezone_id=?
-) FROM (` + strings.Join(branches, ` UNION ALL `) + `) r`
+			SELECT i.session_id FROM usage_rollup_installs i
+			WHERE i.id = r.rollup_install_id AND i.timezone_id = ?
+		) FROM (` + strings.Join(branches, ` UNION ALL `) + `) r`
 	}
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -308,7 +352,11 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 	// snapshot's metadata. The indexed range stays bounded by concurrent work.
 	// Notifications can pair a conservative source revision with newer session
 	// metadata. Check the baked fields even when the revision stamp matches.
-	rows, err := conn.QueryContext(ctx, `SELECT session_id, source_change_revision, source_pricing, baked_agent, baked_started_at FROM usage_rollup_installs WHERE timezone_id=? AND install_revision>=?`, zone.id, prepared.installSeq)
+	rows, err := conn.QueryContext(ctx, `
+		SELECT session_id, source_change_revision, source_pricing,
+			baked_agent, baked_started_at
+		FROM usage_rollup_installs
+		WHERE timezone_id = ? AND install_revision >= ?`, zone.id, prepared.installSeq)
 	if err != nil {
 		return 0, err
 	}
@@ -342,7 +390,10 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 	}
 	if snapshot.CursorHighWater > 0 {
 		var install usageRollupInstall
-		err := conn.QueryRowContext(ctx, `SELECT id, install_revision, pricing_hash FROM usage_rollup_installs WHERE timezone_id=? AND session_id=?`, zone.id, usageRollupCursorSessionID).Scan(&install.ID, &install.InstallRevision, &install.PricingHash)
+		err := conn.QueryRowContext(ctx, `
+			SELECT id, install_revision, pricing_hash FROM usage_rollup_installs
+			WHERE timezone_id = ? AND session_id = ?`, zone.id, usageRollupCursorSessionID,
+		).Scan(&install.ID, &install.InstallRevision, &install.PricingHash)
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, errUsageCacheSourceChanged
 		}

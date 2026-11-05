@@ -510,10 +510,17 @@ func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) 
 	if err != nil || through == after {
 		return err
 	}
+	revision, err := archive.UsageChangeRevision(ctx)
+	if err != nil {
+		return err
+	}
 	tombstones, err := archive.LoadSessionDeletionDelta(
 		ctx, after, through, nil, nil)
 	if err != nil {
 		return err
+	}
+	if cache.fill.observer.beforeDeletionSweep != nil {
+		cache.fill.observer.beforeDeletionSweep()
 	}
 	conn, err := cache.db.Conn(ctx)
 	if err != nil {
@@ -544,18 +551,9 @@ func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) 
 	excluded := make(map[string]bool, len(tombstoneIDs))
 	for _, sessionID := range tombstoneIDs {
 		excluded[sessionID] = true
-		if _, err := conn.ExecContext(ctx,
-			`DELETE FROM usage_rollup_installs WHERE session_id = ?`,
-			sessionID,
-		); err != nil {
-			return err
-		}
-		if _, err := conn.ExecContext(ctx,
-			`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
-			sessionID,
-		); err != nil {
-			return err
-		}
+	}
+	if err := deleteUsageCachedSessions(ctx, conn, tombstoneIDs, revision); err != nil {
+		return err
 	}
 	// Rebuild the survivors' rollups so groups the deleted sessions kept
 	// irreducible can finalize again.

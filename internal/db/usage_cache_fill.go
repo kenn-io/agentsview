@@ -62,6 +62,7 @@ type usageFillObserver struct {
 	beforeInstall          func([]usageSourceVersion)
 	afterNotificationBatch func()
 	afterMaintenance       func()
+	beforeDeletionSweep    func()
 }
 
 type usageFillCoordinator struct {
@@ -1841,27 +1842,14 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string, revision
 	excluded := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		excluded[id] = true
-		if _, err := conn.ExecContext(c.ctx,
-			`DELETE FROM usage_rollup_installs WHERE session_id = ?`, id,
-		); err != nil {
-			return err
-		}
-		if _, err := conn.ExecContext(c.ctx,
-			`DELETE FROM usage_cached_sessions WHERE session_id = ?`, id,
-		); err != nil {
-			return err
-		}
+	}
+	if err := deleteUsageCachedSessions(c.ctx, conn, ids, revision); err != nil {
+		return err
 	}
 	// Rebuild the survivors' rollups so groups the deleted sessions kept
 	// irreducible can finalize again.
 	sharers, err := invalidateUsageDedupSharers(c.ctx, conn, removed, excluded)
 	if err != nil {
-		return err
-	}
-	// A restore can be installed by another process after the archive recheck.
-	// Replay from that recheck even though deleting cached facts removes the
-	// missing-install invalidation along with them.
-	if _, err := conn.ExecContext(c.ctx, `UPDATE usage_rollup_timezones SET change_revision=MIN(change_revision, ?)`, revision); err != nil {
 		return err
 	}
 	if _, err := conn.ExecContext(c.ctx, `COMMIT`); err != nil {
@@ -1870,6 +1858,30 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string, revision
 	committed = true
 	c.requeueSessions(sharers)
 	return nil
+}
+
+// deleteUsageCachedSessions runs inside the caller's cache write transaction.
+// A restore or reimport can be installed after the archive deletion check.
+// Lower coverage in the same transaction: the cached-session cascade removes
+// missing-install invalidations, so only journal replay can recover that usage.
+func deleteUsageCachedSessions(ctx context.Context, conn *sql.Conn, ids []string, revision int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	for _, id := range ids {
+		for _, query := range []string{
+			`DELETE FROM usage_rollup_installs WHERE session_id = ?`,
+			`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
+		} {
+			if _, err := conn.ExecContext(ctx, query, id); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := conn.ExecContext(ctx, `
+		UPDATE usage_rollup_timezones
+		SET change_revision = MIN(change_revision, ?)`, revision)
+	return err
 }
 
 func (c *usageFillCoordinator) requeueSessions(ids []string) {
