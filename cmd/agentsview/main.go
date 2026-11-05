@@ -511,8 +511,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		memoryRefresh = newMemoryRefreshQueue()
 		go startPeriodicSync(ctx, cfg, ingestion, engine, database, idleTracker, validRemotes, emitter, attachedSources)
 		go runMemoryRefreshScheduler(ctx, memoryRefresh.requests, memoryRefreshDebounce, func() {
-			if localCtx := ingestion.ActiveContext(); localCtx != nil {
-				idleTracker.Do(func() { runScheduledSyncPass(localCtx, engine, scheduledReconcileTargets(ingestion.Config())) })
+			if ingestion.Active() {
+				idleTracker.Do(func() { runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(ingestion.Config())) })
 			}
 		})
 	} else if opts.ReloadConfig != nil {
@@ -3217,8 +3217,7 @@ func startPeriodicSync(
 			return
 		case <-ticker.C:
 		}
-		localCtx := ingestion.ActiveContext()
-		if localCtx == nil {
+		if !ingestion.Active() {
 			continue
 		}
 		log.Println("Running scheduled reconciliation...")
@@ -3227,13 +3226,13 @@ func startPeriodicSync(
 			// reconcile targets are re-probed each tick because disk
 			// availability changes.
 			current := ingestion.Config()
-			runScheduledSyncPass(localCtx, engine, scheduledReconcileTargets(current))
-			runRemoteSourceSyncPass(localCtx, engine, remoteSourceSyncRoots(current))
-			if _, err := attachedSources.DrainScheduled(localCtx); err != nil && ctx.Err() == nil {
+			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
+			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
+			if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("archive sources: %v", err)
 			}
-			recomputePendingSessions(localCtx, engine, database)
-			recomputeStaleFriction(localCtx, engine)
+			recomputePendingSessions(ctx, engine, database)
+			recomputeStaleFriction(ctx, engine)
 		})
 	}
 }

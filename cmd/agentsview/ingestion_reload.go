@@ -142,14 +142,11 @@ func (d *daemonIngestion) StartLiveActivity() {
 	)
 }
 
-// ActiveContext admits scheduled work while collection is installed.
-func (d *daemonIngestion) ActiveContext() context.Context {
+// Active admits scheduled work while collection is installed.
+func (d *daemonIngestion) Active() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.stopped || d.watchers == nil {
-		return nil
-	}
-	return d.ctx
+	return !d.stopped && d.watchers != nil
 }
 
 func (d *daemonIngestion) Pending() bool {
@@ -240,21 +237,16 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 		watchers = d.startWatchers(d.Config())
 	}
 	d.mu.Lock()
-	stopped = d.stopped
-	if watchers != nil && !stopped {
+	if watchers != nil {
 		d.watchers = watchers
 		watchers.openDispatch()
 		if d.liveEnabled {
 			d.stopLive = startLiveActivityPoller(d.ctx, d.Config(), d.database, d.engine, d.idleTracker)
 		}
-		watchers = nil
 	}
 	since := d.quietSince.Add(-quickSyncMargin)
 	d.mu.Unlock()
 	d.applyMu.Unlock()
-	if watchers != nil {
-		watchers.stop()
-	}
 	go func() {
 		defer finish()
 		complete := false
@@ -331,6 +323,14 @@ func (d *daemonIngestion) applySaved() {
 	if reflect.DeepEqual(engineSourceConfig(prev), engineSourceConfig(next)) {
 		return
 	}
+	// Register the replacement watcher before the engine switches, so once
+	// the engine reports a new root, every later change under it is seen.
+	// Registration can take tens of milliseconds, and a session written in
+	// that gap would otherwise wait for the next full sync. The watcher only
+	// collects until dispatch opens below, so its first batch is still
+	// handled by the new provider set. It also starts before the old watcher
+	// stops, so no change falls between them; a change seen by both is
+	// synced twice, which is harmless.
 	d.mu.Lock()
 	active := d.watchers != nil && !d.stopped
 	d.mu.Unlock()

@@ -277,7 +277,7 @@ func TestDaemonIngestionSlowCatchupKeepsAuditWaiting(t *testing.T) {
 	t.Cleanup(ts.Close)
 	headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
 	require.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
-	require.NotNil(t, ingestion.ActiveContext(), "watching resumes before catch-up finishes")
+	require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
 	assert.Empty(t, auditReady, "the audit waits for catch-up, not just watcher setup")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

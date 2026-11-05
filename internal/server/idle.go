@@ -11,15 +11,16 @@ import (
 // IdleTracker tracks external client activity and internal write work for a
 // server that suspends local ingestion and optionally exits after a quiet period.
 type IdleTracker struct {
-	mu               sync.Mutex
-	timeout          time.Duration
-	onIdle           func()
-	lastExternal     time.Time
+	mu             sync.Mutex
+	timeout        time.Duration
+	onIdle         func()
+	lastExternal   time.Time
+	activeExternal int
+	activeWork     int
+	draining       bool
+	notify         chan struct{}
+
 	lastSyncActivity time.Time
-	activeExternal   int
-	activeWork       int
-	draining         bool
-	notify           chan struct{}
 	syncTimeout      time.Duration
 	onSyncIdle       func()
 	syncIdle         bool
@@ -78,9 +79,6 @@ func (t *IdleTracker) BeginWork() (func(), bool) {
 			t.mu.Lock()
 			if t.activeWork > 0 {
 				t.activeWork--
-				if t.activeWork == 0 {
-					t.syncIdle = false
-				}
 			}
 			t.mu.Unlock()
 			t.signal()
@@ -106,7 +104,6 @@ func (t *IdleTracker) Touch() {
 	}
 	t.mu.Lock()
 	if !t.draining {
-		t.syncIdle = false
 		t.lastExternal = time.Now()
 		t.lastSyncActivity = t.lastExternal
 	}
@@ -186,7 +183,7 @@ func (t *IdleTracker) nextWait() (time.Duration, bool) {
 				wait = min(wait, remaining)
 			}
 		}
-		if t.timeout > 0 && t.activeWork == 0 {
+		if t.timeout > 0 {
 			remaining := t.timeout - time.Since(t.lastExternal)
 			if remaining <= 0 {
 				t.draining = true

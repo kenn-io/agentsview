@@ -251,29 +251,12 @@ func TestIdleTrackerSyncSuspensionRepeatsAndKeepsSSEActive(t *testing.T) {
 	})
 }
 
-func TestIdleTrackerDesktopProbesPermitSyncIdle(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		tracker := NewIdleTracker(time.Minute, func() { assert.Fail(t, "desktop probes must keep the daemon alive") })
-		suspensions := 0
-		tracker.SetSyncIdle(10*time.Minute, func() { suspensions++ })
-		go tracker.Run(ctx)
-		for range 24 {
-			time.Sleep(30 * time.Second)
-			tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), "").ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/ping", nil))
-		}
-		synctest.Wait()
-		require.Equal(t, 1, suspensions)
-	})
-}
-
 func TestIdleSyncIgnoresBasePathPing(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		tracker := NewIdleTracker(0, func() {})
+		tracker := NewIdleTracker(time.Minute, func() { assert.Fail(t, "desktop probes must keep the daemon alive") })
 		suspensions := 0
 		tracker.SetSyncIdle(time.Minute, func() { suspensions++ })
 		handler := New(config.Config{Host: "127.0.0.1", Port: 8080}, database, nil, WithIdleTracker(tracker), WithBasePath("/archive")).Handler()
