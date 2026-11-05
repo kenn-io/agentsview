@@ -919,14 +919,15 @@ func TestCommitLinkMirrorRows(t *testing.T) {
 
 func TestTrailerCommitTurnRecency(t *testing.T) {
 	for _, tt := range []struct {
-		name, authorTime string
-		wantOrdinal      int
-		wantTurn         *CommitTurn
+		name, authorTime, activityTime string
+		wantOrdinal                    int
+		wantTurn                       *CommitTurn
 	}{
-		{"agent commit", "2026-01-02T10:04:30Z", 1, &CommitTurn{Heuristic: true, Ordinal: 0, Text: "Fix the parser"}},
-		{"five minutes", "2026-01-02T12:05:00Z", 3, &CommitTurn{Heuristic: true, Ordinal: 2, Text: "Push and open a pull request"}},
-		{"over five minutes", "2026-01-02T12:05:01Z", -1, nil},
-		{"before session", "2026-01-02T09:59:59Z", -1, nil},
+		{"agent commit", "2026-01-02T10:04:30Z", "2026-01-02T12:00:00Z", 1, &CommitTurn{Heuristic: true, Ordinal: 0, Text: "Fix the parser"}},
+		{"five minutes", "2026-01-02T12:05:00Z", "2026-01-02T12:00:00Z", 3, &CommitTurn{Heuristic: true, Ordinal: 2, Text: "Push and open a pull request"}},
+		{"five minutes rounded up", "2026-01-02T12:06:00Z", "2026-01-02T12:01:00Z", 3, &CommitTurn{Heuristic: true, Ordinal: 2, Text: "Push and open a pull request"}},
+		{"over five minutes", "2026-01-02T12:05:01Z", "2026-01-02T12:00:00Z", -1, nil},
+		{"before session", "2026-01-02T09:59:59Z", "2026-01-02T12:00:00Z", -1, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -935,7 +936,7 @@ func TestTrailerCommitTurnRecency(t *testing.T) {
 				Message{SessionID: "editor", Ordinal: 0, Role: "user", Content: "Fix the parser", Timestamp: "2026-01-02T10:00:00Z"},
 				Message{SessionID: "editor", Ordinal: 1, Role: "assistant", Content: "Fixed the parser", Timestamp: "2026-01-02T10:04:00Z"},
 				Message{SessionID: "editor", Ordinal: 2, Role: "user", Content: "Push and open a pull request", Timestamp: "2026-01-02T11:59:00Z"},
-				Message{SessionID: "editor", Ordinal: 3, Role: "assistant", Content: "Opened the pull request", Timestamp: "2026-01-02T12:00:00Z"},
+				Message{SessionID: "editor", Ordinal: 3, Role: "assistant", Content: "Opened the pull request", Timestamp: tt.activityTime},
 			)
 			sha := strings.Repeat("a", 40)
 			_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{"claude:editor"}, CommittedAt: tt.authorTime}})

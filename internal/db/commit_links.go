@@ -575,7 +575,7 @@ var commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value A
  SELECT t.owner_id,t.sha,t.branch,t.subject,t.repository,
  COALESCE((SELECT m.ordinal FROM messages m WHERE m.session_id=t.owner_id
  AND julianday(m.timestamp)<=julianday(t.committed_at)
- AND julianday(t.committed_at)-julianday(m.timestamp)<=5.0/1440 ORDER BY m.ordinal DESC LIMIT 1),-1),
+ AND julianday(m.timestamp)>=julianday(t.committed_at,'-5 minutes') ORDER BY m.ordinal DESC LIMIT 1),-1),
  -1,'',t.committed_at,t.project,'trailer' FROM resolved_trailers t
  WHERE t.owner_rank=1 AND NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=t.owner_id AND substr(t.sha,1,length(c.sha))=c.sha)
  ) l LEFT JOIN sessions s ON s.id=l.session_id
