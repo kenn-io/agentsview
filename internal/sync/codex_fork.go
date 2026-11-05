@@ -92,6 +92,12 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			break
 		}
 	}
+	usageMessageOrdinals := make(map[int]bool)
+	for _, event := range retainedEvents {
+		if event.MessageOrdinal != nil {
+			usageMessageOrdinals[*event.MessageOrdinal] = true
+		}
+	}
 	state := &db.CodexForkState{ParentID: info.ParentID, ParentKnown: info.Resolved, ParentTurns: maps.Clone(info.ParentTurns)}
 	if previous != nil && previous.ParentID == info.ParentID {
 		state.TurnContexts = slices.Clone(previous.TurnContexts)
@@ -257,7 +263,10 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 				}
 			}
 		}
-		if staged != nil && retainMessages && len(m.ToolCalls) > 0 {
+		// An imported event still owns its archived message after the source
+		// omits it. Matched authoritative messages need only metadata.
+		retainMessage := retainMessages || (match < 0 && usageMessageOrdinals[m.Ordinal])
+		if retainMessage && len(m.ToolCalls) > 0 && (staged != nil || !retainMessages) {
 			loaded, err := store.GetMessages(ctx, priorID, m.Ordinal, 1, true)
 			if err != nil {
 				return c, nil, nil, err
@@ -270,6 +279,10 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 		if match >= 0 {
 			current := &incoming[match]
 			if retainMessages {
+				// A matching shorter snapshot cannot erase observed turn boundaries.
+				if codexForkContextContains(state.TurnContexts, old.TurnContext, current.provenance.TurnContext) {
+					current.provenance.TurnContext = old.TurnContext
+				}
 				previousUsage := m
 				if old.PendingUsage != nil {
 					usage := old.PendingUsage
@@ -323,6 +336,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 							return c, nil, nil, err
 						}
 					}
+					hasCurrentResult := len(call.ResultEvents) > 0
 					var retained bool
 					call.ResultEvents, retained = mergeCodexForkResultEvents(saved.ResultEvents, call.ResultEvents)
 					if retained {
@@ -338,6 +352,12 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 						} else {
 							call.ResultContent = ""
 							call.ResultContentLength = codexForkResultSummaryLength(call.ResultEvents)
+						}
+						if !hasCurrentResult {
+							// Imported raw participation can be unknown after policy
+							// blanking. Keep the saved summary's known length until a
+							// current output supplies replacement evidence.
+							call.ResultContentLength = saved.ResultContentLength
 						}
 					}
 					if staged != nil {
@@ -363,7 +383,7 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 			priorOrdinals[m.Ordinal] = sourceOrdinals[current.source]
 			continue
 		}
-		if !retainMessages {
+		if !retainMessage {
 			continue
 		}
 		// Remove only records positively identified as inherited replay. Source

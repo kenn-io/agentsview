@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -20,7 +21,7 @@ import (
 // omit those two fields before the real artifact-import database boundary.
 func TestCodexForkImportedResultOccurrences(t *testing.T) {
 	for _, stage := range []int64{1, 1 << 30} {
-		for _, current := range []string{"absent", "fresh"} {
+		for _, current := range []string{"absent", "fresh", "idless"} {
 			t.Run(strconv.FormatInt(stage, 10)+"/"+current, func(t *testing.T) {
 				root := t.TempDir()
 				cp := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+forkReviewChild+".jsonl")
@@ -54,9 +55,15 @@ func TestCodexForkImportedResultOccurrences(t *testing.T) {
 					rows.Messages[i].SessionID = id
 					for j := range rows.Messages[i].ToolCalls {
 						rows.Messages[i].ToolCalls[j].SessionID = id
+						if current == "idless" {
+							rows.Messages[i].ToolCalls[j].ToolUseID = ""
+						}
 						for k := range rows.Messages[i].ToolCalls[j].ResultEvents {
 							event := &rows.Messages[i].ToolCalls[j].ResultEvents[k]
 							event.RawContentDigest, event.SummaryParticipates = nil, nil
+							if current == "idless" {
+								event.ToolUseID = ""
+							}
 						}
 					}
 				}
@@ -73,14 +80,18 @@ func TestCodexForkImportedResultOccurrences(t *testing.T) {
 				assert.Nil(t, initial[0].ToolCalls[0].ResultEvents[1].RawContentDigest)
 				assert.Nil(t, initial[0].ToolCalls[0].ResultEvents[0].SummaryParticipates)
 				t.Logf("accepted artifact import: events=%d lengths=[%d,%d] digests=[%x,%x]", len(initial[0].ToolCalls[0].ResultEvents), initial[0].ToolCalls[0].ResultEvents[0].ContentLength, initial[0].ToolCalls[0].ResultEvents[1].ContentLength, initial[0].ToolCalls[0].ResultEvents[0].RawContentDigest, initial[0].ToolCalls[0].ResultEvents[1].RawContentDigest)
-				e := NewEngine(t.Context(), d, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "fixture", IDPrefix: "fixture~", DisableFilesystemProjectDiscovery: true, StagedCodexParseMinBytes: stage, BlockedResultCategories: []string{"Bash"}})
+				e := NewEngine(t.Context(), d, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "fixture", IDPrefix: "fixture~", DisableFilesystemProjectDiscovery: true, StagedCodexParseMinBytes: stage, ToolResultImages: config.ToolResultImagesDrop, BlockedResultCategories: []string{"Bash"}})
 				t.Cleanup(e.Close)
+				if current == "idless" {
+					e.blockedResultCategories = nil
+					prefix = meta
+				}
 				require.NoError(t, os.WriteFile(cp, []byte(prefix), 0o600))
 				for retry := range 4 {
-					want := 2
+					want, wantLength := 2, 13
 					if retry >= 1 && current == "fresh" {
 						require.NoError(t, os.WriteFile(cp, []byte(prefix+testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON("call_test", "fresh source result", "2026-09-01T10:03:00Z"))), 0o600))
-						want = 3
+						want, wantLength = 3, 19
 					}
 					if retry == 3 {
 						require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))), 0o600))
@@ -101,9 +112,21 @@ func TestCodexForkImportedResultOccurrences(t *testing.T) {
 						if event.RawContentDigest != nil {
 							known++
 						}
-						assert.Empty(t, event.Content)
+						if current == "idless" {
+							assert.NotEmpty(t, event.Content)
+						} else {
+							assert.Empty(t, event.Content)
+						}
+						if event.Timestamp != "2026-09-01T10:03:00Z" {
+							assert.Nil(t, event.RawContentDigest)
+							assert.Nil(t, event.SummaryParticipates)
+						}
 					}
 					t.Logf("retry=%d parent=%v events=%d known=%d lengths=%v times=%v summaryLength=%d", retry, retry == 3, len(call.ResultEvents), known, lengths, timestamps, call.ResultContentLength)
+					if current == "idless" {
+						assert.Equal(t, "second longer", call.ResultContent)
+					}
+					assert.Equal(t, wantLength, call.ResultContentLength, "retry %d", retry)
 					assert.Len(t, call.ResultEvents, want, "accepted historical occurrences must survive and fresh source event must appear once")
 					assert.Contains(t, timestamps, "2026-09-01T10:01:00Z")
 					assert.Contains(t, timestamps, "2026-09-01T10:02:00Z")

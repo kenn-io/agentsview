@@ -655,18 +655,19 @@ func replaceSessionMessagesTxStaged(
 				FilePath:          m.ToolCalls[callIdx].FilePath,
 				CallIndex:         callIdx,
 			}
-			if tc.ToolUseID != "" {
-				occurrence := callOccurrences[tc.ToolUseID]
-				callOccurrences[tc.ToolUseID] = occurrence + 1
-				stageKey := StagedToolCallKey(tc.ToolUseID, occurrence)
-				retained := false
-				if write != nil && write.CodexForkState != nil {
-					originalKey, parsed := write.StagedToolKeys[stageKey]
-					retained = !parsed
-					if parsed {
-						stageKey = originalKey
-					}
+			occurrence := callOccurrences[tc.ToolUseID]
+			callOccurrences[tc.ToolUseID] = occurrence + 1
+			stageKey := StagedToolCallKey(tc.ToolUseID, occurrence)
+			forkCall, retained := false, false
+			if write != nil && write.CodexForkState != nil {
+				originalKey, mapped := write.StagedToolKeys[stageKey]
+				forkCall, retained = mapped, !mapped
+				if mapped {
+					stageKey = originalKey
 				}
+			}
+			// Archive-only calls use occurrence keys even without a provider ID.
+			if tc.ToolUseID != "" || forkCall {
 				if !retained {
 					if retainedMessage.ToolCalls != nil {
 						retainedMessage.ToolCalls[callIdx].ResultEvents = nil

@@ -19372,9 +19372,6 @@ func stagedToolCallPositions(
 	callOccurrences := make(map[string]int)
 	for _, m := range msgs {
 		for callIdx, tc := range m.ToolCalls {
-			if tc.ToolUseID == "" {
-				continue
-			}
 			occurrence := callOccurrences[tc.ToolUseID]
 			callOccurrences[tc.ToolUseID] = occurrence + 1
 			stageKey := db.StagedToolCallKey(tc.ToolUseID, occurrence)

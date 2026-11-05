@@ -90,14 +90,19 @@ from sanitized text, so a cleared result cannot revive older output. Spawn links
 also survive when their output records disappear.
 Summary-only saved results keep their text and lengths when the source still
 contains the call but omits its output. Blocked results retain their permitted
-length metadata across repeated staged writes.
+length metadata across repeated staged writes, including imported events whose
+raw summary participation is unknown. A current output supplies replacement
+length evidence. Archived calls without provider IDs use occurrence keys to
+publish their staged summaries, events, and finding coordinates.
 
 Each saved message keeps its original ordered turn-context prefix, including
 turns that emitted no message. Prefixes share storage across snapshots and only
 referenced prefixes survive a write. Replay classification uses that source
 evidence rather than merged archive order. Pre-turn replay leaves the transcript
 and preview when the parent returns. Known source occurrences claim their
-matches before legacy rows.
+matches before legacy rows. A matching shortened snapshot keeps the saved
+context when it contains every incoming turn in order; changed contexts use the
+current source.
 When fewer identical legacy occurrences return, their ownership remains unknown:
 keep those rows and their uncounted usage separately instead of assigning parent
 usage to a child. Repeating the same source does not add more occurrences.
@@ -107,13 +112,15 @@ Their non-summary usage adds to message totals, and context uses the highest
 measurement from either source. Retained history keeps chronological activity
 bounds even when its only remaining rows are usage events.
 Ordinal-only usage reconciliation reads message metadata without result bodies.
-Retaining usage alone does not require preserving message payloads on later
-refreshes. Restored usage also follows source entries emitted before their
+Matched usage references do not require archived result payloads. If a source
+omits a referenced message, retain that message and load its results one message
+at a time. Restored usage also follows source entries emitted before their
 archived counterpart is reconciled.
 
 Archived result events without recorded raw digests remain separate occurrences.
-Sanitized or blocked display text cannot establish provider identity. Returning
-source events with real digests still deduplicate across retries; unknown
+Sanitized or blocked display text cannot establish provider identity, including
+during image projection. Returning source events with real digests still
+deduplicate across retries; unknown
 historical occurrences remain alongside them when their identity cannot be
 proved.
 

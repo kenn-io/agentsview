@@ -818,7 +818,15 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexForkRestoredOrderKeepsUsage` exercises descending match indices in
   unresolved and resolved writes. `TestCodexForkImportedResultOccurrences`
   reaches nullable raw event metadata through `ApplyArtifactImportedSession`;
-  native digests remain a separate control in `TestCodexForkNativeResultIdentity`.
+  repeated blocked retries retain summary lengths, image projection preserves
+  unknown identities, and archived calls without IDs retain output. Native
+  digests remain a separate control in `TestCodexForkNativeResultIdentity`.
+  `TestCodexForkMatchedMessageKeepsSourceBoundary` covers a matching child whose
+  earlier message-free boundary disappears, followed by parent recovery.
+  `TestCodexForkImportedOrdinalUsageSurvivesResolvedShortening` retains a message
+  referenced by imported usage after resolved refreshes and source shortening.
+  These synthetic archive cases were rechecked on 2026-11-05 in both publication
+  paths; they do not describe additional producer fields.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started

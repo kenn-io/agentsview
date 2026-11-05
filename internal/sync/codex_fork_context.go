@@ -70,3 +70,15 @@ func retainCodexForkContexts(state *db.CodexForkState) {
 	}
 	state.TurnContexts = turns
 }
+
+// codexForkContextContains reports whether full retains every turn in part,
+// in source order. Only an observed prefix can replace a shorter snapshot.
+func codexForkContextContains(turns []db.CodexForkTurnContext, full, part int) bool {
+	for full > 0 && part > 0 && full != part {
+		if turns[full-1].TurnID == turns[part-1].TurnID {
+			part = turns[part-1].Parent
+		}
+		full = turns[full-1].Parent
+	}
+	return part == 0 || full == part
+}
