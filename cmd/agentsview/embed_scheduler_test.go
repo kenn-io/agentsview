@@ -1915,6 +1915,7 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						battery.Store(true)
 						s := newEmbedScheduler(mgr, time.Second, 0, false, tracker)
 						s.onBattery = battery.Load
+						s.batteryDeferredPath = filepath.Join(t.TempDir(), "deferred")
 						ticks := make(chan time.Time)
 						go s.run(ctx, ticks)
 						defer s.Stop()
@@ -1926,23 +1927,79 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						synctest.Sleep(4 * time.Second)
 						synctest.Wait()
 						assert.Zero(t, mgr.callCount())
+						assert.FileExists(t, s.batteryDeferredPath)
 						if idleExit {
 							select {
 							case <-idled:
-								assert.Fail(t, "battery-deferred work lost its idle lease")
 							default:
+								assert.Fail(t, "battery-deferred work kept the daemon alive")
 							}
+							return
 						}
 						synctest.Sleep(3 * batteryRecheckInterval)
 						synctest.Wait()
 						assert.Zero(t, mgr.callCount())
 						battery.Store(false)
+						if backstop {
+							ticks <- time.Now()
+						}
 						synctest.Sleep(batteryRecheckInterval)
 						synctest.Wait()
 						assert.Equal(t, []vector.BuildRequest{{Backstop: backstop}}, mgr.callsSnapshot())
+						assert.NoFileExists(t, s.batteryDeferredPath)
 					})
 				})
 			}
+		})
+	}
+}
+
+func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
+	for _, deferred := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deferred=%t", deferred), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				dataDir := t.TempDir()
+				database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+				dbtest.SeedSessionWithMessages(t, database, "session", "project", []db.Message{
+					dbtest.UserMsg("session", 0, "Synced while scheduled embeddings were deferred."),
+				})
+				cfg := vectorTestConfig(dataDir)
+				cfg.Vector.Embed.Recall = false
+				if deferred {
+					func() {
+						vs, err := setupVectorServing(t.Context(), cfg, database, nil)
+						require.NoError(t, err)
+						defer vs.Close()
+						mgr := &fakeEmbedManager{}
+						vs.Scheduler.mgr = mgr
+						vs.Scheduler.onBattery = func() bool { return true }
+						vs.Scheduler.Notify()
+						go vs.Scheduler.Run(t.Context())
+						defer vs.Scheduler.Stop()
+						synctest.Sleep(embedDebounceInterval + time.Second)
+						synctest.Wait()
+						require.Zero(t, mgr.callCount())
+						require.FileExists(t, vs.Scheduler.batteryDeferredPath)
+					}()
+				}
+				vs, err := setupVectorServing(t.Context(), cfg, database, nil)
+				require.NoError(t, err)
+				defer vs.Close()
+				mgr := &fakeEmbedManager{}
+				vs.Scheduler.mgr = mgr
+				vs.Scheduler.onBattery = func() bool { return false }
+				go vs.Scheduler.Run(t.Context())
+				defer vs.Scheduler.Stop()
+				synctest.Sleep(embedDebounceInterval + time.Second)
+				synctest.Wait()
+				var want []vector.BuildRequest
+				if deferred {
+					want = []vector.BuildRequest{{}}
+				}
+				assert.NoFileExists(t, vs.Scheduler.batteryDeferredPath)
+				assert.Equal(t, want, mgr.callsSnapshot(),
+					"startup must catch up an unchanged archive without another sync notification")
+			})
 		})
 	}
 }
