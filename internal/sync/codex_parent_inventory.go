@@ -30,7 +30,7 @@ func (e *Engine) finishCodexParentInventoryBatch(ctx context.Context, stats *Syn
 			if e.archiveStore != nil {
 				var preserve []string
 				for _, id := range ids {
-					stored, lookupErr := e.archiveStore.GetSessionFull(completionCtx, id)
+					stored, lookupErr := savedHistory(completionCtx, e.archiveStore, id)
 					err = errors.Join(err, lookupErr)
 					if lookupErr == nil && stored != nil {
 						preserve = append(preserve, id)

@@ -284,6 +284,12 @@ func TestMissingParentForkImportsOverPlaceholderRows(t *testing.T) {
 				assert.Equal(t, []string{"available child history"}, messageContents(t, database, id))
 				assert.Less(t, database.GetSessionDataVersion(t.Context(), id), db.CurrentDataVersion(),
 					"the fallback import must stay marked for retry")
+				if seed == "recall-import" {
+					entry, err := database.GetRecallEntry(t.Context(), "c1")
+					require.NoError(t, err)
+					require.NotNil(t, entry, "the imported Recall entry must survive the fallback import")
+					assert.Equal(t, id, entry.SourceSessionID)
+				}
 			})
 		}
 	}
