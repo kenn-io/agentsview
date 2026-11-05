@@ -81,6 +81,11 @@ func TestCommitLinksNonCommitCandidatesSkipResultReadsAndDelete(t *testing.T) {
 
 func TestCommitLinksParsing(t *testing.T) {
 	for _, input := range []string{
+		`text(await tools.exec_command({cmd:"git status --short"})); text(await tools.exec_command({cmd:"git commit -m fix"}));`,
+		`text(await tools.exec_command({cmd:"git commit -m fix"})); text(await tools.exec_command({cmd:"git status --short"}));`,
+		`text(await tools.exec_command({cmd:"git status --short"})); text(await tools.exec_command({cmd:"git commit -m fix"})); text(await tools.exec_command({cmd:"git status --short"}));`,
+		`text(await tools.exec_command({cmd:'git status --short'})); text(await tools.exec_command({cmd:'git commit -m \'fix\''}));`,
+		"text(await tools.exec_command({cmd:`git status --short`})); text(await tools.exec_command({cmd:`git commit -m fix`}));",
 		`{"command":["bash","-lc","git commit -m fix"]}`,
 		`{"command":["git","commit","-m","fix"]}`,
 		`{"command":["git","-C","/path with spaces","commit","-m","x"]}`,
@@ -90,6 +95,9 @@ func TestCommitLinksParsing(t *testing.T) {
 			insertSession(t, d, "codex:commit", "project-a")
 			messages := commitMessages("codex:commit", input, "[main abc1234] Fix parser")
 			messages[2].ToolCalls[0].ToolName = "shell"
+			if strings.HasPrefix(input, "text(") {
+				messages[2].ToolCalls[0].ToolName = "exec"
+			}
 			insertMessages(t, d, messages...)
 			got, err := d.SessionCommitLinks(t.Context(), "codex:commit")
 			require.NoError(t, err)
@@ -486,6 +494,55 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 				assert.True(t, got.Commits[0].Links[2].Missing)
 			} else {
 				assert.Empty(t, got.Commits[0].Links)
+			}
+		})
+	}
+}
+
+func TestCommitLinksImplementationTurn(t *testing.T) {
+	for _, category := range []string{"Edit", "Write"} {
+		t.Run(category, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			edit := func(ordinal int) Message {
+				tool := "apply_patch"
+				if category == "Write" {
+					tool = "write_file"
+				}
+				return Message{SessionID: "s1", Ordinal: ordinal, Role: "assistant", HasToolUse: true, ToolCalls: []ToolCall{{ToolName: tool, Category: category}}}
+			}
+			commit := func(ordinal int, output string) Message {
+				m := commitMessages("s1", `{"command":"git commit -m fix"}`, output)[2]
+				m.Ordinal = ordinal
+				return m
+			}
+			insertMessages(t, d,
+				userMsg("s1", 0, "What's in this project?"),
+				userMsg("s1", 1, "Fix the parser"),
+				Message{SessionID: "s1", Ordinal: 2, Role: "user", IsSystem: true, Content: "system context"},
+				Message{SessionID: "s1", Ordinal: 3, Role: "user", SourceSubtype: "tool_result", Content: "tool output"},
+				userMsg("s1", 4, " "),
+				edit(5),
+				userMsg("s1", 6, "Also adjust the error text"),
+				edit(7),
+				userMsg("s1", 8, "Looks good, commit it"),
+				commit(9, "[main abc1234] Fix parser"),
+				userMsg("s1", 10, "Why does this use a map?"),
+				userMsg("s1", 11, "Fix the search"),
+				edit(12),
+				userMsg("s1", 13, "Commit that too"),
+				commit(14, "[main def5678] Fix search"),
+				userMsg("s1", 15, "Record the existing changes"),
+				commit(16, "[main 123abcd] Existing changes"),
+				userMsg("s1", 17, "Make another change"),
+				edit(18),
+			)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 3)
+			for i, want := range []CommitTurn{{Ordinal: 1, Text: "Fix the parser"}, {Ordinal: 11, Text: "Fix the search"}, {Ordinal: 15, Text: "Record the existing changes"}} {
+				require.NotNil(t, got.Commits[i].Turn)
+				assert.Equal(t, want, *got.Commits[i].Turn)
 			}
 		})
 	}

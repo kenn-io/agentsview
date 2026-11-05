@@ -2016,7 +2016,9 @@ agentsview session parent <id> <parent>  # record the launching session
 `agentsview session commits <id>` lists commits recorded by a session. Use
 `--format json` for structured output. The table shows the session, exact message
 ordinal, call index, tool-use ID, call time, recorded SHA, branch, subject, and
-preceding user turn, shortened to 100 terminal columns. Trashed or permanently
+user turn that led to the first edit since the session's previous commit link,
+shortened to 100 terminal columns. If no edit precedes this commit, it uses the
+last user turn at or before the commit call. Trashed or permanently
 deleted sessions carry `missing: true` and omit the turn. See
 [commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
 retention and lookup limits. Links use stored Git summaries, including Codex

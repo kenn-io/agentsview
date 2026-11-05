@@ -1340,6 +1340,9 @@ fixtures retain this field; missing identities remain source-local.
   verified against `codex/fc_stdin.jsonl` and the parser's function-call path.
   `TestCommitLinksNativePollOwnership` writes both representations through
   the public archive API and checks the originating commit call's location.
+  Reverified 2026-11-04 against the stored code-mode input path:
+  `TestCommitLinksParsing` covers several `exec_command` command literals in
+  one input, including a status call before the successful commit call.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)

@@ -1559,9 +1559,12 @@ Each link includes `session_id`, the recorded `sha`, `branch`, `subject`,
 `repository`, `message_ordinal`, `call_index`, `tool_use_id`, `committed_at`,
 and `source: "transcript"`. `committed_at` is the tool call's message time. The
 SHA is exactly as Git printed it, usually a short prefix. Full SHAs match stored
-prefixes. `turn` contains the preceding nonempty, non-system user prompt's
-`ordinal` and `text`, limited to 2,000 UTF-8 bytes. It is omitted when the
-archive has no preceding user prompt.
+prefixes. `turn` contains the `ordinal` and `text` of the last nonempty,
+non-system user prompt before the first Edit or Write tool call after the
+session's previous commit link and at or before this commit. Codex patch calls
+count as Edit calls. If there is no such edit, it uses the last user prompt at
+or before the commit call. Tool-result messages are excluded. Text is limited
+to 2,000 UTF-8 bytes. The turn is omitted when no eligible prompt exists.
 
 Links to trashed or permanently deleted sessions carry `missing: true` and omit
 `turn`. Restoring a trashed session restores its turn. Every candidate link

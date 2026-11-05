@@ -167,7 +167,8 @@ func commitCommandText(input string) string {
 	}
 	command := signals.CommandText(input)
 	if !jsontext.Value(input).IsValid() {
-		if match := commitCommandRE.FindStringSubmatch(input); match != nil {
+		var commands []string
+		for _, match := range commitCommandRE.FindAllStringSubmatch(input, -1) {
 			literal := match[1]
 			var decoded strings.Builder
 			for rest := literal[1 : len(literal)-1]; rest != ""; {
@@ -178,9 +179,12 @@ func commitCommandText(input string) string {
 				decoded.WriteRune(r)
 				rest = tail
 				if rest == "" {
-					command = decoded.String()
+					commands = append(commands, decoded.String())
 				}
 			}
+		}
+		if len(commands) > 0 {
+			command = strings.Join(commands, "\n")
 		}
 	}
 	return command
@@ -554,7 +558,12 @@ const commitLinkSelect = `SELECT l.session_id,l.sha,l.branch,l.subject,l.reposit
  turn.ordinal, turn.content
  FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
- SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
+ SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=COALESCE((
+ SELECT MIN(edited.ordinal) FROM tool_calls t JOIN messages edited ON edited.id=t.message_id
+ WHERE t.session_id=l.session_id AND t.category IN ('Edit','Write')
+ AND edited.ordinal>COALESCE((SELECT MAX(previous.message_ordinal) FROM commit_links previous
+ WHERE previous.session_id=l.session_id AND previous.message_ordinal<l.message_ordinal),-1)
+ AND edited.ordinal<=l.message_ordinal),l.message_ordinal)
  AND m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''
  ORDER BY m.ordinal DESC LIMIT 1)
  WHERE (s.id IS NOT NULL OR EXISTS(SELECT 1 FROM excluded_sessions e WHERE e.id=l.session_id)) AND `
