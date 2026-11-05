@@ -148,25 +148,6 @@ func (s *extractScheduler) Run(ctx context.Context) {
 	// only reloads done sessions written to since their coverage stamp.
 	// Single-goroutine state, no locking needed.
 	pendingFull := true
-	batteryWaiting := false
-	deferOnBattery := func(periodic bool) bool {
-		if s.onBattery == nil || !s.onBattery() {
-			batteryWaiting = false
-			return false
-		}
-		if periodic || !batteryWaiting {
-			started, _, err := s.tryPassWithLease(ctx, s.onBatteryMgr, extract.PassOptions{})
-			if err != nil {
-				log.Printf("extract scheduler: reconciliation failed: %v", err)
-			}
-			if started {
-				startupDone()
-				batteryWaiting = true
-			}
-		}
-		resetTimer(debounceTimer, batteryRecheckInterval)
-		return true
-	}
 
 	for {
 		select {
@@ -175,13 +156,14 @@ func (s *extractScheduler) Run(ctx context.Context) {
 		case <-s.stop:
 			return
 		case <-s.dirty:
-			batteryWaiting = false
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			if deferOnBattery(false) {
-				continue
+			onBattery := s.onBattery != nil && s.onBattery()
+			mgr := s.mgr
+			if onBattery {
+				mgr = s.onBatteryMgr
 			}
-			started, ok, err := s.tryPassWithLease(ctx, s.mgr,
+			started, ok, err := s.tryPassWithLease(ctx, mgr,
 				extract.PassOptions{Full: pendingFull})
 			if !ok {
 				// Draining: the daemon is shutting down, so no new pass
@@ -202,7 +184,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// Only clear a carried full pass once it both started and
 			// succeeded; a started-but-failed pass never completed the
 			// top-up it carried.
-			if err == nil {
+			if err == nil && !onBattery {
 				pendingFull = false
 			}
 		case <-tickC:
@@ -211,11 +193,12 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// stay carried forever — the debounce only re-arms on sync
 			// activity, and catchup ticks alone never revisit done sessions.
 			full := tickFull || pendingFull
-			if deferOnBattery(true) {
-				pendingFull = full
-				continue
+			onBattery := s.onBattery != nil && s.onBattery()
+			mgr := s.mgr
+			if onBattery {
+				mgr = s.onBatteryMgr
 			}
-			started, ok, err := s.tryPassWithLease(ctx, s.mgr,
+			started, ok, err := s.tryPassWithLease(ctx, mgr,
 				extract.PassOptions{Full: full})
 			if !ok {
 				continue
@@ -225,15 +208,12 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			if started {
 				startupDone()
-				if err == nil {
-					stopTimer(debounceTimer)
-				}
 			}
 			if full {
 				// A dropped incremental catchup tick needs no carry: the
 				// next tick or debounced pass covers the same ground. A full
 				// pass stays carried until one both starts and succeeds.
-				pendingFull = !started || err != nil
+				pendingFull = onBattery || !started || err != nil
 			}
 		}
 	}

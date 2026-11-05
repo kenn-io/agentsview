@@ -423,7 +423,7 @@ func TestExtractSchedulerReconcilesOnBatteryAndCarriesFullPass(t *testing.T) {
 		mgr, reconciler := &fakePassManager{}, &fakePassManager{}
 		var battery atomic.Bool
 		battery.Store(true)
-		s := newExtractScheduler(mgr, time.Second, 0, 0, nil)
+		s := newExtractScheduler(mgr, time.Second, 0, 5*time.Minute, nil)
 		s.onBattery, s.onBatteryMgr = battery.Load, reconciler
 		var notified atomic.Int32
 		s.onPassFinished = func() { notified.Add(1) }
@@ -432,7 +432,7 @@ func TestExtractSchedulerReconcilesOnBatteryAndCarriesFullPass(t *testing.T) {
 		synctest.Sleep(time.Second + 2*batteryRecheckInterval)
 		synctest.Wait()
 		assert.Zero(t, mgr.callCount())
-		assert.Equal(t, []extract.PassOptions{{}}, reconciler.callsSnapshot())
+		assert.Equal(t, []extract.PassOptions{{Full: true}}, reconciler.callsSnapshot())
 		assert.EqualValues(t, 1, notified.Load())
 		for range 5 {
 			s.Notify()
@@ -440,13 +440,18 @@ func TestExtractSchedulerReconcilesOnBatteryAndCarriesFullPass(t *testing.T) {
 		synctest.Sleep(time.Second)
 		synctest.Wait()
 		assert.Zero(t, mgr.callCount())
-		assert.Equal(t, []extract.PassOptions{{}, {}}, reconciler.callsSnapshot())
+		assert.Equal(t, []extract.PassOptions{{Full: true}, {Full: true}}, reconciler.callsSnapshot())
 		assert.EqualValues(t, 2, notified.Load())
+		synctest.Sleep(3 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, []extract.PassOptions{{Full: true}, {Full: true}, {Full: true}}, reconciler.callsSnapshot())
+		assert.Zero(t, mgr.callCount())
 		battery.Store(false)
-		synctest.Sleep(batteryRecheckInterval)
+		s.Notify()
+		synctest.Sleep(time.Second)
 		synctest.Wait()
 		assert.Equal(t, []extract.PassOptions{{Full: true}}, mgr.callsSnapshot())
-		assert.EqualValues(t, 3, notified.Load())
+		assert.EqualValues(t, 4, notified.Load())
 	})
 }
 
@@ -468,7 +473,7 @@ func TestExtractSchedulerBatteryShortBackstopReleasesStartupLease(t *testing.T) 
 		assert.Zero(t, mgr.callCount())
 		require.NotEmpty(t, calls)
 		for _, opts := range calls {
-			assert.Equal(t, extract.PassOptions{}, opts)
+			assert.Equal(t, extract.PassOptions{Full: true}, opts)
 		}
 		select {
 		case <-idled:
@@ -478,44 +483,21 @@ func TestExtractSchedulerBatteryShortBackstopReleasesStartupLease(t *testing.T) 
 	})
 }
 
-func TestExtractSchedulerACBackstopConsumesBatteryRetry(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		result fakeTryPassResult
-		retry  bool
-	}{
-		{name: "success", result: fakeTryPassResult{started: true}},
-		{name: "failure", result: fakeTryPassResult{started: true, err: errors.New("model unavailable")}, retry: true},
-		{name: "collision", retry: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				mgr := &fakePassManager{results: []fakeTryPassResult{tc.result, {started: true}}}
-				reconciler := &fakePassManager{}
-				var battery atomic.Bool
-				battery.Store(true)
-				s := newExtractScheduler(mgr, 30*time.Second, 45*time.Second, 0, nil)
-				s.onBattery, s.onBatteryMgr = battery.Load, reconciler
-				go s.Run(t.Context())
-				defer s.Stop()
-				synctest.Sleep(50 * time.Second)
-				synctest.Wait()
-				require.Equal(t, []extract.PassOptions{{}, {}}, reconciler.callsSnapshot())
-				require.Zero(t, mgr.callCount())
-				battery.Store(false)
-				synctest.Sleep(40 * time.Second)
-				synctest.Wait()
-				require.Equal(t, 1, mgr.callCount())
-				synctest.Sleep(25 * time.Second)
-				synctest.Wait()
-				want := []extract.PassOptions{{Full: true}}
-				if tc.retry {
-					want = append(want, extract.PassOptions{Full: true})
-				}
-				assert.Equal(t, want, mgr.callsSnapshot())
-			})
-		})
-	}
+func TestExtractSchedulerPeriodicPassPreservesSyncDebounce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakePassManager{}
+		s := newExtractScheduler(mgr, 30*time.Second, 2*time.Minute, 0, nil)
+		go s.Run(t.Context())
+		defer s.Stop()
+		synctest.Sleep(100 * time.Second)
+		synctest.Wait()
+		s.Notify()
+		synctest.Wait()
+		synctest.Sleep(31 * time.Second)
+		synctest.Wait()
+		assert.Equal(t, []extract.PassOptions{{Full: true}, {Full: true}, {}}, mgr.callsSnapshot(),
+			"the later sync debounce must still scan sessions that become eligible after the periodic pass")
+	})
 }
 
 func TestExtractSchedulerBatteryRetractsAfterLateSignalBackfill(t *testing.T) {
@@ -557,7 +539,7 @@ func TestExtractSchedulerBatteryRetractsAfterLateSignalBackfill(t *testing.T) {
 		synctest.Wait()
 		entry, err = database.GetRecallEntry(t.Context(), "entry")
 		require.NoError(t, err)
-		require.NotNil(t, entry, "power rechecks must preserve the normal reconciliation cadence")
+		require.NotNil(t, entry, "reconciliation must wait for the next scheduled pass")
 		synctest.Sleep(4 * time.Minute)
 		synctest.Wait()
 		entry, err = database.GetRecallEntry(t.Context(), "entry")
