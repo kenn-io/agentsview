@@ -464,14 +464,31 @@
 
   /* The selected segment of a disabled control keeps app.css's selected
      fill, edge, and weight, and clearly stronger ink than its disabled
-     neighbours, so the current choice reads on a read-only server. */
-  .settings-page :global(.kit-settings__panel .kit-segmented__btn.active:disabled) {
-    color: var(--text-secondary);
+     neighbours, so the current choice reads on a read-only server. The
+     extra .kit-segmented class outranks the disabled-button rule above,
+     whose :not(...) argument adds two classes of specificity. */
+  .settings-page :global(.kit-settings__panel .kit-segmented .kit-segmented__btn.active:disabled) {
+    color: var(--text-primary);
   }
 
-  /* A disabled switch keeps its on/off state readable. */
+  /* A disabled switch keeps its on/off state readable, but its track is
+     clearly quieter than a live switch so read-only rows do not look
+     editable beside their disabled inputs and buttons. */
   .settings-page :global(.kit-settings__panel .kit-toggle--disabled .kit-toggle__input:checked + .kit-toggle__track) {
-    background: color-mix(in srgb, var(--accent-blue) 55%, var(--border-default));
+    background: color-mix(in srgb, var(--accent-blue) 38%, var(--border-default));
+  }
+
+  /* Placeholders sit a clear step below entered values (which use muted
+     ink), so example text such as "e.g. ~/.claude-work" never reads as a
+     configured value. */
+  .settings-page :global(.kit-settings__panel .kit-text-input__control::placeholder) {
+    color: color-mix(in srgb, var(--text-muted) 68%, var(--bg-surface));
+  }
+
+  /* Panel titles step up from section headings (13px semibold) and row
+     labels (12px), so a panel reads as panel > section > row. */
+  .settings-page :global(.kit-settings__panel .kit-settings-section__title) {
+    font-size: calc(var(--font-size-md) + 2px);
   }
 
   /* Room below the panel so the sticky footer never clips the preview. */

@@ -163,7 +163,7 @@
   /* Light theme: the same warm wash as ToolBlock, so the group reads as one
      tool unit on the near-white page. */
   :global(:root:not(.dark):not(.high-contrast)) .tool-group {
-    background: color-mix(in srgb, var(--role-tool-accent) 6%, var(--tool-bg));
+    background: color-mix(in srgb, var(--role-tool-accent) 3%, var(--tool-bg));
   }
   :global(:root:not(.dark)) .tool-icon { color: color-mix(in srgb, var(--role-tool-accent) 65%, var(--text-primary)); }
   .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }

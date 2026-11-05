@@ -358,16 +358,17 @@
     margin: 0;
   }
 
-  /* The readable unavailable state leads; the raw diagnostic below it
-     stays muted monospace. */
+  /* The readable unavailable state leads as regular body text, marked by
+     the status ring rather than weight, so it never reads as a heading;
+     the raw diagnostic below it stays muted monospace. */
   .state {
     display: flex;
     align-items: center;
     gap: 8px;
     margin: 0;
     font-size: 13px;
-    font-weight: 500;
-    color: var(--text-primary);
+    font-weight: 400;
+    color: var(--text-secondary);
   }
 
   /* The hollow status ring GitHub uses for "Not configured": the

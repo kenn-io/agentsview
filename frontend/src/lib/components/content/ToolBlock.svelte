@@ -335,7 +335,7 @@
      group apart from white prose cards and the near-white page. It mixes in
      the tool accent, so a custom tool color carries through. */
   :global(:root:not(.dark):not(.high-contrast)) .tool-block {
-    background: color-mix(in srgb, var(--role-tool-accent) 6%, var(--tool-bg));
+    background: color-mix(in srgb, var(--role-tool-accent) 3%, var(--tool-bg));
   }
   .tool-header-row, .output-header-row { display: flex; align-items: center; min-width: 0; }
   .output-header-row { border-top: 1px solid var(--border-muted); }
@@ -363,13 +363,17 @@
     background: transparent;
     border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; margin-right: 6px; min-width: 56px; text-align: right;
   }
-  /* An unknown duration is a status, so it gets the same quiet chip shape
-     as the other statuses instead of floating as bare text. */
+  /* An unknown duration is a status, so it leads with the hollow ring the
+     Signal panel uses for Unknown, as unboxed muted text: one status
+     language, and no chip competing with the +N -N stats. */
   .tool-duration.unknown {
-    font-family: var(--font-sans); min-width: 0; padding: 0 6px;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--font-sans); min-width: 0; padding: 0;
     color: var(--text-muted);
-    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
-    border-color: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  }
+  .tool-duration.unknown::before {
+    content: ""; width: 7px; height: 7px; box-sizing: border-box; flex-shrink: 0;
+    border-radius: 50%; border: 1.5px solid currentColor;
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
   .tool-duration.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }

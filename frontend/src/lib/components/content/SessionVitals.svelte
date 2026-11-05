@@ -542,7 +542,7 @@
         </header>
         {#if !categoryFilter}
           <p class="v-hint">
-            {m.session_vitals_completed_turns_hint()}{#if measuredCategories.size === 0}<span class="v-hint-state"> · {m.session_vitals_not_measured()}</span>{/if}
+            {m.session_vitals_completed_turns_hint()}{#if measuredCategories.size === 0}<span class="v-hint-state">{" · "}{m.session_vitals_not_measured()}</span>{/if}
           </p>
         {/if}
         {#each timing.by_category as cat (cat.category)}

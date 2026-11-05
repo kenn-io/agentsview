@@ -270,10 +270,12 @@
     color: var(--text-secondary);
   }
 
+  /* Rows stay compact (no list gap, 3px padding, flush title and
+     project lines) so all ten fit above the status bar at 1440x900. */
   .session-list {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 0;
     overflow-y: auto;
     flex: 1;
   }
@@ -282,7 +284,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 4px 6px;
+    padding: 3px 6px;
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: background 0.1s;
@@ -317,7 +319,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 0;
   }
 
   /* The title leads; the project line is supporting metadata. */

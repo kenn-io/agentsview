@@ -211,14 +211,46 @@
     background: var(--bg-surface-hover);
   }
 
-  /* A ghost control at rest: no fill or frame, secondary ink, so the
-     reserved width does not read as a heavy field. Hover and the open menu
-     keep kit-ui's frame. The selector outranks kit-ui's resting rule. */
-  :global(.kit-menu__trigger.view-trigger:not(:hover):not([aria-expanded="true"])) {
+  /* A ghost control: no fill or frame on the button, whose width is
+     reserved for the longest label, so it never reads as an empty field.
+     Hover and the open menu draw a fill around the visible label instead.
+     The selector outranks kit-ui's trigger rules. */
+  :global(:root .kit-menu__trigger.view-trigger),
+  :global(:root .kit-menu__trigger.view-trigger:hover),
+  :global(:root .kit-menu__trigger.view-trigger[aria-expanded="true"]) {
     background: transparent;
     border-color: transparent;
     box-shadow: none;
+  }
+
+  :global(.kit-menu__trigger.view-trigger:not(:hover):not([aria-expanded="true"])) {
     color: var(--text-secondary);
+  }
+
+  /* Hug the visible label so the fill does not span the reserved width. */
+  .view-trigger-current {
+    justify-self: start;
+    max-width: 100%;
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-fast, 0.1s), box-shadow var(--transition-fast, 0.1s);
+  }
+
+  :global(.kit-menu__trigger.view-trigger:hover) .view-trigger-current,
+  :global(.kit-menu__trigger.view-trigger[aria-expanded="true"]) .view-trigger-current {
+    background: var(--bg-surface-hover);
+    box-shadow:
+      0 0 0 4px var(--bg-surface-hover),
+      0 0 0 5px var(--border-default);
+  }
+
+  /* The chosen layout and content mode carry a neutral row fill and a
+     heavier name, not only the radio dot. */
+  :global(.view-menu .kit-menu__radio-item[aria-checked="true"]) {
+    background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  }
+
+  :global(.view-menu .kit-menu__radio-item[aria-checked="true"]) .option-name {
+    font-weight: 600;
   }
 
   :global(.view-trigger) {

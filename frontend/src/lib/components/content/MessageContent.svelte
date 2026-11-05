@@ -361,11 +361,11 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
   .turn-summary {
     font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums;
-    /* The turn's duration and call count are one unit, so a hairline outline
-       sets them apart from the token count and date around them. Only slow
-       and running turns get a fill. */
-    padding: 0 6px; border-radius: var(--radius-sm);
-    border: 1px solid var(--border-muted);
+    /* Plain metadata like the token count beside it: the header's 16px gap
+       separates the runs, so no outline makes it look like a button. Only
+       slow and running turns get a fill. */
+    padding: 0; border-radius: var(--radius-sm);
+    border: 1px solid transparent;
     background: transparent; line-height: 18px;
     white-space: nowrap; flex-shrink: 0;
   }
