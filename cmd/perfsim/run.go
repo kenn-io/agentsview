@@ -46,22 +46,33 @@ func (r *report) measure(phase, name string, fn func() error) error {
 	return nil
 }
 
-func run(ctx context.Context, o options, dir string) (report, error) {
-	r := report{Options: o}
+func (r *report) ingest(ctx context.Context, o options, dir string) (_ []source, _ *db.DB, _ *syncengine.Engine, err error) {
 	sources, roots, err := corpus(ctx, dir, o)
 	if err != nil {
-		return r, err
+		return nil, nil, nil, err
 	}
 	if sources[0].Store != nil {
-		defer sources[0].Store.Close()
+		defer func() {
+			if err != nil {
+				sources[0].Store.Close()
+			}
+		}()
 	}
 	database, err := db.OpenIsolated(ctx, filepath.Join(dir, "sessions.db"))
 	if err != nil {
-		return r, err
+		return nil, nil, nil, err
 	}
-	defer database.Close()
+	defer func() {
+		if err != nil {
+			database.Close()
+		}
+	}()
 	engine := syncengine.NewEngine(ctx, database, syncengine.EngineConfig{AgentDirs: roots, Machine: "simulation", DisableFilesystemProjectDiscovery: true})
-	defer engine.Close()
+	defer func() {
+		if err != nil {
+			engine.Close()
+		}
+	}()
 	if err := r.measure("cold", "ingest", func() error {
 		stats := engine.SyncAll(ctx, nil)
 		if stats.Failed != 0 || stats.Aborted {
@@ -69,19 +80,33 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 		}
 		return ctx.Err()
 	}); err != nil {
-		return r, err
+		return nil, nil, nil, err
 	}
 	r.Initial, err = database.GetStats(ctx, false, false)
 	if err != nil {
-		return r, err
+		return nil, nil, nil, err
 	}
 	initialMessages := o.Sessions * o.Turns * 2
 	if o.ActiveTurns > 0 {
 		initialMessages += o.Active * (o.ActiveTurns - o.Turns) * 2
 	}
 	if r.Initial.SessionCount != o.Sessions || r.Initial.MessageCount != initialMessages {
-		return r, fmt.Errorf("parsed corpus mismatch: got %d sessions/%d messages, want %d/%d", r.Initial.SessionCount, r.Initial.MessageCount, o.Sessions, initialMessages)
+		return nil, nil, nil, fmt.Errorf("parsed corpus mismatch: got %d sessions/%d messages, want %d/%d", r.Initial.SessionCount, r.Initial.MessageCount, o.Sessions, initialMessages)
 	}
+	return sources, database, engine, nil
+}
+
+func run(ctx context.Context, o options, dir string) (report, error) {
+	r := report{Options: o}
+	sources, database, engine, err := r.ingest(ctx, o, dir)
+	if err != nil {
+		return r, err
+	}
+	if sources[0].Store != nil {
+		defer sources[0].Store.Close()
+	}
+	defer database.Close()
+	defer engine.Close()
 	filter := db.AnalyticsFilter{From: "2026-06-01", To: "2026-06-30", Timezone: "UTC"}
 	queries := []struct {
 		name string
@@ -184,7 +209,7 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 	if err != nil {
 		return r, err
 	}
-	wantMessages := initialMessages + o.Active*o.Iterations*2
+	wantMessages := r.Initial.MessageCount + o.Active*o.Iterations*2
 	if r.Final.SessionCount != o.Sessions || r.Final.MessageCount != wantMessages {
 		return r, fmt.Errorf("append lost data: got %d sessions/%d messages, want %d/%d", r.Final.SessionCount, r.Final.MessageCount, o.Sessions, wantMessages)
 	}
