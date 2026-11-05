@@ -128,14 +128,16 @@ function modelDailyEntry(
 ): DbDailyUsageEntry {
   const entry = dailyEntry(index);
   entry.projectBreakdowns = [];
-  entry.modelBreakdowns = models.map(({ modelName, cost, inputTokens = 60, outputTokens = 30 }) => ({
-    modelName,
-    inputTokens,
-    outputTokens,
-    cacheCreationTokens: 0,
-    cacheReadTokens: 0,
-    cost,
-  }));
+  entry.modelBreakdowns = models.map(
+    ({ modelName, cost, inputTokens = 60, outputTokens = 30 }) => ({
+      modelName,
+      inputTokens,
+      outputTokens,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost,
+    }),
+  );
   return entry;
 }
 
@@ -634,36 +636,57 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it.each(["cost", "token"] as const)("folds tiny %s series into Other without changing daily totals", async (mode) => {
-    usage.mode = mode;
-    usage.setSelectedTokenTypes(["output"]);
-    usage.toggles.timeSeries.groupBy = "model";
-    usage.toggles.timeSeries.view = "bars";
-    const names = ["large", "boundary", "tiny", "smallest"];
-    usage.summary = usageSummary([[993, 5, 2, 0], [987, 5, 6, 2]].map((values, day) => {
-      return modelDailyEntry(day, values.map((value, index) => ({
-        modelName: names[index]!,
-        cost: testMoney(value),
-        inputTokens: 100_000,
-        outputTokens: value,
-      })));
-    }));
-    const component = mountChart();
-    await tick();
-
-    const labels = Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim());
-    expect(labels).toEqual(["large", "boundary", "Other"]);
-    const bars = Array.from(document.querySelectorAll("rect.cost-seg"));
-    expect(bars.slice(0, 3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0)).toBeCloseTo(160);
-    expect(bars.slice(3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0)).toBeCloseTo(160);
-    for (const [day, value] of [2, 8].entries()) {
-      document.querySelectorAll(".slot-hit")[day]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+  it.each(["cost", "token"] as const)(
+    "folds tiny %s series into Other without changing daily totals",
+    async (mode) => {
+      usage.mode = mode;
+      usage.setSelectedTokenTypes(["output"]);
+      usage.toggles.timeSeries.groupBy = "model";
+      usage.toggles.timeSeries.view = "bars";
+      const names = ["large", "boundary", "tiny", "smallest"];
+      usage.summary = usageSummary(
+        [
+          [993, 5, 2, 0],
+          [987, 5, 6, 2],
+        ].map((values, day) => {
+          return modelDailyEntry(
+            day,
+            values.map((value, index) => ({
+              modelName: names[index]!,
+              cost: testMoney(value),
+              inputTokens: 100_000,
+              outputTokens: value,
+            })),
+          );
+        }),
+      );
+      const component = mountChart();
       await tick();
-      const other = Array.from(document.querySelectorAll(".tooltip-row")).find((row) => row.textContent?.includes("Other"));
-      expect(other?.textContent).toContain(mode === "cost" ? `$${value}.00` : String(value));
-    }
-    unmount(component);
-  });
+
+      const labels = Array.from(document.querySelectorAll(".legend-item"), (item) =>
+        item.textContent?.trim(),
+      );
+      expect(labels).toEqual(["large", "boundary", "Other"]);
+      const bars = Array.from(document.querySelectorAll("rect.cost-seg"));
+      expect(
+        bars.slice(0, 3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0),
+      ).toBeCloseTo(160);
+      expect(
+        bars.slice(3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0),
+      ).toBeCloseTo(160);
+      for (const [day, value] of [2, 8].entries()) {
+        document
+          .querySelectorAll(".slot-hit")
+          [day]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+        await tick();
+        const other = Array.from(document.querySelectorAll(".tooltip-row")).find((row) =>
+          row.textContent?.includes("Other"),
+        );
+        expect(other?.textContent).toContain(mode === "cost" ? `$${value}.00` : String(value));
+      }
+      unmount(component);
+    },
+  );
 
   it("keeps zero-total day slots without legend entries", async () => {
     usage.toggles.timeSeries.groupBy = "model";
