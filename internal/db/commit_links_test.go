@@ -125,6 +125,29 @@ func TestCommitLinksParsing(t *testing.T) {
 	}
 }
 
+func TestCommitLinksCodeModeBacktick(t *testing.T) {
+	for _, tc := range []struct{ command, repository string }{
+		{"git commit -m fix", "/work"},
+		{"cd /repo && git commit -m fix", "/repo"},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			messages := commitMessages("s1", "text(await tools.exec_command({cmd:`"+tc.command+"`}))", "[main abc1234] Fix parser")
+			messages[2].ToolCalls[0].ToolName = "exec"
+			insertMessages(t, d, messages...)
+			got, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			require.Len(t, got.Commits[0].Links, 1)
+			link := got.Commits[0].Links[0]
+			assert.Equal(t, "s1", link.SessionID)
+			assert.Equal(t, "abc1234", link.SHA)
+			assert.Equal(t, tc.repository, link.Repository)
+		})
+	}
+}
+
 func TestCommitLinksCodeModeBatch(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")
