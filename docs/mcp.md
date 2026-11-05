@@ -255,7 +255,8 @@ when that exclusion applies. Restart without a cursor to obtain both fields.
 continuation. Archive edits retain the existing offset-pagination behavior.
 
 `exclusions.children` reports whether child sessions were excluded, including
-in empty results.
+in empty results. It is true for `scope: top` and FTS searches without an exact
+`session_id`. It stays false for `scope: subordinate`, which keeps child sessions.
 
 SQLite and PostgreSQL search matches also carry `transcript_revision`, captured
 by the same storage query as the evidence. A `revision_bound` response flag says

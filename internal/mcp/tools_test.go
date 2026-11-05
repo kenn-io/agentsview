@@ -2081,15 +2081,12 @@ func TestFileReferencesTool(t *testing.T) {
 func TestSearchContent_LexicalChildScope(t *testing.T) {
 	_, d := newTestToolset(t)
 	dbtest.SeedLexicalScope(t, d)
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
+	httpServer := httptest.NewUnstartedServer(nil)
 	srv := server.New(config.Config{
-		Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port,
+		Host: "127.0.0.1", Port: httpServer.Listener.Addr().(*net.TCPAddr).Port,
 		DataDir: t.TempDir(), WriteTimeout: 30 * time.Second,
 	}, d, nil)
-	httpServer := httptest.NewUnstartedServer(srv.Handler())
-	require.NoError(t, httpServer.Listener.Close())
-	httpServer.Listener = ln
+	httpServer.Config.Handler = srv.Handler()
 	httpServer.Start()
 	t.Cleanup(httpServer.Close)
 	for name, svc := range map[string]service.SessionService{
