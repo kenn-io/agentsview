@@ -19,12 +19,12 @@ func (e *Engine) ReconcileCommitTrailers(ctx context.Context) {
 	e.reconcileCommitTrailersLocked(ctx)
 }
 
-func (e *Engine) reconcileCommitTrailersLocked(ctx context.Context) {
-	e.reconcileCommitTrailersWithBudget(ctx, 60*time.Second)
+func (e *Engine) reconcileCommitTrailersLocked(ctx context.Context) int {
+	return e.reconcileCommitTrailersWithBudget(ctx, 60*time.Second)
 }
 
 // A nonpositive budget permits one repository attempt before yielding.
-func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget time.Duration) {
+func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget time.Duration) (stored int) {
 	if e.ephemeral || e.forceParse || e.db.ArchiveContent().UsageOnly() {
 		return
 	}
@@ -61,13 +61,16 @@ func (e *Engine) reconcileCommitTrailersWithBudget(ctx context.Context, budget t
 		}
 		// Failed scans also yield their place to repositories still waiting.
 		e.trailerScanAttempts[repo] = time.Now()
-		if err := e.reconcileRepositoryTrailers(ctx, repo, paths[repo]); err != nil {
+		n, err := e.reconcileRepositoryTrailers(ctx, repo, paths[repo])
+		if err != nil {
 			log.Printf("commit trailers in %s: %v", repo, err)
 		}
+		stored += n
 		if time.Since(start) >= budget {
 			return
 		}
 	}
+	return stored
 }
 
 // survivingTrailerCwd returns the nearest existing ancestor of a session cwd.
@@ -90,16 +93,16 @@ func (e *Engine) survivingTrailerCwd(machine, cwd string) string {
 	return cwd
 }
 
-func (e *Engine) reconcileRepositoryTrailers(ctx context.Context, repo, path string) error {
+func (e *Engine) reconcileRepositoryTrailers(ctx context.Context, repo, path string) (int, error) {
 	gitDir, commonDir, _ := gitDirectoryContext(path, e.mayProbeLocalPath)
 	if !e.mayProbeLocalPath(filepath.Join(gitDir, "HEAD")) ||
 		!e.mayProbeLocalPath(filepath.Join(gitDir, "commondir")) ||
 		!e.mayProbeLocalPath(filepath.Join(commonDir, "config")) {
-		return nil
+		return 0, nil
 	}
 	commits, err := gitlog.ScanCommitTrailers(ctx, path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	return e.db.StoreTrailerCommitLinks(ctx, repo, commits)
 }

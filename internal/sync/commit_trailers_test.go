@@ -189,6 +189,29 @@ func TestReconcileCommitTrailersNewCommit(t *testing.T) {
 	assert.ElementsMatch(t, []string{first, second}, []string{list.Commits[0].SHA, list.Commits[1].SHA})
 }
 
+func TestCommitTrailersHistoryOnlySyncChangesArchive(t *testing.T) {
+	database, engine, repo, _, runGit := commitTrailerFixture(t)
+	emitter := &fakeEmitter{}
+	engine.emitter = emitter
+	unchanged := engine.SyncAll(t.Context(), nil)
+	assert.False(t, unchanged.ChangedArchive())
+	assert.Empty(t, emitter.got())
+	runGit(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Later\n\nAgent-Session: claude:editor-session")
+
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, stats.Synced)
+	assert.Equal(t, 1, stats.LinksUpdated)
+	assert.True(t, stats.ChangedArchive())
+	assert.Equal(t, 1, engine.LastSyncStats().LinksUpdated)
+	assert.Equal(t, []string{"sessions"}, emitter.got())
+	list, err := database.SessionCommitLinks(t.Context(), "editor-session")
+	require.NoError(t, err)
+	require.Len(t, list.Commits, 2)
+	unchanged = engine.SyncAll(t.Context(), nil)
+	assert.False(t, unchanged.ChangedArchive())
+	assert.Equal(t, []string{"sessions"}, emitter.got())
+}
+
 func TestCommitTrailersSkipPartialSync(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -311,7 +334,8 @@ func TestReconcileCommitTrailersRepositoryErrors(t *testing.T) {
 			} else {
 				require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("invalid HEAD\n"), 0o600))
 			}
-			require.Error(t, engine.reconcileRepositoryTrailers(t.Context(), repo, repo))
+			_, err := engine.reconcileRepositoryTrailers(t.Context(), repo, repo)
+			require.Error(t, err)
 		})
 	}
 }

@@ -3926,7 +3926,7 @@ func (e *Engine) resyncBuildLocked(
 
 	// Scan once every session and its cwd have been restored.
 	e.db = newDB
-	e.reconcileCommitTrailersLocked(ctx)
+	stats.RecordLinksUpdated(e.reconcileCommitTrailersLocked(ctx))
 	e.db = origDB
 
 	// Re-link subagent sessions after orphan copy so copied
@@ -8646,6 +8646,9 @@ func (e *Engine) syncAllLocked(
 		MessagesIndexed: stats.messagesIndexed,
 	})
 
+	if since.IsZero() && scope == nil && e.archiveRebuildIndex == nil {
+		stats.RecordLinksUpdated(e.reconcileCommitTrailersLocked(ctx))
+	}
 	// Store the anomaly-folded stats so LastSyncStats (UI) matches the
 	// value returned to the CLI summary. The deferred applyTo only reads
 	// the accumulator, so folding a separate copy here does not
@@ -8667,9 +8670,6 @@ func (e *Engine) syncAllLocked(
 		if err := e.db.CompleteScopedUpgrade(ctx); err != nil {
 			log.Printf("persist scoped upgrade completion: %v", err)
 		}
-	}
-	if since.IsZero() && scope == nil && e.archiveRebuildIndex == nil {
-		e.reconcileCommitTrailersLocked(ctx)
 	}
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.

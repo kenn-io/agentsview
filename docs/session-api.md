@@ -1620,6 +1620,7 @@ The suggested `turn` is the last real user prompt in transcript order with a
 usable timestamp at or before commit time. It carries
 `heuristic: true`; no eligible prompt means no turn. This time rule adapts
 [Pando's fallback](https://github.com/backnotprop/pando/blob/80c8f91f3c445b080d49a95d7600ca6a348e9828/worker/src/understand/lookups.ts).
-A transcript link for the same session takes precedence only when its SHA
-matches the trailer SHA exactly. Short transcript SHAs leave the full trailer
-SHA visible. Other sessions' trailer links remain visible.
+A transcript link for the same session takes precedence when its SHA is a
+prefix of the trailer SHA, including a full SHA match. Git prints a short SHA
+that uniquely identifies the commit when it is made. Other sessions' trailer
+links remain visible.

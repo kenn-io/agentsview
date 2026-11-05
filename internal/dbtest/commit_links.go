@@ -26,13 +26,15 @@ func SeedCommitLinks(t *testing.T, d *db.DB) {
 	}
 	SeedSession(t, d, "commit-trailer", "commit-project")
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "commit-trailer", []db.Message{{SessionID: "commit-trailer", Ordinal: 0, Role: "user", Content: "Save the editor change", Timestamp: "2026-01-01T00:00:00Z"}}))
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "trailer-repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:commit-trailer"}, Subject: "Editor change", CommittedAt: "2026-01-01T00:01:00Z"}}))
+	_, err := d.StoreTrailerCommitLinks(t.Context(), "trailer-repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:commit-trailer"}, Subject: "Editor change", CommittedAt: "2026-01-01T00:01:00Z"}})
+	require.NoError(t, err)
 	require.NoError(t, d.SoftDeleteSession(t.Context(), "commit-trash"))
 	SeedSession(t, d, "commit-order", "commit-project")
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "order-repo", []gitlog.TrailerCommit{
+	_, err = d.StoreTrailerCommitLinks(t.Context(), "order-repo", []gitlog.TrailerCommit{
 		{SHA: strings.Repeat("e", 40), Sessions: []string{"claude:commit-order"}, Subject: "First", CommittedAt: "2026-01-01T00:01:00Z"},
 		{SHA: strings.Repeat("d", 40), Sessions: []string{"claude:commit-order"}, Subject: "Second", CommittedAt: "2026-01-01T00:02:00Z"},
-	}))
+	})
+	require.NoError(t, err)
 }
 
 func AssertCommitLinkParity(t *testing.T, local *db.DB, store db.CommitLinkReader) {
@@ -126,9 +128,10 @@ func AssertRetainedCommitLinkScope(t *testing.T, local *db.DB, reader func() db.
 // AssertTrailerIncrementalPush checks changes without rewriting the transcript.
 func AssertTrailerIncrementalPush(t *testing.T, local *db.DB, reader func() db.CommitLinkReader, push func()) {
 	t.Helper()
-	require.NoError(t, local.StoreTrailerCommitLinks(t.Context(), "trailer-repo", []gitlog.TrailerCommit{
+	_, err := local.StoreTrailerCommitLinks(t.Context(), "trailer-repo", []gitlog.TrailerCommit{
 		{SHA: strings.Repeat("c", 40), Sessions: []string{"claude:commit-trailer"}, Subject: "Amended editor change", CommittedAt: "2026-01-01T00:01:00Z"},
-	}))
+	})
+	require.NoError(t, err)
 	push()
 	links, err := reader().SessionCommitLinks(t.Context(), "commit-trailer")
 	require.NoError(t, err)

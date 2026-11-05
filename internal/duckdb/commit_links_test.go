@@ -19,11 +19,12 @@ func TestDuckDBCommitLinkParity(t *testing.T) {
 		local := newLocalDB(t)
 		require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "codex:abc", Agent: "codex", Project: "project-a", Machine: "m"}))
 		const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-		require.NoError(t, local.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
+		_, err := local.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
 			SHA: sha, Sessions: []string{"claude:codex:abc", "codex:abc"}, CommittedAt: "2026-01-01T00:00:00Z",
-		}}))
+		}})
+		require.NoError(t, err)
 		path := filepath.Join(t.TempDir(), "commits.duckdb")
-		_, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
+		_, err = Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
 		require.NoError(t, err)
 		store := openPushedStore(t, path)
 		links, err := store.SessionCommitLinks(t.Context(), "codex:abc")

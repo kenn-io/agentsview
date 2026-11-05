@@ -519,7 +519,7 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
  COALESCE((SELECT m.ordinal FROM messages m WHERE m.session_id=t.owner_id
  AND julianday(m.timestamp)<=julianday(t.committed_at) ORDER BY m.ordinal DESC LIMIT 1),-1),
  -1,'',t.committed_at,t.project,'trailer' FROM resolved_trailers t
- WHERE t.owner_rank=1 AND NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=t.owner_id AND c.sha=t.sha)
+ WHERE t.owner_rank=1 AND NOT EXISTS(SELECT 1 FROM commit_links c WHERE c.session_id=t.owner_id AND substr(t.sha,1,length(c.sha))=c.sha)
  ) l LEFT JOIN sessions s ON s.id=l.session_id
  LEFT JOIN messages turn ON turn.session_id=s.id AND turn.ordinal=(
  SELECT m.ordinal FROM messages m WHERE m.session_id=s.id AND m.ordinal<=l.message_ordinal
@@ -530,8 +530,10 @@ const commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value
 // StoreTrailerCommitLinks adds or updates one repository's trailer evidence.
 // Existing evidence is retained; an empty result leaves it unchanged.
 // The stored session_id is the trailer's agent:ID, independent of archive owners.
-func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits []gitlog.TrailerCommit) error {
-	return d.Update(ctx, func(tx *sql.Tx) error {
+// It returns the number of inserted or changed trailer rows.
+func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits []gitlog.TrailerCommit) (int, error) {
+	var stored int
+	err := d.Update(ctx, func(tx *sql.Tx) error {
 		changed := map[string]bool{}
 		if d.ArchiveContent().UsageOnly() {
 			commits = nil
@@ -554,6 +556,7 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 					return err
 				}
 				if n > 0 {
+					stored += int(n)
 					changed[value] = true
 				}
 			}
@@ -574,6 +577,10 @@ func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits [
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (SELECT value FROM json_each(?))`, owners)
 		return err
 	})
+	if err != nil {
+		return 0, err
+	}
+	return stored, nil
 }
 
 type TrailerRepository struct{ Machine, Cwd string }

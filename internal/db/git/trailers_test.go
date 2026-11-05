@@ -10,6 +10,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCommitTrailersOutputEncoding(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initRepo(t)
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-qm", "Fix café\n\nAgent-Session: claude:editor")
+	gitRun(t, repo, nil, "config", "i18n.logOutputEncoding", "ISO-8859-1")
+
+	commits, err := ScanCommitTrailers(t.Context(), repo)
+	require.NoError(t, err)
+	require.Len(t, commits, 1)
+	assert.Equal(t, "Fix café", commits[0].Subject)
+}
+
 func TestCommitTrailersSquashMessage(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initRepo(t)

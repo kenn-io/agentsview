@@ -398,7 +398,8 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 		insertSession(t, old, id, "project-a")
 		insertMessages(t, old, commitMessages(id, `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
 	}
-	require.NoError(t, old.StoreTrailerCommitLinks(t.Context(), "gone", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:orphan"}, CommittedAt: tsZero}}))
+	_, err := old.StoreTrailerCommitLinks(t.Context(), "gone", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:orphan"}, CommittedAt: tsZero}})
+	require.NoError(t, err)
 	require.NoError(t, old.SoftDeleteSession(t.Context(), "trash"))
 	require.NoError(t, old.DeleteSession(t.Context(), "deleted"))
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
@@ -410,7 +411,8 @@ func TestCommitLinksResyncAndPolicy(t *testing.T) {
 			fresh := testDB(t)
 			if policy.UsageOnly() {
 				// Downgrade an archive that already holds evidence for a session being copied.
-				require.NoError(t, fresh.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:written"}, CommittedAt: tsZero}}))
+				_, err := fresh.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:written"}, CommittedAt: tsZero}})
+				require.NoError(t, err)
 				var rows int
 				require.NoError(t, fresh.getReader().QueryRowContext(t.Context(), "SELECT count(*) FROM commit_trailers").Scan(&rows))
 				require.Equal(t, 1, rows)
@@ -493,7 +495,8 @@ func TestCommitLinksWritePolicy(t *testing.T) {
 			} else {
 				assert.Empty(t, initial.Commits)
 			}
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:s2"}, CommittedAt: tsZero}}))
+			_, err = d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:s2"}, CommittedAt: tsZero}})
+			require.NoError(t, err)
 			trailers, err := d.CommitSessionLinks(t.Context(), []string{strings.Repeat("b", 40)})
 			require.NoError(t, err)
 			require.Len(t, trailers.Commits, 1)
@@ -799,9 +802,9 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 		collision     bool
 		wantSHAs      []string
 	}{
-		{"prefix", "abc1234", false, []string{"abc1234", firstSHA}},
+		{"prefix", "abc1234", false, []string{"abc1234"}},
 		{"exact", firstSHA, false, []string{firstSHA}},
-		{"collision", "abc1234", true, []string{"abc1234", firstSHA, secondSHA}},
+		{"later prefix collision", "abc1234", true, []string{"abc1234"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -814,7 +817,8 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 			if tt.collision {
 				commits = append(commits, gitlog.TrailerCommit{SHA: secondSHA, Sessions: []string{"claude:editor"}, CommittedAt: tsZero})
 			}
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", commits))
+			_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", commits)
+			require.NoError(t, err)
 
 			session, err := d.SessionCommitLinks(t.Context(), "editor")
 			require.NoError(t, err)
@@ -841,7 +845,7 @@ func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 			for _, link := range found.Commits[0].Links {
 				if link.SessionID == "editor" {
 					shas = append(shas, link.SHA)
-					assert.Equal(t, tt.collision, link.Ambiguous)
+					assert.False(t, link.Ambiguous)
 				}
 			}
 			assert.ElementsMatch(t, tt.wantSHAs, shas)
@@ -853,7 +857,8 @@ func TestTrailerCommitMirrorRows(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "editor", "project-a")
 	insertMessages(t, d, userMsg("editor", 0, "Save the edit"))
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}))
+	_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}})
+	require.NoError(t, err)
 	rows, err := d.SessionCommitLinkRows(t.Context(), "editor")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -882,8 +887,10 @@ func TestTrailerCommitUpsert(t *testing.T) {
 				_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=? WHERE id='editor'`, tsZero)
 				require.NoError(t, err)
 				c.Branch = tt.branches[i]
-				require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), repo, []gitlog.TrailerCommit{c}))
+				stored, err := d.StoreTrailerCommitLinks(t.Context(), repo, []gitlog.TrailerCommit{c})
+				require.NoError(t, err)
 				if i >= tt.unchangedAfter {
+					assert.Zero(t, stored)
 					links, err := d.SessionCommitLinks(t.Context(), "editor")
 					require.NoError(t, err)
 					require.Len(t, links.Commits, 1)
@@ -892,9 +899,13 @@ func TestTrailerCommitUpsert(t *testing.T) {
 					var modified string
 					require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='editor'`).Scan(&modified))
 					assert.Equal(t, tsZero, modified)
+				} else {
+					assert.Equal(t, 1, stored)
 				}
 			}
-			require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), tt.wantRepository, nil))
+			stored, err := d.StoreTrailerCommitLinks(t.Context(), tt.wantRepository, nil)
+			require.NoError(t, err)
+			assert.Zero(t, stored)
 			links, err := d.SessionCommitLinks(t.Context(), "editor")
 			require.NoError(t, err)
 			require.Len(t, links.Commits, 1)
@@ -910,7 +921,8 @@ func TestTrailerCommitProjectSurvivesPurge(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, id, "project-a")
 	insertMessages(t, d, userMsg(id, 0, "Save the edit"))
-	require.NoError(t, d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}}))
+	_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:editor"}, CommittedAt: tsZero}})
+	require.NoError(t, err)
 	session, err := d.GetSession(t.Context(), id)
 	require.NoError(t, err)
 	session.Project = "project-b"
