@@ -781,13 +781,13 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
           {#each summary.scoreDistribution as bucket}
             <div class="grade-bar">
               <span>{bucket.grade}</span>
+              <strong>{formatCount(bucket.count)}</strong>
               <div class="bar-track">
                 <div
                   class="bar-fill"
                   style:width={`${(bucket.count / maxGradeCount) * 100}%`}
                 ></div>
               </div>
-              <strong>{formatCount(bucket.count)}</strong>
             </div>
           {/each}
         </Card>
@@ -823,22 +823,30 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
               </div>
 
               <div class="driver-list">
+                <div class="driver-head" aria-hidden="true">
+                  <span>{m.insights_page_column_signal()}</span>
+                  <span>{m.insights_page_column_count()}</span>
+                  <span>{m.insights_page_column_sessions()}</span>
+                  <span>{m.insights_page_column_outcome()}</span>
+                </div>
                 {#each pattern.drivers as driver}
+                  {@const sessionsLabel = m.insights_page_driver_sessions({
+                    count: driver.sessions,
+                    countLabel: formatCount(driver.sessions),
+                  })}
+                  {@const totalLabel = `${formatCount(driver.total)}${driver.unit ?? ""}`}
+                  {@const outcomeLabel = calibrationLabel(String(driver.id))}
                   <button
                     class="driver-row"
                     class:active={selectedSignalId === driver.id}
                     type="button"
+                    aria-label={`${driver.label}: ${totalLabel}, ${sessionsLabel}, ${outcomeLabel}`}
                     onclick={() => openSignalEvidence(String(driver.id))}
                   >
                     <span>{driver.label}</span>
-                    <strong>
-                      {formatCount(driver.total)}{driver.unit ?? ""}
-                    </strong>
-                    <em>{m.insights_page_driver_sessions({
-                      count: driver.sessions,
-                      countLabel: formatCount(driver.sessions),
-                    })}</em>
-                    <small>{calibrationLabel(String(driver.id))}</small>
+                    <strong>{totalLabel}</strong>
+                    <em>{formatCount(driver.sessions)}</em>
+                    <small>{outcomeLabel}</small>
                   </button>
                 {/each}
               </div>
@@ -1169,7 +1177,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .grade-bar {
     display: grid;
-    grid-template-columns: 18px 1fr minmax(22px, auto);
+    grid-template-columns: 12px minmax(36px, auto) 1fr;
     gap: 8px;
     align-items: center;
     color: var(--text-secondary);
@@ -1177,7 +1185,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   }
 
   .grade-bar strong {
-    text-align: right;
+    text-align: left;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
   }
@@ -1302,16 +1310,36 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   }
 
   .driver-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    column-gap: var(--space-4);
+    row-gap: 6px;
+  }
+
+  .driver-head,
+  .driver-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: baseline;
+  }
+
+  .driver-head {
+    padding: 0 4px;
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .driver-head span:not(:first-child),
+  .driver-row > :not(:first-child) {
+    text-align: right;
   }
 
   .driver-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
-    gap: var(--space-4);
-    align-items: baseline;
     width: 100%;
     min-height: 24px;
     padding: 2px 4px;
@@ -1719,7 +1747,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       grid-template-columns: 1fr;
     }
 
-    .driver-row,
     .evidence-list :global(.evidence-row) {
       grid-template-columns: 1fr;
     }

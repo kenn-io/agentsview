@@ -8,6 +8,7 @@
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { seriesPaint } from "../../utils/seriesPaint.js";
+  import { resolveRootColor } from "../../utils/calmSeriesColor.js";
   import SeriesPatternDefs from "../shared/SeriesPatternDefs.svelte";
   import { treemapLabelSize, type TreemapLabelScale } from "./treemapLabelSize.js";
 
@@ -64,11 +65,9 @@
   // Resolve them against the root so the contrast math sees the real hex;
   // reading the theme here re-runs the resolution when the theme changes.
   function resolveColor(color: string): string {
-    const name = /^var\((--[\w-]+)\)$/.exec(color.trim())?.[1];
-    if (!name || typeof document === "undefined") return color;
     void ui.theme;
     void ui.highContrast;
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || color;
+    return resolveRootColor(color);
   }
 
   function tilePaint(color: string): { fill: string; ink: string } | null {
