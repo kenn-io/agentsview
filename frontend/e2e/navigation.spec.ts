@@ -218,3 +218,55 @@ test.describe("Top bar current tab", () => {
     expect(new Set(tabs.map((t) => t.look)).size).toBe(1);
   });
 });
+
+test.describe("Project picker", () => {
+  const projects = Array.from({ length: 60 }, (_, i) => ({
+    name: `project-${String(i).padStart(2, "0")}`,
+    session_count: 10,
+  }));
+
+  async function openPicker(page: import("@playwright/test").Page) {
+    await page.route("**/api/v1/projects*", (route) => route.fulfill({ json: { projects } }));
+    await page.goto("/sessions");
+    await page.locator(".project-picker .kit-typeahead__trigger").click();
+    await expect(page.locator(".kit-typeahead__option").first()).toBeVisible();
+  }
+
+  test("the open filter field sits above the collapsed navigation and search", async ({ page }) => {
+    // Ten destinations do not fit at this width, so the tabs collapse.
+    await page.setViewportSize({ width: 1400, height: 700 });
+    await openPicker(page);
+    await expect(page.locator(".kit-top-bar__nav-select")).toBeVisible();
+    const hits = await page.locator(".kit-typeahead__input").evaluate((input) => {
+      const r = input.getBoundingClientRect();
+      return [0.1, 0.5, 0.9].map((f) => {
+        const hit = document.elementFromPoint(r.left + r.width * f, r.top + r.height / 2);
+        return !!hit && input.closest(".kit-typeahead")!.contains(hit);
+      });
+    });
+    expect(hits).toEqual([true, true, true]);
+  });
+
+  for (const zoom of ["100", "150"]) {
+    test(`the list shows only whole rows at ${zoom}% zoom`, async ({ page }) => {
+      await page.addInitScript((value) => localStorage.setItem("agentsview-zoom-level", value), zoom);
+      await page.setViewportSize({ width: 1400, height: 700 });
+      await openPicker(page);
+      const layout = await page.locator(".kit-typeahead__body").evaluate((body) => {
+        const box = body.getBoundingClientRect();
+        const rows = [...body.querySelectorAll(".kit-typeahead__option")]
+          .map((row) => row.getBoundingClientRect())
+          .filter((row) => row.bottom > box.top + 0.5 && row.top < box.bottom - 0.5);
+        const panel = body.closest(".kit-typeahead__panel")!.getBoundingClientRect();
+        return {
+          rows: rows.length,
+          lastCut: rows.at(-1)!.bottom - box.bottom,
+          bodyInsidePanel: box.bottom <= panel.bottom + 0.5,
+        };
+      });
+      expect(layout.rows).toBeGreaterThan(3);
+      expect(layout.lastCut, JSON.stringify(layout)).toBeLessThanOrEqual(0.5);
+      expect(layout.bodyInsidePanel).toBe(true);
+    });
+  }
+});

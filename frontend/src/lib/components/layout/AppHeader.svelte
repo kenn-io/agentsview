@@ -55,20 +55,6 @@
    * side-region snippets read it to drop their labels. */
   let navCollapsed = $state(false);
 
-  const NAV_ROUTES = [
-    "sessions",
-    "usage",
-    "activity",
-    "trends",
-    "recall",
-    "pinned",
-    "quality",
-    "friction",
-    "trash",
-    "recent-edits",
-    "data",
-  ] as const;
-
   const frictionNavVisible = $derived(sync.serverVersion?.friction_readable === true);
 
   const tabs: TopBarTab[] = $derived([
@@ -85,10 +71,10 @@
     { id: "data", label: m.nav_data() },
   ]);
 
+  // Only a rendered tab can be current: Friction is a route even while its
+  // tab is hidden, and then no tab is current.
   const activeTab = $derived(
-    (NAV_ROUTES as readonly string[]).includes(router.route)
-      ? router.route
-      : "",
+    tabs.some((tab) => tab.id === router.route) ? router.route : "",
   );
 
   async function handleExport() {
@@ -429,16 +415,20 @@
     position: absolute;
     top: 0;
     left: 0;
-    /* No z-index: one would trap the list's fixed popover layer in this
-       box's stacking context, under the sidebar. Positioned, the field
-       already paints over the unpositioned tabs. */
+    /* The collapsed navigation and the search field are positioned and
+       come later, so without a z-index they paint over the open field and
+       take its clicks. The popover layer keeps the fixed list above the
+       sidebar inside this box's stacking context. */
+    z-index: var(--z-popover);
     width: var(--project-picker-open-width);
     max-width: calc(100vw - 16px);
   }
 
   /* Fixed-height rows, and a list height rounded down to a whole number
      of them, so the last visible project is never cut in half. The
-     panel's own cap is 50vh; 4px covers its padding. */
+     panel's own cap is 50vh of the viewport; 6px covers its padding and
+     border. The list sits inside the interface zoom while vh does not, so
+     the cap converts to the list's own pixels first. */
   .project-picker {
     --project-row: 27px;
   }
@@ -449,7 +439,11 @@
   }
 
   .project-picker :global(.kit-typeahead__body) {
-    max-height: round(down, calc(50vh - 4px), var(--project-row));
+    max-height: round(
+      down,
+      calc((50vh - 6px) * var(--agentsview-zoom-compensation, 1)),
+      var(--project-row)
+    );
   }
 
   /* Settings (and Friction when its tab is hidden) is not a tab, but
