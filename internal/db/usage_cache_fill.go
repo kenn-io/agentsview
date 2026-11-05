@@ -1672,14 +1672,12 @@ func (m *usageCacheManager) NotifyCursorUsage() {
 }
 
 func (db *DB) notifyUsageSessions(sessionIDs []string) {
-	db.usageWrites.Add(1)
 	if db.usageCache != nil && len(sessionIDs) > 0 {
 		db.usageCache.NotifySessions(sessionIDs)
 	}
 }
 
 func (db *DB) notifyCursorUsage() {
-	db.usageWrites.Add(1)
 	if db.usageCache != nil {
 		db.usageCache.NotifyCursorUsage()
 	}

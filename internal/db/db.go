@@ -878,7 +878,7 @@ type DB struct {
 	reads                readRegistry
 	usageCache           *usageCacheManager
 	usageWindows         flightgroup.Group[usagePreparedWindow]
-	usageWrites          atomic.Uint64
+	archiveCommits       *atomic.Uint64
 	usageWindowObserver  usageWindowObserver
 	activityMemo         activityCandidateMemo
 	frustrationMemo      frustrationMarkerMemo
@@ -1974,7 +1974,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 	}
 	db := &DB{
 		path: path, readOnly: true,
-		usageCache: newUsageCacheManager(path),
+		usageCache: newUsageCacheManager(path), archiveCommits: new(atomic.Uint64),
 	}
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
@@ -4779,17 +4779,15 @@ func openAndInit(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, false))
-	if err != nil {
-		return nil, fmt.Errorf("opening writer: %w", err)
-	}
+	commits := new(atomic.Uint64)
+	writer := sql.OpenDB(&archiveWriterConnector{dsn: makeDSN(path, false), commits: commits})
 	writer.SetMaxOpenConns(1)
 	if err := configureWALContext(ctx, writer); err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
 
-	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
+	db := &DB{path: path, usageCache: newUsageCacheManager(path), archiveCommits: commits}
 	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
@@ -4810,7 +4808,7 @@ func openAndInit(
 			return nil, err
 		}
 		db.mu.Lock()
-		err = repairLegacySchemaBeforeInit(ctx, db.getWriter(), progress)
+		err := repairLegacySchemaBeforeInit(ctx, db.getWriter(), progress)
 		db.mu.Unlock()
 		if err != nil {
 			_ = db.CloseContext(ctx)
@@ -4825,7 +4823,7 @@ func openAndInit(
 		return nil, err
 	}
 	db.mu.Lock()
-	err = migrateRecallReviewStateConstraintLocked(ctx, db.getWriter())
+	err := migrateRecallReviewStateConstraintLocked(ctx, db.getWriter())
 	db.mu.Unlock()
 	if err != nil {
 		_ = db.CloseContext(ctx)
@@ -5556,12 +5554,7 @@ func (db *DB) reopenLocked() error {
 // barrier kept up so no write can land before the replacement commits; every
 // other caller clears the barrier.
 func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
-	writer, err := sql.Open(
-		sqliteArchiveDriverName, makeDSN(db.path, false),
-	)
-	if err != nil {
-		return fmt.Errorf("reopening writer: %w", err)
-	}
+	writer := sql.OpenDB(&archiveWriterConnector{dsn: makeDSN(db.path, false), commits: db.archiveCommits})
 	writer.SetMaxOpenConns(1)
 	if err := configureWAL(writer); err != nil {
 		writer.Close()

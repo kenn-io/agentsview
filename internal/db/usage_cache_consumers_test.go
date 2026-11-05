@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestTopSessionsRollupMatchesLegacy(t *testing.T) {
@@ -213,7 +215,7 @@ func TestUsageWindowMemoKeepsIntegerFiltersDistinct(t *testing.T) {
 }
 
 func TestConcurrentUsageReadsSeparateArchiveStates(t *testing.T) {
-	for _, change := range []string{"pricing", "usage replacement", "usage deletion", "cursor"} {
+	for _, change := range []string{"pricing", "usage replacement", "usage deletion", "cursor", "session project"} {
 		t.Run(change, func(t *testing.T) {
 			database := testDB(t)
 			insertSession(t, database, "reported", "project", func(s *Session) {
@@ -221,9 +223,8 @@ func TestConcurrentUsageReadsSeparateArchiveStates(t *testing.T) {
 			})
 			events := []UsageEvent{{Source: "session", Model: "model-a", InputTokens: 10, OccurredAt: "2026-08-10T09:00:00Z", DedupKey: "event"}}
 			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "reported", events))
-			probe, err := database.ActivityReportSourceProbe(t.Context())
-			require.NoError(t, err)
-			writes := database.usageWrites.Load()
+			require.NoError(t, database.SetPricingMetaContext(t.Context(), "_openrouter_models", `["model-a"]`))
+			require.NoError(t, database.UpsertModelPricingContext(t.Context(), []ModelPricing{{ModelPattern: "model-a", InputPerMTok: money.MustParseDollars("1"), UpdatedAt: "2026-08-10T12:00:00Z"}}))
 			entered, release := make(chan struct{}), make(chan struct{})
 			var once sync.Once
 			unblock := func() { once.Do(func() { close(release) }) }
@@ -250,27 +251,7 @@ func TestConcurrentUsageReadsSeparateArchiveStates(t *testing.T) {
 			}
 			go read()
 			<-entered
-			switch change {
-			case "pricing":
-				require.NoError(t, database.UpsertModelPricingContext(t.Context(), []ModelPricing{{ModelPattern: "model-a", UpdatedAt: "2026-08-10T12:00:00Z"}}))
-			case "usage replacement":
-				events[0].InputTokens = 17
-				require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "reported", events))
-			case "usage deletion":
-				require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "reported", nil))
-			case "cursor":
-				require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-08-10T09:00:00Z", Model: "cursor-model", InputTokens: 7, DedupKey: "cursor"}}))
-			}
-			after, err := database.ActivityReportSourceProbe(t.Context())
-			require.NoError(t, err)
-			if change == "pricing" {
-				assert.NotEqual(t, probe, after)
-				assert.Equal(t, writes, database.usageWrites.Load())
-			} else if change == "cursor" {
-				assert.Equal(t, probe, after, "this write needs the usage write counter")
-			} else if change == "usage replacement" {
-				assert.Equal(t, probe.MaxUsageID, after.MaxUsageID)
-			}
+			applyUsageArchiveChange(t, database, change)
 			go read()
 			assert.Eventually(t, func() bool { return prepares.Load() == 2 }, 10*time.Second, time.Millisecond)
 			unblock()
@@ -431,7 +412,53 @@ func TestConcurrentUsageReadsCancelAbandonedWindow(t *testing.T) {
 
 func usageFlightKeyForTest(t *testing.T, database *DB, filter UsageFilter) string {
 	t.Helper()
-	probe, err := database.ActivityReportSourceProbe(t.Context())
+	return usageWindowKey(filter, usageQueryKindToken, usageCursorIncluded(filter)) + "|" + fmt.Sprintf("%d", database.archiveCommits.Load())
+}
+
+func applyUsageArchiveChange(t *testing.T, database *DB, change string) {
+	t.Helper()
+	switch change {
+	case "pricing":
+		require.NoError(t, database.UpsertModelPricingContext(t.Context(), []ModelPricing{{ModelPattern: "model-a", InputPerMTok: money.MustParseDollars("2"), UpdatedAt: "2026-08-10T12:00:00Z"}}))
+	case "usage replacement":
+		require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "reported", []UsageEvent{{Source: "session", Model: "model-a", InputTokens: 17, OccurredAt: "2026-08-10T09:00:00Z", DedupKey: "event"}}))
+	case "usage deletion":
+		require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "reported", nil))
+	case "cursor":
+		require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-08-10T09:00:00Z", Model: "cursor-model", InputTokens: 7, DedupKey: "cursor"}}))
+	case "session project":
+		_, err := database.getWriter().Exec(t.Context(), `UPDATE sessions SET project = 'project-b' WHERE id = 'reported'`)
+		require.NoError(t, err)
+	}
+}
+
+func TestArchiveCommitCountAdvancesOnCommitOnly(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 10)
+	for _, change := range []string{"pricing", "usage replacement", "usage deletion", "cursor", "session project"} {
+		t.Run(change, func(t *testing.T) {
+			before := database.archiveCommits.Load()
+			applyUsageArchiveChange(t, database, change)
+			assert.Greater(t, database.archiveCommits.Load(), before)
+		})
+	}
+	before := database.archiveCommits.Load()
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	want := getDailyUsageLegacyForRollupTest(t, database, filter)
+	got, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
-	return usageWindowKey(filter, usageQueryKindToken, usageCursorIncluded(filter)) + "|" + fmt.Sprintf("%+v|%d", probe, database.usageWrites.Load())
+	assert.Equal(t, want, got)
+	assert.Equal(t, before, database.archiveCommits.Load(), "reads and cache fills must preserve sharing")
+	tx, err := database.getWriter().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET project = 'rolled-back' WHERE id = 'reported'`)
+	require.NoError(t, err)
+	assert.Equal(t, before, database.archiveCommits.Load())
+	require.NoError(t, tx.Rollback())
+	assert.Equal(t, before, database.archiveCommits.Load())
+	require.NoError(t, database.Reopen())
+	assert.GreaterOrEqual(t, database.archiveCommits.Load(), before)
+	before = database.archiveCommits.Load()
+	applyUsageArchiveChange(t, database, "session project")
+	assert.Greater(t, database.archiveCommits.Load(), before, "the reopened writer must retain commit tracking")
 }

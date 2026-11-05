@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 	}
 	reader.SetMaxOpenConns(4)
 	defer reader.Close()
-	d := &DB{path: path}
+	d := &DB{path: path, archiveCommits: new(atomic.Uint64)}
 	d.reader.Store(reader)
 	d.usageCache = newUsageCacheManager(filepath.Join(t.TempDir(), "sessions.db"))
 	d.usageCache.attachArchive(d)
@@ -96,7 +97,7 @@ func TestRealDBUsagePerf(t *testing.T) {
 	reader.SetMaxOpenConns(4) // matches production reader pool
 	defer reader.Close()
 
-	d := &DB{path: path}
+	d := &DB{path: path, archiveCommits: new(atomic.Uint64)}
 	d.reader.Store(reader)
 	d.usageCache = newUsageCacheManager(filepath.Join(t.TempDir(), "sessions.db"))
 	d.usageCache.attachArchive(d)
@@ -243,7 +244,7 @@ func TestRealDBUsageRollupOracle(t *testing.T) {
 	reader.SetMaxOpenConns(4)
 	t.Cleanup(func() { require.NoError(t, reader.Close()) })
 
-	database := &DB{path: path}
+	database := &DB{path: path, archiveCommits: new(atomic.Uint64)}
 	database.reader.Store(reader)
 	database.usageCache = newUsageCacheManager(
 		filepath.Join(t.TempDir(), "sessions.db"))

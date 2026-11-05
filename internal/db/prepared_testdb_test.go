@@ -4,16 +4,15 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"sync/atomic"
 )
 
 // OpenPreparedTestDB opens a private test database file that has already been
 // initialized with the current schema and data version. It is intentionally
 // test-only so production code cannot bypass the normal open/migration path.
 func OpenPreparedTestDB(path string) (*DB, error) {
-	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, false))
-	if err != nil {
-		return nil, fmt.Errorf("opening prepared test writer: %w", err)
-	}
+	commits := new(atomic.Uint64)
+	writer := sql.OpenDB(&archiveWriterConnector{dsn: makeDSN(path, false), commits: commits})
 	writer.SetMaxOpenConns(1)
 	if err := configureWAL(writer); err != nil {
 		writer.Close()
@@ -24,7 +23,7 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("configuring prepared test CJK FTS: %w", err)
 	}
 
-	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
+	db := &DB{path: path, usageCache: newUsageCacheManager(path), archiveCommits: commits}
 	reader := sql.OpenDB(&archiveReaderConnector{dsn: makeDSN(path, true), reads: &db.reads})
 	reader.SetMaxOpenConns(4)
 	db.usageCache.attachArchive(db)

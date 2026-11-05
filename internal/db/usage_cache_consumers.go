@@ -103,11 +103,7 @@ func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind us
 	if prepared, ok := memo.get(key); ok {
 		return prepared, nil
 	}
-	probe, err := db.ActivityReportSourceProbe(ctx)
-	if err != nil {
-		return usagePreparedWindow{}, err
-	}
-	flightKey := key + "|" + fmt.Sprintf("%+v|%d", probe, db.usageWrites.Load())
+	flightKey := key + "|" + fmt.Sprintf("%d", db.archiveCommits.Load())
 	prepared, err := db.usageWindows.Do(ctx, flightKey, func(ctx context.Context) (usagePreparedWindow, error) {
 		return db.prepareUsageWindow(ctx, filter, kind, cursor, nil)
 	})
@@ -197,9 +193,6 @@ func (db *DB) queryUsageRollups(
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, err
 		}
 		snapshot := prepared.snapshot
-		if !includeCursor {
-			snapshot.CursorHighWater = 0
-		}
 		resolver := export.NewPricingResolver(snapshot.PricingRows)
 		cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
 		if err != nil {
