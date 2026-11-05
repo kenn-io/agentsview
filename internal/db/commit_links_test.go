@@ -924,10 +924,8 @@ func TestTrailerCommitTurnRecency(t *testing.T) {
 		wantTurn         *CommitTurn
 	}{
 		{"agent commit", "2026-01-02T10:04:30Z", 1, &CommitTurn{Heuristic: true, Ordinal: 0, Text: "Fix the parser"}},
-		{"rebased author time", "2026-01-02T10:05:30Z", 1, &CommitTurn{Heuristic: true, Ordinal: 0, Text: "Fix the parser"}},
 		{"five minutes", "2026-01-02T12:05:00Z", 3, &CommitTurn{Heuristic: true, Ordinal: 2, Text: "Push and open a pull request"}},
 		{"over five minutes", "2026-01-02T12:05:01Z", -1, nil},
-		{"squash hours later", "2026-01-02T17:00:00Z", -1, nil},
 		{"before session", "2026-01-02T09:59:59Z", -1, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

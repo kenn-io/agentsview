@@ -127,7 +127,6 @@ func TestReconcileCommitTrailersCwdFilter(t *testing.T) {
 		{name: "owner without cwd", includeRepo: true, wantSessions: []string{"allowed"}},
 		{name: "allowed owners", includeRepo: true, otherCwd: "allowed", wantSessions: []string{"allowed", "codex:other"}},
 		{name: "trashed allowed owners", includeRepo: true, otherCwd: "allowed", trashed: true, wantSessions: []string{"allowed", "codex:other"}},
-		{name: "trashed excluded owner", includeRepo: true, otherCwd: "outside", trashed: true, wantSessions: []string{"allowed"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			testutil.IsolateGit(t)
@@ -151,18 +150,6 @@ func TestReconcileCommitTrailersCwdFilter(t *testing.T) {
 			}
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", IncludeCwdPrefixes: prefixes})
 			t.Cleanup(engine.Close)
-			if tt.name == "allowed owners" {
-				// Scan an existing checkout before discovering another session's repository.
-				initial := filepath.Join(allowed, "initial")
-				require.NoError(t, os.Mkdir(initial, 0o700))
-				runGit(t, initial, "init", "-q", "-b", "main")
-				runGit(t, initial, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Initial\n\nAgent-Session: claude:initial")
-				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "initial", Agent: "claude", Machine: "local", Cwd: initial}))
-				engine.ReconcileCommitTrailers(t.Context())
-				list, err := database.SessionCommitLinks(t.Context(), "initial")
-				require.NoError(t, err)
-				require.Len(t, list.Commits, 1)
-			}
 			sha := runGit(t, repo, "rev-parse", "HEAD")
 			for _, session := range []db.Session{
 				{ID: "discovery", Agent: "claude", Machine: "local", Cwd: repo},

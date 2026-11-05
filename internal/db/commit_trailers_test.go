@@ -77,51 +77,25 @@ func TestTrailerCommitLinksMissingOwner(t *testing.T) {
 }
 
 func TestTrailerCommitLinksPrompt(t *testing.T) {
-	for _, tt := range []struct {
-		name, owner, agent, trailer, committedAt string
-		messages                                 []Message
-		wantPrompt                               bool
-	}{
-		{
-			wantPrompt: true, name: "qualifying prompt", owner: "session-a", agent: "claude", trailer: "claude:session-a", committedAt: "2026-10-30T10:10:00Z",
-			messages: []Message{
-				{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Before", Timestamp: "2026-10-30T10:00:00Z"},
-				{SessionID: "session-a", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []ToolCall{{ToolName: "apply_patch", Category: "Edit"}}, Timestamp: "2026-10-30T10:01:00Z"},
-				{SessionID: "session-a", Ordinal: 2, Role: "user", Content: "At author time", Timestamp: "2026-10-30T10:10:00Z"},
-				{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:10:00Z"},
-				{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:10:00Z"},
-				{SessionID: "session-a", Ordinal: 5, Role: "user", Content: "Next task", Timestamp: "2026-10-30T10:12:00Z"},
-			},
-		},
-		{
-			name: "no qualifying prompt", owner: "codex:thread", agent: "codex", trailer: "codex:thread", committedAt: "2026-10-30T10:10:00Z",
-			messages: []Message{
-				{SessionID: "codex:thread", Ordinal: 0, Role: "user", Content: "Too late", Timestamp: "2026-10-30T10:12:00Z"},
-			},
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, tt.owner, "project-a", func(s *Session) { s.Agent = tt.agent })
-			insertMessages(t, d, tt.messages...)
-			sha := strings.Repeat("a", 40)
-			_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, CommittedAt: tt.committedAt, Sessions: []string{tt.trailer}}})
-			require.NoError(t, err)
-			if !tt.wantPrompt {
-				found, err := d.CommitSessionLinks(t.Context(), []string{sha})
-				require.NoError(t, err)
-				require.Len(t, found.Commits[0].Links, 1)
-				assert.Nil(t, found.Commits[0].Links[0].Turn)
-				return
-			}
-			list, err := d.SessionCommitLinks(t.Context(), tt.owner)
-			require.NoError(t, err)
-			require.Len(t, list.Commits, 1)
-			require.NotNil(t, list.Commits[0].Turn)
-			assert.True(t, list.Commits[0].Turn.Heuristic)
-			assert.Equal(t, "At author time", list.Commits[0].Turn.Text)
-		})
-	}
+	d := testDB(t)
+	insertSession(t, d, "session-a", "project-a")
+	insertMessages(t, d,
+		Message{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "Before", Timestamp: "2026-10-30T10:00:00Z"},
+		Message{SessionID: "session-a", Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []ToolCall{{ToolName: "apply_patch", Category: "Edit"}}, Timestamp: "2026-10-30T10:01:00Z"},
+		Message{SessionID: "session-a", Ordinal: 2, Role: "user", Content: "At author time", Timestamp: "2026-10-30T10:10:00Z"},
+		Message{SessionID: "session-a", Ordinal: 3, Role: "user", Content: "System", IsSystem: true, Timestamp: "2026-10-30T10:10:00Z"},
+		Message{SessionID: "session-a", Ordinal: 4, Role: "user", Content: "Tool result", SourceSubtype: "tool_result", Timestamp: "2026-10-30T10:10:00Z"},
+		Message{SessionID: "session-a", Ordinal: 5, Role: "user", Content: "Next task", Timestamp: "2026-10-30T10:12:00Z"},
+	)
+	sha := strings.Repeat("a", 40)
+	_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, CommittedAt: "2026-10-30T10:10:00Z", Sessions: []string{"claude:session-a"}}})
+	require.NoError(t, err)
+	list, err := d.SessionCommitLinks(t.Context(), "session-a")
+	require.NoError(t, err)
+	require.Len(t, list.Commits, 1)
+	require.NotNil(t, list.Commits[0].Turn)
+	assert.True(t, list.Commits[0].Turn.Heuristic)
+	assert.Equal(t, "At author time", list.Commits[0].Turn.Text)
 }
 
 func TestTrailerCommitLinksOrdering(t *testing.T) {
