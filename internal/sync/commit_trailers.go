@@ -120,7 +120,7 @@ func (e *Engine) reconcileRepositoryTrailers(ctx context.Context, repo, path str
 				if !ok || !known {
 					continue
 				}
-				session, err := e.db.GetSession(ctx, def.IDPrefix+id)
+				session, err := e.db.GetSessionFull(ctx, def.IDPrefix+id)
 				if err != nil {
 					return 0, err
 				}

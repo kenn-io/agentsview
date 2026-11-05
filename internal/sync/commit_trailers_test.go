@@ -119,12 +119,15 @@ func TestReconcileCommitTrailersCwdFilter(t *testing.T) {
 		name         string
 		includeRepo  bool
 		otherCwd     string
+		trashed      bool
 		wantSessions []string
 	}{
 		{name: "excluded repository", wantSessions: []string{}},
 		{name: "excluded owner", includeRepo: true, otherCwd: "outside", wantSessions: []string{"allowed"}},
 		{name: "owner without cwd", includeRepo: true, wantSessions: []string{"allowed"}},
 		{name: "allowed owners", includeRepo: true, otherCwd: "allowed", wantSessions: []string{"allowed", "codex:other"}},
+		{name: "trashed allowed owners", includeRepo: true, otherCwd: "allowed", trashed: true, wantSessions: []string{"allowed", "codex:other"}},
+		{name: "trashed excluded owner", includeRepo: true, otherCwd: "outside", trashed: true, wantSessions: []string{"allowed"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			testutil.IsolateGit(t)
@@ -167,6 +170,11 @@ func TestReconcileCommitTrailersCwdFilter(t *testing.T) {
 				{ID: "codex:other", Agent: "codex", Machine: "local", Cwd: otherCwd},
 			} {
 				require.NoError(t, database.UpsertSession(t.Context(), session))
+			}
+			if tt.trashed {
+				for _, id := range []string{"allowed", "codex:other"} {
+					require.NoError(t, database.SoftDeleteSession(t.Context(), id))
+				}
 			}
 
 			engine.ReconcileCommitTrailers(t.Context())
