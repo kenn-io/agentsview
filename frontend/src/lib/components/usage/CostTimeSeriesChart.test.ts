@@ -124,14 +124,14 @@ function usageSummary(
 
 function modelDailyEntry(
   index: number,
-  models: Array<{ modelName: string; cost: Money }>,
+  models: Array<{ modelName: string; cost: Money; inputTokens?: number; outputTokens?: number }>,
 ): DbDailyUsageEntry {
   const entry = dailyEntry(index);
   entry.projectBreakdowns = [];
-  entry.modelBreakdowns = models.map(({ modelName, cost }) => ({
+  entry.modelBreakdowns = models.map(({ modelName, cost, inputTokens = 60, outputTokens = 30 }) => ({
     modelName,
-    inputTokens: 60,
-    outputTokens: 30,
+    inputTokens,
+    outputTokens,
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
     cost,
@@ -628,15 +628,20 @@ describe("CostTimeSeriesChart", () => {
     usage.setSelectedTokenTypes(["output"]);
     usage.toggles.timeSeries.groupBy = "model";
     usage.toggles.timeSeries.view = "bars";
+    const names = ["large", "boundary", "tiny", "smallest"];
     usage.summary = usageSummary([[993, 5, 2, 0], [987, 5, 6, 2]].map((values, day) => {
-      const entry = modelDailyEntry(day, values.map((value, index) => ({ modelName: ["large", "boundary", "tiny", "smallest"][index]!, cost: testMoney(value) })));
-      entry.modelBreakdowns!.forEach((row, index) => { row.outputTokens = values[index]!; row.inputTokens = 100_000; });
-      return entry;
+      return modelDailyEntry(day, values.map((value, index) => ({
+        modelName: names[index]!,
+        cost: testMoney(value),
+        inputTokens: 100_000,
+        outputTokens: value,
+      })));
     }));
     const component = mountChart();
     await tick();
 
-    expect(Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim())).toEqual(["large", "boundary", "Other"]);
+    const labels = Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim());
+    expect(labels).toEqual(["large", "boundary", "Other"]);
     const bars = Array.from(document.querySelectorAll("rect.cost-seg"));
     expect(bars.slice(0, 3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0)).toBeCloseTo(160);
     expect(bars.slice(3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0)).toBeCloseTo(160);
@@ -662,7 +667,11 @@ describe("CostTimeSeriesChart", () => {
   it("cuts tiny reference series while keeping a selected series that grows in share", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     usage.selectedModel = "tiny";
-    usage.referenceSummary = usageSummary([modelDailyEntry(0, [{ modelName: "large", cost: testMoney(999) }, { modelName: "tiny", cost: testMoney(1) }, { modelName: "smallest", cost: testMoney(1) }])]);
+    usage.referenceSummary = usageSummary([modelDailyEntry(0, [
+      { modelName: "large", cost: testMoney(999) },
+      { modelName: "tiny", cost: testMoney(1) },
+      { modelName: "smallest", cost: testMoney(1) },
+    ])]);
     usage.summary = usageSummary([modelDailyEntry(0, [{ modelName: "tiny", cost: testMoney(1) }])]);
     const component = mountChart();
     await tick();
