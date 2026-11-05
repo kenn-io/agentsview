@@ -837,6 +837,8 @@ fixtures retain this field; missing identities remain source-local.
   saved contributor hints atomically while preserving other fork provenance.
   `TestCodexForkNativeResultIdentity` also verifies that archive copies retain
   known raw metadata and deduplicate returning source events after a rebuild.
+  `TestCodexForkRebuildBeforeProvenanceSchema` covers older archives without
+  local fork provenance, orphan preservation, and delayed parent recovery.
   `TestCodexForkIdlessResultSignalsKeepOccurrences` preserves distinct result
   outcomes for calls without provider IDs.
   `TestCodexForkImportedOrdinalUsageSurvivesResolvedShortening` retains a message

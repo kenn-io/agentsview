@@ -95,6 +95,23 @@ func (db *DB) HasCodexForkSource(ctx context.Context, agent, path string) (bool,
 	return found, err
 }
 
+// HasCodexForkToolHistory identifies retained calls whose result payloads are
+// not bounded by the size of the current source file.
+func (db *DB) HasCodexForkToolHistory(ctx context.Context, agent, path string) (bool, error) {
+	// Rebuilds read the original archive before applying schema migrations.
+	var exists bool
+	if err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
+	 SELECT 1 FROM sqlite_master WHERE type='table' AND name='codex_fork_state')`).Scan(&exists); err != nil || !exists {
+		return false, err
+	}
+	var found bool
+	err := db.getReader().QueryRow(ctx, `SELECT EXISTS (
+	 SELECT 1 FROM sessions s JOIN codex_fork_state f ON f.session_id = s.id
+	 JOIN messages m ON m.session_id = s.id JOIN tool_calls t ON t.message_id = m.id
+	 WHERE s.agent = ? AND s.file_path = ?)`, agent, path).Scan(&found)
+	return found, err
+}
+
 // GetCodexForkMessageMetadata omits result bodies. Staged fork reconciliation
 // reads archived results one message at a time and spools them back to scratch.
 func (db *DB) GetCodexForkMessageMetadata(ctx context.Context, sessionID string) ([]Message, error) {

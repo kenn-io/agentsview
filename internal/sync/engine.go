@@ -13241,8 +13241,8 @@ func (e *Engine) processProviderFile(
 	// Large Codex full parses stream through the scratch staging sink: the
 	// in-memory model keeps placeholders instead of tool-result content, so
 	// peak memory stays bounded by messages + one scratch batch rather than
-	// the transcript size. Known forks also stage: a shortened source does not
-	// bound the result payloads retained in its archive. Report-only
+	// the transcript size. Forks with archived calls also stage: a shortened
+	// source does not bound their retained result payloads. Report-only
 	// parse-diff disables staging through e.forceParse; ordinary forced full
 	// syncs retain the bounded-memory path.
 	var stagedSink *codexStagingSink
@@ -13253,7 +13253,7 @@ func (e *Engine) processProviderFile(
 		if archive, ok := e.archiveStore.(*db.DB); ok {
 			reader = archive
 		}
-		stageCodex, err = reader.HasCodexForkSource(ctx, string(file.Agent), e.effectiveSourcePath(providerDiscoveredPath(source)))
+		stageCodex, err = reader.HasCodexForkToolHistory(ctx, string(file.Agent), e.effectiveSourcePath(providerDiscoveredPath(source)))
 		if err != nil {
 			lease.Release()
 			return processResult{err: err}, true

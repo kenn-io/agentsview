@@ -83,10 +83,10 @@ tool results obey the current category and archive-content policies. Retained
 messages keep their activity bounds and supply the child preview; retained usage
 events follow the final child identity and message ordinals. Restored metadata
 continues to survive full parses until it returns in the source itself.
-Known Codex fork retries use staging even when the source shrinks below the
-size threshold. They load archived message and call metadata separately, then
-reconcile and spool result bodies one archived message at a time. Restored source events
-keep their order around shared events. Raw summary participation remains distinct
+Codex forks with archived tool calls use staging even when the source shrinks
+below the size threshold. They load message and call metadata separately, then
+reconcile and spool result bodies one archived message at a time. Restored source
+events keep their order around shared events. Raw summary participation remains distinct
 from sanitized text, so a cleared result cannot revive older output. Spawn links
 also survive when their output records disappear.
 Summary-only saved results keep their text and lengths when the source still
