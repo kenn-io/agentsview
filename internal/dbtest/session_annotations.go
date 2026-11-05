@@ -124,11 +124,15 @@ func AssertSessionAnnotationParity(t *testing.T, archive, mirror db.Store) {
 		slices.Sort(ids)
 		return ids
 	}
-	sidebarIDs := func(rows []db.SidebarSessionIndexRow) []string {
+	orderedSidebarIDs := func(rows []db.SidebarSessionIndexRow) []string {
 		ids := make([]string, 0, len(rows))
 		for _, r := range rows {
 			ids = append(ids, r.ID)
 		}
+		return ids
+	}
+	sidebarIDs := func(rows []db.SidebarSessionIndexRow) []string {
+		ids := orderedSidebarIDs(rows)
 		slices.Sort(ids)
 		return ids
 	}
@@ -163,14 +167,7 @@ func AssertSessionAnnotationParity(t *testing.T, archive, mirror db.Store) {
 				require.NoError(t, err)
 				got, err := mirror.GetSidebarSessionIndex(ctx, mirrorFilter)
 				require.NoError(t, err)
-				wantIDs, gotIDs := []string{}, []string{}
-				for _, row := range want.Sessions {
-					wantIDs = append(wantIDs, row.ID)
-				}
-				for _, row := range got.Sessions {
-					gotIDs = append(gotIDs, row.ID)
-				}
-				assert.Equal(t, wantIDs, gotIDs, "sidebar page %d", page)
+				assert.Equal(t, orderedSidebarIDs(want.Sessions), orderedSidebarIDs(got.Sessions), "sidebar page %d", page)
 				assert.Equal(t, want.Total, got.Total, "sidebar page %d total", page)
 				require.Equal(t, want.NextCursor != "", got.NextCursor != "", "sidebar page %d cursor", page)
 				if want.NextCursor == "" {
