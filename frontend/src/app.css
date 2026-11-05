@@ -108,9 +108,11 @@
   --running-bg: rgba(106, 208, 168, 0.12); /* kit-ui-check-ignore: app token definition */
   --running-ring: rgba(106, 208, 168, 0.22); /* kit-ui-check-ignore: app token definition */
   /* Role surfaces stay near-neutral so transcript prose carries the
-     hierarchy: the user turn gets a faint blue wash, assistant turns sit on
-     the plain surface, and tool runs read as a quiet inset. */
-  --user-bg: color-mix(in srgb, var(--accent-blue) 5%, var(--bg-surface));
+     hierarchy: the user turn gets a calm blue wash, assistant turns sit on
+     the plain surface, and tool runs read as a quiet inset. Light needs a
+     little more blue than dark: at 5% the wash matched the grey page and the
+     prompt read weaker than the white assistant cards. */
+  --user-bg: color-mix(in srgb, var(--accent-blue) 9%, var(--bg-surface));
   --assistant-bg: var(--bg-surface);
   --thinking-bg: color-mix(in srgb, var(--accent-purple) 4%, var(--bg-surface));
   --tool-bg: color-mix(in srgb, var(--text-primary) 4.5%, var(--bg-surface));
@@ -217,13 +219,6 @@
   --role-code-frame-style: solid;
 }
 
-/* Compact trades some line length for density: a modestly wider column
-   while that layout is on screen. The header, find bar, and session panels
-   read the same token, so they keep sharing both edges. */
-:root:has(.message-list-scroll.layout-compact) {
-  --reading-column: 960px;
-}
-
 :root[data-message-role-patterns] {
   --role-user-bar-width: 4px;
   --role-assistant-bar-style: double;
@@ -313,18 +308,24 @@ html:root .kit-modal-panel {
   box-shadow: var(--overlay-shadow);
 }
 
-/* Dark popovers (pickers, menus) sit one surface step above the page so
-   they read as raised, not as part of the page beneath. */
+/* Dark popovers (pickers, menus) sit clearly above the page: a lighter
+   raised surface and a lighter edge, since a shadow alone barely shows on
+   the near-black page. Inside them the chosen option (the date picker's
+   Relative tab and 30d preset) takes a stronger fill and edge, because the
+   raised surface narrows the gap to the ordinary selected fill. */
 :root {
   --popover-bg: var(--bg-surface);
 }
 
 :root.dark {
-  --popover-bg: color-mix(in srgb, var(--text-primary) 4%, var(--bg-surface));
+  --popover-bg: color-mix(in srgb, var(--text-primary) 9%, var(--bg-surface));
 }
 
 html:root.dark .kit-popover-card {
   background: var(--popover-bg);
+  border-color: color-mix(in srgb, var(--text-primary) 20%, var(--bg-surface));
+  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 30%, var(--bg-surface));
+  --selected-strong-edge: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 50%, transparent);
 }
 
 /* Outranks kit-ui's scoped active rule (three classes). */
@@ -367,6 +368,19 @@ html:root.dark .kit-popover-card {
 /* Only the selected destination keeps the medium weight. */
 :root .kit-top-bar .kit-top-bar__tab.active {
   font-weight: 500;
+}
+
+/* Dark: kit-ui's surface-colored pill is almost the track color there, so
+   the selected destination takes the shared strong selected fill. */
+:root.dark .kit-top-bar .kit-top-bar__tab.active {
+  background: var(--selected-strong-bg);
+  box-shadow: var(--selected-strong-edge);
+}
+
+/* Separate the tab strip from the search field: kit-ui's 8px bar gap made
+   them read as one control. */
+:root .kit-top-bar .kit-top-bar__search {
+  margin-inline-start: 16px;
 }
 
 html,
@@ -451,6 +465,12 @@ button:disabled {
 :root {
   --disabled-ink: color-mix(in srgb, var(--text-muted) 58%, var(--bg-surface));
   --disabled-edge: var(--border-muted);
+}
+
+/* Light: at 58% the label (Recall's Generate) nearly vanished on white;
+   a step darker still reads as disabled but can be read. */
+:root:not(.dark) {
+  --disabled-ink: color-mix(in srgb, var(--text-muted) 72%, var(--bg-surface));
 }
 
 /* A disabled primary (Save token, Connect on a read-only server) keeps a
