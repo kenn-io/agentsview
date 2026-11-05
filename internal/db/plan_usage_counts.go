@@ -99,6 +99,8 @@ func (t *PlanUsageCountTally) Counts() PlanUsageSessionCounts {
 // filter), and partly-captured rows from usage events. Messages and events
 // use the same eligibility, model filters, and timestamp fallback as the
 // matching-session count and the totals.
+// CROSS JOIN keeps plan usage outermost so an empty plan table skips
+// the session, message, and event lookups.
 func planUsageCountSQL(f UsageFilter) (string, []any) {
 	b := usageBoundsForFilter(f)
 	var args []any
@@ -112,8 +114,8 @@ func planUsageCountSQL(f UsageFilter) (string, []any) {
 SELECT '` + PlanUsageCountKindPlanOnly + `', s.id, m.model,
 	COALESCE(NULLIF(m.timestamp, ''), s.started_at, '')
 FROM session_plan_usage p
-JOIN sessions s ON s.id = p.session_id
-JOIN messages m ON m.session_id = s.id
+CROSS JOIN sessions s ON s.id = p.session_id
+CROSS JOIN messages m ON m.session_id = s.id
 WHERE ` + messageWhere
 
 	if len(CSVFilterValues(f.Model)) == 0 {
@@ -129,7 +131,7 @@ WHERE ` + messageWhere
 UNION ALL
 SELECT '` + PlanUsageCountKindPlanOnly + `', s.id, '', COALESCE(s.started_at, '')
 FROM session_plan_usage p
-JOIN sessions s ON s.id = p.session_id
+CROSS JOIN sessions s ON s.id = p.session_id
 WHERE ` + sessionWhere
 	}
 
@@ -143,8 +145,8 @@ UNION ALL
 SELECT '` + PlanUsageCountKindPartlyCaptured + `', s.id, ue.model,
 	COALESCE(ue.occurred_at, s.started_at, '')
 FROM session_plan_usage p
-JOIN sessions s ON s.id = p.session_id
-JOIN usage_events ue ON ue.session_id = s.id
+CROSS JOIN sessions s ON s.id = p.session_id
+CROSS JOIN usage_events ue ON ue.session_id = s.id
 WHERE ` + eventWhere
 	return query, args
 }
