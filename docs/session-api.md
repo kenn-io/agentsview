@@ -1260,8 +1260,7 @@ A missing daemon ID returns a retry error while
 all three are clear, it returns exit 2. Scheduled ingestion owns retries.
 
 `sync_pending` stays true while ingestion catches up after an idle period.
-It clears when the pass ends, even if a source fails. Source failures are logged;
-failed files retry through the next scheduled sync while collection is active.
+It clears when the pass ends, even if a source fails. Source failures are logged.
 Archive responses carry `X-Agentsview-Archive-Stale: true` while catch-up is
 incomplete. A required parser rebuild uses the stale header independently.
 

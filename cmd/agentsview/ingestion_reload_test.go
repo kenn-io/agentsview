@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -48,15 +47,12 @@ func sessionImported(t *testing.T, database *db.DB, id string) bool {
 
 func searchIngestionArchive(t *testing.T, endpoint, query string) (http.Header, string) {
 	t.Helper()
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, endpoint+"/api/v1/search?q="+url.QueryEscape(query), nil)
+	client, err := apiclient.NewHTTPClient(endpoint, "", http.DefaultClient)
 	require.NoError(t, err)
-	response, err := http.DefaultClient.Do(request)
+	response, err := client.GetAPIV1SearchWithResponse(t.Context(), &apiclient.GetAPIV1SearchRequestOptions{Query: &apiclient.GetAPIV1SearchQuery{Q: query}})
 	require.NoError(t, err)
-	body, err := io.ReadAll(response.Body)
-	require.NoError(t, response.Body.Close())
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, response.StatusCode, string(body))
-	return response.Header, string(body)
+	require.Equal(t, http.StatusOK, response.StatusCode, string(response.Body))
+	return response.HTTPResponse.Header, string(response.Body)
 }
 
 func serveIngestionArchive(t *testing.T, cfg config.Config, database *db.DB, engine *agentsync.Engine, ingestion *daemonIngestion, options ...server.Option) *httptest.Server {
@@ -188,10 +184,6 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 	lastSync := time.Now().Add(-time.Minute)
 	require.NoError(t, f.database.SetSyncState(t.Context(), "last_sync_started_at", lastSync.Format(time.RFC3339Nano)))
 	writeReloadGeminiSession(t, f.root, "overnight")
-	path := filepath.Join(f.root, "tmp", "project", "chats", "session-overnight.json")
-	// The file precedes the last sync but falls inside its ten-second margin.
-	withinMargin := lastSync.Add(-5 * time.Second)
-	require.NoError(t, os.Chtimes(path, withinMargin, withinMargin))
 	writeReloadGeminiSession(t, f.root, "old")
 	oldPath := filepath.Join(f.root, "tmp", "project", "chats", "session-old.json")
 	oldTime := lastSync.Add(-time.Hour)
@@ -223,9 +215,9 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 	require.Eventually(t, func() bool { return !f.ingestion.Pending() }, 5*time.Second, time.Millisecond)
 	require.True(t, f.ingestion.EnsureFresh(t.Context()))
 	headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
-	assert.Contains(t, freshBody, "hello from overnight", "wake includes files within the last sync's mtime margin")
+	assert.Contains(t, freshBody, "hello from overnight")
 	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-	assert.False(t, sessionImported(t, f.database, "gemini:old"), "wake skips files older than the last sync and its margin")
+	assert.True(t, sessionImported(t, f.database, "gemini:old"), "wake imports copied files with preserved old modification times")
 }
 
 func TestDaemonIngestionReloadWhileSuspended(t *testing.T) {

@@ -221,6 +221,11 @@ func (d *daemonIngestion) restoreCollection() error {
 	if !active {
 		watchers := d.startWatchers(d.Config())
 		d.mu.Lock()
+		if d.stopped {
+			d.mu.Unlock()
+			watchers.stop()
+			return errIngestionStopped
+		}
 		d.installWatchersLocked(watchers, d.liveEnabled)
 		d.mu.Unlock()
 	}
@@ -265,10 +270,9 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 
 func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
-	since := quickSyncCutoff(d.engine.LastSyncStartedAt(d.ctx))
 	err := d.restoreCollection()
 	if err == nil {
-		stats := d.engine.SyncAllSince(d.ctx, since, nil)
+		stats := d.engine.SyncAll(d.ctx, nil)
 		if !stats.ProcessingComplete() {
 			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
 		}
