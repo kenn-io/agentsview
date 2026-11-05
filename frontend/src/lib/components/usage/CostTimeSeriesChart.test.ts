@@ -623,6 +623,55 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  it.each(["cost", "token"] as const)("folds tiny %s series into Other without changing daily totals", async (mode) => {
+    usage.mode = mode;
+    usage.setSelectedTokenTypes(["output"]);
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.toggles.timeSeries.view = "bars";
+    usage.summary = usageSummary([[993, 5, 2, 0], [987, 5, 6, 2]].map((values, day) => {
+      const entry = modelDailyEntry(day, values.map((value, index) => ({ modelName: ["large", "boundary", "tiny", "smallest"][index]!, cost: testMoney(value) })));
+      entry.modelBreakdowns!.forEach((row, index) => { row.outputTokens = values[index]!; row.inputTokens = 100_000; });
+      return entry;
+    }));
+    const component = mountChart();
+    await tick();
+
+    expect(Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim())).toEqual(["large", "boundary", "Other"]);
+    const bars = Array.from(document.querySelectorAll("rect.cost-seg"));
+    expect(bars.slice(0, 3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0)).toBeCloseTo(160);
+    expect(bars.slice(3).reduce((sum, bar) => sum + Number(bar.getAttribute("height")), 0)).toBeCloseTo(160);
+    for (const [day, value] of [2, 8].entries()) {
+      document.querySelectorAll(".slot-hit")[day]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+      await tick();
+      const other = Array.from(document.querySelectorAll(".tooltip-row")).find((row) => row.textContent?.includes("Other"));
+      expect(other?.textContent).toContain(mode === "cost" ? `$${value}.00` : String(value));
+    }
+    unmount(component);
+  });
+
+  it("keeps zero-total day slots without legend entries", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary = usageSummary([modelDailyEntry(0, [{ modelName: "zero", cost: testMoney(0) }])]);
+    const component = mountChart();
+    await tick();
+    expect(document.querySelectorAll(".slot-hit")).toHaveLength(1);
+    expect(document.querySelectorAll("rect.cost-seg, .legend-item")).toHaveLength(0);
+    unmount(component);
+  });
+
+  it("cuts tiny reference series while keeping a selected series that grows in share", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.selectedModel = "tiny";
+    usage.referenceSummary = usageSummary([modelDailyEntry(0, [{ modelName: "large", cost: testMoney(999) }, { modelName: "tiny", cost: testMoney(1) }, { modelName: "smallest", cost: testMoney(1) }])]);
+    usage.summary = usageSummary([modelDailyEntry(0, [{ modelName: "tiny", cost: testMoney(1) }])]);
+    const component = mountChart();
+    await tick();
+    const items = Array.from(document.querySelectorAll(".legend-item"));
+    expect(items.map((item) => item.textContent?.trim())).toEqual(["large", "tiny", "Other"]);
+    expect(items.filter((item) => !item.classList.contains("dimmed")).map((item) => item.textContent?.trim())).toEqual(["tiny"]);
+    unmount(component);
+  });
+
   it("renders ten named series before rolling the rest into Other", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     const models = Array.from({ length: 11 }, (_, index) => ({

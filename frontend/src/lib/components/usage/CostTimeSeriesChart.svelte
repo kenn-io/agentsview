@@ -45,6 +45,7 @@
   const SVG_H = PLOT_BOTTOM + X_LABEL_H;
   const DAY_MS = 86_400_000;
   const MAX_SERIES = 10;
+  const MIN_SERIES_SHARE = 0.005;
 
   interface Point {
     date: string;
@@ -188,13 +189,15 @@
       return { points, keys: ["total"], maxY: maxY || 1, labels };
     }
 
-    // Pick top N by total value, group the rest as "Other".
+    // Keep visible shares up to the series limit, then group the remainder.
     const ranked = [...totals.entries()]
       .sort((a, b) => b[1] - a[1]);
-    const topKeys = new Set(
-      ranked.slice(0, MAX_SERIES).map(([k]) => k),
-    );
-    const hasOther = ranked.length > MAX_SERIES;
+    const windowTotal = ranked.reduce((sum, [, value]) => sum + value, 0);
+    const retained = ranked
+      .filter(([, value]) => value > 0 && value >= windowTotal * MIN_SERIES_SHARE)
+      .slice(0, MAX_SERIES);
+    const topKeys = new Set(retained.map(([key]) => key));
+    const hasOther = ranked.some(([key, value]) => !topKeys.has(key) && value > 0);
 
     const points: Point[] = [];
     for (const day of daily) {
@@ -237,9 +240,7 @@
 
     // Build ordered key list: top N by value desc, then
     // __other__ (displayed as "Other" in legend/labels).
-    const keys = ranked
-      .slice(0, MAX_SERIES)
-      .map(([k]) => k);
+    const keys = retained.map(([key]) => key);
     if (hasOther) keys.push("__other__");
 
     let maxY = 0;
