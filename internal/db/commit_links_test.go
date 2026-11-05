@@ -144,6 +144,19 @@ func TestCommitLinksParsing(t *testing.T) {
 	}
 }
 
+func TestCommitLinksToolNameInSubject(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	messages := commitMessages("s1", `text(await tools.exec_command({cmd:"git commit -m 'Document tools.exec_command'"}))`, "[main abc1234] Document tools.exec_command")
+	messages[2].ToolCalls[0].ToolName = "exec"
+	insertMessages(t, d, messages...)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+	assert.Equal(t, "abc1234", got.Commits[0].SHA)
+	assert.Equal(t, "Document tools.exec_command", got.Commits[0].Subject)
+}
+
 func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 	for _, tt := range []struct {
 		name, cwd, command, repository string

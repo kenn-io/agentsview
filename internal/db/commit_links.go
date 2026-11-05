@@ -154,7 +154,7 @@ func commitCommandText(input string) string {
 	}
 	// A batch's output and process IDs do not identify which new call owns them.
 	matches := commitCommandRE.FindAllStringSubmatch(input, -1)
-	if strings.Count(input, "tools.") != 1 || len(matches) != 1 {
+	if len(matches) != 1 || commitPollRE.MatchString(input) {
 		return ""
 	}
 	literal := matches[0][1]
