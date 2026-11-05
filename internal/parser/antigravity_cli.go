@@ -1699,20 +1699,19 @@ type agyTrajectoryParseResult struct {
 	parentCascadeID string
 }
 
-// antigravityCLISidecarParent returns the parent a reader sidecar names, or ""
-// when the sidecar names none or would not parse, so the parser falls back
-// to the summary store.
-func antigravityCLISidecarParent(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
+// antigravityCLISidecarParent reports the parent parseSessionWithStatus takes
+// from a reader sidecar for conversation id. ok is false when the sidecar
+// would not parse or names no parent, so the parser falls back to the summary
+// store. A sidecar naming the conversation itself yields no parent.
+func antigravityCLISidecarParent(path, id string) (parent string, ok bool) {
+	result, err := parseAntigravityCLITrajectory(path, nil)
+	if err != nil || result.parentCascadeID == "" {
+		return "", false
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxTrajectorySidecarBytes+1))
-	if err != nil || int64(len(data)) > maxTrajectorySidecarBytes || !gjson.ValidBytes(data) {
-		return ""
+	if strings.EqualFold(result.parentCascadeID, id) {
+		return "", true
 	}
-	return parseAgyReaderParentCascadeID(jsontext.Value(gjson.GetBytes(data, "agyReader").Raw))
+	return result.parentCascadeID, true
 }
 
 func parseAgyReaderParentCascadeID(raw jsontext.Value) string {

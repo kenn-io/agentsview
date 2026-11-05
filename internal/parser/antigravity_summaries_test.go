@@ -91,7 +91,8 @@ func TestAntigravityProviderSummaryResolutionStates(t *testing.T) {
 					summaryTestID: {ParentID: summaryTestID},
 				})
 			},
-			want: SourceCwdUnspecified,
+			// A listed row without a folder means the conversation has none.
+			want: SourceCwdNone,
 		},
 		"store predates the workspace and parent columns": {
 			store: func(t *testing.T, root string) {

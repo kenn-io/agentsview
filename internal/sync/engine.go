@@ -12660,7 +12660,16 @@ func (e *Engine) processProviderFile(
 	}
 	if providerSemantics.UnavailableCwdKeepsArchivedSession &&
 		cwdDecision.resolution.State == parser.SourceCwdUnavailable {
-		keep, err := e.archivedSessionHasSourceMetadata(ctx, cwdPath, cwdAgent)
+		paths := []string{cwdPath}
+		if lister, ok := provider.(parser.ArchivedSourcePathLister); ok {
+			for _, path := range lister.ArchivedSourcePaths(source) {
+				if e.pathRewriter != nil {
+					path = e.pathRewriter(path)
+				}
+				paths = append(paths, path)
+			}
+		}
+		keep, err := e.archivedSessionHasSourceMetadata(ctx, paths, cwdAgent)
 		if err != nil {
 			return processResult{err: err}, true
 		}

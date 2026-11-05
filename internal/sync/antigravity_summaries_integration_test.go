@@ -478,6 +478,101 @@ func TestAntigravitySummaryStoreRoutesCLIImplicitSessions(t *testing.T) {
 	assert.Equal(t, "/tmp/moved-proj", antigravityStoredSession(t, archive, id).Cwd)
 }
 
+// With the app or IDE store missing after a restart, a conversation that
+// moved from its brain transcript to a database is still held back: the
+// archived row names the transcript, not the database now parsed.
+func TestAntigravityMissingSummaryStoreKeepsSessionsAcrossSourceMoves(t *testing.T) {
+	tc := antigravitySummaryCases()["app and IDE"]
+	root := t.TempDir()
+	tc.write(t, root)
+	engine, archive := newAntigravitySummaryEngine(t, tc.agent, root, config.ArchiveContentFull)
+	id := string(tc.agent) + ":" + tc.id
+	transcript := filepath.Join(root, "brain", tc.id, ".system_generated", "logs", "transcript.jsonl")
+	require.FileExists(t, transcript)
+	require.NoError(t, archive.UpsertSession(t.Context(), db.Session{
+		ID: id, Agent: string(tc.agent), Machine: "host-a", FilePath: &transcript,
+		Cwd: "/tmp/ws-proj", Project: "ws_proj",
+	}))
+
+	assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Failed, "the session is retried, not reparsed")
+	kept := antigravityStoredSession(t, archive, id)
+	assert.Equal(t, "/tmp/ws-proj", kept.Cwd)
+	assert.Equal(t, "ws_proj", kept.Project)
+}
+
+// With a cwd allow-list, clearing a workspace fails the filter, so the parse
+// is not stored; the archived cwd is still cleared.
+func TestAntigravitySummaryStoreClearedWorkspaceUnderAllowList(t *testing.T) {
+	tc := antigravitySummaryCases()["app and IDE"]
+	root := t.TempDir()
+	tc.write(t, root)
+	store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+		tc.id: {WorkspaceURIs: `["file:///tmp/allowed/proj"]`},
+	})
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{tc.agent: {root}}, Machine: "host-a",
+		IncludeCwdPrefixes: []string{"/tmp/allowed"},
+	})
+	t.Cleanup(engine.Close)
+	id := string(tc.agent) + ":" + tc.id
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, "/tmp/allowed/proj", antigravityStoredSession(t, archive, id).Cwd)
+
+	testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{tc.id: {WorkspaceURIs: `[]`}})
+	_ = engine.SyncPathsContext(t.Context(), []string{store})
+	assert.Empty(t, antigravityStoredSession(t, archive, id).Cwd)
+}
+
+// A CLI reader sidecar decides the parent only as the parser reads it: one
+// the parser rejects defers to the store, and one naming the conversation
+// itself means no parent, whatever the store says.
+func TestAntigravitySummaryStoreCLISidecarParentFollowsParser(t *testing.T) {
+	const other = "dddddddd-eeee-ffff-0000-111111111111"
+	tc := antigravitySummaryCases()["CLI"]
+	t.Run("sidecar the parser rejects", func(t *testing.T) {
+		root := t.TempDir()
+		tc.write(t, root)
+		sidecar := filepath.Join(root, "conversations", tc.id+".trajectory.json")
+		require.NoError(t, os.WriteFile(sidecar,
+			[]byte(`{"steps":"not a list","agyReader":{"parentCascadeId":"`+antigravitySummaryParent+`"}}`), 0o644))
+		store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+			tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: antigravitySummaryParent},
+		})
+		engine, archive := newAntigravitySummaryEngine(t, tc.agent, root, config.ArchiveContentFull)
+		id := string(tc.agent) + ":" + tc.id
+		engine.SyncAll(t.Context(), nil)
+		require.Equal(t, new(string(tc.agent)+":"+antigravitySummaryParent), antigravityStoredSession(t, archive, id).ParentSessionID)
+
+		testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+			tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: other},
+		})
+		require.NoError(t, antigravityEngineOn(t, tc.agent, root, archive).SyncPathsContext(t.Context(), []string{store}))
+		assert.Equal(t, new(string(tc.agent)+":"+other), antigravityStoredSession(t, archive, id).ParentSessionID)
+	})
+	t.Run("sidecar naming the conversation itself", func(t *testing.T) {
+		root := t.TempDir()
+		tc.write(t, root)
+		sidecar := filepath.Join(root, "conversations", tc.id+".trajectory.json")
+		require.NoError(t, os.WriteFile(sidecar, []byte(`{"agyReader":{"parentCascadeId":"`+tc.id+`"}}`), 0o644))
+		store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+			tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`},
+		})
+		engine, archive := newAntigravitySummaryEngine(t, tc.agent, root, config.ArchiveContentFull)
+		id := string(tc.agent) + ":" + tc.id
+		engine.SyncAll(t.Context(), nil)
+		require.Nil(t, antigravityStoredSession(t, archive, id).ParentSessionID)
+
+		testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+			tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: other},
+		})
+		router := antigravityEngineOn(t, tc.agent, root, archive)
+		require.NoError(t, router.SyncPathsContext(t.Context(), []string{store}))
+		assert.Zero(t, router.LastSyncStats().Synced, "the parser would store no parent, so nothing routes")
+		assert.Nil(t, antigravityStoredSession(t, archive, id).ParentSessionID)
+	})
+}
+
 func antigravityEngineOn(t *testing.T, agent parser.AgentType, root string, archive *db.DB) *sync.Engine {
 	t.Helper()
 	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{

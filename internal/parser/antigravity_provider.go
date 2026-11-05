@@ -100,6 +100,17 @@ func (p *antigravityProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
+func (p *antigravityProvider) ArchivedSourcePaths(source SourceRef) []string {
+	src, ok := p.sources.sourceFromRef(source)
+	if !ok {
+		return nil
+	}
+	return []string{
+		filepath.Join(src.Root, "conversations", src.ID+".db"),
+		antigravityBrainTranscriptPath(src.Root, src.ID),
+	}
+}
+
 func (p *antigravityProvider) SummaryStoreExpectations(
 	ctx context.Context, storePath string,
 ) ([]SummaryStoreExpectation, error) {
@@ -591,13 +602,10 @@ func (s antigravitySourceSet) summaryStoreExpectations(
 			if p := summaries.parent(id); p != "" {
 				parent = antigravityIDPrefix + p
 			}
-			// Only the store names an app or IDE parent or workspace, so a row
-			// with no workspace folder means a parse stores no cwd.
-			expectation := summaryExpectation(s.newSourceRef(ctx, src), antigravityIDPrefix+id, parent, true)
-			if expectation.Source.CwdResolution.State == SourceCwdUnspecified {
-				expectation.CwdKnown = true
-			}
-			expectations = append(expectations, expectation)
+			// Only the store names an app or IDE parent.
+			expectations = append(expectations, summaryExpectation(
+				s.newSourceRef(ctx, src), antigravityIDPrefix+id, parent, true,
+			))
 		}
 	}
 	return expectations, ctx.Err()

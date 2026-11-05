@@ -587,10 +587,14 @@ func (s antigravityCLISourceSet) summaryStoreExpectations(
 					// A reader sidecar's parent wins over the store's when the
 					// sidecar parses and names one, as in parseSessionWithStatus.
 					expectation.ResolveParent = func() (string, error) {
-						if p := antigravityCLISidecarParent(sidecar); p != "" {
-							return antigravityCLIIDPrefix + p, nil
+						p, ok := antigravityCLISidecarParent(sidecar, id)
+						switch {
+						case !ok:
+							return parent, nil
+						case p == "":
+							return "", nil
 						}
-						return parent, nil
+						return antigravityCLIIDPrefix + p, nil
 					}
 				}
 				expectations = append(expectations, expectation)

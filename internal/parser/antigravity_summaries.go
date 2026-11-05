@@ -56,10 +56,13 @@ func (s antigravitySummaries) cwdResolution(id string) SourceCwdResolution {
 	if s.err != nil || s.missing {
 		return SourceCwdResolution{State: SourceCwdUnavailable}
 	}
-	summary := s.byID[id]
+	summary, listed := s.byID[id]
 	switch {
-	case !summary.hasWorkspace:
+	case !listed:
 		return SourceCwdResolution{}
+	case !summary.hasWorkspace:
+		// A listed row without a folder means the conversation has none.
+		return SourceCwdResolution{State: SourceCwdNone}
 	case summary.workspace == "":
 		return SourceCwdResolution{State: SourceCwdAmbiguous}
 	}
@@ -276,6 +279,13 @@ type SummaryStoreExpectation struct {
 	ResolveParent func() (string, error)
 }
 
+// ArchivedSourcePathLister names every source path a session may have been
+// archived from, such as a conversation that moved between a brain
+// transcript and its database.
+type ArchivedSourcePathLister interface {
+	ArchivedSourcePaths(source SourceRef) []string
+}
+
 // SummaryStoreExpectationLister lists, for a summary store write, every
 // session its conversations feed, with the values a parse would store. The
 // engine routes the sessions whose archived values differ, so a store write
@@ -292,9 +302,9 @@ func summaryExpectation(source SourceRef, sessionID, parentID string, parentKnow
 	switch source.CwdResolution.State {
 	case SourceCwdResolved:
 		expectation.Cwd, expectation.CwdKnown = source.CwdResolution.Path, true
-	case SourceCwdAmbiguous, SourceCwdRemote:
+	case SourceCwdNone, SourceCwdAmbiguous, SourceCwdRemote:
 		expectation.CwdKnown = true
-	case SourceCwdUnspecified, SourceCwdNone, SourceCwdUnavailable:
+	case SourceCwdUnspecified, SourceCwdUnavailable:
 		// The store does not decide this session's working directory.
 	}
 	return expectation

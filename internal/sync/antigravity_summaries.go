@@ -112,12 +112,12 @@ type sessionSourceMetadataReader interface {
 	GetSessionSourceMetadataByAgentPath(ctx context.Context, path, agent string) (db.SessionSourceMetadata, bool, error)
 }
 
-// archivedSessionHasSourceMetadata reports whether the live session archived
-// from path holds a working directory, parser parent, or parser project, the
-// values a provider declaring UnavailableCwdKeepsArchivedSession takes from
-// the source it cannot read now.
+// archivedSessionHasSourceMetadata reports whether a live session archived
+// from any of paths holds a working directory, parser parent, or parser
+// project, the values a provider declaring UnavailableCwdKeepsArchivedSession
+// takes from the source it cannot read now.
 func (e *Engine) archivedSessionHasSourceMetadata(
-	ctx context.Context, path string, agent parser.AgentType,
+	ctx context.Context, paths []string, agent parser.AgentType,
 ) (bool, error) {
 	// During a rebuild e.db is the empty replacement; the old archive holds
 	// the values to protect.
@@ -125,9 +125,14 @@ func (e *Engine) archivedSessionHasSourceMetadata(
 	if archived, ok := e.archiveStore.(sessionSourceMetadataReader); ok {
 		reader = archived
 	}
-	meta, ok, err := reader.GetSessionSourceMetadataByAgentPath(ctx, path, string(agent))
-	if err != nil || !ok {
-		return false, err
+	for _, path := range paths {
+		meta, ok, err := reader.GetSessionSourceMetadataByAgentPath(ctx, path, string(agent))
+		if err != nil {
+			return false, err
+		}
+		if ok && (meta.Cwd != "" || meta.ParserParentSessionID != "" || meta.ParserProject != "") {
+			return true, nil
+		}
 	}
-	return meta.Cwd != "" || meta.ParserParentSessionID != "" || meta.ParserProject != "", nil
+	return false, nil
 }
