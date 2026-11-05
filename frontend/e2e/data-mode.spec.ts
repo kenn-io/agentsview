@@ -355,3 +355,44 @@ test.describe("Data mode project reclassification", () => {
     await expect(page.getByText("No worktree mappings configured.")).toBeVisible();
   });
 });
+
+test("rules actions stay reachable with a long mapping list", async ({ page }) => {
+  const rules = Array.from({ length: 30 }, (_, i) => ({
+    id: i + 1,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    enabled: true,
+    layout: "explicit",
+    machine: "fixture-machine",
+    original_project: `original-${i}`,
+    path_prefix: `/home/user/src/worktrees/project-${i}`,
+    project: `project-${i}`,
+    governed_sessions: i,
+  }));
+  await page.route("**/api/v1/data/project-rules*", (route) =>
+    route.fulfill({
+      json: { local_machine: "fixture-machine", machine: "fixture-machine", machines: ["fixture-machine"], rules },
+    }),
+  );
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/data?view=rules");
+  await expect(page.locator("tr.rule-row")).toHaveCount(30);
+  // Scroll the way a person would: the wheel over the rules description.
+  // (scrollIntoView would also scroll overflow-hidden boxes a person cannot.)
+  const description = page.locator(".rules-view .description");
+  const start = (await description.boundingBox())!;
+  await page.mouse.move(start.x + 20, start.y + 5);
+  for (let i = 0; i < 6; i++) await page.mouse.wheel(0, 400);
+  for (const name of ["Apply mappings"]) {
+    const action = page.getByRole("button", { name, exact: true });
+    await expect(action).toBeAttached();
+    const box = (await action.boundingBox())!;
+    expect(box.y + box.height, `${name} below the window`).toBeLessThanOrEqual(768);
+    const reachable = await action.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !!hit && el.contains(hit);
+    });
+    expect(reachable, `${name} is covered or clipped`).toBe(true);
+  }
+});
