@@ -539,7 +539,7 @@ describe("CostTimeSeriesChart", () => {
 
   const names = (by: string, from: number, to: number) =>
     Array.from({ length: to - from }, (_, index) => `${by}-${from + index}`);
-  const seriesSummary = (by: "model" | "agent", ids: string[]) => {
+  const seriesSummary = (by: "model" | "agent", ids: string[], costs?: Record<string, number>) => {
     const entry = dailyEntry(0);
     entry.projectBreakdowns = [];
     const rows = ids.map((id) => ({
@@ -547,7 +547,7 @@ describe("CostTimeSeriesChart", () => {
       outputTokens: 30,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: testMoney(12 - Number(id.split("-")[1])),
+      cost: testMoney(costs?.[id] ?? 12 - Number(id.split("-")[1])),
     }));
     if (by === "model")
       entry.modelBreakdowns = rows.map((row, index) => ({ ...row, modelName: ids[index]! }));
@@ -560,11 +560,22 @@ describe("CostTimeSeriesChart", () => {
     by: "model" | "agent";
     selected: string;
     reference?: string[];
+    costs?: Record<string, number>;
     brushed?: string[];
     plotted: string[];
     legend: string[];
     lit: string[];
   }>([
+    {
+      name: "cuts tiny reference series while keeping a selected series that grows in share",
+      by: "model",
+      selected: "tiny",
+      reference: ["large", "tiny", "smallest"],
+      costs: { large: 999, tiny: 1, smallest: 1 },
+      plotted: ["tiny"],
+      legend: ["large", "tiny", "Other"],
+      lit: ["tiny"],
+    },
     {
       name: "keeps the unselected entries of a single selected series and dims them",
       by: "model",
@@ -601,14 +612,14 @@ describe("CostTimeSeriesChart", () => {
       legend: [...names("model", 0, 10), "Other"],
       lit: [...names("model", 0, 10), "Other"],
     },
-  ])("$name", async ({ by, selected, reference, brushed, plotted, legend, lit }) => {
+  ])("$name", async ({ by, selected, reference, costs, brushed, plotted, legend, lit }) => {
     usage.toggles.timeSeries.groupBy = by;
     usage.toggles.attribution.groupBy = by;
     if (by === "model") usage.selectedModel = selected;
     else sessions.filters.agent = selected;
-    usage.referenceSummary = reference ? seriesSummary(by, reference) : null;
+    usage.referenceSummary = reference ? seriesSummary(by, reference, costs) : null;
     usage.attributionSummary = brushed ? seriesSummary(by, brushed) : null;
-    usage.summary = seriesSummary(by, plotted);
+    usage.summary = seriesSummary(by, plotted, costs);
 
     const component = mountChart();
     await tick();
@@ -656,28 +667,16 @@ describe("CostTimeSeriesChart", () => {
 
   it("keeps zero-total day slots without legend entries", async () => {
     usage.toggles.timeSeries.groupBy = "model";
-    usage.summary = usageSummary([modelDailyEntry(0, [{ modelName: "zero", cost: testMoney(0) }])]);
+    const entry = modelDailyEntry(0, [
+      { modelName: "zero-a", cost: testMoney(0) },
+      { modelName: "zero-b", cost: testMoney(0) },
+    ]);
+    entry.totalCost = testMoney(0);
+    usage.summary = usageSummary([entry]);
     const component = mountChart();
     await tick();
     expect(document.querySelectorAll(".slot-hit")).toHaveLength(1);
-    expect(document.querySelectorAll("rect.cost-seg, .legend-item")).toHaveLength(0);
-    unmount(component);
-  });
-
-  it("cuts tiny reference series while keeping a selected series that grows in share", async () => {
-    usage.toggles.timeSeries.groupBy = "model";
-    usage.selectedModel = "tiny";
-    usage.referenceSummary = usageSummary([modelDailyEntry(0, [
-      { modelName: "large", cost: testMoney(999) },
-      { modelName: "tiny", cost: testMoney(1) },
-      { modelName: "smallest", cost: testMoney(1) },
-    ])]);
-    usage.summary = usageSummary([modelDailyEntry(0, [{ modelName: "tiny", cost: testMoney(1) }])]);
-    const component = mountChart();
-    await tick();
-    const items = Array.from(document.querySelectorAll(".legend-item"));
-    expect(items.map((item) => item.textContent?.trim())).toEqual(["large", "tiny", "Other"]);
-    expect(items.filter((item) => !item.classList.contains("dimmed")).map((item) => item.textContent?.trim())).toEqual(["tiny"]);
+    expect(document.querySelector(".legend")).toBeNull();
     unmount(component);
   });
 
