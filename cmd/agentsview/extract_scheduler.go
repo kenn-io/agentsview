@@ -203,7 +203,6 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// top-up it carried.
 			if err == nil {
 				pendingFull = false
-				reconcileOwed = false
 			}
 		case <-tickC:
 			// A catchup tick also picks up a carried full pass: with the
@@ -225,9 +224,6 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			if started {
 				startupDone()
-				if err == nil {
-					reconcileOwed = false
-				}
 			}
 			if full {
 				// A dropped incremental catchup tick needs no carry: the
