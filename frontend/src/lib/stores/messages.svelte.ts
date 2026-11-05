@@ -455,7 +455,8 @@ export class MessagesStore {
 
     const newest = this.messages[this.messages.length - 1];
     if (this.sessionId !== id) return false;
-    this.messageCount = messageCountHint ?? (newest ? newest.ordinal + 1 : this.messages.length);
+    const loadedCount = newest ? newest.ordinal + 1 : this.messages.length;
+    this.messageCount = complete ? loadedCount : (messageCountHint ?? loadedCount);
     this.hasOlder = false;
     this.historyComplete = complete;
     return true;

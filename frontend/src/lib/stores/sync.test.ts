@@ -149,6 +149,25 @@ describe("session watch visibility", () => {
     },
   );
 
+  it("releases the initial read immediately on a watch error", async () => {
+    vi.useFakeTimers();
+    const onUpdate = vi.fn();
+    const settled = vi.fn();
+    const ready = sync.watchSession("session-a", onUpdate);
+    void ready.then(settled);
+    const stream = api.watchSession.mock.results[0]!.value;
+
+    stream.dispatchEvent(new Event("error"));
+    await Promise.resolve();
+
+    expect(settled).toHaveBeenCalledExactlyOnceWith(false);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    stream.dispatchEvent(new Event("session_ready"));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
   it("closes a hidden session stream and refreshes on return and every reconnect", () => {
     const onUpdate = vi.fn();
     const onTiming = vi.fn();

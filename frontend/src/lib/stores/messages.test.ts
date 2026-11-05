@@ -161,8 +161,11 @@ describe("MessagesStore", () => {
 
   it("fetches metadata immediately, then gates multi-page reads and folds ready reloads", async () => {
     const ready = createDeferred<void>();
+    const rows = Array.from({ length: 1001 }, (_, i) => makeMessage(i));
     api.getSession.mockResolvedValue(makeSession("s1", 1001));
-    api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+    api.getMessages.mockImplementation(async (_id, params) =>
+      makeMessagesResponse(rows.slice(params.from, params.from + params.limit)),
+    );
     const load = messages.loadSession("s1", ready.promise);
     expect(api.getSession).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -170,12 +173,37 @@ describe("MessagesStore", () => {
     expect(api.getMessages).not.toHaveBeenCalled();
     ready.resolve();
     await Promise.all([load, reload]);
-    expect(api.getMessages).toHaveBeenCalledTimes(1);
-    expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
+    expect(api.getMessages).toHaveBeenCalledTimes(2);
+    expect(messages.messages).toHaveLength(1001);
+    expect(messages.messages.at(-1)!.content).toBe("msg 1000");
 
     await messages.reload();
-    expect(api.getMessages).toHaveBeenCalledTimes(2);
+    expect(api.getMessages).toHaveBeenCalledTimes(4);
   });
+
+  it.each([1, 3])(
+    "uses the completed transcript count when metadata reports %i messages",
+    async (count) => {
+      const ready = createDeferred<void>();
+      const metadataRead = createDeferred<void>();
+      api.getSession.mockImplementationOnce(async () => {
+        metadataRead.resolve();
+        return makeSession("s1", count);
+      });
+      api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0), makeMessage(1)]));
+
+      const load = messages.loadSession("s1", ready.promise);
+      await metadataRead.promise;
+      ready.resolve();
+      const reload = messages.reload();
+      await Promise.all([load, reload]);
+
+      expect(api.getMessages).toHaveBeenCalledTimes(1);
+      expect(messages.messages.map((row) => row.content)).toEqual(["msg 0", "msg 1"]);
+      expect(messages.historyComplete).toBe(true);
+      expect(messages.messageCount).toBe(2);
+    },
+  );
 
   it("folds ready into one large-session download while metadata is in flight", async () => {
     const ready = createDeferred<void>();
@@ -856,7 +884,11 @@ describe("MessagesStore", () => {
     // The pending reload should trigger automatically and
     // update state with the new count (6).
     vi.mocked(api.getSession).mockResolvedValue(makeSession("s2", 6));
-    vi.mocked(api.getMessages).mockResolvedValue(makeMessagesResponse([]));
+    vi.mocked(api.getMessages).mockResolvedValue(
+      makeMessagesResponse(
+        Array.from({ length: 6 }, (_, i) => ({ ...makeMessage(i), session_id: "s2" })),
+      ),
+    );
     const callsBeforeP2 = vi.mocked(api.getSession).mock.calls.length;
     resolveP2(makeSession("s2", 5));
 

@@ -356,6 +356,10 @@ class SyncStore {
     const open = () => {
       this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
       const es = this.watchEventSource;
+      es.addEventListener("error", () => {
+        if (this.watchEventSource !== es) return;
+        settle(false);
+      });
       es.addEventListener("session_ready", () => {
         if (this.watchEventSource !== es) return;
         settle(true);
