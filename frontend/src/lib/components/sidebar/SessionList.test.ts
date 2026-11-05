@@ -10,7 +10,7 @@ import { SessionsService } from "../../api/generated/index.js";
 import { starred } from "../../stores/starred.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { m, setLocale } from "../../i18n/index.js";
-import { ITEM_HEIGHT, STORAGE_KEY_GROUP } from "./session-list-utils.js";
+import { ITEM_HEIGHT, OVERSCAN, STORAGE_KEY_GROUP } from "./session-list-utils.js";
 
 vi.mock("../../api/client.js", () => ({
   listSessions: vi.fn().mockResolvedValue({
@@ -374,7 +374,7 @@ describe("SessionList visible hydration", () => {
     await tick();
 
     expect(hydrate).toHaveBeenCalledWith(
-      ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s12", "s13"],
+      Array.from({ length: 3 + OVERSCAN + 1 }, (_, i) => `s${i}`),
       sessions.sidebarIndexVersion,
     );
   });
