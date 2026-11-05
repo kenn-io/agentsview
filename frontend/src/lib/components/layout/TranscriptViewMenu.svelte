@@ -245,7 +245,7 @@
       0 0 0 5px var(--border-default);
   }
 
-  /* The chosen layout and content mode are marked by the radio dot and a
+  /* The chosen layout and content mode are marked by the check and a
      medium-weight name. Rows keep the plain item styling of the Resume and
      More menus, so a row fill only ever means hover or keyboard focus. */
   :global(.view-menu .kit-menu__radio-item[aria-checked="true"]) .option-name {
@@ -318,24 +318,11 @@
   }
 
   /* The block toggles' icon slot matches the radio items' 12px check
-     slot, so all three sections share one indent. */
+     slot, so all three sections share one indent. Every section marks its
+     selection with the same check. */
   :global(.view-menu) {
     width: 300px;
     --menu-icon-width: 12px;
-  }
-
-  /* Single-choice items (layout, mode) mark the selection with a radio
-     dot; the check stays for the independent block toggles. */
-  :global(.view-menu .kit-menu__radio-item .kit-menu__indicator svg) {
-    display: none;
-  }
-
-  :global(.view-menu .kit-menu__radio-item[aria-checked="true"] .kit-menu__indicator::before) {
-    content: "";
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: currentColor;
   }
 
   :global(.view-menu .kit-menu__radio-content) {

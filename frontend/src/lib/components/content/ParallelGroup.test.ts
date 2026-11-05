@@ -58,9 +58,11 @@ describe("ParallelGroup", () => {
     });
     await tick();
 
+    // A call with timing but no measured duration shows no status at all.
     expect(
       [...document.querySelectorAll(".tool-duration")].map((el) => el.textContent?.trim()),
-    ).toEqual(["2.0s", "unknown"]);
+    ).toEqual(["2.0s"]);
+    expect(document.querySelector(".pg-members")?.textContent).not.toContain("unknown");
     expect(document.querySelector(".pg-header")?.textContent).not.toContain("5.0s");
     expect(document.querySelector(".pg-count")?.textContent?.trim()).toBe("3 calls");
     unmount(component);

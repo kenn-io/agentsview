@@ -517,9 +517,9 @@
 
   .settings-page :global(.kit-settings__nav-item--active),
   .settings-page :global(.kit-settings__nav-item--active:hover) {
+    /* A neutral fill and primary ink mark the selected panel; no accent
+       edge. */
     background: var(--selected-list-bg);
-    /* Same cue as the selected search result: a fill and an accent edge. */
-    box-shadow: inset 3px 0 0 var(--accent-blue);
     color: var(--text-primary);
   }
 

@@ -36,14 +36,12 @@
     durationLabel?: string;
     isSlow?: boolean;
     isRunning?: boolean;
-    /** The duration label is a status ("unknown"), not a measurement. */
-    durationUnknown?: boolean;
     /** Flatten outer spacing when inside a parallel group. */
     inGroup?: boolean;
   }
 
   let { content, label, toolCall, searchScope, durationLabel,
-    isSlow = false, isRunning = false, durationUnknown = false,
+    isSlow = false, isRunning = false,
     inGroup = false }: Props = $props();
   let userCollapsed = $state(true);
   let userOutputCollapsed = $state(true);
@@ -216,7 +214,7 @@
           {#if summaryDiffStat}<span class="summary-path">{summaryDiffStat.path}</span> (<span class="stat-add">{summaryDiffStat.add}</span>{#if summaryDiffStat.del}{" "}<span class="stat-del">{summaryDiffStat.del}</span>{/if}){:else}{structuredSummary}{/if}{#if structuredSummaryTitle}<span class="kit-sr-only">{structuredSummaryTitle}</span>{/if}
         </span>
       {:else if collapsed && legacyPreview}<span class="tool-preview">{legacyPreview}</span>{/if}
-      {#if durationLabel}<span class="tool-duration" class:slow={isSlow} class:running={isRunning} class:unknown={durationUnknown}>{durationLabel}</span>{/if}
+      {#if durationLabel}<span class="tool-duration" class:slow={isSlow} class:running={isRunning}>{durationLabel}</span>{/if}
     </button>
     {#if inputCopySource}
       <CopyButton class="tool-copy input-copy" revealOnHover copied={inputCopied}
@@ -333,8 +331,12 @@
   .tool-block.in-group { margin: 0; border-left: none; border-radius: 0; }
   .tool-header-row, .output-header-row { display: flex; align-items: center; min-width: 0; }
   .output-header-row { border-top: 1px solid var(--border-muted); }
+  /* Tool and parallel groups set --tool-row-pad-block and
+     --tool-row-copy-trim so a run of calls packs into 24px rows: the
+     hover-only copy button is 26px tall, so the trim keeps it from
+     setting the row height. */
   .tool-header {
-    display: flex; align-items: center; gap: 8px; padding: 4px 10px; width: 100%;
+    display: flex; align-items: center; gap: 8px; padding: var(--tool-row-pad-block, 4px) 10px; width: 100%;
     text-align: left; font-size: 12px; color: var(--text-secondary); min-width: 0;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0; transition: background 0.1s;
     user-select: text; flex: 1 1 auto;
@@ -359,18 +361,6 @@
     font-variant-numeric: tabular-nums; border: 1px solid transparent;
     background: transparent;
     border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; margin-right: 6px; min-width: 56px; text-align: right;
-  }
-  /* An unknown duration is a status, so it leads with the hollow ring the
-     Signal panel uses for Unknown, as unboxed muted text: one status
-     language, and no chip competing with the +N -N stats. */
-  .tool-duration.unknown {
-    display: inline-flex; align-items: center; gap: 5px;
-    font-family: var(--font-sans); min-width: 0; padding: 0;
-    color: var(--text-muted);
-  }
-  .tool-duration.unknown::before {
-    content: ""; width: 7px; height: 7px; box-sizing: border-box; flex-shrink: 0;
-    border-radius: 50%; border: 1.5px solid currentColor;
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
   .tool-duration.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }
@@ -408,6 +398,7 @@
   .formatted-output :global(p) { overflow-wrap: anywhere; }
   .output-header:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
   :global(.tool-copy.kit-copy-btn) { flex: 0 0 auto; margin-right: 8px; }
+  .tool-header-row > :global(.tool-copy.kit-copy-btn) { margin-block: var(--tool-row-copy-trim, 0); }
   .tool-block:hover :global(.tool-copy.kit-copy-btn),
   .tool-header-row:focus-within :global(.tool-copy.kit-copy-btn),
   .output-header-row:focus-within :global(.tool-copy.kit-copy-btn) { opacity: 1; }

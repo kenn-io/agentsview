@@ -34,13 +34,12 @@
   <div class="pg-members">
     {#each toolCalls as toolCall, i (toolCall.tool_use_id || `idx:${i}`)}
       {@const ct = callTimingByID?.get(toolCall.tool_use_id ?? "")}
-      {@const dur = ct === undefined ? undefined : ct.duration_ms != null ? formatDuration(ct.duration_ms) : m.shared_unknown()}
+      {@const dur = ct?.duration_ms != null ? formatDuration(ct.duration_ms) : undefined}
       <ToolBlock
         {toolCall}
         content=""
         label={displayToolName(toolCall)}
         durationLabel={dur}
-        durationUnknown={ct !== undefined && ct.duration_ms == null}
         inGroup={true}
         searchScope={searchOrdinal === undefined ? undefined : { ordinal: searchOrdinal, callIdx: i }}
       />
@@ -50,20 +49,14 @@
 
 <style>
   .parallel-group {
+    /* The members drop their own bars, so one calm grey rule encloses the
+       group; pattern mode dashes it and takes the tool accent. */
+    border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-group-rail);
     background: transparent;
-    border-radius: var(--radius-sm);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     margin: 4px 0;
     padding: 0;
     overflow: hidden;
-  }
-  /* A parallel group always sits inside a message card, whose role rail
-     already marks the block. By default the group adds no rule of its own:
-     its members indent under the "parallel" label instead. Pattern mode
-     keeps the dashed tool rail, since it tells roles apart by line shape. */
-  :global(:root:not([data-message-role-patterns])) .pg-members { padding-left: 12px; }
-  :global(:root[data-message-role-patterns]) .parallel-group {
-    border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-group-rail);
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   }
   /* Same header voice as ToolCallGroup's "3 tool calls": a 12px semibold
      sans label with the count in muted ink beside it. */
@@ -86,6 +79,11 @@
     color: var(--running-fg);
     font-size: 11px;
     animation: duration-pulse 1.6s ease-in-out infinite;
+  }
+  /* Members pack as tightly as tool-group rows (see ToolBlock). */
+  .pg-members {
+    --tool-row-pad-block: 3px;
+    --tool-row-copy-trim: -1px;
   }
   .pg-members :global(.tool-block) { margin: 0; border-radius: 0; }
   .pg-members :global(.tool-block + .tool-block) {

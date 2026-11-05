@@ -166,7 +166,13 @@
   .group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
   .group-timestamp { font-size: 12px; color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; }
   .tool-group:hover :global(.kit-copy-btn) { opacity: 1; }
-  .tool-group-body { display: flex; flex-direction: column; gap: 2px; }
+  /* Consecutive tool rows touch and use the tighter row padding from
+     ToolBlock, so a run of calls reads as one unit beside the prose. */
+  .tool-group-body {
+    display: flex; flex-direction: column; gap: 0;
+    --tool-row-pad-block: 3px;
+    --tool-row-copy-trim: -1px;
+  }
   .read-progress-divider {
     display: flex;
     align-items: center;

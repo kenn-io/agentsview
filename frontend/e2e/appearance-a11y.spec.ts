@@ -405,8 +405,9 @@ test.describe("Appearance accessibility", () => {
     await sp.selectFirstSession();
     const rail = page.locator(".parallel-group").first();
     await expect(rail).toBeVisible();
-    // By default the message card's rail is the only rule; the group adds none.
-    await expect(rail).toHaveCSS("border-left-style", "none");
+    // By default one solid neutral rule encloses the group.
+    await expect(rail).toHaveCSS("border-left-style", "solid");
+    await expect(rail).toHaveCSS("border-left-width", "2px");
 
     await page.evaluate(() =>
       localStorage.setItem(
