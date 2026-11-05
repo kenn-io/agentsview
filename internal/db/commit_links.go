@@ -32,8 +32,6 @@ var (
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(detached HEAD|[^\s\[\]~^:?*\\]+) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
 	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
-	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
-	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
 	commitCDRE                = regexp.MustCompile(`(?:^|[;&|\n])\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGlobalOptionRE      = regexp.MustCompile(commitGlobalOption)
 	commitPollRE              = regexp.MustCompile(`\btools\.write_stdin\s*\(\s*\{[^{}]*["']?session_id["']?\s*:\s*([0-9]+)`)
@@ -123,14 +121,6 @@ func commitRepository(input, cwd string) string {
 	if dir == "" {
 		dir = fields.Cwd
 	}
-	if dir == "" && !jsontext.Value(input).IsValid() {
-		if match := commitWorkdirRE.FindStringSubmatch(commitCommandRE.ReplaceAllString(input, "")); match != nil {
-			dir = match[1]
-			if strings.HasPrefix(dir, "\"") {
-				_ = json.Unmarshal([]byte(match[1]), &dir)
-			}
-		}
-	}
 	if dir != "" {
 		cwd = resolve(cwd, dir)
 	}
@@ -152,22 +142,7 @@ func commitCommandText(input string) string {
 	if jsontext.Value(input).IsValid() {
 		return signals.CommandText(input)
 	}
-	// A batch's output and process IDs do not identify which new call owns them.
-	matches := commitCommandRE.FindAllStringSubmatch(input, -1)
-	if len(matches) != 1 || commitPollRE.MatchString(input) {
-		return ""
-	}
-	literal := matches[0][1]
-	var decoded strings.Builder
-	for rest := literal[1 : len(literal)-1]; rest != ""; {
-		r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
-		if err != nil {
-			return ""
-		}
-		decoded.WriteRune(r)
-		rest = tail
-	}
-	return decoded.String()
+	return ""
 }
 
 type commitCall struct {
@@ -285,8 +260,8 @@ func commitLinks(calls []commitCall, cwd string) []CommitLink {
 		} else if len(pollIDs) == 0 {
 			continue
 		}
-		// A call that only polls one execution owns its output even after it finishes.
-		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1 && (call.toolName != "exec" || strings.Count(call.input, "tools.") == 1)
+		// A native poll owns its output even after the execution finishes.
+		singleOwner, singlePoll := commitCall{}, !isCommit && len(pollIDs) == 1 && call.toolName != "exec"
 		if singlePoll {
 			var ok bool
 			if singleOwner, ok = pending[pollIDs[0]]; !ok {

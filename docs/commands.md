@@ -2015,17 +2015,19 @@ agentsview session parent <id> <parent>  # record the launching session
 
 `agentsview session commits <id>` lists commits recorded by a session. Use
 `--format json` for structured output. The table shows the session, exact
-message ordinal, call index, call time, recorded SHA, branch, subject, and last
-user turn before the commit call, shortened to 100 terminal
-columns. Trashed or permanently deleted sessions carry `missing: true` and omit
-the turn. See
+message ordinal, call time, recorded SHA, branch, subject, and last user turn
+before the commit call, shortened to 100 terminal columns. Trashed or
+permanently deleted sessions carry `missing: true` and omit the turn. See
 [commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
 retention and lookup limits. Links require stored Git summaries with SHAs of 7
 to 64 characters. Quiet commits have no link. Links include Codex poll results
 paired with the original call. Calls spanning repositories use the first
 directory; the last `cd` before the first commit invocation adjusts it. Archives
 retaining only transcripts or usage have no links, and hosted PostgreSQL returns
-HTTP 501. Sessions permanently deleted before this release have no links.
+HTTP 501. Sessions permanently deleted before this release have no links. JSON
+output keeps `call_index`. Code-mode output needs an execution or process ID
+matching an earlier commit call. New commits started inside code-mode batches
+have no links because their output IDs cannot be tied to the commit command.
 
 `session list --label k=v` and `--pr owner/repo#123` filter by
 [labels](/docs/session-api/#agentsview-session-label) and
