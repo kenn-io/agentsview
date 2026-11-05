@@ -8,28 +8,26 @@ import (
 	"testing/synctest"
 
 	"github.com/stretchr/testify/require"
-
-	"go.kenn.io/agentsview/internal/activity"
 )
 
-func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) {
+func TestGroupSharesBuildAfterOneWaiterCancels(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		group := &Group[activity.CandidateArtifacts]{}
+		group := &Group[string]{}
 		started := make(chan struct{})
 		release := make(chan struct{})
 		var releaseOnce sync.Once
 		releaseBuild := func() { releaseOnce.Do(func() { close(release) }) }
 		t.Cleanup(releaseBuild)
 		var builds atomic.Int32
-		build := func(ctx context.Context) (activity.CandidateArtifacts, error) {
+		build := func(ctx context.Context) (string, error) {
 			if builds.Add(1) == 1 {
 				close(started)
 			}
 			select {
 			case <-release:
-				return activity.CandidateArtifacts{Sessions: []activity.SessionRow{{SessionID: "ok"}}}, nil
+				return "ok", nil
 			case <-ctx.Done():
-				return activity.CandidateArtifacts{}, ctx.Err()
+				return "", ctx.Err()
 			}
 		}
 		firstCtx, cancelFirst := context.WithCancel(t.Context())
@@ -40,13 +38,13 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 		}()
 		<-started
 		type result struct {
-			artifacts activity.CandidateArtifacts
-			err       error
+			value string
+			err   error
 		}
 		secondDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.Do(t.Context(), "same", build)
-			secondDone <- result{artifacts: artifacts, err: err}
+			value, err := group.Do(t.Context(), "same", build)
+			secondDone <- result{value: value, err: err}
 		}()
 		synctest.Wait()
 		group.mu.Lock()
@@ -63,24 +61,22 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 		releaseBuild()
 		second := <-secondDone
 		require.NoError(t, second.err)
-		require.Equal(t, "ok", second.artifacts.Sessions[0].SessionID)
+		require.Equal(t, "ok", second.value)
 		require.Equal(t, int32(1), builds.Load())
 	})
 }
 
-func TestActivityReportBuildGroupCancelsAbandonedBuild(t *testing.T) {
+func TestGroupCancelsAbandonedBuild(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		group := &Group[activity.CandidateArtifacts]{}
+		group := &Group[string]{}
 		buildCanceled := make(chan struct{})
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {
-			_, err := group.Do(ctx, "abandoned", func(ctx context.Context) (
-				activity.CandidateArtifacts, error,
-			) {
+			_, err := group.Do(ctx, "abandoned", func(ctx context.Context) (string, error) {
 				<-ctx.Done()
 				close(buildCanceled)
-				return activity.CandidateArtifacts{}, ctx.Err()
+				return "", ctx.Err()
 			})
 			done <- err
 		}()
@@ -95,9 +91,9 @@ func TestActivityReportBuildGroupCancelsAbandonedBuild(t *testing.T) {
 	})
 }
 
-func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T) {
+func TestGroupStartsFreshAfterLastWaiterCancels(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		group := &Group[activity.CandidateArtifacts]{}
+		group := &Group[string]{}
 		firstStarted := make(chan struct{})
 		firstCanceled := make(chan struct{})
 		releaseFirst := make(chan struct{})
@@ -109,24 +105,20 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 			releaseSecondOnce.Do(func() { close(releaseSecond) })
 		})
 		var builds atomic.Int32
-		build := func(ctx context.Context) (activity.CandidateArtifacts, error) {
+		build := func(ctx context.Context) (string, error) {
 			switch builds.Add(1) {
 			case 1:
 				close(firstStarted)
 				<-ctx.Done()
 				close(firstCanceled)
 				<-releaseFirst
-				return activity.CandidateArtifacts{}, ctx.Err()
+				return "", ctx.Err()
 			case 2:
 				close(secondStarted)
 				<-releaseSecond
-				return activity.CandidateArtifacts{
-					Sessions: []activity.SessionRow{{SessionID: "fresh"}},
-				}, nil
+				return "fresh", nil
 			default:
-				return activity.CandidateArtifacts{
-					Sessions: []activity.SessionRow{{SessionID: "duplicate"}},
-				}, nil
+				return "duplicate", nil
 			}
 		}
 
@@ -157,13 +149,13 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 		}
 
 		type result struct {
-			artifacts activity.CandidateArtifacts
-			err       error
+			value string
+			err   error
 		}
 		secondDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.Do(t.Context(), "same", build)
-			secondDone <- result{artifacts: artifacts, err: err}
+			value, err := group.Do(t.Context(), "same", build)
+			secondDone <- result{value: value, err: err}
 		}()
 		synctest.Wait()
 		select {
@@ -192,8 +184,8 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 
 		thirdDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.Do(t.Context(), "same", build)
-			thirdDone <- result{artifacts: artifacts, err: err}
+			value, err := group.Do(t.Context(), "same", build)
+			thirdDone <- result{value: value, err: err}
 		}()
 		synctest.Wait()
 		group.mu.Lock()
@@ -206,8 +198,7 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 
 		for _, completed := range []result{<-secondDone, <-thirdDone} {
 			require.NoError(t, completed.err)
-			require.Len(t, completed.artifacts.Sessions, 1)
-			require.Equal(t, "fresh", completed.artifacts.Sessions[0].SessionID)
+			require.Equal(t, "fresh", completed.value)
 		}
 		require.Equal(t, int32(2), builds.Load())
 	})
