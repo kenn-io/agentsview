@@ -365,6 +365,8 @@ describe("SessionList visible hydration", () => {
   });
 
   it("hydrates visible viewport rows plus overscan", async () => {
+    const viewportHeight = ITEM_HEIGHT * 2.5;
+    clientHeightSpy!.mockReturnValue(viewportHeight);
     sessions.sessions = Array.from({ length: 20 }, (_, i) =>
       makeSession({ id: `s${i}`, is_index_only: true }),
     );
@@ -374,7 +376,7 @@ describe("SessionList visible hydration", () => {
     await tick();
 
     expect(hydrate).toHaveBeenCalledWith(
-      Array.from({ length: 3 + OVERSCAN + 1 }, (_, i) => `s${i}`),
+      Array.from({ length: Math.ceil(viewportHeight / ITEM_HEIGHT) + OVERSCAN }, (_, i) => `s${i}`),
       sessions.sidebarIndexVersion,
     );
   });
@@ -466,7 +468,7 @@ describe("SessionList visible hydration", () => {
     expect(name?.textContent).toBe(title);
   });
 
-  it("reveals a deep-linked child session without looping before hydration", async () => {
+  it("reveals a deep-linked child without looping while its row is unavailable", async () => {
     // Opening a child session's URL directly must reveal it even while
     // the sidebar's title hydration is pending.
     sessions.sessions = [
