@@ -2847,6 +2847,38 @@ describe("SessionsStore", () => {
   });
 
   describe("renameSession", () => {
+    it("keeps omitted sidebar fields and ancestry when renaming a child", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "parent" }),
+        makeSkinnyRow({
+          id: "child",
+          parent_session_id: "parent",
+          relationship_type: "subagent",
+          source_machines: ["host-a"],
+          entrypoint: "cli",
+        }),
+      ]);
+      await sessions.load();
+      api.renameSession.mockResolvedValueOnce(
+        makeSession({ id: "child", display_name: "Renamed" }),
+      );
+
+      await sessions.renameSession("child", "Renamed");
+
+      expect(sessions.byId.get("child")).toMatchObject({
+        display_name: "Renamed",
+        parent_session_id: "parent",
+        relationship_type: "subagent",
+        source_machines: ["host-a"],
+        entrypoint: "cli",
+      });
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.sessions.map((session) => session.id)).toEqual([
+        "parent",
+        "child",
+      ]);
+    });
+
     it("updates the selected session's token totals from the rename response", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
       api.getSession.mockResolvedValueOnce(
@@ -3172,6 +3204,38 @@ describe("SessionsStore", () => {
     expect(sessions.nextCursor).toBeNull();
     expect(sessions.total).toBe(0);
     expect(sessions.sidebarLoadError).toBe("ambiguous machine");
+  });
+
+  it("discards stored and pending titles when pagination rejects the machine filter", async () => {
+    const rows = [makeSkinnyRow({ id: "stored" }), makeSkinnyRow({ id: "pending" })];
+    api.getSidebarSessionIndex.mockResolvedValueOnce({
+      sessions: rows,
+      total: 3,
+      next_cursor: "page-2",
+    });
+    await sessions.load();
+    const pending = Promise.withResolvers<Session>();
+    api.getSession
+      .mockResolvedValueOnce(makeSession({ id: "stored", first_message: "Old stored title" }))
+      .mockReturnValueOnce(pending.promise);
+    await sessions.hydrateVisibleSessions(["stored"]);
+    const hydration = sessions.hydrateVisibleSessions(["pending"]);
+    api.getSidebarSessionIndex.mockRejectedValueOnce(
+      new ApiError(400, "ambiguous machine", "invalid_machine_filter"),
+    );
+    await sessions.loadMore();
+    pending.resolve(makeSession({ id: "pending", first_message: "Old pending title" }));
+    await hydration;
+
+    mockSidebarIndex(rows);
+    await sessions.load();
+    api.getSession
+      .mockResolvedValueOnce(makeSession({ id: "stored", first_message: "Fresh stored title" }))
+      .mockResolvedValueOnce(makeSession({ id: "pending", first_message: "Fresh pending title" }));
+    await sessions.navigateToSession("stored");
+    expect(sessions.activeSession?.first_message).toBe("Fresh stored title");
+    await sessions.navigateToSession("pending");
+    expect(sessions.activeSession?.first_message).toBe("Fresh pending title");
   });
 
   describe("loadProjects dedup", () => {

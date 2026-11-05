@@ -461,6 +461,9 @@ class SessionsStore {
 
   private resetPagination() {
     this.sessions = [];
+    this.sidebarIndexIds = new Set();
+    this.invalidateHydratedSessionDetails();
+    this.details.clear();
     this.nextCursor = null;
     this.total = 0;
   }
@@ -642,9 +645,6 @@ class SessionsStore {
       // filter's rows under it would mislabel them.
       if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
         this.resetPagination();
-        this.invalidateHydratedSessionDetails();
-        this.details.clear();
-        this.sidebarIndexIds = new Set();
         this.sidebarLoadError = error.message;
         return;
       }
@@ -799,10 +799,7 @@ class SessionsStore {
     } catch (error) {
       if (signal.aborted || isAbortError(error) || this.loadVersion !== version) return;
       if (error instanceof ApiError && error.code === "invalid_machine_filter") {
-        this.sessions = [];
-        this.sidebarIndexIds = new Set();
-        this.nextCursor = null;
-        this.total = 0;
+        this.resetPagination();
         this.sidebarLoadError = error.message;
         return;
       }
@@ -1658,8 +1655,7 @@ class SessionsStore {
     if (idx !== -1) {
       const merged = {
         ...this.sessions[idx]!,
-        ...indexFields(updated),
-        is_teammate: this.sessions[idx]!.is_teammate,
+        ...indexFields({ ...this.sessions[idx]!, ...updated }),
       };
       // When the caller cleared the rename and the backend found no agent name
       // to restore, display_name is absent from the response (omitempty on nil).
