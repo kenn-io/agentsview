@@ -917,6 +917,47 @@ func TestCommitLinkMirrorRows(t *testing.T) {
 	assert.Equal(t, "abc1234", retained[0].SHA)
 }
 
+func TestTrailerCommitTurnRecency(t *testing.T) {
+	for _, tt := range []struct {
+		name, authorTime string
+		wantOrdinal      int
+		wantTurn         *CommitTurn
+	}{
+		{"agent commit", "2026-01-02T10:04:30Z", 1, &CommitTurn{Heuristic: true, Ordinal: 0, Text: "Fix the parser"}},
+		{"rebased author time", "2026-01-02T10:05:30Z", 1, &CommitTurn{Heuristic: true, Ordinal: 0, Text: "Fix the parser"}},
+		{"five minutes", "2026-01-02T12:05:00Z", 3, &CommitTurn{Heuristic: true, Ordinal: 2, Text: "Push and open a pull request"}},
+		{"over five minutes", "2026-01-02T12:05:01Z", -1, nil},
+		{"squash hours later", "2026-01-02T17:00:00Z", -1, nil},
+		{"before session", "2026-01-02T09:59:59Z", -1, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "editor", "project-a")
+			insertMessages(t, d,
+				Message{SessionID: "editor", Ordinal: 0, Role: "user", Content: "Fix the parser", Timestamp: "2026-01-02T10:00:00Z"},
+				Message{SessionID: "editor", Ordinal: 1, Role: "assistant", Content: "Fixed the parser", Timestamp: "2026-01-02T10:04:00Z"},
+				Message{SessionID: "editor", Ordinal: 2, Role: "user", Content: "Push and open a pull request", Timestamp: "2026-01-02T11:59:00Z"},
+				Message{SessionID: "editor", Ordinal: 3, Role: "assistant", Content: "Opened the pull request", Timestamp: "2026-01-02T12:00:00Z"},
+			)
+			sha := strings.Repeat("a", 40)
+			_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{SHA: sha, Sessions: []string{"claude:editor"}, CommittedAt: tt.authorTime}})
+			require.NoError(t, err)
+			session, err := d.SessionCommitLinks(t.Context(), "editor")
+			require.NoError(t, err)
+			require.Len(t, session.Commits, 1)
+			commits, err := d.CommitSessionLinks(t.Context(), []string{sha})
+			require.NoError(t, err)
+			require.Len(t, commits.Commits, 1)
+			require.Len(t, commits.Commits[0].Links, 1)
+			for _, link := range []CommitLink{session.Commits[0], commits.Commits[0].Links[0]} {
+				assert.Equal(t, "trailer", link.Source)
+				assert.Equal(t, tt.wantOrdinal, link.MessageOrdinal)
+				assert.Equal(t, tt.wantTurn, link.Turn)
+			}
+		})
+	}
+}
+
 func TestTrailerCommitTranscriptPrefix(t *testing.T) {
 	const firstSHA = "abc1234000000000000000000000000000000000"
 	const secondSHA = "abc1234111111111111111111111111111111111"

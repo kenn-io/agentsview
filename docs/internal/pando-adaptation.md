@@ -15,7 +15,9 @@ chosen turn `heuristic: true` and omits a turn when no eligible prompt has a
 usable timestamp. It excludes system and tool-result messages. It uses only the
 time fallback, without Pando's changed-path matching or live session reads.
 The prompt must be at or before the commit time, without Pando's five-minute
-grace period.
+grace period. A message of any role must also fall within the five minutes
+before commit time. Without one, AgentsView omits the turn. The chosen prompt
+can be older when later messages keep the session active.
 
 The adapted SQL lives in `internal/db/commit_links.go`.
 

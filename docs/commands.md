@@ -2020,8 +2020,10 @@ linked to a session. The `SOURCE` column distinguishes `transcript` from
 call time, source, recorded SHA, branch, subject, and user turn, shortened to
 100 terminal columns. Transcript links use the last real prompt before the
 commit call. Trailer links use the last real prompt at or before Git's author
-time and mark the turn as estimated. Trashed or permanently deleted sessions
-carry `missing: true` and omit the turn. See
+time and mark the turn as estimated. They require a session message within the
+five minutes before that time; an idle session has no suggested turn. The prompt
+can be older than five minutes when later messages keep the session active.
+Trashed or permanently deleted sessions carry `missing: true` and omit the turn. See
 [commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
 retention and lookup limits. Transcript links require stored Git summaries with SHAs of 7
 to 64 characters. Quiet commits have no transcript link. Links include Codex

@@ -135,7 +135,7 @@ func TestTrailerCommitLinksOrdering(t *testing.T) {
 	insertMessages(t, d, prompt, commit)
 	sha := strings.Repeat("b", 40)
 	_, err := d.StoreTrailerCommitLinks(t.Context(), "repo", []gitlog.TrailerCommit{{
-		SHA: sha, CommittedAt: "2026-10-30T10:45:00Z", Sessions: []string{"claude:session-a"},
+		SHA: sha, CommittedAt: "2026-10-30T10:34:00Z", Sessions: []string{"claude:session-a"},
 	}})
 	require.NoError(t, err)
 

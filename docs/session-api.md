@@ -1625,11 +1625,15 @@ Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
 Git's traversal source with `refs/heads/` or `refs/remotes/` removed, excluding
 remote `HEAD` aliases; other sources, such as tags and stash, leave it empty.
 Their `committed_at` is the Git author time in UTC. Their `message_ordinal`
-is the last message ordinal at or before commit time, or `-1` when none exists.
+is the last message ordinal at or before commit time within the preceding five
+minutes, or `-1` when none exists. Messages of any role can satisfy this bound.
 
 The suggested `turn` is the last real user prompt in transcript order with a
-usable timestamp at or before commit time. It carries
-`heuristic: true`; no eligible prompt means no turn. This time rule adapts
+usable timestamp at or before commit time and an ordinal at or before
+`message_ordinal`. It carries `heuristic: true`; no recent message or eligible
+prompt means no turn. A squash commit made hours after the session went quiet
+therefore has no suggested turn. Rebased commits use their preserved author
+time. This time rule adapts
 [Pando's fallback](https://github.com/backnotprop/pando/blob/80c8f91f3c445b080d49a95d7600ca6a348e9828/worker/src/understand/lookups.ts).
 A transcript link for the same session takes precedence when its SHA is a
 prefix of the trailer SHA, including a full SHA match. Git prints a short SHA
