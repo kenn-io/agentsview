@@ -1145,6 +1145,20 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     padding-block: 8px;
   }
 
+  /* With only four cards and two of them able to show the same compact
+     value, the label names the card: a full step larger and in primary
+     ink, with the sublabel kept below it. */
+  .summary-grid :global(.kit-card.stat-card .card-label) {
+    font-size: 12.5px;
+    line-height: 17px;
+    color: var(--text-primary);
+  }
+
+  .summary-grid :global(.kit-card.stat-card .card-sub) {
+    font-size: 11.5px;
+    line-height: 15px;
+  }
+
   .content :global(.distribution-row) {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1229,13 +1243,26 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     line-height: 1.4;
   }
 
+  /* A leading status dot in the pill's color, so severity reads like
+     every other status in the suite (dots), not as text alone. */
   .severity {
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     border-radius: 999px;
-    padding: 2px 8px;
+    padding: 2px 8px 2px 7px;
     font-size: 11px;
-    font-weight: 700;
-    border: 1px solid var(--border-muted);
+    font-weight: 600;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  }
+
+  .severity::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
   }
 
   .pattern-grid :global(.severity-critical .severity) {
