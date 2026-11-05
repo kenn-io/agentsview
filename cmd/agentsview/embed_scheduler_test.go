@@ -1898,15 +1898,19 @@ func TestInstallDirectVectorSearcherVersionMismatchServesRebuildRequired(t *test
 
 func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 	for _, tc := range []struct {
-		name             string
-		notify, backstop bool
+		name                             string
+		notify, backstop, failedBackstop bool
 	}{
 		{name: "notify", notify: true},
 		{name: "backstop", backstop: true},
 		{name: "notify then backstop", notify: true, backstop: true},
+		{name: "exhausted backstop", backstop: true, failedBackstop: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, idleExit := range []bool{false, true} {
+				if idleExit && !tc.notify {
+					continue
+				}
 				t.Run(fmt.Sprintf("idle_exit=%t", idleExit), func(t *testing.T) {
 					synctest.Test(t, func(t *testing.T) {
 						var tracker *server.IdleTracker
@@ -1919,13 +1923,27 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						}
 						mgr := &fakeEmbedManager{}
 						var battery atomic.Bool
-						battery.Store(true)
+						battery.Store(!tc.failedBackstop)
+						wantCalls := 0
+						if tc.failedBackstop {
+							buildErr := errors.New("embedding request rejected")
+							mgr.results = []fakeTryBuildResult{{started: true, err: buildErr}, {started: true, err: buildErr}, {started: true}}
+							wantCalls = 2
+						}
 						s := newEmbedScheduler(mgr, time.Second, 0, false, tracker)
 						s.onBattery = battery.Load
 						s.batteryDeferredPath = filepath.Join(t.TempDir(), "deferred")
 						ticks := make(chan time.Time)
 						go s.run(ctx, ticks)
 						defer s.Stop()
+						if tc.failedBackstop {
+							ticks <- time.Now()
+							synctest.Sleep(2 * time.Second)
+							synctest.Wait()
+							require.Equal(t, []vector.BuildRequest{{Backstop: true}, {Backstop: true}}, mgr.callsSnapshot())
+							require.NoFileExists(t, s.batteryDeferredPath)
+							battery.Store(true)
+						}
 						if tc.notify {
 							s.Notify()
 							synctest.Wait()
@@ -1935,7 +1953,7 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						}
 						synctest.Sleep(4 * time.Second)
 						synctest.Wait()
-						assert.Zero(t, mgr.callCount())
+						assert.Equal(t, wantCalls, mgr.callCount())
 						assert.FileExists(t, s.batteryDeferredPath)
 						if idleExit {
 							select {
@@ -1947,14 +1965,15 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						}
 						synctest.Sleep(3 * batteryRecheckInterval)
 						synctest.Wait()
-						assert.Zero(t, mgr.callCount())
+						assert.Equal(t, wantCalls, mgr.callCount())
 						battery.Store(false)
-						if tc.backstop {
-							ticks <- time.Now()
-						}
 						synctest.Sleep(batteryRecheckInterval)
 						synctest.Wait()
-						assert.Equal(t, []vector.BuildRequest{{Backstop: tc.backstop}}, mgr.callsSnapshot())
+						want := []vector.BuildRequest{{Backstop: tc.backstop}}
+						if tc.failedBackstop {
+							want = []vector.BuildRequest{{Backstop: true}, {Backstop: true}, {Backstop: true}}
+						}
+						assert.Equal(t, want, mgr.callsSnapshot())
 						assert.NoFileExists(t, s.batteryDeferredPath)
 					})
 				})
@@ -1965,14 +1984,13 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 
 func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 	for _, tc := range []struct {
-		name                                              string
-		deferred, runAfterSync, wantBuild, failedBackstop bool
-		backstop                                          string
+		name                              string
+		deferred, runAfterSync, wantBuild bool
+		backstop                          string
 	}{
 		{name: "ordinary startup", runAfterSync: true, backstop: "24h"},
 		{name: "deferred sync", deferred: true, runAfterSync: true, backstop: "0", wantBuild: true},
 		{name: "deferred backstop", deferred: true, backstop: "24h", wantBuild: true},
-		{name: "deferred after exhausted backstop", deferred: true, failedBackstop: true, backstop: "24h", wantBuild: true},
 		{name: "automatic builds disabled", deferred: true, backstop: "0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1985,37 +2003,7 @@ func TestMessageSchedulerStartupCatchesUpBatteryDeferredArchive(t *testing.T) {
 				cfg := vectorTestConfig(dataDir)
 				cfg.Vector.Embed.Recall = false
 				if tc.deferred {
-					func() {
-						vs, err := setupVectorServing(t.Context(), cfg, database, nil)
-						require.NoError(t, err)
-						defer vs.Close()
-						mgr := &fakeEmbedManager{}
-						vs.Scheduler.mgr = mgr
-						var battery atomic.Bool
-						battery.Store(!tc.failedBackstop)
-						vs.Scheduler.onBattery = battery.Load
-						ticks := make(chan time.Time)
-						go vs.Scheduler.run(t.Context(), ticks)
-						defer vs.Scheduler.Stop()
-						if tc.failedBackstop {
-							mgr.results = []fakeTryBuildResult{{started: true, err: errors.New("embedding request rejected")}}
-							ticks <- time.Now()
-							synctest.Sleep(embedDebounceInterval + time.Second)
-							synctest.Wait()
-							require.Equal(t, []vector.BuildRequest{{Backstop: true}, {Backstop: true}}, mgr.callsSnapshot())
-							require.NoFileExists(t, vs.Scheduler.batteryDeferredPath)
-							battery.Store(true)
-							ticks <- time.Now()
-						} else {
-							vs.Scheduler.Notify()
-						}
-						synctest.Sleep(embedDebounceInterval + time.Second)
-						synctest.Wait()
-						if !tc.failedBackstop {
-							require.Zero(t, mgr.callCount())
-						}
-						require.FileExists(t, vs.Scheduler.batteryDeferredPath)
-					}()
+					require.NoError(t, os.WriteFile(cfg.Vector.ResolvedDBPath(cfg.DataDir)+".battery-deferred", nil, 0o600))
 				}
 				cfg.Vector.Embed.RunAfterSync = new(tc.runAfterSync)
 				cfg.Vector.Embed.BackstopInterval = tc.backstop

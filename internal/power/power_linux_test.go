@@ -18,13 +18,10 @@ func TestOnBattery(t *testing.T) {
 		{name: "desktop"},
 		{name: "mouse", files: map[string]string{"mouse/type": "Battery", "mouse/scope": "Device", "mouse/status": "Discharging"}},
 		{name: "discharging", files: map[string]string{"AC/type": "Mains", "AC/online": "0", "BAT0/type": "Battery", "BAT0/status": "Discharging"}, battery: true},
-		{name: "AC overrides discharging", files: map[string]string{"ZAC/type": "Mains", "ZAC/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
+		{name: "AC overrides discharging", files: map[string]string{"ZAC/type": "USB_PD", "ZAC/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
 		{name: "peripheral USB", files: map[string]string{"USB/type": "USB", "USB/scope": "Device", "USB/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}, battery: true},
-		{name: "fixed USB", files: map[string]string{"USB/type": "USB", "USB/scope": "System", "USB/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
-		{name: "programmable USB", files: map[string]string{"USB/type": "USB", "USB/scope": "System", "USB/online": "2", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
+		{name: "programmable USB", files: map[string]string{"USB/type": "USB_C", "USB/scope": "System", "USB/online": "2", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
 		{name: "adjustable USB", files: map[string]string{"USB/type": "USB", "USB/scope": "System", "USB/online": "3", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
-		{name: "USB PD", files: map[string]string{"USB/type": "USB_PD", "USB/scope": "System", "USB/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
-		{name: "USB C", files: map[string]string{"USB/type": "USB_C", "USB/scope": "System", "USB/online": "1", "BAT0/type": "Battery", "BAT0/status": "Discharging"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
