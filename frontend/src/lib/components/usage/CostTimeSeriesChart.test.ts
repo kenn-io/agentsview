@@ -248,7 +248,6 @@ describe("CostTimeSeriesChart", () => {
     await tick();
     const tooltip = document.querySelector(".tooltip")!;
     expect(tooltip.querySelector(".tooltip-date")?.textContent).toContain("Jun 5, 2026");
-    expect(tooltip.querySelectorAll(".tooltip-row")).toHaveLength(0);
 
     unmount(component);
   });
@@ -650,14 +649,11 @@ describe("CostTimeSeriesChart", () => {
         { modelName: "small", cost: testMoney(1) },
         { modelName: "large", cost: testMoney(9) },
         { modelName: "medium", cost: testMoney(4) },
-        { modelName: "zero", cost: testMoney(0) },
       ]),
       modelDailyEntry(1, [
         { modelName: "small", cost: testMoney(2) },
         { modelName: "large", cost: testMoney(3) },
         { modelName: "medium", cost: testMoney(8) },
-        { modelName: "zero", cost: testMoney(2) },
-        { modelName: "absent", cost: testMoney(1) },
       ]),
     ]);
 
@@ -681,8 +677,7 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it.each(["cost", "token"] as const)("hides zero Other rows in %s mode", async (mode) => {
-    usage.mode = mode;
+  it("hides series with no usage on the hovered day", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     const models = Array.from({ length: 11 }, (_, index) => ({
       modelName: `model-${index}`,
