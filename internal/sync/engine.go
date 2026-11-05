@@ -9477,6 +9477,56 @@ func codebuffCompositeMtime(path string) (int64, error) {
 	return mtime, nil
 }
 
+// musePersonalCompositeMtime is a stat-only incremental cutoff for a
+// transcript plus its advisory sessions index. The index ctime catches
+// same-size rewrites with a restored mtime; the sessions directory catches
+// index creation and removal. These local-only signals do not change the
+// persisted transcript mtime or hosted projection.
+func musePersonalCompositeMtime(path string) (int64, error) {
+	dir := filepath.Dir(path)
+	targets := []struct {
+		path      string
+		required  bool
+		directory bool
+	}{
+		{path: path, required: true},
+		{path: filepath.Join(dir, "sessions.json")},
+		{path: dir, required: true, directory: true},
+	}
+	var mtime int64
+	for _, target := range targets {
+		info, err := os.Lstat(target.path)
+		if os.IsNotExist(err) && !target.required {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if target.required {
+				return 0, fmt.Errorf("Muse Personal source path is a symlink: %s", target.path)
+			}
+			continue
+		}
+		if target.directory {
+			if !info.IsDir() {
+				return 0, fmt.Errorf("Muse Personal sessions path is not a directory: %s", target.path)
+			}
+		} else if !info.Mode().IsRegular() {
+			if target.required {
+				return 0, fmt.Errorf("Muse Personal transcript is not a regular file: %s", target.path)
+			}
+			continue
+		}
+		ts := info.ModTime().UnixNano()
+		if changeTime, ok := fileChangeTime(target.path, info); ok && changeTime > ts {
+			ts = changeTime
+		}
+		mtime = max(mtime, ts)
+	}
+	return mtime, nil
+}
+
 // discoveredFileEffectiveMtime returns the freshness timestamp used to filter a
 // discovered file against an incremental-sync cutoff. For provider-sourced
 // files it consults the provider's Fingerprint so composite/sibling-file
@@ -9602,6 +9652,9 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// doc comment for what the composite covers.
 	if file.Agent == parser.AgentCodebuff || file.Agent == parser.AgentFreebuff {
 		return codebuffCompositeMtime(file.Path)
+	}
+	if file.Agent == parser.AgentMusePersonal {
+		return musePersonalCompositeMtime(file.Path)
 	}
 	// ICodeMate CLI fingerprints hash transcript and sidecar contents. The
 	// incremental cutoff needs only their stat metadata, including sidecar
@@ -9787,6 +9840,9 @@ func discoveredFileMtime(ctx context.Context,
 
 	if file.Agent == parser.AgentCodebuff || file.Agent == parser.AgentFreebuff {
 		return codebuffCompositeMtime(file.Path)
+	}
+	if file.Agent == parser.AgentMusePersonal {
+		return musePersonalCompositeMtime(file.Path)
 	}
 
 	info, err := os.Stat(file.Path)

@@ -135,7 +135,6 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 			FingerprintHashRequiredForFreshness: true,
 			UnchangedResults:                    UnchangedResultMTimeAndHash,
 		},
-		AgentMusePersonal: {FingerprintHashRequiredForFreshness: true},
 		AgentEvener: {
 			FingerprintHashRequiredForFreshness: true,
 		},
@@ -167,6 +166,11 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 
 	for _, factory := range ProviderFactories() {
 		agent := factory.Definition().Type
+		if agent == AgentMusePersonal {
+			// Its fingerprint freshness and partial-discovery behavior are
+			// exercised through the sync engine in internal/sync.
+			continue
+		}
 		t.Run(string(agent), func(t *testing.T) {
 			// The behavior-only fields are excluded from this declaration
 			// comparison; see the Hermes/Augure Desktop comment above.

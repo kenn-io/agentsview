@@ -111,6 +111,42 @@ func TestMusePersonalCompositeFingerprintAndDigest(t *testing.T) {
 	assert.Equal(t, initial.Hash, final.Hash)
 }
 
+func TestMusePersonalPartialDiscoveryPreservesHealthySourcesAndRawNonAuthority(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "agent-66666666-7777-4888-8999-000000000000", "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o700))
+	incompleteID := "00000000-2222-4333-8444-555555555555"
+	incompletePath := filepath.Join(sessionsDir, incompleteID+".jsonl")
+	writeSourceFile(t, incompletePath, `{"type":"session_header"`)
+	healthyID := "99999999-2222-4333-8444-555555555555"
+	healthyPath := filepath.Join(sessionsDir, healthyID+".jsonl")
+	header := strings.ReplaceAll(musePersonalTestHeader, musePersonalTestID, healthyID)
+	writeSourceFile(t, healthyPath, header+musePersonalTestItem(0, `{"type":"message","role":"user","text":"healthy"}`))
+	p, ok := NewProvider(AgentType("muse-personal"), ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	sources, err := p.Discover(t.Context())
+	require.Error(t, err)
+	_, incomplete := errors.AsType[DiscoveryIncompleteError](err)
+	assert.True(t, incomplete)
+	require.Len(t, sources, 1)
+	assert.Equal(t, healthyPath, sources[0].DisplayPath)
+
+	rawProvider, ok := p.(StreamingRawCaptureSourceProvider)
+	require.True(t, ok)
+	var rawSources []SourceRef
+	authoritative, err := rawProvider.DiscoverRawCaptureSourcesEach(t.Context(), func(source SourceRef) error {
+		rawSources = append(rawSources, source)
+		return nil
+	})
+	require.Error(t, err)
+	_, incomplete = errors.AsType[DiscoveryIncompleteError](err)
+	assert.True(t, incomplete)
+	assert.False(t, authoritative)
+	require.Len(t, rawSources, 1)
+	assert.Equal(t, healthyPath, rawSources[0].DisplayPath)
+}
+
 func TestMusePersonalStrictClaimingAndCancellation(t *testing.T) {
 	p, path := musePersonalTestProvider(t, "")
 	dir := filepath.Dir(path)
