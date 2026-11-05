@@ -88,8 +88,9 @@ func BenchmarkDuckDBActivityReportDay(b *testing.B) {
 	for b.Loop() {
 		report, err := store.GetActivityReport(b.Context(), filter, q)
 		require.NoError(b, err)
-		if report.Totals.Sessions == 0 || len(report.BySession) == 0 {
-			b.Fatal("activity report for the benchmark day is empty")
-		}
+		require.Positive(b, report.Totals.Sessions,
+			"activity report for the benchmark day is empty")
+		require.NotEmpty(b, report.BySession,
+			"activity report for the benchmark day has no sessions")
 	}
 }
