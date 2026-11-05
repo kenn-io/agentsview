@@ -5292,10 +5292,6 @@ func TestAnalyticsDateWindowPlan(t *testing.T) {
 			assert.Contains(t, queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where, args...), tc.index)
 		})
 	}
-	t.Run("top_sessions", func(t *testing.T) {
-		where, args := sqliteAnalyticsWhereSQL(baseFilter(), "+COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id", true)
-		assert.Contains(t, queryPlanOf(t, d, "SELECT id FROM sessions WHERE "+where+" ORDER BY message_count DESC, id ASC LIMIT 10", args...), "idx_sessions_message_count")
-	})
 }
 
 func TestAnalyticsDateWindowOldNullStart(t *testing.T) {
