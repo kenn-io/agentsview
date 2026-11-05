@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -585,8 +586,18 @@ func TestSearchSnippetsAfterPagination(t *testing.T) {
 			// FTS5 loads snippet bodies through its external-content view. Instrument
 			// that boundary so this checks the actual snippet() calls and output.
 			reads := map[string]int{}
+			contentLowerCalls := 0
 			require.NoError(t, conn.Raw(func(driverConn any) error {
-				return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("snippet_body", func(id, content string) string {
+				register := driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc
+				if err := register("lower", func(value string) string {
+					if value == index.content {
+						contentLowerCalls++
+					}
+					return strings.ToLower(value)
+				}, false); err != nil {
+					return err
+				}
+				return register("snippet_body", func(id, content string) string {
 					reads[id]++
 					return content
 				}, false)
@@ -611,8 +622,14 @@ func TestSearchSnippetsAfterPagination(t *testing.T) {
 				} {
 					t.Run(fmt.Sprintf("%s/offset-%d", sort, tc.cursor), func(t *testing.T) {
 						clear(reads)
+						contentLowerCalls = 0
 						page, err := d.Search(t.Context(), SearchFilter{Query: index.query, Sort: sort, Cursor: tc.cursor, Limit: 2})
 						require.NoError(t, err)
+						if sort == "recency" {
+							assert.Zero(t, contentLowerCalls)
+						} else {
+							assert.Equal(t, 6, contentLowerCalls)
+						}
 						if index.name == "cjk" {
 							// HasCJKFTS also reads the first row to probe the optional
 							// index. Exclude that read from snippet body counts.

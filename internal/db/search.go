@@ -387,8 +387,10 @@ func (db *DB) Search(
 	// (e.g. "…T12:00:00Z" vs "…T12:00:00.123Z"). SQLite NULLs sort smaller
 	// than any value, so julianday(NULL) DESC naturally places NULLs last.
 	orderBy := "rank ASC, match_pos ASC, julianday(session_ended_at) DESC, session_id ASC"
+	matchPosSQL := "instr(LOWER(m.content), LOWER(best.best_query))"
 	if f.Sort == "recency" {
 		orderBy = "julianday(session_ended_at) DESC, session_id ASC"
+		matchPosSQL = "0"
 	}
 
 	// innerWhere is used in the ROW_NUMBER inner subquery and the NOT IN
@@ -449,8 +451,9 @@ func (db *DB) Search(
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
 	args = append(args, f.Query)             // paged snippet MATCH
 
-	// Materialize the ordered page before evaluating snippet(). match_pos stays
-	// in the page query because relevance ordering depends on it.
+	// Relevance ordering needs match_pos before pagination. Recency ordering
+	// does not, so it avoids scanning every matching message for the position.
+	// Materialize the ordered page before evaluating snippet().
 	query := fmt.Sprintf(`
 		WITH page AS MATERIALIZED (
 		SELECT session_id, project, agent, machine, name,
@@ -463,8 +466,7 @@ func (db *DB) Search(
 				best.best_ordinal AS ordinal, best.best_rowid,
 				NULL AS snippet,
 				best.best_rank AS rank,
-				instr(LOWER(m.content), LOWER(best.best_query))
-					AS match_pos
+				%s AS match_pos
 			FROM (
 				SELECT session_id, best_rowid, best_ordinal, best_rank, best_query
 				FROM (
@@ -536,6 +538,7 @@ func (db *DB) Search(
 			rank, match_pos
 		FROM page
 		ORDER BY %s`,
+		matchPosSQL,
 		innerWhereSQL,     // ROW_NUMBER inner WHERE (%s at rn subquery)
 		nameProjectClause, // optional project filter for name branch (%s)
 		innerWhereSQL,     // NOT IN subquery WHERE (%s)
