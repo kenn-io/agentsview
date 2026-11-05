@@ -1066,12 +1066,19 @@
     overflow-anchor: none;
   }
 
-  /* One reading column for every layout: cards, prose, tool rows, and
-     their timestamps share a right edge instead of prose stopping short
-     inside full-width cards. */
+  /* One reading column for every layout: cards, tool rows, and their
+     timestamps share both edges. The find bar, SignalPanel, and
+     ToolSequencesPanel align their content to the same 960px column. */
   .virtual-row > :global(*) {
-    max-width: 840px;
+    max-width: 960px;
     margin-inline: auto;
+  }
+
+  /* The wide column gives commands and diffs room; prose keeps a
+     comfortable line length inside it. 76ch is about 100 characters of
+     body text in the UI font. */
+  .virtual-row :global(.text-content.markdown) {
+    max-width: 76ch;
   }
 
   .virtual-row.selected > :global(*) {
@@ -1244,10 +1251,12 @@
     display: none;
   }
 
+  /* Only the block margin is reset, so standalone tool runs keep the
+     reading column's auto inline margins and line up with the messages. */
   .layout-skim :global(.tool-group),
   .layout-skim :global(.parallel-group) {
     border: none;
-    margin: 0;
+    margin-block: 0;
     padding: 0;
     background: transparent;
   }

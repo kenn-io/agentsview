@@ -90,23 +90,26 @@ test("transcript controls fit a very narrow transcript pane", async ({ page }) =
   expect(view.x + view.width).toBeLessThanOrEqual(pane.x + pane.width);
 });
 
-test("the View trigger keeps its width across layouts and modes", async ({ page }) => {
+test("the View trigger shows its full label and keeps its width across layouts", async ({ page }) => {
   const sp = new SessionsPage(page);
   await sp.goto();
   await sp.selectFirstSession();
   const trigger = page.locator(".session-breadcrumb .view-trigger");
-  const widths = new Set<number>();
-  for (const [layout, mode] of [
-    ["Default", "Everything"],
-    ["Compact", "Prompts and final answers"],
-    ["Skim", "Prompts and final answers"],
-    ["Stream", "Everything"],
-  ] as const) {
-    await trigger.click();
-    await page.getByRole("menuitemradio", { name: new RegExp(`^${layout}`) }).click();
+  const label = trigger.locator(".view-trigger-text");
+  for (const mode of ["Everything", "Prompts and final answers"]) {
     await trigger.click();
     await page.getByRole("menuitemradio", { name: new RegExp(`^${mode}`) }).click();
-    widths.add(Math.round((await trigger.boundingBox())!.width));
+    const widths = new Set<number>();
+    for (const layout of ["Default", "Compact", "Stream", "Skim"]) {
+      await trigger.click();
+      await page.getByRole("menuitemradio", { name: new RegExp(`^${layout}`) }).click();
+      await expect(label).toContainText(layout);
+      // The label is drawn in full: nothing clipped behind an ellipsis.
+      const clip = await label.evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect(clip, `${mode} / ${layout}`).toBeLessThanOrEqual(0);
+      widths.add(Math.round((await trigger.boundingBox())!.width));
+    }
+    // Switching layouts does not move the trigger's neighbors.
+    expect([...widths], mode).toHaveLength(1);
   }
-  expect([...widths]).toHaveLength(1);
 });

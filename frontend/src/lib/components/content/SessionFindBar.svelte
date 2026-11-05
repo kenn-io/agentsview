@@ -36,7 +36,7 @@
 </script>
 
 {#if inSessionSearch.isOpen}
-  <div class="session-find" bind:this={root} use:ownAnnouncements use:protectFindInput={inSessionSearch}>
+  <div class="session-find" class:has-find={inSessionSearch.isActive} bind:this={root} use:ownAnnouncements use:protectFindInput={inSessionSearch}>
     <div class="find-controls">
       <div class="find-input">
         <FindBar bind:query={inSessionSearch.query} matchCount={inSessionSearch.total}
@@ -78,8 +78,24 @@
 {/if}
 
 <style>
-  .session-find { flex: 0 0 auto; min-width: 0; }
-  .find-controls { display: flex; align-items: center; gap: 4px; padding-inline-end: 8px; }
+  /* The band spans the pane, but the field and its buttons sit on the
+     transcript's 960px reading column (MessageList .virtual-row). An active
+     find reserves a 12px gutter for the overview rail, which shifts that
+     column (SessionFindView .has-find). */
+  .session-find {
+    --find-rail: 0px;
+    --find-side: max(12px, calc((100% - 960px - var(--find-rail)) / 2));
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+  .session-find.has-find { --find-rail: 12px; }
+  .find-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-inline-start: var(--find-side);
+    padding-inline-end: calc(var(--find-side) + var(--find-rail));
+  }
   .find-input { flex: 1; min-width: 0; }
-  .history-status { display: flex; align-items: center; gap: 8px; padding: 2px 12px 6px; font-size: 11px; color: var(--text-muted); }
+  .history-status { display: flex; align-items: center; gap: 8px; padding: 2px calc(var(--find-side) + var(--find-rail)) 6px var(--find-side); font-size: 11px; color: var(--text-muted); }
 </style>
