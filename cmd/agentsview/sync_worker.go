@@ -43,13 +43,15 @@ type workerLine struct {
 // "ok" only when the pass completed and discovery was authoritative; the parent
 // treats anything else, or a missing/duplicate result, as a failed run.
 type workerResult struct {
-	Status            string `json:"status"` // "ok" | "aborted" | "failed"
-	Synced            int    `json:"synced"`
-	Skipped           int    `json:"skipped"`
-	Failed            int    `json:"failed"`
-	Tombstoned        int    `json:"tombstoned,omitempty"`
-	DiscoveryComplete bool   `json:"discoveryComplete"`
-	Error             string `json:"error,omitempty"`
+	Status            string          `json:"status"` // "ok" | "aborted" | "failed"
+	Synced            int             `json:"synced"`
+	Skipped           int             `json:"skipped"`
+	Failed            int             `json:"failed"`
+	Tombstoned        int             `json:"tombstoned,omitempty"`
+	DiscoveryComplete bool            `json:"discoveryComplete"`
+	Error             string          `json:"error,omitempty"`
+	Deferred          int             `json:"deferred,omitempty"`
+	DeferredRetry     sync.WatchBatch `json:"deferredRetry,omitempty"`
 	// Stats carries the complete public SyncStats payload so the daemon's
 	// /sync and /resync responses keep result parity with in-process passes
 	// (total sessions, orphan counts, warnings, anomalies). The summary
@@ -250,7 +252,11 @@ func runSyncWorkerStartup(
 			result.Error = auditErr.Error()
 		}
 	default:
-		result = workerResultFromStats(ctx, engine.SyncAll(ctx, onProgress))
+		stats := engine.SyncAll(ctx, onProgress)
+		result = workerResultFromStats(ctx, stats)
+	}
+	if mode == "startup" && result.Deferred > 0 && result.Failed == 0 && result.DiscoveryComplete && ctx.Err() == nil {
+		result.Status = "ok"
 	}
 
 	result.Stats.LinksPending = engine.PendingSubagentLinks()
@@ -328,6 +334,8 @@ func resyncBuildResultFromStats(
 		Tombstoned:        stats.Tombstoned,
 		DiscoveryComplete: stats.AuthoritativeDiscoveryComplete(),
 		Stats:             &statsCopy,
+		Deferred:          stats.Deferred,
+		DeferredRetry:     stats.DeferredRetryBatch(),
 	}
 	switch {
 	case ctx.Err() != nil:
@@ -340,8 +348,6 @@ func resyncBuildResultFromStats(
 	case stats.Aborted:
 		result.Status = "aborted"
 		result.DiscoveryComplete = false
-	case stats.Deferred > 0:
-		result.Status = "failed"
 	case !result.DiscoveryComplete:
 		result.Status = "failed"
 	default:
@@ -378,6 +384,8 @@ func workerResultFromStats(
 		Tombstoned:        stats.Tombstoned,
 		DiscoveryComplete: stats.AuthoritativeDiscoveryComplete(),
 		Stats:             &statsCopy,
+		Deferred:          stats.Deferred,
+		DeferredRetry:     stats.DeferredRetryBatch(),
 	}
 	switch {
 	case ctx.Err() != nil || stats.Aborted:
