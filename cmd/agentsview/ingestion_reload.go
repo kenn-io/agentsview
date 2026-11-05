@@ -165,9 +165,8 @@ func (d *daemonIngestion) Suspend() {
 	if d.stopped || d.watchers == nil || d.catchup != nil {
 		return
 	}
-	if !d.pending {
-		d.pending = true
-		d.resumed = make(chan struct{})
+	if !d.pending || released(d.resumed) {
+		d.pending, d.resumed = true, make(chan struct{})
 	}
 	watchers, stopLive := d.watchers, d.stopLive
 	d.watchers, d.stopLive = nil, nil
@@ -256,23 +255,41 @@ func (d *daemonIngestion) restoreCollection() error {
 	return nil
 }
 
-func (d *daemonIngestion) acknowledgeSync() {
+// AcknowledgeSync settles recovery after a complete manual pass.
+func (d *daemonIngestion) AcknowledgeSync() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if !d.stopped && d.pending {
-		d.pending = false
+	d.settleLocked(true)
+}
+
+func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.settleLocked(complete)
+	d.catchup = nil
+	close(done)
+}
+
+// settleLocked releases waiting audits once a recovery pass leaves the
+// engine; only a complete pass clears the reader warning.
+func (d *daemonIngestion) settleLocked(complete bool) {
+	if d.stopped || !d.pending {
+		return
+	}
+	d.pending = !complete
+	if !released(d.resumed) {
 		close(d.resumed)
 	}
 }
 
-func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
-	if complete {
-		d.acknowledgeSync()
+// released reports whether audits waiting on ch may run.
+func released(ch chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.catchup = nil
-	close(done)
 }
 
 func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.LocalSyncRunner {
@@ -282,7 +299,7 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 		}
 		stats, err := runner(ctx, progress)
 		if err == nil && ctx.Err() == nil && stats.ProcessingComplete() {
-			d.acknowledgeSync()
+			d.AcknowledgeSync()
 		}
 		return stats, err
 	}

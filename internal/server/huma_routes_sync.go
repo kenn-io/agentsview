@@ -543,6 +543,19 @@ func (s *Server) finishLocalSync(
 	return stats, err
 }
 
+// finishRecoveredSync settles idle recovery when a manual pass that bypasses
+// the foreground runner completes, attached sources included.
+func (s *Server) finishRecoveredSync(
+	ctx context.Context, engine *syncpkg.Engine, stats syncpkg.SyncStats,
+	progress func(syncpkg.Progress),
+) (syncpkg.SyncStats, error) {
+	stats, err := s.finishLocalSync(ctx, engine, stats, progress, false)
+	if err == nil && ctx.Err() == nil && stats.ProcessingComplete() && s.ingestionFreshness != nil {
+		s.ingestionFreshness.AcknowledgeSync()
+	}
+	return stats, err
+}
+
 // runResyncRoute runs a /resync request. Both resync runners fall back to an
 // incremental pass when the rebuild safety-aborts and report that pass as
 // success, so the route checks the archive itself. Push shares
@@ -755,7 +768,7 @@ func (s *Server) runRemoteSyncRequest(
 			}
 		} else if localStats != nil {
 			// The manager takes the engine lock per source, after coordination releases it.
-			*localStats, blocked = s.finishLocalSync(ctx, engine, *localStats, progress, false)
+			*localStats, blocked = s.finishRecoveredSync(ctx, engine, *localStats, progress)
 		}
 	} else {
 		exclusiveRun := func() (remotesync.SyncStats, error) {

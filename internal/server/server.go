@@ -629,6 +629,7 @@ func WithInsightLogDrainTimeouts(drain, stopWait time.Duration) Option {
 type IngestionFreshness interface {
 	EnsureFresh(context.Context) bool
 	Pending() bool
+	AcknowledgeSync()
 }
 
 // WithIngestionFreshness waits for local ingestion before archive operations.
