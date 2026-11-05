@@ -510,18 +510,20 @@ func TestBulkImportRestoresUsageGenerationInvalidation(t *testing.T) {
 	appendLiveWriteMessage(t, database, "session", day, 2, 5)
 	seedLiveWriteSession(t, database, "loaded", "project", day, 0, 3)
 	require.NoError(t, database.RebuildBulkImportIndexes(t.Context()))
+
+	// Append reuse needs a generation; a session created during the load has
+	// none until the rebuild assigns one. Check before any later insert, whose
+	// restored trigger would assign one itself.
+	var missing int
+	require.NoError(t, database.getReader().QueryRow(t.Context(),
+		`SELECT count(*) FROM sessions WHERE usage_generation IS NULL`,
+	).Scan(&missing))
+	assert.Zero(t, missing)
+
 	assert.Equal(t, 25, liveWriteDailyInput(t, database, "project"))
 
 	appendLiveWriteMessage(t, database, "session", day, 1, 11)
 	assert.Equal(t, 36, liveWriteDailyInput(t, database, "project"))
 	appendLiveWriteMessage(t, database, "loaded", day, 1, 13)
 	assert.Equal(t, 49, liveWriteDailyInput(t, database, "project"))
-
-	// Append reuse needs a generation; a session created during the load has
-	// none until the rebuild assigns one.
-	var missing int
-	require.NoError(t, database.getReader().QueryRow(t.Context(),
-		`SELECT count(*) FROM sessions WHERE usage_generation IS NULL`,
-	).Scan(&missing))
-	assert.Zero(t, missing)
 }
