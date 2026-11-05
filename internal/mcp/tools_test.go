@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,8 +16,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
@@ -1453,33 +1456,27 @@ func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	assert.Equal(t, "semantic", fake.lastReq.Mode)
 }
 
-// search_content must reject scope outside semantic/hybrid/terms with the same
-// message the HTTP transport uses (the db layer silently ignores Scope for
-// lexical modes, so the guard lives in the transport), and must not reach
-// the service at all on rejection.
-func TestSearchContent_ScopeRejectedOnUnsupportedLexicalModes(t *testing.T) {
+func TestSearchContent_ScopeRejectedForFTS(t *testing.T) {
 	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-	for _, mode := range []string{"", "substring", "regex", "fts"} {
+	for _, mode := range []string{"fts"} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Pattern: "needle", Mode: mode, Scope: "top", IncludeActive: true,
 			})
 			require.Error(t, err)
 			assert.EqualError(t, err,
-				"scope is only supported for semantic, hybrid, and terms search modes")
+				db.ContentSearchScopeUnsupportedMsg)
 		})
 	}
 	assert.Empty(t, fake.lastReq.Pattern,
 		"a rejected request must not reach the service")
 }
 
-// search_content must pass Scope through to the service untouched for
-// semantic, hybrid, and terms modes; the db layer owns scope-value validation from
-// there.
+// Scoped modes forward the requested scope; the store validates its value.
 func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
-	for _, mode := range []string{"semantic", "hybrid", "terms"} {
+	for _, mode := range []string{"semantic", "hybrid", "terms", "", "substring", "regex"} {
 		t.Run(mode, func(t *testing.T) {
 			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
@@ -1508,8 +1505,7 @@ func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "substring", out.EffectiveMode)
-	assert.Empty(t, out.EffectiveScope,
-		"substring results are not conversation units, so no scope applies")
+	assert.Equal(t, "all", out.EffectiveScope)
 }
 
 func TestSearchContent_RecallContractMapping(t *testing.T) {
@@ -2080,4 +2076,88 @@ func TestFileReferencesTool(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &out))
 	assert.Equal(t, "enabled", out.Integration)
 	assert.Empty(t, out.Occurrences)
+}
+
+func TestSearchContent_LexicalChildScope(t *testing.T) {
+	_, d := newTestToolset(t)
+	dbtest.SeedLexicalScope(t, d)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := server.New(config.Config{
+		Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port,
+		DataDir: t.TempDir(), WriteTimeout: 30 * time.Second,
+	}, d, nil)
+	httpServer := httptest.NewUnstartedServer(srv.Handler())
+	require.NoError(t, httpServer.Listener.Close())
+	httpServer.Listener = ln
+	httpServer.Start()
+	t.Cleanup(httpServer.Close)
+	for name, svc := range map[string]service.SessionService{
+		"direct": service.NewDirectBackend(d, nil),
+		"http":   servicehttp.NewHTTPBackend(httpServer.URL, "", false, ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
+			defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+			for _, mode := range []string{"", "regex", "fts"} {
+				for _, scope := range []string{"", "all", "top", "subordinate"} {
+					if mode == "fts" && scope != "" {
+						continue
+					}
+					args := map[string]any{
+						"pattern": "scopeanchor", "mode": mode, "scope": scope,
+						"include_active": true, "include_one_shot": true, "include_automated": true,
+					}
+					result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, args))
+					require.NoError(t, err)
+					require.False(t, result.IsError)
+					out := decodeStructured[searchContentOut](t, result)
+					ids := make([]string, 0, len(out.Matches))
+					for _, match := range out.Matches {
+						ids = append(ids, match.SessionID)
+					}
+					if scope == "top" || mode == "fts" {
+						assert.NotContains(t, ids, "a-child")
+					} else {
+						assert.Contains(t, ids, "a-child")
+					}
+					if mode == "fts" {
+						assert.Empty(t, out.EffectiveScope)
+					} else if scope == "" {
+						assert.Equal(t, "all", out.EffectiveScope)
+					} else {
+						assert.Equal(t, scope, out.EffectiveScope)
+					}
+					raw, err := json.Marshal(result.StructuredContent)
+					require.NoError(t, err)
+					var fields struct {
+						Exclusions map[string]bool `json:"exclusions"`
+					}
+					require.NoError(t, json.Unmarshal(raw, &fields))
+					children, exists := fields.Exclusions["children"]
+					assert.True(t, exists)
+					assert.Equal(t, scope == "top" || mode == "fts", children)
+					if mode == "fts" || scope == "top" {
+						args["session_id"] = "a-child"
+						exact, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, args))
+						require.NoError(t, err)
+						require.False(t, exact.IsError)
+						got := decodeStructured[searchContentOut](t, exact)
+						if scope == "top" {
+							assert.Empty(t, got.Matches)
+							assert.True(t, got.Exclusions.Children)
+						} else {
+							require.Len(t, got.Matches, 1)
+							assert.False(t, got.Exclusions.Children)
+						}
+					}
+				}
+			}
+			result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{
+				"pattern": "scopeanchor", "scope": "bogus", "include_active": true,
+			}))
+			require.NoError(t, err)
+			assert.True(t, result.IsError)
+		})
+	}
 }

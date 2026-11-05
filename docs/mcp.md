@@ -212,8 +212,11 @@ belong to no exchange and never match. `%`, `_`, and backslashes stay literal;
 tool and system content is outside this mode. The `terms` mode currently
 requires a SQLite or PostgreSQL backend.
 
-`scope` can be `top`, `all` (default), or `subordinate` for terms, semantic, and
-hybrid searches. The semantic and hybrid modes need the opt-in
+`scope` can be `top`, `all` (default), or `subordinate` for substring, regex,
+terms, semantic, and hybrid searches. `all` includes child sessions and
+sidechain messages; `top` excludes them, and `subordinate` returns only them.
+Child sessions bypass the one-shot exclusion; top-level one-shot sessions still
+require `include_one_shot: true`. The semantic and hybrid modes need the opt-in
 [semantic search](/docs/semantic-search/) index on the local SQLite archive;
 without it they return a "not available" error. Exact `session_id`,
 `git_branch`, `project`, `agent`, `date_from`, and `date_to` filters apply
@@ -242,14 +245,17 @@ Every match carries a conversation-unit citation: an `ordinal_range` of
 `parent_session_id`, and `is_sidechain` fields that flag hits from sidechain
 runs and subagent or fork sessions. The response also reports the
 `effective_mode`, the `effective_scope` for modes that support scope, and the
-`exclusions` that applied by default. `next_cursor` is present when another page
-exists. To continue `search_content`, pass `next_cursor` as the numeric `cursor`
-and echo the returned RFC3339 `activity_cutoff` unchanged. The cutoff keeps the
-recent-activity exclusion fixed across pages of an unchanged archive, including
-on older servers. A positive cursor without the cutoff returns a restart error
-when that exclusion applies. Restart without a cursor to obtain both fields.
-`include_active: true` or an explicit `current_session_id` allows numeric-only
-continuation. Archive edits retain the existing offset-pagination behavior.
+`exclusions` that applied by default. `exclusions.children` reports whether
+child sessions were excluded, including in empty results.
+
+`next_cursor` is present when another page exists. To continue `search_content`,
+pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
+`activity_cutoff` unchanged. The cutoff keeps the recent-activity exclusion fixed
+across pages of an unchanged archive, including on older servers. A positive
+cursor without the cutoff returns a restart error when that exclusion applies.
+Restart without a cursor to obtain both fields. `include_active: true` or an
+explicit `current_session_id` allows numeric-only continuation. Archive edits
+retain the existing offset-pagination behavior.
 
 SQLite and PostgreSQL search matches also carry `transcript_revision`, captured
 by the same storage query as the evidence. A `revision_bound` response flag says

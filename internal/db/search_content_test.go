@@ -1338,6 +1338,21 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 	assert.Equal(t, "subagent", m.Relationship, "Relationship from sessions join")
 	assert.Equal(t, "boss", m.ParentSessionID, "ParentSessionID from sessions join")
 
+	for _, mode := range []string{"substring", "regex"} {
+		for _, scope := range []string{"all", "subordinate", "top"} {
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "ORPHHIT", Mode: mode, Scope: scope, Sources: []string{"tool_result"}, Limit: 1,
+			})
+			require.NoError(t, err)
+			if scope == "top" {
+				assert.Empty(t, page.Matches)
+			} else {
+				require.Len(t, page.Matches, 1)
+				assert.Equal(t, "evorph", page.Matches[0].SessionID)
+			}
+		}
+	}
+
 	ev, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "EVHIT", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
