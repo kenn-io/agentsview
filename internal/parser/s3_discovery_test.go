@@ -1,9 +1,6 @@
 package parser
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,89 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestS3DiscoveryReportsListingFailure(t *testing.T) {
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-	denied := errors.New("listing denied")
-	for _, agent := range []AgentType{AgentClaude, AgentCodex, AgentCursor, AgentIcodemate} {
-		t.Run(string(agent), func(t *testing.T) {
-			root := t.TempDir()
-			localRel := "project/22222222-2222-4222-8222-222222222222.jsonl"
-			remoteRel := "project/11111111-1111-4111-8111-111111111111.jsonl"
-			if agent == AgentCodex {
-				localRel = "2026/06/24/rollout-2026-06-24T00-00-00-22222222-2222-4222-8222-222222222222.jsonl"
-				remoteRel = "2026/06/24/rollout-2026-06-24T00-00-00-11111111-1111-4111-8111-111111111111.jsonl"
-			}
-			if agent == AgentCursor {
-				localRel = "project/agent-transcripts/parent/subagents/22222222-2222-4222-8222-222222222222.jsonl"
-			}
-			localPath := filepath.Join(root, filepath.FromSlash(localRel))
-			require.NoError(t, os.MkdirAll(filepath.Dir(localPath), 0o755))
-			require.NoError(t, os.WriteFile(localPath, []byte("{}\n"), 0o600))
-			good := "s3://bucket/healthy/raw/" + string(agent)
-			bad := "s3://bucket/denied/raw/" + string(agent)
-			localRoots := []string{root}
-			expectedPaths := []string{localPath, good + "/" + remoteRel}
-			if agent == AgentIcodemate {
-				opencodeRoot := t.TempDir()
-				sessionPath := filepath.Join(opencodeRoot, "storage", "session_diff", "global", "ses_vscode.json")
-				writeOpenCodeStorageFile(t, sessionPath, map[string]any{
-					"id": "ses_vscode", "directory": "/demo/project", "title": "Available history",
-					"time": map[string]any{"created": 1700000000000, "updated": 1700000060000},
-				})
-				localRoots = append(localRoots, opencodeRoot)
-				expectedPaths = append(expectedPaths, sessionPath)
-			}
-			listS3Objects = func(prefix string) ([]S3Object, error) {
-				if prefix == bad {
-					return nil, denied
-				}
-				require.Equal(t, good, prefix)
-				return []S3Object{{URI: good + "/" + remoteRel, Size: 3, LastModified: time.Unix(100, 0)}}, nil
-			}
-
-			for _, deniedFirst := range []bool{true, false} {
-				t.Run(fmt.Sprintf("denied_first=%v", deniedFirst), func(t *testing.T) {
-					roots := append([]string{bad, good}, localRoots...)
-					if !deniedFirst {
-						roots = append(append([]string(nil), localRoots...), good, bad)
-					}
-					factory, ok := ProviderFactoryByType(agent)
-					require.True(t, ok)
-					provider := factory.NewProvider(ProviderConfig{Roots: roots})
-					sources, err := provider.Discover(t.Context())
-					require.ErrorIs(t, err, denied)
-					var incomplete DiscoveryIncompleteError
-					require.ErrorAs(t, err, &incomplete)
-					var paths []string
-					for _, source := range sources {
-						paths = append(paths, source.DisplayPath)
-					}
-					assert.ElementsMatch(t, expectedPaths, paths)
-					paths = nil
-					err = provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(source SourceRef) error { paths = append(paths, source.DisplayPath); return nil })
-					require.ErrorIs(t, err, denied)
-					assert.ElementsMatch(t, expectedPaths, paths)
-				})
-			}
-			factory, ok := ProviderFactoryByType(agent)
-			require.True(t, ok)
-			provider := factory.NewProvider(ProviderConfig{Roots: []string{bad, root, good}})
-			consumerErr := errors.New("consumer stopped")
-			calls := 0
-			err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error { calls++; return consumerErr })
-			require.ErrorIs(t, err, consumerErr)
-			assert.Equal(t, 1, calls)
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			calls = 0
-			err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(SourceRef) error { calls++; cancel(); return nil })
-			require.ErrorIs(t, err, context.Canceled)
-			assert.Equal(t, 1, calls)
-		})
-	}
-}
 
 // TestClaudeSourceSetDiscoversS3Sessions verifies the Claude source set
 // enumerates s3:// roots through its provider Discover path and carries the

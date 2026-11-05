@@ -46,6 +46,7 @@ func claudeLayoutSpecIcodemateCLI() claudeLayoutSpec {
 		agent:          AgentIcodemate,
 		dirLabel:       "IcodeMate CLI project directory",
 		debounceScope:  "cli-projects",
+		listFiles:      IcodemateCLIProjectSessionFiles,
 		sidecarSources: true,
 	}
 }

@@ -519,6 +519,7 @@ type claudeLayoutSpec struct {
 	dirLabel      string
 	debounceScope string
 	watchGlobs    []string
+	listFiles     func(string) []DiscoveredFile
 	// sidecarSources includes persisted tool-result companions in watch
 	// coverage, changed-path mapping, and source fingerprints. The Claude
 	// provider keeps this off: its stored fingerprints hash only the
@@ -533,6 +534,7 @@ func claudeLayoutSpecClaude() claudeLayoutSpec {
 		dirLabel:      "Claude project directory",
 		debounceScope: "projects",
 		watchGlobs:    []string{"*.jsonl"},
+		listFiles:     ClaudeProjectSessionFiles,
 	}
 }
 
@@ -552,27 +554,36 @@ func newClaudeLayoutSourceSet(
 }
 
 func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	return collectPartialDiscoveredSources(ctx, s.DiscoverEach)
+	var sources []SourceRef
+	seen := make(map[string]struct{})
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		for _, file := range s.spec.listFiles(root) {
+			source, ok := s.discoveredSourceRef(root, file)
+			if !ok {
+				continue
+			}
+			addJSONLSource(source, &sources, seen)
+		}
+	}
+	sortJSONLSources(sources)
+	return sources, nil
 }
 
-func (s claudeSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
-	var incomplete error
-	emit := wrapDiscoveryYield(ctx, yield)
+func (s claudeSourceSet) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.discoverEachRoot(ctx, root, emit); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if cause, ok := discoveryYieldCause(err); ok {
-				return cause
-			}
-			incomplete = errors.Join(incomplete, incompleteDiscoveryError(s.spec.agent, "discover "+root, err))
+		if err := s.discoverEachRoot(ctx, root, yield); err != nil {
+			return err
 		}
 	}
-	return errors.Join(incomplete, ctx.Err())
+	return nil
 }
 
 func (s claudeSourceSet) discoverEachRoot(
@@ -581,15 +592,12 @@ func (s claudeSourceSet) discoverEachRoot(
 	yield func(SourceRef) error,
 ) error {
 	if strings.HasPrefix(root, "s3://") {
-		scanner := claudeS3Scanner()
-		scanner.Agent = s.spec.agent
-		files, err := s3PrefixScan(root, scanner)
-		if err != nil {
-			return err
-		}
-		for _, file := range files {
-			if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
-				return err
+		for _, file := range s.spec.listFiles(root) {
+			source, ok := s.discoveredSourceRef(root, file)
+			if ok {
+				if err := yield(source); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -663,11 +671,22 @@ func (s claudeSourceSet) streamLocalSubtree(ctx context.Context, root, path stri
 		}
 		return nil
 	}
-	return streamDirectoryTreeRecursive(ctx, path, emit, func(dir string) bool {
-		rel, err := filepath.Rel(root, dir)
-		parts := strings.Split(rel, string(filepath.Separator))
-		return err == nil && (len(parts) < 3 || parts[2] == "subagents")
-	})
+	return streamDirectoryTreeRecursive(ctx, path, emit)
+}
+
+// discoveredSourceRef builds the SourceRef for one enumerated session file.
+// Local files resolve through the regular file-backed source ref; s3://
+// objects (which spec.listFiles enumerates via the agent's S3 scanner) carry
+// their durable object metadata in the Opaque payload, because the
+// IsRegularFile gate that sourceRef applies to a local path would otherwise drop
+// every remote object.
+func (s claudeSourceSet) discoveredSourceRef(
+	root string, file DiscoveredFile,
+) (SourceRef, bool) {
+	if strings.HasPrefix(file.Path, "s3://") {
+		return s3SourceRefFromDiscoveredFile(root, file), true
+	}
+	return s.sourceRef(root, file.Path)
 }
 
 func (s claudeSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
@@ -1011,7 +1030,6 @@ func claudeProviderCapabilities() Capabilities {
 			StopReason:           CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
-			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,

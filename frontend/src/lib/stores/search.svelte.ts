@@ -4,7 +4,6 @@ import { ApiError, isAbortError } from "../api/runtime.js";
 import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
-import { events } from "./events.svelte.js";
 
 export type SearchMode = "fulltext" | "semantic" | "hybrid";
 export type SearchSort = "relevance" | "recency";
@@ -143,12 +142,9 @@ export class SearchStore {
   private storage: SearchModeStorage | null;
   private abortController: AbortController | null = null;
   private requestVersion = 0;
-  private searchScheduled = false;
-  private refreshPending = false;
 
-  private debouncedSearch = debounce((query: string, project: string, background = false) => {
-    this.searchScheduled = false;
-    void this.executeSearch(query, project, background);
+  private debouncedSearch = debounce((query: string, project: string) => {
+    void this.executeSearch(query, project);
   }, SEARCH_DEBOUNCE_MS);
 
   constructor(storage: SearchModeStorage | null = availableStorage()) {
@@ -169,18 +165,11 @@ export class SearchStore {
       return;
     }
 
-    this.searchScheduled = true;
     this.debouncedSearch(query, this.project);
   }
 
   refresh() {
-    if (!this.query.trim() || this.searchScheduled) return;
-    if (this.abortController !== null) {
-      this.refreshPending = true;
-      return;
-    }
-    this.searchScheduled = true;
-    this.debouncedSearch(this.query, this.project, true);
+    if (this.query.trim()) this.search(this.query, this.project);
   }
 
   setMode(mode: SearchMode) {
@@ -249,21 +238,19 @@ export class SearchStore {
   }
 
   private cancelInFlight() {
-    this.searchScheduled = false;
-    this.refreshPending = false;
     this.endedEmpty = false;
     this.requestVersion += 1;
     this.abortController?.abort();
     this.abortController = null;
   }
 
-  private async executeSearch(query: string, project: string, background = false) {
+  private async executeSearch(query: string, project: string) {
     this.cancelInFlight();
     const requestVersion = this.requestVersion;
     const controller = new AbortController();
     const { signal } = controller;
     this.abortController = controller;
-    this.isSearching = !background || this.results.length === 0;
+    this.isSearching = true;
     this.error = null;
     const mode = this.mode;
     if (!this.reportedModes.has(mode)) {
@@ -326,10 +313,6 @@ export class SearchStore {
       if (requestVersion === this.requestVersion && !signal.aborted) {
         this.isSearching = false;
         this.abortController = null;
-        if (this.refreshPending) {
-          this.refreshPending = false;
-          this.refresh();
-        }
       }
     }
   }
@@ -342,9 +325,3 @@ export function createSearchStore(
 }
 
 export const searchStore = createSearchStore();
-
-events.subscribe((event) => {
-  if (event.scope === "sessions" || event.scope === "messages" || event.scope === "sync") {
-    searchStore.refresh();
-  }
-});

@@ -144,7 +144,7 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 }
 
 func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
-	for _, mode := range []string{"automatic", "reload", "requested", "canceled", "ensure-fresh-stop", "requested-stop"} {
+	for _, mode := range []string{"automatic", "reload", "ensure-fresh-stop"} {
 		t.Run(mode, func(t *testing.T) {
 			reload := mode == "reload"
 			database := dbtest.OpenTestDB(t)
@@ -180,24 +180,6 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 				_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
 			}()
 			<-entered
-			requested := make(chan error, 1)
-			requestedCtx, cancelRequested := context.WithCancel(t.Context())
-			defer cancelRequested()
-			if mode == "requested" || mode == "requested-stop" || mode == "canceled" {
-				registered := make(chan struct{})
-				go func() {
-					requested <- ingestion.RunSync(requestedCtx, func(ctx context.Context) error {
-						close(registered)
-						<-release
-						if mode == "canceled" {
-							return nil // Isolate the owner's context check from callback errors.
-						}
-						engine.SyncAll(ctx, nil)
-						return nil
-					})
-				}()
-				<-registered
-			}
 			query := "overnight"
 			if reload {
 				_, err := ingestion.Reload(t.Context())
@@ -225,14 +207,10 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 				require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
 			}
 			assert.Empty(t, active, "WaitActive waits for catch-up, not just watcher setup")
-			require.ErrorIs(t, ingestion.RunSync(t.Context(), func(context.Context) error { return nil }), agentsync.ErrSyncInProgress)
 			canceled, stop := context.WithCancel(t.Context())
 			stop()
 			assert.False(t, ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
-			if mode == "canceled" {
-				cancelRequested()
-			}
-			if mode == "ensure-fresh-stop" || mode == "requested-stop" {
+			if mode == "ensure-fresh-stop" {
 				stopped := make(chan struct{})
 				go func() { ingestion.Stop(); close(stopped) }()
 				assert.Never(t, func() bool {
@@ -246,22 +224,10 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 				releaseOnce()
 				<-finished
 				<-stopped
-				if mode == "requested-stop" {
-					require.NoError(t, <-requested)
-				}
 				return
 			}
 			releaseOnce()
 			<-finished
-			switch mode {
-			case "requested":
-				require.NoError(t, <-requested)
-			case "canceled":
-				require.NoError(t, <-requested)
-				require.True(t, ingestion.Pending(), "cancellation keeps catch-up pending even when its callback returns nil")
-				require.False(t, ingestion.EnsureFresh(t.Context()))
-				require.NoError(t, ingestion.syncScheduled(t.Context()))
-			}
 			require.True(t, ingestion.EnsureFresh(t.Context()))
 			headers, freshBody := searchIngestionArchive(t, ts.URL, query)
 			assert.Contains(t, freshBody, "hello from "+query)
@@ -378,48 +344,14 @@ func TestDaemonIngestionWakeCatchesUpChangedSources(t *testing.T) {
 	}
 }
 
-type countingIngestionFactory struct {
-	parser.ProviderFactory
-	calls *atomic.Int32
-}
-
-func (f countingIngestionFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
-	provider := f.ProviderFactory.NewProvider(cfg)
-	return countingIngestionProvider{Provider: provider, ReconciliationSourceResolver: provider.(parser.ReconciliationSourceResolver), calls: f.calls}
-}
-
-type countingIngestionProvider struct {
-	parser.Provider
-	parser.ReconciliationSourceResolver
-	calls *atomic.Int32
-}
-
-func (p countingIngestionProvider) Discover(ctx context.Context) ([]parser.SourceRef, error) {
-	p.calls.Add(1)
-	return p.Provider.Discover(ctx)
-}
-
-func (p countingIngestionProvider) DiscoverEach(ctx context.Context, yield func(parser.SourceRef) error) error {
-	p.calls.Add(1)
-	return p.Provider.(parser.StreamingDiscoverer).DiscoverEach(ctx, yield)
-}
-
-func TestDaemonIngestionRequestedSyncOwnsCatchup(t *testing.T) {
-	for _, tc := range []struct{ name, route string }{{"sync owns catch-up", "/sync"}, {"resync owns catch-up", "/resync"}, {"startup-only leaves catch-up pending", "/sync?startup_only=true"}} {
+func TestDaemonIngestionManualSyncResumesCollection(t *testing.T) {
+	for _, tc := range []struct{ name, route string }{{"sync", "/sync"}, {"resync", "/resync"}, {"startup-only", "/sync?startup_only=true"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
 			root := t.TempDir()
 			writeReloadGeminiSession(t, root, "before")
 			cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-			var calls atomic.Int32
-			var factory parser.ProviderFactory
-			for _, candidate := range parser.ProviderFactories() {
-				if candidate.Definition().Type == parser.AgentGemini {
-					factory = candidate
-				}
-			}
-			require.NotNil(t, factory)
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine", ProviderFactories: []parser.ProviderFactory{countingIngestionFactory{factory, &calls}}})
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
 			t.Cleanup(engine.Close)
 			engine.SyncAll(t.Context(), nil)
 			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
@@ -427,7 +359,6 @@ func TestDaemonIngestionRequestedSyncOwnsCatchup(t *testing.T) {
 			ingestion.Suspend()
 			ingestion.applying.Wait()
 			writeReloadGeminiSession(t, root, "morning")
-			calls.Store(0)
 			ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
 			request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1"+tc.route, nil)
 			require.NoError(t, err)
@@ -438,13 +369,6 @@ func TestDaemonIngestionRequestedSyncOwnsCatchup(t *testing.T) {
 			require.NoError(t, response.Body.Close())
 			require.NoError(t, err)
 			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
-			if tc.route == "/sync?startup_only=true" {
-				assert.Zero(t, calls.Load())
-				assert.True(t, ingestion.Pending())
-				assert.False(t, sessionImported(t, database, "gemini:morning"))
-				return
-			}
-			assert.EqualValues(t, 1, calls.Load(), "the requested pass also satisfies idle catch-up")
 			assert.True(t, sessionImported(t, database, "gemini:morning"))
 			assert.False(t, ingestion.Pending())
 		})

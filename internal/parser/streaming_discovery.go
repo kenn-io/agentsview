@@ -61,18 +61,6 @@ func incompleteDiscoveryError(
 	}
 }
 
-func wrapDiscoveryYield(ctx context.Context, yield func(SourceRef) error) func(SourceRef) error {
-	return func(source SourceRef) error {
-		if err := ctx.Err(); err != nil {
-			return discoveryYieldError{cause: err}
-		}
-		if err := yield(source); err != nil {
-			return discoveryYieldError{cause: err}
-		}
-		return nil
-	}
-}
-
 func discoveryYieldCause(err error) (error, bool) {
 	yieldErr, hasYieldErr := errors.AsType[discoveryYieldError](err)
 	if !hasYieldErr {
@@ -365,7 +353,7 @@ func streamDirectoryTree(
 	root string,
 	yield func(path string, entry os.DirEntry) error,
 ) error {
-	err := streamDirectoryTreeRecursive(ctx, root, yield, nil)
+	err := streamDirectoryTreeRecursive(ctx, root, yield)
 	if cause, ok := discoveryYieldCause(err); ok {
 		return cause
 	}
@@ -376,16 +364,12 @@ func streamDirectoryTreeRecursive(
 	ctx context.Context,
 	root string,
 	yield func(path string, entry os.DirEntry) error,
-	descend func(path string) bool,
 ) error {
-	if descend != nil && !descend(root) {
-		return nil
-	}
 	var incomplete error
 	err := streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
 		path := filepath.Join(root, entry.Name())
 		if entry.IsDir() {
-			err := streamDirectoryTreeRecursive(ctx, path, yield, descend)
+			err := streamDirectoryTreeRecursive(ctx, path, yield)
 			if err == nil {
 				return nil
 			}
@@ -428,23 +412,15 @@ func collectDiscoveredSources(
 	ctx context.Context,
 	discover func(context.Context, func(SourceRef) error) error,
 ) ([]SourceRef, error) {
-	sources, err := collectPartialDiscoveredSources(ctx, discover)
-	if err != nil {
-		return nil, err
-	}
-	return sources, nil
-}
-
-func collectPartialDiscoveredSources(
-	ctx context.Context,
-	discover func(context.Context, func(SourceRef) error) error,
-) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
 	err := discover(ctx, func(source SourceRef) error {
 		addJSONLSource(source, &sources, seen)
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	sortJSONLSources(sources)
-	return sources, err
+	return sources, nil
 }

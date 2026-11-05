@@ -179,7 +179,7 @@ func (d *daemonIngestion) Suspend() {
 	})
 }
 
-// WaitActive preserves audit deadlines until catch-up succeeds.
+// WaitActive preserves audit deadlines until catch-up finishes.
 func (d *daemonIngestion) WaitActive(ctx context.Context) bool {
 	d.mu.Lock()
 	pending, resumed := d.pending, d.resumed
@@ -252,43 +252,15 @@ func (d *daemonIngestion) restoreCollection() error {
 	return nil
 }
 
-func (d *daemonIngestion) finishCatchup(done chan struct{}, complete bool) {
+func (d *daemonIngestion) finishCatchup(done chan struct{}) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if complete && !d.stopped && d.pending {
+	if !d.stopped && d.pending {
 		d.pending = false
 		close(d.resumed)
 	}
 	d.catchup = nil
 	close(done)
-}
-
-// RunSync makes a requested pass satisfy the shared idle catch-up obligation.
-func (d *daemonIngestion) RunSync(ctx context.Context, run func(context.Context) error) (err error) {
-	finish, ok := d.idleTracker.BeginWork()
-	if !ok {
-		return context.Canceled
-	}
-	defer finish()
-	d.mu.Lock()
-	if d.stopped || d.catchup != nil {
-		d.mu.Unlock()
-		return agentsync.ErrSyncInProgress
-	}
-	done := make(chan struct{})
-	d.catchup = done
-	d.applying.Add(1)
-	d.mu.Unlock()
-	defer d.applying.Done()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stop := context.AfterFunc(d.ctx, cancel)
-	defer stop()
-	defer func() { d.finishCatchup(done, err == nil && ctx.Err() == nil && d.ctx.Err() == nil) }()
-	if err = d.restoreCollection(); err == nil {
-		err = run(ctx)
-	}
-	return err
 }
 
 func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
@@ -300,7 +272,7 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	if err != nil {
 		log.Printf("idle catch-up incomplete: %v", err)
 	}
-	d.finishCatchup(done, err == nil && d.ctx.Err() == nil)
+	d.finishCatchup(done)
 }
 
 // catchUpSources syncs what changed while collection was released: local
@@ -320,19 +292,16 @@ func (d *daemonIngestion) catchUpSources(cfg config.Config) error {
 // catchUpScheduledSources runs the remote and attached-source passes the
 // scheduled tick skips while collection is released.
 func (d *daemonIngestion) catchUpScheduledSources(cfg config.Config) error {
-	remoteErr := runRemoteSourceSyncPass(d.ctx, d.engine, remoteSourceSyncRoots(cfg))
+	runRemoteSourceSyncPass(d.ctx, d.engine, remoteSourceSyncRoots(cfg))
 	if attached := d.attached; attached != nil {
 		_, err := attached.DrainScheduled(d.ctx)
-		return errors.Join(remoteErr, err)
+		return err
 	}
-	return remoteErr
+	return nil
 }
 
-// syncScheduled retries incomplete recovery on the existing periodic cadence.
+// syncScheduled runs the existing periodic passes while collection is active.
 func (d *daemonIngestion) syncScheduled(ctx context.Context) error {
-	if d.Pending() {
-		return d.RunSync(ctx, func(context.Context) error { return d.catchUpSources(d.Config()) })
-	}
 	cfg := d.Config()
 	runScheduledSyncPass(ctx, d.engine, scheduledReconcileTargets(cfg))
 	return d.catchUpScheduledSources(cfg)

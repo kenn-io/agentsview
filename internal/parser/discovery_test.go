@@ -1203,9 +1203,8 @@ func TestDiscoverCursorSessions(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
 			set := newCursorSourceSet([]string{dir})
-			sources, err := set.Discover(t.Context())
-			require.NoError(t, err)
-			require.Len(t, sources, tt.wantCount, "sources count")
+			paths := set.discoverTranscriptPaths(dir)
+			require.Len(t, paths, tt.wantCount, "paths count")
 		})
 	}
 }
@@ -1275,9 +1274,8 @@ func TestDiscoverCursorSessions_NestedLayout(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
 			set := newCursorSourceSet([]string{dir})
-			sources, err := set.Discover(t.Context())
-			require.NoError(t, err)
-			require.Len(t, sources, tt.wantCount, "sources count")
+			paths := set.discoverTranscriptPaths(dir)
+			require.Len(t, paths, tt.wantCount, "paths count")
 		})
 	}
 }
@@ -1292,10 +1290,10 @@ func TestDiscoverCursorSessions_DedupPrefersJsonl(t *testing.T) {
 		filepath.Join(transcripts, "sess.jsonl"): `{"role":"user"}`,
 	})
 	set := newCursorSourceSet([]string{dir})
-	sources, err := set.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1, "sources count")
-	assert.Equal(t, filepath.Join(dir, transcripts, "sess.jsonl"), sources[0].DisplayPath)
+	paths := set.discoverTranscriptPaths(dir)
+	require.Len(t, paths, 1, "paths count")
+	assert.True(t, strings.HasSuffix(paths[0], ".jsonl"),
+		"expected .jsonl path, got %q", paths[0])
 }
 
 func TestParseCursorTranscriptRelPath(t *testing.T) {

@@ -88,7 +88,6 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 // terminal CLI transcripts.
 func icodemateProviderCapabilities() Capabilities {
 	caps := openCodeFormatProviderCapabilities()
-	caps.Sync.PartialDiscovery = true
 	caps.Source.MultiSessionSource = CapabilitySupported
 	caps.Source.ExcludedSessions = CapabilitySupported
 	caps.Source.ForceReplaceOnParse = CapabilitySupported
@@ -137,36 +136,24 @@ type icodemateProvider struct {
 }
 
 func (p *icodemateProvider) Discover(ctx context.Context) ([]SourceRef, error) {
-	opencodeSources, opencodeErr := p.opencode.Discover(ctx)
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	cliSources, cliErr := p.cli.Discover(ctx)
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	err := errors.Join(opencodeErr, cliErr)
+	opencodeSources, err := p.opencode.Discover(ctx)
 	if err != nil {
-		err = incompleteDiscoveryError(AgentIcodemate, "discover storage families", err)
+		return nil, err
 	}
-	return append(opencodeSources, cliSources...), err
+	cliSources, err := p.cli.Discover(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append(opencodeSources, cliSources...), nil
 }
 
-func (p *icodemateProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
-	emit := wrapDiscoveryYield(ctx, yield)
-	var incomplete error
-	for _, sources := range []StreamingDiscoverer{p.opencode, p.cli} {
-		if err := sources.DiscoverEach(ctx, emit); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if cause, ok := discoveryYieldCause(err); ok {
-				return cause
-			}
-			incomplete = errors.Join(incomplete, incompleteDiscoveryError(AgentIcodemate, "discover storage family", err))
-		}
+func (p *icodemateProvider) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	if err := p.opencode.DiscoverEach(ctx, yield); err != nil {
+		return err
 	}
-	return errors.Join(incomplete, ctx.Err())
+	return p.cli.DiscoverEach(ctx, yield)
 }
 
 func (p *icodemateProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {

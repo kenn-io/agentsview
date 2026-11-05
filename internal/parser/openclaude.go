@@ -137,7 +137,7 @@ func (s openClaudeSourceSet) streamLocalRoot(
 				return nil
 			}
 			return yield(source)
-		}, nil)
+		})
 		if err == nil {
 			return nil
 		}

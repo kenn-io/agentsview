@@ -3,26 +3,8 @@ import { SearchService } from "../api/generated/index.js";
 import { ApiError } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
-import {
-  SEARCH_MODE_STORAGE_KEY,
-  createSearchStore,
-  searchStore,
-  type SearchMode,
-} from "./search.svelte.js";
-import { events } from "./events.svelte.js";
-import type { DataChangedEvent } from "../api/client.js";
+import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
-
-const wire = vi.hoisted(() => ({
-  deliver: undefined as ((event: DataChangedEvent) => void) | undefined,
-}));
-vi.mock("../api/client.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../api/client.js")>()),
-  watchEvents: vi.fn((callback) => {
-    wire.deliver = callback;
-    return { readyState: 1, addEventListener: vi.fn(), close: vi.fn() };
-  }),
-}));
 
 vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn(), reportErrorShown: vi.fn() }));
 
@@ -121,98 +103,29 @@ async function flushMicrotasks(ticks = 5) {
 }
 
 describe("SearchStore", () => {
+  it("refreshes the current query and project when catch-up finishes", async () => {
+    const store = createSearchStore(memoryStorage());
+    searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("overnight", 0));
+    store.search("overnight", "alpha");
+    await runDebounce();
+    expect(store.results).toEqual([]);
+    searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("overnight"));
+    store.refresh();
+    await runDebounce();
+    expect(store.results.map((result) => result.session_id)).toEqual(["full-0"]);
+    expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
+      expect.objectContaining({ q: "overnight", project: "alpha" }),
+      expect.anything(),
+    );
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.resetAllMocks();
   });
 
   afterEach(() => {
-    searchStore.clear();
-    searchStore.setMode("fulltext");
-    searchStore.resetSort();
-    searchStore.resetRange();
-    events.setAvailable(false);
-    vi.restoreAllMocks();
     vi.useRealTimers();
-  });
-
-  it.each(["fulltext", "hybrid"] as const)(
-    "refreshes an open %s search from committed archive events",
-    async (mode) => {
-      events.setAvailable(true);
-      const unsubscribe = events.subscribe(() => {});
-      searchStore.setMode(mode);
-      searchStore.setSort("recency");
-      searchStore.setRange({ mode: "custom", from: "2026-06-01", to: "2026-07-31" });
-      searchService.getApiV1Search
-        .mockResolvedValueOnce(fullTextResponse("needle", 0))
-        .mockResolvedValueOnce(fullTextResponse("needle"));
-      searchService.getApiV1SearchContent
-        .mockResolvedValueOnce(contentResult([]))
-        .mockResolvedValueOnce(contentResult([contentMatch("full-0", 4, 0.9)]));
-      searchStore.search("needle", "alpha");
-      await runDebounce();
-      expect(searchStore.results).toEqual([]);
-
-      // Committed messages refresh the query without a sync-status poll.
-      expect(wire.deliver).toBeTypeOf("function");
-      wire.deliver!({ scope: "sessions" });
-      await vi.advanceTimersByTimeAsync(200);
-      wire.deliver!({ scope: "sessions" });
-      await vi.advanceTimersByTimeAsync(99);
-      const query =
-        mode === "fulltext" ? searchService.getApiV1Search : searchService.getApiV1SearchContent;
-      expect(query).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-
-      expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
-      expect(query).toHaveBeenCalledTimes(2);
-      expect(query).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          project: "alpha",
-          date_from: "2026-06-01",
-          date_to: "2026-07-31",
-          ...(mode === "fulltext" ? { q: "needle", sort: "recency" } : { pattern: "needle", mode }),
-        }),
-        expect.objectContaining({ signal: expect.anything() }),
-      );
-      expect(searchStore.mode).toBe(mode);
-      expect(searchStore.sort).toBe("recency");
-      searchStore.clear();
-      wire.deliver!({ scope: "sessions" });
-      await runDebounce();
-      expect(query).toHaveBeenCalledTimes(2);
-      unsubscribe();
-    },
-  );
-
-  it("finishes a slow search and queues one refresh without hiding accepted results", async () => {
-    events.setAvailable(true);
-    const first = deferred<SearchResponse>();
-    const background = deferred<SearchResponse>();
-    searchService.getApiV1Search
-      .mockReturnValueOnce(first.promise as never)
-      .mockReturnValueOnce(background.promise as never);
-    searchStore.search("needle", "alpha");
-    await runDebounce();
-    const firstSignal = searchService.getApiV1Search.mock.calls[0]![1]!.signal!;
-    for (let index = 0; index < 3; index++) {
-      wire.deliver!({ scope: "sessions" });
-      await vi.advanceTimersByTimeAsync(10_000);
-    }
-    expect(firstSignal.aborted).toBe(false);
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    first.resolve(fullTextResponse("needle"));
-    await flushMicrotasks();
-    expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
-    expect(searchStore.isSearching).toBe(false);
-    await runDebounce();
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-    expect(searchStore.isSearching).toBe(false);
-    expect(searchStore.results.map((result) => result.session_id)).toEqual(["full-0"]);
-
-    background.resolve(fullTextResponse("needle"));
-    await flushMicrotasks();
   });
 
   it.each([

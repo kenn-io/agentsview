@@ -352,10 +352,10 @@ type S3SessionScanner struct {
 // s3PrefixScan is the shared S3 discovery body for the
 // .../<machine>/raw/<provider> layout. Providers reuse it by supplying an
 // S3SessionScanner with their own Keep/Project predicates.
-func s3PrefixScan(root string, scan S3SessionScanner) ([]DiscoveredFile, error) {
+func s3PrefixScan(root string, scan S3SessionScanner) []DiscoveredFile {
 	objects, err := listS3Objects(root)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 	machine := s3MachineFromRoot(root, string(scan.Agent))
 	var out []DiscoveredFile
@@ -390,7 +390,7 @@ func s3PrefixScan(root string, scan S3SessionScanner) ([]DiscoveredFile, error) 
 			TranscriptMtime:   obj.LastModified.UnixNano(),
 		})
 	}
-	return out, nil
+	return out
 }
 
 func s3URIWithLast(parts []string, last string) string {

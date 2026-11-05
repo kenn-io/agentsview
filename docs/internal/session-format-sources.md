@@ -2427,11 +2427,6 @@ schemas keep their existing ordering behavior.
 
 ## Cursor (`cursor`)
 
-- **Discovery rechecked 2026-11-05:** Flat, nested, and subagent layout fixtures
-  preserve readable siblings when another parent directory is inaccessible.
-  The incomplete scan remains an error; transcript identities and extension
-  preference are unchanged.
-
 - **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and
   shared block fixtures. Assistant text and thinking blocks remain separate.
   Cursor IDE uses a different parser.

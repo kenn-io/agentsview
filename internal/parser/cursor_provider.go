@@ -276,138 +276,133 @@ var cursorS3Provider = DefaultS3Provider{
 }
 
 func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	return collectPartialDiscoveredSources(ctx, s.DiscoverEach)
+	var sources []SourceRef
+	seen := make(map[string]struct{})
+	resolutionCache := make(cursorResolutionCache)
+	s3FilesByRoot, err := discoverCursorS3ByRoot(ctx, s.roots)
+	if err != nil {
+		return nil, err
+	}
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if isS3URI(root) {
+			for _, file := range s3FilesByRoot[root] {
+				addJSONLSource(s3SourceRefFromDiscoveredFile(root, file), &sources, seen)
+			}
+			continue
+		}
+		for _, chats := range s.chatsDirs(root) {
+			s.storeIndex.refresh(chats)
+		}
+		for _, path := range s.discoverTranscriptPaths(root) {
+			source, ok := s.sourceRefWithCache(root, path, resolutionCache)
+			if !ok {
+				continue
+			}
+			addJSONLSource(source, &sources, seen)
+		}
+	}
+	sortJSONLSources(sources)
+	return sources, nil
 }
 
 func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	resolutionCache := make(cursorResolutionCache)
-	s3FilesByRoot, incomplete := discoverCursorS3ByRoot(ctx, s.roots)
-	emit := wrapDiscoveryYield(ctx, yield)
+	s3FilesByRoot, err := discoverCursorS3ByRoot(ctx, s.roots)
+	if err != nil {
+		return err
+	}
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if isS3URI(root) {
 			for _, file := range s3FilesByRoot[root] {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
 				if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		if err := s.discoverLocalRootEach(ctx, root, resolutionCache, emit); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if cause, ok := discoveryYieldCause(err); ok {
-				return cause
-			}
-			incomplete = errors.Join(incomplete, incompleteDiscoveryError(AgentCursor, "discover "+root, err))
+		for _, chats := range s.chatsDirs(root) {
+			s.storeIndex.refresh(chats)
 		}
-	}
-	return errors.Join(incomplete, ctx.Err())
-}
-
-func (s cursorSourceSet) discoverLocalRootEach(ctx context.Context, root string, resolutionCache cursorResolutionCache, yield func(SourceRef) error) error {
-	for _, chats := range s.chatsDirs(root) {
-		s.storeIndex.refresh(chats)
-	}
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		if _, lstatErr := os.Lstat(root); errors.Is(lstatErr, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("resolve cursor root %s: %w", root, err)
-	}
-	var incomplete error
-	err = streamDirectoryEntries(ctx, root, func(project os.DirEntry) error {
-		if !project.IsDir() || project.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		err := s.discoverLocalProjectEach(ctx, root, resolvedRoot, project.Name(), resolutionCache, yield)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if _, stopped := discoveryYieldCause(err); stopped {
-			return err
-		}
-		incomplete = errors.Join(incomplete, err)
-		return nil
-	})
-	return errors.Join(incomplete, err)
-}
-
-func (s cursorSourceSet) discoverLocalProjectEach(ctx context.Context, root, resolvedRoot, project string, resolutionCache cursorResolutionCache, yield func(SourceRef) error) error {
-	dir := filepath.Join(root, project, "agent-transcripts")
-	resolvedDir, resolveErr := filepath.EvalSymlinks(dir)
-	if errors.Is(resolveErr, os.ErrNotExist) {
-		if _, lstatErr := os.Lstat(dir); errors.Is(lstatErr, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
-	}
-	if resolveErr != nil {
-		return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
-	}
-	if !isContainedIn(resolvedDir, resolvedRoot) {
-		return nil
-	}
-	topLevel := make(map[string]struct{})
-	var sessionDirs []string
-	var incomplete error
-	emitCandidate := func(path string) error {
-		err := s.yieldIfCanonical(root, path, resolutionCache, yield)
-		if _, stopped := discoveryYieldCause(err); stopped || ctx.Err() != nil {
-			return err
-		}
+		resolvedRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
-			incomplete = errors.Join(incomplete, err)
-		}
-		return nil
-	}
-	err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
-		if !entry.IsDir() {
-			if !IsCursorTranscriptExt(entry.Name()) {
-				return nil
-			}
-			if entry.Type().IsRegular() {
-				name := entry.Name()
-				topLevel[strings.TrimSuffix(name, filepath.Ext(name))] = struct{}{}
-			}
-			return emitCandidate(filepath.Join(dir, entry.Name()))
-		}
-		sessionDir := filepath.Join(dir, entry.Name())
-		sessionDirs = append(sessionDirs, sessionDir)
-		base := filepath.Join(sessionDir, entry.Name())
-		path := ""
-		for _, ext := range []string{".jsonl", ".txt"} {
-			// Preserve broken-link errors without letting a symlink
-			// reserve the stem or outrank a regular file.
-			regular, statErr := streamingRegularFileCandidate(base + ext)
-			if statErr != nil {
-				incomplete = errors.Join(incomplete, fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr))
+			if _, lstatErr := os.Lstat(root); errors.Is(lstatErr, os.ErrNotExist) {
 				continue
 			}
-			if regular && IsRegularFile(base+ext) {
-				path = base + ext
-				break
+			return fmt.Errorf("resolve cursor root %s: %w", root, err)
+		}
+		err = streamDirectoryEntries(ctx, root, func(project os.DirEntry) error {
+			if !project.IsDir() || project.Type()&os.ModeSymlink != 0 {
+				return nil
 			}
+			dir := filepath.Join(root, project.Name(), "agent-transcripts")
+			resolvedDir, resolveErr := filepath.EvalSymlinks(dir)
+			if errors.Is(resolveErr, os.ErrNotExist) {
+				if _, lstatErr := os.Lstat(dir); errors.Is(lstatErr, os.ErrNotExist) {
+					return nil
+				}
+				return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
+			}
+			if resolveErr != nil {
+				return fmt.Errorf("resolve cursor transcripts %s: %w", dir, resolveErr)
+			}
+			if !isContainedIn(resolvedDir, resolvedRoot) {
+				return nil
+			}
+			topLevel := make(map[string]struct{})
+			var sessionDirs []string
+			err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+				if !entry.IsDir() {
+					if !IsCursorTranscriptExt(entry.Name()) {
+						return nil
+					}
+					if entry.Type().IsRegular() {
+						name := entry.Name()
+						topLevel[strings.TrimSuffix(name, filepath.Ext(name))] = struct{}{}
+					}
+					return s.yieldIfCanonical(
+						root, filepath.Join(dir, entry.Name()), resolutionCache, yield,
+					)
+				}
+				sessionDir := filepath.Join(dir, entry.Name())
+				sessionDirs = append(sessionDirs, sessionDir)
+				base := filepath.Join(sessionDir, entry.Name())
+				path := ""
+				for _, ext := range []string{".jsonl", ".txt"} {
+					// Preserve broken-link errors without letting a symlink
+					// reserve the stem or outrank a regular file.
+					regular, statErr := streamingRegularFileCandidate(base + ext)
+					if statErr != nil {
+						return fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr)
+					}
+					if regular && IsRegularFile(base+ext) {
+						path = base + ext
+						break
+					}
+				}
+				if path == "" {
+					return nil
+				}
+				topLevel[entry.Name()] = struct{}{}
+				return s.yieldIfCanonical(root, path, resolutionCache, yield)
+			})
+			if err != nil {
+				return err
+			}
+			return s.streamSubagentTranscripts(
+				ctx, root, sessionDirs, topLevel, resolutionCache, yield,
+			)
+		})
+		if err != nil {
+			return err
 		}
-		if path == "" {
-			return nil
-		}
-		topLevel[entry.Name()] = struct{}{}
-		return emitCandidate(path)
-	})
-	if err != nil {
-		return err
 	}
-	return errors.Join(incomplete, s.streamSubagentTranscripts(
-		ctx, root, sessionDirs, topLevel, resolutionCache, yield,
-	))
+	return nil
 }
 
 func (s cursorSourceSet) yieldIfCanonical(
@@ -425,9 +420,13 @@ func (s cursorSourceSet) yieldIfCanonical(
 	return nil
 }
 
-// streamSubagentTranscripts deduplicates child stems across parents, letting
-// top-level transcripts shadow children. Symlinked subagents folders are
-// skipped, and unreadable parents remain errors after readable children yield.
+// streamSubagentTranscripts resolves a project's subagent files through the
+// same stem map as the batch walk, so a child stem under two parents yields
+// one source in both walks and a top-level transcript always shadows it. The
+// map holds one entry per child, so streaming stays bounded. A symlinked
+// subagents folder is skipped like a symlinked project directory, and each
+// folder is read with one ReadDir: it holds a handful of files, so the batched
+// streamer that guards huge flat archives costs more than it saves here.
 func (s cursorSourceSet) streamSubagentTranscripts(
 	ctx context.Context,
 	root string,
@@ -440,7 +439,6 @@ func (s cursorSourceSet) streamSubagentTranscripts(
 	// os.ReadDir sorts, so sort here too or "first parent wins" diverges.
 	sort.Strings(sessionDirs)
 	subagentSeen := make(map[string]string)
-	var incomplete error
 	for _, sessionDir := range sessionDirs {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -451,8 +449,7 @@ func (s cursorSourceSet) streamSubagentTranscripts(
 			continue
 		}
 		if err != nil {
-			incomplete = errors.Join(incomplete, fmt.Errorf("stat cursor subagents %s: %w", subagentsDir, err))
-			continue
+			return fmt.Errorf("stat cursor subagents %s: %w", subagentsDir, err)
 		}
 		if !info.IsDir() {
 			continue
@@ -462,8 +459,7 @@ func (s cursorSourceSet) streamSubagentTranscripts(
 			continue
 		}
 		if err != nil {
-			incomplete = errors.Join(incomplete, fmt.Errorf("read cursor subagents %s: %w", subagentsDir, err))
-			continue
+			return fmt.Errorf("read cursor subagents %s: %w", subagentsDir, err)
 		}
 		for _, entry := range entries {
 			if !entry.Type().IsRegular() || !IsCursorTranscriptExt(entry.Name()) {
@@ -480,16 +476,13 @@ func (s cursorSourceSet) streamSubagentTranscripts(
 	}
 	sort.Strings(stems)
 	for _, stem := range stems {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		if err := s.yieldIfCanonical(
 			root, subagentSeen[stem], resolutionCache, yield,
 		); err != nil {
 			return err
 		}
 	}
-	return incomplete
+	return nil
 }
 
 func (s cursorSourceSet) streamingSourceRefWithCache(
@@ -570,6 +563,152 @@ func cursorFindSourceFileInProjectStrict(
 		}
 	}
 	return "", nil
+}
+
+// discoverTranscriptPaths walks a Cursor projects root and returns the primary
+// transcript file paths. All paths resolve within the canonical root,
+// preventing symlink escapes. Symlinked project directory entries are rejected.
+// Cursor uses three layouts: flat (agent-transcripts/<uuid>.{txt,jsonl}),
+// nested (agent-transcripts/<uuid>/<uuid>.{txt,jsonl}), and subagent
+// (agent-transcripts/<parent>/subagents/<uuid>.{txt,jsonl}); when both .jsonl
+// and .txt exist for the same stem, .jsonl is preferred.
+func (s cursorSourceSet) discoverTranscriptPaths(projectsDir string) []string {
+	if projectsDir == "" {
+		return nil
+	}
+
+	// Canonicalize root once for containment checks.
+	resolvedRoot, err := filepath.EvalSymlinks(projectsDir)
+	if err != nil {
+		return nil
+	}
+
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return nil
+	}
+
+	var paths []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// Reject symlinked project directory entries.
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+
+		transcriptsDir := filepath.Join(
+			projectsDir, entry.Name(), "agent-transcripts",
+		)
+
+		// Verify the transcripts directory resolves within
+		// the canonical root.
+		resolvedDir, err := filepath.EvalSymlinks(transcriptsDir)
+		if err != nil {
+			continue
+		}
+		if !isContainedIn(resolvedDir, resolvedRoot) {
+			continue
+		}
+
+		transcripts, err := os.ReadDir(transcriptsDir)
+		if err != nil {
+			continue
+		}
+
+		// Collect valid transcripts, deduping by basename
+		// stem. When both .jsonl and .txt exist for the
+		// same session, prefer .jsonl.
+		seen := make(map[string]string) // stem -> path
+		var subagentsDirs []string
+		for _, sf := range transcripts {
+			if !sf.IsDir() {
+				// Flat layout: file directly in
+				// agent-transcripts/.
+				name := sf.Name()
+				if !IsCursorTranscriptExt(name) {
+					continue
+				}
+				fullPath := filepath.Join(transcriptsDir, name)
+				if !IsRegularFile(fullPath) {
+					continue
+				}
+				cursorAddSeen(seen, name, fullPath)
+				continue
+			}
+
+			// Nested layout: agent-transcripts/<uuid>/
+			// containing <uuid>.{txt,jsonl}.
+			subDir := filepath.Join(transcriptsDir, sf.Name())
+			subEntries, err := os.ReadDir(subDir)
+			if err != nil {
+				continue
+			}
+			dirName := sf.Name()
+			for _, sub := range subEntries {
+				if sub.IsDir() {
+					// A symlinked subagents entry reports IsDir false
+					// and is skipped with the other non-transcripts.
+					if sub.Name() == cursorSubagentsDirName {
+						subagentsDirs = append(
+							subagentsDirs, filepath.Join(subDir, sub.Name()),
+						)
+					}
+					continue
+				}
+				name := sub.Name()
+				if !IsCursorTranscriptExt(name) {
+					continue
+				}
+				// Only accept files whose stem matches
+				// the parent directory name, e.g.
+				// <uuid>/<uuid>.jsonl.
+				stem := strings.TrimSuffix(name, filepath.Ext(name))
+				if stem != dirName {
+					continue
+				}
+				fullPath := filepath.Join(subDir, name)
+				if !IsRegularFile(fullPath) {
+					continue
+				}
+				cursorAddSeen(seen, name, fullPath)
+			}
+		}
+		// A session's own transcript outranks a copy in another session's
+		// subagents directory regardless of extension, matching
+		// cursorTranscriptCandidates, so subagent files fill unseen stems only.
+		subagentSeen := make(map[string]string)
+		for _, subagentsDir := range subagentsDirs {
+			cursorCollectSubagentTranscripts(subagentSeen, subagentsDir)
+		}
+		for stem, path := range subagentSeen {
+			if _, ok := seen[stem]; !ok {
+				seen[stem] = path
+			}
+		}
+		for _, path := range seen {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func cursorCollectSubagentTranscripts(seen map[string]string, subagentsDir string) {
+	entries, err := os.ReadDir(subagentsDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !IsCursorTranscriptExt(entry.Name()) {
+			continue
+		}
+		fullPath := filepath.Join(subagentsDir, entry.Name())
+		if !IsRegularFile(fullPath) {
+			continue
+		}
+		cursorAddSeen(seen, entry.Name(), fullPath)
+	}
 }
 
 // cursorAddSeen inserts a transcript path into the seen map, preferring .jsonl
@@ -1090,7 +1229,6 @@ func cursorProviderCapabilities() Capabilities {
 			ToolResultEvents: CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
-			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 		},
