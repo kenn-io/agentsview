@@ -556,20 +556,6 @@ describe("SessionsStore", () => {
       expect(api.getSession).toHaveBeenCalledTimes(2);
     });
 
-    it("reuses off-page details after an index reload and reselection", async () => {
-      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
-      api.getSession.mockResolvedValue(makeSession({ id: "offpage", first_message: "Loaded title" }));
-      await sessions.load();
-      await sessions.navigateToSession("offpage");
-      await sessions.load();
-      sessions.deselectSession();
-
-      await sessions.navigateToSession("offpage");
-
-      expect(sessions.activeSession?.first_message).toBe("Loaded title");
-      expect(api.getSession).toHaveBeenCalledTimes(1);
-    });
-
     it("discards old details when the index rejects a filter", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
       api.getSession.mockResolvedValueOnce(makeSession({ id: "row", first_message: "Old title" }));
@@ -620,7 +606,6 @@ describe("SessionsStore", () => {
       expect(api.getSession).toHaveBeenCalledTimes(2);
     });
 
-
     it("regroups real ancestry, teammate, and project changes from the index", async () => {
       const root = makeSkinnyRow({ id: "root" });
       const child = makeSkinnyRow({ id: "child" });
@@ -633,12 +618,13 @@ describe("SessionsStore", () => {
       mockSidebarIndex([root, { ...child, is_teammate: true }]);
       await sessions.load();
       expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.sessions[1]).toMatchObject({ parent_session_id: undefined, is_teammate: true });
       mockSidebarIndex([root, { ...child, is_teammate: true, project: "other" }]);
       await sessions.load();
       expect(sessions.groupedSessions.map((g) => g.project)).toEqual(["proj", "other"]);
     });
 
-    it("indexes repeated selection reads once per row set", () => {
+    it("avoids row scans for empty and repeated selections", () => {
       let reads = 0;
       sessions.sessions = new Proxy([makeSession({ id: "row" })], {
         get(target, key, receiver) {
@@ -646,32 +632,13 @@ describe("SessionsStore", () => {
           return Reflect.get(target, key, receiver);
         },
       });
+      expect(sessions.activeSession).toBeUndefined();
+      expect(reads).toBe(0);
       sessions.activeSessionId = "row";
       expect(sessions.activeSession?.id).toBe("row");
       const initial = reads;
       for (let i = 0; i < 10; i++) expect(sessions.activeSession?.id).toBe("row");
       expect(reads).toBe(initial);
-    });
-
-
-    it("keeps a title loaded during a failed index refresh", async () => {
-      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
-      await sessions.load();
-      let failIndex!: (error: Error) => void;
-      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
-        new Promise((_, reject) => {
-          failIndex = reject;
-        }),
-      );
-      const reload = sessions.load();
-      vi.mocked(api.getSession).mockResolvedValue(
-        makeSession({ id: "row", first_message: "Loaded title" }),
-      );
-      await sessions.hydrateVisibleSessions(["row"]);
-      failIndex(new Error("network error"));
-      await reload;
-      await sessions.navigateToSession("row");
-      expect(sessions.activeSession?.first_message).toBe("Loaded title");
     });
 
     it("keeps unchanged index rows and grouping across reloads", async () => {
@@ -695,7 +662,6 @@ describe("SessionsStore", () => {
       expect(sessions.groupedSessions).toBe(grouped);
       api.getSession.mockResolvedValueOnce(makeSession({ id: "second", first_message: "New title" }));
       await sessions.hydrateVisibleSessions(["second"]);
-      expect(sessions.groupedSessions).toBe(grouped);
       expect(sessions.view(sessions.byId.get("second")!)).toMatchObject({ first_message: "New title", health_score_basis: ["retained"] });
 
       mockSidebarIndex([rows[0]!, { ...rows[1]!, ended_at: "2026-01-02T00:00:00Z" }]);
@@ -707,31 +673,6 @@ describe("SessionsStore", () => {
         ended_at: "2026-01-02T00:00:00Z",
         first_message: "New title",
       });
-    });
-
-    it("keeps a newer active refresh while another title is pending", async () => {
-      mockSidebarIndex([makeSkinnyRow({ id: "row" }), makeSkinnyRow({ id: "slow" })]);
-      await sessions.load();
-      let finishSlow!: (row: Session) => void;
-      vi.mocked(api.getSession).mockImplementation((id: string) =>
-        id === "row"
-          ? Promise.resolve(makeSession({ id, first_message: "Old title" }))
-          : new Promise<Session>((resolve) => {
-              finishSlow = resolve;
-            }),
-      );
-      const hydrate = sessions.hydrateVisibleSessions(["row", "slow"]);
-      await Promise.resolve();
-      await Promise.resolve();
-      sessions.activeSessionId = "row";
-      vi.mocked(api.getSession).mockResolvedValueOnce(
-        makeSession({ id: "row", first_message: "New title" }),
-      );
-      await sessions.refreshActiveSession();
-      expect(sessions.activeSession?.first_message).toBe("New title");
-      finishSlow(makeSession({ id: "slow" }));
-      await hydrate;
-      expect(sessions.activeSession?.first_message).toBe("New title");
     });
 
     it("publishes each staggered title without rebuilding groups", async () => {
@@ -761,40 +702,20 @@ describe("SessionsStore", () => {
     });
 
     it.each(["Renamed", null])("keeps a rename to %s while titles are in flight", async (name) => {
-      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
-      await sessions.load();
-      const request = Promise.withResolvers<Session>();
-      vi.mocked(api.getSession).mockReturnValueOnce(request.promise);
-      const hydrate = sessions.hydrateVisibleSessions(["row"]);
-      vi.mocked(api.renameSession).mockResolvedValue(
-        makeSession({ id: "row", display_name: name ?? undefined }),
-      );
-      await sessions.renameSession("row", name);
-      request.resolve(makeSession({ id: "row", display_name: "Old name" }));
-      await hydrate;
-      expect(sessions.view(sessions.byId.get("row")!).display_name).toBe(name ?? undefined);
-    });
-
-    it("shows selected session details after a rename while hydration is in flight", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "row", display_name: "Original" })]);
       await sessions.load();
       const request = Promise.withResolvers<Session>();
       vi.mocked(api.getSession).mockReturnValueOnce(request.promise);
-      const navigation = sessions.navigateToSession("row");
+      const hydrate = sessions.navigateToSession("row");
       expect(api.getSession).toHaveBeenCalledWith("row");
       vi.mocked(api.renameSession).mockResolvedValue(
-        makeSession({ id: "row", display_name: "Renamed" }),
+        makeSession({ id: "row", display_name: name ?? undefined }),
       );
-      await sessions.renameSession("row", "Renamed");
-      request.resolve(
-        makeSession({ id: "row", display_name: "Original", first_message: "Loaded title" }),
-      );
-      await navigation;
-      expect(sessions.activeSession).toMatchObject({
-        display_name: "Renamed",
-        first_message: "Loaded title",
-        is_index_only: false,
-      });
+      await sessions.renameSession("row", name);
+      request.resolve(makeSession({ id: "row", display_name: "Original", first_message: "Loaded title" }));
+      await hydrate;
+      expect(sessions.view(sessions.byId.get("row")!).display_name).toBe(name ?? undefined);
+      expect(sessions.activeSession).toMatchObject({ display_name: name ?? undefined, first_message: "Loaded title", is_index_only: false });
     });
 
     it("selects an index-only row before a larger batch finishes", async () => {
@@ -812,36 +733,38 @@ describe("SessionsStore", () => {
       slow.resolve(makeSession({ id: "slow" }));
       await hydrate;
       expect(sessions.activeSession?.first_message).toBe("Active title");
-    });
 
-    it("publishes a cached title when cancellation interrupts its batch", async () => {
-      mockSidebarIndex([makeSkinnyRow({ id: "fast" }), makeSkinnyRow({ id: "slow" })]);
       await sessions.load();
-      const slow = Promise.withResolvers<Session>();
+      const slowAgain = Promise.withResolvers<Session>();
       vi.mocked(api.getSession).mockImplementation((id: string) =>
-        id === "slow" ? slow.promise : Promise.resolve(makeSession({ id, first_message: "Title" })),
+        id === "slow"
+          ? slowAgain.promise
+          : Promise.resolve(makeSession({ id, first_message: "Active title" })),
       );
-      const hydrate = sessions.hydrateVisibleSessions(["fast", "slow"]);
-      await Promise.resolve();
-      await Promise.resolve();
-      sessions.cancelRouteReads();
-      slow.resolve(makeSession({ id: "slow" }));
-      await hydrate;
-      expect(sessions.view(sessions.byId.get("fast")!).first_message).toBe("Title");
-      await sessions.navigateToSession("fast");
-      expect(sessions.activeSession?.first_message).toBe("Title");
-    });
+      const pending = sessions.hydrateVisibleSessions(["active", "slow"]);
+      await sessions.hydrateVisibleSessions(["active"]);
+      vi.mocked(api.getSession).mockResolvedValueOnce(makeSession({ id: "active", first_message: "New title" }));
+      await sessions.refreshActiveSession();
+      expect(sessions.activeSession?.first_message).toBe("New title");
+      slowAgain.resolve(makeSession({ id: "slow" }));
+      await pending;
+      expect(sessions.activeSession?.first_message).toBe("New title");
 
-    it("reads no rows when no session is selected", () => {
-      let reads = 0;
-      sessions.sessions = new Proxy([makeSession({ id: "row" })], {
-        get(target, key, receiver) {
-          if (key === "0") reads++;
-          return Reflect.get(target, key, receiver);
-        },
-      });
-      expect(sessions.activeSession).toBeUndefined();
-      expect(reads).toBe(0);
+      await sessions.load();
+      const slowCanceled = Promise.withResolvers<Session>();
+      vi.mocked(api.getSession).mockImplementation((id: string) =>
+        id === "slow"
+          ? slowCanceled.promise
+          : Promise.resolve(makeSession({ id, first_message: "Title" })),
+      );
+      const canceled = sessions.hydrateVisibleSessions(["active", "slow"]);
+      await sessions.hydrateVisibleSessions(["active"]);
+      sessions.cancelRouteReads();
+      slowCanceled.resolve(makeSession({ id: "slow" }));
+      await canceled;
+      expect(sessions.view(sessions.byId.get("active")!).first_message).toBe("Title");
+      await sessions.navigateToSession("active");
+      expect(sessions.activeSession?.first_message).toBe("Title");
     });
 
     it("does not load sessions when no sidebar consumer is mounted", async () => {
@@ -1074,14 +997,19 @@ describe("SessionsStore", () => {
 
       expect(sessions.sessions.map((s) => s.id)).toEqual(["listed", "offpage"]);
       expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
-    });
-
-    it("updates the active off-page row and its group when details refresh", async () => {
-      mockSidebarIndex([makeSkinnyRow({ id: "parent" })]);
-      vi.mocked(api.getSession).mockResolvedValueOnce(makeSession({ id: "offpage" }));
-      await sessions.load();
+      sessions.deselectSession();
       await sessions.navigateToSession("offpage");
-      await sessions.load();
+      expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+
+      const failedIndex = Promise.withResolvers<never>();
+      api.getSidebarSessionIndex.mockReturnValueOnce(failedIndex.promise);
+      const reload = sessions.load();
+      await sessions.hydrateVisibleSessions(["offpage"]);
+      failedIndex.reject(new Error("network error"));
+      await reload;
+      await sessions.navigateToSession("offpage");
+      expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
 
       vi.mocked(api.getSession).mockResolvedValueOnce(makeSession({
         id: "offpage",
@@ -1090,20 +1018,19 @@ describe("SessionsStore", () => {
         ended_at: "2026-01-01T12:00:00Z",
         termination_status: "awaiting_user",
         transcript_revision: "rev-2",
-        parent_session_id: "parent",
-        parent_session_ids: ["parent"],
+        parent_session_id: "listed",
+        parent_session_ids: ["listed"],
         relationship_type: "subagent",
       }));
       await sessions.refreshActiveSession();
-
       expect(sessions.activeSession).toMatchObject({
         message_count: 12,
         user_message_count: 4,
         ended_at: "2026-01-01T12:00:00Z",
         termination_status: "awaiting_user",
         transcript_revision: "rev-2",
-        parent_session_id: "parent",
-        parent_session_ids: ["parent"],
+        parent_session_id: "listed",
+        parent_session_ids: ["listed"],
         relationship_type: "subagent",
       });
       expect(sessions.groupedSessions).toHaveLength(1);
@@ -3120,6 +3047,18 @@ describe("SessionsStore", () => {
       expect(sessions.sessions).toHaveLength(1);
       expect(sessions.sessions[0]!.id).toBe("s1");
       expect(sessions.total).toBe(1);
+
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      await sessions.load();
+      const failedIndex = Promise.withResolvers<never>();
+      api.getSidebarSessionIndex.mockReturnValueOnce(failedIndex.promise);
+      const reload = sessions.load();
+      api.getSession.mockResolvedValue(makeSession({ id: "row", first_message: "Loaded title" }));
+      await sessions.hydrateVisibleSessions(["row"]);
+      failedIndex.reject(new Error("network error"));
+      await reload;
+      await sessions.navigateToSession("row");
+      expect(sessions.activeSession?.first_message).toBe("Loaded title");
     });
 
     it("initFromParams + load preserves sessions on failure", async () => {
