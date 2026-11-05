@@ -446,7 +446,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 		{name: "current", want: attempt{archiveAuditInterval, "audit"}},
 		{name: "battery", battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
 		{name: "required on battery", battery: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
-		{name: "required while idle", idle: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
+		{name: "required while idle", idle: true, stale: true, want: attempt{archiveAuditRetryInitial + batteryRecheckInterval, "resync-build"}},
 		{name: "idle on battery", idle: true, battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -473,9 +473,9 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				defer restore()
 				engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 				defer engine.Close()
-				ingestion := &daemonIngestion{pending: tc.idle, resumed: make(chan struct{})}
-				if tc.idle {
-					ingestion.catchup = make(chan struct{})
+				ingestion := &daemonIngestion{}
+				if !tc.idle {
+					ingestion.watchers = &ingestionWatchers{}
 				}
 				done := make(chan struct{})
 				go func() {
@@ -485,15 +485,19 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				if tc.idle && tc.stale {
 					synctest.Sleep(archiveAuditRetryInitial)
 					synctest.Wait()
-					assert.Empty(t, attempts, "the idle rebuild waits for catch-up")
-					ingestion.finishCatchup(ingestion.catchup)
+					assert.Empty(t, attempts, "the idle rebuild waits for collection to resume")
+					ingestion.mu.Lock()
+					ingestion.watchers = &ingestionWatchers{}
+					ingestion.mu.Unlock()
 					synctest.Wait()
 				}
 				if tc.idle && !tc.stale {
 					synctest.Sleep(archiveAuditInterval + batteryRecheckInterval)
 					synctest.Wait()
-					assert.Empty(t, attempts, "the due audit waits for catch-up")
-					ingestion.finishCatchup(ingestion.catchup)
+					assert.Empty(t, attempts, "the due audit waits for collection to resume")
+					ingestion.mu.Lock()
+					ingestion.watchers = &ingestionWatchers{}
+					ingestion.mu.Unlock()
 					synctest.Wait()
 				}
 				if tc.battery && !tc.stale {

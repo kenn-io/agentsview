@@ -3290,8 +3290,9 @@ func startArchiveAudit(
 				case <-ctx.Done():
 					return false
 				case <-timer.C:
-					if ingestion != nil && !ingestion.WaitActive(ctx) {
-						return false
+					if ingestion != nil && !ingestion.Active() {
+						timer.Reset(batteryRecheckInterval)
+						continue
 					}
 					if startupReady != nil || database.NeedsResync() || onBattery == nil || !onBattery() {
 						return true

@@ -217,13 +217,10 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 				<-stopped
 				return
 			}
-			active := make(chan bool, 1)
-			go func() { active <- ingestion.WaitActive(t.Context()) }()
 			ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
 			headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
 			assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
 			require.True(t, ingestion.Active(), "watching resumes before catch-up finishes")
-			assert.Empty(t, active, "WaitActive waits for catch-up, not just watcher setup")
 			canceled, stop := context.WithCancel(t.Context())
 			stop()
 			assert.False(t, ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
@@ -233,7 +230,6 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 			headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
 			assert.Contains(t, freshBody, "hello from overnight")
 			assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-			require.True(t, <-active)
 		})
 	}
 }

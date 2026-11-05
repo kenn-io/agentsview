@@ -48,7 +48,6 @@ type daemonIngestion struct {
 	stopped      bool
 	applying     sync.WaitGroup
 	pending      bool
-	resumed      chan struct{}
 	catchup      chan struct{}
 	liveEnabled  bool
 }
@@ -165,9 +164,7 @@ func (d *daemonIngestion) Suspend() {
 	if d.stopped || d.watchers == nil || d.catchup != nil {
 		return
 	}
-	if !d.pending {
-		d.pending, d.resumed = true, make(chan struct{})
-	}
+	d.pending = true
 	watchers, stopLive := d.watchers, d.stopLive
 	d.watchers, d.stopLive = nil, nil
 	d.applying.Go(func() {
@@ -176,22 +173,6 @@ func (d *daemonIngestion) Suspend() {
 		}
 		watchers.stop()
 	})
-}
-
-// WaitActive preserves audit deadlines until catch-up finishes.
-func (d *daemonIngestion) WaitActive(ctx context.Context) bool {
-	d.mu.Lock()
-	pending, resumed := d.pending, d.resumed
-	d.mu.Unlock()
-	if !pending {
-		return ctx.Err() == nil
-	}
-	select {
-	case <-ctx.Done():
-		return false
-	case <-resumed:
-		return true
-	}
 }
 
 // EnsureFresh shares one catch-up; each reader owns only its bounded wait.
@@ -253,11 +234,9 @@ func (d *daemonIngestion) finishCatchup(done chan struct{}) {
 	d.catchup = nil
 	close(done)
 }
+
 func (d *daemonIngestion) clearPendingLocked() {
-	if d.pending {
-		d.pending = false
-		close(d.resumed)
-	}
+	d.pending = false
 }
 
 func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.LocalSyncRunner {
