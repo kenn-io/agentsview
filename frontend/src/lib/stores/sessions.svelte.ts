@@ -8,6 +8,7 @@ import type {
   DbSidebarSessionIndexRow as SidebarSessionIndexRow,
 } from "../api/generated/index.js";
 import { sync } from "./sync.svelte.js";
+import { searchStore } from "./search.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
@@ -2273,4 +2274,5 @@ export const sessions = createSessionsStore();
 sync.onSyncComplete(() => {
   sessions.invalidateFilterCaches();
   sessions.refreshSidebarIfAttached();
+  if (searchStore.query) searchStore.search(searchStore.query);
 });

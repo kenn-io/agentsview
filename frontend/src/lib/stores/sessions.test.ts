@@ -7,7 +7,9 @@ import {
   filtersToParams,
   splitExcludeProjectParam,
 } from "./sessions.svelte.js";
-import { SessionsService, type DbSession } from "../api/generated/index";
+import { SearchService, SessionsService, type DbSession } from "../api/generated/index";
+import { searchStore } from "./search.svelte.js";
+import { sync } from "./sync.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
@@ -62,6 +64,10 @@ vi.mock("../api/client.js", () => ({
   watchEvents: api.watchEvents,
 }));
 
+vi.mock("./sync.svelte.js", () => ({
+  sync: { onSyncComplete: vi.fn(), loadStats: vi.fn() },
+}));
+
 vi.mock("../api/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/runtime.js")>()),
 
@@ -71,6 +77,7 @@ vi.mock("../api/runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("../api/generated/index", () => ({
+  SearchService: { getApiV1Search: vi.fn() },
   SessionsService: {
     getApiV1SessionIdsResolve: vi.fn(),
     getApiV1Sessions: vi.fn((params) => api.listSessions(params)),
@@ -89,6 +96,8 @@ vi.mock("../api/generated/index", () => ({
     getApiV1Stats: vi.fn((params) => api.getStats(params)),
   },
 }));
+
+const syncCallback = vi.mocked(sync.onSyncComplete).mock.calls[0]![0];
 
 function mockSidebarPage(overrides?: Partial<{ next_cursor: string }>) {
   vi.mocked(api.getSidebarSessionIndex).mockResolvedValue({
@@ -3825,6 +3834,55 @@ describe("SessionsStore live refresh", () => {
     mockSidebarPage();
     mockSidebarIndex();
     mockGetProjects();
+  });
+
+  it("refreshes an empty active search when sync completes", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(SearchService.getApiV1Search).mockResolvedValueOnce({
+        query: "recovered transcript",
+        count: 0,
+        next: 0,
+        results: [],
+      });
+      searchStore.search("recovered transcript", "alpha");
+      await vi.advanceTimersByTimeAsync(300);
+      expect(SearchService.getApiV1Search).toHaveBeenCalledTimes(1);
+      expect(searchStore.results).toEqual([]);
+
+      vi.mocked(SearchService.getApiV1Search).mockResolvedValueOnce({
+        query: "recovered transcript",
+        count: 1,
+        next: 0,
+        results: [
+          {
+            session_id: "recovered",
+            project: "alpha",
+            machine: "host-a",
+            agent: "codex",
+            name: "Recovered session",
+            ordinal: 1,
+            session_ended_at: "2026-07-01T12:00:00Z",
+            snippet: "recovered transcript",
+            rank: 1,
+          },
+        ],
+      });
+      syncCallback();
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(SearchService.getApiV1Search).toHaveBeenCalledTimes(2);
+      expect(SearchService.getApiV1Search).toHaveBeenLastCalledWith(
+        expect.objectContaining({ q: "recovered transcript", project: "alpha" }),
+        expect.anything(),
+      );
+      expect(searchStore.results).toEqual([
+        expect.objectContaining({ session_id: "recovered", snippet: "recovered transcript" }),
+      ]);
+    } finally {
+      searchStore.search("");
+      vi.useRealTimers();
+    }
   });
 
   it.each(["messages", "sync"])(
