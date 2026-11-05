@@ -376,6 +376,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	var memoryRefresh *memoryRefreshQueue
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
+		var queueRebuildRetry func(sync.WatchBatch)
 		engine = sync.NewEngine(ctx, database, sync.EngineConfig{
 			AgentDirs: cfg.AgentDirs,
 			RebuildSources: func(ctx context.Context) (sync.RebuildOptions, error) {
@@ -397,6 +398,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			OnStartupReconciled: func(stats sync.SyncStats, err error) {
 				onStartupReconciled(stats, err)
 			},
+			OnRebuildDeferred: func(batch sync.WatchBatch) { queueRebuildRetry(batch) },
 		})
 		defer engine.Close()
 		if frictionReviews != nil {
@@ -409,6 +411,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		ingestion := newDaemonIngestion(
 			ctx, cfg, engine, database, idleTracker, opts.ReloadConfig,
 		)
+		queueRebuildRetry = ingestion.QueueWatchRetry
 		defer ingestion.Stop()
 		if opts.ReloadConfig != nil {
 			reloadIngestion = ingestion.Reload
@@ -988,6 +991,7 @@ func deferStartupMaintenance(skipInitialSync, workerSyncDone bool) bool {
 func statsFromWorkerResult(r workerResult) sync.SyncStats {
 	if r.Stats != nil {
 		stats := *r.Stats
+		stats.SetDeferredRetryBatch(r.Deferred, r.DeferredRetry)
 		if r.Tombstoned > stats.Tombstoned {
 			stats.Tombstoned = r.Tombstoned
 		}
@@ -1412,6 +1416,7 @@ func runWorkerResyncBuild(
 		return nil
 	})
 	if doneStats.ArchiveRebuilt {
+		engine.NotifyRebuildDeferred(doneStats)
 		engine.FinishStartupReconciled(doneStats)
 	} else if startup {
 		engine.RecordStartupReconciled(statsFromWorkerResult(result), barrierErr)

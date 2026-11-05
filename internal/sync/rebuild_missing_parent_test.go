@@ -1,0 +1,126 @@
+package sync
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/testjsonl"
+)
+
+func TestRebuildKeepsHealthyHistoryWhenCodexParentIsMissing(t *testing.T) {
+	const parent = "11111111-1111-4111-8111-111111111111"
+	const child = "22222222-2222-4222-8222-222222222222"
+	const healthy = "33333333-3333-4333-8333-333333333333"
+	const timestamp = "2026-09-01T10:00:00Z"
+	root := t.TempDir()
+	parentPath := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+parent+".jsonl")
+	childPath := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	healthyPath := filepath.Join(root, "rollout-2026-09-01T12-00-00-"+healthy+".jsonl")
+	parentContent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "parent answer", timestamp),
+	)
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o600))
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "parent answer", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	require.NoError(t, os.WriteFile(healthyPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(healthy, "/work/project", "user", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "healthy answer", timestamp),
+	)), 0o600))
+	database := openTestDB(t)
+	var retry WatchBatch
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local", DisableFilesystemProjectDiscovery: true, OnRebuildDeferred: func(batch WatchBatch) { retry = batch }})
+	t.Cleanup(engine.Close)
+	initial := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, initial.Deferred)
+	require.NoError(t, database.SetSessionDataVersion(t.Context(), "codex:"+child, 17))
+	require.NoError(t, os.Remove(parentPath))
+	engine.Close()
+	engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local", DisableFilesystemProjectDiscovery: true, OnRebuildDeferred: func(batch WatchBatch) { retry = batch }})
+	t.Cleanup(engine.Close)
+	partialCtx, cancel := context.WithCancel(t.Context())
+	partial := engine.ResyncAll(partialCtx, func(p Progress) {
+		if p.Phase == PhaseSyncing && p.SessionsDone > 0 {
+			cancel()
+		}
+	})
+	cancel()
+	require.True(t, partial.Aborted)
+	assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
+	assert.Empty(t, retry.Paths)
+	rebuilt := engine.ResyncAll(t.Context(), nil)
+	require.False(t, rebuilt.Aborted)
+	require.True(t, rebuilt.ArchiveRebuilt)
+	assert.Equal(t, 1, rebuilt.Deferred)
+	assert.Equal(t, []string{"healthy answer"}, messageContents(t, database, "codex:"+healthy))
+	assert.Equal(t, []string{"parent answer"}, messageContents(t, database, "codex:"+parent))
+	assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
+	assert.Equal(t, 17, database.GetSessionDataVersion(t.Context(), "codex:"+child))
+	assert.Equal(t, []string{childPath}, retry.Paths)
+	assert.True(t, engine.StartupReconciled())
+	again := engine.SyncAll(t.Context(), nil)
+	assert.Equal(t, 1, again.Deferred)
+	assert.Equal(t, 17, database.GetSessionDataVersion(t.Context(), "codex:"+child))
+	assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o600))
+	recovered := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, recovered.Deferred)
+	assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+child))
+}
+
+func TestRebuildMissingParentRemainsRetryableAcrossRestart(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	for _, stagedMin := range []int64{1, 1 << 30} {
+		t.Run(fmt.Sprintf("staging-%d", stagedMin), func(t *testing.T) {
+			root := t.TempDir()
+			childPath := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+			parentPath := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+parent+".jsonl")
+			require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
+				testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
+				testjsonl.CodexMsgJSON("assistant", "replayed answer", timestamp),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+				testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+			)), 0o600))
+			database := openTestDB(t)
+			cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local", DisableFilesystemProjectDiscovery: true, StagedCodexParseMinBytes: stagedMin}
+			engine := NewEngine(t.Context(), database, cfg)
+			stats := engine.ResyncAll(t.Context(), nil)
+			require.True(t, stats.ArchiveRebuilt)
+			assert.Equal(t, 1, stats.Deferred)
+			assert.NotEmpty(t, stats.Warnings)
+			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
+			assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+child), db.CurrentDataVersion())
+			engine.Close()
+			engine = NewEngine(t.Context(), database, cfg)
+			t.Cleanup(engine.Close)
+			assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Deferred)
+			assert.Equal(t, []string{"replayed answer", "child answer"}, messageContents(t, database, "codex:"+child))
+			require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
+				testjsonl.CodexMsgJSON("assistant", "replayed answer", timestamp),
+			)), 0o600))
+			recovered := engine.SyncAll(t.Context(), nil)
+			assert.Zero(t, recovered.Deferred)
+			assert.Equal(t, []string{"child answer"}, messageContents(t, database, "codex:"+child))
+			assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+child))
+		})
+	}
+}

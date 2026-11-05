@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -111,6 +112,9 @@ func (a *providerResultAdmission) admit(r parser.ParseResultOutcome) error {
 	}})
 	if r.DataVersion == parser.DataVersionNeedsRetry {
 		a.retryIDs = append(a.retryIDs, r.Result.Session.ID)
+		if a.engine.archiveStore != nil {
+			log.Printf("resync: deferred %s: %s", a.file.Path, r.RetryReason)
+		}
 	}
 	kept := a.engine.dropUnchangedSharedSQLiteResults(
 		a.ctx, a.file, []parser.ParseResult{r.Result}, a.policy,

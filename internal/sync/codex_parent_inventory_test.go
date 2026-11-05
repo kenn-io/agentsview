@@ -144,3 +144,63 @@ func TestCodexParentInventoryBatchRetriesUnchangedForks(t *testing.T) {
 		})
 	}
 }
+
+func TestRebuildPreservesForksWhenParentInventoryChanges(t *testing.T) {
+	const parent = "11111111-1111-4111-8111-111111111111"
+	const page = "44444444-4444-4444-8444-444444444444"
+	const timestamp = "2026-09-01T10:00:00Z"
+	root := t.TempDir()
+	parentPath := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+parent+".jsonl")
+	pagePath := filepath.Join(root, "rollout-2026-09-01T10-01-00-"+parent+"_"+page+".jsonl")
+	require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "head-turn", timestamp),
+	)), 0o600))
+	pageContent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "page-turn", timestamp),
+	)
+	require.NoError(t, os.WriteFile(pagePath, []byte(pageContent), 0o600))
+	forks := []string{"22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"}
+	paths := make(map[string]bool)
+	for _, fork := range forks {
+		path := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+fork+".jsonl")
+		require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+			testjsonl.CodexForkedSessionMetaJSON(fork, parent, "/work/project", "user", timestamp),
+			testjsonl.CodexTurnContextWithIDJSON("gpt-5", "page-turn", timestamp),
+			testjsonl.CodexMsgJSON("assistant", "copied page", timestamp),
+			testjsonl.CodexTurnContextWithIDJSON("gpt-5", "new-turn", timestamp),
+			testjsonl.CodexMsgJSON("assistant", "new answer", timestamp),
+		)), 0o600))
+		paths[path] = true
+	}
+	database := openTestDB(t)
+	cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local", DisableFilesystemProjectDiscovery: true}
+	engine := NewEngine(t.Context(), database, cfg)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Deferred)
+	for _, fork := range forks {
+		assert.Equal(t, []string{"new answer"}, messageContents(t, database, "codex:"+fork))
+	}
+	engine.Close()
+	require.NoError(t, os.Remove(pagePath))
+	delegate, ok := parser.ProviderFactoryByType(parser.AgentCodex)
+	require.True(t, ok)
+	cfg.ProviderFactories = []parser.ProviderFactory{&codexPageRestoreFactory{ProviderFactory: delegate, forkPaths: paths, restore: func() error {
+		return os.WriteFile(pagePath, []byte(pageContent), 0o600)
+	}}}
+	engine = NewEngine(t.Context(), database, cfg)
+	t.Cleanup(engine.Close)
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.True(t, stats.ArchiveRebuilt)
+	require.Positive(t, stats.Deferred)
+	for _, fork := range forks {
+		assert.Equal(t, []string{"new answer"}, messageContents(t, database, "codex:"+fork))
+		assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+fork), db.CurrentDataVersion())
+	}
+	recovered := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, recovered.Deferred)
+	for _, fork := range forks {
+		assert.Equal(t, []string{"new answer"}, messageContents(t, database, "codex:"+fork))
+		assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+fork))
+	}
+}

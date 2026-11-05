@@ -467,7 +467,7 @@ func TestResyncBuildResultFromStatsToleratesMinorityParseFailures(t *testing.T) 
 			name:       "deferred processing",
 			ctx:        t.Context(),
 			stats:      sync.SyncStats{Deferred: 1},
-			wantStatus: "failed",
+			wantStatus: "ok",
 		},
 		{
 			name:       "build error",
@@ -503,6 +503,86 @@ func TestResyncBuildResultFromStatsToleratesMinorityParseFailures(t *testing.T) 
 			}
 		})
 	}
+}
+
+func TestWorkerRebuildHandsDeferredForkToWatcher(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	cfg := testConfigWithClaudeFixture(t)
+	root := t.TempDir()
+	cfg.AgentDirs[parser.AgentCodex] = []string{root}
+	childPath := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "replayed answer", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	database, _ := openTestWriteDB(t, cfg)
+	var retry sync.WatchBatch
+	engineCfg := workerEngineConfig(cfg)
+	engineCfg.OnRebuildDeferred = func(batch sync.WatchBatch) { retry = batch }
+	engine := sync.NewEngine(t.Context(), database, engineCfg)
+	t.Cleanup(engine.Close)
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, request syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		var wire bytes.Buffer
+		err := runSyncWorkerContext(ctx, cfg, request, &wire)
+		return decodeSingleResult(t, &wire), err
+	})
+	t.Cleanup(restore)
+	result, err, spawnFailed := runWorkerResyncBuild(t.Context(), t.Context(), cfg, engine, database, nil, true, nil)
+	require.NoError(t, err)
+	require.False(t, spawnFailed)
+	assert.Equal(t, "ok", result.Status)
+	assert.Equal(t, 1, result.Deferred)
+	assert.Equal(t, []string{childPath}, retry.Paths)
+	assert.True(t, engine.StartupReconciled())
+	assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+child), db.CurrentDataVersion())
+	parentPath := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+parent+".jsonl")
+	require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
+	)), 0o600))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), retry.Paths))
+	messages, err := database.GetAllMessages(t.Context(), "codex:"+child)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "child answer", messages[0].Content)
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+child))
+}
+
+func TestStartupWorkerQueuesMissingParentAfterRestart(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	cfg := testConfigWithClaudeFixture(t)
+	root := t.TempDir()
+	cfg.AgentDirs[parser.AgentCodex] = []string{root}
+	childPath := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	var wire bytes.Buffer
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &wire))
+	result := decodeSingleResult(t, &wire)
+	require.Equal(t, "ok", result.Status)
+	require.Equal(t, 1, result.Deferred)
+	database, _ := openTestWriteDB(t, cfg)
+	var retries []sync.WatchBatch
+	engineCfg := workerEngineConfig(cfg)
+	engineCfg.OnRebuildDeferred = func(batch sync.WatchBatch) { retries = append(retries, batch) }
+	engine := sync.NewEngine(t.Context(), database, engineCfg)
+	t.Cleanup(engine.Close)
+	completeWorkerStartupReconciliation(t.Context(), reconcileRootPaths(cfg), statsFromWorkerResult(result),
+		engine.RetainSubagentLinkRetry, engine.ReconcileWatchRoots,
+		func(batch sync.WatchBatch) { retries = append(retries, batch) }, engine.RecordStartupReconciled)
+	assert.True(t, engine.StartupReconciled())
+	require.NotEmpty(t, retries)
+	assert.Contains(t, retries[0].Paths, childPath)
 }
 
 func TestSyncWorkerSyncModeSyncsLikeStartup(t *testing.T) {
