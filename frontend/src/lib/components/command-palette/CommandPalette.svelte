@@ -582,7 +582,7 @@
   }
 
   .item-meta {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-secondary);
     white-space: nowrap;
     flex-shrink: 0;
@@ -669,7 +669,7 @@
     width: 72px;
     text-align: right;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
     flex-shrink: 0;

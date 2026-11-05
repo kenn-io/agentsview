@@ -1041,7 +1041,7 @@
               {/each}
               <button class="open-menu-item" onclick={handleResumeDefault}>
                 <span class="open-menu-num">
-                  <SquareTerminalIcon size="10" strokeWidth="2" aria-hidden="true" />
+                  <SquareTerminalIcon size="13" strokeWidth="2" aria-hidden="true" />
                 </span>
                 <span class="open-menu-name">{m.session_breadcrumb_default_terminal()}</span>
               </button>
@@ -1054,7 +1054,7 @@
                   title={m.session_breadcrumb_open_in_codex_desktop()}
                 >
                   <span class="open-menu-num">
-                    <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
+                    <CirclePlayIcon size="13" strokeWidth="2" aria-hidden="true" />
                   </span>
                   <span class="open-menu-name">{m.session_breadcrumb_open_in_codex_desktop()}</span>
                 </a>
@@ -1068,7 +1068,7 @@
                   title={m.session_breadcrumb_open_in_claude_code()}
                 >
                   <span class="open-menu-num">
-                    <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
+                    <CirclePlayIcon size="13" strokeWidth="2" aria-hidden="true" />
                   </span>
                   <span class="open-menu-name">{m.session_breadcrumb_open_in_claude_code()}</span>
                 </a>
@@ -1078,7 +1078,7 @@
               {#if canLaunch}<div class="open-menu-divider"></div>{/if}
               <button class="open-menu-item" onclick={handleCopyResumeCommand}>
                 <span class="open-menu-num">
-                  <CopyIcon size="10" strokeWidth="2" aria-hidden="true" />
+                  <CopyIcon size="13" strokeWidth="2" aria-hidden="true" />
                 </span>
                 <span class="open-menu-name">{m.session_breadcrumb_copy_command()}</span>
               </button>
@@ -1086,7 +1086,7 @@
             {#if isLocal}
             <button class="open-menu-item" onclick={handleCopyFilePath}>
               <span class="open-menu-num">
-                <FileTextIcon size="10" strokeWidth="2" aria-hidden="true" />
+                <FileTextIcon size="13" strokeWidth="2" aria-hidden="true" />
               </span>
               <span class="open-menu-name">{m.session_breadcrumb_copy_directory_path()}</span>
             </button>
@@ -1099,7 +1099,7 @@
                   onclick={() => handleOpenIn(opener)}
                 >
                   <span class="open-menu-num">
-                    <CodeIcon size="10" strokeWidth="2" aria-hidden="true" />
+                    <CodeIcon size="13" strokeWidth="2" aria-hidden="true" />
                   </span>
                   <span class="open-menu-name">{opener.name}</span>
                 </button>
@@ -1110,7 +1110,7 @@
                   onclick={() => handleOpenIn(opener)}
                 >
                   <span class="open-menu-num">
-                    <FolderIcon size="10" strokeWidth="2" aria-hidden="true" />
+                    <FolderIcon size="13" strokeWidth="2" aria-hidden="true" />
                   </span>
                   <span class="open-menu-name">{opener.name}</span>
                 </button>
@@ -1124,7 +1124,7 @@
                 onclick={() => handleResumeIn(claudeDesktopOpener)}
               >
                 <span class="open-menu-num">
-                  <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
+                  <CirclePlayIcon size="13" strokeWidth="2" aria-hidden="true" />
                 </span>
                 <span class="open-menu-name">Claude Desktop</span>
               </button>
@@ -1741,13 +1741,15 @@
     top: 100%;
     right: 0;
     margin-top: 4px;
-    background: var(--bg-primary);
+    /* Same fill, edge, radius and shadow as the View and More actions
+       popovers. */
+    background: var(--popover-bg);
     border: 1px solid var(--border-default);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     padding: 4px;
     min-width: 200px;
     z-index: var(--z-popover);
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--overlay-shadow);
   }
 
   .open-menu-item {
@@ -1776,7 +1778,7 @@
     width: 18px;
     font-size: 11px;
     font-weight: 500;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     flex-shrink: 0;
   }
 

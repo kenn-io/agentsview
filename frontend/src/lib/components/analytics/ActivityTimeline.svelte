@@ -670,15 +670,20 @@
     display: flex;
     flex: 1;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 8px 12px;
     min-width: 0;
   }
 
+  /* Each choice group sits in its own inset track, like the shared
+     segmented control, so the three groups read as separate choices. */
   .metric-toggle,
   .granularity-toggle,
   .scale-toggle {
     display: flex;
     gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
   }
 
   .toggle-btn {
@@ -703,7 +708,8 @@
   }
 
   .toggle-btn.active {
-    background: var(--bg-inset);
+    background: var(--selected-bg);
+    box-shadow: var(--selected-edge), var(--shadow-sm);
     color: var(--text-primary);
   }
 

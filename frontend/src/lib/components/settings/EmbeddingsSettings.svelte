@@ -200,7 +200,7 @@
   {#if !loaded}
     <p class="muted">{m.settings_embeddings_loading()}</p>
   {:else if unavailableReason !== null}
-    <p class="muted">{m.settings_embeddings_unavailable()}</p>
+    <p class="state">{m.settings_embeddings_unavailable()}</p>
     <p class="muted detail">{unavailableReason}</p>
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
@@ -353,6 +353,15 @@
     font-size: 12px;
     color: var(--text-muted);
     margin: 0;
+  }
+
+  /* The readable unavailable state leads; the raw diagnostic below it
+     stays muted monospace. */
+  .state {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
   }
 
   .muted.detail {

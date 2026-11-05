@@ -400,15 +400,19 @@
     background: var(--bg-surface-hover);
   }
 
+  /* Titles use their whole column and only truncate at its edge;
+     max-width: 0 lets the percentage width bound the cell in an
+     auto-layout table. */
   .col-session {
-    max-width: 240px;
+    width: 34%;
+    max-width: 0;
   }
 
   .session-cell {
     display: flex;
     align-items: center;
     gap: 6px;
-    max-width: 240px;
+    min-width: 0;
   }
 
   .session-link {

@@ -328,12 +328,18 @@ html:root.dark .kit-popover-card {
      them below the page content and leave search its full width. */
   padding: 3px 9px;
   font-size: 12.5px;
+  font-weight: 400;
   color: var(--text-muted);
 }
 
 :root .kit-top-bar .kit-top-bar__tab:hover:not(:disabled),
 :root .kit-top-bar .kit-top-bar__tab.active {
   color: var(--text-primary);
+}
+
+/* Only the selected destination keeps the medium weight. */
+:root .kit-top-bar .kit-top-bar__tab.active {
+  font-weight: 500;
 }
 
 html,
@@ -427,6 +433,14 @@ button:disabled {
   color: var(--disabled-ink);
   box-shadow: none;
   cursor: not-allowed;
+}
+
+/* A disabled menu item often carries its reason ("Import unavailable in
+   read-only mode"). Muted ink at full opacity keeps it clearly disabled
+   beside secondary-ink items while the reason stays readable. */
+:root .kit-menu__item.kit-control-states[aria-disabled="true"] {
+  opacity: 1;
+  color: var(--text-muted);
 }
 
 /* Input reset */

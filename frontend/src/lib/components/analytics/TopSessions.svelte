@@ -298,7 +298,7 @@
     font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
 
   .session-status {
@@ -319,9 +319,11 @@
     gap: 1px;
   }
 
+  /* The title leads; the project line is supporting metadata. */
   .session-label {
-    font-size: 11px;
-    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -329,7 +331,7 @@
 
   .session-project {
     font-size: 11px;
-    color: var(--text-secondary);
+    color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -337,9 +339,11 @@
 
   .session-metric {
     flex-shrink: 0;
-    font-size: 11px;
+    /* Values use the UI sans with tabular figures, like the other
+       analytics values. */
+    font-size: 12px;
     font-weight: 500;
-    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
     color: var(--text-primary);
     min-width: 86px;
     text-align: right;
