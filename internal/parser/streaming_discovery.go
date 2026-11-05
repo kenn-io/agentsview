@@ -424,15 +424,23 @@ func collectDiscoveredSources(
 	ctx context.Context,
 	discover func(context.Context, func(SourceRef) error) error,
 ) ([]SourceRef, error) {
+	sources, err := collectPartialDiscoveredSources(ctx, discover)
+	if err != nil {
+		return nil, err
+	}
+	return sources, nil
+}
+
+func collectPartialDiscoveredSources(
+	ctx context.Context,
+	discover func(context.Context, func(SourceRef) error) error,
+) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
 	err := discover(ctx, func(source SourceRef) error {
 		addJSONLSource(source, &sources, seen)
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
 	sortJSONLSources(sources)
-	return sources, nil
+	return sources, err
 }

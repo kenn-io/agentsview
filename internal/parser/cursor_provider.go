@@ -276,14 +276,7 @@ var cursorS3Provider = DefaultS3Provider{
 }
 
 func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	var sources []SourceRef
-	seen := make(map[string]struct{})
-	err := s.DiscoverEach(ctx, func(source SourceRef) error {
-		addJSONLSource(source, &sources, seen)
-		return nil
-	})
-	sortJSONLSources(sources)
-	return sources, err
+	return collectPartialDiscoveredSources(ctx, s.DiscoverEach)
 }
 
 func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {

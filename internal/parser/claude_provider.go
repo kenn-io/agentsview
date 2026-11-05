@@ -552,14 +552,7 @@ func newClaudeLayoutSourceSet(
 }
 
 func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	var sources []SourceRef
-	seen := make(map[string]struct{})
-	err := s.DiscoverEach(ctx, func(source SourceRef) error {
-		addJSONLSource(source, &sources, seen)
-		return nil
-	})
-	sortJSONLSources(sources)
-	return sources, err
+	return collectPartialDiscoveredSources(ctx, s.DiscoverEach)
 }
 
 func (s claudeSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
