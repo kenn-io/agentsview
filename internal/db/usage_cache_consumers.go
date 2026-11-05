@@ -94,7 +94,7 @@ func (memo *usageWindowMemo) drop(key string) {
 
 func usageWindowKey(filter UsageFilter, kind usageQueryKind, cursor bool) string {
 	where, args := filter.appendUsageSessionFilterClauses("1=1", nil)
-	return fmt.Sprintf("%d|%q|%q|%q|%t|%q|%q", kind, filter.From, filter.To, filter.Timezone, cursor, where, args)
+	return fmt.Sprintf("%d|%q|%q|%q|%t|%q|%#v", kind, filter.From, filter.To, filter.Timezone, cursor, where, args)
 }
 
 func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool) (usagePreparedWindow, error) {
@@ -103,7 +103,12 @@ func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind us
 	if prepared, ok := memo.get(key); ok {
 		return prepared, nil
 	}
-	prepared, err := db.usageWindows.Do(ctx, key, func(ctx context.Context) (usagePreparedWindow, error) {
+	probe, err := db.ActivityReportSourceProbe(ctx)
+	if err != nil {
+		return usagePreparedWindow{}, err
+	}
+	flightKey := key + "|" + fmt.Sprintf("%+v|%d", probe, db.usageWrites.Load())
+	prepared, err := db.usageWindows.Do(ctx, flightKey, func(ctx context.Context) (usagePreparedWindow, error) {
 		return db.prepareUsageWindow(ctx, filter, kind, cursor, nil)
 	})
 	if err == nil {
@@ -167,7 +172,7 @@ func (db *DB) queryUsageRollups(
 	// Retirement and cache-side install invalidation require a fresh capture.
 	var lastErr error
 	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
-	cursor := usageCursorIncluded(filter)
+	cursor := includeCursor && usageCursorIncluded(filter)
 	key := usageWindowKey(filter, kind, cursor)
 	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
 		if attempt > 1 {

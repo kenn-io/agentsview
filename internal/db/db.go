@@ -878,6 +878,7 @@ type DB struct {
 	reads                readRegistry
 	usageCache           *usageCacheManager
 	usageWindows         flightgroup.Group[usagePreparedWindow]
+	usageWrites          atomic.Uint64
 	usageWindowObserver  usageWindowObserver
 	activityMemo         activityCandidateMemo
 	frustrationMemo      frustrationMarkerMemo

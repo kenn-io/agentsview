@@ -2,13 +2,16 @@ package service_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -424,6 +427,47 @@ func TestDirectBackend_UsagePairwiseComparison_ParallelReadsCancelOnError(t *tes
 	require.ErrorIs(t, err, readErr)
 	assert.Nil(t, res)
 	assert.ErrorIs(t, <-store.canceled, context.Canceled)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_DefaultModelsPrepareOnce(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	var captures atomic.Int32
+	// Count candidate metadata reads at the SQLite boundary. This small
+	// fixture fits in one capture batch; the other pairwise reads don't
+	// load the session's peak context metadata.
+	reader := d.Reader().(interface {
+		Conn(context.Context) (*sql.Conn, error)
+	})
+	var conns []*sql.Conn
+	for range 4 {
+		conn, err := reader.Conn(t.Context())
+		require.NoError(t, err)
+		conns = append(conns, conn)
+		t.Cleanup(func() { _ = conn.Close() })
+		require.NoError(t, conn.Raw(func(raw any) error {
+			raw.(interface {
+				RegisterAuthorizer(func(int, string, string, string) int)
+			}).RegisterAuthorizer(func(op int, table, column, _ string) int {
+				if op == sqlite3.SQLITE_READ && table == "sessions" && column == "peak_context_tokens" {
+					captures.Add(1)
+				}
+				return sqlite3.SQLITE_OK
+			})
+			return nil
+		}))
+	}
+	for _, conn := range conns {
+		require.NoError(t, conn.Close())
+	}
+	result, err := service.NewDirectBackend(d, nil).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 285, result.Left.TotalTokens)
+	assert.Equal(t, 50, result.Right.TotalTokens)
+	assert.Equal(t, int32(1), captures.Load())
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
