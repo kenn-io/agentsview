@@ -5,11 +5,14 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -419,6 +422,45 @@ func TestConcurrentUsageReadsSeeCommitsAfterWriterHandoff(t *testing.T) {
 	}
 }
 
+func TestUsageReadCloseConnectionsReleasesArchive(t *testing.T) {
+	for _, writerBarrier := range []bool{false, true} {
+		name := "direct"
+		if writerBarrier {
+			name = "writer barrier"
+		}
+		t.Run(name, func(t *testing.T) {
+			database := testDB(t)
+			seedLiveWriteSession(t, database, "old", "before", "2026-08-10T09:00:00Z", 0, 10)
+			filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+			_, err := database.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			seedLiveWriteSession(t, database, "late", "before", "2026-08-10T09:00:00Z", 0, 3)
+			if writerBarrier {
+				require.NoError(t, database.CloseWriter())
+			}
+			require.NoError(t, database.CloseConnections(t.Context()))
+			_, err = database.usageWindowVersion(t.Context())
+			require.Error(t, err, "a probe must keep the archive closed until Reopen")
+			require.NoFileExists(t, database.path+"-wal", "the last writer must checkpoint")
+			savedPath := filepath.Join(t.TempDir(), "saved.db")
+			require.NoError(t, os.Rename(database.path, savedPath))
+			saved, err := OpenReadOnly(t.Context(), savedPath)
+			require.NoError(t, err)
+			requireSessionExists(t, saved, "late")
+			require.NoError(t, saved.Close())
+
+			replacement := testDB(t)
+			seedLiveWriteSession(t, replacement, "new", "after", "2026-08-10T09:00:00Z", 0, 7)
+			require.NoError(t, replacement.Close())
+			require.NoError(t, os.Rename(replacement.path, database.path))
+			require.NoError(t, database.Reopen())
+			daily, err := database.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			assert.Equal(t, 7, daily.Totals.InputTokens)
+		})
+	}
+}
+
 func TestPostCommitRequestSeesPublishedMetadata(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "session", "before", "2026-08-10T09:00:00Z", 0, 10)
@@ -431,37 +473,57 @@ func TestPostCommitRequestSeesPublishedMetadata(t *testing.T) {
 	require.NoError(t, err)
 	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs`)
 	require.NoError(t, err)
-	// Keep the transcript in SQLite's page cache until COMMIT to exercise
-	// the interval between the commit hook and WAL publication.
-	_, err = database.getWriter().Exec(t.Context(), `PRAGMA cache_size = -524288`)
+	conn, err := database.getWriter().Conn(t.Context())
 	require.NoError(t, err)
-	_, err = database.getWriter().Exec(t.Context(), `PRAGMA cache_spill = OFF`)
+	defer conn.Close()
+	commitEntered, commitRelease := make(chan struct{}), make(chan struct{})
+	var commitOnce sync.Once
+	unblockCommit := func() { commitOnce.Do(func() { close(commitRelease) }) }
+	defer unblockCommit()
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterCommitHook(func() int {
+			close(commitEntered)
+			<-commitRelease
+			return 0
+		})
+		return nil
+	}))
+	defer func() {
+		require.NoError(t, conn.Raw(func(raw any) error {
+			raw.(*sqlite3.SQLiteConn).RegisterCommitHook(nil)
+			return nil
+		}))
+	}()
+	tx, err := conn.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
-	tx, err := database.getWriter().BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = tx.Rollback() })
-	_, err = tx.ExecContext(t.Context(), `UPDATE messages SET content = hex(zeroblob(128*1024*1024)) WHERE session_id = 'session'`)
-	require.NoError(t, err)
+	defer tx.Rollback()
 	_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET project = 'after' WHERE id = 'session'`)
 	require.NoError(t, err)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
-	var prepares atomic.Int32
-	database.usageWindowObserver.beforePrepare = func(context.Context) { prepares.Add(1) }
+	prepared := make(chan struct{}, 2)
+	database.usageWindowObserver.beforePrepare = func(context.Context) { prepared <- struct{}{} }
 	var enteredOnce sync.Once
 	cache.rollup.observer.beforeEnsure = func() {
 		enteredOnce.Do(func() { close(entered) })
 		<-release
 	}
 	committed := make(chan error, 1)
-	go func() { committed <- tx.Commit() }()
+	commitDone := make(chan struct{})
+	go func() {
+		defer close(commitDone)
+		committed <- tx.Commit()
+	}()
+	defer func() {
+		unblockCommit()
+		<-commitDone
+	}()
 	select {
-	case err := <-committed:
-		require.NoError(t, err)
-		require.FailNow(t, "commit published before the old snapshot could be captured")
-	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: assert the large commit stays unpublished during the capture delay.
+	case <-commitEntered:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "commit never reached the publication barrier")
 	}
 	type result struct {
 		entries []TopSessionEntry
@@ -478,6 +540,8 @@ func TestPostCommitRequestSeesPublishedMetadata(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		require.FailNow(t, "preparation never reached rollup")
 	}
+	<-prepared
+	unblockCommit()
 	require.NoError(t, <-committed)
 	select {
 	case <-first:
@@ -488,7 +552,11 @@ func TestPostCommitRequestSeesPublishedMetadata(t *testing.T) {
 	require.NoError(t, err)
 	key := usageWindowKey(filter, usageQueryKindToken, false) + "|" + version
 	go read(second)
-	assert.Eventually(t, func() bool { return prepares.Load() == 2 }, 10*time.Second, time.Millisecond)
+	select {
+	case <-prepared:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "post-commit request never started its own preparation")
+	}
 	assert.Equal(t, 1, database.usageWindows.Waiters(key))
 	unblock()
 	old, fresh := <-first, <-second

@@ -101,15 +101,19 @@ func usageWindowKey(filter UsageFilter, kind usageQueryKind, cursor bool) string
 // usageArchiveVersion pins one reader because data_version values are local
 // to a connection. The epoch separates connections after an archive swap.
 type usageArchiveVersion struct {
-	mu    sync.Mutex
-	conn  *sql.Conn
-	epoch uint64
+	mu     sync.Mutex
+	conn   *sql.Conn
+	epoch  uint64
+	closed bool
 }
 
 func (db *DB) usageWindowVersion(ctx context.Context) (string, error) {
 	version := &db.usageVersion
 	version.mu.Lock()
 	defer version.mu.Unlock()
+	if version.closed {
+		return "", sql.ErrConnDone
+	}
 	if version.conn == nil {
 		pool, err := sql.Open("sqlite3", makeDSN(db.path, true))
 		if err != nil {
@@ -129,7 +133,7 @@ func (db *DB) usageWindowVersion(ctx context.Context) (string, error) {
 	return fmt.Sprintf("%d|%d", version.epoch, value), nil
 }
 
-func (version *usageArchiveVersion) reset() {
+func (version *usageArchiveVersion) reset(closed bool) {
 	version.mu.Lock()
 	defer version.mu.Unlock()
 	if version.conn != nil {
@@ -137,6 +141,8 @@ func (version *usageArchiveVersion) reset() {
 		version.conn = nil
 	}
 	version.epoch++
+	// Keep probes from reopening the archive between shutdown and replacement.
+	version.closed = closed
 }
 
 func (db *DB) sharedUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool) (usagePreparedWindow, error) {
