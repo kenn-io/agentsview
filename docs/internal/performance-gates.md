@@ -44,6 +44,8 @@ runner noise and fail loudly:
   and original source label. `BenchmarkRepositoryProjectImport` measures
   imports with an existing project name and with a label that needs
   attribution.
+- `TestSourceFreshnessSnapshotMatchesLiveQueries` (`internal/db`) compares
+  startup freshness with live queries, including NULL metadata and trash.
 - `TestProviderAuthoritativeUnchangedSessionSkipsOnResync`
   (`internal/sync/provider_freshness_integration_test.go`) — the generic
   freshness skip for provider-authoritative agents, Vibe as representative.

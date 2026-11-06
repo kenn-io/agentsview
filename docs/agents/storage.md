@@ -22,6 +22,10 @@ The archive writer caches up to 64 prepared SQL statements per connection to
 avoid compiling repeated import and project-attribution queries. The cache stays
 in memory and closes with its connection. Reader connections do not use it.
 
+The startup worker snapshots freshness for digest-capable providers while it
+holds the archive write lock, before the daemon opens the archive; later passes
+query live state.
+
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned
 sessions from the old database, and swap the files atomically. Preserve sessions

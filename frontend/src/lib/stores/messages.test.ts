@@ -456,6 +456,19 @@ describe("MessagesStore", () => {
     await Promise.all([p1, p2]);
   });
 
+  it("updates mainModel when older messages supply the model", async () => {
+    const tail = Array.from({ length: 1_000 }, (_, i) => makeMessage(3_999 - i));
+    await setupSession("s1", 4_000, tail);
+    expect(messages.mainModel).toBe("");
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([{ ...makeMessage(2_999), model: "claude-3-opus" }, makeMessage(2_998)]),
+    );
+    await messages.loadOlder();
+
+    expect(messages.mainModel).toBe("claude-3-opus");
+  });
+
   it("should retain mainModel during reload", async () => {
     const msgs = Array.from({ length: 5 }, (_, i) => ({
       ...makeMessage(i),

@@ -7,8 +7,8 @@ import (
 )
 
 // Memo keeps the results of recent reads. A slot names the read
-// and holds only the rows of its latest version, which names the parts the
-// rows were read from. A push replaces a slot's rows instead of adding a
+// and holds only the rows of its latest version, which names the rows the
+// read sees. A push replaces a slot's rows instead of adding a
 // second copy beside them, and a stale version is never returned. The
 // empty slot keeps nothing. The oldest written slots go first when the
 // memo is over its slot or byte limit.

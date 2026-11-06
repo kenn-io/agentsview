@@ -2190,11 +2190,14 @@ func (s *Store) usageRowMemoKey(
 	if err != nil {
 		return "", "", err
 	}
+	if version == "" {
+		return "", "", nil
+	}
 	slot, err = usageRowMemoKeyFor(kind, f, sessionID, pricingDigest, customModels)
 	return slot, version, err
 }
 
-// chUsageReadTables are the tables a prepared usage read touches besides
+// chUsageReadTables name the rows a prepared usage read depends on besides
 // prepared_usage itself, whose rows the state's stamp identifies.
 var chUsageReadTables = []string{
 	"sessions", "usage_session_snapshots", "cursor_usage_events", "usage_event_prices",
@@ -2205,25 +2208,99 @@ var chUsageReadTables = []string{
 // host is read raw; see preparedUsageState.raw.
 var chRawHostUsageTables = []string{"usage_messages", "usage_events"}
 
-// usageReadFingerprint identifies what a usage read depends on. A prepared
-// read depends on the prepared rows, named by the state's stamp, and on the
-// active parts of the tables it joins or prices from; the large message and
-// event tables, whose background merges rename parts long after a push, are
-// not among them. A raw read depends on the parts of every table.
+// usageReadFingerprint identifies the rows a usage read sees. Fully prepared
+// reads keep their version across merges. Raw and mixed reads name parts.
 func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState) (string, error) {
 	if !state.ready {
 		return s.partsFingerprint(ctx)
 	}
-	tables := chUsageReadTables
-	if len(state.raw) > 0 {
-		// The raw hosts' rows come from the message and event tables.
-		tables = slices.Concat(tables, chRawHostUsageTables)
+	if len(state.raw) == 0 {
+		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables)
+		if err != nil || !ok {
+			return "", err
+		}
+		return version + "|" + state.stamp, nil
 	}
+	// The raw hosts' rows come from the message and event tables.
+	tables := slices.Concat(chUsageReadTables, chRawHostUsageTables)
 	fingerprint, err := s.tablePartsFingerprint(ctx, tables)
 	if err != nil {
 		return "", err
 	}
 	return fingerprint + "|" + state.stamp, nil
+}
+
+type usageTableVersion struct {
+	parts, identity string
+}
+
+// usageRowsVersion probes only tables whose parts changed. If parts move
+// during the probe or the probe fails, the read is served uncached.
+func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, bool, error) {
+	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
+	if !ok {
+		var err error
+		if snapshot, err = s.readPartsSnapshot(ctx); err != nil {
+			return "", false, err
+		}
+	}
+	// The fill mutex shares a probe with concurrent requests, which recheck
+	// the kept digests after acquiring it.
+	s.usageVersions.Lock()
+	defer s.usageVersions.Unlock()
+	var changed []string
+	for _, table := range tables {
+		kept, exists := s.usageVersions.tables[table]
+		if !exists || kept.parts != snapshot[table] {
+			changed = append(changed, table)
+		}
+	}
+	if len(changed) > 0 {
+		identities, err := s.readUsageRowIdentities(ctx, changed)
+		if err != nil {
+			s.logUsageReadiness(fmt.Sprintf("row identity probe failed, serving uncached: %v", err))
+			return "", false, nil
+		}
+		fresh, err := s.readPartsSnapshot(ctx)
+		if err != nil {
+			s.logUsageReadiness(fmt.Sprintf("parts recheck failed, serving uncached: %v", err))
+			return "", false, nil
+		}
+		for _, table := range tables {
+			if fresh[table] != snapshot[table] {
+				return "", false, nil
+			}
+		}
+		for i, table := range changed {
+			s.usageVersions.tables[table] = usageTableVersion{snapshot[table], identities[i]}
+		}
+	}
+	return tableValuesFingerprint(tables, func(table string) string {
+		return s.usageVersions.tables[table].identity
+	}), true, nil
+}
+
+func chUsageRowHashSQL(columns string) string {
+	return "reinterpretAsUInt128(sipHash128Reference(tuple(" + columns + ")))"
+}
+
+// readUsageRowIdentities returns one identity per table, in order.
+func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string) ([]string, error) {
+	queries := make([]string, len(tables))
+	for i, table := range tables {
+		columns := "*"
+		if table == "usage_session_snapshots" {
+			// Revision identifies the usage arrays without hashing them; push_version identifies publication.
+			columns = "id, revision, push_version"
+		}
+		queries[i] = fmt.Sprintf("assumeNotNull((SELECT toString(tuple(count(), sumWithOverflow(%s))) FROM %s))",
+			chUsageRowHashSQL(columns), table)
+	}
+	identities := make([]string, len(tables))
+	if err := s.queryRowContext(ctx, "SELECT ["+strings.Join(queries, ",")+"]").Scan(&identities); err != nil {
+		return nil, fmt.Errorf("reading clickhouse usage row identities: %w", err)
+	}
+	return identities, nil
 }
 
 // usageRowMemoKeyFor renders the key. The filter is JSON and the custom
@@ -2265,12 +2342,16 @@ func (s *Store) tablePartsFingerprint(ctx context.Context, tables []string) (str
 	if len(tables) == 0 {
 		tables = slices.Collect(maps.Keys(snapshot))
 	}
+	return tableValuesFingerprint(tables, func(table string) string { return snapshot[table] }), nil
+}
+
+func tableValuesFingerprint(tables []string, value func(string) string) string {
 	tables = slices.Sorted(slices.Values(tables))
 	sum := sha256.New()
 	for _, table := range slices.Compact(tables) {
-		fmt.Fprintf(sum, "%s\x00%s\x00", table, snapshot[table])
+		fmt.Fprintf(sum, "%s\x00%s\x00", table, value(table))
 	}
-	return hex.EncodeToString(sum.Sum(nil)), nil
+	return hex.EncodeToString(sum.Sum(nil))
 }
 
 // partsSnapshot maps each table to a digest of its active parts.
