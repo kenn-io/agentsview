@@ -22,9 +22,10 @@ import (
 
 type usageReadCounter struct {
 	storeExecutor
-	mu            sync.Mutex
-	queries       map[string]int
-	revisionReads int
+	mu             sync.Mutex
+	queries        map[string]int
+	revisionReads  int
+	revisionErrors []error
 }
 
 // Hold the first pricing query after PostgreSQL has taken its statement snapshot.
@@ -109,9 +110,13 @@ func TestUsageKeptMissAfterPricingPush(t *testing.T) {
 }
 
 func (c *usageReadCounter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	rows, err := c.storeExecutor.QueryContext(ctx, query, args...)
 	if strings.Contains(query, "usage_change_revision") {
 		c.mu.Lock()
 		c.revisionReads++
+		if err != nil {
+			c.revisionErrors = append(c.revisionErrors, err)
+		}
 		c.mu.Unlock()
 	}
 	if strings.Contains(query, "usage_events") && !strings.Contains(query, "usage_session_changes") {
@@ -119,7 +124,20 @@ func (c *usageReadCounter) QueryContext(ctx context.Context, query string, args 
 		c.queries[query]++
 		c.mu.Unlock()
 	}
-	return c.storeExecutor.QueryContext(ctx, query, args...)
+	return rows, err
+}
+
+func (c *usageReadCounter) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	row := c.storeExecutor.QueryRowContext(ctx, query, args...)
+	if strings.Contains(query, "usage_change_revision") {
+		c.mu.Lock()
+		c.revisionReads++
+		if err := row.Err(); err != nil {
+			c.revisionErrors = append(c.revisionErrors, err)
+		}
+		c.mu.Unlock()
+	}
+	return row
 }
 
 func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
@@ -141,6 +159,36 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 	counter := &usageReadCounter{storeExecutor: store.pg, queries: map[string]int{}}
 	store.pg = counter
 	return local, syncer, store, counter
+}
+
+func TestUsageKeptWithoutJournal(t *testing.T) {
+	_, syncer, store, counter := keptUsageFixture(t)
+	ctx := t.Context()
+	// Optional journal installation leaves no version row when it cannot run.
+	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+	require.NoError(t, err)
+	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
+	read := func(s *Store) []any {
+		daily, err := s.GetDailyUsage(ctx, f)
+		require.NoError(t, err)
+		counts, err := s.GetPlanUsageSessionCounts(ctx, f)
+		require.NoError(t, err)
+		top, err := s.GetTopSessionsByCost(ctx, f, 10)
+		require.NoError(t, err)
+		return []any{daily, counts, top}
+	}
+	want := read(&Store{pg: counter.storeExecutor})
+	require.Equal(t, 1000, want[0].(db.DailyUsageResult).Totals.OutputTokens)
+	require.Equal(t, 1, want[1].(db.PlanUsageSessionCounts).PlanOnly)
+	require.Len(t, want[2], 2)
+	for range 2 {
+		assert.Equal(t, want, read(store))
+	}
+	assert.Equal(t, 6, counter.revisionReads)
+	assert.Empty(t, counter.revisionErrors, "Usage revision probes must succeed without a journal")
+	for _, count := range counter.queries {
+		assert.Equal(t, 2, count, "archives without a journal must read fresh")
+	}
 }
 
 func TestUsageKeptPushBetweenReads(t *testing.T) {

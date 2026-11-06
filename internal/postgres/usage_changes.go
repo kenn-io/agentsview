@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"strconv"
 	"strings"
 )
@@ -200,7 +199,14 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 // UsageChangeRevision returns the current revision, or 0 when the journal is
 // unavailable. See LoadUsageChanges.
 func (s *Store) UsageChangeRevision(ctx context.Context) (int64, error) {
-	revision, _, err := s.LoadUsageChanges(ctx, math.MaxInt64)
+	var revision int64
+	err := s.pg.QueryRowContext(ctx, `SELECT coalesce((
+ SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
+ AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value = $1)
+), 0)`, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&revision)
+	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
+		return 0, nil
+	}
 	return revision, err
 }
 
