@@ -240,9 +240,10 @@ source or processing-version selection provides new work, or an operator runs
 `pg raw-reparse --repair`.
 
 Equivalent content from several devices coalesces when it shares a stable
-provider session identity. Piebald's numeric database IDs stay scoped to their
-source, so unrelated chats on different devices do not merge. Without a stable
-provider identity, sources remain separate even when their content matches.
+provider session identity. Piebald database IDs and Hermes session IDs stay
+scoped to their physical source, so unrelated chats or profiles do not merge.
+Without a stable provider identity, sources remain separate even when their
+content matches.
 
 Device machine filters are available on `main` after v0.46.1. The Machine filter
 lists contributing devices by their enrollment display names. Its stable
@@ -438,6 +439,32 @@ Keep the same device ID, credential, server, and provider configuration for the
 handoff. The watcher owns the same checkpoint writer and continues from the
 acknowledged source heads left by the backfill, so do not run both commands at
 the same time.
+
+### Hermes homes and profiles
+
+On `main` after v0.46.1, Hermes supports native raw backfill and watch. Select it
+with `--provider hermes` during backfill. Each home or profile uploads as one
+source: an online backup of `state.db`, when present, plus its JSONL and legacy
+`session_*.json` transcripts. Committed WAL content is included in the backup;
+SQLite coordination files are not uploaded separately. Homes containing only
+legacy transcripts are also supported. Augure Desktop remains separate and does
+not support raw capture.
+
+Each selected home or profile container must exist for a complete backfill. A
+database-only home can omit `sessions/`; AgentsView captures `state.db` and
+keeps the sessions path in its watch plan for transcripts added later. Missing
+selected homes or profile containers keep a backfill incomplete, so remove
+unavailable alternate-platform roots before the initial backfill. A configured
+profiles container stays the owner of its individual profile sources,
+including profiles created later.
+
+Hosted Hermes refreshes replace session content but preserve archived sessions
+omitted from later snapshots, including removed database rows or transcripts.
+Delete or exclude archived sessions explicitly in AgentsView. Identical native
+session IDs in different homes stay separate, and adding or removing a home's
+database keeps the same source identity. Offset-free transcript timestamps use
+the parser machine's timezone; exact local/hosted timestamp parity requires the
+same timezone.
 
 ## Laptop raw watch daemon
 

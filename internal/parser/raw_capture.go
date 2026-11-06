@@ -26,6 +26,8 @@ const (
 	RawCaptureShapeUnsupported RawCaptureShape = iota
 	RawCaptureShapeFiles
 	RawCaptureShapeSQLite
+	// RawCaptureShapeSQLiteArchive combines an optional SQLite backup with files.
+	RawCaptureShapeSQLiteArchive
 )
 
 // RawCaptureAppendPolicy declares which entries can safely extend while
@@ -74,6 +76,9 @@ type RawCapturePlan struct {
 	// provider reads as inputs for this source, such as a second Codex
 	// home's session_index.jsonl. Entries may live under any of them.
 	SidecarRoots []string
+	// SnapshotPath names the SQLite archive entry requiring online backup.
+	// Empty means the archive currently contains files only.
+	SnapshotPath string
 }
 
 // RawCaptureDiscovery reports physical sources and whether every configured
@@ -116,7 +121,8 @@ func ResolveRawSnapshotSessions(
 	provider Provider,
 	source SourceRef,
 ) ([]SourceRef, bool, error) {
-	if provider.Capabilities().RawCapture.Shape != RawCaptureShapeSQLite {
+	shape := provider.Capabilities().RawCapture.Shape
+	if shape != RawCaptureShapeSQLite && shape != RawCaptureShapeSQLiteArchive {
 		return nil, false, nil
 	}
 	fanout, ok := provider.(RawSnapshotSessionProvider)
@@ -298,7 +304,7 @@ func validateRawCapturePlan(
 	switch {
 	case capabilities.Shape == RawCaptureShapeFiles &&
 		capabilities.Snapshot == RawCaptureSnapshotNone:
-	case capabilities.Shape == RawCaptureShapeSQLite &&
+	case (capabilities.Shape == RawCaptureShapeSQLite || capabilities.Shape == RawCaptureShapeSQLiteArchive) &&
 		capabilities.Snapshot == RawCaptureSnapshotOnlineBackup &&
 		capabilities.Append == RawCaptureAppendReplaceOnly:
 	default:
@@ -390,6 +396,14 @@ func validateRawCapturePlan(
 	if capabilities.Shape == RawCaptureShapeSQLite && len(entries) != 1 {
 		return RawCapturePlan{}, invalidRawCapturePlan("SQLite source must have exactly one entry")
 	}
+	if plan.SnapshotPath != "" {
+		if capabilities.Shape != RawCaptureShapeSQLiteArchive {
+			return RawCapturePlan{}, invalidRawCapturePlan("snapshot path requires a SQLite archive")
+		}
+		if _, ok := seen[plan.SnapshotPath]; !ok {
+			return RawCapturePlan{}, invalidRawCapturePlan("snapshot path does not name an archive entry")
+		}
+	}
 	slices.SortFunc(entries, func(a, b RawCaptureEntry) int {
 		return strings.Compare(a.Path, b.Path)
 	})
@@ -399,6 +413,7 @@ func validateRawCapturePlan(
 		SourceKey:      plan.SourceKey,
 		Entries:        entries,
 		SidecarRoots:   sidecarRoots,
+		SnapshotPath:   plan.SnapshotPath,
 	}, nil
 }
 

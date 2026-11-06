@@ -167,7 +167,11 @@ func (c *Capturer) captureFile(
 		return rawcheckpoint.CapturedEntry{}, false, err
 	}
 	planned := observed.planned
-	source := observed.file
+	source, err := c.openObservedFile(observed)
+	if err != nil {
+		return rawcheckpoint.CapturedEntry{}, false, err
+	}
+	defer source.Close()
 	if _, err := source.Seek(0, io.SeekStart); err != nil {
 		return rawcheckpoint.CapturedEntry{}, false, fmt.Errorf("rawcapture: seek %q: filesystem error", planned.Path)
 	}
@@ -271,7 +275,11 @@ func (c *Capturer) captureAppendFile(
 		return rawcheckpoint.CapturedEntry{}, false, err
 	}
 	planned := observed.planned
-	source := observed.file
+	source, err := c.openObservedFile(observed)
+	if err != nil {
+		return rawcheckpoint.CapturedEntry{}, false, err
+	}
+	defer source.Close()
 	if _, err := source.Seek(0, io.SeekStart); err != nil {
 		return rawcheckpoint.CapturedEntry{}, false, fmt.Errorf("rawcapture: seek %q: filesystem error", planned.Path)
 	}
@@ -377,7 +385,11 @@ func (c *Capturer) captureReusedFile(
 	base rawcheckpoint.CapturedEntry,
 ) (rawcheckpoint.CapturedEntry, error) {
 	planned := observed.planned
-	file := observed.file
+	file, err := c.openObservedFile(observed)
+	if err != nil {
+		return rawcheckpoint.CapturedEntry{}, err
+	}
+	defer file.Close()
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return rawcheckpoint.CapturedEntry{}, fmt.Errorf(
 			"rawcapture: seek %q: filesystem error", planned.Path,
@@ -451,6 +463,9 @@ func (c *Capturer) verifyCapturedFile(
 	length, err := copyContext(ctx, hash, file)
 	if err != nil {
 		return fmt.Errorf("rawcapture: validate %q: %w", planned.Path, sanitizeFilesystemError(err))
+	}
+	if c.capturePhase != nil {
+		c.capturePhase(capturePhaseAfterRead, planned.LocalPath)
 	}
 	afterHandle, err := file.Stat()
 	if err != nil {

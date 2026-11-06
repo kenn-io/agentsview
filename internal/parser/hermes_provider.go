@@ -79,17 +79,22 @@ func (f hermesProviderFactory) Definition() AgentDef {
 }
 
 func (f hermesProviderFactory) Capabilities() Capabilities {
-	return hermesProviderCapabilities()
+	return withHermesRawCapture(f.spec.agent, hermesProviderCapabilities())
 }
 
 func (f hermesProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
+	caps := withHermesRawCapture(f.spec.agent, hermesProviderCapabilities())
+	if f.spec.agent == AgentHermes && cfg.StableSourceSnapshots {
+		// Hosted snapshots refresh content; omission cannot erase the archive.
+		caps.Source.ExplicitDeletionOnly = CapabilitySupported
+	}
 	return &hermesProvider{
 		Def:     cloneAgentDef(f.def),
-		Caps:    hermesProviderCapabilities(),
+		Caps:    caps,
 		Config:  cfg,
 		spec:    f.spec,
-		sources: newHermesSourceSet(f.spec.agent, cfg.Roots),
+		sources: newHermesSourceSetWithConfig(f.spec.agent, cfg),
 	}
 }
 
@@ -259,13 +264,19 @@ func (p *hermesProvider) Parse(
 		} else if absolute, err := filepath.Abs(sourcePath); err == nil {
 			sourcePath = absolute
 		}
-		sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
-		home := filepath.Dir(sourcePath)
-		if filepath.Base(sourcePath) != "state.db" && filepath.Base(home) == "sessions" {
-			home = filepath.Dir(home)
+		var home string
+		if p.Config.StableSourceSnapshots && p.Config.PathRewriter != nil {
+			home = hermesRawClientHome(sourcePath)
+		} else {
+			sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
+			home = filepath.Dir(sourcePath)
+			if filepath.Base(sourcePath) != "state.db" && filepath.Base(home) == "sessions" {
+				home = filepath.Dir(home)
+			}
+			home = filepath.Clean(home)
 		}
 		// Legacy job IDs can repeat across homes on the same machine.
-		hash := sha256.Sum256([]byte(filepath.Clean(home)))
+		hash := sha256.Sum256([]byte(home))
 		for i := range outcome.Results {
 			sess := &outcome.Results[i].Result.Session
 			if sess.GroupKey != "" {
@@ -412,8 +423,9 @@ type hermesSourceSet struct {
 	// the store layout but must not share a discovery namespace: keying
 	// sources by agent keeps an Augure Desktop session ID from colliding
 	// with a Hermes one.
-	agent AgentType
-	roots []string
+	agent              AgentType
+	roots              []string
+	profilesContainers map[string]struct{}
 }
 
 func newHermesSourceSet(agent AgentType, roots []string) hermesSourceSet {
@@ -423,6 +435,28 @@ func newHermesSourceSet(agent AgentType, roots []string) hermesSourceSet {
 	return hermesSourceSet{agent: agent, roots: cleanJSONLRoots(roots)}
 }
 
+func newHermesSourceSetWithConfig(agent AgentType, cfg ProviderConfig) hermesSourceSet {
+	sources := newHermesSourceSet(agent, cfg.Roots)
+	for root, enabled := range cfg.RawCaptureHermesProfilesContainerRoots {
+		if !enabled {
+			continue
+		}
+		if sources.profilesContainers == nil {
+			sources.profilesContainers = make(map[string]struct{})
+		}
+		sources.profilesContainers[filepath.Clean(root)] = struct{}{}
+	}
+	return sources
+}
+
+func (s hermesSourceSet) isProfilesContainer(root string) bool {
+	if isHermesProfilesContainer(root) {
+		return true
+	}
+	_, ok := s.profilesContainers[filepath.Clean(root)]
+	return ok
+}
+
 // The default Hermes roots include the stable profiles container rather than
 // its current children. Expanding direct children during discovery lets a
 // long-running provider see profiles created after initialization.
@@ -430,6 +464,12 @@ func isHermesProfilesContainer(root string) bool {
 	root = filepath.Clean(root)
 	return filepath.Base(root) == "profiles" &&
 		filepath.Base(filepath.Dir(root)) == ".hermes"
+}
+
+// IsHermesProfilesContainer reports whether root is the dynamic Hermes profile
+// container rather than one profile home.
+func IsHermesProfilesContainer(root string) bool {
+	return isHermesProfilesContainer(root)
 }
 
 // hermesProfileArchiveRoots expands a profiles container into its current
@@ -468,7 +508,7 @@ func (s hermesSourceSet) expandedRoots() ([]string, error) {
 	var roots []string
 	var expandErr error
 	for _, root := range s.roots {
-		if isHermesProfilesContainer(root) {
+		if s.isProfilesContainer(root) {
 			profileRoots, err := hermesProfileArchiveRoots(root)
 			if err != nil {
 				expandErr = errors.Join(expandErr, err)
@@ -781,7 +821,7 @@ func (m *hermesStateMembership) Close() {
 func (s hermesSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
-		if isHermesProfilesContainer(root) {
+		if s.isProfilesContainer(root) {
 			roots = append(roots, WatchRoot{
 				Path:         root,
 				Recursive:    true,
@@ -789,6 +829,9 @@ func (s hermesSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				DebounceKey:  string(s.agent) + ":profiles:" + root,
 			})
 			continue
+		}
+		if s.agent == AgentHermes {
+			root = hermesRawEventPath(root)
 		}
 		roots = append(roots, hermesWatchRoots(s.agent, root)...)
 	}
@@ -900,7 +943,7 @@ func (s hermesSourceSet) reconciliationScopePlan(
 			root:  root,
 			match: absoluteHermesPath(root),
 		}
-		if isHermesProfilesContainer(root) {
+		if s.isProfilesContainer(root) {
 			// The container is one coverage identity: profile membership is
 			// dynamic, so a pass covers it only by traversing the container
 			// itself, and discovery reports an unreadable container as
@@ -1118,7 +1161,7 @@ func (s hermesSourceSet) SourcesForChangedPath(
 	}
 	allowMissing := jsonlMissingPathFallbackAllowed(req)
 	for _, root := range s.roots {
-		if isHermesProfilesContainer(root) {
+		if s.isProfilesContainer(root) {
 			if req.WatchRoot != "" && !samePath(root, req.WatchRoot) {
 				continue
 			}
@@ -1635,7 +1678,8 @@ func (s hermesSourceSet) sourceForChangedPath(
 }
 
 func hermesStatePathAffectsArchive(path, stateDB string) bool {
-	return samePath(path, stateDB) || samePath(path, stateDB+"-wal")
+	return sameHermesEventPath(path, stateDB) ||
+		sameHermesEventPath(path, stateDB+"-wal")
 }
 
 func (s hermesSourceSet) sourceRef(root, path string) (SourceRef, bool) {
@@ -1716,6 +1760,7 @@ func hermesWatchRoots(agent AgentType, root string) []WatchRoot {
 		watchRoots = append(watchRoots, WatchRoot{
 			Path:         sessionsDir,
 			Recursive:    true,
+			Optional:     true,
 			IncludeGlobs: []string{"*.jsonl", "session_*.json"},
 			DebounceKey:  string(agent) + ":sessions:" + root,
 		})
@@ -1748,22 +1793,26 @@ func ResolveHermesShallowWatchRoots(root string) []string {
 func hermesWatchRootMatches(root, watchRoot string) bool {
 	root = filepath.Clean(root)
 	watchRoot = filepath.Clean(watchRoot)
-	if samePath(root, watchRoot) {
+	if sameHermesEventPath(root, watchRoot) {
 		return true
 	}
 	if stateDB, sessionsDir, ok := hermesArchiveRootPaths(root); ok {
-		return samePath(watchRoot, filepath.Dir(stateDB)) ||
-			samePath(watchRoot, sessionsDir)
+		return sameHermesEventPath(watchRoot, filepath.Dir(stateDB)) ||
+			sameHermesEventPath(watchRoot, sessionsDir)
 	}
 	switch filepath.Base(root) {
 	case "state.db":
-		return samePath(watchRoot, filepath.Dir(root)) ||
-			samePath(watchRoot, filepath.Join(filepath.Dir(root), "sessions"))
+		return sameHermesEventPath(watchRoot, filepath.Dir(root)) ||
+			sameHermesEventPath(watchRoot, filepath.Join(filepath.Dir(root), "sessions"))
 	case "sessions":
-		return samePath(watchRoot, filepath.Dir(root))
+		return sameHermesEventPath(watchRoot, filepath.Dir(root))
 	default:
-		return samePath(watchRoot, filepath.Join(root, "sessions"))
+		return sameHermesEventPath(watchRoot, filepath.Join(root, "sessions"))
 	}
+}
+
+func sameHermesEventPath(first, second string) bool {
+	return samePath(hermesRawEventPath(first), hermesRawEventPath(second))
 }
 
 func hermesArchivePathsForEvent(root, path string) (stateDB, sessionsDir string, ok bool) {

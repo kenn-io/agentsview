@@ -696,3 +696,35 @@ func TestResolveRawCapturePlanDoesNotExposeLocalPathInFilesystemError(t *testing
 	assert.NotContains(t, err.Error(), root)
 	assert.ErrorIs(t, err, ErrInvalidRawCapturePlan)
 }
+
+func TestSQLiteArchiveCapturePlanMembership(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"state.db", "session.jsonl"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0o600))
+	}
+	for _, tc := range []struct {
+		name, snapshot        string
+		shape                 RawCaptureShape
+		appendable, wantError bool
+	}{
+		{name: "database and companion", snapshot: "state.db", shape: RawCaptureShapeSQLiteArchive},
+		{name: "file only", shape: RawCaptureShapeSQLiteArchive},
+		{name: "missing snapshot", snapshot: "missing.db", shape: RawCaptureShapeSQLiteArchive, wantError: true},
+		{name: "unsafe snapshot", snapshot: "../state.db", shape: RawCaptureShapeSQLiteArchive, wantError: true},
+		{name: "appendable archive", snapshot: "state.db", shape: RawCaptureShapeSQLiteArchive, appendable: true, wantError: true},
+		{name: "single database shape unchanged", shape: RawCaptureShapeSQLite, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &rawCaptureTestProvider{Def: AgentDef{Type: AgentHermes}, Caps: Capabilities{RawCapture: RawCaptureCapabilities{Support: CapabilitySupported, Shape: tc.shape, Snapshot: RawCaptureSnapshotOnlineBackup}}, plan: RawCapturePlan{ConfiguredRoot: root, CaptureRoot: root, SourceKey: "archive", SnapshotPath: tc.snapshot, Entries: []RawCaptureEntry{{Path: "state.db", LocalPath: filepath.Join(root, "state.db")}, {Path: "session.jsonl", LocalPath: filepath.Join(root, "session.jsonl"), Appendable: tc.appendable}}}}
+			plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, SourceRef{Provider: AgentHermes, Key: "archive"})
+			if tc.wantError {
+				require.ErrorIs(t, err, ErrInvalidRawCapturePlan)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, supported)
+			assert.Equal(t, tc.snapshot, plan.SnapshotPath)
+			require.Len(t, plan.Entries, 2)
+		})
+	}
+}

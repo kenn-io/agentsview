@@ -18,15 +18,28 @@ var (
 )
 
 type BackfillSelection struct {
-	Provider         parser.AgentType
-	ConfiguredRootID string
-	ProjectPath      string
+	Provider                parser.AgentType
+	ConfiguredRootID        string
+	ProjectPath             string
+	HermesProfilesContainer bool `json:"hermes_profiles_container,omitzero"`
 }
 
 // BackfillRoot retains provider metadata needed to reproduce raw manifest paths.
 type BackfillRoot struct {
 	ConfiguredRoot
-	ProjectPath string
+	ProjectPath             string
+	HermesProfilesContainer bool
+}
+
+type backfillRootSelection struct {
+	BackfillSelection
+	LocalRoot string
+}
+
+type backfillSelectionSnapshot struct {
+	Providers []parser.AgentType
+	Roots     []backfillRootSelection
+	Entries   []BackfillEntry
 }
 
 // BackfillEntry is one configured root entry as written in the user's
@@ -96,11 +109,7 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 		if err := ensureDestinationConn(ctx, conn, spec.Destination); err != nil {
 			return err
 		}
-		type rootSelection struct {
-			BackfillSelection
-			LocalRoot string
-		}
-		selected := make([]rootSelection, 0, len(spec.Roots))
+		selected := make([]backfillRootSelection, 0, len(spec.Roots))
 		for _, root := range spec.Roots {
 			if !slices.Contains(spec.Providers, root.Provider) {
 				return ErrBackfillConflict
@@ -112,14 +121,17 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 				}
 				return err
 			}
-			selected = append(selected, rootSelection{root, path})
+			selected = append(selected, backfillRootSelection{
+				BackfillSelection: root,
+				LocalRoot:         path,
+			})
 		}
 		// Root IDs keep the snapshot unique when invalid UTF-8 in a path is replaced.
-		selection, err := json.Marshal(struct {
-			Providers []parser.AgentType
-			Roots     []rootSelection
-			Entries   []BackfillEntry
-		}{spec.Providers, selected, spec.Entries}, jsontext.AllowInvalidUTF8(true))
+		selection, err := json.Marshal(backfillSelectionSnapshot{
+			Providers: spec.Providers,
+			Roots:     selected,
+			Entries:   spec.Entries,
+		}, jsontext.AllowInvalidUTF8(true))
 		if err != nil {
 			return ErrBackfillConflict
 		}
@@ -445,6 +457,23 @@ const backfillPendingClosure = `WITH RECURSIVE backfill_pending(capture_id) AS (
 
 // BackfillRoots returns the private immutable root selection for one provider.
 func (s *Store) BackfillRoots(ctx context.Context, runID string, provider parser.AgentType) ([]BackfillRoot, error) {
+	var storedSelection string
+	err := s.db.QueryRowContext(ctx, `SELECT selection FROM backfill_runs WHERE run_id=?`, runID).Scan(&storedSelection)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	profilesContainers := make(map[string]bool)
+	if err == nil {
+		var snapshot backfillSelectionSnapshot
+		if err := json.Unmarshal([]byte(storedSelection), &snapshot); err != nil {
+			return nil, err
+		}
+		for _, root := range snapshot.Roots {
+			if root.Provider == provider && root.HermesProfilesContainer {
+				profilesContainers[root.ConfiguredRootID] = true
+			}
+		}
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT configured_root_id,local_root,project_path FROM backfill_roots WHERE run_id=? AND provider=? ORDER BY ordinal`, runID, string(provider))
 	if err != nil {
 		return nil, err
@@ -456,6 +485,7 @@ func (s *Store) BackfillRoots(ctx context.Context, runID string, provider parser
 		if err := rows.Scan(&root.ID, &root.LocalPath, &root.ProjectPath); err != nil {
 			return nil, err
 		}
+		root.HermesProfilesContainer = profilesContainers[root.ID]
 		roots = append(roots, root)
 	}
 	return roots, rows.Err()

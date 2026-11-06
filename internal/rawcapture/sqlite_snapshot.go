@@ -25,7 +25,11 @@ func (c *Capturer) snapshotSQLitePlan(
 	source *sql.Conn,
 	maxBytes int64,
 ) (parser.RawCapturePlan, func() error, error) {
-	if len(plan.Entries) != 1 {
+	snapshotPath := plan.SnapshotPath
+	if snapshotPath == "" && len(plan.Entries) == 1 {
+		snapshotPath = plan.Entries[0].Path
+	}
+	if snapshotPath == "" {
 		return parser.RawCapturePlan{}, nil, ErrUnsupportedSnapshot
 	}
 	temporary, err := os.MkdirTemp(c.store.CaptureTempDir(), "sqlite-")
@@ -46,14 +50,19 @@ func (c *Capturer) snapshotSQLitePlan(
 	); err != nil {
 		return parser.RawCapturePlan{}, nil, errors.Join(err, cleanup())
 	}
-	return parser.RawCapturePlan{
-		ConfiguredRoot: temporary,
-		CaptureRoot:    temporary,
-		SourceKey:      plan.SourceKey,
-		Entries: []parser.RawCaptureEntry{{
-			Path: plan.Entries[0].Path, LocalPath: destination,
-		}},
-	}, cleanup, nil
+	if plan.SnapshotPath != "" {
+		if err := standaloneSQLiteSnapshot(ctx, destination); err != nil {
+			return parser.RawCapturePlan{}, nil, errors.Join(err, cleanup())
+		}
+	}
+	plan.Entries = append([]parser.RawCaptureEntry(nil), plan.Entries...)
+	plan.SidecarRoots = append(append([]string(nil), plan.SidecarRoots...), temporary)
+	for i := range plan.Entries {
+		if plan.Entries[i].Path == snapshotPath {
+			plan.Entries[i].LocalPath = destination
+		}
+	}
+	return plan, cleanup, nil
 }
 
 type sqliteSnapshotSource struct {
@@ -296,14 +305,6 @@ func sqliteBackupSizeError(pages, pageBytes, maxBytes int64) error {
 	return nil
 }
 
-func sqliteSnapshotReservationBytes(snapshotBytes int64) int64 {
-	metadata := rawcheckpoint.CaptureMetadataCharge(1, 1)
-	if snapshotBytes > math.MaxInt64-metadata {
-		return math.MaxInt64
-	}
-	return snapshotBytes + metadata
-}
-
 // SnapshotSQLite makes a standalone online backup without the upload spool.
 // The caller owns a private destination directory. Existing files are refused.
 func SnapshotSQLite(ctx context.Context, sourcePath, destination string, expected os.FileInfo) (retErr error) {
@@ -334,13 +335,29 @@ func SnapshotSQLite(ctx context.Context, sourcePath, destination string, expecte
 	if err := sqliteOnlineBackup(ctx, source.connection, destination, math.MaxInt64); err != nil {
 		return err
 	}
+	if err := standaloneSQLiteSnapshot(ctx, destination); err != nil {
+		return err
+	}
+	return source.verifyCurrent()
+}
+
+// Reserve the online backup, companion contents, and their capture metadata.
+func sqliteArchiveReservationBytes(databaseBytes, companionBytes int64, entries int) int64 {
+	metadata := rawcheckpoint.CaptureMetadataCharge(entries, entries)
+	if databaseBytes > math.MaxInt64-companionBytes || databaseBytes+companionBytes > math.MaxInt64-metadata {
+		return math.MaxInt64
+	}
+	return databaseBytes + companionBytes + metadata
+}
+
+// A WAL-mode header can require creating coordination files even for a
+// read-only reader. Backups have no WAL, so finish them before making the
+// materialized archive read-only.
+func standaloneSQLiteSnapshot(ctx context.Context, destination string) error {
 	standalone, err := sql.Open(sqliteSnapshotDriverName, sqliteSnapshotDSN(destination, false))
 	if err != nil {
 		return err
 	}
 	_, err = standalone.ExecContext(ctx, "PRAGMA journal_mode=DELETE")
-	if err = errors.Join(err, standalone.Close()); err != nil {
-		return err
-	}
-	return source.verifyCurrent()
+	return errors.Join(err, standalone.Close())
 }

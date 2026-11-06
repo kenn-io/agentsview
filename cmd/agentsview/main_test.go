@@ -1610,6 +1610,10 @@ func TestCollectWatchRootsHermesSessionsWatchesStateDBParent(t *testing.T) {
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")
 	require.NoError(t, os.Mkdir(sessionsDir, 0o755), "mkdir sessions")
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	canonicalSessionsDir, err := filepath.EvalSymlinks(sessionsDir)
+	require.NoError(t, err)
 
 	cfg := config.Config{
 		AgentDirs: map[parser.AgentType][]string{
@@ -1621,11 +1625,11 @@ func TestCollectWatchRootsHermesSessionsWatchesStateDBParent(t *testing.T) {
 
 	require.Empty(t, unwatchedDirs, "unwatched dirs before watcher setup")
 	require.Len(t, roots, 2)
-	assert.Equal(t, root, roots[0].path)
+	assert.Equal(t, canonicalRoot, roots[0].path)
 	assert.False(t, roots[0].recursive)
 	assert.True(t, roots[0].exists)
 	assert.Equal(t, []watchScope{{agent: parser.AgentHermes, syncDir: sessionsDir}}, roots[0].scopes)
-	assert.Equal(t, sessionsDir, roots[1].path)
+	assert.Equal(t, canonicalSessionsDir, roots[1].path)
 	assert.True(t, roots[1].recursive)
 	assert.True(t, roots[1].exists)
 	assert.Equal(t, []watchScope{{agent: parser.AgentHermes, syncDir: sessionsDir}}, roots[1].scopes)

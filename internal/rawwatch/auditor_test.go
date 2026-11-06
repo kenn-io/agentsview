@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/parsertest/hermesfixture"
 	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -399,6 +400,62 @@ func TestAuditorFullReconciliationPreservesIncompleteRootCoverageFailure(t *test
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, rawcheckpoint.CoverageDegraded, coverage.State)
+}
+
+func TestAuditorFullHermesAuditAcceptsMissingOptionalSessionsRoot(t *testing.T) {
+	home := t.TempDir()
+	state := hermesfixture.OpenState(t, home)
+	require.NoError(t, state.Close())
+
+	provider, ok := parser.NewProvider(parser.AgentHermes, parser.ProviderConfig{
+		Roots: []string{home},
+	})
+	require.True(t, ok)
+	_, err := os.Stat(filepath.Join(home, "sessions"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	base := t.TempDir()
+	store, err := rawcheckpoint.OpenWithOptions(t.Context(), filepath.Join(base, "checkpoint.db"), rawcheckpoint.Options{
+		SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	result, err := NewAuditor(store, rawcapture.New(store), 32).
+		AuditProviderFull(t.Context(), provider)
+	require.NoError(t, err)
+	require.True(t, result.Complete,
+		"a missing optional sessions directory must not keep a full Hermes audit incomplete")
+	assert.Equal(t, 1, result.Captured,
+		"the existing Hermes database must still be captured during the complete audit")
+}
+
+func TestAuditorHermesFreshAuditAcceptsMissingOptionalSessionsRoot(t *testing.T) {
+	home := t.TempDir()
+	state := hermesfixture.OpenState(t, home)
+	require.NoError(t, state.Close())
+
+	provider, ok := parser.NewProvider(parser.AgentHermes, parser.ProviderConfig{
+		Roots: []string{home},
+	})
+	require.True(t, ok)
+	_, err := os.Stat(filepath.Join(home, "sessions"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	base := t.TempDir()
+	store, err := rawcheckpoint.OpenWithOptions(t.Context(), filepath.Join(base, "checkpoint.db"), rawcheckpoint.Options{
+		SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	result, err := NewAuditor(store, rawcapture.New(store), 32).
+		AuditProvider(t.Context(), provider)
+
+	require.NoError(t, err)
+	assert.True(t, result.Complete)
+	assert.Equal(t, 1, result.Captured,
+		"the Hermes database must still be captured during the fresh audit")
 }
 
 func TestAuditorFullReconciliationPreservesDegradedRootCoverageFailure(t *testing.T) {

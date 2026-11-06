@@ -346,6 +346,8 @@ func rawSyncBackfillSpec(
 			}
 			roots = append(roots, rawcheckpoint.BackfillRoot{
 				ConfiguredRoot: root, ProjectPath: projectPath,
+				HermesProfilesContainer: typ == parser.AgentHermes &&
+					parser.IsHermesProfilesContainer(path),
 			})
 		}
 		spec.Roots = append(spec.Roots, bindRawSyncBackfillProviderRoots(item, roots)...)
@@ -373,6 +375,7 @@ func bindRawSyncBackfillProviderRoots(item *rawSyncBackfillProvider, roots []raw
 	providerConfig := item.config.Clone()
 	providerConfig.Roots = make([]string, 0, len(roots))
 	providerConfig.RawCaptureProjectDirs = make(map[string]string)
+	providerConfig.RawCaptureHermesProfilesContainerRoots = make(map[string]bool)
 	seen := make(map[string]bool, len(roots))
 	for _, root := range roots {
 		if seen[root.ID] {
@@ -381,8 +384,12 @@ func bindRawSyncBackfillProviderRoots(item *rawSyncBackfillProvider, roots []raw
 		seen[root.ID] = true
 		selection = append(selection, rawcheckpoint.BackfillSelection{
 			Provider: root.Provider, ConfiguredRootID: root.ID, ProjectPath: root.ProjectPath,
+			HermesProfilesContainer: root.HermesProfilesContainer,
 		})
 		providerConfig.Roots = append(providerConfig.Roots, root.LocalPath)
+		if root.HermesProfilesContainer {
+			providerConfig.RawCaptureHermesProfilesContainerRoots[root.LocalPath] = true
+		}
 		if root.ProjectPath != "" {
 			providerConfig.RawCaptureProjectDirs[root.LocalPath] = root.ProjectPath
 		}
