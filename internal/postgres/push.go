@@ -1469,11 +1469,9 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
-		// Bump updated_at when messages, secret findings, friction, or
-		// plan usage were rewritten but pushSession was a metadata no-op
-		// (its WHERE clause skips unchanged rows). PG read-mode session
-		// watchers rely on updated_at to surface these changes.
-		if messagesChanged || findingsChanged || frictionChanged || planUsageChanged {
+		// Publish findings, friction, or plan usage changes to read-mode
+		// watchers unless pushMessages already advanced updated_at.
+		if !messagesChanged && (findingsChanged || frictionChanged || planUsageChanged) {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE sessions
 				SET updated_at = NOW()
@@ -3063,6 +3061,15 @@ func (s *Sync) pushMessages(
 		return 0, false, err
 	}
 	defer func() { err = errors.Join(err, snapshot.Close()) }()
+	defer func() {
+		if err == nil && changed {
+			// Every caller must publish message changes to read-mode watchers.
+			_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at = NOW() WHERE id = $1`, sessionID)
+			if err != nil {
+				err = fmt.Errorf("bumping message session version: %w", err)
+			}
+		}
+	}()
 	boundary := 0
 	usageChanged := true
 	if !rewriteTranscripts {
