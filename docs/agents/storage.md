@@ -970,10 +970,15 @@ must compare the same fields so incremental and resync paths agree. A no-op
 message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
 
-### PostgreSQL usage comparisons
+### PostgreSQL usage change journal
 
 PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
-and project identity writes. CockroachDB has no journal.
+and project identity writes, including changes to source archives. Installation
+requires `CREATE` on the schema and `TRIGGER` on the watched tables in addition
+to normal table access. See [PostgreSQL Sync](../pg-sync.md) for installation
+locks. CockroachDB has no journal.
+
+### PostgreSQL usage comparisons
 
 PostgreSQL stores usage timestamps in UTC with microsecond precision, while
 SQLite keeps the timestamp text that the parser produced. Before PostgreSQL push

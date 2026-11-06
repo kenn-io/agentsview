@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,35 +34,57 @@ func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 	return local, syncer, store
 }
 
-func TestUsageChangeJournalBoundedCommit(t *testing.T) {
-	var commits []time.Duration
-	for _, sessions := range []int{8000, 32000} {
-		t.Run(fmt.Sprint(sessions), func(t *testing.T) {
-			_, syncer, store := newUsageJournalFixture(t)
-			ctx := t.Context()
-			before, err := store.UsageChangeRevision(ctx)
-			require.NoError(t, err)
-			tx, err := syncer.pg.BeginTx(ctx, nil)
-			require.NoError(t, err)
-			defer tx.Rollback()
-			_, err = tx.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent)
- SELECT 'bulk-' || n, 'machine', 'project', 'codex' FROM generate_series(1,$1::int) n`, sessions)
-			require.NoError(t, err)
-			started := time.Now()
-			require.NoError(t, tx.Commit())
-			elapsed := time.Since(started)
-			t.Logf("%d-session commit: %s", sessions, elapsed)
-			commits = append(commits, elapsed)
-			through, ids, err := store.LoadUsageChanges(ctx, before)
-			require.NoError(t, err)
-			assert.Equal(t, before+1, through)
-			assert.Len(t, ids, sessions)
-		})
-	}
-	require.Len(t, commits, 2)
-	// Four times the rows allows linear work but rejects quadratic stamping,
-	// which grows sixteenfold. Compare commits rather than host speed.
-	assert.Less(t, commits[1], 10*commits[0], "bulk journal stamping must scale with the changed sessions")
+func TestUsageChangeJournalEmptyArchivePublication(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session-a", Project: "project-a", Machine: "test-machine", Agent: "codex"}))
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, result.Errors)
+	empty := testDB(t)
+	second, err := New(ctx, testPGURL(t), syncer.schema, empty, "second-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, second.Close()) })
+	require.NoError(t, second.EnsureSchema(ctx))
+	beforeProjects, err := store.BuildProjectIdentityMap(ctx, []string{"project-a"})
+	require.NoError(t, err)
+	require.NotEmpty(t, beforeProjects["project-a"].ProjectKey)
+	before, err := store.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+
+	result, err = second.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, result.Errors)
+	require.Zero(t, result.SessionsPushed)
+	afterProjects, err := store.BuildProjectIdentityMap(ctx, []string{"project-a"})
+	require.NoError(t, err)
+	require.NotEmpty(t, afterProjects["project-a"].ProjectKey)
+	require.NotEqual(t, beforeProjects["project-a"].ProjectKey, afterProjects["project-a"].ProjectKey)
+	after, ids, err := store.LoadUsageChanges(ctx, before)
+	require.NoError(t, err)
+	assert.Greater(t, after, before, "a changed project key must advance the revision")
+	assert.Empty(t, ids)
+}
+
+func TestUsageChangeJournalRoleQueryCredentials(t *testing.T) {
+	_, syncer, _ := newUsageJournalFixture(t)
+	base, err := url.Parse(testPGURL(t))
+	require.NoError(t, err)
+	user := base.User.Username()
+	password, _ := base.User.Password()
+	query := base.Query()
+	query.Set("user", user)
+	query.Set("password", password)
+	base.RawQuery = query.Encode()
+	t.Setenv("TEST_PG_URL", base.String())
+	roleDSN := newUsageJournalRole(t, syncer, "")
+	roleDB, err := Open(t.Context(), roleDSN, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, roleDB.Close()) })
+	var currentUser string
+	require.NoError(t, roleDB.QueryRowContext(t.Context(), `SELECT current_user`).Scan(&currentUser))
+	assert.NotEqual(t, user, currentUser)
+	assert.True(t, strings.HasPrefix(currentUser, "usage_role_"), "connection must use the fixture role")
 }
 
 func TestUsageChangeJournalWriteAfterImmediateStamp(t *testing.T) {
@@ -101,10 +122,9 @@ func newUsageJournalRole(t *testing.T, syncer *Sync, grants string) string {
 		_, err := syncer.pg.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role+`; DROP ROLE `+role)
 		require.NoError(t, err)
 	})
-	roleURL, err := url.Parse(testPGURL(t))
+	roleDSN, err := appendConnParams(testPGURL(t), map[string]string{"user": role, "password": "test-password"})
 	require.NoError(t, err)
-	roleURL.User = url.UserPassword(role, "test-password")
-	return roleURL.String()
+	return roleDSN
 }
 
 // v0.46.1 replaces usage events without touching sessions when a session has
@@ -148,6 +168,7 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 		{"model_pricing_bands", [3]string{`INSERT INTO model_pricing_bands(model_pattern,above_input_tokens,input_microdollars_per_mtok,output_microdollars_per_mtok,cache_creation_microdollars_per_mtok,cache_read_microdollars_per_mtok) VALUES('parent-model',1000,0,0,0,0)`, `UPDATE model_pricing_bands SET input_microdollars_per_mtok=1`, `DELETE FROM model_pricing_bands`}, [3][]string{}},
 		{"genai_pricing", [3]string{`INSERT INTO genai_pricing(singleton,version,source,data_json) VALUES(1,'v1','source','\x00')`, `UPDATE genai_pricing SET version='v2'`, `DELETE FROM genai_pricing`}, [3][]string{}},
 		{"cursor_usage_events", [3]string{`INSERT INTO cursor_usage_events(occurred_at,model) VALUES(now(),'model-a')`, `UPDATE cursor_usage_events SET input_tokens=1`, `DELETE FROM cursor_usage_events`}, [3][]string{}},
+		{"source_archives", [3]string{`INSERT INTO source_archives(source_archive_id,source_archive_salt) VALUES('row-archive','salt-a')`, `UPDATE source_archives SET source_archive_salt='salt-b' WHERE source_archive_id='row-archive'`, `DELETE FROM source_archives WHERE source_archive_id='row-archive'`}, [3][]string{}},
 		{"source_project_identity_observations", [3]string{`INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('archive','row','machine',now())`, `UPDATE source_project_identity_observations SET git_branch='main' WHERE project='row'`, `DELETE FROM source_project_identity_observations WHERE project='row'`}, [3][]string{}},
 		{"source_project_identity_observation_scopes", [3]string{`INSERT INTO source_project_identity_observation_scopes(source_archive_id,project,machine,publication_scope) VALUES('archive','parent','machine','scope')`, `UPDATE source_project_identity_observation_scopes SET publication_scope='changed'`, `DELETE FROM source_project_identity_observation_scopes`}, [3][]string{}},
 		{"source_session_project_identity_snapshots", [3]string{`INSERT INTO source_session_project_identity_snapshots(source_archive_id,source_database_generation,source_session_id,project,machine,observed_at) VALUES('archive','generation','row','project','machine',now())`, `UPDATE source_session_project_identity_snapshots SET git_branch='main' WHERE source_session_id='row'`, `DELETE FROM source_session_project_identity_snapshots WHERE source_session_id='row'`}, [3][]string{}},

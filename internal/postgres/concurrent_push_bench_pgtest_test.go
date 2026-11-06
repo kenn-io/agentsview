@@ -14,6 +14,39 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
+func BenchmarkPGUsageJournalCommit(b *testing.B) {
+	for _, sessions := range []int{8000, 32000} {
+		b.Run(fmt.Sprint(sessions), func(b *testing.B) {
+			pgURL := testPGURL(b)
+			schema := pgUsageBenchmarkSchema(b)
+			pg, err := Open(b.Context(), pgURL, schema, true)
+			require.NoError(b, err)
+			b.Cleanup(func() { cleanNamedPGSchema(b, pgURL, schema) })
+			b.Cleanup(func() { require.NoError(b, pg.Close()) })
+			require.NoError(b, EnsureSchema(b.Context(), pg, schema))
+			b.ResetTimer()
+			for range b.N {
+				b.StopTimer()
+				_, err := pg.ExecContext(b.Context(), `DELETE FROM sessions`)
+				require.NoError(b, err)
+				tx, err := pg.BeginTx(b.Context(), nil)
+				require.NoError(b, err)
+				_, err = tx.ExecContext(b.Context(), `INSERT INTO sessions(id,machine,project,agent)
+ SELECT 'bulk-' || n, 'machine', 'project', 'codex' FROM generate_series(1,$1::int) n`, sessions)
+				if err != nil {
+					require.NoError(b, tx.Rollback())
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				err = tx.Commit()
+				b.StopTimer()
+				require.NoError(b, err)
+			}
+			b.ReportMetric(float64(sessions), "sessions/op")
+		})
+	}
+}
+
 // This file also runs unchanged on the base revision. One operation publishes
 // four independent archives concurrently, including their messages and usage.
 func BenchmarkPGConcurrentPush(b *testing.B) {

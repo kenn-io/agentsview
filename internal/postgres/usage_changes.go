@@ -67,6 +67,7 @@ const usageChangeJournalVersionPG = 1
 var usageChangeTablesPG = []struct{ table, sessionColumn string }{
 	{"sessions", "id"}, {"usage_events", "session_id"},
 	{"model_pricing", ""}, {"model_pricing_bands", ""}, {"genai_pricing", ""}, {"cursor_usage_events", ""},
+	{"source_archives", ""},
 	{"source_project_identity_observations", ""}, {"source_project_identity_observation_scopes", ""},
 	{"source_session_project_identity_snapshots", ""}, {"source_session_project_identity_snapshot_scopes", ""},
 	{"source_worktree_project_mappings", ""}, {"source_worktree_project_mapping_scopes", ""},
