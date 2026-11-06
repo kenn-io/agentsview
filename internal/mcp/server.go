@@ -111,7 +111,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			MIMEType: "image/png",
 			Sizes:    []string{"256x256"},
 		}},
-	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
+	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions. " + bundledSkills.Instructions()})
 
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
@@ -126,6 +126,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 			return result, err
 		}
 	})
+
+	bundledSkills.Register(s)
 
 	t := &toolset{svc: opts.Service, now: opts.Now, version: version}
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}

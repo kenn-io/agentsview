@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-05
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +10,12 @@ The latest release is
 ## Unreleased
 
 **New features**
+
+- MCP clients can list and read the bundled conversation-history guide with
+  `agentsview.skills` in both profiles. It reuses the existing authored workflow
+  and explains MCP fields and source-read limits. Development builds temporarily
+  use [Kit's pending MCP skills support](https://github.com/kenn-io/kit/pull/316);
+  remove the fork bridge once a verified canonical Kit version contains it.
 
 - Investigate an expensive archived session with `session diagnose <id>`. The
   report combines usage, context growth, compactions, large tool results, retry
