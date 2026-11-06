@@ -192,11 +192,12 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 						}
 						return
 					}
-					if response == "active" {
+					switch response {
+					case "active":
 						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"}]}`))
-					} else if response == "idle" {
+					case "idle":
 						_, _ = w.Write([]byte(`{"matches":[{"session_id":"idle"}],"next_cursor":50}`))
-					} else {
+					default:
 						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"},{"session_id":"idle"}]}`))
 					}
 					return

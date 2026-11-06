@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -413,7 +414,7 @@ func TestSessionListChildMembershipPartialPage(t *testing.T) {
 			calls := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				for key, want := range map[string]string{"limit": fmt.Sprint(db.MaxSessionLimit), "project": "selected", "order_by": "messages", "descending": "true", "include_one_shot": "true", "include_automated": "true", "include_children": "true"} {
+				for key, want := range map[string]string{"limit": strconv.Itoa(db.MaxSessionLimit), "project": "selected", "order_by": "messages", "descending": "true", "include_one_shot": "true", "include_automated": "true", "include_children": "true"} {
 					assert.Equal(t, want, r.URL.Query().Get(key), key)
 				}
 				w.Header().Set("Content-Type", "application/json")

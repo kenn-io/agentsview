@@ -899,7 +899,7 @@ func TestSessionSearchFTSHints(t *testing.T) {
 func TestSessionSearchHintPreservesServer(t *testing.T) {
 	newAgentDataDir(t)
 	tokenFile := filepath.Join(t.TempDir(), "token")
-	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0600))
+	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0o600))
 	ftsCalls := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))

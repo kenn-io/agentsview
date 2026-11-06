@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -78,7 +79,7 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		if count == 0 {
 			return
 		}
-		n := fmt.Sprint(count)
+		n := strconv.Itoa(count)
 		wording := "matches are"
 		if count == 1 {
 			wording = "match is"
