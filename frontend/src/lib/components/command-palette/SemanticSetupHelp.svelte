@@ -119,7 +119,6 @@ enabled = true`;
       disposed = true;
       if (timer !== null) clearTimeout(timer);
       if (copyTimer !== null) clearTimeout(copyTimer);
-
     };
   });
 
@@ -196,7 +195,8 @@ enabled = true`;
         return;
       }
     }
-    if (!disposed) schedulePoll();
+    if (disposed) return;
+    schedulePoll();
   }
 
   function schedulePoll(): void {
@@ -240,6 +240,7 @@ enabled = true`;
     buildDone = done;
     buildTotal = total;
   }
+
   async function copy(text: string, which: "config" | "command"): Promise<void> {
     const ok = await copyToClipboard(text);
     if (!ok || disposed) return;
@@ -251,7 +252,6 @@ enabled = true`;
       copiedCommand = false;
     }, 1500);
   }
-
 </script>
 
 <div class="semantic-setup" role="alert">

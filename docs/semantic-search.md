@@ -23,12 +23,6 @@ concurrency, and the search path — see
 
 Semantic search is disabled by default. Open **Settings → Embeddings** and choose **Turn on**, or choose it from the search palette. AgentsView asks for the required download through that button, shows download and indexing progress, and starts semantic search without a restart. Full-text search remains available during indexing.
 
-Turn on writes only `enabled = true`, preserving explicit recipe and server settings while allowing omitted defaults to follow later releases. If local files are missing from an already-enabled installation, the same button approves their download. Embeddings configured through deployment environment variables appear as status only; change those variables to manage them.
-
-Switching a named Nomic recipe changes only its selected transport. Automatic Nomic discovery switches by recording only its local server choice. Another-model switches write the built-in recipe while preserving other named servers. Omitted transport and scheduling defaults remain omitted.
-
-After saving, AgentsView reloads the current file through its startup loader. Edits made during a download take effect too; setup failures offer Retry.
-
 An existing Ollama setup offers **Use built-in instead**. Nomic recipes keep their indexed content; another model requires a rebuild, with a rough estimate shown before switching.
 
 For CLI setup, add a `[vector]` section to

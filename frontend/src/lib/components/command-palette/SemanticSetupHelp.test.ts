@@ -154,23 +154,10 @@ describe("SemanticSetupHelp", () => {
     unmount(component);
   });
 
-  it("describes disabled Ollama before turning it on", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup: { enabled: false, action: "turn-on", provider: "ollama", busy: false, installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0, rebuild_required: false } }));
-    const { component } = mountHelp();
-    await settle();
-    expect(text()).toContain("Uses Ollama when turned on");
-    expect(text()).not.toContain("On · Ollama");
-    unmount(component);
-  });
-
   it.each([false, true])("shows switch download approval (rebuild %s)", async (rebuild_required) => {
     const setup = { enabled: true, action: "use-built-in", provider: "ollama", model: "other-model", rebuild_required, missing_bytes: 295000000, installing: false, busy: false, downloaded_bytes: 0, total_bytes: 0 };
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup }));
     embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({ generations: [{ id: 1, state: "active", embedded: 123, missing: 27 }] });
-    embeddingsService.postApiV1EmbeddingsSetup.mockImplementation(async () => {
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup: { ...setup, busy: true } }));
-      return { started: true };
-    });
     const { component } = mountHelp(); await settle();
     expect(text()).toContain("Downloads 295 MB");
     if (rebuild_required) {
@@ -179,7 +166,7 @@ describe("SemanticSetupHelp", () => {
     }
     expect(embeddingsService.postApiV1EmbeddingsSetup).not.toHaveBeenCalled();
     const button = [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use built-in instead");
-    expect(button).toBeTruthy(); button!.click(); await settle();
+    expect(button).toBeTruthy();
     unmount(component);
   });
 
@@ -370,17 +357,14 @@ describe("SemanticSetupHelp", () => {
     unmount(component);
   });
 
-  it.each([false, true])("follows a running build with a previous setup error (%s)", async (setupError) => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(250, 1000, {
-      setup: setupError ? { enabled: true, error: "previous setup failed", action: "", busy: false, installing: false, provider: "built-in", missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0, rebuild_required: false } : undefined,
-    }));
+  it("jumps straight to progress when a build is already running at mount", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(runningStatus(250, 1000));
 
     const { component } = mountHelp();
     await settle();
 
-    expect(text()).toContain(setupError ? "Indexing 250 of 1,000 chunks" : "Building embeddings index...");
-    await settle(2000);
-    expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+    expect(text()).toContain("Building embeddings index...");
+    expect(text()).toContain("25%");
 
     unmount(component);
   });

@@ -123,8 +123,6 @@
       const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal });
       if (disposed || !generationsRead.isCurrent(signal)) return;
       generations = res.generations ?? [];
-    } catch {
-      // Keep the current coverage until a later refresh.
     } finally {
       generationsRead.finish(signal);
     }

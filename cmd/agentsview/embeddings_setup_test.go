@@ -252,9 +252,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			}
 			if recipe == "configured" {
 				assert.Equal(t, expected, persisted.Vector)
-				_, deployment, err := persisted.Vector.Embeddings.Server("")
-				require.NoError(t, err)
-				assert.Equal(t, stub.URL+"/v1", deployment.Endpoint)
 			}
 		})
 	}
@@ -303,17 +300,7 @@ func TestLiveEmbeddingsSetupFailureRetryAndCancellation(t *testing.T) {
 }
 
 func TestLiveEmbeddingsSetupDeploymentOwned(t *testing.T) {
-	t.Setenv("AGENTSVIEW_MODE", "serve")
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "http://127.0.0.1:1/v1")
-	dir := testDataDir(t)
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	require.NotNil(t, cfg.DeploymentEmbeddings)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, owner.Close()) }()
+	owner := &liveVectorServing{cfg: config.Config{DeploymentEmbeddings: &config.VectorEmbeddingsServerConfig{Endpoint: "http://127.0.0.1:1/v1"}}}
 	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, status.Action)

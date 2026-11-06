@@ -203,9 +203,6 @@ func (v *liveVectorServing) Setup(action string) error {
 	if action != status.Action {
 		return errors.New("setup action is unavailable for the current embeddings provider")
 	}
-	if v.reload == nil {
-		return errors.New("configuration reload is unavailable")
-	}
 	release, ok := v.idle.BeginWork()
 	if !ok {
 		return errors.New("server is shutting down")
