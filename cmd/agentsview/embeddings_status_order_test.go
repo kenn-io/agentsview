@@ -81,8 +81,10 @@ func TestLiveEmbeddingsSetupStatusAcrossSuccessiveSetups(t *testing.T) {
 		err    error
 	}
 	completed := make(chan result, 1)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
+	require.NoError(t, err)
 	go func() {
-		response, err := ts.Client().Get(ts.URL + "/api/v1/embeddings/status")
+		response, err := ts.Client().Do(req)
 		if err != nil {
 			completed <- result{err: err}
 			return
