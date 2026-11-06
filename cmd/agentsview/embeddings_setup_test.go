@@ -441,3 +441,36 @@ func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
+	dir := testDataDir(t)
+	raw := "[vector]\nenabled = true\n[vector.embeddings]\ndefault_server = 'ollama'\nmodel = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\n[vector.embeddings.servers.sibling]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n"
+	path := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	require.NoError(t, cfg.Vector.Validate())
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+	})
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{DownloadBytes: 295_000_000}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+	downloads := 0
+	installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		downloads++
+		return embedlocal.Installation{}, errors.New("download started before validation")
+	}
+	owner := &liveVectorServing{ctx: t.Context(), cfg: cfg}
+	err = owner.Setup("use-built-in")
+	if err == nil {
+		<-owner.done
+	}
+	assert.ErrorContains(t, err, "max_batch_tokens (512) must be at least model_context_tokens (2048)")
+	assert.Zero(t, downloads)
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, raw, string(saved))
+}
