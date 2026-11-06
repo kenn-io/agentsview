@@ -107,8 +107,8 @@ func (s *Server) embeddingsUnavailableError() error {
 	return apiError(http.StatusNotImplemented, msg)
 }
 
-// embeddingsSetupBusyCode marks the 409 a build gets while setup runs, so a
-// client can tell it from a build that is already running and will finish.
+// embeddingsSetupBusyCode marks the 409 a build or generation request gets
+// while setup runs, so a client can tell it from a build that will finish.
 const embeddingsSetupBusyCode = "embeddings_setup_busy"
 
 // embeddingsBuildUnavailableError refuses a build with 409 while setup is
@@ -128,7 +128,7 @@ func (s *Server) embeddingsBuildUnavailableError(ctx context.Context) error {
 var ErrEmbeddingsSetupBusy = fmt.Errorf("%w: search by meaning is being set up", vector.ErrBuildRunning)
 
 func embeddingsSetupBusyError() error {
-	return apiErrorWithCode(http.StatusConflict, embeddingsSetupBusyCode, "search by meaning is being set up; run the build again when it finishes")
+	return apiErrorWithCode(http.StatusConflict, embeddingsSetupBusyCode, "search by meaning is being set up; retry the build or generation request when it finishes")
 }
 
 // embeddingsBuildRunningError keeps the setup-busy code on a build or

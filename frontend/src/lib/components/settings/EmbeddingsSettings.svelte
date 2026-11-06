@@ -120,12 +120,22 @@
   async function refreshGenerations(): Promise<void> {
     const signal = generationsRead.begin();
     try {
-      const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal }).catch(() => null);
+      const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal }).catch((e) => generationsFailed(e, signal));
       if (disposed || res === null || !generationsRead.isCurrent(signal)) return;
       generations = res.generations ?? [];
     } finally {
       generationsRead.finish(signal);
     }
+  }
+
+  // A missing manager or a running setup only delays the rows and status
+  // polling notices when either ends; any other failure is shown, since the
+  // old coverage cannot explain itself.
+  function generationsFailed(e: unknown, signal: AbortSignal): null {
+    if (disposed || isAbortError(e) || !generationsRead.isCurrent(signal)) return null;
+    if (e instanceof ApiError && (e.status === 501 || e.code === "embeddings_setup_busy")) return null;
+    loadError = e instanceof Error && e.message ? e.message : m.settings_embeddings_load_failed();
+    return null;
   }
 
   async function retryBuild(): Promise<void> {
