@@ -4531,7 +4531,7 @@ schemas keep their existing ordering behavior.
   held `["file:///<folder>"]`, and a `research` sub-agent the main
   conversation invoked wrote its own `conversations/<uuid>.db` and a row
   naming the main conversation, with `nesting_depth` 1. Top-level rows hold
-  `''`. The desktop app and IDE read the same table for titles, but their
+  `''`. The Antigravity app and IDE read the same table for titles, but their
   values for these columns remain unconfirmed.
 
 - **Workspace and parent handling:** Agentsview takes the first `file:` URI as
