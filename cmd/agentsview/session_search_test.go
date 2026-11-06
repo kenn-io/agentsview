@@ -931,11 +931,26 @@ func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 	root := newRootCommand()
 	cmd, _, err := root.Find([]string{"session", "search"})
 	require.NoError(t, err)
-	if shell, err := exec.LookPath("sh"); err == nil {
-		retry := contentSearchRetry(cmd, "~/needle", map[string]any{"include_one_shot": true}, "linux")
-		output, err := exec.CommandContext(t.Context(), shell, "-c", "set -- "+retry+`; for arg do :; done; printf '%s' "$arg"`).CombinedOutput()
-		require.NoError(t, err, string(output))
-		assert.Equal(t, "~/needle", string(output))
+	// zsh -f skips startup files, which can disable the default EQUALS option.
+	for _, tc := range []struct {
+		shell   string
+		flags   string
+		pattern string
+	}{
+		{"sh", "-c", "~/needle"},
+		{"zsh", "-fc", "~/needle"},
+		{"zsh", "-fc", "=="},
+	} {
+		t.Run(tc.shell+" "+tc.pattern, func(t *testing.T) {
+			shell, err := exec.LookPath(tc.shell)
+			if err != nil {
+				t.Skipf("%s not installed", tc.shell)
+			}
+			retry := contentSearchRetry(cmd, tc.pattern, map[string]any{"include_one_shot": true}, "linux")
+			output, err := exec.CommandContext(t.Context(), shell, tc.flags, "set -- "+retry+`; for arg do :; done; printf '%s' "$arg"`).CombinedOutput()
+			require.NoError(t, err, string(output))
+			assert.Equal(t, tc.pattern, string(output))
+		})
 	}
 	windowsRetry := contentSearchRetry(cmd, "can't decode", map[string]any{"include_one_shot": true}, "windows")
 	assert.Equal(t, "& 'agentsview' 'session' 'search' '--include-one-shot=true' '--' 'can''t decode'", windowsRetry)

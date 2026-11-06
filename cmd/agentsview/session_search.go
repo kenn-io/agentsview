@@ -535,7 +535,8 @@ func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]a
 	for i, part := range parts {
 		if platform == "windows" {
 			parts[i] = shellquote.PowerShell(part)
-		} else if i == len(parts)-1 && strings.HasPrefix(part, "~") {
+		} else if i == len(parts)-1 && (strings.HasPrefix(part, "~") || strings.HasPrefix(part, "=")) {
+			// A leading ~ expands to a home path, and zsh expands a leading = to a command path.
 			parts[i] = shellquote.POSIXLiteral(part)
 		} else {
 			parts[i] = shellquote.POSIX(part)
