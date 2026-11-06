@@ -148,6 +148,12 @@ The latest release is
   one-year range from 6.0 s to 1.4 s. A report now holds its intervals in memory
   while it sorts them, about 130 bytes each (about 120 MB for that year).
 
+- The Activity page counts user and assistant messages from the sessions it
+  already holds in memory, so it no longer reads every message twice. On the
+  same archive a month's report went from 250 ms to 210 ms when opened again,
+  and from 350 ms to 300 ms on first open. The memory cache for Activity grows
+  by about 57 bytes per counted message, at most about 11 MiB.
+
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.
 

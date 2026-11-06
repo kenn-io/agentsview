@@ -164,3 +164,68 @@ func TestSQLiteActivityReportPairingMatchesSQLPairing(t *testing.T) {
 		})
 	}
 }
+
+func TestSQLiteActivityReportMemoCountsMatchSQLCounts(t *testing.T) {
+	d := testDB(t)
+	messages := []Message{
+		{Role: "user", Timestamp: "2026-06-15T23:59:59.9999999Z"},
+		{Role: "user", Timestamp: "2026-06-16T00:00:00Z"},
+		{Role: "assistant", Timestamp: "2026-06-16T00:04:59.999999Z"},
+		{Role: "assistant", Timestamp: "2026-06-16T09:30:00.1234565Z"},
+		{Role: "user", Timestamp: "2026-06-16T09:30:00.1234566Z"},
+		{Role: "user", Timestamp: "2026-06-16T03:00:00+02:00"},
+		{Role: "assistant", Timestamp: "2026-06-17T18:00:00+20:00"},
+		{Role: "user", Timestamp: "2026-06-16T05:00:00Z", SourceSubtype: "tool_result"},
+		{Role: "assistant", Timestamp: "2026-06-16T05:01:00Z", IsSystem: true},
+		{Role: "tool", Timestamp: "2026-06-16T05:02:00Z"},
+		{Role: "user", Timestamp: "2026-06-16T05:invalid"},
+		{Role: "user"},
+	}
+	for _, id := range []string{"interactive", "automated"} {
+		insertSession(t, d, id, "p", func(s *Session) {
+			s.StartedAt = Ptr("2026-06-15T23:59:59Z")
+			s.EndedAt = Ptr("2026-06-16T09:31:00Z")
+			s.IsAutomated = id == "automated"
+		})
+		for i := range messages {
+			messages[i].SessionID = id
+			messages[i].Ordinal = i
+			messages[i].Content = "message"
+		}
+		insertMessages(t, d, messages...)
+	}
+	q := dayQuery(t, "2026-06-16", "UTC")
+	q.EffectiveEnd = time.Date(2026, 6, 16, 9, 30, 0, 123456600, time.UTC)
+	counts := func(t *testing.T, keep bool) []int {
+		t.Helper()
+		d.activityMemo.swap(func() {})
+		old := activityMemoMaxEntries
+		if !keep {
+			activityMemoMaxEntries = 0
+		}
+		artifacts, err := d.BuildActivityReportArtifacts(t.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
+		activityMemoMaxEntries = old
+		require.NoError(t, err)
+		require.Equal(t, keep, len(d.activityMemo.entries) > 0)
+		var out []int
+		for _, bucket := range artifacts.Report.Buckets {
+			out = append(out, bucket.UserMessages, bucket.AssistantMessages)
+		}
+		return out
+	}
+	read := counts(t, false)
+	require.Contains(t, read, 2)
+	assert.Equal(t, read, counts(t, true))
+
+	// Rows rewritten without a new session version prove the memo serves counts.
+	_, err := d.getWriter().ExecContext(t.Context(), `UPDATE messages SET is_system = 1`)
+	require.NoError(t, err)
+	artifacts, err := d.BuildActivityReportArtifacts(t.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
+	require.NoError(t, err)
+	var kept []int
+	for _, bucket := range artifacts.Report.Buckets {
+		kept = append(kept, bucket.UserMessages, bucket.AssistantMessages)
+	}
+	assert.Equal(t, read, kept)
+	assert.Equal(t, make([]int, len(read)), counts(t, false))
+}
