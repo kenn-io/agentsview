@@ -1547,49 +1547,60 @@ func TestEmbeddingsActivateDispatchesToDaemon(t *testing.T) {
 	assert.Equal(t, "Generation 3 activated.\n", out.String())
 }
 
-// TestBuildViaDaemonConflictThenPolls drives buildViaDaemon (the daemon
-// build path's core logic) against a fake HTTP server that refuses the
-// first build attempt with 409 and reports Running until the second status
-// poll, asserting the CLI prints the "already running" notice and then the
-// same final summary format the direct path uses.
+// TestBuildViaDaemonConflictThenPolls follows an active build while refusing
+// setup conflicts and a setup that hides the followed build's outcome.
 func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	orig := embeddingsPollInterval
 	embeddingsPollInterval = time.Millisecond
 	t.Cleanup(func() { embeddingsPollInterval = orig })
-
-	var statusCalls atomic.Int32
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_ = json.MarshalWrite(w, map[string]string{
-			"error": "an embeddings build is already running",
+	for _, tc := range []struct {
+		name       string
+		code       string
+		message    string
+		setupBusy  bool
+		wantError  string
+		wantPolls  int32
+		wantNotice bool
+	}{
+		{name: "running build", message: "an embeddings build is already running", wantPolls: 2, wantNotice: true},
+		{name: "setup refusal", code: "embeddings_setup_busy", message: "search by meaning is being set up", wantError: "being set up"},
+		{name: "setup hides the followed build outcome", message: "an embeddings build is already running", setupBusy: true, wantError: "being set up", wantPolls: 1, wantNotice: true},
+	} {
+		var statusCalls atomic.Int32
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.MarshalWrite(w, map[string]string{"error": tc.message, "code": tc.code})
 		})
-	})
-	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
-		n := statusCalls.Add(1)
-		status := vector.BuildStatus{Running: n < 2}
-		if n >= 2 {
-			status.LastResult = &vector.BuildResult{
-				Activated: true,
-				Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},
+		mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
+			n := statusCalls.Add(1)
+			status := vector.BuildStatus{Running: n < 2}
+			if tc.setupBusy {
+				status = vector.BuildStatus{Setup: &vector.SetupStatus{Enabled: true, Busy: true}}
+			} else if n >= 2 {
+				status.LastResult = &vector.BuildResult{
+					Activated: true,
+					Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},
+				}
 			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.MarshalWrite(w, status)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		var out bytes.Buffer
+		err := buildViaDaemon(t.Context(), &out, embeddingsDaemonClient{baseURL: srv.URL}, vector.BuildRequest{})
+		if tc.wantError != "" {
+			require.ErrorContains(t, err, tc.wantError, tc.name)
+		} else {
+			require.NoError(t, err, tc.name)
+			assert.Contains(t, out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0")
+			assert.Contains(t, out.String(), "Generation activated.")
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.MarshalWrite(w, status)
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	client := embeddingsDaemonClient{baseURL: srv.URL}
-	var out bytes.Buffer
-	err := buildViaDaemon(t.Context(), &out, client, vector.BuildRequest{})
-	require.NoError(t, err)
-
-	assert.Contains(t, out.String(), "a build is already running (daemon)")
-	assert.Contains(t, out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0")
-	assert.Contains(t, out.String(), "Generation activated.")
-	assert.GreaterOrEqual(t, statusCalls.Load(), int32(2))
+		assert.Equal(t, tc.wantNotice, strings.Contains(out.String(), "a build is already running (daemon)"), tc.name)
+		assert.Equal(t, tc.wantPolls, statusCalls.Load(), tc.name)
+	}
 }
 
 // TestBuildViaDaemonAlwaysSendsIncludeAutomated pins the wire contract for

@@ -268,30 +268,10 @@ func TestLiveEmbeddingsSetupRejectsConcurrentBuild(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	dir := testDataDir(t)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Input []string `json:"input"`
-		}
-		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		data := make([]map[string]any, len(request.Input))
-		for i := range data {
-			values := make([]float32, 768)
-			values[0] = 1
-			data[i] = map[string]any{"index": i, "embedding": values}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
-	}))
-	defer stub.Close()
-	raw := "[vector]\nenabled=true\n[vector.embeddings]\nmodel='nomic-embed-text'\ndimension=768\n[vector.embeddings.servers.ollama]\nendpoint='" + stub.URL + "/v1'\nollama_cpu_fallback=true\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(raw), 0o600))
+	writeEmbeddingsTestConfig(t, dir, "http://127.0.0.1:11434/v1")
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 		return embedlocal.Status{DownloadBytes: 295_000_000}, nil
 	}
@@ -315,40 +295,11 @@ func TestLiveEmbeddingsSetupRejectsConcurrentBuild(t *testing.T) {
 	}()
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
-	handler := server.New(cfg, database, nil, owner.ServerOptions()...).Handler()
-	ts := startTestServer(t, ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/embeddings/status" {
-			// Setup can finish after the build refusal and before the CLI polls.
-			release()
-			<-owner.done
-		}
-		handler.ServeHTTP(w, r)
-	}))
-	writeDaemonRuntimeForTest(t, dir, cfg.Host, port, "test", false)
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
 	<-downloading
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/embeddings/build", strings.NewReader(`{}`))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", ts.URL)
-	response, err := ts.Client().Do(req)
-	require.NoError(t, err)
-	body, err := io.ReadAll(response.Body)
-	require.NoError(t, err)
-	require.NoError(t, response.Body.Close())
-	assert.Equal(t, http.StatusConflict, response.StatusCode, string(body))
-	cliDone := make(chan error, 1)
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	cmd := newEmbeddingsBuildCommand()
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetIn(strings.NewReader(""))
-	cmd.SetArgs([]string{})
-	go func() { cliDone <- cmd.ExecuteContext(ctx) }()
-	require.ErrorContains(t, <-cliDone, "being set up", "CLI must refuse the build while setup owns the index")
-	release()
-	<-owner.done
+	body := embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/build", "application/json", strings.NewReader(`{}`), http.StatusConflict)
+	assert.Contains(t, string(body), "embeddings_setup_busy")
 }
 
 func TestLiveEmbeddingsSetupStatusDuringProbe(t *testing.T) {
@@ -382,10 +333,14 @@ func TestLiveEmbeddingsSetupStatusDuringProbe(t *testing.T) {
 	}
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, owner.Close()) }()
+	defer func() {
+		release()
+		require.NoError(t, owner.Close())
+	}()
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	ts.Client().Timeout = time.Second
 	type result struct {
 		status int
 		body   []byte
@@ -652,41 +607,6 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 	return data
 }
 
-func TestLiveEmbeddingsSetupProbeKeepsRuntimeAvailable(t *testing.T) {
-	dir := testDataDir(t)
-	cfg, err := config.Default()
-	require.NoError(t, err)
-	cfg.DataDir = dir
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	oldInspect := inspectLocalEmbeddings
-	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
-	probing, resume := make(chan struct{}), make(chan struct{})
-	release := sync.OnceFunc(func() { close(resume) })
-	defer release()
-	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-		close(probing)
-		<-resume
-		return embedlocal.Status{}, nil
-	}
-	owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
-	setupDone := make(chan error, 1)
-	go func() {
-		_, err := owner.SetupStatus(t.Context())
-		setupDone <- err
-	}()
-	<-probing
-	manager := make(chan server.EmbeddingsManager, 1)
-	go func() { manager <- owner.Manager("") }()
-	select {
-	case got := <-manager:
-		assert.Nil(t, got)
-	case <-time.After(time.Second):
-		assert.Fail(t, "the Ollama probe blocked access to the running server")
-	}
-	release()
-	require.NoError(t, <-setupDone)
-}
-
 func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 	for _, inspectFailure := range []bool{false, true} {
 		t.Run(strconv.FormatBool(inspectFailure), func(t *testing.T) {
@@ -743,7 +663,8 @@ func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 		return embedlocal.Status{DownloadBytes: 295_000_000}, nil
 	}
-	owner := &liveVectorServing{ctx: t.Context(), cfg: cfg}
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
 	err = owner.Setup("use-built-in")
 	require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
 }

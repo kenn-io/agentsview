@@ -711,9 +711,8 @@ func pollDaemonBuildStatus(
 	}
 }
 
-// daemonBuildStatus reads the daemon's build status, failing while setup
-// owns the index: setup reports Running == false, which would otherwise end
-// the poll as a success with the requested build never run.
+// daemonBuildStatus fails if setup hides the followed build's outcome.
+// Its empty build status must not turn a failed build into success.
 func daemonBuildStatus(
 	ctx context.Context, client embeddingsDaemonClient,
 ) (vector.BuildStatus, error) {

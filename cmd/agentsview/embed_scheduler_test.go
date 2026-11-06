@@ -637,7 +637,7 @@ func (e *recordingEmitter) count() int {
 	return len(e.scopes)
 }
 
-func TestEmbeddingSyncEmitterForwardsAndNotifiesLiveServing(t *testing.T) {
+func TestEmbeddingSyncEmitterForwardsThenNotifiesBothStores(t *testing.T) {
 	primary := &recordingEmitter{}
 	var notifications []bool
 	wrapEmbeddingSyncEmitter(primary, func(recall bool) {
