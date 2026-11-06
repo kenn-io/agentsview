@@ -500,6 +500,9 @@
     box-sizing: border-box;
     width: 100%;
     min-height: 116px;
+    /* The terms panel is as tall as the chart beside it. Stopping the
+       resize short of that keeps the handle and some counts in view. */
+    max-height: calc(var(--trends-chart-height) - 160px);
     padding: 8px 10px;
     resize: vertical;
     border: 1px solid var(--border-default);
@@ -584,6 +587,11 @@
     .terms-panel {
       height: auto;
       min-height: 0;
+    }
+
+    /* Stacked, the panel grows with the field. */
+    textarea {
+      max-height: none;
     }
 
     .table-panel {
