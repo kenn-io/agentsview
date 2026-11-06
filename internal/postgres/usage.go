@@ -1564,7 +1564,7 @@ func (s *Store) GetDailyUsage(
 ) (db.DailyUsageResult, error) {
 	slot := db.UsageSlot(f, true)
 	version := s.keptUsageVersion(ctx, slot)
-	if version == "" || slot == "" {
+	if version == "" {
 		return s.readDailyUsage(ctx, f)
 	}
 	return db.DailyUsage(ctx, &s.runtimeState().dailyUsage, slot, version, f, func(ctx context.Context, full db.UsageFilter) (db.DailyUsageResult, error) {
