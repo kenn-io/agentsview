@@ -121,6 +121,11 @@ The latest release is
   the first start after upgrading waits while it is built, about a minute per 2
   GB of message text.
 
+- Terms search (`mode=terms`) uses the same substring index to find the sessions
+  that mention each word. Searching for a word that appears in a few sessions no
+  longer reads every message in the archive; in a benchmark of 100,000 messages
+  it went from 192 ms to 7 ms.
+
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.
 

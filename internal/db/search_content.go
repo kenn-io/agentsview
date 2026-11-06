@@ -563,16 +563,20 @@ func (db *DB) searchContentTerms(
 	if len(terms) == 0 {
 		return ContentSearchPage{}, nil
 	}
-	query, args, err := BuildTermsSearchSQL(f, terms, SQLiteQueryDialect())
-	if err != nil {
-		return ContentSearchPage{}, err
-	}
 	if f.SessionID == "" {
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
 			return ContentSearchPage{}, err
 		}
 		defer release()
+	}
+	indexed, err := db.termsIndexQueries(ctx, f, terms)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+	query, args, err := buildTermsSearchSQL(f, terms, SQLiteQueryDialect(), indexed)
+	if err != nil {
+		return ContentSearchPage{}, err
 	}
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)

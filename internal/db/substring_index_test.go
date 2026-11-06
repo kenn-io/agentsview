@@ -324,3 +324,47 @@ func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 	assert.Equal(t, "message", matches[0].Location)
 	assert.Equal(t, 0, matches[0].Ordinal)
 }
+
+// Terms search prefilters sessions through the index only for terms it
+// lists selectively, and returns the same exchanges as the scan.
+func TestSearchContentTermsIndexMatchesScan(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for i, msgs := range [][2]string{
+		{"Deploy-Window opened", "the beta setting is required"},
+		{"alpha%_ marker here", "beta follows"},
+		{"nothing relevant", "still nothing"},
+		{"Über alles", "über reply"},
+	} {
+		id := fmt.Sprintf("terms-%d", i)
+		seedSearchSession(t, d, id, "proj", [][2]string{{"user", msgs[0]}, {"assistant", msgs[1]}})
+		countMessagesForSubstringIndex(t, d, id)
+	}
+	filter := func(pattern string) ContentSearchFilter {
+		return ContentSearchFilter{Pattern: pattern, Mode: "terms", Scope: "all", Limit: 50}
+	}
+	indexed, err := d.termsIndexQueries(ctx, filter("deploy-window beta"), []string{"deploy-window", "beta", "ab"})
+	require.NoError(t, err)
+	assert.Contains(t, indexed, "deploy-window")
+	assert.NotContains(t, indexed, "ab")
+
+	patterns := map[string][]substringHit{
+		"deploy-window beta": {{"message", 0}},
+		"alpha%_ beta":       {{"message", 0}},
+		"über":               {{"message", 0}},
+		"missing beta":       {},
+	}
+	before := map[string][]substringHit{}
+	for pattern, want := range patterns {
+		got := substringHits(t, d, filter(pattern))
+		assert.Equal(t, want, got, pattern)
+		before[pattern] = got
+	}
+	for _, stmt := range dropSubstringIndexSQL {
+		_, err := d.getWriter().Exec(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+	for pattern := range patterns {
+		assert.Equal(t, before[pattern], substringHits(t, d, filter(pattern)), pattern)
+	}
+}
