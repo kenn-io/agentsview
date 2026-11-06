@@ -266,6 +266,7 @@ collection paused. Requests share a two-second wait budget from the start of
 catch-up. After that, reads return immediately with a stale-results warning
 while catch-up continues in the
 background.
+The warning clears when catch-up finishes or fails, and failures are logged.
 Every client request except `/api/ping` counts as activity. Version and sync-status
 probes report readiness without starting catch-up.
 Desktop health probes keep the daemon alive without restarting sync.

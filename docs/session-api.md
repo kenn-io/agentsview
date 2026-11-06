@@ -1264,8 +1264,8 @@ are clear, it returns exit 2. Scheduled ingestion owns retries.
 
 Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
 after an idle period. Older local clients must upgrade to interpret it. The
-field clears when the pass ends, even if a source fails. Source failures are
-logged. Archive responses carry `X-Agentsview-Archive-Stale: true` while
+field and catch-up warning clear when the pass finishes or fails, and failures
+are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` while
 catch-up is incomplete. A required parser rebuild uses the stale header
 independently.
 
