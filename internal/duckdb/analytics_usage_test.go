@@ -1711,56 +1711,50 @@ func duckHOWMessages(cells []db.HourOfWeekCell, dow, hour int) int {
 }
 
 func TestDuckUsageCopilotCostFollowsLatestEvent(t *testing.T) {
-	session := syncSession("copilot-order", "project-a", "reported cost", "2026-08-10T09:00:00Z", 2)
-	session.Agent = "copilot"
-	first, latest := money.MustParseDollars("0.30"), money.MustParseDollars("0.50")
-	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
-		Session: session,
-		UsageEvents: []db.UsageEvent{
-			{Source: "shutdown", Model: "zzz-model", InputTokens: 5, Cost: &first, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:01:00Z", DedupKey: "first"},
-			{Source: "shutdown", Model: "aaa-model", InputTokens: 5, Cost: &latest, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:02:00Z", DedupKey: "latest"},
-		},
-		DataVersion: 1, ReplaceMessages: true,
-	}})
-	filter := db.UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	daily, err := store.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, latest, daily.Totals.TotalCost)
-	top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	require.Len(t, top, 1)
-	assert.Equal(t, latest, top[0].Cost)
-	usage, err := store.GetSessionUsage(t.Context(), session.ID, false)
-	require.NoError(t, err)
-	assert.Equal(t, latest, usage.Cost)
-}
-
-func TestDuckUsageBlankModelFiltersPreserveReportedCost(t *testing.T) {
-	session := syncSession("copilot-reported", "project-a", "reported cost", "2026-08-10T08:00:00Z", 2)
-	session.Agent = "copilot"
-	first, last := money.MustParseDollars("5"), money.MustParseDollars("3")
-	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
-		Session: session,
-		UsageEvents: []db.UsageEvent{
-			{Source: "shutdown", Model: "zzz-model", InputTokens: 10, Cost: &first, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:00:00Z", DedupKey: "first"},
-			{Source: "shutdown", Model: "aaa-model", InputTokens: 20, Cost: &last, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T10:00:00Z", DedupKey: "last"},
-		},
-		DataVersion: 1, ReplaceMessages: true,
-	}})
-	for _, filter := range []db.UsageFilter{{}, {Model: " , "}, {ExcludeModel: " , "}, {Model: " , ", ExcludeModel: " , "}} {
-		filter.From, filter.To, filter.Timezone = "2026-08-10", "2026-08-10", "UTC"
-		daily, err := store.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		assert.Equal(t, last, daily.Totals.TotalCost)
-		top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
-		require.NoError(t, err)
-		require.Len(t, top, 1)
-		assert.Equal(t, last, top[0].Cost)
-		if filter.Model == "" && filter.ExcludeModel == "" {
+	for _, tc := range []struct {
+		name          string
+		first, latest string
+	}{
+		{name: "increasing", first: "0.30", latest: "0.50"},
+		{name: "decreasing", first: "5", latest: "3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := syncSession("copilot-order", "project-a", "reported cost", "2026-08-10T08:00:00Z", 2)
+			session.Agent = "copilot"
+			first, latest := money.MustParseDollars(tc.first), money.MustParseDollars(tc.latest)
+			store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+				Session: session,
+				UsageEvents: []db.UsageEvent{
+					{Source: "shutdown", Model: "zzz-model", InputTokens: 10, Cost: &first, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:00:00Z", DedupKey: "first"},
+					{Source: "shutdown", Model: "aaa-model", InputTokens: 20, Cost: &latest, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T10:00:00Z", DedupKey: "latest"},
+				},
+				DataVersion: 1, ReplaceMessages: true,
+			}})
+			for _, fc := range []struct {
+				name   string
+				filter db.UsageFilter
+			}{
+				{name: "unfiltered"},
+				{name: "blank_model", filter: db.UsageFilter{Model: " , "}},
+				{name: "blank_exclude_model", filter: db.UsageFilter{ExcludeModel: " , "}},
+				{name: "both_blank", filter: db.UsageFilter{Model: " , ", ExcludeModel: " , "}},
+			} {
+				t.Run(fc.name, func(t *testing.T) {
+					filter := fc.filter
+					filter.From, filter.To, filter.Timezone = "2026-08-10", "2026-08-10", "UTC"
+					daily, err := store.GetDailyUsage(t.Context(), filter)
+					require.NoError(t, err)
+					assert.Equal(t, latest, daily.Totals.TotalCost)
+					top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
+					require.NoError(t, err)
+					require.Len(t, top, 1)
+					assert.Equal(t, latest, top[0].Cost)
+				})
+			}
 			usage, err := store.GetSessionUsage(t.Context(), session.ID, false)
 			require.NoError(t, err)
-			assert.Equal(t, last, usage.Cost)
-		}
+			assert.Equal(t, latest, usage.Cost)
+		})
 	}
 }
 
