@@ -263,13 +263,15 @@
             ></div>
           </div>
           <div class="progress-stats">
-            <span>
-              {m.settings_embeddings_progress_chunks({
-                count: status.total,
-                doneLabel: numberFormat.format(status.done),
-                totalLabel: numberFormat.format(status.total),
-              })}
-            </span>
+            {#if !status.setup}
+              <span>
+                {m.settings_embeddings_progress_chunks({
+                  count: status.total,
+                  doneLabel: numberFormat.format(status.done),
+                  totalLabel: numberFormat.format(status.total),
+                })}
+              </span>
+            {/if}
             {#if progressFraction !== null}
               <span>{percentFormat.format(progressFraction)}</span>
             {/if}
@@ -288,16 +290,18 @@
                 })}
               </span>
             {/if}
-            {#if estimateReady && etaMs !== null}
-              <span class="eta">
-                {m.settings_embeddings_eta({
-                  duration: formatDurationLocalized(etaMs),
-                })}
-              </span>
-            {:else}
-              <span class="eta muted"
-                >{m.settings_embeddings_eta_estimating()}</span
-              >
+            {#if !status.setup}
+              {#if estimateReady && etaMs !== null}
+                <span class="eta">
+                  {m.settings_embeddings_eta({
+                    duration: formatDurationLocalized(etaMs),
+                  })}
+                </span>
+              {:else}
+                <span class="eta muted"
+                  >{m.settings_embeddings_eta_estimating()}</span
+                >
+              {/if}
             {/if}
           </div>
         </div>

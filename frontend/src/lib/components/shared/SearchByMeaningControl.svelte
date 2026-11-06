@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SearchByMeaningHint, SearchByMeaningRow, type SearchByMeaningState } from "@kenn-io/kit-ui";
+  import { Button, SearchByMeaningHint, SearchByMeaningRow, type SearchByMeaningState } from "@kenn-io/kit-ui";
   import { EmbeddingsService, type VectorBuildStatus, type VectorGenerationInfo } from "../../api/generated/index.js";
   import { getLocale, m } from "../../i18n/index.js";
 
@@ -51,18 +51,32 @@
     {/if}
   {:else}
     <div class:build-failed={!!status?.last_error && !status?.running}>
-      <SearchByMeaningRow state={rowState} {labels} readonly={!setup.action} itemNoun={status?.running ? m.meaning_chunks({ count: status?.total ?? 0 }) : m.meaning_documents({ count: documents })} onturnon={() => void activate()} onusebuiltin={() => void activate()} />
+      <SearchByMeaningRow state={rowState} {labels} readonly={!setup.action || !!setup.error} itemNoun={status?.running ? m.meaning_chunks({ count: status?.total ?? 0 }) : m.meaning_documents({ count: documents })} onturnon={() => void activate()} onusebuiltin={() => void activate()} />
     </div>
   {/if}
   {#if !hint && setup.action === "use-built-in" && setup.missing_bytes > 0}
     <p class="download-size">{downloadLabel}</p>
   {/if}
   {#if error || setup.error}
-    <p role="alert">{error || setup.error}</p>
+    <div class="setup-error">
+      <p role="alert">{error || setup.error}</p>
+      {#if setup.error && setup.action}
+        <Button size="sm" label={m.shared_retry()} onclick={() => void activate()} />
+      {/if}
+    </div>
   {/if}
 {/if}
 
 <style>
+  .setup-error {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+  .setup-error p {
+    margin: 0;
+  }
   .download-size {
     margin: 0;
     font-size: var(--font-size-xs);

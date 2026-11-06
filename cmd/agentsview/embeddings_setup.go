@@ -14,7 +14,10 @@ import (
 	"go.kenn.io/kit/embedlocal"
 )
 
-var inspectLocalEmbeddings = embedlocal.Inspect
+var (
+	inspectLocalEmbeddings = embedlocal.Inspect
+	onBattery              = power.OnBattery
+)
 
 // liveVectorServing owns activation and replacement over the daemon's open indexes.
 type liveVectorServing struct {
@@ -29,7 +32,6 @@ type liveVectorServing struct {
 	done        chan struct{}
 	setup       server.EmbeddingsSetupStatus
 	reload      func() (config.Config, error)
-	push        *vectorPushSource
 }
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
@@ -42,7 +44,6 @@ func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.D
 	v := &liveVectorServing{
 		serving: serving, cfg: cfg, database: database,
 		ctx: ctx, cancel: cancel, idle: idle, reload: reload,
-		push: &vectorPushSource{cfg: cfg},
 	}
 	v.startSchedulers()
 	return v, nil
@@ -54,8 +55,8 @@ func (v *liveVectorServing) startSchedulers() {
 	}
 	schedulerCtx, cancel := context.WithCancel(v.ctx)
 	v.schedCancel = cancel
-	v.serving.Scheduler.onBattery = power.OnBattery
-	v.serving.RecallScheduler.onBattery = power.OnBattery
+	v.serving.Scheduler.onBattery = onBattery
+	v.serving.RecallScheduler.onBattery = onBattery
 	go v.serving.Scheduler.Run(schedulerCtx)
 	go v.serving.RecallScheduler.Run(schedulerCtx)
 }
@@ -82,7 +83,6 @@ func (v *liveVectorServing) Close() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.stopBuilders()
-	closeVectorPushSource(v.push)
 	if v.serving.Close != nil {
 		return v.serving.Close()
 	}
@@ -119,7 +119,6 @@ func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 func (v *liveVectorServing) ServerOptions() []server.Option {
 	options := []server.Option{
 		server.WithEmbeddingsRuntime(v),
-		server.WithVectorPushSource(v.push),
 		server.WithSessionMutationNotifier(func() { v.Notify(false); v.Notify(true) }),
 		server.WithRecallCorpusMutationNotifier(func() { v.Notify(true) }),
 	}
@@ -138,7 +137,13 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
 	v.mu.Lock()
 	status, cfg := v.setup, v.cfg
+	running := (v.serving.manager != nil && v.serving.manager.Status().Running) ||
+		(v.serving.recallManager != nil && v.serving.recallManager.Status().Running)
 	v.mu.Unlock()
+	if status.Busy || running {
+		status.Enabled = cfg.Vector.Enabled
+		return status, nil
+	}
 	return embeddingsSetupStatus(ctx, status, cfg)
 }
 
@@ -187,6 +192,10 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 }
 
 func (v *liveVectorServing) Setup(action string) error {
+	status, err := v.SetupStatus(v.ctx)
+	if err != nil {
+		return err
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.setup.Busy {
@@ -195,10 +204,6 @@ func (v *liveVectorServing) Setup(action string) error {
 	if (v.serving.manager != nil && v.serving.manager.Status().Running) ||
 		(v.serving.recallManager != nil && v.serving.recallManager.Status().Running) {
 		return vector.ErrBuildRunning
-	}
-	status, err := embeddingsSetupStatus(v.ctx, v.setup, v.cfg)
-	if err != nil {
-		return err
 	}
 	if action != status.Action {
 		return errors.New("setup action is unavailable for the current embeddings provider")
@@ -285,11 +290,8 @@ func (v *liveVectorServing) activate(action string) error {
 	defer v.mu.Unlock()
 	v.serving = serving
 	if serving.manager == nil {
-		return errors.New("vector index is unavailable; another process may hold vectors.write.lock")
+		return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.
 	}
 	v.startSchedulers()
-	v.push.mu.Lock()
-	v.push.cfg = cfg
-	v.push.mu.Unlock()
 	return serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 }

@@ -4097,6 +4097,21 @@ func (c *Config) SaveVectorSetup(builtIn bool) error {
 			return err
 		}
 		existing["vector"] = section
+		encoded, err := toml.Marshal(existing)
+		if err != nil {
+			return err
+		}
+		candidate, err := Default()
+		if err != nil {
+			return err
+		}
+		candidate.DataDir = c.DataDir
+		if err := candidate.applyConfigTOML(string(encoded)); err != nil {
+			return err
+		}
+		if err := candidate.Vector.Validate(); err != nil {
+			return err
+		}
 		return c.writeConfigMap(existing)
 	})
 }

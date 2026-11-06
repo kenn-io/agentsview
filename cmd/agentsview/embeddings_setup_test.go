@@ -27,8 +27,11 @@ import (
 
 func TestLiveEmbeddingsSetup(t *testing.T) {
 	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	oldOnBattery := onBattery
+	onBattery = func() bool { return false }
 	t.Cleanup(func() {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+		onBattery = oldOnBattery
 	})
 	for _, recipe := range []string{"fresh", "enabled-missing", "automatic", "configured", "nomic", "other"} {
 		t.Run(recipe, func(t *testing.T) {
@@ -39,7 +42,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			building, resume := make(chan struct{}), make(chan struct{})
 			resumeBuild := sync.OnceFunc(func() { close(resume) })
 			defer resumeBuild()
-			var encoded, installs atomic.Int64
+			var encoded, installs, inspections atomic.Int64
 			stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
 					Model string   `json:"model"`
@@ -91,6 +94,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			expected.Enabled = true
 			var installed atomic.Bool
 			inspectLocalEmbeddings = func(_ context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
+				inspections.Add(1)
 				if recipe == "automatic" && !opts.SkipOllama {
 					return embedlocal.Status{OllamaAvailable: true, DownloadBytes: 295_000_000}, nil
 				}
@@ -155,6 +159,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "fresh" {
 				<-building
 				<-owner.done
+				before := inspections.Load()
+				require.True(t, status().Running)
+				assert.Equal(t, before, inspections.Load(), "build progress must not probe Ollama")
 				idleCtx, stopIdle := context.WithCancel(t.Context())
 				go idle.Run(idleCtx)
 				assert.Never(t, idleFired.Load, 2*time.Second, 25*time.Millisecond)
@@ -177,10 +184,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				assert.Empty(t, status().Setup.Action)
 				request("POST", "/api/v1/embeddings/setup", `{"action":"use-built-in"}`, 400)
 			}
-			export, ok, exportErr := owner.push.BeginExport(t.Context(), nil)
-			require.NoError(t, exportErr)
-			require.True(t, ok)
-			require.NoError(t, export.Close())
 			assert.Equal(t, (recipe == "fresh" || recipe == "enabled-missing"), installs.Load() > 0)
 			generations, err := owner.serving.manager.Generations(t.Context())
 			require.NoError(t, err)
@@ -273,7 +276,9 @@ func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 	held, err := tryAcquireNamedLock(dir, vectorsWriteLockFile)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, held.Close()) }()
+	var inspections atomic.Int64
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		inspections.Add(1)
 		return embedlocal.Status{OllamaAvailable: true}, nil
 	}
 	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:1/v1", nil }
@@ -293,19 +298,21 @@ func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), 202)
 	<-reloaded
 	client := &http.Client{Timeout: time.Second}
+	before := inspections.Load()
 	for start := time.Now(); time.Since(start) < time.Second; {
 		var status vector.BuildStatus
 		require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
 		require.NotNil(t, status.Setup)
 		assert.True(t, status.Setup.Busy)
 	}
+	assert.Equal(t, before, inspections.Load(), "setup progress must not probe Ollama")
 	<-owner.done
 	var status vector.BuildStatus
 	require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
 	require.NotNil(t, status.Setup)
 	assert.False(t, status.Setup.Busy)
 	assert.Equal(t, "use-built-in", status.Setup.Action)
-	assert.Contains(t, status.Setup.Error, "vectors.write.lock")
+	assert.Equal(t, "Another process may be using search. Close it and retry.", status.Setup.Error)
 }
 
 func TestLiveEmbeddingsSetupFailureRetry(t *testing.T) {
@@ -372,4 +379,31 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 	require.NoError(t, err)
 	require.Equal(t, want, response.StatusCode, string(data))
 	return data
+}
+
+func TestLiveEmbeddingsSetupProbeKeepsRuntimeAvailable(t *testing.T) {
+	oldInspect := inspectLocalEmbeddings
+	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
+	probing, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		close(probing)
+		<-resume
+		return embedlocal.Status{}, nil
+	}
+	owner := &liveVectorServing{ctx: t.Context()}
+	setupDone := make(chan error, 1)
+	go func() { setupDone <- owner.Setup("unavailable") }()
+	<-probing
+	manager := make(chan server.EmbeddingsManager, 1)
+	go func() { manager <- owner.Manager("") }()
+	select {
+	case got := <-manager:
+		assert.Nil(t, got)
+	case <-time.After(time.Second):
+		assert.Fail(t, "the Ollama probe blocked access to the running server")
+	}
+	release()
+	assert.ErrorContains(t, <-setupDone, "setup action is unavailable")
 }

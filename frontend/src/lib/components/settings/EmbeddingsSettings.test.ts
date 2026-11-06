@@ -86,36 +86,40 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
-  it("keeps setup recovery when the index is unavailable", async () => {
-    const setup = {
-      enabled: true,
-      action: "turn-on",
-      provider: "built-in",
-      error: "vector index is unavailable; another process may hold vectors.write.lock",
-      rebuild_required: false,
-      busy: false,
-      installing: false,
-      missing_bytes: 0,
-      downloaded_bytes: 0,
-      total_bytes: 0,
-    };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
-    embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(
-      new ApiError(501, "embeddings manager not available"),
-    );
-    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
-    const component = mount(EmbeddingsSettings, { target: document.body });
-    await settle();
-    expect(document.body.textContent).toContain(setup.error);
-    const button = [...document.body.querySelectorAll("button")].find(
-      (b) => b.textContent?.trim() === "Turn on",
-    );
-    expect(button).toBeTruthy();
-    button!.click();
-    await settle();
-    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ action: "turn-on" });
-    unmount(component);
-  });
+  it.each(["turn-on", "use-built-in"])(
+    "keeps setup recovery when the index is unavailable (%s)",
+    async (action) => {
+      const setup = {
+        enabled: true,
+        action,
+        provider: "built-in",
+        error: "Another process may be using search. Close it and retry.",
+        rebuild_required: false,
+        busy: false,
+        installing: false,
+        missing_bytes: 0,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+      };
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+      embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(
+        new ApiError(501, "embeddings manager not available"),
+      );
+      embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+      const component = mount(EmbeddingsSettings, { target: document.body });
+      await settle();
+      expect(document.body.textContent).toContain(setup.error);
+      const button = [...document.body.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "Retry",
+      );
+      expect(button).toBeTruthy();
+      expect(document.body.querySelectorAll("button")).toHaveLength(1);
+      button!.click();
+      await settle();
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ action });
+      unmount(component);
+    },
+  );
 
   it("retries a failed first build without repeating installation", async () => {
     const setup = {
@@ -151,34 +155,54 @@ describe("EmbeddingsSettings", () => {
     unmount(component);
   });
 
-  it("shows the daemon's warmed estimate on the first status response", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      runningStatus(200, {
-        estimate_ready: true,
-        rate_per_second: 50,
-        eta_milliseconds: 16_000,
-      }),
-    );
+  it.each([false, true])(
+    "shows the daemon's warmed estimate once (setup %s)",
+    async (withSetup) => {
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+        runningStatus(200, {
+          estimate_ready: true,
+          rate_per_second: 50,
+          eta_milliseconds: 16_000,
+          ...(withSetup
+            ? {
+                setup: {
+                  enabled: true,
+                  action: "",
+                  provider: "built-in",
+                  busy: false,
+                  installing: false,
+                  missing_bytes: 0,
+                  downloaded_bytes: 0,
+                  total_bytes: 0,
+                  rebuild_required: false,
+                },
+              }
+            : {}),
+        }),
+      );
 
-    const component = mount(EmbeddingsSettings, { target: document.body });
-    await settle();
+      const component = mount(EmbeddingsSettings, { target: document.body });
+      await settle();
 
-    const text = () => document.body.textContent ?? "";
-    expect(text()).toContain("test-embed-model");
-    expect(text()).toContain("256");
-    expect(text()).toContain("Embedding");
-    expect(text()).toContain("200 / 1,000 chunks");
-    expect(text()).toContain("20%");
-    expect(text()).toContain("50 chunks/s");
-    expect(text()).toContain("ETA 16s");
-    expect(text()).toContain("Elapsed 5s");
+      const text = () => document.body.textContent ?? "";
+      expect(text()).toContain("test-embed-model");
+      expect(text()).toContain("256");
+      expect(text()).toContain("Embedding");
+      expect(text().match(/200/g)).toHaveLength(1);
+      expect(text()).toContain(withSetup ? "Indexing 200 of 1,000 chunks" : "200 / 1,000 chunks");
+      expect(text()).toContain("20%");
+      expect(text()).toContain("50 chunks/s");
+      expect(text().includes("ETA 16s")).toBe(!withSetup);
+      if (withSetup) expect(text()).toContain("left");
+      expect(text()).toContain("Elapsed 5s");
 
-    const progressbar = document.body.querySelector('[role="progressbar"]');
-    expect(progressbar?.getAttribute("aria-valuenow")).toBe("200");
-    expect(progressbar?.getAttribute("aria-valuemax")).toBe("1000");
+      const progressbar = document.body.querySelector('[role="progressbar"]');
+      expect(progressbar?.getAttribute("aria-valuenow")).toBe("200");
+      expect(progressbar?.getAttribute("aria-valuemax")).toBe("1000");
 
-    unmount(component);
-  });
+      unmount(component);
+    },
+  );
 
   it("shows an estimating state while the daemon warms its estimate", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
