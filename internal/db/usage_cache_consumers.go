@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -167,7 +168,29 @@ func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot,
 	timings := usageRollupRequestTimings{candidates: len(snapshot.Versions)}
 	fillStarted := time.Now()
 	report(fmt.Sprintf("Preparing usage data for %d sessions in this report", timings.candidates))
-	fills, err := cache.fill.Ensure(ctx, snapshot.Versions, snapshot.CursorHighWater)
+	shards := max(1, min(bulkReadSlots, len(snapshot.Versions)/usageFillShardMinSessions))
+	var fills map[string]usageFillResult
+	var err error
+	if shards == 1 {
+		fills, err = cache.fill.Ensure(ctx, snapshot.Versions, snapshot.CursorHighWater)
+	} else {
+		fills = make(map[string]usageFillResult, len(snapshot.Versions))
+		var wait sync.WaitGroup
+		var mu sync.Mutex
+		for chunk := range slices.Chunk(snapshot.Versions, (len(snapshot.Versions)+shards-1)/shards) {
+			wait.Go(func() {
+				results, fillErr := cache.fill.Ensure(ctx, chunk, 0)
+				mu.Lock()
+				defer mu.Unlock()
+				maps.Copy(fills, results)
+				err = errors.Join(err, fillErr)
+			})
+		}
+		wait.Wait()
+		if err == nil && snapshot.CursorHighWater > 0 {
+			err = cache.fill.ensureCursor(ctx, snapshot.CursorHighWater)
+		}
+	}
 	if err != nil {
 		return nil, timings, err
 	}

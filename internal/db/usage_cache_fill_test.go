@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -362,6 +363,40 @@ func TestUsageCacheFillInstallsCompleteSessionFacts(t *testing.T) {
 	assert.Equal(t, "source-id", got[0].sourceUUID)
 }
 
+func TestUsageCacheFillPreservesMessageTimestampOrder(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "session-a", "project")
+	insertSession(t, database, "session-b", "project")
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{
+		{SessionID: "session-a", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:02:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":2}`)},
+		{SessionID: "session-a", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":3}`)},
+		{SessionID: "session-b", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:01:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":5}`)},
+		{SessionID: "session-b", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T09:03:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":7}`)},
+	}))
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	_, err = cache.fill.Ensure(t.Context(), snapshot.Versions, snapshot.CursorHighWater)
+	require.NoError(t, err)
+
+	rows, err := cache.db.QueryContext(t.Context(), `
+		SELECT s.session_id, f.message_ordinal
+		FROM usage_facts f JOIN usage_cached_sessions s ON s.id = f.cached_session_id
+		ORDER BY s.session_id, f.fact_index`)
+	require.NoError(t, err)
+	defer rows.Close()
+	got := make(map[string][]int)
+	for rows.Next() {
+		var sessionID string
+		var ordinal int
+		require.NoError(t, rows.Scan(&sessionID, &ordinal))
+		got[sessionID] = append(got[sessionID], ordinal)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[string][]int{"session-a": {1, 0}, "session-b": {0, 1}}, got)
+}
+
 func TestUsageCacheFillExtractionUsesNarrowIndexes(t *testing.T) {
 	database := usageCandidateFixture(t)
 	conn, err := database.getReader().Conn(t.Context())
@@ -391,8 +426,10 @@ func TestUsageCacheFillExtractionUsesNarrowIndexes(t *testing.T) {
 		require.NoError(t, rows.Err())
 		return strings.Join(details, "\n")
 	}
-	assert.Contains(t, plan(usageFillMessageFactsSQL),
+	messagePlan := plan(usageFillMessageFactsSQL)
+	assert.Contains(t, messagePlan,
 		"SEARCH m USING COVERING INDEX idx_messages_usage_session_covering")
+	assert.Contains(t, messagePlan, "USE TEMP B-TREE FOR LAST 2 TERMS OF ORDER BY")
 	assert.Contains(t, plan(usageFillActivityFactsSQL),
 		"idx_messages_session_role")
 	assert.Contains(t, plan(usageFillEventFactsSQL),
@@ -952,6 +989,56 @@ func TestUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
 	require.ErrorIs(t, <-firstDone, context.Canceled)
 	require.NoError(t, <-secondDone)
 	assert.Equal(t, int32(1), extractions.Load())
+}
+
+func TestUsagePageFillShardsLargeWindow(t *testing.T) {
+	database := testDB(t)
+	database.SetUsageCacheNotificationWork(func() (func(), bool) { return nil, false })
+	const sessions = 2*usageFillShardMinSessions + 5
+	_, err := database.getWriter().ExecContext(t.Context(), `
+		WITH RECURSIVE seq(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM seq WHERE n < ?-1)
+		INSERT INTO sessions (id, project, machine, agent, message_count, started_at, ended_at)
+		SELECT printf('session-%06d', n), 'project', 'local', 'claude', 2,
+			'2026-08-10T10:00:00Z', '2026-08-10T10:01:00Z' FROM seq`, sessions)
+	require.NoError(t, err)
+	_, err = database.getWriter().ExecContext(t.Context(), `
+		INSERT INTO messages (session_id, ordinal, role, content, model, timestamp, token_usage)
+		SELECT s.id, o.ordinal, 'assistant', 'answer', 'model',
+			'2026-08-10T10:00:00Z',
+			'{"input_tokens":10,"output_tokens":5}'
+		FROM sessions s CROSS JOIN (SELECT 0 AS ordinal UNION ALL SELECT 1) o`)
+	require.NoError(t, err)
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{Timezone: "UTC"}, usageQueryKindToken)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	require.Len(t, snapshot.Versions, sessions)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var batches [][]usageSourceVersion
+	barrier := make(chan struct{})
+	var mu sync.Mutex
+	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
+		mu.Lock()
+		// Capture only the first wave; lost-install retries can extract again.
+		if len(batches) < 2 {
+			batches = append(batches, versions)
+			if len(batches) == 2 {
+				close(barrier)
+			}
+		}
+		mu.Unlock()
+		select {
+		case <-barrier:
+		case <-ctx.Done():
+		}
+	}
+	installs, _, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, func(string) {})
+	require.NoError(t, err)
+	assert.Len(t, installs, sessions)
+	require.Len(t, batches, 2)
+	assert.ElementsMatch(t, snapshot.Versions, append(batches[0], batches[1]...))
 }
 
 func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
