@@ -3063,5 +3063,6 @@
   "friction_session_error": "摩擦發現無法使用。",
   "friction_session_empty": "此對話中沒有摩擦發現。",
   "friction_session_jump": "訊息 {ordinal}",
-  "friction_session_jump_title": "跳至訊息 {ordinal}"
+  "friction_session_jump_title": "跳至訊息 {ordinal}",
+  "usage_tooltip_no_usage": "無使用"
 }

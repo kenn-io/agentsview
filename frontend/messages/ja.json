@@ -3135,5 +3135,6 @@
   "friction_session_error": "フリクションの検出結果を利用できません。",
   "friction_session_empty": "このセッションにフリクションの検出結果はありません。",
   "friction_session_jump": "メッセージ {ordinal}",
-  "friction_session_jump_title": "メッセージ {ordinal} へ移動"
+  "friction_session_jump_title": "メッセージ {ordinal} へ移動",
+  "usage_tooltip_no_usage": "使用なし"
 }

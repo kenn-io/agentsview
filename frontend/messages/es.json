@@ -3204,5 +3204,6 @@
   "friction_session_error": "Los hallazgos de fricción no están disponibles.",
   "friction_session_empty": "No hay hallazgos de fricción en esta sesión.",
   "friction_session_jump": "Mensaje {ordinal}",
-  "friction_session_jump_title": "Ir al mensaje {ordinal}"
+  "friction_session_jump_title": "Ir al mensaje {ordinal}",
+  "usage_tooltip_no_usage": "Sin uso"
 }

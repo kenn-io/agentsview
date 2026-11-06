@@ -3066,5 +3066,6 @@
   "friction_session_error": "마찰 발견 항목을 사용할 수 없습니다.",
   "friction_session_empty": "이 세션에는 마찰 발견 항목이 없습니다.",
   "friction_session_jump": "메시지 {ordinal}",
-  "friction_session_jump_title": "메시지 {ordinal}(으)로 이동"
+  "friction_session_jump_title": "메시지 {ordinal}(으)로 이동",
+  "usage_tooltip_no_usage": "사용 없음"
 }

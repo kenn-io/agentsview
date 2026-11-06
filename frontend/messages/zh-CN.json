@@ -3060,5 +3060,6 @@
   "friction_session_error": "摩擦发现不可用。",
   "friction_session_empty": "此会话中没有摩擦发现。",
   "friction_session_jump": "消息 {ordinal}",
-  "friction_session_jump_title": "跳转到消息 {ordinal}"
+  "friction_session_jump_title": "跳转到消息 {ordinal}",
+  "usage_tooltip_no_usage": "无使用"
 }

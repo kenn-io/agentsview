@@ -3172,5 +3172,6 @@
   "friction_session_error": "Sürtünmə tapıntıları əlçatan deyil.",
   "friction_session_empty": "Bu sessiyada sürtünmə tapıntısı yoxdur.",
   "friction_session_jump": "Mesaj {ordinal}",
-  "friction_session_jump_title": "{ordinal} nömrəli mesaja keç"
+  "friction_session_jump_title": "{ordinal} nömrəli mesaja keç",
+  "usage_tooltip_no_usage": "İstifadə yoxdur"
 }

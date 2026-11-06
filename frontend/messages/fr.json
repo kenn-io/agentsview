@@ -3204,5 +3204,6 @@
   "friction_session_error": "Les constats de friction ne sont pas disponibles.",
   "friction_session_empty": "Aucun constat de friction dans cette session.",
   "friction_session_jump": "Message {ordinal}",
-  "friction_session_jump_title": "Aller au message {ordinal}"
+  "friction_session_jump_title": "Aller au message {ordinal}",
+  "usage_tooltip_no_usage": "Aucune utilisation"
 }

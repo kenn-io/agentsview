@@ -473,6 +473,8 @@
     return isTokenMode ? formatCount(v) : fmtCostYLabel(v);
   }
 
+  // Series with nothing on this day are left out: a column of $0.00 rows
+  // says nothing. Tiny non-zero values still show (as "<$0.01").
   function tooltipRows(point: Point) {
     return seriesData.keys
       .map((key) => ({
@@ -482,6 +484,7 @@
         swatch: seriesSwatch(key),
         patterned: seriesStyle(key).fill !== "solid",
       }))
+      .filter((row) => row.value > 0)
       .sort((a, b) => b.value - a.value);
   }
 
@@ -851,6 +854,8 @@
                     : formatMoney(moneyFromMicrodollars(row.value))}
                 </dd>
               </div>
+            {:else}
+              <div class="tooltip-empty">{m.usage_tooltip_no_usage()}</div>
             {/each}
           </dl>
         </div>
@@ -1018,6 +1023,11 @@
     display: grid;
     gap: 4px;
     margin: 6px 0 0;
+  }
+
+  .tooltip-empty {
+    font-size: 12px;
+    color: var(--text-muted);
   }
 
   .tooltip-row {

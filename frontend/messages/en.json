@@ -3179,5 +3179,6 @@
   "friction_session_error": "Friction findings are unavailable.",
   "friction_session_empty": "No friction findings in this session.",
   "friction_session_jump": "Message {ordinal}",
-  "friction_session_jump_title": "Jump to message {ordinal}"
+  "friction_session_jump_title": "Jump to message {ordinal}",
+  "usage_tooltip_no_usage": "No usage"
 }
