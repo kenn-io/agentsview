@@ -69,10 +69,11 @@
   // Widths the user set by dragging or fitting a column edge, kept across
   // visits. Plain: the table owns the live widths once it has sized them.
   let keptWidths = loadColumnWidths();
-  // The column whose resize handle was last pressed, and its width then.
-  // Only a change from that width keeps it: tabbing across handles, a
-  // click without a drag, or an arrow press at a width limit keeps nothing.
-  let touched: { column: string; width: number } | undefined;
+  // The column whose resize handle is in use, and whether the person
+  // asked for a new width: a drag that moved, an arrow key, or a fit
+  // (Enter or double-click). Tabbing across handles or a click that does
+  // not move keeps nothing.
+  let touched: { column: string; resized: boolean } | undefined;
 
   // The toolbar spans the list's width, and it is laid out before the
   // first rows arrive, when the table sizes its columns.
@@ -110,41 +111,40 @@
     return Math.max(160, tableWidth - 2 - others);
   }
 
-  // Widths the table last reported, by column, for the table as built
-  // now. A rebuild for a new window width starts over.
-  let reported = new Map<string, number>();
-  $effect(() => {
-    void tableWidth;
-    reported = new Map();
-  });
-
-  // A drag, key press, or double-click on a header's resize handle names
-  // the column a following width change belongs to, with its width then.
-  // That width comes from the table's last report when there is one: the
-  // shown width of the last column also includes the room it fills when
-  // the others add up to less than the list. Before any report the
-  // handle's aria-valuenow serves, in the same table pixels, since the
-  // starting widths fill the list exactly.
-  function noteResize(event: Event) {
+  function handleColumn(event: Event): string | undefined {
     const handle = (event.target as Element | null)?.closest?.(".kit-th__resize");
     const cell = handle?.closest("th");
-    const column = cell ? columns[cell.cellIndex] : undefined;
-    const width =
-      (column !== undefined ? reported.get(column) : undefined) ??
-      Number(handle?.querySelector("[aria-valuenow]")?.getAttribute("aria-valuenow"));
-    touched = column && Number.isFinite(width) ? { column, width: Math.round(width) } : undefined;
+    return cell ? columns[cell.cellIndex] : undefined;
+  }
+
+  function notePointerDown(event: PointerEvent) {
+    const column = handleColumn(event);
+    touched = column ? { column, resized: false } : undefined;
+  }
+
+  // The handle captures the pointer, so its moves pass through the list.
+  function notePointerMove(event: PointerEvent) {
+    if (touched && (event.buttons & 1) !== 0 && event.movementX !== 0) touched.resized = true;
+  }
+
+  const RESIZE_KEYS = new Set(["ArrowLeft", "ArrowRight", "Enter"]);
+  function noteKey(event: KeyboardEvent) {
+    const column = handleColumn(event);
+    if (column && RESIZE_KEYS.has(event.key)) touched = { column, resized: true };
+  }
+
+  function noteFit(event: MouseEvent) {
+    const column = handleColumn(event);
+    if (column) touched = { column, resized: true };
   }
 
   // Called after a resize or fit. Earlier resized columns are already
-  // kept, so only the touched column is merged, and only if it changed.
+  // kept, so only the column the person resized is merged.
   function keepWidths(widths: number[]) {
     const change = touched;
     touched = undefined;
-    reported = new Map(columns.map((column, i) => [column, widths[i] ?? 0]));
     // Phone widths fit the phone; they are not kept for wider windows.
-    if (stacked.current || !change) return;
-    const width = widths[columns.indexOf(change.column)];
-    if (width === undefined || Math.round(width) === change.width) return;
+    if (stacked.current || !change?.resized) return;
     keptWidths = mergeColumnWidths(keptWidths, columns, widths, new Set([change.column]));
     saveColumnWidths(keptWidths);
   }
@@ -317,9 +317,10 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="re-list"
-      onpointerdowncapture={noteResize}
-      onkeydowncapture={noteResize}
-      ondblclickcapture={noteResize}
+      onpointerdowncapture={notePointerDown}
+      onpointermovecapture={notePointerMove}
+      onkeydowncapture={noteKey}
+      ondblclickcapture={noteFit}
     >
       {#key tableWidth}
       <VirtualTable
