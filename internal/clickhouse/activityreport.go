@@ -736,7 +736,7 @@ func (s *Store) activityReportUsage(
 		// rows would never be read again and are not kept.
 		var memoSlot, memoVersion string
 		if !state.ready {
-			fingerprint, err := s.usageReadFingerprint(ctx, state)
+			fingerprint, err := s.partsFingerprint(ctx)
 			if err != nil {
 				return nil, nil, err
 			}
