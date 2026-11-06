@@ -202,7 +202,10 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 		return err
 	}
 	defer release()
-	zone, err := readUsageZoneCoverage(ctx, cache.db, usageTimezoneIdentityFor(time.Local, nil).Key) //nolint:forbidigo // The pass covers the process-local timezone.
+	var installSeq int64
+	err = cache.db.QueryRowContext(ctx, `
+		SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key = ?`,
+		usageCacheMetadataNextRollupRevision).Scan(&installSeq)
 	if err != nil {
 		return err
 	}
@@ -211,7 +214,7 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return db.runUsageCacheBackfillPass(ctx, time.Now(), snapshot, zone.installSeq)
+	return db.runUsageCacheBackfillPass(ctx, time.Now(), snapshot, installSeq)
 }
 
 func (db *DB) runUsageCacheBackfillPass(

@@ -208,12 +208,8 @@ func (db *DB) captureJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		if err := loadUsageSnapshotSessions(ctx, tx, refreshIDs, filter, false, &refresh); err != nil {
 			return err
 		}
-		fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, refreshIDs, nil, false)
-		if err != nil {
+		if err := refresh.loadUsageEventFingerprints(ctx, tx, refreshIDs); err != nil {
 			return err
-		}
-		for i := range refresh.Versions {
-			refresh.Versions[i].UsageEventFingerprint = fingerprints[refresh.Versions[i].SessionID]
 		}
 		if err := loadUsageSnapshotSessions(ctx, tx, window, filter, true, snapshot); err != nil {
 			return err
@@ -286,16 +282,7 @@ func usageSessionsWithoutRollup(ctx context.Context, q sessionExportQuerier, tim
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return scanStrings(rows)
 }
 
 func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, timezoneID int64, filter UsageFilter) ([]string, error) {
@@ -350,7 +337,14 @@ func verifyPreparedUsageRollup(ctx context.Context, conn *sql.Conn, key string, 
 }
 
 func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared usagePreparedWindow, key string) (int64, error) {
-	zone, err := readUsageZoneCoverage(ctx, conn, key)
+	var zone usageZoneCoverage
+	err := conn.QueryRowContext(ctx, `
+		SELECT id, change_revision, change_pricing
+		FROM usage_rollup_timezones WHERE timezone_key = ?`, key,
+	).Scan(&zone.id, &zone.revision, &zone.pricing)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, errUsageCacheSourceChanged
+	}
 	if err != nil {
 		return 0, err
 	}

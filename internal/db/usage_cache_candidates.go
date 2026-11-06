@@ -106,12 +106,8 @@ func captureUsageQueryFrom(ctx context.Context, tx *sql.Tx, filter UsageFilter, 
 	if err := loadUsageSnapshotSessions(ctx, tx, ids, filter, false, snapshot); err != nil {
 		return err
 	}
-	fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, ids, nil, false)
-	if err != nil {
-		return fmt.Errorf("fingerprinting usage events: %w", err)
-	}
-	for i := range snapshot.Versions {
-		snapshot.Versions[i].UsageEventFingerprint = fingerprints[snapshot.Versions[i].SessionID]
+	if err := snapshot.loadUsageEventFingerprints(ctx, tx, ids); err != nil {
+		return err
 	}
 	snapshot.Intervals = usageQueryIntervals(filter)
 	var hasCursorTable bool
@@ -127,6 +123,17 @@ func captureUsageQueryFrom(ctx context.Context, tx *sql.Tx, filter UsageFilter, 
 		).Scan(&snapshot.CursorHighWater); err != nil {
 			return fmt.Errorf("reading Cursor usage high-water mark: %w", err)
 		}
+	}
+	return nil
+}
+
+func (snapshot *usageQuerySnapshot) loadUsageEventFingerprints(ctx context.Context, tx *sql.Tx, ids []string) error {
+	fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, ids, nil, false)
+	if err != nil {
+		return fmt.Errorf("fingerprinting usage events: %w", err)
+	}
+	for i := range snapshot.Versions {
+		snapshot.Versions[i].UsageEventFingerprint = fingerprints[snapshot.Versions[i].SessionID]
 	}
 	return nil
 }
