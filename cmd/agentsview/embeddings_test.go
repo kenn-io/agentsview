@@ -1305,6 +1305,32 @@ func TestEmbeddingsActivateInvalidIDReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid generation id")
 }
 
+func TestEmbeddingsBuildRejectsDaemonWithoutBuildIdentity(t *testing.T) {
+	for _, apiVersion := range []int{14, 15} {
+		t.Run(strconv.Itoa(apiVersion), func(t *testing.T) {
+			dataDir := testDataDir(t)
+			writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
+			var posted atomic.Bool
+			mux := http.NewServeMux()
+			mux.Handle("GET /api/ping", daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"}))
+			mux.HandleFunc("POST /api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
+				posted.Store(true)
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = io.WriteString(w, `{"started":true}`)
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			endpoint := serverEndpoint(t, srv)
+			writeRuntimeRecordFixture(t, dataDir, daemonRuntimeRecord(endpoint.Host, endpoint.Port, withRuntimeAPIVersion(apiVersion)))
+			var out bytes.Buffer
+			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(""), EmbeddingsBuildOptions{Yes: true})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")
+			assert.False(t, posted.Load(), "incompatible daemons must be rejected before starting a build")
+		})
+	}
+}
+
 func TestResolveEmbeddingsDaemonClientReportsIncompatibleDaemon(t *testing.T) {
 	dataDir := runtimeTestDir(t)
 	writeLiveRuntime(t, dataDir, false,

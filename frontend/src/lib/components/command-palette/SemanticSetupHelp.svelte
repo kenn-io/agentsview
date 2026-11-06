@@ -47,27 +47,15 @@
     // Called when a build finishes successfully so the caller can re-run
     // the search that failed.
     onResolved: () => void;
-    // The search's own 501 message. Most carry the generic "enable [vector]
-    // ... run 'agentsview index embeddings build'" remediation the panel replaces,
-    // but some name a specific recoverable state (stale index after an
-    // embedding-config change, vectors.db schema mismatch) that the status
-    // probe cannot distinguish — those are shown verbatim so their
-    // remediation is not hidden.
+    // Detailed search failures retain their backend-specific recovery guidance.
     searchDetail?: string | null;
+    searchCode?: string;
   }
 
-  let { onResolved, searchDetail = null }: Props = $props();
-
-  // db.ErrSemanticUnavailable's base message; search failures wrapping a
-  // more specific cause differ from it.
-  const GENERIC_SEARCH_UNAVAILABLE =
-    "semantic search not available: enable [vector] in config.toml and run " +
-    "'agentsview index embeddings build'";
+  let { onResolved, searchDetail = null, searchCode }: Props = $props();
 
   const specificSearchDetail = $derived(
-    searchDetail !== null && searchDetail !== GENERIC_SEARCH_UNAVAILABLE
-      ? searchDetail
-      : null,
+    searchCode === "semantic_setup_required" ? null : searchDetail,
   );
 
   // The daemon returns this exact 501 message when [vector] is disabled in

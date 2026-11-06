@@ -350,6 +350,7 @@
           <SemanticSetupHelp
             onResolved={() => searchStore.retry()}
             searchDetail={searchStore.error.detail}
+            searchCode={searchStore.error.code}
           />
         {:else if searchStore.error}
           <div class="palette-error" role="alert">

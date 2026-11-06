@@ -332,16 +332,24 @@ describe("SearchStore", () => {
     [503, "Embedding provider is temporarily unavailable; retry shortly", "generic"],
   ] as const)("preserves actionable backend detail for HTTP %i", async (status, detail, kind) => {
     const store = createSearchStore(memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: "semantic" }));
-    searchService.getApiV1SearchContent.mockRejectedValueOnce(generatedApiError(status, detail));
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(
+      new ApiError(status, detail, status === 501 ? "semantic_setup_required" : undefined),
+    );
 
     store.search("failure");
     await runDebounce();
 
-    expect(store.error).toEqual({ detail, kind });
+    expect(store.error).toEqual({
+      detail,
+      kind,
+      code: status === 501 ? "semantic_setup_required" : undefined,
+    });
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
     expect(store.results).toEqual([]);
     expect(store.isSearching).toBe(false);
-    searchService.getApiV1SearchContent.mockRejectedValueOnce(generatedApiError(status, detail));
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(
+      new ApiError(status, detail, status === 501 ? "semantic_setup_required" : undefined),
+    );
     store.retry();
     await flushMicrotasks();
     expect(vi.mocked(reportErrorShown).mock.calls).toEqual([["search"], ["search"]]);

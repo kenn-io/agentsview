@@ -42,6 +42,7 @@ const {
     isSearching: false,
     error: null as {
       detail: string | null;
+      code?: string;
       kind: "generic" | "timeout" | "semantic-unavailable";
     } | null,
     mode: "fulltext" as "fulltext" | "semantic" | "hybrid",
@@ -741,7 +742,8 @@ describe("CommandPalette", () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
       detail:
-        "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
+        "semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and run 'agentsview index embeddings build'",
+      code: "semantic_setup_required",
       kind: "semantic-unavailable",
     };
     const component = mount(CommandPalette, { target: document.body });
@@ -818,7 +820,8 @@ describe("CommandPalette", () => {
       mockSearchStore.mode = "semantic";
       mockSearchStore.error = {
         detail:
-          "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
+          "semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and run 'agentsview index embeddings build'",
+        code: "semantic_setup_required",
         kind: "semantic-unavailable",
       };
       const component = mount(CommandPalette, { target: document.body });
@@ -862,7 +865,8 @@ describe("CommandPalette", () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
       detail:
-        "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
+        "semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and run 'agentsview index embeddings build'",
+      code: "semantic_setup_required",
       kind: "semantic-unavailable",
     };
     mockSessions.activeSessionId = "session-1";

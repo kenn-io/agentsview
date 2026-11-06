@@ -136,10 +136,14 @@ describe("SemanticSetupHelp", () => {
     return document.body.textContent ?? "";
   }
 
-  function mountHelp(onResolved = vi.fn(), searchDetail: string | null = null) {
+  function mountHelp(
+    onResolved = vi.fn(),
+    searchDetail: string | null = null,
+    searchCode?: string,
+  ) {
     const component = mount(SemanticSetupHelp, {
       target: document.body,
-      props: { onResolved, searchDetail },
+      props: { onResolved, searchDetail, searchCode },
     });
     return { component, onResolved };
   }
@@ -226,7 +230,11 @@ describe("SemanticSetupHelp", () => {
       "vectors.write.lock at startup; wait for it to finish, then restart the daemon";
     embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(new ApiError(501, reason));
 
-    const { component } = mountHelp();
+    const { component } = mountHelp(
+      vi.fn(),
+      "semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and run 'agentsview index embeddings build'",
+      "semantic_setup_required",
+    );
     await settle();
 
     expect(text()).toContain("Semantic search is disabled");
@@ -324,11 +332,11 @@ describe("SemanticSetupHelp", () => {
 
   it("replaces the generic search 501 message with localized ready copy", async () => {
     const generic =
-      "semantic search not available: enable [vector] in config.toml and " +
+      "semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and " +
       "run 'agentsview index embeddings build'";
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
 
-    const { component } = mountHelp(vi.fn(), generic);
+    const { component } = mountHelp(vi.fn(), generic, "semantic_setup_required");
     await settle();
 
     expect(text()).toContain(

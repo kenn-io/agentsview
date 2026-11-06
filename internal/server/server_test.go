@@ -908,12 +908,34 @@ func TestSearchContentSemanticGETWithIntentHeaderReachesSearcher(t *testing.T) {
 // than 500 or a silently-empty page.
 func TestSearchContentSemanticModeUnavailable(t *testing.T) {
 	te := setup(t)
-
-	for _, mode := range []string{"semantic", "hybrid"} {
-		w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode="+mode,
-			withHeader("X-AgentsView-Search-Intent", "semantic"))
-		assertStatus(t, w, http.StatusNotImplemented)
+	for _, cause := range []error{nil, fmt.Errorf("lookup: %w", db.NewSemanticUnavailableError("index is stale; rebuild it"))} {
+		for _, mode := range []string{"semantic", "hybrid"} {
+			if cause != nil {
+				te.db.SetVectorSearcher(fakeTransientVectorSearcher{err: cause})
+			}
+			w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode="+mode,
+				withHeader("X-AgentsView-Search-Intent", "semantic"))
+			assertStatus(t, w, http.StatusNotImplemented)
+			var body struct {
+				Code  string `json:"code"`
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			if cause == nil {
+				assert.Equal(t, "semantic_setup_required", body.Code)
+			} else {
+				assert.Empty(t, body.Code)
+				assert.Contains(t, body.Error, "index is stale; rebuild it")
+			}
+		}
 	}
+	te.db.SetVectorSearcher(fakeHitsVectorSearcher{})
+	w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode=semantic",
+		withHeader("X-AgentsView-Search-Intent", "semantic"))
+	assertStatus(t, w, http.StatusOK)
+	var body map[string]jsontext.Value
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.JSONEq(t, "[]", string(body["matches"]))
 }
 
 // fakeTransientVectorSearcher implements db.VectorSearcher, always failing
@@ -921,11 +943,14 @@ func TestSearchContentSemanticModeUnavailable(t *testing.T) {
 // cmd/agentsview's searcherAdapter returns when the embeddings endpoint
 // itself is unreachable at query time (translateSearchError wraps a
 // vector.QueryEncodeError this way).
-type fakeTransientVectorSearcher struct{}
+type fakeTransientVectorSearcher struct{ err error }
 
-func (fakeTransientVectorSearcher) PrepareSemanticSearch(
+func (f fakeTransientVectorSearcher) PrepareSemanticSearch(
 	context.Context, string,
 ) (db.VectorSearchPage, int, error) {
+	if f.err != nil {
+		return nil, 0, f.err
+	}
 	return nil, 0, fmt.Errorf("%w: dial tcp: connection refused", db.ErrSemanticTransient)
 }
 

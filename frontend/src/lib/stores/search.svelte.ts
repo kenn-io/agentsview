@@ -23,6 +23,7 @@ export interface PaletteSearchResult {
 
 export interface SearchFailure {
   detail: string | null;
+  code?: string;
   kind: "generic" | "timeout" | "semantic-unavailable";
 }
 
@@ -98,11 +99,9 @@ function normalizeContent(matches: ContentSearchMatch[]): PaletteSearchResult[] 
   return results;
 }
 
-function errorDetail(error: unknown): string | null {
-  if (error instanceof ApiError || error instanceof Error) {
-    return error.message || null;
-  }
-  return null;
+function errorDetail(error: unknown): Pick<SearchFailure, "detail" | "code"> {
+  if (error instanceof ApiError) return { detail: error.message || null, code: error.code };
+  return { detail: error instanceof Error ? error.message || null : null };
 }
 
 function isTimeoutDetail(detail: string | null): boolean {
@@ -302,8 +301,8 @@ export class SearchStore {
         return;
       }
       this.results = [];
-      const detail = errorDetail(error);
-      this.error = { detail, kind: failureKind(mode, error, detail) };
+      const failure = errorDetail(error);
+      this.error = { ...failure, kind: failureKind(mode, error, failure.detail) };
       reportErrorShown("search");
     } finally {
       if (requestVersion === this.requestVersion && !signal.aborted) {
