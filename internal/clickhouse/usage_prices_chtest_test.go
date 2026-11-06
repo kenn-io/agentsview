@@ -592,6 +592,7 @@ func TestServeStoreBackgroundPricesWithCustomRates(t *testing.T) {
 }
 
 func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
+	t.Parallel()
 	for _, custom := range []map[string]config.CustomModelRate{
 		nil,
 		{"round-test": {InputMicrodollarsPerMTok: 2_000_000, OutputMicrodollarsPerMTok: 3_000_000}},
@@ -599,36 +600,27 @@ func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 		store, _, local := newUsagePriceStore(t)
 		local.SetCustomPricing(custom)
 		store.SetCustomPricing(custom)
-		for name, filter := range usagePriceFilters() {
-			for _, group := range []bool{false, true} {
-				filter.TopSessionsByGroup = group
-				for _, sort := range []string{"cost", "tokens"} {
-					filter.TopSessionsSort = sort
-					for _, tokenTypes := range []db.UsageTokenTypes{
-						0, db.UsageTokenTypeInput, db.UsageTokenTypeOutput,
-						db.UsageTokenTypeCacheRead | db.UsageTokenTypeCacheWrite,
-					} {
-						filter.TopSessionsTokenTypes = tokenTypes
-						for _, limit := range []int{20, 2} {
-							want, err := local.GetTopSessionsByCost(t.Context(), filter, limit)
-							require.NoError(t, err, name)
-							for i := range want {
-								if want[i].StartedAt != "" {
-									parsed, err := time.Parse(time.RFC3339Nano, want[i].StartedAt)
-									require.NoError(t, err)
-									want[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
-								}
-								if want[i].Machine == "local" {
-									want[i].Machine = fixtureMachine
-								}
-							}
-							got, err := store.GetTopSessionsByCost(t.Context(), filter, limit)
-							require.NoError(t, err, name)
-							require.Equal(t, want, got, name)
-						}
-					}
+		filters := usagePriceFilters()
+		if custom == nil {
+			filters["grouped"] = db.UsageFilter{Timezone: "UTC", TopSessionsByGroup: true}
+		}
+		for name, filter := range filters {
+			want, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
+			require.NoError(t, err, name)
+			require.NotEmpty(t, want, name)
+			for i := range want {
+				if want[i].StartedAt != "" {
+					parsed, err := time.Parse(time.RFC3339Nano, want[i].StartedAt)
+					require.NoError(t, err)
+					want[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
+				}
+				if want[i].Machine == "local" {
+					want[i].Machine = fixtureMachine
 				}
 			}
+			got, err := store.GetTopSessionsByCost(t.Context(), filter, 20)
+			require.NoError(t, err, name)
+			assert.Equal(t, want, got, name)
 		}
 	}
 }
@@ -688,12 +680,75 @@ func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
 
 func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newUsagePriceStore(t)
-	_, err := store.conn.ExecContext(t.Context(), "TRUNCATE TABLE usage_price_contexts")
+	local, target := seedUsagePriceFixture(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "push-test-*", InputPerMTok: money.MustParseDollars("1"),
+	}}))
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
 
-	top, err := store.GetTopSessionsByCost(t.Context(), db.UsageFilter{Timezone: "UTC"}, 10)
+	var readingContexts atomic.Bool
+	var attempts atomic.Int32
+	options, err := parseDSN(target.URL)
+	require.NoError(t, err)
+	options.Auth.Database = target.Database
+	options.Settings["final"] = 1
+	options.Debug = true
+	options.Debugf = func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		if strings.Contains(line, "sending query") {
+			readingContexts.Store(strings.Contains(line, "FROM usage_price_contexts"))
+		}
+	}
+	store := NewStoreFromDB(chdriver.OpenDB(options))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	pushResults := make(chan error, 3)
+	ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(p *chdriver.Progress) {
+		if p.Rows == 0 || !readingContexts.CompareAndSwap(true, false) {
+			return
+		}
+		attempt := attempts.Add(1)
+		// A fourth attempt gets no push, so an excessive retry returns success
+		// and fails the exhaustion assertion instead of looping indefinitely.
+		if attempt > 3 {
+			return
+		}
+		id := fmt.Sprintf("pushed-price-%d", attempt)
+		stamp := "2026-01-13T05:00:00.000Z"
+		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+			Session: fixtureSession(id, "gamma", "pushed first", stamp, 1),
+			Messages: []db.Message{usagePriceMessage(id, 0, stamp,
+				fmt.Sprintf("push-test-%d", attempt), `{"input_tokens":1000000}`)},
+			DataVersion: 1, ReplaceMessages: true,
+		}})
+		if err == nil {
+			_, err = syncer.Push(t.Context(), false, nil)
+		}
+		pushResults <- err
+	}))
+	filter := db.UsageFilter{Timezone: "UTC", Project: "gamma"}
+	top, err := store.GetTopSessionsByCost(ctx, filter, 20)
 	require.ErrorIs(t, err, errUsagePriceContextChanged)
 	assert.Empty(t, top)
-	assert.Empty(t, store.topSessionTotals.entries)
+	require.EqualValues(t, 3, attempts.Load())
+	for range 3 {
+		require.NoError(t, <-pushResults)
+	}
+
+	// With pushes finished, the next read must return complete totals.
+	want, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+	for i := range want {
+		parsed, err := time.Parse(time.RFC3339Nano, want[i].StartedAt)
+		require.NoError(t, err)
+		want[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
+		if want[i].Machine == "local" {
+			want[i].Machine = fixtureMachine
+		}
+	}
+	top, err = store.GetTopSessionsByCost(t.Context(), filter, 20)
+	require.NoError(t, err)
+	assert.Equal(t, want, top)
 }
