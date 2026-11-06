@@ -221,3 +221,38 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 		"a": 2_000_103, "copilot:s": 3_500_009, "early": 0,
 	}, output)
 }
+
+// TestActivityReportWithoutCandidatesLeavesUsageCacheEmpty holds a report
+// whose filter selects no sessions to the raw path's early return: it fills
+// no usage facts, while a report with candidates does.
+func TestActivityReportWithoutCandidatesLeavesUsageCacheEmpty(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedActivityUsageParity(t, d)
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: "2026-06-16", Timezone: "UTC",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	databaseID, err := d.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	cache, release, err := d.usageCache.acquireGeneration(ctx, databaseID)
+	require.NoError(t, err)
+	defer release()
+	cachedSessions := func() int {
+		var n int
+		require.NoError(t, cache.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM usage_cached_sessions`).Scan(&n))
+		return n
+	}
+	require.Zero(t, cachedSessions())
+
+	report, err := d.GetActivityReport(ctx,
+		AnalyticsFilter{Project: "no-such-project", Timezone: "UTC"}, q)
+	require.NoError(t, err)
+	assert.Empty(t, report.BySession)
+	assert.Zero(t, cachedSessions())
+
+	_, err = d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"}, q)
+	require.NoError(t, err)
+	assert.NotZero(t, cachedSessions())
+}

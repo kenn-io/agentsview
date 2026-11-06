@@ -166,18 +166,23 @@ func (db *DB) BuildActivityReportArtifacts(
 	activity.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
-	// Filling the usage cache takes its own archive reads. Waiting for them
-	// while holding one could exhaust the bulk-read slots.
-	release()
-	release = func() {}
-	usage, err := db.prepareActivityUsageWindow(ctx, lowerBound, upperBound)
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
+	// A report without candidate sessions reads no usage, so it leaves the
+	// cache alone.
+	var usage activityUsageWindow
+	if len(ids) > 0 {
+		// Filling the usage cache takes its own archive reads. Waiting for
+		// them while holding one could exhaust the bulk-read slots.
+		release()
+		release = func() {}
+		usage, err = db.prepareActivityUsageWindow(ctx, lowerBound, upperBound)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if held, err = db.acquireBulkRead(ctx); err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		release = held
 	}
-	if held, err = db.acquireBulkRead(ctx); err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	release = held
 
 	var read []string
 	var readSet *[]string
