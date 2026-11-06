@@ -678,7 +678,7 @@ func buildViaDaemon(
 ) error {
 	if err := client.startBuild(ctx, req); err != nil {
 		apiErr, hasApiErr := errors.AsType[*daemonAPIError](err)
-		if hasApiErr && apiErr.status == http.StatusConflict && apiErr.code != "embeddings_setup_busy" {
+		if hasApiErr && apiErr.status == http.StatusConflict && apiErr.Code != "embeddings_setup_busy" {
 			fmt.Fprintln(out, "a build is already running (daemon)")
 		} else {
 			return err
@@ -1001,11 +1001,11 @@ type embeddingsDaemonClient struct {
 // from other failures.
 type daemonAPIError struct {
 	status  int
-	code    string
-	message string
+	Code    string `json:"code"`
+	Message string `json:"error"`
 }
 
-func (e *daemonAPIError) Error() string { return e.message }
+func (e *daemonAPIError) Error() string { return e.Message }
 
 func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) error {
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
@@ -1115,30 +1115,19 @@ func daemonEmbeddingStore(name string) string {
 
 func embeddingResponseError(status int, body []byte, err error) error {
 	if status >= 300 {
-		return &daemonAPIError{status: status, code: daemonErrorCode(body), message: daemonErrorMessage(status, body)}
+		return daemonError(status, body)
 	}
 	return err
 }
 
-// daemonErrorCode extracts the optional "code" a daemon error carries, such
-// as the one that tells setup refusing a build from a build already running.
-func daemonErrorCode(body []byte) string {
-	var apiErr struct {
-		Code string `json:"code"`
+// daemonError decodes the {"error": "...", "code": "..."} body huma's error
+// responses carry, falling back to a generic "HTTP <status>: <body>" message
+// when the body has no error message.
+func daemonError(status int, body []byte) *daemonAPIError {
+	apiErr := &daemonAPIError{status: status}
+	if json.Unmarshal(body, apiErr) == nil && apiErr.Message != "" {
+		return apiErr
 	}
-	_ = json.Unmarshal(body, &apiErr)
-	return apiErr.Code
-}
-
-// daemonErrorMessage extracts the {"error": "..."} message huma's error
-// responses carry, falling back to a generic "HTTP <status>: <body>" when
-// the body isn't in that shape.
-func daemonErrorMessage(status int, body []byte) string {
-	var apiErr struct {
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(body, &apiErr) == nil && apiErr.Error != "" {
-		return apiErr.Error
-	}
-	return fmt.Sprintf("HTTP %d: %s", status, strings.TrimSpace(string(body)))
+	apiErr.Message = fmt.Sprintf("HTTP %d: %s", status, strings.TrimSpace(string(body)))
+	return apiErr
 }

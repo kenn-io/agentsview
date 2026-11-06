@@ -50,7 +50,7 @@ func syncClaudeAIChrome(ctx context.Context) error {
 
 func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (importer.ImportStats, error) {
 	if response.StatusCode != http.StatusOK {
-		return importer.ImportStats{}, errors.New(daemonErrorMessage(response.StatusCode, response.Body))
+		return importer.ImportStats{}, daemonError(response.StatusCode, response.Body)
 	}
 	var stats importer.ImportStats
 	result, err := consumeDaemonPushEvents[importer.ImportStats](response.Stream200, func(progress importer.ImportStats) {
