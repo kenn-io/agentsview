@@ -11,7 +11,7 @@ import (
 // at all). Backends with more specific context wrap this classification with
 // SemanticUnavailableError.
 var ErrSemanticUnavailable = errors.New(
-	"semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'")
+	"semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and run 'agentsview index embeddings build'")
 
 // SemanticUnavailableError carries a backend-specific reason while retaining
 // ErrSemanticUnavailable as its machine-readable classification. Its rendered
