@@ -1274,6 +1274,18 @@ func terminationPredicate(
 	return renderTerminationPredicate(status, b.dialect.terminationExpr, q("termination_status"), b.terminationParam)
 }
 
+// TerminationUsesTime reports whether a termination filter compares
+// session times with the current time.
+func TerminationUsesTime(status string) bool {
+	for part := range strings.SplitSeq(status, ",") {
+		switch strings.TrimSpace(part) {
+		case "active", "stale", "unclean":
+			return true
+		}
+	}
+	return false
+}
+
 func renderTerminationPredicate(status, activityExpr, statusExpr string, param func(time.Time) string) string {
 	if status == "" || status == "all" {
 		return ""

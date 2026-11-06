@@ -199,6 +199,7 @@ func TestSQLiteActivityReportMemoCountsMatchSQLCounts(t *testing.T) {
 	counts := func(t *testing.T, keep bool) []int {
 		t.Helper()
 		d.activityMemo.swap(func() {})
+		clearKeptActivity(d)
 		old := activityMemoMaxEntries
 		if !keep {
 			activityMemoMaxEntries = 0
@@ -220,6 +221,7 @@ func TestSQLiteActivityReportMemoCountsMatchSQLCounts(t *testing.T) {
 	// Rows rewritten without a new session version prove the memo serves counts.
 	_, err := d.getWriter().ExecContext(t.Context(), `UPDATE messages SET is_system = 1`)
 	require.NoError(t, err)
+	clearKeptActivity(d)
 	artifacts, err := d.BuildActivityReportArtifacts(t.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
 	require.NoError(t, err)
 	var kept []int

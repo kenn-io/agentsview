@@ -87,6 +87,14 @@ and `duckdb serve`.
 proxy and TLS flags) and is read-only in the same way — no uploads, file
 watching, or local sync.
 
+Local `duckdb serve` keeps finished Activity ranges in memory and past days a
+client opens on disk, so reopening them is quick, including after a restart.
+Disk reports are reused with the same mirror file, binary, and custom pricing.
+They live under `$CACHE_DIRECTORY/duckdb-activity-reports`, or under
+`agentsview/duckdb-activity-reports` in the user cache directory. Reports no one
+opens for 30 days are removed. Deleting them only slows the next open. If the
+cache directory cannot be created, serve keeps reports in memory only.
+
 ## Quack Remote Access
 
 [Quack](https://duckdb.org/docs/current/core_extensions/quack) is DuckDB's

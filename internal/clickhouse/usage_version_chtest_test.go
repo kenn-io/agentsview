@@ -91,14 +91,7 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 		t.Helper()
 		return readPreparedUsage(t, store, f)
 	}
-	memos := func() []any {
-		return []any{maps.Clone(store.dailyUsageRows.entries), maps.Clone(store.topSessionTotals.entries),
-			maps.Clone(store.usageSessionRows.entries)}
-	}
 	before := read()
-	for _, memo := range memos() {
-		require.NotEmpty(t, memo)
-	}
 	probes, results := usageQueryCounts(t, store)
 	require.EqualValues(t, 3, results, "cold read must run all three result queries")
 	require.Equal(t, before, read())
@@ -135,12 +128,11 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	// particular result, such as session counts after repricing, stays equal.
 	requireMiss := func(change func()) {
 		t.Helper()
-		kept := memos()
+		_, results := usageQueryCounts(t, store)
 		change()
 		read()
-		for i, memo := range memos() {
-			require.NotEqual(t, kept[i], memo)
-		}
+		_, freshResults := usageQueryCounts(t, store)
+		require.Equal(t, results+3, freshResults, "changes must rerun all three result queries")
 	}
 	requireMiss(func() {
 		appendMessage(t, local, usagePriceRoundID, "more usage", "2026-01-12T04:00:00.000Z")

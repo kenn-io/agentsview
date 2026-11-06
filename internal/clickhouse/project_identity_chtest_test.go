@@ -60,7 +60,12 @@ func TestProjectIdentityMapKeptPerLabelSet(t *testing.T) {
 	second, err := store.BuildProjectIdentityMap(ctx, []string{"beta", "alpha", "beta"})
 	require.NoError(t, err)
 	require.Equal(t, first, second)
-	require.Len(t, store.projectIdentityMaps.order, 1)
+	var slots []string
+	store.projectIdentityMaps.DeleteSlots(func(slot string) bool {
+		slots = append(slots, slot)
+		return false
+	})
+	require.Len(t, slots, 1)
 }
 
 func TestCHUsageGroups(t *testing.T) {

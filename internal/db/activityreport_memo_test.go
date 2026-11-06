@@ -226,6 +226,7 @@ func TestActivityMemoReportReuse(t *testing.T) {
 	assert.InEpsilon(t, 4.0, cold.Report.Totals.ActiveMinutes, 1e-9)
 	rewriteActivityModels(t, d, "idle-reread", "idle")
 	rewriteActivityModels(t, d, "changed-reread", "changed")
+	clearKeptActivity(d)
 	warm, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 4.0, warm.Report.Totals.AgentMinutes, 1e-9)
@@ -265,6 +266,7 @@ func TestActivityMemoReportAboveEntryCap(t *testing.T) {
 		ids[i] = fmt.Sprintf("s-%04d", i)
 	}
 	rewriteActivityModels(t, d, "reread", ids...)
+	clearKeptActivity(d)
 	warm, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 4_097.0, warm.Report.Totals.AgentMinutes, 1e-9)
@@ -356,6 +358,7 @@ func TestActivityMemoPartialInvalidationPreservesSubmicrosecondReport(t *testing
 	partial, err := d.GetActivityReport(t.Context(), f, q)
 	require.NoError(t, err)
 	d.activityMemo.swap(func() {})
+	clearKeptActivity(d)
 	cold, err := d.GetActivityReport(t.Context(), f, q)
 	require.NoError(t, err)
 	require.NotEmpty(t, cold.ByModel)
