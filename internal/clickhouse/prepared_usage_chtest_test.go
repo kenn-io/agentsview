@@ -403,13 +403,7 @@ func TestEnsurePreparedUsageProjectionsRestartsRefreshAfterFailure(t *testing.T)
 func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	local, target := seedUsagePriceFixture(t)
-	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
-	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
-	pushPreparedUsage(t, syncer)
-	execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
-		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
+	local, syncer, store := newPreparedUsageStore(t)
 	filters := []db.UsageFilter{
 		{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12", Breakdowns: true},
 		{Timezone: "UTC", From: "2026-01-01", To: "2026-01-31", Agent: "claude", ExcludeOneShot: true},
@@ -467,8 +461,7 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 	between := read()
 	require.NotEqual(t, prepared, between, "reads must serve the pushed sessions")
 
-	execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
-		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
+	runPreparedUsageRefresh(t, store)
 	state, err = store.preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.True(t, state.ready)
@@ -1061,6 +1054,25 @@ func execPreparedUsage(t *testing.T, store *Store, stmts ...string) {
 		_, err := store.DB().ExecContext(t.Context(), stmt)
 		require.NoError(t, err, stmt)
 	}
+}
+
+// newPreparedUsageStore pushes the price fixture and refreshes its prepared
+// rows once, leaving the refresh stopped.
+func newPreparedUsageStore(t *testing.T) (*db.DB, *Sync, *Store) {
+	t.Helper()
+	local, target := seedUsagePriceFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
+	pushPreparedUsage(t, syncer)
+	runPreparedUsageRefresh(t, store)
+	return local, syncer, store
+}
+
+func runPreparedUsageRefresh(t *testing.T, store *Store) {
+	t.Helper()
+	execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
 }
 
 func pushPreparedUsage(t *testing.T, syncer *Sync) {

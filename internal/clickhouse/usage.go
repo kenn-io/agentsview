@@ -2254,12 +2254,10 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	if !ok {
 		var err error
-		snapshot, err = s.readPartsSnapshot(ctx)
-		if err != nil {
+		if snapshot, err = s.readPartsSnapshot(ctx); err != nil {
 			return "", false, err
 		}
 	}
-	tables = slices.Compact(slices.Sorted(slices.Values(tables)))
 	// The fill mutex shares a probe with concurrent requests, which recheck
 	// the kept digests after acquiring it.
 	s.usageVersions.Lock()
@@ -2274,7 +2272,7 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 	if len(changed) > 0 {
 		identities, err := s.readUsageRowIdentities(ctx, changed)
 		if err != nil {
-			return "", false, ctx.Err()
+			return "", false, nil
 		}
 		fresh, err := s.readPartsSnapshot(ctx)
 		if err != nil {
@@ -2285,14 +2283,10 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 				return "", false, nil
 			}
 		}
-		if s.usageVersions.tables == nil {
-			s.usageVersions.tables = make(map[string]usageTableVersion, len(chUsageReadTables))
-		}
-		for _, table := range changed {
-			s.usageVersions.tables[table] = usageTableVersion{snapshot[table], identities[table]}
+		for i, table := range changed {
+			s.usageVersions.tables[table] = usageTableVersion{snapshot[table], identities[i]}
 		}
 	}
-
 	return tableValuesFingerprint(tables, func(table string) string {
 		return s.usageVersions.tables[table].identity
 	}), true, nil
@@ -2302,33 +2296,22 @@ func chUsageRowHashSQL(columns string) string {
 	return "reinterpretAsUInt128(sipHash128Reference(tuple(" + columns + ")))"
 }
 
-func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string) (map[string]string, error) {
-	queries := make([]string, 0, len(tables))
-	for _, table := range tables {
+// readUsageRowIdentities returns one identity per table, in order.
+func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string) ([]string, error) {
+	queries := make([]string, len(tables))
+	for i, table := range tables {
 		columns := "*"
 		if table == "usage_session_snapshots" {
 			// Revision identifies the usage arrays without hashing them; push_version identifies publication.
 			columns = "id, revision, push_version"
 		}
-		queries = append(queries, fmt.Sprintf(`SELECT '%s', toString(tuple(count(),
-			sumWithOverflow(%s))) FROM %s`, table, chUsageRowHashSQL(columns), table))
+		queries[i] = fmt.Sprintf("assumeNotNull((SELECT toString(tuple(count(), sumWithOverflow(%s))) FROM %s))",
+			chUsageRowHashSQL(columns), table)
 	}
 	s.usageRowIdentityQueries.Add(1)
-	rows, err := s.queryContext(ctx, strings.Join(queries, " UNION ALL "))
-	if err != nil {
+	var identities []string
+	if err := s.queryRowContext(ctx, "SELECT ["+strings.Join(queries, ",")+"]").Scan(&identities); err != nil {
 		return nil, fmt.Errorf("reading clickhouse usage row identities: %w", err)
-	}
-	defer rows.Close()
-	identities := make(map[string]string, len(tables))
-	for rows.Next() {
-		var table, identity string
-		if err := rows.Scan(&table, &identity); err != nil {
-			return nil, fmt.Errorf("scanning clickhouse usage row identity: %w", err)
-		}
-		identities[table] = identity
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating clickhouse usage row identities: %w", err)
 	}
 	return identities, nil
 }

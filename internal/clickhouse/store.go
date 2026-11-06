@@ -145,6 +145,7 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 // connection's compatibility checks.
 func NewStoreFromDB(conn *sql.DB) *Store {
 	s := &Store{conn: conn}
+	s.usageVersions.tables = map[string]usageTableVersion{}
 	s.dailyUsageRows.size, s.dailyUsageRows.maxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
 	s.sessionAggregateRows.size = aggregateRowBytes
 	s.usageSessionRows.size = usageSessionRowBytes

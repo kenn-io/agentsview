@@ -182,14 +182,12 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	// tables named in the fingerprint and on the prepared rows, so they only
 	// change when those rows or the stamp do.
 	live, cached := s.cachedUsageCoverage(fingerprint, stamp)
-	cached = cached && stable
 	if !cached {
 		// One caller fills the cache; the requests of a page load that
 		// arrive together wait for it instead of each reading coverage.
 		s.coverageCache.fill.Lock()
 		defer s.coverageCache.fill.Unlock()
 		live, cached = s.cachedUsageCoverage(fingerprint, stamp)
-		cached = cached && stable
 	}
 	if !cached {
 		live, err = s.readUsageCoverage(ctx, stamp, stored.pricingDigest)
