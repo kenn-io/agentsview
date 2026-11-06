@@ -49,7 +49,7 @@ type Store struct {
 	closeErr                  error
 	probeCache                activityProbeCache
 	// frustrationMarkers memoizes signals marker counts per session version.
-	frustrationMarkers frustrationMarkerMemo
+	frustrationMarkers readbase.FrustrationMarkerMemo[uint64]
 	// pricing memoizes the pricing catalog per set of active pricing parts.
 	pricing pricingCache
 	// coverageCache memoizes complete usage snapshot coverage per rows.

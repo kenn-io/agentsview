@@ -3649,3 +3649,26 @@ func TestFilteredPushReconcilesProjectMoveCommittedDuringPush(t *testing.T) {
 	).Scan(&count))
 	assert.Zero(t, count, "a session moved out of scope during the push must leave the remote")
 }
+
+func TestPushMessagesFrustrationMemoVersion(t *testing.T) {
+	const schema = "agentsview_message_version_test"
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, testPGURL(t), schema) })
+	seedProvenanceSession(t, local, "message-version", "workstation", "sample", "")
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	// Keep session columns identical while repairing a changed transcript.
+	_, err = pg.ExecContext(ctx, `UPDATE messages SET content = 'this is broken' WHERE session_id = 'message-version'`)
+	require.NoError(t, err)
+	var before, after time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT updated_at FROM sessions WHERE id = 'message-version'`).Scan(&before))
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, changed, err := syncer.pushMessages(ctx, tx, "message-version", true, nil, nil)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.NoError(t, tx.Commit())
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT updated_at FROM sessions WHERE id = 'message-version'`).Scan(&after))
+	assert.True(t, after.After(before), "message repair must advance the session version")
+}
