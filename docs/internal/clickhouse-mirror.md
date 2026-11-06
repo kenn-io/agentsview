@@ -82,11 +82,17 @@ scale ever demands it.
 
 The vector phase writes changed sessions in batches of up to 500 sessions or
 about 32 MiB of document text and embeddings, whichever fills first. Each batch
-inserts its documents and chunks, deletes its sessions' older chunks and
-documents, then inserts their `vector_push_state` rows, all under one version.
-The statement count grows with the number of batches, not sessions. A crash
-before the state rows land leaves every session in the batch stale, so the next
-push repeats them.
+inserts its documents and chunks, deletes the rows its sessions no longer hold,
+then inserts their `vector_push_state` rows, all under one version. The delete
+covers documents and chunks whose key the batch did not rewrite. A rewritten key
+keeps its older row until `ReplacingMergeTree` collapses it, which every
+`final=1` read already does. Deleting those rows too would write a patch row for
+each one, and every later read of the table pays to apply patch rows until
+merges fold them in. Evictions run in batches of 500 sessions as well. The
+vector tables are not sorted by session, so each statement reads the whole
+session column; the statement count grows with the number of batches, not
+sessions. A crash before the state rows land leaves every session in the batch
+stale, so the next push repeats them.
 
 **Tables are `ReplacingMergeTree(push_version)`.** `push_version` is the push
 start time in Unix nanoseconds. Same-key rows from a retry collapse on merge and
