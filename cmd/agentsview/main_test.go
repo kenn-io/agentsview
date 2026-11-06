@@ -1508,53 +1508,28 @@ func (e *scopedEmitter) Emit(scope string) {
 	}
 }
 
-func TestRunRemoteHostSyncLoopEmitsSyncedSessions(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		primary := &recordingEmitter{}
-		done := make(chan struct{})
-		exited := make(chan struct{})
-		go func() {
-			runRemoteHostSyncLoop(t.Context(), "remote-host", 5*time.Millisecond, func() (int, error) { return 1, nil }, primary, nil, done)
-			close(exited)
-		}()
-		synctest.Wait()
-		synctest.Sleep(5 * time.Millisecond)
-		assert.Equal(t, []string{"sessions"}, primary.scopes)
-		close(done)
-		synctest.Wait()
-		<-exited
-	})
-}
-
 func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		em := &scopedEmitter{scopes: make(chan string, 1)}
-		syncFn := func() (int, error) { return 3, nil }
-
-		done := make(chan struct{})
-		exited := make(chan struct{})
-		interval := 10 * time.Millisecond
-		go func() {
-			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
-			close(exited)
-		}()
-		defer func() {
-			close(done)
-			<-exited
-		}()
-
-		// Wait for the loop to start its ticker before advancing fake time.
-		synctest.Wait()
-		time.Sleep(interval)
-		synctest.Wait()
-
-		select {
-		case scope := <-em.scopes:
-			assert.Equal(t, "sessions", scope)
-		default:
-			require.FailNow(t, "remote sync did not emit after its first tick")
-		}
-	})
+	for _, synced := range []int{1, 3} {
+		t.Run(strconv.Itoa(synced), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				em := &recordingEmitter{}
+				done, exited := make(chan struct{}), make(chan struct{})
+				interval := 10 * time.Millisecond
+				go func() {
+					runRemoteHostSyncLoop(t.Context(), "test-host", interval, func() (int, error) { return synced, nil }, em, nil, done)
+					close(exited)
+				}()
+				defer func() {
+					close(done)
+					<-exited
+				}()
+				synctest.Wait()
+				time.Sleep(interval)
+				synctest.Wait()
+				assert.Equal(t, []string{"sessions"}, em.scopes)
+			})
+		})
+	}
 }
 
 func TestStartRemoteHostSync_NoEmitOnZeroSynced(t *testing.T) {
