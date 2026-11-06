@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// Memo keeps the rows of recent usage reads. A slot names the read
+// Memo keeps the results of recent reads. A slot names the read
 // and holds only the rows of its latest version, which names the parts the
 // rows were read from. A push replaces a slot's rows instead of adding a
 // second copy beside them, and a stale version is never returned. The
