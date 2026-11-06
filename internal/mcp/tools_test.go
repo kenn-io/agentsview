@@ -1349,10 +1349,13 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 	assert.Equal(t, "one-shot", included.Matches[0].SessionID)
 	assert.Contains(t, included.Matches[0].Snippet, "wire one-shot marker")
 
+	callerRequests := []string{requests[0]}
+
 	for _, args := range []map[string]any{
 		{"pattern": "wire one-shot marker", "mode": "substring", "agent": "pi", "include_active": true},
 		{"pattern": "wire one-shot marker", "mode": "substring", "agent": "pi", "include_active": true, "include_one_shot": false},
 	} {
+		before := len(requests)
 		result, err := ct.CallTool(ctx, callParams(ToolSearchContent, args))
 		require.NoError(t, err)
 		require.False(t, result.IsError)
@@ -1361,6 +1364,7 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, json.Unmarshal(raw, &excluded))
 		assert.Empty(t, excluded.Matches)
+		callerRequests = append(callerRequests, requests[before])
 	}
 
 	tools, err := ct.ListTools(ctx, nil)
@@ -1408,16 +1412,16 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 	assert.Contains(t, searchTool.Description, "One-shot and automated sessions are excluded by default")
 	assert.Contains(t, searchTool.Description, "include_one_shot")
 	assert.Contains(t, searchTool.Description, "include_automated")
-	assert.Len(t, requests, 3)
-	assert.Contains(t, requests[0], "mode=substring")
-	assert.Contains(t, requests[0], "agent=pi")
-	assert.Contains(t, requests[0], "include_one_shot=true")
-	for _, request := range requests {
+	assert.Len(t, callerRequests, 3)
+	assert.Contains(t, callerRequests[0], "mode=substring")
+	assert.Contains(t, callerRequests[0], "agent=pi")
+	assert.Contains(t, callerRequests[0], "include_one_shot=true")
+	for _, request := range callerRequests {
 		assert.NotContains(t, request, "include_automated=")
 	}
 }
 
-// fakeContentSearchService captures the ContentSearchRequest a tool builds
+// fakeContentSearchService captures the first ContentSearchRequest a tool builds
 // and returns a canned result or error, so semantic-mode passthrough and
 // context-mapping can be asserted without a full backend. Unused methods
 // fall through to the embedded nil interface (never called by searchContent
@@ -1432,7 +1436,9 @@ type fakeContentSearchService struct {
 func (f *fakeContentSearchService) SearchContent(
 	_ context.Context, req service.ContentSearchRequest,
 ) (*service.ContentSearchResult, error) {
-	f.lastReq = req
+	if f.lastReq.Pattern == "" && len(f.lastReq.Concepts) == 0 {
+		f.lastReq = req
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -1494,6 +1500,7 @@ func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "all", out.EffectiveScope)
 
+	fake.lastReq = service.ContentSearchRequest{}
 	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "retries", IncludeActive: true,
 	})
@@ -1511,6 +1518,7 @@ func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
 		{mode: "fts", children: true},
 		{mode: "fts", sessionID: "child"},
 	} {
+		fake.lastReq = service.ContentSearchRequest{}
 		_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 			Pattern: "retries", Mode: tc.mode, Scope: tc.scope, SessionID: tc.sessionID, IncludeActive: true,
 		})

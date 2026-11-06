@@ -2050,6 +2050,19 @@ their polls need output process IDs matching an earlier commit call.
 refresh behavior, missing-session exit codes, and the `refresh_incomplete`
 JSON field.
 
+An empty first page of `session search` keeps `(no matches)` on stdout and prints
+measured hints on stderr when one-shot, automated, or child sessions contain
+matches. Each hint
+includes a command that preserves your filters and enables the required include
+flags. JSON adds `hints` entries with `code`, `message`, and a full `next` command.
+Counts use a bounded search and say `more than N` when more matches exist, or
+`at least N` for semantic and hybrid searches or when filtering or candidate
+limits prevent an exact count.
+For multi-word substring queries over messages, a hint offers `--fts` only when
+that retry finds matches. `excluded_combined` gives a retry with the remaining
+include flags for matches beyond the individual class hints. Failed diagnostic
+searches add no hint.
+
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Semantic and hybrid results can be scoped with
@@ -2068,10 +2081,14 @@ exceptions: they stream raw bytes and NDJSON respectively, so they reject
 `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>` when that daemon
 requires auth, or `--pg` to read from configured PostgreSQL.
 
-`agentsview session list` excludes one-shot and automated sessions by default.
-When that hides matching sessions on the first page, it reports the counts and
-the corresponding `--include-one-shot` or `--include-automated` flags on stderr.
-Stdout, including `--format json`, keeps its existing shape for pipelines.
+`agentsview session list` excludes one-shot, automated, and child sessions by
+default. When that hides matching sessions on the first page, it reports the
+counts and the corresponding `--include-one-shot`, `--include-automated`, or
+`--include-children` flags on stderr, including when the list has visible results.
+Child counts include sessions hidden by several defaults; the notice lists
+every remaining include flag to use together. Child counts use one bounded page;
+a positive count from a partial page says `at least N`. Stdout, including
+`--format json`, keeps its existing shape for pipelines.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from
 `default_pg` plus `[pg.NAME]` are sync configuration only; they do not change
