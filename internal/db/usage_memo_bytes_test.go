@@ -1,15 +1,14 @@
-package kept_test
+package db_test
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/kept"
 )
 
 func TestTopSessionMemoCountsGroupMetadata(t *testing.T) {
-	base := kept.TopSessionBytes(db.TopSessionEntry{})
+	base := db.TopSessionBytes(db.TopSessionEntry{})
 	for _, tc := range []struct {
 		name  string
 		entry db.TopSessionEntry
@@ -21,7 +20,7 @@ func TestTopSessionMemoCountsGroupMetadata(t *testing.T) {
 		{"title", db.TopSessionEntry{SessionName: "Daily digest · Oct 07 12:00"}, 28},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.bytes, kept.TopSessionBytes(tc.entry)-base)
+			assert.Equal(t, tc.bytes, db.TopSessionBytes(tc.entry)-base)
 		})
 	}
 }

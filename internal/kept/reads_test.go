@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/kept"
 )
 
@@ -118,18 +117,5 @@ func TestReadsConcurrentCancellation(t *testing.T) {
 				require.Equal(t, int32(1), loads.Load())
 			})
 		})
-	}
-}
-
-func TestUsageSlot(t *testing.T) {
-	base := kept.UsageSlot(db.UsageFilter{}, true)
-	require.NotEmpty(t, base)
-	require.Equal(t, base, kept.UsageSlot(db.UsageFilter{ModelAliases: map[string]string{"m": "g"}, SkipSessionCounts: true, TopSessionsSort: "tokens", TopSessionsByGroup: true, TopSessionsTokenTypes: db.UsageTokenTypeOutput}, true))
-	require.NotEqual(t, base, kept.UsageSlot(db.UsageFilter{ProjectLabels: []string{}}, true))
-	require.NotEqual(t, base, kept.UsageSlot(db.UsageFilter{Breakdowns: true}, true))
-	require.Equal(t, base, kept.UsageSlot(db.UsageFilter{Breakdowns: true}, false))
-	require.NotEqual(t, base, kept.UsageSlot(db.UsageFilter{From: "2026-01-01"}, true))
-	for _, termination := range []string{"active", "stale", "unclean", "\xff"} {
-		require.Empty(t, kept.UsageSlot(db.UsageFilter{Termination: termination}, true))
 	}
 }

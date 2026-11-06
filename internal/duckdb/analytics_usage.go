@@ -12,7 +12,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
@@ -1342,7 +1341,7 @@ func (s *Store) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUs
 	if version == "" {
 		return s.readDailyUsage(ctx, f)
 	}
-	slot := kept.UsageSlot(f, true)
+	slot := db.UsageSlot(f, true)
 	if slot == "" {
 		return s.readDailyUsage(ctx, f)
 	}
@@ -1829,7 +1828,7 @@ func (s *Store) sessionUsageRows(
 }
 
 func (s *Store) GetTopSessionsByCost(ctx context.Context, f db.UsageFilter, limit int) ([]db.TopSessionEntry, error) {
-	out, err := s.topUsage.Do(ctx, kept.UsageSlot(f, false), s.keptVersion(), func(ctx context.Context) ([]db.TopSessionEntry, error) {
+	out, err := s.topUsage.Do(ctx, db.UsageSlot(f, false), s.keptVersion(), func(ctx context.Context) ([]db.TopSessionEntry, error) {
 		return s.readTopSessionTotals(ctx, f)
 	})
 	if err != nil {

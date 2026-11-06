@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json/v2"
 	"sync"
-
-	"go.kenn.io/agentsview/internal/db"
 )
 
 // Reads keeps one finished value per selection and version and shares equal loads.
@@ -57,26 +55,4 @@ func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(conte
 // Clear drops all finished values.
 func (r *Reads[T]) Clear() {
 	r.memo.DeleteSlots(func(string) bool { return true })
-}
-
-// UsageSlot names the selection, excluding options applied after the read.
-// Time-dependent or unencodable filters bypass reuse.
-func UsageSlot(f db.UsageFilter, keepBreakdowns bool) string {
-	if db.TerminationUsesTime(f.Termination) {
-		return ""
-	}
-	f.Progress = nil
-	f.ModelAliases = nil
-	f.TopSessionsByGroup = false
-	f.TopSessionsSort = ""
-	f.TopSessionsTokenTypes = 0
-	f.SkipSessionCounts = false
-	if !keepBreakdowns {
-		f.Breakdowns = false
-	}
-	key, err := json.Marshal(f, json.Deterministic(true), json.FormatNilSliceAsNull(true))
-	if err != nil {
-		return ""
-	}
-	return string(key)
 }

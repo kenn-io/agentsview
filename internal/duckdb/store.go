@@ -104,7 +104,7 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		topUsage: kept.Reads[[]db.TopSessionEntry]{Size: func(entries []db.TopSessionEntry) int64 {
 			var n int64
 			for _, entry := range entries {
-				n += kept.TopSessionBytes(entry)
+				n += db.TopSessionBytes(entry)
 			}
 			return n
 		}},
