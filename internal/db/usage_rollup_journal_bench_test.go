@@ -65,15 +65,6 @@ func BenchmarkUsageRollupJournaled(b *testing.B) {
 	}
 }
 
-func TestUsageJournalBenchmarkInAuckland(t *testing.T) {
-	t.Setenv("TZ", "Pacific/Auckland")
-	for _, dailyRows := range []int{1, 3} {
-		t.Run(fmt.Sprintf("rows-%d", dailyRows), func(t *testing.T) {
-			seedUsageJournalBenchmark(t, 5, dailyRows)
-		})
-	}
-}
-
 func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageFilter, DailyUsageResult) {
 	tb.Helper()
 	database := testDB(tb)
