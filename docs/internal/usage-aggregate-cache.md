@@ -124,9 +124,9 @@ After a completed timezone coverage pass, an aggregate request reads the archive
 change journal and refreshes only journaled sessions and cached sessions that
 lost their rollup install. Deleting an install queues its session in an indexed
 worklist in the same transaction. Reinstalling it clears that entry, and
-deleting its cached facts removes it. Requests read window IDs and that worklist
-in one cache transaction, then capture archive revisions, pricing, current
-session metadata, and changed-session fingerprints in one archive transaction.
+deleting its cached facts removes it. Requests read the worklist and, except for
+daily totals, window IDs in a cache transaction, then revisions, pricing, session
+metadata, and changed-session fingerprints in an archive transaction.
 Deletion sweeps and notifications lower claims to the revision captured before
 their archive deletion check in the same transaction that removes cached facts.
 That preserves journal replay if another handle has already restored or
