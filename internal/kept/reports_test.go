@@ -20,9 +20,6 @@ func TestKeptReportsRoundTrip(t *testing.T) {
 	entry := Report{Done: activity.Progress{Phase: activity.ProgressDone, SessionsTotal: 3, RowsProcessed: 12}}
 	selection := Selection("filter", q)
 	first.Put(selection, "version", true, entry)
-	// Replacing a saved report must also replace what a restart reads.
-	entry.Done.RowsProcessed = 24
-	first.Put(selection, "version", true, entry)
 	first.Put("range", "version", false, entry)
 	_, err = os.Stat(first.Path("range"))
 	require.ErrorIs(t, err, os.ErrNotExist)

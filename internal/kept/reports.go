@@ -195,7 +195,7 @@ func (s *Reports) saveActivityReport(selection, key string, entry Report) {
 	}
 	body, err := json.Marshal(entry)
 	if err == nil {
-		err = atomicfile.WriteFile(d.path(selection), append(d.header(key), body...), atomicfile.WithPrivate(), atomicfile.WithoutSync())
+		err = writeFileAtomic(d.path(selection), append(d.header(key), body...))
 	}
 	if err != nil {
 		log.Printf("%s: keeping an activity report on disk: %v", s.subdir, err)
@@ -247,8 +247,7 @@ func (d activityReportDisk) sweep(now time.Time) (int, error) {
 		switch {
 		case entry.IsDir():
 			continue
-		case strings.HasPrefix(name, ".") && strings.Contains(name, ".json.tmp-"):
-			// atomicfile stages reports as .<report>.json.tmp-*.
+		case strings.HasPrefix(name, activityReportTempPrefix):
 			maxAge = activityReportTempAge
 		case strings.HasSuffix(name, ".json"):
 			maxAge = activityReportUnopened
@@ -271,6 +270,28 @@ func (d activityReportDisk) sweep(now time.Time) (int, error) {
 		removed++
 	}
 	return removed, nil
+}
+
+// activityReportTempPrefix starts the names of writeFileAtomic's temporary
+// files.
+const activityReportTempPrefix = ".write-"
+
+// writeFileAtomic writes data to a private temporary file beside path and
+// renames it over path, so a reader sees the old file or the new one.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), activityReportTempPrefix+"*")
+	if err != nil {
+		return err
+	}
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return errors.Join(err, os.Remove(tmp.Name()))
+	}
+	if err := atomicfile.Replace(tmp.Name(), path); err != nil {
+		return errors.Join(err, os.Remove(tmp.Name()))
+	}
+	return nil
 }
 
 // DayPreset reports whether q is what a plain day request produces.
