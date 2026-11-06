@@ -90,7 +90,7 @@
       unavailableReason = null;
       loadError = null;
       updateElapsed(next);
-      if (next.setup?.enabled !== false && !next.setup?.busy && (withGenerations || (wasRunning && !next.running))) {
+      if (next.setup?.enabled !== false && !next.setup?.busy && !next.setup?.error && (withGenerations || (wasRunning && !next.running))) {
         activePollsSinceGenerations = 0;
         await refreshGenerations();
       }

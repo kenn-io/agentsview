@@ -229,6 +229,23 @@ func (v *liveVectorServing) Setup(action string) error {
 	return nil
 }
 
+// closeServing releases the current indexes and records cfg; setup.Busy keeps
+// Setup out and Close waits on done until activate installs the replacement.
+func (v *liveVectorServing) closeServing(cfg config.Config) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.stopBuilders()
+	if v.serving.Close != nil {
+		if err := v.serving.Close(); err != nil {
+			return err
+		}
+	}
+	v.serving, v.cfg = vectorServing{}, cfg
+	v.database.SetVectorSearcher(nil)
+	v.database.SetRecallVectorSearcher(nil)
+	return nil
+}
+
 func (v *liveVectorServing) activate(action string) error {
 	cfg := v.cfg
 	_, deployment, err := cfg.Vector.Embeddings.Server("")
@@ -256,21 +273,16 @@ func (v *liveVectorServing) activate(action string) error {
 	if err != nil {
 		return err
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.stopBuilders()
-	if v.serving.Close != nil {
-		if err := v.serving.Close(); err != nil {
-			return err
-		}
+	if err := v.closeServing(cfg); err != nil {
+		return err
 	}
-	v.serving, v.cfg = vectorServing{}, cfg
-	v.database.SetVectorSearcher(nil)
-	v.database.SetRecallVectorSearcher(nil)
+	// Opening can wait on another process's write lock; v.mu stays free so status answers.
 	serving, err := setupVectorServing(v.ctx, cfg, v.database, v.idle)
 	if err != nil {
 		return err
 	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.serving = serving
 	if serving.manager == nil {
 		return errors.New("vector index is unavailable; another process may hold vectors.write.lock")

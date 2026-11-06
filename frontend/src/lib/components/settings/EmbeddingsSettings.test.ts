@@ -86,6 +86,21 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
+  it("keeps setup recovery when the index is unavailable", async () => {
+    const setup = { enabled: true, action: "turn-on", provider: "built-in", error: "vector index is unavailable; another process may hold vectors.write.lock", rebuild_required: false, busy: false, installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0 };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(new ApiError(501, "embeddings manager not available"));
+    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    await settle();
+    expect(document.body.textContent).toContain(setup.error);
+    const button = [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Turn on");
+    expect(button).toBeTruthy();
+    button!.click(); await settle();
+    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ action: "turn-on" });
+    unmount(component);
+  });
+
   it("retries a failed first build without repeating installation", async () => {
     const setup = { enabled: true, action: "", provider: "built-in", rebuild_required: false, busy: false, installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0 };
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, last_error: "encoder unavailable", setup });

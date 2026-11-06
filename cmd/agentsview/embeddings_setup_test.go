@@ -257,6 +257,50 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 	}
 }
 
+func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
+	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+	oldTimeout := vectorsWriteLockRetryTimeout
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint
+		vectorsWriteLockRetryTimeout = oldTimeout
+	})
+	t.Setenv("HOME", t.TempDir())
+	dir := testDataDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n"), 0o600))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	held, err := tryAcquireNamedLock(dir, vectorsWriteLockFile)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, held.Close()) }()
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{OllamaAvailable: true}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:1/v1", nil }
+	reloaded := make(chan struct{})
+	vectorsWriteLockRetryTimeout = time.Millisecond
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, func() (config.Config, error) {
+		cfg, err := config.LoadReadOnly()
+		close(reloaded)
+		return cfg, err
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	vectorsWriteLockRetryTimeout = oldTimeout
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), 202)
+	<-reloaded
+	client := &http.Client{Timeout: time.Second}
+	for start := time.Now(); time.Since(start) < time.Second; {
+		var status vector.BuildStatus
+		require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
+		require.NotNil(t, status.Setup)
+		assert.True(t, status.Setup.Busy)
+	}
+}
+
 func TestLiveEmbeddingsSetupFailureRetryAndCancellation(t *testing.T) {
 	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() {
