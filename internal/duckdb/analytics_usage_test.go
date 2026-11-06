@@ -1710,6 +1710,31 @@ func duckHOWMessages(cells []db.HourOfWeekCell, dow, hour int) int {
 	return -1
 }
 
+func TestDuckUsageCopilotCostFollowsLatestEvent(t *testing.T) {
+	session := syncSession("copilot-order", "project-a", "reported cost", "2026-08-10T09:00:00Z", 2)
+	session.Agent = "copilot"
+	first, latest := money.MustParseDollars("0.30"), money.MustParseDollars("0.50")
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session: session,
+		UsageEvents: []db.UsageEvent{
+			{Source: "copilot-shutdown", Model: "zzz-model", InputTokens: 5, Cost: &first, CostStatus: "reported", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:01:00Z", DedupKey: "first"},
+			{Source: "copilot-shutdown", Model: "aaa-model", InputTokens: 5, Cost: &latest, CostStatus: "reported", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:02:00Z", DedupKey: "latest"},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	filter := db.UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	daily, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, latest, daily.Totals.TotalCost)
+	top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, latest, top[0].Cost)
+	usage, err := store.GetSessionUsage(t.Context(), session.ID, false)
+	require.NoError(t, err)
+	assert.Equal(t, latest, usage.Cost)
+}
+
 func TestDuckUsageBlankModelFiltersPreserveReportedCost(t *testing.T) {
 	session := syncSession("copilot-reported", "project-a", "reported cost", "2026-08-10T08:00:00Z", 2)
 	session.Agent = "copilot"

@@ -583,3 +583,72 @@ func TestServeStoreBackgroundPricesWithCustomRates(t *testing.T) {
 	local.SetCustomPricing(custom)
 	assertDailyUsageParity(t, local, serve)
 }
+
+func TestTopSessionsCopilotCostFollowsLatestEvent(t *testing.T) {
+	t.Parallel()
+	local, target := seedUsagePriceFixture(t)
+	firstCost := money.MustParseDollars("0.30")
+	latestCost := money.MustParseDollars("0.50")
+	session := fixtureSession(
+		"copilot-order", "gamma", "copilot order", "2026-01-12T05:00:00.000Z", 1,
+	)
+	session.Agent = "copilot"
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session: session,
+		Messages: []db.Message{usagePriceMessage(
+			session.ID, 0, "2026-01-12T05:00:00.000Z", "claude-test", `{"input_tokens":10}`,
+		)},
+		UsageEvents: []db.UsageEvent{
+			{
+				Source: "copilot-shutdown", Model: "zzz-model", InputTokens: 5,
+				Cost: &firstCost, CostStatus: "reported",
+				CostSource: db.CopilotReportedCostSource,
+				OccurredAt: "2026-01-12T05:01:00.000Z", DedupKey: "copilot-order-first",
+			},
+			{
+				Source: "copilot-shutdown", Model: "aaa-model", InputTokens: 5,
+				Cost: &latestCost, CostStatus: "reported",
+				CostSource: db.CopilotReportedCostSource,
+				OccurredAt: "2026-01-12T05:02:00.000Z", DedupKey: "copilot-order-latest",
+			},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.DB().ExecContext(t.Context(), "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+
+	filter := db.UsageFilter{Timezone: "UTC", Agent: "copilot"}
+	costOf := func(entries []db.TopSessionEntry) money.Money {
+		for _, e := range entries {
+			if e.SessionID == session.ID {
+				return e.Cost
+			}
+		}
+		t.Fatalf("session %s missing", session.ID)
+		return money.Money{}
+	}
+	want, err := local.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	assert.Equal(t, latestCost, costOf(want), "sqlite top")
+	got, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	assert.Equal(t, latestCost, costOf(got), "clickhouse top")
+
+	lsu, err := local.GetSessionUsage(t.Context(), session.ID, false)
+	require.NoError(t, err)
+	csu, err := store.GetSessionUsage(t.Context(), session.ID, false)
+	require.NoError(t, err)
+	assert.Equal(t, lsu.Cost, csu.Cost, "session usage matches sqlite")
+	ld, err := local.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	cd, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, ld.Totals.TotalCost, cd.Totals.TotalCost, "daily usage matches sqlite")
+}
