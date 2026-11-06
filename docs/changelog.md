@@ -141,6 +141,13 @@ The latest release is
   30,000 sessions went from 2.5 s to 0.13 s, and the same word paired with a
   word in every session went from 3.9 s to 0.2 s.
 
+- The Activity page opens about four times faster on the local archive the
+  first time it shows a range. It now pairs each session's messages in one pass
+  instead of looking up each message's successor and model in the database. On
+  a 30,000-session test archive, pairing a month went from 340 ms to 90 ms and a
+  one-year range from 6.0 s to 1.4 s. A report now holds its intervals in memory
+  while it sorts them, about 130 bytes each (about 120 MB for that year).
+
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.
 

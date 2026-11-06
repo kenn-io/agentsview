@@ -259,28 +259,13 @@ func TestSQLiteActivityReportCandidatesMatchGoPairingAtScanBounds(t *testing.T) 
 	assert.Equal(t, want, got)
 }
 
-func TestSQLiteActivityReportCandidateQueryUsesExistingSessionIndex(t *testing.T) {
+func TestSQLiteActivityReportMessageQueryUsesExistingSessionIndex(t *testing.T) {
 	d := testDB(t)
-	q := dayQuery(t, "2026-06-16", "UTC")
-	rows, err := d.getReader().QueryContext(
-		t.Context(), "EXPLAIN QUERY PLAN "+activityReportCandidatesSQL,
-		`["session"]`, "2026-06-15T09:00:00Z", "2026-06-17T14:00:00Z",
-		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro(),
-	)
-	require.NoError(t, err)
-	defer rows.Close()
-	var details []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-		details = append(details, detail)
-	}
-	require.NoError(t, rows.Err())
-	plan := strings.Join(details, "\n")
+	plan := queryPlanOf(t, d, activityReportMessagesSQL, `["session"]`)
 	assert.Contains(t, plan, "idx_messages_velocity")
 	assert.NotContains(t, plan, "idx_messages_activity_timestamp")
-	assert.NotContains(t, plan, "SCAN m")
+	assert.NotContains(t, plan, "SCAN messages")
+	assert.NotContains(t, plan, "TEMP B-TREE")
 }
 
 func TestSQLiteActivityReportCandidatesMatchGoPairingWithoutModels(t *testing.T) {
@@ -323,28 +308,13 @@ func TestSQLiteActivityReportCandidatesMatchGoPairingWithoutModels(t *testing.T)
 	}, priors)
 }
 
-func TestSQLiteActivityReportPriorModelSeeksAssistantModelIndex(t *testing.T) {
+func TestSQLiteActivityReportTerminalPriorModelSeeksAssistantModelIndex(t *testing.T) {
 	d := testDB(t)
 	q := dayQuery(t, "2026-06-16", "UTC")
-	lower := q.RangeStart.Add(-5 * time.Minute).UnixMicro()
-	upper := q.EffectiveEnd.UnixMicro()
-	for _, tt := range []struct {
-		name  string
-		query string
-		args  []any
-	}{
-		{"message candidates", activityReportCandidatesSQL, []any{
-			`["session"]`, "2026-06-15T09:00:00Z", "2026-06-17T14:00:00Z", lower, upper,
-		}},
-		{"terminal candidates", activityReportTerminalCandidatesSQL, []any{
-			`["session"]`, lower, upper,
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Contains(t, queryPlanOf(t, d, tt.query, tt.args...),
-				"SEARCH prior USING INDEX idx_messages_assistant_model (session_id=? AND ordinal<?)")
-		})
-	}
+	plan := queryPlanOf(t, d, activityReportTerminalCandidatesSQL, `["session"]`,
+		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro())
+	assert.Contains(t, plan,
+		"SEARCH prior USING INDEX idx_messages_assistant_model (session_id=? AND ordinal<?)")
 }
 
 func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
@@ -462,16 +432,16 @@ func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 func BenchmarkSQLiteActivityReportCandidateSourceWarm100K(b *testing.B) {
 	d, ids, q := seedSQLiteActivityReportCandidateBenchmark(b)
 	source := d.activityReportCandidateSource(ids, q)
-	reads := activityMemoPairingReads(b, d)
 	count := 0
 	require.NoError(b, source(b.Context(), func(activity.IntervalCandidate) error { count++; return nil }))
 	require.Equal(b, 100_000, count)
 	require.Len(b, d.activityMemo.entries, len(ids))
 	require.Equal(b, 100_000, d.activityMemo.rows)
-	require.NotEmpty(b, reads)
-	clear(reads)
-	require.NoError(b, source(b.Context(), func(activity.IntervalCandidate) error { return nil }))
-	require.Empty(b, reads)
+	rewriteActivityModels(b, d, "reread", ids...)
+	require.NoError(b, source(b.Context(), func(c activity.IntervalCandidate) error {
+		require.NotEqual(b, "reread", c.ClosingModel)
+		return nil
+	}))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {

@@ -568,57 +568,50 @@ func (db *DB) activityReportCandidates(
 	return out, err
 }
 
-const activityReportCandidatesSQL = `SELECT
-	m.session_id, m.ordinal, successor.ordinal,
-	m.timestamp, successor.timestamp,
-	successor.role, successor.model,
-	COALESCE((
-		SELECT prior.model
-		FROM messages prior
-		WHERE prior.session_id = m.session_id
-			AND prior.ordinal <= m.ordinal
-			AND prior.role = 'assistant'
-			AND prior.model != ''
-			AND prior.timestamp IS NOT NULL
-			AND prior.timestamp != ''
-			AND agentsview_timestamp_unix_micro(prior.timestamp) IS NOT NULL
-			AND agentsview_timestamp_unix_micro(prior.timestamp) > (
-				SELECT agentsview_timestamp_unix_micro(prior_previous.timestamp)
-				FROM messages prior_previous
-				WHERE prior_previous.session_id = prior.session_id
-					AND prior_previous.ordinal < prior.ordinal
-					AND prior_previous.timestamp IS NOT NULL
-					AND prior_previous.timestamp != ''
-					AND agentsview_timestamp_unix_micro(
-						prior_previous.timestamp) IS NOT NULL
-				ORDER BY prior_previous.ordinal DESC
-				LIMIT 1
-			)
-		ORDER BY prior.ordinal DESC
-		LIMIT 1
-	), 'unknown')
-FROM messages m INDEXED BY idx_messages_velocity
-JOIN messages successor ON successor.id = (
-	SELECT next.id
-	FROM messages next
-	WHERE next.session_id = m.session_id
-		AND next.ordinal > m.ordinal
-		AND next.timestamp IS NOT NULL
-		AND next.timestamp != ''
-		AND agentsview_timestamp_unix_micro(next.timestamp) IS NOT NULL
-	ORDER BY next.ordinal
-	LIMIT 1
-)
-WHERE m.session_id IN (SELECT value FROM json_each(?))
-	AND m.timestamp IS NOT NULL
-	AND m.timestamp != ''
-	AND m.timestamp >= ?
-	AND m.timestamp < ?
-	AND agentsview_timestamp_unix_micro(m.timestamp) IS NOT NULL
-	AND agentsview_timestamp_unix_micro(m.timestamp) >= ?
-	AND agentsview_timestamp_unix_micro(m.timestamp) < ?
-ORDER BY agentsview_timestamp_unix_micro(m.timestamp),
-	m.session_id, m.ordinal`
+// activityReportMessagesSQL reads the timestamped messages of the candidate
+// sessions in transcript order. Pairing them in Go parses each timestamp once;
+// correlated successor and prior-model lookups in SQL parsed it many times per
+// pair through a Go callback.
+const activityReportMessagesSQL = `SELECT session_id, ordinal, role, timestamp, model
+FROM messages INDEXED BY idx_messages_velocity
+WHERE session_id IN (SELECT value FROM json_each(?))
+	AND timestamp IS NOT NULL AND timestamp != ''
+ORDER BY session_id, ordinal`
+
+// activityPairMessage is one parseable message of a session. starts marks a
+// message inside the pairing window, which may start a pair.
+type activityPairMessage struct {
+	ordinal     int
+	at          time.Time
+	role, model string
+	starts      bool
+}
+
+// appendActivityTranscriptPairs pairs each window message of one session with
+// the next parseable one. The prior model is the latest assistant model whose
+// message is later than the message before it, up to and including the start.
+// Times compare at microseconds, as the reports order them.
+func appendActivityTranscriptPairs(
+	out []activity.IntervalCandidate, sessionID string, ms []activityPairMessage,
+) []activity.IntervalCandidate {
+	prior := "unknown"
+	for i, m := range ms {
+		if i > 0 && m.role == "assistant" && m.model != "" &&
+			m.at.UnixMicro() > ms[i-1].at.UnixMicro() {
+			prior = m.model
+		}
+		if !m.starts || i+1 == len(ms) {
+			continue
+		}
+		next := ms[i+1]
+		out = append(out, activity.IntervalCandidate{
+			SessionID: sessionID, StartOrdinal: m.ordinal, EndOrdinal: next.ordinal,
+			Start: m.at, End: next.at, ClosingRole: next.role,
+			ClosingModel: next.model, PriorModel: prior,
+		})
+	}
+	return out
+}
 
 const activityReportTerminalCandidatesSQL = `WITH
 	session_ids AS (
@@ -835,27 +828,57 @@ func (db *DB) activityReportCandidateSQL(ids []string, q activity.Query) activit
 			yield func(activity.IntervalCandidate) error,
 		) error {
 			rows, queryErr := db.getReader().QueryContext(
-				ctx, activityReportCandidatesSQL,
-				encodedIDs, paddedLower, paddedUpper, lower, upper,
-			)
+				ctx, activityReportMessagesSQL, encodedIDs)
 			if queryErr != nil {
 				return fmt.Errorf(
-					"querying activity report candidates: %w", queryErr)
+					"querying activity report messages: %w", queryErr)
 			}
 			defer rows.Close()
+			var pairs []activity.IntervalCandidate
+			var sessionID string
+			var session []activityPairMessage
 			for rows.Next() {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				candidate, scanErr := scanCandidate(rows)
-				if scanErr != nil {
-					return scanErr
+				var id, timestamp string
+				var m activityPairMessage
+				if err := rows.Scan(
+					&id, &m.ordinal, &m.role, &timestamp, &m.model,
+				); err != nil {
+					return fmt.Errorf(
+						"scanning activity report message: %w", err)
+				}
+				if id != sessionID {
+					pairs = appendActivityTranscriptPairs(pairs, sessionID, session)
+					sessionID, session = id, session[:0]
+				}
+				at, ok := ParseStoredTimestamp(timestamp)
+				if !ok {
+					continue
+				}
+				m.at = at.UTC()
+				us := m.at.UnixMicro()
+				m.starts = us >= lower && us < upper &&
+					timestamp >= paddedLower && timestamp < paddedUpper
+				session = append(session, m)
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			pairs = appendActivityTranscriptPairs(pairs, sessionID, session)
+			sort.Slice(pairs, func(i, j int) bool {
+				return activity.CandidateLess(pairs[i], pairs[j])
+			})
+			for _, candidate := range pairs {
+				if err := ctx.Err(); err != nil {
+					return err
 				}
 				if err := yield(candidate); err != nil {
 					return err
 				}
 			}
-			return rows.Err()
+			return nil
 		}
 		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
