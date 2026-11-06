@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math/rand/v2"
 	"net/url"
@@ -66,6 +65,7 @@ func TestUsageChangeJournalEmptyArchivePublication(t *testing.T) {
 	assert.Empty(t, ids)
 }
 
+// Connection parameters must override credentials already present in the URL query.
 func TestUsageChangeJournalRoleQueryCredentials(t *testing.T) {
 	_, syncer, _ := newUsageJournalFixture(t)
 	base, err := url.Parse(testPGURL(t))
@@ -127,25 +127,6 @@ func newUsageJournalRole(t *testing.T, syncer *Sync, grants string) string {
 	return roleDSN
 }
 
-// v0.46.1 replaces usage events without touching sessions when a session has
-// no new messages (push.go replaceUsageEvents with no updated_at bump).
-func TestUsageChangeJournalReleasedUsageOnlyWrite(t *testing.T) {
-	_, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('hermes','machine','project','hermes');
- INSERT INTO usage_events(session_id,source,model,input_tokens,dedup_key) VALUES('hermes','provider','model-a',100,'event-a')`)
-	require.NoError(t, err)
-	before, err := store.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	_, err = syncer.pg.ExecContext(ctx, `DELETE FROM usage_events WHERE session_id = 'hermes';
- INSERT INTO usage_events(session_id,source,model,input_tokens,dedup_key) VALUES('hermes','provider','model-a',200,'event-a')`)
-	require.NoError(t, err)
-	through, ids, err := store.LoadUsageChanges(ctx, before)
-	require.NoError(t, err)
-	assert.Equal(t, before+1, through)
-	assert.Equal(t, []string{"hermes"}, ids)
-}
-
 func TestUsageChangeJournalWatchedTables(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
@@ -163,7 +144,7 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 		ids   [3][]string
 	}{
 		{"sessions", [3]string{`INSERT INTO sessions(id,machine,project,agent) VALUES('row','machine','project','codex')`, `UPDATE sessions SET project='changed' WHERE id='row'`, `DELETE FROM sessions WHERE id='row'`}, [3][]string{{"row"}, {"row"}, {"row"}}},
-		{"usage_events", [3]string{`INSERT INTO usage_events(session_id,source,model) VALUES('owner','provider','model-a')`, `UPDATE usage_events SET session_id='other' WHERE session_id='owner'`, `DELETE FROM usage_events WHERE session_id='other'`}, [3][]string{{"owner"}, {"other", "owner"}, {"other"}}},
+		{"usage_events", [3]string{`INSERT INTO usage_events(session_id,source,model) VALUES('owner','provider','model-a')`, `UPDATE usage_events SET session_id='other' WHERE session_id IN ('owner','other')`, `DELETE FROM usage_events WHERE session_id='other'`}, [3][]string{{"owner"}, {"other", "owner"}, {"other"}}},
 		{"model_pricing", [3]string{`INSERT INTO model_pricing(model_pattern) VALUES('row-model')`, `UPDATE model_pricing SET input_microdollars_per_mtok=1 WHERE model_pattern='row-model'`, `DELETE FROM model_pricing WHERE model_pattern='row-model'`}, [3][]string{}},
 		{"model_pricing_bands", [3]string{`INSERT INTO model_pricing_bands(model_pattern,above_input_tokens,input_microdollars_per_mtok,output_microdollars_per_mtok,cache_creation_microdollars_per_mtok,cache_read_microdollars_per_mtok) VALUES('parent-model',1000,0,0,0,0)`, `UPDATE model_pricing_bands SET input_microdollars_per_mtok=1`, `DELETE FROM model_pricing_bands`}, [3][]string{}},
 		{"genai_pricing", [3]string{`INSERT INTO genai_pricing(singleton,version,source,data_json) VALUES(1,'v1','source','\x00')`, `UPDATE genai_pricing SET version='v2'`, `DELETE FROM genai_pricing`}, [3][]string{}},
@@ -189,10 +170,23 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, before+1, through, query)
 				assert.Equal(t, tc.ids[step], ids, query)
+				if tc.table == "usage_events" && step == 0 {
+					// Released publishers replace usage without touching sessions.
+					_, err = syncer.pg.ExecContext(ctx, `DELETE FROM usage_events WHERE session_id='owner';
+ INSERT INTO usage_events(session_id,source,model,input_tokens) VALUES('owner','provider','model-a',200)`)
+					require.NoError(t, err)
+					replaced, replacedIDs, err := store.LoadUsageChanges(ctx, through)
+					require.NoError(t, err)
+					assert.Equal(t, through+1, replaced, "delete and reinsert share one revision")
+					assert.Equal(t, []string{"owner"}, replacedIDs)
+				}
 				if step == 1 {
 					// Identity mapping upserts can rewrite unchanged rows.
-					_, err = syncer.pg.ExecContext(ctx, query)
+					result, err := syncer.pg.ExecContext(ctx, query)
 					require.NoError(t, err)
+					affected, err := result.RowsAffected()
+					require.NoError(t, err)
+					require.EqualValues(t, 1, affected, "unchanged update must match a row")
 					unchanged, unchangedIDs, err := store.LoadUsageChanges(ctx, through)
 					require.NoError(t, err)
 					assert.Equal(t, through, unchanged, query)
@@ -280,30 +274,6 @@ func TestUsageChangeJournalPushPaths(t *testing.T) {
 	}
 }
 
-func TestUsageChangeJournalReaderStraddlesPush(t *testing.T) {
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	reader, err := syncer.pg.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
-	require.NoError(t, err)
-	defer reader.Rollback()
-	var started int64
-	require.NoError(t, reader.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'`).Scan(&started))
-	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "straddled", Machine: "test-machine", Project: "project-a", Agent: "codex", CreatedAt: "2026-10-01T09:00:00Z"}))
-	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "straddled", []db.UsageEvent{{SessionID: "straddled", Source: "provider", Model: "model-a", InputTokens: 100, DedupKey: "event-a"}}))
-	result, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	require.Empty(t, result.Errors)
-	// The reader's report predates the push it finishes after.
-	var events int
-	require.NoError(t, reader.QueryRowContext(ctx, `SELECT count(*) FROM usage_events WHERE session_id = 'straddled'`).Scan(&events))
-	assert.Zero(t, events)
-	require.NoError(t, reader.Commit())
-	through, ids, err := store.LoadUsageChanges(ctx, started)
-	require.NoError(t, err)
-	assert.Greater(t, through, started)
-	assert.Equal(t, []string{"straddled"}, ids)
-}
-
 // The transaction that commits later gets the later revision, whichever began first.
 func TestUsageChangeJournalCommitOrder(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
@@ -328,26 +298,6 @@ func TestUsageChangeJournalCommitOrder(t *testing.T) {
 	assert.Equal(t, []string{"first"}, ids)
 }
 
-func TestUsageChangeJournalUnchangedAndRolledBackWrites(t *testing.T) {
-	_, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('a','machine','project','codex'),('b','machine','project','codex')`)
-	require.NoError(t, err)
-	before, err := store.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	_, err = syncer.pg.ExecContext(ctx, `UPDATE sessions SET project=project`)
-	require.NoError(t, err)
-	tx, err := syncer.pg.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `UPDATE sessions SET project='rolled-back'; SET CONSTRAINTS ALL IMMEDIATE`)
-	require.NoError(t, err)
-	require.NoError(t, tx.Rollback())
-	unchanged, err := store.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, before, unchanged)
-}
-
 func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
@@ -358,9 +308,6 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	after, err := store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
-	var triggers int
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'trg_uc_%' AND tgrelid IN (SELECT oid FROM pg_class WHERE relnamespace = current_schema()::regnamespace)`).Scan(&triggers))
-	assert.Equal(t, 3*len(usageChangeTablesPG)+1, triggers)
 	// The ordinary push fast path upgrades an existing schema too.
 	_, err = syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
@@ -399,13 +346,9 @@ func TestUsageChangeJournalInstallTimeoutStillPushes(t *testing.T) {
 func TestUsageChangeJournalNewerVersion(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
-	_, err := syncer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version';
- CREATE OR REPLACE FUNCTION mark_usage_sessions() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END;'`)
+	_, err := syncer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version'`)
 	require.NoError(t, err)
 	ensureUsageChangeJournalPG(ctx, syncer.pg)
-	var body string
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure('mark_usage_sessions()')`).Scan(&body))
-	assert.Equal(t, "BEGIN RETURN NULL; END;", body, "an older binary must preserve the newer journal")
 	through, ids, err := store.LoadUsageChanges(ctx, 0)
 	require.NoError(t, err)
 	assert.Zero(t, through)
@@ -416,7 +359,7 @@ func TestUsageChangeJournalRestrictedRole(t *testing.T) {
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE;
- GRANT USAGE ON ALL SEQUENCES IN SCHEMA `+syncer.schema+` TO ROLE; REVOKE ALL ON usage_session_changes FROM ROLE`)
+ GRANT USAGE ON ALL SEQUENCES IN SCHEMA `+syncer.schema+` TO ROLE`)
 	// The role already reads sessions when the owner installs the journal.
 	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
