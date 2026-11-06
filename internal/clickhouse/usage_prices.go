@@ -228,14 +228,24 @@ func chUsagePricingDigest(
 	writeField(strconv.Itoa(chUsagePriceFormatVersion))
 	writeField(pricingpkg.BillingPolicyVersion())
 	for _, m := range sorted {
-		fingerprint, err := resolver.DependencyFingerprint(m.providerID, m.model, m.priceModel)
-		if err != nil {
-			return "", fmt.Errorf("digesting clickhouse usage pricing for model %q: %w", m.model, err)
-		}
 		writeField(m.providerID)
 		writeField(m.model)
 		writeField(m.priceModel)
-		writeField(fingerprint)
+		fingerprint, err := resolver.DependencyFingerprint(m.providerID, m.model, m.priceModel)
+		if err == nil {
+			writeField(fingerprint)
+			continue
+		}
+		// A provider adjustment that overflows is that model's price error,
+		// which its records carry. Its unadjusted resolution, which the
+		// error and the records' contexts follow, stands in for the
+		// fingerprint, so the model cannot block every push and read.
+		unadjusted, unadjustedErr := resolver.DependencyFingerprint("", m.model, m.priceModel)
+		if unadjustedErr != nil {
+			return "", fmt.Errorf("digesting clickhouse usage pricing for model %q: %w", m.model, unadjustedErr)
+		}
+		writeField("billing error: " + err.Error())
+		writeField(unadjusted)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

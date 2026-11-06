@@ -299,3 +299,32 @@ func TestUsagePricingDigestFollowsPastPricePeriods(t *testing.T) {
 	assert.Equal(t, base, usagePriceTestDigest(t, genAIHistoryRows(t, "1", "2"), used),
 		"only an unpriced model's past rate changed")
 }
+
+// A registered model whose provider adjustment overflows keeps the digest
+// computable, and the digest still follows that model's rates.
+func TestUsagePricingDigestSurvivesBillingOverflow(t *testing.T) {
+	updatedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rows := func(microdollars int64) []export.EffectivePricingRow {
+		return []export.EffectivePricingRow{{
+			ModelPattern: "huge-model",
+			Rates: export.ModelRates{
+				InputPerMTok: money.Money{Microdollars: microdollars},
+				UpdatedAt:    &updatedAt,
+				Source:       export.PricingRowSourceFetched,
+			},
+		}}
+	}
+	model := chUsagePriceModel{
+		providerID: pricingpkg.PositAssistantProviderID,
+		model:      "huge-model", priceModel: "huge-model",
+	}
+	_, err := export.NewPricingResolver(rows(9_000_000_000_000_000_000)).
+		DependencyFingerprint(model.providerID, model.model, model.priceModel)
+	require.ErrorIs(t, err, money.ErrOverflow)
+
+	overflowing := usagePriceTestDigest(t, rows(9_000_000_000_000_000_000), model)
+	assert.NotEqual(t, overflowing,
+		usagePriceTestDigest(t, rows(8_500_000_000_000_000_000), model),
+		"another overflowing rate changes the records' contexts")
+	assert.NotEqual(t, overflowing, usagePriceTestDigest(t, rows(1_000_000), model))
+}
