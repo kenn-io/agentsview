@@ -85,7 +85,7 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 		// Count and sum row hashes so merges and row ordering do not change the
 		// fingerprint, while duplicate rows still contribute to it.
 		err = s.queryRowContext(ctx, `SELECT hex(SHA256(toString(tuple(count(),sumWithOverflow(row_hash)))))
-			FROM (SELECT reinterpretAsUInt128(sipHash128Reference(tuple(*))) AS row_hash
+			FROM (SELECT `+chUsageRowHashSQL("*")+` AS row_hash
 			FROM prepared_usage) SETTINGS final=0`).Scan(&probe.PreparedUsageFingerprint)
 		if err != nil {
 			return activity.SourceProbe{}, fmt.Errorf("probing prepared usage: %w", err)
@@ -144,13 +144,9 @@ func (st preparedUsageState) replaced() []string {
 }
 
 func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, error) {
-	fingerprint, stable, err := s.usageRowsVersion(ctx, []string{"sessions", "usage_session_snapshots", "usage_event_prices"})
-	if err != nil {
-		return preparedUsageState{}, err
-	}
 	var filled uint64
 	var comment string
-	err = s.queryRowContext(ctx, `SELECT
+	err := s.queryRowContext(ctx, `SELECT
 		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?)),
 		ifNull((SELECT comment FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'), '')`,
 		usageSnapshotReadyKeyBase+":").Scan(&filled, &comment)
@@ -175,6 +171,10 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	}
 	if err != nil {
 		return preparedUsageState{}, fmt.Errorf("reading prepared usage stamp: %w", err)
+	}
+	fingerprint, stable, err := s.usageRowsVersion(ctx, []string{"sessions", "usage_session_snapshots", "usage_event_prices"})
+	if err != nil {
+		return preparedUsageState{}, err
 	}
 	stamp := fmt.Sprintf("%s|%d|%d|%s|%d", comment, stored.snapshotCount, stored.snapshotHash,
 		stored.pricingDigest, stored.priceCount)

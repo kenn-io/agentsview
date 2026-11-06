@@ -406,22 +406,9 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	store := NewStoreFromDB(syncer.conn)
-	exec := func(stmts ...string) {
-		t.Helper()
-		for _, stmt := range stmts {
-			_, err := store.DB().ExecContext(ctx, stmt)
-			require.NoError(t, err, stmt)
-		}
-	}
-	push := func() {
-		t.Helper()
-		result, err := syncer.Push(ctx, false, nil)
-		require.NoError(t, err)
-		require.Zero(t, result.Errors)
-	}
-	exec("SYSTEM STOP VIEW prepare_usage")
-	push()
-	exec("SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
+	pushPreparedUsage(t, syncer)
+	execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
 		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
 	filters := []db.UsageFilter{
 		{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12", Breakdowns: true},
@@ -438,15 +425,10 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 		t.Helper()
 		var out reads
 		for _, f := range filters {
-			daily, err := store.GetDailyUsage(ctx, f)
-			require.NoError(t, err)
-			out.daily = append(out.daily, daily)
-			top, err := store.GetTopSessionsByCost(ctx, f, 10)
-			require.NoError(t, err)
-			out.top = append(out.top, top)
-			counts, err := store.GetUsageSessionCounts(ctx, f)
-			require.NoError(t, err)
-			out.counts = append(out.counts, counts)
+			rows := readPreparedUsage(t, store, f)
+			out.daily = append(out.daily, rows.daily)
+			out.top = append(out.top, rows.top)
+			out.counts = append(out.counts, rows.counts)
 		}
 		return out
 	}
@@ -476,7 +458,7 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 	deleted, err := local.DeleteSessionIfTrashed(ctx, usagePriceSnapBID)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deleted)
-	push()
+	pushPreparedUsage(t, syncer)
 	state, err = store.preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.True(t, state.ready)
@@ -485,7 +467,7 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 	between := read()
 	require.NotEqual(t, prepared, between, "reads must serve the pushed sessions")
 
-	exec("SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+	execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
 		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
 	state, err = store.preparedUsageState(ctx)
 	require.NoError(t, err)
@@ -494,7 +476,7 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 	require.Empty(t, state.stale)
 	require.Equal(t, between, read(), "rows prepared at read time must match the refresh")
 	// An empty table is not ready, so the same reads use the raw rows.
-	exec("TRUNCATE TABLE prepared_usage")
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
 	ready, err := store.preparedUsageReady(ctx)
 	require.NoError(t, err)
 	require.False(t, ready)
@@ -1071,4 +1053,36 @@ func preparedUsageTables(t *testing.T, conn *sql.DB, prefix string) []string {
 	}
 	require.NoError(t, rows.Err())
 	return names
+}
+
+func execPreparedUsage(t *testing.T, store *Store, stmts ...string) {
+	t.Helper()
+	for _, stmt := range stmts {
+		_, err := store.DB().ExecContext(t.Context(), stmt)
+		require.NoError(t, err, stmt)
+	}
+}
+
+func pushPreparedUsage(t *testing.T, syncer *Sync) {
+	t.Helper()
+	result, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+}
+
+type preparedUsageRead struct {
+	daily  db.DailyUsageResult
+	top    []db.TopSessionEntry
+	counts db.UsageSessionCounts
+}
+
+func readPreparedUsage(t *testing.T, store *Store, f db.UsageFilter) preparedUsageRead {
+	t.Helper()
+	daily, err := store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
+	require.NoError(t, err)
+	counts, err := store.GetUsageSessionCounts(t.Context(), f)
+	require.NoError(t, err)
+	return preparedUsageRead{daily, top, counts}
 }

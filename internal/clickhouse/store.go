@@ -187,7 +187,10 @@ func (s *Store) HasFTS(_ context.Context) bool { return true }
 // SetCustomPricing installs the operator's model rates. Call it before
 // StartBackground: the background work caches the pricing catalog.
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
+	s.pricing.mu.Lock()
+	defer s.pricing.mu.Unlock()
 	s.customPricing = p
+	s.pricing.snapshot = nil
 }
 
 func (s *Store) SetCursorSecret(secret []byte) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
@@ -18,49 +19,25 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	store := NewStoreFromDB(syncer.conn)
-	exec := func(stmts ...string) {
-		t.Helper()
-		for _, stmt := range stmts {
-			_, err := store.DB().ExecContext(ctx, stmt)
-			require.NoError(t, err, stmt)
-		}
-	}
-	push := func() {
-		t.Helper()
-		result, err := syncer.Push(ctx, false, nil)
-		require.NoError(t, err)
-		require.Zero(t, result.Errors)
-	}
 	refresh := func() {
 		t.Helper()
-		exec("SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+		execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
 			"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
 	}
-	exec("SYSTEM STOP VIEW prepare_usage")
-	push()
+	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
+	pushPreparedUsage(t, syncer)
 	require.NoError(t, syncer.syncModelPricing(ctx))
 	refresh()
 	for _, table := range chUsageReadTables {
-		exec("SYSTEM STOP MERGES " + table)
+		execPreparedUsage(t, store, "SYSTEM STOP MERGES "+table)
 		var count uint64
 		require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT count() FROM "+table).Scan(&count))
 		require.NotZero(t, count, table)
 	}
 	f := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
-	type reads struct {
-		daily  db.DailyUsageResult
-		top    []db.TopSessionEntry
-		counts db.UsageSessionCounts
-	}
-	read := func() reads {
+	read := func() preparedUsageRead {
 		t.Helper()
-		daily, err := store.GetDailyUsage(ctx, f)
-		require.NoError(t, err)
-		top, err := store.GetTopSessionsByCost(ctx, f, 100)
-		require.NoError(t, err)
-		counts, err := store.GetUsageSessionCounts(ctx, f)
-		require.NoError(t, err)
-		return reads{daily, top, counts}
+		return readPreparedUsage(t, store, f)
 	}
 	before := read()
 	require.NotEmpty(t, store.dailyUsageRows.entries)
@@ -76,7 +53,7 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 			counts := maps.Clone(store.usageSessionRows.entries)
 			parts, err := store.readPartsSnapshot(ctx)
 			require.NoError(t, err)
-			exec("INSERT INTO "+table+" SELECT * FROM "+table,
+			execPreparedUsage(t, store, "INSERT INTO "+table+" SELECT * FROM "+table,
 				"SYSTEM START MERGES "+table, "OPTIMIZE TABLE "+table+" FINAL", "SYSTEM STOP MERGES "+table)
 			merged, err := store.readPartsSnapshot(ctx)
 			require.NoError(t, err)
@@ -97,11 +74,26 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 		})
 	}
 	for _, table := range chUsageReadTables {
-		exec("SYSTEM START MERGES " + table)
+		execPreparedUsage(t, store, "SYSTEM START MERGES "+table)
 	}
+	for _, custom := range []map[string]config.CustomModelRate{
+		{"round-test": {InputMicrodollarsPerMTok: 5_000_000}},
+		{"claude-test": {InputMicrodollarsPerMTok: 7_000_000}},
+	} {
+		before := read()
+		daily := maps.Clone(store.dailyUsageRows.entries)
+		top := maps.Clone(store.topSessionTotals.entries)
+		store.SetCustomPricing(custom)
+		after := read()
+		require.NotEqual(t, daily, store.dailyUsageRows.entries)
+		require.NotEqual(t, top, store.topSessionTotals.entries)
+		require.NotEqual(t, before.daily.Totals.TotalCost, after.daily.Totals.TotalCost)
+		require.NotEqual(t, before.top, after.top)
+	}
+	store.SetCustomPricing(nil)
 	// Each real change must update every memo, even when a
 	// particular result, such as session counts after repricing, stays equal.
-	requireMiss := func(change func()) reads {
+	requireMiss := func(change func()) preparedUsageRead {
 		t.Helper()
 		daily := maps.Clone(store.dailyUsageRows.entries)
 		top := maps.Clone(store.topSessionTotals.entries)
@@ -115,7 +107,7 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	}
 	afterPush := requireMiss(func() {
 		appendMessage(t, local, usagePriceRoundID, "more usage", "2026-01-12T04:00:00.000Z")
-		push()
+		pushPreparedUsage(t, syncer)
 	})
 	require.Greater(t, afterPush.daily.Totals.InputTokens, before.daily.Totals.InputTokens)
 	require.NotEqual(t, before.top, afterPush.top)
@@ -124,7 +116,7 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 		deleted, err := local.DeleteSessionIfTrashed(ctx, usagePriceTierID)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, deleted)
-		push()
+		pushPreparedUsage(t, syncer)
 	})
 	require.Equal(t, afterPush.counts.Total-1, afterDelete.counts.Total)
 	require.Less(t, afterDelete.daily.Totals.InputTokens, afterPush.daily.Totals.InputTokens)
@@ -144,48 +136,81 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	require.Equal(t, afterPricing, afterRefresh)
 }
 
-func TestUsageRowsVersionNotKeptAcrossWrite(t *testing.T) {
+// A request can take its parts snapshot before another request's merge.
+// Both coverage and range memos must still reuse the unchanged rows.
+func TestUsageRowsVersionRetriesAcrossMerge(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	store := NewStoreFromDB(syncer.conn)
-	_, err := store.DB().ExecContext(ctx, "SYSTEM STOP VIEW prepare_usage")
-	require.NoError(t, err)
-	_, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	for _, stmt := range []string{"SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
-		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage", "SYSTEM STOP MERGES sessions"} {
-		_, err := store.DB().ExecContext(ctx, stmt)
-		require.NoError(t, err)
-	}
+	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
+	pushPreparedUsage(t, syncer)
+	execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage", "SYSTEM STOP MERGES sessions")
+	appendMessage(t, local, usagePriceRoundID, "delta usage", "2026-01-12T03:50:00.000Z")
+	pushPreparedUsage(t, syncer)
 	f := db.UsageFilter{Timezone: "UTC"}
-	_, err = store.GetDailyUsage(ctx, f)
-	require.NoError(t, err)
+	before := readPreparedUsage(t, store, f)
 	kept := maps.Clone(store.dailyUsageRows.entries)
-	versions := maps.Clone(store.usageVersions.tables)
 	state, err := store.preparedUsageState(ctx)
 	require.NoError(t, err)
-	for _, stmt := range []string{"INSERT INTO sessions SELECT * FROM sessions", "SYSTEM START MERGES sessions",
-		"OPTIMIZE TABLE sessions FINAL", "SYSTEM STOP MERGES sessions"} {
-		_, err := store.DB().ExecContext(ctx, stmt)
-		require.NoError(t, err)
-	}
+	live := store.coverageCache.live
+	// The insert gives the request a changed snapshot that a later merge replaces.
+	execPreparedUsage(t, store, "INSERT INTO sessions SELECT * FROM sessions")
 	oldCtx, err := store.withPartsSnapshot(ctx)
 	require.NoError(t, err)
-	appendMessage(t, local, usagePriceRoundID, "more usage", "2026-01-12T04:00:00.000Z")
-	_, err = syncer.Push(ctx, false, nil)
+	execPreparedUsage(t, store, "SYSTEM START MERGES sessions", "OPTIMIZE TABLE sessions FINAL", "SYSTEM STOP MERGES sessions")
+	probes := store.usageRowIdentityQueries.Load()
+	got, err := store.preparedUsageState(oldCtx)
 	require.NoError(t, err)
+	require.Equal(t, state, got)
+	require.Equal(t, probes+2, store.usageRowIdentityQueries.Load())
+	require.NotEmpty(t, live.deltaRows)
+	require.Same(t, &live.deltaRows[0], &store.coverageCache.live.deltaRows[0])
+	// The same old request snapshot also reaches the range memo path.
+	probes = store.usageRowIdentityQueries.Load()
 	slot, version, err := store.usageRowMemoKey(oldCtx, state, "daily", f, "", "", nil)
 	require.NoError(t, err)
-	require.Empty(t, slot)
-	require.Empty(t, version)
-	require.Equal(t, versions, store.usageVersions.tables)
-	store.dailyUsageRows.put(slot, version, nil)
-	require.Equal(t, kept, store.dailyUsageRows.entries)
-	probes := store.usageRowIdentityQueries.Load()
-	fresh, ok, err := store.usageRowsVersion(ctx, chUsageReadTables)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.NotEmpty(t, fresh)
+	require.NotEmpty(t, slot)
+	require.NotEmpty(t, version)
 	require.Equal(t, probes+1, store.usageRowIdentityQueries.Load())
+	require.Equal(t, before, readPreparedUsage(t, store, f))
+	for slot, entry := range kept {
+		require.Same(t, &entry.rows[0], &store.dailyUsageRows.entries[slot].rows[0])
+	}
+	// A real write during the same interval must produce a new version.
+	execPreparedUsage(t, store, "INSERT INTO sessions SELECT * FROM sessions")
+	oldCtx, err = store.withPartsSnapshot(ctx)
+	require.NoError(t, err)
+	appendMessage(t, local, usagePriceRoundID, "more usage", "2026-01-12T04:00:00.000Z")
+	pushPreparedUsage(t, syncer)
+	_, changed, err := store.usageRowMemoKey(oldCtx, state, "daily", f, "", "", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, changed)
+	require.NotEqual(t, version, changed)
+	after := readPreparedUsage(t, store, f)
+	require.Greater(t, after.daily.Totals.InputTokens, before.daily.Totals.InputTokens)
+}
+
+func TestUsageUnpreparedSkipsIdentityProbe(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedUsagePriceFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
+	pushPreparedUsage(t, syncer)
+	f := db.UsageFilter{Timezone: "UTC"}
+	raw := readPreparedUsage(t, store, f)
+	require.NotZero(t, raw.daily.Totals.InputTokens)
+	require.Zero(t, store.usageRowIdentityQueries.Load())
+	// Published snapshots with an empty prepared table take the second exit.
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+	require.Equal(t, raw, readPreparedUsage(t, store, f))
+	require.Zero(t, store.usageRowIdentityQueries.Load())
+	// Older compatible mirrors have neither snapshots nor a ready marker.
+	execPreparedUsage(t, store, "DELETE FROM sync_metadata WHERE startsWith(key, '"+usageSnapshotReadyKeyBase+":') SETTINGS mutations_sync=2",
+		"DROP TABLE usage_session_snapshots")
+	require.NoError(t, CheckSchemaCompat(ctx, store.DB()))
+	require.Equal(t, raw, readPreparedUsage(t, store, f))
+	require.Zero(t, store.usageRowIdentityQueries.Load())
 }
