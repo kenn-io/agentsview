@@ -105,6 +105,23 @@ func (v *liveVectorServing) Notify(recall bool) {
 func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	return v.managerLocked(store)
+}
+
+// ManagerSetup looks store's manager up under the hold of v.mu that reads
+// setup, so a manager withheld by setup arrives with the busy state that
+// withheld it; it skips the inspection SetupStatus runs outside v.mu.
+func (v *liveVectorServing) ManagerSetup(store string) (server.EmbeddingsManager, server.EmbeddingsSetupStatus) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	status := v.setup
+	status.Enabled = v.cfg.Vector.Enabled
+	return v.managerLocked(store), status
+}
+
+// managerLocked admits store's manager unless setup is replacing it; callers
+// hold v.mu.
+func (v *liveVectorServing) managerLocked(store string) server.EmbeddingsManager {
 	if v.serving.manager == nil || v.setup.Busy {
 		return nil
 	}

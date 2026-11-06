@@ -14,6 +14,9 @@ import (
 // EmbeddingsRuntime owns the writable daemon's live vector setup.
 type EmbeddingsRuntime interface {
 	Manager(store string) EmbeddingsManager
+	// ManagerSetup reports store's manager with the setup state read
+	// alongside it, so a missing manager can be told from one setup withheld.
+	ManagerSetup(store string) (EmbeddingsManager, EmbeddingsSetupStatus)
 	IncludeAutomated() bool
 	SetupStatus(context.Context) (EmbeddingsSetupStatus, error)
 	Setup(action string) error
@@ -212,12 +215,23 @@ func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
 
 // embeddingsManagerAfterSetup looks a missing manager up again once setup
 // reports it is no longer busy, since setup may have installed it after the
-// route's first lookup.
-func (s *Server) embeddingsManagerAfterSetup(manager EmbeddingsManager, store string) EmbeddingsManager {
-	if manager != nil {
+// route's first lookup, or a later setup may have begun and withheld it.
+func (s *Server) embeddingsManagerAfterSetup(manager EmbeddingsManager, store string, setup *EmbeddingsSetupStatus) EmbeddingsManager {
+	if manager != nil || setup == nil {
 		return manager
 	}
-	return s.embeddingsManagerFor(store)
+	return s.embeddingsManagerDuringSetup(store, setup)
+}
+
+// embeddingsManagerDuringSetup looks store's manager up with the setup state
+// read beside it and replaces setup with that state when setup withheld the
+// manager, leaving a missing or unknown store's setup as it was.
+func (s *Server) embeddingsManagerDuringSetup(store string, setup *EmbeddingsSetupStatus) EmbeddingsManager {
+	manager, current := s.embeddingsRuntime.ManagerSetup(store)
+	if manager == nil && current.Busy {
+		*setup = current
+	}
+	return manager
 }
 
 func (s *Server) humaEmbeddingsBuild(
@@ -286,8 +300,8 @@ func (s *Server) humaEmbeddingsStatus(
 			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
 		}
 	}
-	if manager = s.embeddingsManagerAfterSetup(manager, in.Store); manager == nil {
-		if body.Setup != nil && body.Setup.Error != "" {
+	if manager = s.embeddingsManagerAfterSetup(manager, in.Store, body.Setup); manager == nil {
+		if body.Setup != nil && (body.Setup.Error != "" || body.Setup.Busy) {
 			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
 		}
 		return nil, s.embeddingsUnavailableError()
