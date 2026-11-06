@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedlocal"
 )
 
@@ -132,6 +134,13 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 			require.NoError(t, err)
 			defer func() { releaseInstall(); require.NoError(t, owner.Close()) }()
+			initialManager := owner.Manager("")
+			require.NotNil(t, initialManager)
+			require.NoError(t, initialManager.StartBuild(vector.BuildRequest{}))
+			initialManager.Wait()
+			generations, err := initialManager.Generations(t.Context())
+			require.NoError(t, err)
+			require.Len(t, generations, 1)
 			runtime := &pausedEmbeddingsLookup{EmbeddingsRuntime: owner, lookedUp: make(chan struct{}), resume: make(chan struct{})}
 			resume := sync.OnceFunc(func() { close(runtime.resume) })
 			defer resume()
@@ -144,7 +153,7 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			}
 			method, path := http.MethodGet, "/api/v1/embeddings/"+operation
 			if operation == "activate" || operation == "retire" {
-				method, path = http.MethodPost, "/api/v1/embeddings/generations/1/"+operation
+				method, path = http.MethodPost, "/api/v1/embeddings/generations/"+strconv.FormatInt(generations[0].ID, 10)+"/"+operation
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
