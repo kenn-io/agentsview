@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"go.kenn.io/agentsview/internal/vector"
@@ -116,10 +117,27 @@ const embeddingsSetupBusyCode = "embeddings_setup_busy"
 func (s *Server) embeddingsBuildUnavailableError(ctx context.Context) error {
 	if s.embeddingsRuntime != nil {
 		if setup, err := s.embeddingsRuntime.SetupStatus(ctx); err == nil && setup.Busy {
-			return apiErrorWithCode(http.StatusConflict, embeddingsSetupBusyCode, "search by meaning is being set up; run the build again when it finishes")
+			return embeddingsSetupBusyError()
 		}
 	}
 	return s.embeddingsUnavailableError()
+}
+
+// ErrEmbeddingsSetupBusy is the build refusal from a manager setup began
+// replacing after the route looked it up.
+var ErrEmbeddingsSetupBusy = fmt.Errorf("%w: search by meaning is being set up", vector.ErrBuildRunning)
+
+func embeddingsSetupBusyError() error {
+	return apiErrorWithCode(http.StatusConflict, embeddingsSetupBusyCode, "search by meaning is being set up; run the build again when it finishes")
+}
+
+// embeddingsBuildRunningError keeps the setup-busy code on a build refused
+// after the manager lookup.
+func embeddingsBuildRunningError(err error) error {
+	if errors.Is(err, ErrEmbeddingsSetupBusy) {
+		return embeddingsSetupBusyError()
+	}
+	return apiError(http.StatusConflict, err.Error())
 }
 
 func (s *Server) registerEmbeddingsRoutes() {
@@ -225,7 +243,7 @@ func (s *Server) humaEmbeddingsBuild(
 	if err := manager.StartBuild(req); err != nil {
 		release()
 		if errors.Is(err, vector.ErrBuildRunning) {
-			return nil, apiError(http.StatusConflict, err.Error())
+			return nil, embeddingsBuildRunningError(err)
 		}
 		if errors.Is(err, vector.ErrUnknownServer) ||
 			errors.Is(err, vector.ErrInvalidBuildRequest) {

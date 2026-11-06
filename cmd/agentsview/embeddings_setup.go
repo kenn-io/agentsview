@@ -109,10 +109,10 @@ func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 		return nil
 	}
 	if store == "" || store == vector.MessageIndexSpec().Name {
-		return v.serving.manager
+		return v.admit(v.serving.manager)
 	}
 	if store == vector.RecallIndexSpec().Name {
-		return v.serving.recallManager
+		return v.admit(v.serving.recallManager)
 	}
 	return nil
 }
