@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"sync"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -25,14 +26,8 @@ func (s *Store) runtimeState() *storeRuntime {
 					MaxBytes: 128 << 20,
 					Size: func(e pgActivityKept) int64 {
 						size := activity.EstimatedArtifactBytes(e.report.Artifacts)
-						for _, id := range e.candidates {
+						for _, id := range slices.Concat(e.candidates, e.peers, e.labels) {
 							size += int64(len(id)) + 16
-						}
-						for _, id := range e.peers {
-							size += int64(len(id)) + 16
-						}
-						for _, label := range e.labels {
-							size += int64(len(label)) + 16
 						}
 						return size
 					},

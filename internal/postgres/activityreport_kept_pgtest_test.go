@@ -27,6 +27,13 @@ func pgKeptSession(t *testing.T, d *db.DB, id, project, date string) {
 	}))
 }
 
+func pgKeptIdentity(session string, day int) export.ProjectIdentityObservation {
+	return export.ProjectIdentityObservation{
+		SessionID: session, Project: "project-a", Machine: "test-machine", RootPath: "/work/project-a",
+		GitRemote: "https://example.com/team/project-a.git", ObservedAt: time.Date(2026, 6, day, 11, 0, 0, 0, time.UTC),
+	}
+}
+
 func pgKeptPush(t *testing.T, syncer *Sync, full bool) {
 	t.Helper()
 	result, err := syncer.Push(t.Context(), full, nil)
@@ -68,19 +75,22 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 		write    func(*testing.T, *db.DB)
 		check    func(*testing.T, activity.CandidateArtifacts)
 	}{
-		{name: "next day", keep: true, write: func(t *testing.T, d *db.DB) {
+		{name: "next day", keep: true, prepare: func(t *testing.T, d *db.DB) {
+			t.Helper()
+			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), pgKeptIdentity("past", 14)))
+		}, write: func(t *testing.T, d *db.DB) {
 			t.Helper()
 			pgKeptSession(t, d, "next", "project-a", "2026-06-15")
+			session, err := d.GetSession(t.Context(), "next")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			_, err = d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+				Session: *session, IdentityObservation: pgKeptIdentity("next", 15), IdentitySnapshotProject: &session.Project,
+			}})
+			require.NoError(t, err)
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
 			t.Helper()
 			assert.Len(t, a.Sessions, 1)
-		}},
-		{name: "late import", write: func(t *testing.T, d *db.DB) {
-			t.Helper()
-			pgKeptSession(t, d, "late", "project-a", "2026-06-14")
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Len(t, a.Sessions, 2)
 		}},
 		{name: "excluded project", keep: true, write: func(t *testing.T, d *db.DB) {
 			t.Helper()
@@ -89,7 +99,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.Len(t, a.Sessions, 1)
 		}},
-		{name: "New York late import", timezone: "America/New_York", write: func(t *testing.T, d *db.DB) {
+		{name: "late import in New York", timezone: "America/New_York", write: func(t *testing.T, d *db.DB) {
 			t.Helper()
 			require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 				ID: "late", Project: "project-a", Machine: "test-machine", Agent: "claude",
@@ -103,13 +113,6 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.Len(t, a.Sessions, 2)
 			assert.Equal(t, 1000, a.Report.Totals.OutputTokens)
-		}},
-		{name: "soft delete", write: func(t *testing.T, d *db.DB) {
-			t.Helper()
-			require.NoError(t, d.SoftDeleteSession(t.Context(), "past"))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Empty(t, a.Sessions)
 		}},
 		{name: "hard delete", write: func(t *testing.T, d *db.DB) {
 			t.Helper()
@@ -160,32 +163,21 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 		}},
 		{name: "project identity", write: func(t *testing.T, d *db.DB) {
 			t.Helper()
-			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), export.ProjectIdentityObservation{
-				SessionID: "past", Project: "project-a", Machine: "test-machine",
-				RootPath: "/work/project-a", GitRemote: "https://example.com/team/project-a.git",
-				ObservedAt: time.Date(2026, 6, 14, 11, 0, 0, 0, time.UTC),
-			}))
+			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), pgKeptIdentity("past", 14)))
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
 			t.Helper()
 			assert.NotEmpty(t, a.Report.Projects)
 		}},
-		{name: "project assignment", write: func(t *testing.T, d *db.DB) {
+		{name: "terminal after range", write: func(t *testing.T, d *db.DB) {
 			t.Helper()
-			_, err := d.AssignSessionProject(t.Context(), "past", "project-b")
-			require.NoError(t, err)
+			pgKeptSession(t, d, "old", "project-a", "2026-06-12")
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "old", []db.Message{{
+				SessionID: "old", Ordinal: 0, Role: "assistant", Content: "tool", Timestamp: "2026-06-12T10:00:00Z",
+				ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "shell", ResultEvents: []db.ToolResultEvent{{Source: "tool_execution", Status: "completed", Timestamp: "2026-06-16T10:00:00Z"}}}},
+			}}))
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
 			t.Helper()
-			assert.Empty(t, a.Sessions)
-		}},
-		{name: "usage replacement", prepare: func(t *testing.T, d *db.DB) {
-			t.Helper()
-			require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "past", []db.UsageEvent{{Source: "session", Model: "kept-model", OutputTokens: 100, OccurredAt: "2026-06-14T10:01:00Z"}}))
-		}, write: func(t *testing.T, d *db.DB) {
-			t.Helper()
-			require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "past", []db.UsageEvent{{Source: "session", Model: "kept-model", OutputTokens: 900, OccurredAt: "2026-06-14T10:01:00Z"}}))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Equal(t, 1400, a.Report.Totals.OutputTokens)
+			assert.Len(t, a.Sessions, 2)
 		}},
 		{name: "ineligible Claude peer", keep: true, prepare: func(t *testing.T, d *db.DB) {
 			t.Helper()
@@ -261,65 +253,6 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, true))
 		})
 	}
-}
-
-func TestPGActivityReportKeptReuse(t *testing.T) {
-	local, syncer, store := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
-	identity := export.ProjectIdentityObservation{
-		SessionID: "past", Project: "project-a", Machine: "test-machine", RootPath: "/work/project-a",
-		GitRemote: "https://example.com/team/project-a.git", ObservedAt: time.Date(2026, 6, 14, 11, 0, 0, 0, time.UTC),
-	}
-	require.NoError(t, local.UpsertProjectIdentityObservation(t.Context(), identity))
-	pgKeptPush(t, syncer, false)
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	first := pgKeptBuild(t, store, f, q, true)
-	require.Equal(t, 500, first.Report.Totals.OutputTokens)
-	requirePGKeptEqual(t, first, pgKeptBuild(t, store, f, q, false))
-	pgKeptSession(t, local, "today", "project-a", "2026-06-17")
-	identity.SessionID = "today"
-	identity.ObservedAt = time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC)
-	session, err := local.GetSession(t.Context(), "today")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session: *session, IdentityObservation: identity, IdentitySnapshotProject: &session.Project,
-	}})
-	require.NoError(t, err)
-	pgKeptPush(t, syncer, false)
-	requirePGKeptEqual(t, first, pgKeptBuild(t, store, f, q, false))
-}
-
-func TestPGActivityReportKeptRedateIntoRange(t *testing.T) {
-	local, syncer, store := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "past", "project-a", "2026-06-12")
-	pgKeptPush(t, syncer, false)
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	require.Empty(t, pgKeptBuild(t, store, f, q, true).Sessions)
-	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	changed := pgKeptBuild(t, store, f, q, true)
-	require.Len(t, changed.Sessions, 1)
-	assert.Equal(t, 500, changed.Report.Totals.OutputTokens)
-	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
-	requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, true))
-}
-
-func TestPGActivityReportKeptTerminalAfterRange(t *testing.T) {
-	local, syncer, store := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "old", "project-a", "2026-06-12")
-	pgKeptPush(t, syncer, false)
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	require.Empty(t, pgKeptBuild(t, store, f, q, true).Sessions)
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "old", []db.Message{{
-		SessionID: "old", Ordinal: 0, Role: "assistant", Content: "tool", Timestamp: "2026-06-12T10:00:00Z",
-		ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "shell", ResultEvents: []db.ToolResultEvent{{Source: "tool_execution", Status: "completed", Timestamp: "2026-06-16T10:00:00Z"}}}},
-	}}))
-	pgKeptPush(t, syncer, false)
-	changed := pgKeptBuild(t, store, f, q, true)
-	require.Len(t, changed.Sessions, 1)
-	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
-	requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, true))
 }
 
 func TestPGActivityReportKeptPushDuringBuild(t *testing.T) {

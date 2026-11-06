@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"slices"
 
-	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
@@ -34,7 +33,7 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricing []export.Effect
 	return fmt.Sprintf("%d|%s", oid, digest), err
 }
 
-func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, q activity.Query) (kept.Report, int64, bool, error) {
+func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, bool, error) {
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
 	after := int64(math.MaxInt64)
@@ -57,7 +56,6 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		}
 	}
 	if len(changed) > 0 {
-		rangeStart, rangeEnd := db.ActivityReportInstantBoundsUTC(q)
 		_, ids, err := s.activityReportSessions(ctx, f, rangeStart, rangeEnd, changed)
 		if err != nil || len(ids) > 0 {
 			return kept.Report{}, through, false, err
@@ -69,7 +67,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
     AND (`+activityReportClaudePeerPredicate("$2", "$3", "$4")+`)
     AND COALESCE(m.timestamp, s.started_at) >= $3::timestamptz
     AND COALESCE(m.timestamp, s.started_at) <= $4::timestamptz)`,
-			changed, entry.candidates, db.PaddedUTCBound(rangeStart, -14), db.PaddedUTCBound(rangeEnd, 14)).Scan(&overlaps)
+			changed, entry.candidates, lower, upper).Scan(&overlaps)
 		if err != nil {
 			return kept.Report{}, through, false, fmt.Errorf("checking kept activity changes: %w", err)
 		}

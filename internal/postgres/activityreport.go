@@ -88,7 +88,8 @@ func (s *Store) BuildActivityReportArtifacts(
 			selection = kept.Selection(f, q)
 			var report kept.Report
 			var hit bool
-			report, revision, hit, err = s.keptActivityReport(ctx, selection, version, f, q)
+			report, revision, hit, err = s.keptActivityReport(ctx, selection, version, f,
+				rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
 			if err != nil {
 				return activity.CandidateArtifacts{}, err
 			}
@@ -358,10 +359,12 @@ func (s *Store) activityReportSessions(
 		COALESCE(s.is_automated, false) AS is_automated,
 		s.relationship_type = 'subagent' AS is_subagent
 	FROM sessions s
-	WHERE ` + where + ` AND (COALESCE(s.ended_at,
+	WHERE ` + where + `
+		AND (COALESCE(s.ended_at,
 				(SELECT MAX(m.timestamp) FROM messages m
 					WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
-				s.started_at, s.created_at) >= ` + lower + `::timestamptz
+				s.started_at, s.created_at) >= ` +
+		lower + `::timestamptz
 			OR EXISTS (
 				SELECT 1 FROM tool_result_events tre
 				WHERE tre.session_id = s.id
@@ -369,7 +372,8 @@ func (s *Store) activityReportSessions(
 					AND tre.status IN ('completed', 'errored')
 					AND tre.timestamp >= ` + lower + `::timestamptz
 			))
-		AND COALESCE(s.started_at, s.created_at) < ` + upper + `::timestamptz`
+		AND COALESCE(s.started_at, s.created_at) < ` +
+		upper + `::timestamptz`
 
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
