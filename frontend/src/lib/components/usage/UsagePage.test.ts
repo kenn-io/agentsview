@@ -134,7 +134,7 @@ afterEach(() => {
   usage.summary = null;
   usage.referenceSummary = null;
   usage.lastUpdatedAt = null;
-  usage.refreshPending = false;
+  usage.hasNewData = false;
   usage.topSessions = null;
   usage.errors.summary = null;
   usage.errors.topSessions = null;
@@ -227,15 +227,23 @@ describe("UsagePage refresh behavior", () => {
     expect(requests).toHaveBeenCalledTimes(3);
   });
 
-  it("queues the refresh button until the shared minute deadline", async () => {
+  it("refreshes the visible totals immediately when the button is clicked", async () => {
     const { requests } = await mountLiveUsage();
     await vi.advanceTimersByTimeAsync(30_000);
+    requests.mockResolvedValue(tenModelUsageSummary());
     document.querySelector<HTMLButtonElement>('button[aria-label="Refresh usage data"]')!.click();
-    await flushEffects();
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(requests).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
     expect(requests).toHaveBeenCalledTimes(2);
+    expect(usage.summary?.totals.inputTokens).toBe(100);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(requests).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes within a minute after the wall clock moves backwards", async () => {
+    const { requests, emit } = await mountLiveUsage();
+    vi.setSystemTime(Date.now() - 3_600_000);
+    emit({ scope: "messages" });
+    await flushEffects();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requests).toHaveBeenCalledTimes(2);
   });
