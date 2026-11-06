@@ -47,12 +47,15 @@ func TestActivityReportSecondReadLane(t *testing.T) {
 			defer release()
 		}
 	}
-	var want activity.CandidateArtifacts
-	var wantProgress []activity.Progress
 	for _, busy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
+			var wantProgress []activity.Progress
+			want, err := d.BuildActivityReportArtifacts(ctx, AnalyticsFilter{Timezone: "UTC"}, q, func(p activity.Progress) {
+				wantProgress = append(wantProgress, p)
+			})
+			require.NoError(t, err)
 			if busy {
 				for range bulkReadSlots - 1 {
 					release, err := d.acquireBulkRead(ctx)
@@ -65,15 +68,10 @@ func TestActivityReportSecondReadLane(t *testing.T) {
 				progress = append(progress, p)
 			})
 			require.NoError(t, err)
-			if busy {
-				assert.Equal(t, want, got)
-				assert.Equal(t, wantProgress, progress)
-			} else {
-				want = got
-				wantProgress = progress
-				require.Len(t, got.Sessions, 1)
-				assert.InDelta(t, 2.0, got.Report.Totals.AgentMinutes, 1e-9)
-			}
+			assert.Equal(t, want, got)
+			assert.Equal(t, wantProgress, progress)
+			require.Len(t, got.Sessions, 1)
+			assert.InDelta(t, 2.0, got.Report.Totals.AgentMinutes, 1e-9)
 			assert.Equal(t, activity.ProgressDone, progress[len(progress)-1].Phase)
 		})
 		assertLaneFree(t)

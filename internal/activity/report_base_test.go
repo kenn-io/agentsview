@@ -114,7 +114,6 @@ func (b *reportBackendFixture) BuildProjectIdentityMap(_ context.Context, labels
 func TestBuildReportArtifacts(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC", BucketOverride: "1h"}, fixedNow(t))
 	require.NoError(t, err)
-	var want CandidateArtifacts
 	for _, concurrent := range []bool{false, true} {
 		for _, withProgress := range []bool{true, false} {
 			name := "nil callback"
@@ -122,6 +121,13 @@ func TestBuildReportArtifacts(t *testing.T) {
 				name = "progress callback"
 			}
 			t.Run(fmt.Sprintf("%s/concurrent=%t", name, concurrent), func(t *testing.T) {
+				baseline := &reportBackendFixture{t: t, q: q, ids: []string{"s"}, pricing: &export.PricingBlock{}}
+				want, _, err := BuildReportArtifacts(
+					t.Context(), baseline,
+					[]SessionMeta{{SessionID: "s", Project: "project-a"}}, baseline.ids, q,
+					nil, "aggregating example activity report",
+				)
+				require.NoError(t, err)
 				backend := &reportBackendFixture{t: t, q: q, ids: []string{"s"}, pricing: &export.PricingBlock{}, concurrent: concurrent}
 				progress := []Progress{}
 				var onProgress ProgressFunc
@@ -135,11 +141,7 @@ func TestBuildReportArtifacts(t *testing.T) {
 					"aggregating example activity report",
 				)
 				require.NoError(t, err)
-				if concurrent {
-					assert.Equal(t, want, artifacts)
-				} else {
-					want = artifacts
-				}
+				assert.Equal(t, want, artifacts)
 				assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
 				if concurrent {
 					assert.ElementsMatch(t, []string{"usage", "candidates"}, backend.calls[:2])

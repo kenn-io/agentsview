@@ -6,8 +6,6 @@ import (
 	"maps"
 	"slices"
 
-	"golang.org/x/sync/errgroup"
-
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -34,32 +32,28 @@ func BuildReportArtifacts(
 	var usageErr error
 	readCtx := ctx
 	loadUsage := func() ([]UsageRow, error) { return usage, nil }
-	var group *errgroup.Group
+	var ready chan struct{}
 	var cancel context.CancelCauseFunc
 	if concurrent, ok := backend.(ConcurrentUsageBackend); ok {
 		if release, ok := concurrent.ActivityReportSecondRead(); ok {
-			var stageCtx context.Context
-			stageCtx, cancel = context.WithCancelCause(ctx)
+			readCtx, cancel = context.WithCancelCause(ctx)
 			defer cancel(nil)
-			group, readCtx = errgroup.WithContext(stageCtx)
-			ready := make(chan struct{})
-			group.Go(func() error {
+			ready = make(chan struct{})
+			go func() {
 				defer close(ready)
 				defer release()
 				usage, pricing, usageErr = backend.ActivityReportUsage(readCtx, ids, q)
 				if usageErr != nil {
 					cancel(usageErr)
 				}
-				return usageErr
-			})
+			}()
 			loadUsage = func() ([]UsageRow, error) {
-				// Wait cancels readCtx, which aggregation still needs for allocation.
 				<-ready
 				return usage, usageErr
 			}
 		}
 	}
-	if group == nil {
+	if ready == nil {
 		usage, pricing, usageErr = backend.ActivityReportUsage(ctx, ids, q)
 		if usageErr != nil {
 			return CandidateArtifacts{}, Progress{}, usageErr
@@ -94,11 +88,11 @@ func BuildReportArtifacts(
 	if err != nil {
 		err = fmt.Errorf("%s: %w", aggregationLabel, err)
 	}
-	if group != nil {
+	if ready != nil {
 		if err != nil {
 			cancel(err)
 		}
-		usageErr = group.Wait()
+		<-ready
 		if err != nil || usageErr != nil {
 			// Keep the initiating stage's error, before its peer observes cancellation.
 			return CandidateArtifacts{}, Progress{}, context.Cause(readCtx)

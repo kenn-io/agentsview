@@ -100,6 +100,39 @@ func TestPGGetActivityReport(t *testing.T) {
 	assert.GreaterOrEqual(t, len(r.ByModel), 2)
 }
 
+func TestPGActivityReportSecondRead(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_activity_second_read_test")
+	seedPGDailyFixture(t, store)
+	ctx := t.Context()
+	q := pgDayQuery(t, "2026-06-16", "UTC")
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+
+	release, ok := (activityReportBackend{Store: store}).ActivityReportSecondRead()
+	require.True(t, ok, "a pool-backed report can read usage while pairing")
+	release()
+	var poolProgress []activity.Progress
+	pooled, err := store.BuildActivityReportArtifacts(ctx, f, q, func(p activity.Progress) {
+		poolProgress = append(poolProgress, p)
+	})
+	require.NoError(t, err)
+	require.Len(t, pooled.Sessions, 2)
+	assert.Equal(t, 2, pooled.Report.Peak.Agents)
+
+	tx, err := store.DB().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, tx.Rollback()) }()
+	view := store.readView(tx)
+	_, ok = (activityReportBackend{Store: view}).ActivityReportSecondRead()
+	require.False(t, ok, "a transaction view must read usage and candidates in order")
+	var viewProgress []activity.Progress
+	sequential, err := view.BuildActivityReportArtifacts(ctx, f, q, func(p activity.Progress) {
+		viewProgress = append(viewProgress, p)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, pooled, sequential)
+	assert.Equal(t, poolProgress, viewProgress)
+}
+
 // TestPGGetActivityReportOpenSessionWithInRangeMessageIncluded confirms a
 // still-open session (no ended_at) that started before the range but has a
 // message inside it is not dropped. The effective-end fallback uses the
