@@ -218,15 +218,28 @@ func TestIdleTrackerNilReceiverIsNoop(t *testing.T) {
 }
 
 func TestIdleTrackerSyncSuspensionTracksExternalRequestsAndOutsideWork(t *testing.T) {
-	for _, name := range []string{"external request", "outside work"} {
+	for _, name := range []string{"external request", "outside work", "base-path ping"} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				tracker := NewIdleTracker(0, func() {})
+				timeout := time.Duration(0)
+				if name == "base-path ping" {
+					timeout = time.Minute
+				}
+				tracker := NewIdleTracker(timeout, func() { assert.Fail(t, "desktop probes must keep the daemon alive") })
 				suspended := make(chan struct{}, 4)
 				tracker.SetSyncIdle(time.Minute, func() { suspended <- struct{}{} })
 				switch name {
+				case "base-path ping":
+					handler := tracker.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), "/archive")
+					go tracker.Run(ctx)
+					for range 6 {
+						time.Sleep(30 * time.Second)
+						handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/archive/api/ping", nil))
+					}
+					synctest.Wait()
+					assert.Len(t, suspended, 1, "desktop probes permit local suspension")
 				case "outside work":
 					finish := requireBeginWork(t, tracker)
 					defer finish()
@@ -256,22 +269,4 @@ func TestIdleTrackerSyncSuspensionTracksExternalRequestsAndOutsideWork(t *testin
 			})
 		})
 	}
-}
-
-func TestIdleSyncIgnoresBasePathPing(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		tracker := NewIdleTracker(time.Minute, func() { assert.Fail(t, "desktop probes must keep the daemon alive") })
-		suspensions := 0
-		tracker.SetSyncIdle(time.Minute, func() { suspensions++ })
-		handler := tracker.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), "/archive")
-		go tracker.Run(ctx)
-		for range 6 {
-			time.Sleep(30 * time.Second)
-			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/archive/api/ping", nil))
-		}
-		synctest.Wait()
-		require.Equal(t, 1, suspensions)
-	})
 }

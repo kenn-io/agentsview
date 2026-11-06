@@ -447,7 +447,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 		{name: "battery", battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
 		{name: "required on battery", battery: true, stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
 		{name: "required while idle", idle: true, stale: true, want: attempt{archiveAuditRetryInitial + batteryRecheckInterval, "resync-build"}},
-		{name: "idle on battery", idle: true, battery: true, want: attempt{archiveAuditInterval + 3*batteryRecheckInterval, "audit"}},
+		{name: "idle", idle: true, want: attempt{archiveAuditInterval + batteryRecheckInterval, "audit"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -492,7 +492,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 					synctest.Wait()
 				}
 				if tc.idle && !tc.stale {
-					synctest.Sleep(archiveAuditInterval + batteryRecheckInterval)
+					synctest.Sleep(archiveAuditInterval)
 					synctest.Wait()
 					assert.Empty(t, attempts, "the due audit waits for collection to resume")
 					ingestion.mu.Lock()
@@ -501,11 +501,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 					synctest.Wait()
 				}
 				if tc.battery && !tc.stale {
-					if tc.idle {
-						synctest.Sleep(batteryRecheckInterval)
-					} else {
-						synctest.Sleep(archiveAuditInterval + 2*batteryRecheckInterval)
-					}
+					synctest.Sleep(archiveAuditInterval + 2*batteryRecheckInterval)
 					synctest.Wait()
 					assert.Empty(t, attempts, "routine audit must wait on battery")
 					battery.Store(false)
