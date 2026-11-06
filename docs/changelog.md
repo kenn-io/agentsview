@@ -11,6 +11,10 @@ The latest release is
 
 **New features**
 
+- PostgreSQL archives now keep a change journal. Installing it requires
+  `CREATE` on the schema and `TRIGGER` on the watched tables. Roles without
+  these privileges keep working without the journal.
+
 - Investigate an expensive archived session with `session diagnose <id>`. The
   report combines usage, context growth, compactions, large tool results, retry
   candidates, and child links. Use `--format json` for scripts or `--pg` to read
