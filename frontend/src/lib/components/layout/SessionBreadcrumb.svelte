@@ -997,9 +997,12 @@
     observer.observe(pane, { box: "border-box" });
     observer.observe(anchor);
     window.addEventListener("resize", place);
+    // A wrapped metadata group shifts its trigger without resizing it.
+    pane.addEventListener(META_WRAP_EVENT, place);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", place);
+      pane.removeEventListener(META_WRAP_EVENT, place);
     };
   }
 
@@ -1007,21 +1010,27 @@
   // separator. CSS cannot tell where a line starts, so mark those groups
   // after layout; the style block hides their separator without changing
   // their size, so marking cannot reflow the row.
+  const META_WRAP_EVENT = "metawrap";
+
   function markWrappedGroups(header: HTMLElement) {
     if (typeof ResizeObserver === "undefined") return;
     let frame = 0;
     const mark = () => {
       frame = 0;
       let previous: DOMRect | null = null;
+      let changed = false;
       for (const group of header.querySelectorAll<HTMLElement>(".meta-group")) {
         const rect = group.getBoundingClientRect();
         if (rect.width === 0 && rect.height === 0) continue;
-        group.toggleAttribute(
-          "data-wraps",
-          previous !== null && rect.top >= previous.bottom - 1,
-        );
+        const wraps = previous !== null && rect.top >= previous.bottom - 1;
+        if (group.hasAttribute("data-wraps") !== wraps) {
+          group.toggleAttribute("data-wraps", wraps);
+          changed = true;
+        }
         previous = rect;
       }
+      // Open usage menus re-place themselves against the moved trigger.
+      if (changed) header.dispatchEvent(new Event(META_WRAP_EVENT));
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(mark);
@@ -1265,6 +1274,20 @@
               onclick={handleToolEffectiveness}
             >
               {m.session_breadcrumb_tool_effectiveness()}
+            </button>
+          {/if}
+          {#if session && !session.health_grade}
+            <!-- Graded sessions open this panel from the grade chip; an
+                 ungraded session has no chip, so the panel lives here. -->
+            <button
+              class="actions-menu-item"
+              aria-pressed={ui.signalPanelOpen}
+              onclick={() => {
+                menuOpen = false;
+                ui.toggleSignalPanel();
+              }}
+            >
+              {m.session_breadcrumb_session_health_and_tool_sequences()}
             </button>
           {/if}
           <button
@@ -1684,19 +1707,23 @@
     font-weight: 600;
     line-height: 16px;
     color: color-mix(in srgb, var(--agent-ink, var(--text-muted)) 82%, var(--text-primary));
+    white-space: nowrap;
     flex-shrink: 0;
   }
 
   /* The metadata reads in groups: identity (agent and model), start time,
      usage figures, then the grade and ID chips. Items in a group are only
      spaced; a muted middot separates groups. */
+  /* A group too wide for the pane wraps its own items; each figure and
+     chip keeps nowrap itself, so the menus inside keep normal wrapping. */
   .meta-group {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 4px;
     min-width: 0;
+    max-width: 100%;
     flex-shrink: 0;
-    white-space: nowrap;
   }
 
   .meta-identity {
