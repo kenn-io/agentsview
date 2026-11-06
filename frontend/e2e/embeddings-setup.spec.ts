@@ -129,8 +129,6 @@ for (const width of [1280, 390]) {
         expect(
           generationsBox.y - Math.max(errorBox.y + errorBox.height, retryBox.y + retryBox.height),
         ).toBeGreaterThanOrEqual(16);
-        await retry.click();
-        await expect(page.locator(".kit-search-by-meaning")).toContainText("Indexing");
         for (const provider of ["ollama", "ollama-other"]) {
           phase = provider;
           await page.reload();

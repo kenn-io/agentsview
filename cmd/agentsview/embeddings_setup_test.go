@@ -34,6 +34,10 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 		onBattery = oldOnBattery
 	})
+	nomicParams := map[string]string{
+		"max_input_chars": "4000", "doc_unit_scheme": "run_v1", "chunk_overlap_chars": "600",
+		"query_prefix": "search_query: ", "document_prefix": "search_document: ",
+	}
 	for _, recipe := range []string{"fresh", "enabled-missing", "automatic", "configured", "nomic", "other"} {
 		t.Run(recipe, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
@@ -157,7 +161,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				return result
 			}
 			if recipe == "fresh" {
+				buildTestVectorsDB(t, cfg)
 				assert.True(t, push().Vectors.Skipped)
+				require.NoError(t, os.Remove(cfg.Vector.ResolvedDBPath(cfg.DataDir)))
 			}
 			initial := status()
 			require.NotNil(t, initial.Setup)
@@ -198,7 +204,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "fresh" {
 				assert.False(t, push().Vectors.Skipped, "browser activation must publish vectors without restart")
 				require.Len(t, replica.pushed, 1)
-				assert.NotEmpty(t, replica.pushed[0].Params)
+				assert.Equal(t, nomicParams, replica.pushed[0].Params)
 			}
 			if recipe == "configured" {
 				assert.Empty(t, status().Setup.Action)
@@ -232,7 +238,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "other" {
 				assert.False(t, push().Vectors.Skipped)
 				require.Len(t, replica.pushed, 1)
-				assert.NotEmpty(t, replica.pushed[0].Params, "switched vectors must carry their current recipe")
+				assert.Equal(t, nomicParams, replica.pushed[0].Params, "switched vectors must carry their current recipe")
 			}
 			if recipe == "fresh" {
 				var result db.ContentSearchPage
