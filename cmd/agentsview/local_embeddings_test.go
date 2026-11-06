@@ -66,7 +66,9 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 							dispatched = true
 							w.WriteHeader(http.StatusAccepted)
 						},
-						"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{"running":false,"last_result":{}}`) },
+						"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+							_, _ = io.WriteString(w, `{"running":false,"last_result":{}}`)
+						},
 					})
 				}
 				var out bytes.Buffer

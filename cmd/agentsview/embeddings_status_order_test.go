@@ -79,7 +79,7 @@ func TestLiveEmbeddingsSetupStatusAcrossSuccessiveSetups(t *testing.T) {
 			ts := startTestServer(t, ln, server.New(cfg, database, nil, server.WithEmbeddingsRuntime(runtime)).Handler())
 			embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"turn-on"}`), http.StatusAccepted)
 			<-owner.done
-			manager := owner.Manager("")
+			manager, _ := owner.ManagerSetup("")
 			require.NotNil(t, manager)
 			manager.Wait()
 			require.Empty(t, manager.Status().LastError)

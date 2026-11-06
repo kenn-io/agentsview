@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json/v2"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -28,13 +29,13 @@ type pausedEmbeddingsLookup struct {
 	once     sync.Once
 }
 
-func (p *pausedEmbeddingsLookup) Manager(store string) server.EmbeddingsManager {
-	manager := p.EmbeddingsRuntime.Manager(store)
+func (p *pausedEmbeddingsLookup) ManagerSetup(store string) (server.EmbeddingsManager, server.EmbeddingsSetupStatus) {
+	manager, setup := p.EmbeddingsRuntime.ManagerSetup(store)
 	p.once.Do(func() {
 		close(p.lookedUp)
 		<-p.resume
 	})
-	return manager
+	return manager, setup
 }
 
 func TestLiveEmbeddingsSetupRejectsBuildAfterManagerLookup(t *testing.T) {
@@ -106,8 +107,22 @@ func TestLiveEmbeddingsSetupRejectsBuildAfterManagerLookup(t *testing.T) {
 func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
 	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
-	for _, operation := range []string{"status", "generations", "activate", "retire"} {
-		t.Run(operation, func(t *testing.T) {
+	for _, tc := range []struct {
+		operation   string
+		duringSetup bool
+	}{
+		{"status", false},
+		{"build", false},
+		{"generations", false},
+		{"activate", false},
+		{"retire", false},
+		{"build", true},
+		{"generations", true},
+		{"activate", true},
+		{"retire", true},
+	} {
+		operation, duringSetup := tc.operation, tc.duringSetup
+		t.Run(fmt.Sprintf("%s/during-setup=%t", operation, duringSetup), func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
@@ -135,7 +150,7 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 			require.NoError(t, err)
 			defer func() { releaseInstall(); require.NoError(t, owner.Close()) }()
-			initialManager := owner.Manager("")
+			initialManager, _ := owner.ManagerSetup("")
 			require.NotNil(t, initialManager)
 			require.NoError(t, initialManager.StartBuild(vector.BuildRequest{}))
 			initialManager.Wait()
@@ -154,13 +169,20 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			ln, port := listenLoopback(t)
 			cfg.Host, cfg.Port = "127.0.0.1", port
 			ts := startTestServer(t, ln, server.New(cfg, database, nil, server.WithEmbeddingsRuntime(runtime)).Handler())
+			if duringSetup {
+				embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
+				<-activating
+			}
 			method, path := http.MethodGet, "/api/v1/embeddings/"+operation
+			if operation == "build" {
+				method = http.MethodPost
+			}
 			if operation == "activate" || operation == "retire" {
 				method, path = http.MethodPost, "/api/v1/embeddings/generations/"+strconv.FormatInt(generations[0].ID, 10)+"/"+operation
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
-			req, err := http.NewRequestWithContext(ctx, method, ts.URL+path, strings.NewReader(`{"force":true}`))
+			req, err := http.NewRequestWithContext(ctx, method, ts.URL+path, strings.NewReader(`{}`))
 			require.NoError(t, err)
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Origin", ts.URL)
@@ -181,11 +203,13 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 				completed <- result{status: response.StatusCode, body: body, err: err}
 			}()
 			<-lookedUp
-			embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
-			<-activating
+			if !duringSetup {
+				embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
+				<-activating
+			}
 			releaseInstall()
 			<-owner.done
-			manager := owner.Manager("")
+			manager, _ := owner.ManagerSetup("")
 			require.NotNil(t, manager)
 			manager.Wait()
 			require.Empty(t, manager.Status().LastError)
@@ -199,6 +223,7 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 				assert.Equal(t, "nomic-embed-text", status.Model)
 			} else {
 				assert.Equal(t, http.StatusConflict, got.status, string(got.body))
+				assert.Contains(t, string(got.body), "embeddings_setup_busy")
 			}
 		})
 	}

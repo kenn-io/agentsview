@@ -102,12 +102,6 @@ func (v *liveVectorServing) Notify(recall bool) {
 	}
 }
 
-func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.managerLocked(store)
-}
-
 // ManagerSetup looks store's manager up under the hold of v.mu that reads
 // setup, so a manager withheld by setup arrives with the busy state that
 // withheld it; it skips the inspection SetupStatus runs outside v.mu.
