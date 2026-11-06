@@ -2021,6 +2021,14 @@ agentsview session parent <id> <parent>  # record the launching session
 refresh behavior, missing-session exit codes, and the `refresh_incomplete`
 JSON field.
 
+An empty first page keeps `(no matches)` on stdout and prints measured hints on
+stderr when one-shot, automated, or child sessions contain matches. Each hint
+includes a command that preserves your filters and enables the required include
+flags. JSON adds `hints` entries with `code`, `message`, and a full `next` command.
+Counts use a bounded search and say `more than N` when more matches exist.
+For multi-word substring queries over messages, a hint offers `--fts` only when
+that retry finds matches. Failed diagnostic searches add no hint.
+
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Semantic and hybrid results can be scoped with

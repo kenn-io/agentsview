@@ -245,7 +245,13 @@ Every match carries a conversation-unit citation: an `ordinal_range` of
 `parent_session_id`, and `is_sidechain` fields that flag hits from sidechain
 runs and subagent or fork sessions. The response also reports the
 `effective_mode`, the `effective_scope` for modes that support scope, and the
-`exclusions` that applied by default. `next_cursor` is present when another page
+`exclusions` that applied by default. Empty first pages also return `hints` when
+a diagnostic search finds hidden matches. Each entry has `code`, `message`, and
+`retry_with`, the arguments to change while keeping the rest of your request.
+Counts say `more than N` when a bounded probe has more results. Failed probes add
+no hint. Default scope already includes child sessions.
+
+`next_cursor` is present when another page
 exists. To continue `search_content`, pass `next_cursor` as the numeric `cursor`
 and echo the returned RFC3339 `activity_cutoff` unchanged. The cutoff keeps the
 recent-activity exclusion fixed across pages of an unchanged archive, including

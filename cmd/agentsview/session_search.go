@@ -14,8 +14,10 @@ import (
 
 	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/shellquote"
 	"golang.org/x/term"
 )
 
@@ -70,7 +72,7 @@ func newSessionSearchCommand() *cobra.Command {
 			}
 			defer cleanup()
 
-			res, err := svc.SearchContent(cmd.Context(), service.ContentSearchRequest{
+			req := service.ContentSearchRequest{
 				Pattern:           args[0],
 				Mode:              mode,
 				Sources:           sources,
@@ -92,9 +94,22 @@ func newSessionSearchCommand() *cobra.Command {
 				Limit:             limit,
 				Cursor:            cursor,
 				Context:           contextN,
-			})
+			}
+			res, err := svc.SearchContent(cmd.Context(), req)
 			if err != nil {
 				return err
+			}
+			hints := service.SearchContentHints(cmd.Context(), svc, req, res, true)
+			if len(res.Matches) == 0 && cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && mode == "substring" && len(strings.Fields(args[0])) > 1 && (len(sources) == 0 || len(sources) == 1 && sources[0] == "messages") {
+				retry := req
+				retry.Mode = "fts"
+				if page, err := svc.SearchContent(cmd.Context(), retry); err == nil && len(page.Matches) > 0 {
+					hints = append(hints, service.ContentSearchHint{Code: "try_fts", Message: fmt.Sprintf("substring search looks for the exact text %q; --fts matches the words anywhere in a message", args[0]), RetryWith: map[string]any{"fts": true}})
+				}
+			}
+			cliHints := make([]contentSearchCLIHint, 0, len(hints))
+			for _, hint := range hints {
+				cliHints = append(cliHints, contentSearchCLIHint{Code: hint.Code, Message: hint.Message, Next: contentSearchRetry(cmd, args[0], hint.RetryWith)})
 			}
 			if reveal {
 				fmt.Fprintln(cmd.ErrOrStderr(),
@@ -102,9 +117,18 @@ func newSessionSearchCommand() *cobra.Command {
 						"this terminal/session may itself be recorded.")
 			}
 			if outputFormat(cmd) == "json" {
-				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), res)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), struct {
+					*service.ContentSearchResult
+					Hints []contentSearchCLIHint `json:"hints,omitempty"`
+				}{res, cliHints})
 			}
-			return printContentSearchResult(cmd.OutOrStdout(), res, contextN)
+			if err := printContentSearchResult(cmd.OutOrStdout(), res, contextN); err != nil {
+				return err
+			}
+			for _, hint := range cliHints {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Hint: %s; run %s\n", hint.Message, hint.Next)
+			}
+			return nil
 		},
 	}
 	flags := cmd.Flags()
@@ -482,4 +506,43 @@ func printContentContextLine(w io.Writer, m db.Message) {
 	}
 	fmt.Fprintf(w, "  %s: %s\n",
 		sanitizeTerminal(m.Role), sanitizeTerminal(content))
+}
+
+type contentSearchCLIHint struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Next    string `json:"next"`
+}
+
+func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]any) string {
+	parts := strings.Fields(cmd.CommandPath())
+	remaining := make(map[string]any, len(changes))
+	for name, value := range changes {
+		remaining[strings.ReplaceAll(name, "_", "-")] = value
+	}
+	cmd.Flags().Visit(func(flag *pflag.Flag) {
+		value, replaced := remaining[flag.Name]
+		if replaced {
+			parts = append(parts, "--"+flag.Name+"="+fmt.Sprint(value))
+			delete(remaining, flag.Name)
+			return
+		}
+		if values, ok := flag.Value.(pflag.SliceValue); ok {
+			for _, item := range values.GetSlice() {
+				parts = append(parts, "--"+flag.Name+"="+item)
+			}
+		} else {
+			parts = append(parts, "--"+flag.Name+"="+flag.Value.String())
+		}
+	})
+	for _, name := range []string{"include-one-shot", "include-automated", "include-children", "scope", "fts"} {
+		if value, ok := remaining[name]; ok {
+			parts = append(parts, "--"+name+"="+fmt.Sprint(value))
+		}
+	}
+	parts = append(parts, "--", pattern)
+	for i, part := range parts {
+		parts[i] = shellquote.POSIX(part)
+	}
+	return strings.Join(parts, " ")
 }

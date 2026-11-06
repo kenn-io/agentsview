@@ -249,7 +249,7 @@ func sessionListDefaultExclusionNotice(
 	f service.ListFilter,
 	visibleTotal int,
 ) (string, error) {
-	if f.Cursor != "" || (f.IncludeOneShot && f.IncludeAutomated) {
+	if f.Cursor != "" || (f.IncludeOneShot && f.IncludeAutomated && f.IncludeChildren) {
 		return "", nil
 	}
 
@@ -279,7 +279,17 @@ func sessionListDefaultExclusionNotice(
 		hiddenAutomated = hiddenSessionCount(list.Total, visibleTotal)
 	}
 
-	hiddenTotal := hiddenOneShot + hiddenAutomated
+	hiddenChildren := 0
+	if !f.IncludeChildren {
+		withChildren := sessionListCountFilter(f)
+		withChildren.IncludeChildren = true
+		list, err := svc.List(ctx, withChildren)
+		if err != nil {
+			return "", fmt.Errorf("counting child session exclusions: %w", err)
+		}
+		hiddenChildren = hiddenSessionCount(list.Total, visibleTotal)
+	}
+	hiddenTotal := hiddenOneShot + hiddenAutomated + hiddenChildren
 	if hiddenTotal == 0 {
 		return "", nil
 	}
@@ -297,6 +307,10 @@ func sessionListDefaultExclusionNotice(
 		flagParts = append(flagParts, "--include-automated")
 	}
 
+	if hiddenChildren > 0 {
+		hiddenParts = append(hiddenParts, fmt.Sprintf("%d child", hiddenChildren))
+		flagParts = append(flagParts, "--include-children")
+	}
 	return fmt.Sprintf(
 		"Excluded %d %s by default: %s. Use %s to include them.",
 		hiddenTotal,

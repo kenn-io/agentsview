@@ -800,10 +800,11 @@ type contentMatch struct {
 }
 
 type searchContentOut struct {
-	Matches        []contentMatch `json:"matches"`
-	NextCursor     *int           `json:"next_cursor,omitempty"`
-	ActivityCutoff string         `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
-	ExcludedActive int            `json:"excluded_active,omitempty"`
+	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
+	Matches        []contentMatch              `json:"matches"`
+	NextCursor     *int                        `json:"next_cursor,omitempty"`
+	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
+	ExcludedActive int                         `json:"excluded_active,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
 	// resolved, which the caller cannot see in its own request.
 	EffectiveMode      string                  `json:"effective_mode"`
@@ -970,6 +971,9 @@ func (t *toolset) searchContent(
 	if res.NextCursor > 0 && len(res.Matches) > 0 {
 		nc := res.NextCursor
 		out.NextCursor = &nc
+	}
+	if out.ExcludedActive == 0 {
+		out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false)
 	}
 	return nil, out, nil
 }

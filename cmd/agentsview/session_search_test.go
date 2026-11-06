@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -803,4 +807,141 @@ func TestPrintContentMatchesHumanAgeToken(t *testing.T) {
 	require.GreaterOrEqual(t, projIdx, 0)
 	assert.Greater(t, ageIdx, scoreIdx, "age token comes after the score marker")
 	assert.Less(t, ageIdx, projIdx, "age token comes before the project")
+}
+
+func TestSessionSearchHiddenHints(t *testing.T) {
+	for _, class := range []string{"one-shot", "automated", "child", "filtered-parent"} {
+		t.Run(class, func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "p", mut: func(s *db.Session) {
+				if class == "filtered-parent" {
+					s.UserMessageCount = 1
+					s.IsAutomated = true
+					msg := "You are a code reviewer. Review this change."
+					s.FirstMessage = &msg
+				}
+			}}, sessionSeed{id: "hidden", project: "p", mut: func(s *db.Session) {
+				switch class {
+				case "one-shot":
+					s.UserMessageCount = 1
+				case "automated":
+					s.UserMessageCount = 1
+					s.IsAutomated = true
+					msg := "You are a code reviewer. Review this change."
+					s.FirstMessage = &msg
+				default:
+					parent := "parent"
+					s.ParentSessionID = &parent
+					s.RelationshipType = "subagent"
+					s.UserMessageCount = 1
+				}
+			}})
+			seedSearchMessage(t, dataDir, "hidden", "needle with 'quotes' and $symbols")
+			root := newRootCommand()
+			var stdout, stderr bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&stderr)
+			root.SetArgs([]string{"session", "search", "needle with 'quotes'", "--project", "p"})
+			_, err := root.ExecuteC()
+			require.NoError(t, err)
+			assert.Equal(t, "(no matches)\n", stdout.String())
+			assert.Contains(t, stderr.String(), "Hint: 1 match is in")
+
+			out, err := executeCommand(newRootCommand(), "session", "search", "needle with 'quotes'", "--project", "p", "--json", "--exclude-session", "missing-a", "--exclude-session", "missing-b")
+			require.NoError(t, err)
+			got := decodeCLIJSON[struct {
+				Hints []contentSearchCLIHint `json:"hints"`
+			}](t, out)
+			require.Len(t, got.Hints, 1)
+			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-a")
+			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-b")
+			// Let the shell decode the emitted command; printf never runs the binary.
+			shell, err := exec.LookPath("sh")
+			if err != nil {
+				t.Skip("retry execution requires a POSIX shell")
+			}
+			decode := exec.CommandContext(t.Context(), shell, "-c", "set -- "+got.Hints[0].Next+"; printf '%s\\000' \"$@\"")
+			words, err := decode.Output()
+			require.NoError(t, err)
+			args := strings.Split(strings.TrimSuffix(string(words), "\x00"), "\x00")
+			out, err = executeCommand(newRootCommand(), args[1:]...)
+			require.NoError(t, err)
+			matches := decodeCLIJSON[service.ContentSearchResult](t, out)
+			require.Len(t, matches.Matches, 1)
+			assert.Equal(t, "hidden", matches.Matches[0].SessionID)
+		})
+	}
+}
+
+func TestSessionSearchFTSHints(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionWithOpts(t, dataDir, "visible", "p", nil)
+	seedSearchMessage(t, dataDir, "visible", "decode failure error notes")
+	for _, tc := range []struct {
+		pattern, source string
+		hint            bool
+	}{
+		{"decode error notes", "", true},
+		{"decode error notes", "messages", true},
+		{"decode error notes", "tool_result", false},
+		{"decode", "messages", false},
+	} {
+		out, err := executeCommand(newRootCommand(), "session", "search", tc.pattern, "--in", tc.source, "--json")
+		require.NoError(t, err)
+		got := decodeCLIJSON[struct {
+			Hints []contentSearchCLIHint `json:"hints"`
+		}](t, out)
+		if tc.hint {
+			require.Len(t, got.Hints, 1)
+			assert.Equal(t, "try_fts", got.Hints[0].Code)
+		} else {
+			assert.Empty(t, got.Hints)
+		}
+	}
+}
+
+func TestSessionSearchFailedFTSHint(t *testing.T) {
+	newAgentDataDir(t)
+	ftsCalls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("mode") == "fts" {
+			ftsCalls++
+			http.Error(w, "FTS unavailable", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"matches":[]}`))
+	}))
+	defer ts.Close()
+	out, err := executeCommand(newRootCommand(), "session", "search", "decode error", "--server", ts.URL, "--json")
+	require.NoError(t, err)
+	assert.Equal(t, 1, ftsCalls)
+	got := decodeCLIJSON[struct {
+		Hints []contentSearchCLIHint `json:"hints"`
+	}](t, out)
+	assert.Empty(t, got.Hints)
+}
+
+func TestSessionSearchHintPreservesServer(t *testing.T) {
+	newAgentDataDir(t)
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0600))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("include_one_shot") == "true" {
+			_, _ = w.Write([]byte(`{"matches":[{"session_id":"hidden"}]}`))
+		} else {
+			_, _ = w.Write([]byte(`{"matches":[]}`))
+		}
+	}))
+	defer ts.Close()
+	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "needle", "--json")
+	require.NoError(t, err)
+	got := decodeCLIJSON[struct {
+		Hints []contentSearchCLIHint `json:"hints"`
+	}](t, out)
+	require.Len(t, got.Hints, 1)
+	assert.Contains(t, got.Hints[0].Next, "--server="+ts.URL)
+	assert.Contains(t, got.Hints[0].Next, "--server-token-file="+tokenFile)
 }

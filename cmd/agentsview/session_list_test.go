@@ -226,6 +226,11 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSessionsWithOpts(t, dataDir,
 		sessionSeed{id: "included", project: "proj"},
+		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
+			parent := "included"
+			s.ParentSessionID = &parent
+			s.RelationshipType = "subagent"
+		}},
 		sessionSeed{
 			id:      "one-shot",
 			project: "proj",
@@ -256,11 +261,22 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 	require.Equal(t, 1, got.Total)
 	require.Len(t, got.Sessions, 1)
 	assert.Equal(t, "included", got.Sessions[0]["id"])
-	assert.Contains(t, stderr.String(), "Excluded 2 sessions by default")
+	assert.Contains(t, stderr.String(), "Excluded 3 sessions by default")
 	assert.Contains(t, stderr.String(), "1 one-shot")
 	assert.Contains(t, stderr.String(), "1 automated")
+	assert.Contains(t, stderr.String(), "1 child")
+	assert.Contains(t, stderr.String(), "--include-children")
 	assert.Contains(t, stderr.String(), "--include-one-shot")
 	assert.Contains(t, stderr.String(), "--include-automated")
+	stderr.Reset()
+	stdout.Reset()
+	root = newRootCommand()
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"session", "list", "--json", "--include-one-shot", "--include-automated"})
+	_, err = root.ExecuteC()
+	require.NoError(t, err)
+	assert.Contains(t, stderr.String(), "Excluded 1 session by default: 1 child")
 }
 
 // TestResolveSinceFlag_ResolvesRelativeWindow is a fast unit test of the
