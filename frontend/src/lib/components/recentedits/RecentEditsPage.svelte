@@ -69,10 +69,10 @@
   // Widths the user set by dragging or fitting a column edge, kept across
   // visits. Plain: the table owns the live widths once it has sized them.
   let keptWidths = loadColumnWidths();
-  const resizedColumns = new Set<string>();
-  // The column whose resize handle was last pressed. A width change marks
-  // it resized; tabbing across handles without resizing marks nothing.
-  let touchedColumn: string | undefined;
+  // The column whose resize handle was last pressed, and its width then.
+  // Only a change from that width keeps it: tabbing across handles, a
+  // click without a drag, or an arrow press at a width limit keeps nothing.
+  let touched: { column: string; width: number } | undefined;
 
   // The toolbar spans the list's width, and it is laid out before the
   // first rows arrive, when the table sizes its columns.
@@ -111,21 +111,27 @@
   }
 
   // A drag, key press, or double-click on a header's resize handle names
-  // the column a following width change belongs to.
+  // the column a following width change belongs to. The handle's
+  // aria-valuenow is the column's width in the table's own pixels, the
+  // unit the table reports widths in.
   function noteResize(event: Event) {
     const handle = (event.target as Element | null)?.closest?.(".kit-th__resize");
     const cell = handle?.closest("th");
-    touchedColumn = cell ? columns[cell.cellIndex] : undefined;
+    const column = cell ? columns[cell.cellIndex] : undefined;
+    const width = Number(handle?.querySelector("[aria-valuenow]")?.getAttribute("aria-valuenow"));
+    touched = column && Number.isFinite(width) ? { column, width } : undefined;
   }
 
-  // Called only after a resize or fit, so the touched column is the one
-  // that changed; only resized columns' widths are kept.
+  // Called after a resize or fit. Earlier resized columns are already
+  // kept, so only the touched column is merged, and only if it changed.
   function keepWidths(widths: number[]) {
-    if (touchedColumn) resizedColumns.add(touchedColumn);
-    touchedColumn = undefined;
+    const change = touched;
+    touched = undefined;
     // Phone widths fit the phone; they are not kept for wider windows.
-    if (stacked.current) return;
-    keptWidths = mergeColumnWidths(keptWidths, columns, widths, resizedColumns);
+    if (stacked.current || !change) return;
+    const width = widths[columns.indexOf(change.column)];
+    if (width === undefined || Math.round(width) === change.width) return;
+    keptWidths = mergeColumnWidths(keptWidths, columns, widths, new Set([change.column]));
     saveColumnWidths(keptWidths);
   }
 

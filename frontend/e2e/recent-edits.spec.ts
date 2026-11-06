@@ -230,6 +230,41 @@ test.describe("Recent Edits feed", () => {
     expect(kept).toEqual(["edits"]);
   });
 
+  const keptColumns = (page: Page) =>
+    page.evaluate(() =>
+      Object.keys(JSON.parse(localStorage.getItem("agentsview-recent-edits-columns") ?? "{}")),
+    );
+
+  test("clicking a resize handle without dragging keeps no width", async ({ page }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+
+    const handle = page.locator(".re-list thead th").nth(1).getByRole("separator");
+    const box = (await handle.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    expect(await keptColumns(page)).toEqual([]);
+  });
+
+  test("a phone resize is not kept once the window is wide again", async ({ page }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 400, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    // Stacked: File is the first column. Narrow it by one keyboard step.
+    await page.locator(".re-list thead th").first().getByRole("separator").focus();
+    await page.keyboard.press("ArrowLeft");
+    expect(await keptColumns(page)).toEqual([]);
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(page.locator(".re-list thead th")).toHaveCount(4);
+    // Wide: Edits is the third column. Widen it by one keyboard step.
+    await page.locator(".re-list thead th").nth(2).getByRole("separator").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => keptColumns(page)).toEqual(["edits"]);
+  });
+
   test("expand file row and jump to session transcript", async ({ page }) => {
     // Navigate to Recent Edits via its TopBar tab.
     await clickNavTab(page, "Recent Edits");
