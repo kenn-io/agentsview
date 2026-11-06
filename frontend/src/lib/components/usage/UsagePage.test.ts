@@ -4,6 +4,7 @@ import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
+import { events } from "../../stores/events.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { UsageSummaryResponse } from "../../api/generated/index";
@@ -130,6 +131,7 @@ afterEach(() => {
   usage.attributionSummary = null;
   usage.summary = null;
   usage.referenceSummary = null;
+  usage.lastUpdatedAt = null;
   usage.topSessions = null;
   usage.errors.summary = null;
   usage.errors.topSessions = null;
@@ -165,6 +167,31 @@ describe("UsagePage refresh behavior", () => {
 
   function usageReads() {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const side = { ...usageSummaryWithUnsupported().totals, totalTokens: 0, sessionCount: 0 };
+    vi.spyOn(UsageService, "getApiV1UsagePairwiseComparison").mockResolvedValue({
+      left: side,
+      right: side,
+      deltas: {
+        cacheCreationDelta: 0,
+        cacheCreationDeltaRatio: null,
+        cacheReadDelta: 0,
+        cacheReadDeltaRatio: null,
+        costPerSessionDelta: null,
+        costPerSessionRatio: null,
+        inputTokensDelta: 0,
+        inputTokensDeltaRatio: null,
+        outputTokensDelta: 0,
+        outputTokensDeltaRatio: null,
+        sessionCountDelta: 0,
+        sessionCountDeltaRatio: null,
+        tokensPerSessionDelta: null,
+        tokensPerSessionRatio: null,
+        totalCostDelta: testMoney(0),
+        totalCostDeltaRatio: null,
+        totalTokensDelta: 0,
+        totalTokensDeltaRatio: null,
+      },
+    });
     vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
     vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({
       priorFrom: "2024-05-01",
@@ -175,6 +202,91 @@ describe("UsagePage refresh behavior", () => {
     router.route = "usage";
     return vi.spyOn(UsageService, "getApiV1UsageSummary");
   }
+
+  it("refreshes growing totals on a fixed minute deadline and retains events during reads", async () => {
+    vi.useFakeTimers();
+    visibility();
+    const subscription = vi.spyOn(events, "subscribe");
+    const requests = usageReads().mockResolvedValue(usageSummaryWithUnsupported());
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    await flushEffects();
+    const emit = subscription.mock.calls.at(-1)![0];
+    await vi.advanceTimersByTimeAsync(0);
+    const firstUpdatedAt = usage.lastUpdatedAt;
+    expect(firstUpdatedAt).not.toBeNull();
+    expect(usage.isQuerying).toBe(false);
+    const next = Promise.withResolvers<UsageSummaryResponse>();
+    requests.mockReturnValueOnce(next.promise);
+    for (let i = 0; i < 6; i++) {
+      emit({ scope: "sync" });
+      await flushEffects();
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(requests).toHaveBeenCalledTimes(2);
+    const signal = requests.mock.calls[1]![1]!.signal;
+    expect(
+      document.querySelector<HTMLButtonElement>('button[aria-label="Refresh usage data"]')
+        ?.disabled,
+    ).toBe(true);
+    emit({ scope: "sync" });
+    await flushEffects();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(requests).toHaveBeenCalledTimes(2);
+    expect(signal?.aborted).toBe(false);
+    requests.mockResolvedValue(tenModelUsageSummary());
+    next.resolve(tenModelUsageSummary());
+    await vi.advanceTimersByTimeAsync(0);
+    await flushEffects();
+    expect(usage.summary?.totals.inputTokens).toBe(100);
+    expect(usage.lastUpdatedAt).toBeGreaterThan(firstUpdatedAt!);
+    expect(usage.lastQuerySteps.length).toBeGreaterThan(0);
+    expect(requests).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(requests).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets a manual refresh consume queued live data", async () => {
+    vi.useFakeTimers();
+    visibility();
+    const subscription = vi.spyOn(events, "subscribe");
+    const requests = usageReads().mockResolvedValue(usageSummaryWithUnsupported());
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    await flushEffects();
+    await vi.advanceTimersByTimeAsync(0);
+    subscription.mock.calls.at(-1)![0]({ scope: "sync" });
+    await flushEffects();
+    await vi.advanceTimersByTimeAsync(30_000);
+    document.querySelector<HTMLButtonElement>('button[aria-label="Refresh usage data"]')!.click();
+    await flushEffects();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(requests).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores initial events and cancels queued live refreshes on teardown", async () => {
+    vi.useFakeTimers();
+    visibility();
+    const subscription = vi.spyOn(events, "subscribe");
+    const first = Promise.withResolvers<UsageSummaryResponse>();
+    const requests = usageReads()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(usageSummaryWithUnsupported());
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    const emit = subscription.mock.calls.at(-1)![0];
+    emit({ scope: "sync" });
+    first.resolve(usageSummaryWithUnsupported());
+    await flushEffects();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(requests).toHaveBeenCalledTimes(1);
+    emit({ scope: "sync" });
+    await flushEffects();
+    await unmount(component);
+    component = undefined;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(requests).toHaveBeenCalledTimes(1);
+  });
 
   it("aborts hidden reads and resumes once on return", async () => {
     const setHidden = visibility();
@@ -209,19 +321,20 @@ describe("UsagePage refresh behavior", () => {
     await setHidden(true);
     await vi.advanceTimersByTimeAsync(60_000);
     await setHidden(false);
-    expect(requests).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests).toHaveBeenCalledTimes(2);
     await setHidden(true);
     await vi.advanceTimersByTimeAsync(600_000);
-    expect(requests).toHaveBeenCalledTimes(1);
-    await setHidden(false);
     expect(requests).toHaveBeenCalledTimes(2);
+    await setHidden(false);
+    expect(requests).toHaveBeenCalledTimes(3);
     await setHidden(true);
     await vi.advanceTimersByTimeAsync(600_000);
     await unmount(component);
     component = undefined;
     await setHidden(false);
     await vi.advanceTimersByTimeAsync(600_000);
-    expect(requests).toHaveBeenCalledTimes(2);
+    expect(requests).toHaveBeenCalledTimes(3);
   });
 
   it.each(["visible", "hidden", "returning"])("hydrates machines while %s", async (state) => {

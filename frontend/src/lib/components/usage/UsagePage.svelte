@@ -61,6 +61,9 @@
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
   let pendingRefresh = false;
+  let pendingEvent = $state(false);
+  let visible = $state(!document.hidden);
+  let lastRefreshStartedAt = $state(0);
 
   function refreshUsage(): void {
     if (
@@ -71,19 +74,32 @@
       return;
     }
     pendingRefresh = false;
+    pendingEvent = false;
+    lastRefreshStartedAt = Date.now();
     void usage.fetchAll({ preserveTimeRange: true });
   }
 
   function onVisibilityChange(): void {
+    visible = !document.hidden;
     if (document.hidden) {
       if (usage.isQuerying) {
         pendingRefresh = true;
         usage.cancelInFlightReads();
       }
-    } else if (pendingRefresh) {
-      refreshUsage();
+    } else {
+      if (pendingRefresh) refreshUsage();
+      else if (!usage.isQuerying) pendingEvent = true;
     }
   }
+
+  $effect(() => {
+    if (!pendingEvent || !visible || usage.isQuerying ||
+      !urlInitRan || !urlWritebackReady || sessions.machineFilterPending) return;
+    const timer = setTimeout(() => {
+      if (!document.hidden && !usage.isQuerying) refreshUsage();
+    }, Math.max(0, lastRefreshStartedAt + 60_000 - Date.now()));
+    return () => clearTimeout(timer);
+  });
 
   const chartStyleMaps = $derived(
     usageChartStyleMaps(
@@ -466,10 +482,10 @@
     // The Agent dropdown reads sessions.agents, which is otherwise loaded
     // lazily by the sidebar filter control; a direct /usage visit needs it too.
     sessions.loadAgents();
-    // SSE events only flag new data; RefreshControl owns the periodic refresh
-    // and the manual button. The initial and filter-change fetches run from the
-    // effects above once URL/filter state is hydrated.
-    unsubEvents = events.subscribe(() => usage.markNewData());
+    unsubEvents = events.subscribe(() => {
+      usage.markNewData();
+      if (usage.lastUpdatedAt !== null) pendingEvent = true;
+    });
     tick().then(() => {
       urlWritebackReady = true;
     });
@@ -558,7 +574,7 @@
         querySteps={usage.lastQuerySteps}
         liveQuery={usage.liveQuery}
         busy={usage.isQuerying}
-        onRefresh={refreshUsage}
+        onRefresh={() => { if (!usage.isQuerying) refreshUsage(); }}
         label={m.usage_refresh()}
         title={m.shared_refresh()}
       />
