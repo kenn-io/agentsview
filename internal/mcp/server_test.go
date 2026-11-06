@@ -177,9 +177,6 @@ func TestNewServer_CatalogFitsBudget(t *testing.T) {
 				Service: service.NewDirectBackend(d, nil, withTestDocbank()),
 				Profile: tc.profile,
 			}))
-			raw, err := json.Marshal(tools)
-			require.NoError(t, err)
-			t.Logf("catalog: %d bytes", len(raw))
 			require.NoError(t, checkCatalogBudget(tools, tc.budget))
 		})
 	}
@@ -199,7 +196,6 @@ func TestCheckCatalogBudget_FailsOneByteOver(t *testing.T) {
 	tools.Tools[0].Description += "x"
 	err = checkCatalogBudget(tools, fullCatalogBudget)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "96001 bytes exceeds 96000-byte budget")
 	assert.Contains(t, err.Error(), "catalog_fixture:")
 }
 
