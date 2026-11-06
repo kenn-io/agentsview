@@ -2245,6 +2245,8 @@
   "worktree_saving": "Enregistrement...",
   "worktree_add_mapping": "Ajouter un mappage",
   "worktree_save_mapping": "Enregistrer le mappage",
+  "worktree_form_new_title": "Nouveau mappage",
+  "worktree_form_edit_title": "Modifier le mappage",
   "worktree_cancel": "Annuler",
   "worktree_applying": "Application...",
   "worktree_apply_mappings": "Appliquer les mappages",

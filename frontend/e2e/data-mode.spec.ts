@@ -383,14 +383,17 @@ test("rules actions stay reachable with a long mapping list", async ({ page }) =
   const description = page.locator(".rules-view .description");
   const start = (await description.boundingBox())!;
   await page.mouse.move(start.x + 20, start.y + 5);
-  for (const name of ["Apply mappings"]) {
+  // Apply mappings sits with the machine picker above the list, so it is
+  // in reach before scrolling; the form's Add mapping is under the list.
+  for (const [name, wheel] of [["Apply mappings", 0], ["Add mapping", 400]] as const) {
     const action = page.getByRole("button", { name, exact: true });
     await expect(action).toBeAttached();
     // Wheel scrolling is asynchronous and a busy page can drop events, so
     // keep wheeling until the scroll settles with the action in reach.
     await expect(async () => {
-      for (let i = 0; i < 6; i++) await page.mouse.wheel(0, 400);
+      for (let i = 0; i < 6 && wheel > 0; i++) await page.mouse.wheel(0, wheel);
       const box = (await action.boundingBox())!;
+      expect(box.y, `${name} above the window`).toBeGreaterThanOrEqual(0);
       expect(box.y + box.height, `${name} below the window`).toBeLessThanOrEqual(768);
       const reachable = await action.evaluate((el) => {
         const r = el.getBoundingClientRect();

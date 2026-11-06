@@ -1,11 +1,12 @@
 <script lang="ts">
   import {
     Button,
-    Checkbox,
     Modal,
+    SegmentedControl,
     TableHeaderCell,
     TableSort,
     TextInput,
+    Toggle,
     Typeahead,
   } from "@kenn-io/kit-ui";
   import { onDestroy } from "svelte";
@@ -85,6 +86,8 @@
     updated: { value: row => new Date(row.updated_at), firstDirection: "desc" },
     governed: { value: row => row.governed_sessions, firstDirection: "desc" },
   });
+  const uid = $props.id();
+  const formTitleId = `${uid}-form-title`;
   const mappingsRead = new LatestRead();
   let machineGeneration = 0;
   let disposed = false;
@@ -99,6 +102,13 @@
       meta: sessions.machineLabel(name) !== name ? name : undefined,
     })),
   );
+  const layoutOptions = $derived([
+    { value: explicitLayout, label: m.worktree_layout_explicit({}) },
+    {
+      value: repoDotWorktreesLayout,
+      label: m.worktree_layout_repo_dot_worktrees({ repo: "repo", branch: "branch" }),
+    },
+  ]);
   const isRepoDotWorktrees = $derived(layout === repoDotWorktreesLayout);
   const canSave = $derived(
     pathPrefix.trim() !== "" &&
@@ -345,18 +355,32 @@
   {:else if error && machine === ""}
     <div class="error-text">{error}</div>
   {:else}
-    <div class="machine-field">
-      <span class="label">{m.worktree_machine()}</span>
-      <Typeahead
-        options={machineOptions}
-        value={machine}
-        fallbackLabel={sessions.machineLabel(machine || localMachine)}
-        placeholder={m.worktree_select_machine()}
-        title={m.worktree_select_machine()}
-        emptyLabel={m.worktree_no_machines()}
-        onselect={selectMachine}
-      />
+    <!-- Applying acts on every rule listed for the machine, so it sits with
+         the machine picker above the list rather than with the form. -->
+    <div class="list-toolbar">
+      <div class="machine-field">
+        <span class="label">{m.worktree_machine()}</span>
+        <Typeahead
+          options={machineOptions}
+          value={machine}
+          fallbackLabel={sessions.machineLabel(machine || localMachine)}
+          placeholder={m.worktree_select_machine()}
+          title={m.worktree_select_machine()}
+          emptyLabel={m.worktree_no_machines()}
+          onselect={selectMachine}
+        />
+      </div>
+      {#if !readOnly}
+        <Button
+          label={applying ? m.worktree_applying() : m.worktree_apply_mappings()}
+          disabled={applying || loading || mappings.length === 0}
+          onclick={applyMappings}
+        />
+      {/if}
     </div>
+    {#if applyMessage}
+      <div class="success-text">{applyMessage}</div>
+    {/if}
 
     <div class="rules-list" aria-busy={loading}>
       {#if loading}
@@ -440,82 +464,68 @@
         {/snippet}
       </StateNotice>
     {:else}
-      <div class="form-grid">
+      <section class="mapping-form" aria-labelledby={formTitleId}>
+        <h4 id={formTitleId}>
+          {editingId == null ? m.worktree_form_new_title() : m.worktree_form_edit_title()}
+        </h4>
         <div class="field">
           <span>{m.worktree_layout()}</span>
-          <div class="layout-options" role="group" aria-label={m.worktree_layout()}>
-            <Button
-              label={m.worktree_layout_explicit({})}
-              tone={layout === explicitLayout ? "info" : "neutral"}
-              surface={layout === explicitLayout ? "soft" : "outline"}
-              onclick={() => (layout = explicitLayout)}
-            />
-            <Button
-              label={m.worktree_layout_repo_dot_worktrees({ repo: "repo", branch: "branch" })}
-              tone={layout === repoDotWorktreesLayout ? "info" : "neutral"}
-              surface={layout === repoDotWorktreesLayout ? "soft" : "outline"}
-              onclick={() => (layout = repoDotWorktreesLayout)}
-            />
-          </div>
+          <SegmentedControl
+            options={layoutOptions}
+            value={layout}
+            ariaLabel={m.worktree_layout()}
+            onchange={(value) => (layout = value)}
+          />
         </div>
-        <label class="field">
-          <span>{isRepoDotWorktrees ? m.worktree_parent_directory() : m.worktree_path_prefix()}</span>
-          <TextInput
-            bind:value={pathPrefix}
-            block
-            ariaLabel={isRepoDotWorktrees ? m.worktree_parent_directory() : m.worktree_path_prefix()}
-            placeholder={isRepoDotWorktrees ? "/Users/me" : "/Users/me/project.worktrees"}
+        <div class="field-row">
+          <label class="field">
+            <span>{isRepoDotWorktrees ? m.worktree_parent_directory() : m.worktree_path_prefix()}</span>
+            <TextInput
+              bind:value={pathPrefix}
+              block
+              ariaLabel={isRepoDotWorktrees ? m.worktree_parent_directory() : m.worktree_path_prefix()}
+              placeholder={isRepoDotWorktrees ? "/Users/me" : "/Users/me/project.worktrees"}
+            />
+            {#if isRepoDotWorktrees}
+              <div class="hint">{m.worktree_parent_directory_hint()}</div>
+            {/if}
+          </label>
+          <label class="field">
+            <span>{m.worktree_project()}</span>
+            <TextInput
+              bind:value={project}
+              block
+              ariaLabel={m.worktree_project()}
+              placeholder="project-name"
+              disabled={isRepoDotWorktrees}
+            />
+            <div class="hint">
+              {isRepoDotWorktrees ? m.worktree_project_derived() : m.worktree_project_required()}
+            </div>
+          </label>
+        </div>
+        <Toggle bind:checked={enabled} label={m.worktree_enabled()} />
+        <div class="form-actions">
+          <Button
+            label={saving
+              ? m.worktree_saving()
+              : editingId == null
+                ? m.worktree_add_mapping()
+                : m.worktree_save_mapping()}
+            tone="info"
+            surface="solid"
+            disabled={!canSave || saving}
+            onclick={requestSave}
           />
-          {#if isRepoDotWorktrees}
-            <div class="hint">{m.worktree_parent_directory_hint()}</div>
+          {#if editingId != null}
+            <Button label={m.worktree_cancel()} disabled={saving} onclick={resetForm} />
           {/if}
-        </label>
-        <label class="field">
-          <span>{m.worktree_project()}</span>
-          <TextInput
-            bind:value={project}
-            block
-            ariaLabel={m.worktree_project()}
-            placeholder="project-name"
-            disabled={isRepoDotWorktrees}
-          />
-          <div class="hint">
-            {isRepoDotWorktrees ? m.worktree_project_derived() : m.worktree_project_required()}
-          </div>
-        </label>
-        <Checkbox bind:checked={enabled} label={m.worktree_enabled()} />
-      </div>
+        </div>
+      </section>
     {/if}
 
     {#if error}
       <div class="error-text">{error}</div>
-    {/if}
-    {#if applyMessage}
-      <div class="success-text">{applyMessage}</div>
-    {/if}
-
-    {#if !readOnly}
-      <div class="button-row">
-        <Button
-          label={saving
-            ? m.worktree_saving()
-            : editingId == null
-              ? m.worktree_add_mapping()
-              : m.worktree_save_mapping()}
-          tone="info"
-          surface="solid"
-          disabled={!canSave || saving}
-          onclick={requestSave}
-        />
-        {#if editingId != null}
-          <Button label={m.worktree_cancel()} disabled={saving} onclick={resetForm} />
-        {/if}
-        <Button
-          label={applying ? m.worktree_applying() : m.worktree_apply_mappings()}
-          disabled={applying || loading || mappings.length === 0}
-          onclick={applyMappings}
-        />
-      </div>
     {/if}
   {/if}
 </section>
@@ -563,11 +573,21 @@
     font-size: 13px;
   }
 
-  .button-row,
+  .form-actions,
   .row-actions {
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  /* Machine picker on the left, the list-wide Apply action on the right,
+     both on the picker's control line. */
+  .list-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-4);
   }
 
   /* Label above the control, as in the Recall scope fields. The machine is
@@ -576,6 +596,8 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
+    flex: 0 1 320px;
+    min-width: 0;
     gap: var(--space-3);
     --typeahead-min-width: 240px;
     --typeahead-max-width: 320px;
@@ -666,10 +688,31 @@
     cursor: pointer;
   }
 
-  .form-grid {
+  /* One framed form under the list: layout, then the two path fields side
+     by side, the switch, and the actions, all on one left edge. */
+  .mapping-form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-6);
+    padding: var(--space-6);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+  }
+
+  .mapping-form h4 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .field-row {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--space-5);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-6);
+    align-self: stretch;
   }
 
   .field {
@@ -679,13 +722,21 @@
     min-width: 0;
   }
 
-  /* Stacked: the long repo_dot_worktrees label does not fit two-up inside a
-     one-third-width form column. */
-  .layout-options {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
+  .mapping-form :global(.kit-toggle__label) {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  /* Disabled secondary actions (Apply with no rules, Cancel while saving)
+     use app.css's disabled ink and edge, as in Settings, instead of fading
+     the whole button with opacity. */
+  .rules-view :global(.kit-button:disabled:not(.kit-button--solid.kit-button--info)) {
+    opacity: 1;
+    background: transparent;
+    border-color: var(--disabled-edge);
+    box-shadow: none;
+    color: var(--disabled-ink);
   }
 
   .error-text,
@@ -709,7 +760,7 @@
   }
 
   @media (max-width: 760px) {
-    .form-grid {
+    .field-row {
       grid-template-columns: 1fr;
     }
   }

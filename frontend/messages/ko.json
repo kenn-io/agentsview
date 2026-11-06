@@ -2153,6 +2153,8 @@
   "worktree_saving": "저장 중...",
   "worktree_add_mapping": "매핑 추가",
   "worktree_save_mapping": "매핑 저장",
+  "worktree_form_new_title": "새 매핑",
+  "worktree_form_edit_title": "매핑 편집",
   "worktree_cancel": "취소",
   "worktree_applying": "적용 중...",
   "worktree_apply_mappings": "매핑 적용",

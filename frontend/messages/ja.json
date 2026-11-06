@@ -2223,6 +2223,8 @@
   "worktree_saving": "保存中...",
   "worktree_add_mapping": "マッピングの追加",
   "worktree_save_mapping": "マッピングの保存",
+  "worktree_form_new_title": "新しいマッピング",
+  "worktree_form_edit_title": "マッピングの編集",
   "worktree_cancel": "キャンセル",
   "worktree_applying": "適用中...",
   "worktree_apply_mappings": "マッピングを適用する",

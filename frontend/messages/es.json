@@ -2248,6 +2248,8 @@
   "worktree_saving": "Guardando...",
   "worktree_add_mapping": "Añadir asignación",
   "worktree_save_mapping": "Guardar asignación",
+  "worktree_form_new_title": "Nueva asignación",
+  "worktree_form_edit_title": "Editar asignación",
   "worktree_cancel": "Cancelar",
   "worktree_applying": "Aplicando...",
   "worktree_apply_mappings": "Aplicar asignaciones",

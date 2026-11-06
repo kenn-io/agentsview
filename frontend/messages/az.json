@@ -2238,6 +2238,8 @@
   "worktree_saving": "Yadda saxlanılır...",
   "worktree_add_mapping": "Uyğunlaşdırma əlavə et",
   "worktree_save_mapping": "Uyğunlaşdırmanı yadda saxla",
+  "worktree_form_new_title": "Yeni uyğunlaşdırma",
+  "worktree_form_edit_title": "Uyğunlaşdırmanı redaktə et",
   "worktree_cancel": "Ləğv et",
   "worktree_applying": "Tətbiq olunur...",
   "worktree_apply_mappings": "Uyğunlaşdırmaları tətbiq et",

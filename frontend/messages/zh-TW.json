@@ -2151,6 +2151,8 @@
   "worktree_saving": "正在儲存...",
   "worktree_add_mapping": "新增映射",
   "worktree_save_mapping": "儲存映射",
+  "worktree_form_new_title": "新映射",
+  "worktree_form_edit_title": "編輯映射",
   "worktree_cancel": "取消",
   "worktree_applying": "正在套用...",
   "worktree_apply_mappings": "套用映射",

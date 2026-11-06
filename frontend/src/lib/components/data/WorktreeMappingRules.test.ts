@@ -366,9 +366,9 @@ describe("WorktreeMappingRules", () => {
 
     await flush();
 
-    const layoutButton = screen.getByRole("button", { name: /repo\.worktrees/ });
-    expect(layoutButton).toBeTruthy();
-    layoutButton?.click();
+    const layoutRadio = screen.getByRole("radio", { name: /repo\.worktrees/ });
+    expect(layoutRadio.getAttribute("aria-checked")).toBe("false");
+    layoutRadio.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const pathPrefixInput = screen.getByRole("textbox", { name: "Parent directory" });
@@ -598,7 +598,7 @@ describe("WorktreeMappingRules", () => {
     await flush();
 
     await fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    await fireEvent.click(screen.getByRole("switch", { name: "Enabled" }));
     await fireEvent.click(screen.getByRole("button", { name: "Save mapping" }));
 
     expect(settingsService.putApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();

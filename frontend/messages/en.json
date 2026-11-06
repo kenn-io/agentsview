@@ -2245,6 +2245,8 @@
   "worktree_saving": "Saving...",
   "worktree_add_mapping": "Add mapping",
   "worktree_save_mapping": "Save mapping",
+  "worktree_form_new_title": "New mapping",
+  "worktree_form_edit_title": "Edit mapping",
   "worktree_cancel": "Cancel",
   "worktree_applying": "Applying...",
   "worktree_apply_mappings": "Apply mappings",
