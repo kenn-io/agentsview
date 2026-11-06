@@ -1666,6 +1666,8 @@ func TestWatcherRecurringFreshFailuresDoNotPostponeOlderRetry(t *testing.T) {
 				olderAt = append(olderAt, c.at)
 			}
 		}
+		// Finish the callback's event send before Stop removes its receiver.
+		synctest.Wait()
 		ms := time.Millisecond
 		// The older retry backs off 20, 40, 80ms. Fresh failures from 80ms on
 		// must not push its fourth attempt past 140ms.
