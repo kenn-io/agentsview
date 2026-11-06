@@ -126,6 +126,47 @@ func TestActivityReportKeptBoundsReadSetMemory(t *testing.T) {
 	assert.Equal(t, activity.EstimatedArtifactBytes(entry.report.Artifacts)+readBytes, d.activityKept.Size(entry))
 }
 
+func TestActivityReportKeptSkipsUnchangedSizeMeasurement(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	keptActivitySession(t, d, "today", "project-a", "2026-06-15")
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
+	f.IncludeSubagents = true
+	f.IncludeForks = true
+	first := keptActivityBuild(t, d, f, q, true)
+
+	selection := kept.Selection(f, q)
+	version, _, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	entries, ok := d.activityKept.Get(selection, version)
+	require.True(t, ok)
+	require.Len(t, entries, 1)
+	initialSize := entries[0].size
+
+	measure := d.activityKept.Size
+	sizeCalls := 0
+	d.activityKept.Size = func(entry activityKept) int64 {
+		sizeCalls++
+		return measure(entry)
+	}
+	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+	assert.Zero(t, sizeCalls, "an unchanged watermark must not reinsert the report")
+
+	require.NoError(t, d.RenameSession(t.Context(), "today", new("Today changed")))
+	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+	version, currentRevision, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	entries, ok = d.activityKept.Get(selection, version)
+	require.True(t, ok)
+	require.Len(t, entries, 1)
+	assert.Equal(t, currentRevision, entries[0].revision)
+	assert.Equal(t, initialSize, entries[0].size)
+	assert.Equal(t, 1, sizeCalls, "advancing the journal watermark should reuse the measured size")
+
+	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+	assert.Equal(t, 1, sizeCalls, "a second hit at the same watermark must not reinsert the report")
+}
+
 func TestActivityReportKeptVersionRejectsInvalidUsageRevision(t *testing.T) {
 	d := testDB(t)
 	_, err := d.getWriter().ExecContext(t.Context(), `

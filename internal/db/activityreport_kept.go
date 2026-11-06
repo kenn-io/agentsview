@@ -15,6 +15,7 @@ import (
 
 type activityKept struct {
 	report                           kept.Report
+	size                             int64
 	revision                         int64
 	read, labels                     []string
 	filter                           AnalyticsFilter
@@ -24,18 +25,20 @@ type activityKept struct {
 
 func newActivityKeptMemo() kept.Memo[activityKept] {
 	return kept.Memo[activityKept]{
-		Size: func(e activityKept) int64 {
-			size := activity.EstimatedArtifactBytes(e.report.Artifacts) + int64(cap(e.read))*16
-			for _, id := range e.read {
-				size += int64(len(id))
-			}
-			for _, label := range e.labels {
-				size += int64(len(label))
-			}
-			return size
-		},
+		Size:     func(e activityKept) int64 { return e.size },
 		MaxBytes: 128 << 20,
 	}
+}
+
+func activityKeptSize(e activityKept) int64 {
+	size := activity.EstimatedArtifactBytes(e.report.Artifacts) + int64(cap(e.read))*16
+	for _, id := range e.read {
+		size += int64(len(id))
+	}
+	for _, label := range e.labels {
+		size += int64(len(label))
+	}
+	return size
 }
 
 func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
@@ -124,7 +127,7 @@ func (db *DB) keptActivityReport(ctx context.Context, selection, version string,
 	}
 	if revision > entry.revision {
 		entry.revision = revision
+		db.activityKept.Put(selection, version, []activityKept{entry})
 	}
-	db.activityKept.Put(selection, version, []activityKept{entry})
 	return entry.report, true, nil
 }

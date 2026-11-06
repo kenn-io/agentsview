@@ -148,12 +148,14 @@ func (db *DB) BuildActivityReportArtifacts(
 		boundedRead := make([]string, len(read))
 		copy(boundedRead, read)
 		read = boundedRead
-		db.activityKept.Put(selection, version, []activityKept{{
+		entry := activityKept{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
 			read: read, labels: activity.ProjectLabels(sessions),
 			filter: f, rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC,
 			usageLowerBound: lowerBound, usageUpperBound: upperBound,
-		}})
+		}
+		entry.size = activityKeptSize(entry)
+		db.activityKept.Put(selection, version, []activityKept{entry})
 	}
 	return artifacts, err
 }
