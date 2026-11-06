@@ -2,8 +2,10 @@ package db
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -87,16 +89,15 @@ func TestActivityMemoWindow(t *testing.T) {
 		q := dayQuery(t, "2026-06-16", "UTC")
 		q.RangeEnd = q.RangeStart.Add(10*time.Hour + 3*time.Minute)
 		q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + time.Minute)
-		reads := activityMemoPairingReads(t, d)
 		got, err := d.activityReportCandidates(t.Context(), []string{"s"}, q)
 		require.NoError(t, err)
 		require.Len(t, got, 1)
-		clear(reads)
+		rewriteActivityModels(t, d, "reread", "s")
 		q.EffectiveEnd = q.EffectiveEnd.Add(2 * time.Minute)
 		got, err = d.activityReportCandidates(t.Context(), []string{"s"}, q)
 		require.NoError(t, err)
 		require.Len(t, got, 2)
-		assert.Empty(t, reads)
+		assert.Empty(t, rereadSessions(got, "reread"))
 		assert.Equal(t, "2026-06-16T10:02:00Z", got[1].Start.Format(time.RFC3339))
 	})
 	t.Run("fractional end", func(t *testing.T) {
@@ -147,29 +148,47 @@ func TestActivityMemoOverflowSkipsReport(t *testing.T) {
 	got, err := d.activityReportCandidates(t.Context(), []string{"large", "small"}, q)
 	require.NoError(t, err)
 	assert.Len(t, got, 5)
-	reads := activityMemoPairingReads(t, d)
+	rewriteActivityModels(t, d, "reread", "large", "small")
 	got, err = d.activityReportCandidates(t.Context(), []string{"large", "small"}, q)
 	require.NoError(t, err)
 	assert.Len(t, got, 5)
-	assert.Positive(t, reads["2026-06-16T10:00:00Z"])
-	assert.Positive(t, reads["2026-06-16T11:00:00Z"])
+	assert.Equal(t, []string{"large", "small"}, rereadSessions(got, "reread"))
 }
 
-func activityMemoPairingReads(tb testing.TB, d *DB) map[string]int {
+// rewriteActivityModels stores model on every message of the sessions and
+// leaves their transcript revision as it was, so the memo still treats them
+// as unchanged. Pairs read from storage afterwards close on model; pairs the
+// memo serves keep the model they were first read with.
+func rewriteActivityModels(tb testing.TB, d *DB, model string, ids ...string) {
 	tb.Helper()
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.getReader().Conn(tb.Context())
+	encoded, err := json.Marshal(ids)
 	require.NoError(tb, err)
-	defer conn.Close()
-	reads := make(map[string]int)
-	require.NoError(tb, conn.Raw(func(driverConn any) error {
-		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("agentsview_timestamp_unix_micro", func(raw string) any {
-			reads[raw]++
-			return sqliteTimestampUnixMicro(raw)
-		}, false)
-	}))
-	require.NoError(tb, conn.Close())
-	return reads
+	_, err = d.getWriter().ExecContext(tb.Context(),
+		`UPDATE messages SET model = ? WHERE session_id IN (SELECT value FROM json_each(?))`,
+		model, string(encoded))
+	require.NoError(tb, err)
+}
+
+// rereadSessions returns the sorted sessions with a pair closing on model.
+func rereadSessions(candidates []activity.IntervalCandidate, model string) []string {
+	var out []string
+	for _, c := range candidates {
+		if c.ClosingModel == model && !slices.Contains(out, c.SessionID) {
+			out = append(out, c.SessionID)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// reportModels returns the sorted model keys of a report's model minutes.
+func reportModels(artifacts activity.CandidateArtifacts) []string {
+	out := make([]string, 0, len(artifacts.Report.ByModel))
+	for _, row := range artifacts.Report.ByModel {
+		out = append(out, row.Key)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func TestActivityMemoProductionWrites(t *testing.T) {
@@ -177,18 +196,16 @@ func TestActivityMemoProductionWrites(t *testing.T) {
 	insertSession(t, d, "s", "p")
 	seedMessage(t, d, "s", 0, "assistant", "2026-06-16T10:00:00Z", "m")
 	seedMessage(t, d, "s", 1, "assistant", "2026-06-16T10:02:00Z", "m")
-	reads := activityMemoPairingReads(t, d)
 	q := dayQuery(t, "2026-06-16", "UTC")
 	_, err := d.activityReportCandidates(t.Context(), []string{"s"}, q)
 	require.NoError(t, err)
-	require.Positive(t, reads["2026-06-16T10:00:00Z"])
-	clear(reads)
+	rewriteActivityModels(t, d, "reread", "s")
 	require.NoError(t, d.RenameSession(t.Context(), "s", Ptr("renamed")))
 	got, err := d.activityReportCandidates(t.Context(), []string{"s"}, q)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.InEpsilon(t, 2.0, got[0].End.Sub(got[0].Start).Minutes(), 1e-9)
-	assert.Empty(t, reads)
+	assert.Empty(t, rereadSessions(got, "reread"))
 }
 
 func TestActivityMemoReportReuse(t *testing.T) {
@@ -201,32 +218,27 @@ func TestActivityMemoReportReuse(t *testing.T) {
 		seedMessage(t, d, id, 0, "user", fmt.Sprintf("2026-06-16T10:%02d:00Z", i*10), "")
 		seedMessage(t, d, id, 1, "assistant", fmt.Sprintf("2026-06-16T10:%02d:00Z", i*10+2), "m")
 	}
-	reads := activityMemoPairingReads(t, d)
 	q := dayQuery(t, "2026-06-16", "UTC")
 	f := AnalyticsFilter{Timezone: "UTC"}
 	cold, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 4.0, cold.Report.Totals.AgentMinutes, 1e-9)
 	assert.InEpsilon(t, 4.0, cold.Report.Totals.ActiveMinutes, 1e-9)
-	require.Positive(t, reads["2026-06-16T10:00:00Z"])
-	require.Positive(t, reads["2026-06-16T10:10:00Z"])
-	clear(reads)
+	rewriteActivityModels(t, d, "idle-reread", "idle")
+	rewriteActivityModels(t, d, "changed-reread", "changed")
 	warm, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 4.0, warm.Report.Totals.AgentMinutes, 1e-9)
 	assert.InEpsilon(t, 4.0, warm.Report.Totals.ActiveMinutes, 1e-9)
-	assert.Empty(t, reads)
+	assert.Equal(t, []string{"m"}, reportModels(warm))
 	_, err = d.WriteSessionIncremental(t.Context(), "changed", []Message{{SessionID: "changed", Ordinal: 2, Role: "assistant", Content: "x", Timestamp: "2026-06-16T10:15:00Z", Model: "m"}}, IncrementalSessionUpdate{MsgCount: 3, UserMsgCount: 1, NextOrdinal: 3})
 	require.NoError(t, err)
-	clear(reads)
 	updated, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 7.0, updated.Report.Totals.AgentMinutes, 1e-9)
 	assert.InEpsilon(t, 7.0, updated.Report.Totals.ActiveMinutes, 1e-9)
-	assert.Positive(t, reads["2026-06-16T10:10:00Z"])
-	assert.Positive(t, reads["2026-06-16T10:12:00Z"])
-	assert.Zero(t, reads["2026-06-16T10:00:00Z"])
-	assert.Zero(t, reads["2026-06-16T10:02:00Z"])
+	// Only the changed session is read again; the idle one comes from the memo.
+	assert.Equal(t, []string{"changed-reread", "m"}, reportModels(updated))
 }
 
 func TestActivityMemoReportAboveEntryCap(t *testing.T) {
@@ -242,21 +254,32 @@ func TestActivityMemoReportAboveEntryCap(t *testing.T) {
 		seedMessage(t, d, id, 0, "user", at.Format(time.RFC3339), "")
 		seedMessage(t, d, id, 1, "assistant", at.Add(time.Minute).Format(time.RFC3339), "m")
 	}
-	reads := activityMemoPairingReads(t, d)
 	q := dayQuery(t, "2026-06-16", "UTC")
 	f := AnalyticsFilter{Timezone: "UTC"}
 	cold, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 4_097.0, cold.Report.Totals.AgentMinutes, 1e-9)
 	require.Len(t, d.activityMemo.entries, 4_096)
-	clear(reads)
+	ids := make([]string, 4_097)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("s-%04d", i)
+	}
+	rewriteActivityModels(t, d, "reread", ids...)
 	warm, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 4_097.0, warm.Report.Totals.AgentMinutes, 1e-9)
-	assert.Equal(t, cold.Report.Totals, warm.Report.Totals)
+	want := cold.Report.Totals
+	want.DistinctModels = 2
+	assert.Equal(t, want, warm.Report.Totals)
 	assert.Len(t, d.activityMemo.entries, 4_096)
-	// Only the unretained session's two timestamps reach message pairing.
-	assert.Len(t, reads, 2)
+	// Only the unretained session's one minute is read again.
+	require.Len(t, warm.Report.ByModel, 2)
+	for _, row := range warm.Report.ByModel {
+		if row.Key == "reread" {
+			assert.InEpsilon(t, 1.0, row.AgentMinutes, 1e-9)
+		}
+	}
+	assert.Equal(t, []string{"m", "reread"}, reportModels(warm))
 }
 
 func TestActivityMemoEmptyIDsWithCanceledContext(t *testing.T) {
@@ -352,26 +375,22 @@ func TestActivityMemoLRUAndBudgets(t *testing.T) {
 			seedMessage(t, d, id, 1, "assistant", fmt.Sprintf("2026-06-16T10:%02d:00Z", i*10+1), "m")
 		}
 	}
-	reads := activityMemoPairingReads(t, d)
-	read := func(ids ...string) {
+	read := func(ids ...string) []activity.IntervalCandidate {
 		t.Helper()
-		_, err := d.activityReportCandidates(t.Context(), ids, q)
+		got, err := d.activityReportCandidates(t.Context(), ids, q)
 		require.NoError(t, err)
+		return got
 	}
 	read("a", "b")
-	clear(reads)
-	read("a")
-	assert.Empty(t, reads)
+	rewriteActivityModels(t, d, "reread-1", "a", "b", "c")
+	assert.Empty(t, rereadSessions(read("a"), "reread-1"))
 	seedMessage(t, d, "c", 2, "assistant", "2026-06-16T10:22:00Z", "m")
 	read("c")
 	assert.Equal(t, 3, d.activityMemo.rows)
-	clear(reads)
-	read("c", "b")
-	assert.Positive(t, reads["2026-06-16T10:10:00Z"])
-	assert.Zero(t, reads["2026-06-16T10:20:00Z"])
-	clear(reads)
-	read("b", "c")
-	assert.Empty(t, reads)
+	rewriteActivityModels(t, d, "reread-2", "a", "b", "c")
+	assert.Equal(t, []string{"b"}, rereadSessions(read("c", "b"), "reread-2"))
+	rewriteActivityModels(t, d, "reread-3", "a", "b", "c")
+	assert.Empty(t, rereadSessions(read("b", "c"), "reread-3"))
 	assert.Equal(t, 3, d.activityMemo.rows)
 	read("empty-1", "empty-2", "empty-3")
 	assert.Len(t, d.activityMemo.entries, 5)
