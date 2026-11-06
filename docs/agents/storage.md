@@ -18,6 +18,10 @@ reader connections so quick reads always get one. Each holder uses one reader
 connection at a time. Validate input before acquiring a permit. Release it
 before waiting for another bulk reader or doing host git/GitHub lookups.
 
+The archive writer caches up to 64 prepared SQL statements per connection to
+avoid compiling repeated import and project-attribution queries. The cache stays
+in memory and closes with its connection. Reader connections do not use it.
+
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned
 sessions from the old database, and swap the files atomically. Preserve sessions
@@ -66,42 +70,41 @@ The swap installs only the main file, so a failed checkpoint or close aborts it.
 Codex forks keep accepting available messages when their replay parent is
 unavailable. Each full fork write records parent turn membership and per-message
 source origins in `codex_fork_state`, in the same transaction as the transcript
-and usage. Rebuilds copy this provenance with retained orphan sessions. Forks use
-full parses so optional parser checkpoints cannot leave provenance behind.
+and usage. Rebuilds copy this provenance with retained orphan sessions. Forks
+use full parses so optional parser checkpoints cannot leave provenance behind.
 
 A fork whose parent was read previously uses that saved evidence to remove the
 inherited prefix and keep child usage accurate. Without that evidence, the
 fallback transcript stays visible and may include copied parent messages. Sync
 warns about this uncertainty and withholds unverified token usage. The original
-token metadata stays in local provenance for later reconciliation. Saved messages
-and tool results absent from a shortened source remain archived. Retained
-historical usage events also survive.
+token metadata stays in local provenance for later reconciliation. Saved
+messages and tool results absent from a shortened source remain archived.
+Retained historical usage events also survive.
 
 Reconciliation matches storage-normalized message content and consumes each
 occurrence once, including when a TraeX record emits several messages. Restored
 tool results obey the current category and archive-content policies. Retained
 messages keep their activity bounds and supply the child preview; retained usage
 events follow the final child identity and message ordinals. Restored metadata
-continues to survive full parses until it returns in the source itself.
-Codex forks with archived tool calls use staging even when the source shrinks
-below the size threshold. They load message and call metadata separately, then
-reconcile and spool result bodies one archived message at a time. Restored source
-events keep their order around shared events. Raw summary participation remains distinct
-from sanitized text, so a cleared result cannot revive older output. Spawn links
-also survive when their output records disappear.
+continues to survive full parses until it returns in the source itself. Codex
+forks with archived tool calls use staging even when the source shrinks below
+the size threshold. They load message and call metadata separately, then
+reconcile and spool result bodies one archived message at a time. Restored
+source events keep their order around shared events. Raw summary participation
+remains distinct from sanitized text, so a cleared result cannot revive older
+output. Spawn links also survive when their output records disappear.
 Summary-only saved results keep their text and lengths when the source still
 contains the call but omits its output. Blocked results retain their permitted
 length metadata across repeated staged writes, including imported events whose
 raw summary participation is unknown. Local provenance records imported events
 observed contributing readable text, so an update from one agent retains other
 agents' length contributions. Each hint includes its archived event position,
-agent, source, status, timestamp, and length. Artifact message replacements clear
-these hints in the same transaction, since even unchanged event metadata cannot
-prove that replacement content contributes. Other fork provenance survives.
-Raw nullable metadata stays unchanged.
-Blank unknown content establishes no participation. Archived calls without provider
-IDs use occurrence keys to publish their staged summaries, events, findings, and
-failure signals.
+agent, source, status, timestamp, and length. Artifact message replacements
+clear these hints in the same transaction, since even unchanged event metadata
+cannot prove that replacement content contributes. Other fork provenance
+survives. Raw nullable metadata stays unchanged. Blank unknown content
+establishes no participation. Archived calls without provider IDs use occurrence
+keys to publish their staged summaries, events, findings, and failure signals.
 Archive copies retain existing raw result digests and participation flags;
 absent fields remain unknown. Returning native output can therefore match its
 saved event after a preservation rebuild.
@@ -115,46 +118,46 @@ matches before legacy rows. A matching shortened snapshot keeps the saved
 context when it contains every incoming turn in order; changed contexts use the
 current source. Retained context evidence keeps history preservation enabled
 across resolved refreshes until the source supplies it again. One reconciliation
-shares context-containment results for common prefixes.
-Content matches also preserve whether a record appeared before or inside a turn.
-A missing turn ID alone cannot identify pre-turn replay as an idless child.
-Saved prefixes claim matching content before less specific occurrence matches,
-so identical idless parent and child messages keep their separate usage.
-A returning longer prefix must keep the nearest named turn to claim saved
-usage. A different boundary keeps the occurrences separate until ownership can
-be established; identical content and timestamps alone cannot transfer usage.
-When fewer identical legacy occurrences return, their ownership remains unknown:
-keep those rows and their uncounted usage separately instead of assigning parent
-usage to a child. Repeating the same source does not add more occurrences.
+shares context-containment results for common prefixes. Content matches also
+preserve whether a record appeared before or inside a turn. A missing turn ID
+alone cannot identify pre-turn replay as an idless child. Saved prefixes claim
+matching content before less specific occurrence matches, so identical idless
+parent and child messages keep their separate usage. A returning longer prefix
+must keep the nearest named turn to claim saved usage. A different boundary
+keeps the occurrences separate until ownership can be established; identical
+content and timestamps alone cannot transfer usage. When fewer identical legacy
+occurrences return, their ownership remains unknown: keep those rows and their
+uncounted usage separately instead of assigning parent usage to a child.
+Repeating the same source does not add more occurrences.
 
 Independently imported usage events survive resolved refreshes and rebuilds.
 Their non-summary usage adds to message totals, and context uses the highest
 measurement from either source. Retained history keeps chronological activity
-bounds even when its only remaining rows are usage events.
-Ordinal-only usage reconciliation reads message metadata without result bodies.
-Matched usage references do not require archived result payloads. If a source
-omits a referenced message, retain that message and load its results one message
-at a time. Restored usage also follows source entries emitted before their
-archived counterpart is reconciled.
+bounds even when its only remaining rows are usage events. Ordinal-only usage
+reconciliation reads message metadata without result bodies. Matched usage
+references do not require archived result payloads. If a source omits a
+referenced message, retain that message and load its results one message at a
+time. Restored usage also follows source entries emitted before their archived
+counterpart is reconciled.
 
 Archived result events without recorded raw digests remain separate occurrences.
 Sanitized or blocked display text cannot establish provider identity, including
 during image projection. Returning source events with real digests still
-deduplicate across retries; unknown
-historical occurrences remain alongside them when their identity cannot be
-proved.
+deduplicate across retries; unknown historical occurrences remain alongside them
+when their identity cannot be proved.
 
-If the parent never appears, available messages continue updating across retries,
-restarts, and rebuilds. Usage for unverified messages remains unavailable. If the
-parent later appears, reconciliation removes only confirmed inherited turns and
-restores child usage, including retained child messages absent from the current
-source. Rows without source evidence stay preserved, with unverifiable usage withheld
-until returning source records establish its ownership. The stale parser version
-continues to request a parent lookup until the source can be parsed with its
-parent. A successful rebuild still installs while those retries remain queued.
+If the parent never appears, available messages continue updating across
+retries, restarts, and rebuilds. Usage for unverified messages remains
+unavailable. If the parent later appears, reconciliation removes only confirmed
+inherited turns and restores child usage, including retained child messages
+absent from the current source. Rows without source evidence stay preserved,
+with unverifiable usage withheld until returning source records establish its
+ownership. The stale parser version continues to request a parent lookup until
+the source can be parsed with its parent. A successful rebuild still installs
+while those retries remain queued.
 
-When an Antigravity CLI source yields a retryable low-fidelity transcript,
-sync and rebuild preserve any saved history and leave it stale for retry. A new
+When an Antigravity CLI source yields a retryable low-fidelity transcript, sync
+and rebuild preserve any saved history and leave it stale for retry. A new
 session can use the fallback, but later fallback changes are held until a
 high-fidelity parse succeeds. A rebuild still installs, even when these
 preserved sessions are its only work. The sync still reports them as failures,
@@ -840,10 +843,10 @@ results and can delay that first startup; it does not require a session resync.
 
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
 `idx_sessions_source_missing` bound the parser-version check and empty repair
-queries. Owner preparation installs missing indexes automatically.
-Each first build scans `sessions` and blocks writes until installation commits.
-Restricted publishers keep writing before owner installation, using the
-existing queries until the indexes are available.
+queries. Owner preparation installs missing indexes automatically. Each first
+build scans `sessions` and blocks writes until installation commits. Restricted
+publishers keep writing before owner installation, using the existing queries
+until the indexes are available.
 
 ### Usage archive indexes
 
