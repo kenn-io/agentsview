@@ -2829,6 +2829,9 @@ func (s *Store) populateFrustrationMarkers(
 	rows []db.SignalRow,
 	versions map[string]int64,
 ) error {
+	if rows == nil {
+		return nil
+	}
 	memo := &s.runtimeState().frustrationMarkers
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
