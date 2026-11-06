@@ -119,6 +119,8 @@ func TestPGActivityReportSecondRead(t *testing.T) {
 	require.Len(t, pooled.Sessions, 2)
 	assert.Equal(t, 2, pooled.Report.Peak.Agents)
 
+	// Force the transaction view to build rather than reuse the pooled report.
+	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
 	tx, err := store.DB().BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, tx.Rollback()) }()
