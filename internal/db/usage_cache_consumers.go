@@ -402,7 +402,7 @@ func foldUsageTopSessions(sessions []usageQuerySession, groups []usageFactsGroup
 func (db *DB) GetUsageSessionCounts(ctx context.Context, filter UsageFilter) (UsageSessionCounts, error) {
 	kind := usageQueryKindToken
 	if filter.ActiveSince == "" && filter.Termination == "" {
-		kind = usageQueryKindDayTotals
+		kind = usageQueryKindSessionCounts
 	}
 	filter.SkipSessionCounts = false
 	_, facts, _, err := db.queryUsageRollups(ctx, filter, kind, false, 0)

@@ -250,6 +250,47 @@ func TestUsageTopSessionsZeroCostTies(t *testing.T) {
 	}
 }
 
+func TestUsageSessionCountsModelFiltersMatchLegacy(t *testing.T) {
+	database := testDB(t)
+	for _, id := range []string{"owner", "ordinary"} {
+		seedJournaledUsage(t, database, id)
+	}
+	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='claude' WHERE id='owner'`)
+	require.NoError(t, err)
+	insertSession(t, database, "duplicate", "project", func(s *Session) { s.Agent = "claude"; s.StartedAt = new("2026-08-10T23:32:00Z") })
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{
+		{SessionID: "owner", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-other", TokenUsage: []byte(`{"input_tokens":500000}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"},
+		{SessionID: "duplicate", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T23:32:00Z", Model: "journal-other", TokenUsage: []byte(`{"input_tokens":500000}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"},
+	}))
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	warmJournaledUsage(t, database, filter)
+	for _, tc := range []struct {
+		name, model, exclude string
+		total                int
+	}{
+		{"both contributions", "journal-model,journal-other", "", 2},
+		{"ordinary only", "journal-model", "", 2},
+		{"exception only", "journal-other", "", 1},
+		{"exclude exception", "", "journal-other", 2},
+		{"exclude ordinary", "", "journal-model", 1},
+		{"no matching model", "missing-model", "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := filter
+			f.Model, f.ExcludeModel = tc.model, tc.exclude
+			want, err := database.getUsageSessionCountsLegacy(t.Context(), f)
+			require.NoError(t, err)
+			got, err := database.GetUsageSessionCounts(t.Context(), f)
+			require.NoError(t, err)
+			assert.Equal(t, tc.total, got.Total)
+			assert.Equal(t, want, got)
+			if tc.total > 0 {
+				assert.Equal(t, 1, got.ByAgent["claude"], "the owner counts once across ordinary and exceptional rows")
+			}
+		})
+	}
+}
+
 // CheckUsageSessionCountsJournaled checks the count path without archive names.
 func CheckUsageSessionCountsJournaled(t *testing.T, database *DB) {
 	t.Helper()

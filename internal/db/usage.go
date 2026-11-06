@@ -2714,10 +2714,7 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 		}
 	}
 	for _, row := range grouped {
-		row.DisplayName = row.GroupLabel
-		if row.DisplayName == "" {
-			row.DisplayName, _, _ = strings.Cut(row.GroupKey, ":")
-		}
+		row.DisplayName = topSessionGroupDisplayName(row.GroupKey, row.GroupLabel)
 		out = append(out, row.TopSessionEntry)
 	}
 	sortTopSessions(out, sortBy, tokenTypes)
@@ -2733,6 +2730,14 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 		ranked = append(ranked, remainder)
 	}
 	return ranked, nil
+}
+
+func topSessionGroupDisplayName(key, label string) string {
+	if label != "" {
+		return label
+	}
+	name, _, _ := strings.Cut(key, ":")
+	return name
 }
 
 func addTopSessionTotals(dst *TopSessionEntry, src TopSessionEntry) error {

@@ -110,10 +110,7 @@ func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64,
 		if entry.SessionID != "" {
 			entry.GroupLabel = ""
 		} else if entry.GroupKey != "" {
-			entry.DisplayName = entry.GroupLabel
-			if entry.DisplayName == "" {
-				entry.DisplayName, _, _ = strings.Cut(entry.GroupKey, ":")
-			}
+			entry.DisplayName = topSessionGroupDisplayName(entry.GroupKey, entry.GroupLabel)
 		}
 		result.Entries = append(result.Entries, entry)
 	}

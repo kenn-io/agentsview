@@ -21,10 +21,11 @@ const (
 	usageQueryKindActivity
 	usageQueryKindDayTotals
 	usageQueryKindTopSessions
+	usageQueryKindSessionCounts
 )
 
 func (kind usageQueryKind) readsJournaledTotals() bool {
-	return kind == usageQueryKindDayTotals || kind == usageQueryKindTopSessions
+	return kind == usageQueryKindDayTotals || kind == usageQueryKindTopSessions || kind == usageQueryKindSessionCounts
 }
 
 type usageSourceVersion struct {

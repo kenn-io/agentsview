@@ -63,17 +63,10 @@ func (t UsageTokenTypes) Total(
 ) int {
 	t = t.normalized()
 	total := 0
-	if t&UsageTokenTypeInput != 0 {
-		total += input
-	}
-	if t&UsageTokenTypeCacheWrite != 0 {
-		total += cacheWrite
-	}
-	if t&UsageTokenTypeCacheRead != 0 {
-		total += cacheRead
-	}
-	if t&UsageTokenTypeOutput != 0 {
-		total += output
+	for _, counter := range usageTokenCounters(input, output, cacheWrite, cacheRead) {
+		if t&counter.bit != 0 {
+			total += counter.value
+		}
 	}
 	return total
 }
@@ -81,16 +74,25 @@ func (t UsageTokenTypes) Total(
 // SQLTotal sums the selected counters using the same selection as Total.
 func (t UsageTokenTypes) SQLTotal(input, output, cacheWrite, cacheRead string) string {
 	columns := []string{"0"}
-	for _, counter := range []struct {
-		bit    UsageTokenTypes
-		column string
-	}{
-		{UsageTokenTypeInput, input}, {UsageTokenTypeOutput, output},
-		{UsageTokenTypeCacheWrite, cacheWrite}, {UsageTokenTypeCacheRead, cacheRead},
-	} {
-		if t.normalized()&counter.bit != 0 {
-			columns = append(columns, counter.column)
+	t = t.normalized()
+	for _, counter := range usageTokenCounters(input, output, cacheWrite, cacheRead) {
+		if t&counter.bit != 0 {
+			columns = append(columns, counter.value)
 		}
 	}
 	return strings.Join(columns, "+")
+}
+
+type usageTokenCounter[T int | string] struct {
+	bit   UsageTokenTypes
+	value T
+}
+
+func usageTokenCounters[T int | string](input, output, cacheWrite, cacheRead T) [4]usageTokenCounter[T] {
+	return [4]usageTokenCounter[T]{
+		{UsageTokenTypeInput, input},
+		{UsageTokenTypeOutput, output},
+		{UsageTokenTypeCacheWrite, cacheWrite},
+		{UsageTokenTypeCacheRead, cacheRead},
+	}
 }
