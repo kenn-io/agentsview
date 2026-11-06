@@ -107,6 +107,22 @@ func TestAntigravityProviderSummaryResolutionStates(t *testing.T) {
 			},
 			want: SourceCwdUnspecified,
 		},
+		// A store that records parents but not workspaces says nothing
+		// about the cwd.
+		"store without a workspace column": {
+			store: func(t *testing.T, root string) {
+				t.Helper()
+				conn, err := sql.Open("sqlite3", filepath.Join(root, AntigravitySummariesDBName))
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.ExecContext(t.Context(), `CREATE TABLE conversation_summaries (
+					conversation_id TEXT PRIMARY KEY, title TEXT, parent_conversation_id TEXT NOT NULL DEFAULT '')`)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO conversation_summaries VALUES (?, 'Title', '')`, summaryTestID)
+				require.NoError(t, err)
+			},
+			want: SourceCwdUnspecified,
+		},
 		"remote development folder": {
 			store: func(t *testing.T, root string) {
 				t.Helper()

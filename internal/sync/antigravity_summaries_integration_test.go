@@ -524,6 +524,31 @@ func TestAntigravitySummaryStoreClearedWorkspaceUnderAllowList(t *testing.T) {
 	assert.Empty(t, antigravityStoredSession(t, archive, id).Cwd)
 }
 
+// The same holds when the conversation also moved from its brain transcript
+// to a database: the archived row still names the transcript, and the cleared
+// cwd reaches it.
+func TestAntigravitySummaryStoreClearedWorkspaceUnderAllowListAfterSourceMove(t *testing.T) {
+	tc := antigravitySummaryCases()["app and IDE"]
+	root := t.TempDir()
+	tc.write(t, root)
+	store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{tc.id: {WorkspaceURIs: `[]`}})
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{tc.agent: {root}}, Machine: "host-a",
+		IncludeCwdPrefixes: []string{"/tmp/allowed"},
+	})
+	t.Cleanup(engine.Close)
+	id := string(tc.agent) + ":" + tc.id
+	transcript := filepath.Join(root, "brain", tc.id, ".system_generated", "logs", "transcript.jsonl")
+	require.NoError(t, archive.UpsertSession(t.Context(), db.Session{
+		ID: id, Agent: string(tc.agent), Machine: "host-a", FilePath: &transcript,
+		Cwd: "/tmp/allowed/proj", Project: "proj",
+	}))
+
+	_ = engine.SyncPathsContext(t.Context(), []string{store, tc.path(root)})
+	assert.Empty(t, antigravityStoredSession(t, archive, id).Cwd)
+}
+
 // A CLI reader sidecar decides the parent only as the parser reads it: one
 // the parser rejects defers to the store, and one naming the conversation
 // itself means no parent, whatever the store says.

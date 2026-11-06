@@ -31,9 +31,10 @@ import (
 type antigravitySummary struct {
 	// workspace is the first workspace folder as a local path, or "" when
 	// that folder is not local. hasWorkspace reports whether any folder is
-	// named.
-	workspace    string
-	hasWorkspace bool
+	// named, and workspaceRecorded whether the store records workspaces.
+	workspace         string
+	hasWorkspace      bool
+	workspaceRecorded bool
 	// parentID is the canonical ID of the conversation that started this
 	// one, or "".
 	parentID string
@@ -58,7 +59,7 @@ func (s antigravitySummaries) cwdResolution(id string) SourceCwdResolution {
 	}
 	summary, listed := s.byID[id]
 	switch {
-	case !listed:
+	case !listed || !summary.workspaceRecorded:
 		return SourceCwdResolution{}
 	case !summary.hasWorkspace:
 		// A listed row without a folder means the conversation has none.
@@ -200,7 +201,8 @@ func readAntigravitySummaries(ctx context.Context, path string) antigravitySumma
 			continue
 		}
 		summary := antigravitySummary{
-			parentID: canonicalAgyCascadeID(strings.TrimSpace(parentID)),
+			parentID:          canonicalAgyCascadeID(strings.TrimSpace(parentID)),
+			workspaceRecorded: hasWorkspaces,
 		}
 		if first := gjson.Get(uris, "0"); first.Type == gjson.String {
 			summary.workspace = antigravityWorkspacePath(first.Str)
