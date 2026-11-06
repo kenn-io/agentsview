@@ -221,7 +221,7 @@
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
   {:else if status && status.setup?.enabled !== false && !status.setup?.busy}
-    {#if status.model || status.dimension || !status.setup || !running}
+    {#if status.model || status.dimension || !status.setup}
       <div class="status-grid">
         {#if status.model}
           <span class="row-label">{m.settings_embeddings_model_label()}</span>
@@ -231,7 +231,7 @@
           <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
           <span class="row-value">{numberFormat.format(status.dimension)}</span>
         {/if}
-        {#if !status.setup || !running}
+        {#if !status.setup}
           <span class="row-label">{m.settings_embeddings_status_label()}</span>
           <span class="row-value">
             {#if running}
@@ -466,6 +466,7 @@
   }
 
   .subsection {
+    margin-top: var(--space-3);
     display: flex;
     flex-direction: column;
     gap: 6px;

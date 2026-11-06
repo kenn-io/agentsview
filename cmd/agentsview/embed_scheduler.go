@@ -793,20 +793,9 @@ func setupVectorServing(
 	recallScheduler := newEmbedScheduler(
 		recallMgr, embedDebounceInterval, recallBackstop(cfg, backstop), false, idle,
 	)
-	serverOpts := []server.Option{
-		server.WithEmbeddingsManager(mgr),
-		server.WithEmbeddingsStoreManager(
-			vector.RecallIndexSpec().Name, recallMgr,
-		),
-		server.WithEmbeddingsIncludeAutomatedDefault(cfg.Vector.IncludeAutomated),
-	}
 	if cfg.Vector.Embed.RunAfterSyncEnabled() || backstop > 0 {
 		// Only automatic builds replay a battery marker; manual builds leave it on disk.
 		scheduler.batteryDeferredPath = path + ".battery-deferred"
-	}
-	if cfg.Vector.Embed.RunAfterSyncEnabled() {
-		// A permanent delete must reach the message mirror's journal refresh without waiting for a sync.
-		serverOpts = append(serverOpts, server.WithSessionMutationNotifier(scheduler.Notify))
 	}
 	var recallMutationNotify func()
 	if cfg.Vector.Embed.Recall {
@@ -816,15 +805,10 @@ func setupVectorServing(
 		// signal stays bounded and coalesces with any startup mutation burst.
 		recallScheduler.Notify()
 		recallMutationNotify = recallScheduler.Notify
-		serverOpts = append(serverOpts,
-			server.WithRecallCorpusMutationNotifier(recallMutationNotify),
-			server.WithSessionMutationNotifier(recallMutationNotify),
-		)
 	}
 
 	return vectorServing{
 		manager: mgr, recallManager: recallMgr,
-		ServerOpts:           serverOpts,
 		Scheduler:            scheduler,
 		RecallScheduler:      recallScheduler,
 		RecallMutationNotify: recallMutationNotify,

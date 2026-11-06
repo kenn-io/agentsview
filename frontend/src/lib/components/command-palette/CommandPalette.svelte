@@ -21,6 +21,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { stripIdPrefix } from "../../utils/resume.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
+  import { EmbeddingsService, type VectorBuildStatus } from "../../api/generated/index.js";
   import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
   import SemanticSetupHelp from "./SemanticSetupHelp.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
@@ -31,11 +32,14 @@
     SearchMode,
   } from "../../stores/search.svelte.js";
 
-  import { EmbeddingsService, type VectorBuildStatus } from "../../api/generated/index.js";
   let hintStatus = $state<VectorBuildStatus | null>(null);
   onMount(() => {
     const controller = new AbortController();
-    void EmbeddingsService.getApiV1EmbeddingsStatus({}, { signal: controller.signal }).then((status) => { if (!controller.signal.aborted) hintStatus = status; }).catch(() => {});
+    void EmbeddingsService.getApiV1EmbeddingsStatus({}, { signal: controller.signal })
+      .then((status) => {
+        if (!controller.signal.aborted) hintStatus = status;
+      })
+      .catch(() => {});
     return () => controller.abort();
   });
   let inputRef: HTMLInputElement | undefined = $state(undefined);

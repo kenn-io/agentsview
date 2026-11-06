@@ -27,15 +27,19 @@
   import { onMount } from "svelte";
   import { Button, CopyButton, Spinner } from "@kenn-io/kit-ui";
   import { getLocale, m } from "../../i18n/index.js";
-  import { EmbeddingsService } from "../../api/generated/index.js";
+  import { EmbeddingsService, type VectorBuildStatus, type VectorGenerationInfo } from "../../api/generated/index.js";
   import { ApiError, isAbortError } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
-  import type { VectorBuildStatus, VectorGenerationInfo } from "../../api/generated/index.js";
+
   let generations = $state<VectorGenerationInfo[]>([]);
   async function readCoverage() {
-    try { const next = await EmbeddingsService.getApiV1EmbeddingsGenerations({}); if (!disposed) generations = next.generations; }
-    catch { /* Coverage is optional until the next panel open. */ }
+    try {
+      const next = await EmbeddingsService.getApiV1EmbeddingsGenerations({});
+      if (!disposed) generations = next.generations;
+    } catch {
+      // Coverage is optional until the next panel open.
+    }
   }
   let setupStatus = $state<VectorBuildStatus | null>(null);
 

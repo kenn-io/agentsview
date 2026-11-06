@@ -122,10 +122,19 @@ for (const width of [1280, 390]) {
           .click();
         await expect(page.getByRole("alert")).toContainText("encoder unavailable");
         expect((await name.boundingBox())!.y).toBe(indexingNameTop);
+        const failedChip = page.locator(".kit-search-by-meaning .kit-chip");
+        await expect(failedChip).toHaveText("Failed");
+        await expect(failedChip).toHaveCSS("text-transform", "none");
         const retry = page.getByRole("button", { name: "Retry", exact: true });
         const errorBox = (await page.getByRole("alert").boundingBox())!;
         const retryBox = (await retry.boundingBox())!;
         expect(Math.max(0, retryBox.y - errorBox.y - errorBox.height)).toBeLessThanOrEqual(8);
+        const generationsBox = (await page
+          .locator(".embeddings-settings .subsection")
+          .boundingBox())!;
+        expect(
+          generationsBox.y - Math.max(errorBox.y + errorBox.height, retryBox.y + retryBox.height),
+        ).toBeGreaterThanOrEqual(16);
         await retry.click();
         await expect(page.locator(".kit-search-by-meaning [role=progressbar]")).toHaveAttribute(
           "aria-valuenow",
