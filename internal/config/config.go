@@ -4126,7 +4126,7 @@ func (c *Config) SaveVectorSetup(builtIn bool) error {
 		if err != nil {
 			return err
 		}
-		return c.writeConfigMap(existing)
+		return c.writeVectorSetup(existing)
 	})
 }
 

@@ -13,6 +13,7 @@ require (
 	github.com/ccoveille/go-safecast/v2 v2.0.1
 	github.com/cenkalti/backoff/v7 v7.0.2
 	github.com/coder/websocket v1.8.15
+	github.com/creachadair/tomledit v0.0.29
 	github.com/danielgtaylor/huma/v2 v2.40.0
 	github.com/dlclark/regexp2/v2 v2.12.0
 	github.com/dmarkham/enumer v1.7.2

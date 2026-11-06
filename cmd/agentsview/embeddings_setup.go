@@ -204,7 +204,7 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 	if err != nil {
 		return status, err
 	}
-	status.MissingBytes = inspected.DownloadBytes
+	status.MissingBytes = max(status.MissingBytes, inspected.DownloadBytes)
 	if inspected.OllamaAvailable {
 		status.Provider = "ollama"
 		if status.Enabled && status.Action == "" {
@@ -313,7 +313,15 @@ func (v *liveVectorServing) closeServing(cfg config.Config) error {
 func (v *liveVectorServing) activate(action string, deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
 	cfg := v.cfg
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
-		func(_ context.Context, size int64) (bool, error) { return size <= approvedBytes, nil },
+		func(_ context.Context, size int64) (bool, error) {
+			if size > approvedBytes {
+				v.mu.Lock()
+				v.setup.MissingBytes = size
+				v.mu.Unlock()
+				return false, nil
+			}
+			return true, nil
+		},
 		func(done, total int64) {
 			v.mu.Lock()
 			v.setup.DownloadedBytes, v.setup.TotalBytes = done, total

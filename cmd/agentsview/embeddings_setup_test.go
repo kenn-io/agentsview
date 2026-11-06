@@ -664,3 +664,54 @@ func TestEmbeddingsSetupStatusKeepsActiveProviderDuringSharedInstall(t *testing.
 		})
 	}
 }
+
+func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	shared, err := embedlocal.DefaultDir()
+	require.NoError(t, err)
+	modelDir := filepath.Join(shared, "nomic-embed-text-v1.5", "e9b6763023c676ca8431644204f50c2b100d9aab")
+	require.NoError(t, os.MkdirAll(modelDir, 0o700))
+	// Correct metadata hides corrupt content from Inspect's inexpensive probe.
+	require.NoError(t, os.WriteFile(filepath.Join(modelDir, "tokenizer.json"), make([]byte, 711396), 0o600))
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+	})
+	inspectLocalEmbeddings = func(ctx context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
+		opts.SkipOllama = true
+		return embedlocal.Inspect(ctx, opts)
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+	var approved atomic.Bool
+	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		confirm := opts.Confirm
+		opts.Confirm = func(ctx context.Context, size int64) (bool, error) {
+			consent, err := confirm(ctx, size)
+			approved.Store(consent)
+			if consent {
+				return false, errors.New("test stops before approved download")
+			}
+			return false, err
+		}
+		return embedlocal.Install(ctx, opts)
+	}
+	owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
+	initial, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 293859028, initial.MissingBytes)
+	require.NoError(t, owner.Setup("turn-on", initial.MissingBytes))
+	<-owner.done
+	assert.False(t, approved.Load())
+	retry, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, retry.Error, "declined")
+	assert.EqualValues(t, 294570424, retry.MissingBytes)
+	require.NoError(t, owner.Setup("turn-on", retry.MissingBytes))
+	<-owner.done
+	assert.True(t, approved.Load(), "Retry must approve the verified size disclosed after repair was refused")
+}

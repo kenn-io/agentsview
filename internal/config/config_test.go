@@ -3256,3 +3256,33 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestSaveVectorSetupPreservesComments(t *testing.T) {
+	for _, tc := range []struct{ name, original, local string }{
+		{"section", "# personal settings\nport = 12345 # keep port\n[vector] # search options\nenabled = false # keep toggle\n", "automatic"},
+		{"dotted", "# personal settings\nvector.enabled = false # keep toggle\nport = 12345 # keep port\n", "automatic"},
+		{"inline", "# personal settings\nvector = { enabled = false } # keep toggle\nport = 12345 # keep port\n", "automatic"},
+		{"switch", "# personal settings\nport = 12345 # keep port\n[vector]\nenabled = true # keep toggle\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.ollama] # keep server\nendpoint = 'http://127.0.0.1:11434/v1' # keep endpoint\n", "ollama"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			path := filepath.Join(dir, configFileName)
+			require.NoError(t, os.WriteFile(path, []byte(tc.original), 0o600))
+			cfg, err := LoadReadOnly()
+			require.NoError(t, err)
+			require.NoError(t, cfg.SaveVectorSetup(true))
+			saved, err := os.ReadFile(path)
+			require.NoError(t, err)
+			for _, comment := range []string{"# personal settings", "# keep port", "# keep toggle", "# search options", "# keep server", "# keep endpoint"} {
+				if strings.Contains(tc.original, comment) {
+					assert.Contains(t, string(saved), comment)
+				}
+			}
+			reloaded, err := LoadReadOnly()
+			require.NoError(t, err)
+			assert.True(t, reloaded.Vector.Enabled)
+			assert.True(t, reloaded.Vector.Embeddings.Servers[tc.local].Local)
+			assert.Equal(t, 12345, reloaded.Port)
+		})
+	}
+}
