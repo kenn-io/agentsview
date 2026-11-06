@@ -632,7 +632,10 @@ func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
 		ModelPattern: "push-test", InputPerMTok: money.MustParseDollars("1"),
 	}}))
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	_, err := syncer.Push(t.Context(), false, nil)
+	// Keep reads on raw usage while the callback pushes new pricing contexts.
+	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM STOP VIEW prepare_usage")
+	require.NoError(t, err)
+	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
 
 	// The driver's query log identifies the context SELECT. Its progress
@@ -685,7 +688,10 @@ func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
 		ModelPattern: "push-test-*", InputPerMTok: money.MustParseDollars("1"),
 	}}))
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	_, err := syncer.Push(t.Context(), false, nil)
+	// Keep reads on raw usage while the callback pushes new pricing contexts.
+	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM STOP VIEW prepare_usage")
+	require.NoError(t, err)
+	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
 
 	var readingContexts atomic.Bool
