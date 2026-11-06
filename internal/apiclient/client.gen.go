@@ -29667,6 +29667,9 @@ type SyncStatusResponse struct {
 	// StartupPending Startup ingestion has not completed successfully
 	StartupPending bool          `json:"startup_pending"`
 	Stats          SyncSyncStats `json:"stats"`
+
+	// SyncPending Local ingestion is catching up after an idle period
+	SyncPending bool `json:"sync_pending"`
 }
 
 func (s SyncStatusResponse) Validate() error {

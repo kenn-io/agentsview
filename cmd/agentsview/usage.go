@@ -414,9 +414,8 @@ func applyCustomPricing(database *db.DB, cfg config.Config) {
 // Decision tree:
 //  1. If the stored data version is stale (parser changes on
 //     upgrade), run a full resync.
-//  2. If a server process is active (via kit runtime record), trust
-//     its file watcher and skip on-demand sync. This avoids
-//     duplicate work and write contention.
+//  2. If a server process is active (via kit runtime record), wake
+//     it through the API and wait for its bounded catch-up.
 //  3. Otherwise, run a quick incremental sync scoped to files
 //     modified since the last recorded sync start time, with
 //     a small safety margin.
@@ -463,11 +462,21 @@ func ensureFreshData(
 		return
 	}
 
-	// Skip on-demand sync only when a writable local daemon is
-	// already keeping the SQLite archive fresh. pg serve daemons
-	// (read-only) do not sync the local DB, so we still want to
-	// run our own sync when only one of those is present.
+	// A writable daemon owns ingestion even while starting or incompatible.
 	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
+		stale := true
+		if rt := FindWritableDaemonRuntime(appCfg.DataDir, appCfg.AuthToken); rt != nil {
+			api, err := apiclient.NewHTTPClient(transportFromRuntime(rt).URL, appCfg.AuthToken, &http.Client{Timeout: 30 * time.Second})
+			if err == nil {
+				ctx, archiveStale := apiclient.TrackArchiveFreshness(ctx, nil)
+				// Wake idle ingestion through an in-memory status read.
+				response, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
+				stale = err != nil || response == nil || response.StatusCode != http.StatusOK || archiveStale()
+			}
+		}
+		if stale {
+			fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
+		}
 		return
 	}
 

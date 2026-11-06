@@ -1258,9 +1258,16 @@ without waiting for startup ingestion. The CLI requests this with
 `usage_refresh: true`, `id`, and `subagents: true` on
 `POST /api/v1/sessions/sync`. If refresh is refused or fails, the command
 returns archived totals with a warning; JSON sets `refresh_incomplete: true`.
-A missing daemon ID returns a retry error while
-`GET /api/v1/sync/status` reports `startup_pending` or `archive_stale`. Once
-both are clear, it returns exit 2. Scheduled ingestion owns retries.
+A missing daemon ID returns a retry error while `GET /api/v1/sync/status`
+reports `startup_pending`, `archive_stale`, or `sync_pending`. Once all three
+are clear, it returns exit 2. Scheduled ingestion owns retries.
+
+Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
+after an idle period. Older local clients must upgrade to interpret it. The
+field and catch-up warning clear when the pass finishes or fails, and failures
+are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` while
+catch-up is incomplete. A required parser rebuild uses the stale header
+independently.
 
 HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
 missing IDs. Direct mode still refreshes the named transcript. Combined HTTP
