@@ -1,5 +1,9 @@
 import { getApiV1SessionsByIdTiming as fetchSessionTiming } from "../api/generated/sessions/sessions.js";
-import type { DbCallTiming as CallTiming, DbSessionTiming as SessionTiming, DbTurnTiming as TurnTiming } from "../api/generated/index.js";
+import type {
+  DbCallTiming as CallTiming,
+  DbSessionTiming as SessionTiming,
+  DbTurnTiming as TurnTiming,
+} from "../api/generated/index.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 /** Per-session timing snapshot fetched from
