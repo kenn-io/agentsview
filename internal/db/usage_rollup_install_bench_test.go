@@ -14,6 +14,15 @@ import (
 // Measure cold installs separately from fact extraction and pricing. Each batch
 // has one daily row per session, as in an initial coverage pass.
 func BenchmarkUsageRollupColdInstall(b *testing.B) {
+	for _, replace := range []bool{false, true} {
+		b.Run(fmt.Sprintf("replace-%t", replace), func(b *testing.B) {
+			benchmarkUsageRollupInstall(b, replace)
+		})
+	}
+}
+
+func benchmarkUsageRollupInstall(b *testing.B, replace bool) {
+	b.Helper()
 	cache, err := initializeUsageCache(b.Context(), filepath.Join(b.TempDir(), "usage.db"), "benchmark", true)
 	require.NoError(b, err)
 	b.Cleanup(func() { require.NoError(b, cache.db.Close()) })
@@ -40,6 +49,9 @@ func BenchmarkUsageRollupColdInstall(b *testing.B) {
 	_, err = loadUsageRollupFacts(b.Context(), conn, sessions)
 	require.NoError(b, err)
 	identity := usageTimezoneIdentityFor(time.UTC, nil)
+	if replace {
+		require.NoError(b, installUsageRollupBuilds(b.Context(), conn, identity, time.UTC, builds, usageDedupIdentitySet{}))
+	}
 	b.ResetTimer()
 	for range b.N {
 		require.NoError(b, installUsageRollupBuilds(b.Context(), conn, identity, time.UTC, builds, usageDedupIdentitySet{}))
@@ -53,8 +65,10 @@ func BenchmarkUsageRollupColdInstall(b *testing.B) {
 		require.Equal(b, int64(256), rows)
 		require.Equal(b, int64(25600), input)
 		require.Equal(b, int64(51200), cost)
-		_, err := conn.ExecContext(b.Context(), `DELETE FROM usage_rollup_timezones`)
-		require.NoError(b, err)
+		if !replace {
+			_, err := conn.ExecContext(b.Context(), `DELETE FROM usage_rollup_timezones`)
+			require.NoError(b, err)
+		}
 		b.StartTimer()
 	}
 }

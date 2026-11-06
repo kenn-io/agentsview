@@ -702,6 +702,21 @@ func installUsageRollupBuilds(
 		return err
 	}
 	defer dailyInsert.Close()
+	dailyDelete, err := conn.PrepareContext(ctx, `DELETE FROM usage_daily_rollups WHERE rollup_install_id = ?`)
+	if err != nil {
+		return err
+	}
+	defer dailyDelete.Close()
+	installInsert, err := conn.PrepareContext(ctx, `INSERT INTO usage_rollup_installs(
+		timezone_id, session_id, source_sync_marker, source_transcript_rev,
+		usage_event_fingerprint, fact_install_revision, baked_agent,
+		baked_started_at, project, machine, git_branch, is_automated, user_message_count, has_authoritative, pricing_inputs, pricing_hash, install_revision,
+		cached_at, source_change_revision, source_pricing
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer installInsert.Close()
 	dates := make(map[string]bool)
 	for _, build := range builds {
 		var installID int64
@@ -727,8 +742,11 @@ func installUsageRollupBuilds(
 				errUsageCacheSourceChanged)
 		}
 		if err == nil {
+			if _, err := dailyDelete.ExecContext(ctx, installID); err != nil {
+				return err
+			}
 			for _, table := range []string{
-				"usage_daily_rollups", "usage_activity_rollups", "usage_rollup_exceptions",
+				"usage_activity_rollups", "usage_rollup_exceptions",
 			} {
 				if _, err := conn.ExecContext(ctx, `DELETE FROM `+table+
 					` WHERE rollup_install_id = ?`, installID); err != nil {
@@ -745,12 +763,7 @@ func installUsageRollupBuilds(
 				build.Agent, build.StartedAt, build.Project, build.Machine, build.GitBranch, build.IsAutomated, build.UserMessageCount, build.HasAuthoritative, build.PricingInputs, build.PricingHash,
 				nextRevision, now, build.ChangeRevision, build.SourcePricing, installID)
 		} else {
-			result, insertErr := conn.ExecContext(ctx, `INSERT INTO usage_rollup_installs(
-				timezone_id, session_id, source_sync_marker, source_transcript_rev,
-				usage_event_fingerprint, fact_install_revision, baked_agent,
-				baked_started_at, project, machine, git_branch, is_automated, user_message_count, has_authoritative, pricing_inputs, pricing_hash, install_revision,
-				cached_at, source_change_revision, source_pricing
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, timezoneID, build.SessionID,
+			result, insertErr := installInsert.ExecContext(ctx, timezoneID, build.SessionID,
 				build.Source.SyncMarker, build.Source.TranscriptRevision,
 				build.Source.UsageEventFingerprint, build.FactRevision,
 				build.Agent, build.StartedAt, build.Project, build.Machine, build.GitBranch, build.IsAutomated, build.UserMessageCount, build.HasAuthoritative, build.PricingInputs, build.PricingHash,
