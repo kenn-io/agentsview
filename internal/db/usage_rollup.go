@@ -694,6 +694,13 @@ func installUsageRollupBuilds(
 	if err != nil {
 		return err
 	}
+	firstRevision := nextRevision
+	bulk := len(builds) > 1
+	if bulk {
+		if _, err := conn.ExecContext(ctx, `INSERT INTO usage_cache_metadata(key, value) VALUES ('bulk_rollup_install', '1')`); err != nil {
+			return err
+		}
+	}
 	dates := make(map[string]bool)
 	for _, build := range builds {
 		var installID int64
@@ -762,6 +769,14 @@ func installUsageRollupBuilds(
 			return err
 		}
 		nextRevision++
+	}
+	if bulk {
+		if err := installUsageDayTotals(ctx, conn, timezoneID, firstRevision, nextRevision); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx, `DELETE FROM usage_cache_metadata WHERE key='bulk_rollup_install'`); err != nil {
+			return err
+		}
 	}
 	if _, err := conn.ExecContext(ctx, `UPDATE usage_cache_metadata SET value=?
 		WHERE key=?`, strconv.FormatInt(nextRevision, 10),
