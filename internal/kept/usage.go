@@ -27,6 +27,7 @@ type usageMemo[T any] struct {
 func (u *Usage) init() {
 	u.once.Do(func() {
 		u.daily.Size = dailyUsageBytes
+		u.plan.Size = planUsageBytes
 		u.top.Size = TopSessionBytes
 	})
 }
@@ -39,12 +40,9 @@ func (u *Usage) Clear() {
 }
 
 func usageRows[T any](ctx context.Context, memo *usageMemo[T], f db.UsageFilter, version string, load func(context.Context, db.UsageFilter) ([]T, error)) ([]T, error) {
-	if version == "" || db.TerminationUsesTime(f.Termination) {
-		return load(ctx, f)
-	}
 	key, err := json.Marshal(f, json.Deterministic(true))
 	if err != nil {
-		return nil, err
+		return load(ctx, f)
 	}
 	slot := string(key)
 	if rows, ok := memo.Get(slot, version); ok {

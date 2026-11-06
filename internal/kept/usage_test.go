@@ -127,6 +127,37 @@ func TestUsagePlanAndTopTotals(t *testing.T) {
 	require.Equal(t, 3, topLoads)
 }
 
+func TestUsageInvalidKeyLoadsUncached(t *testing.T) {
+	var usage kept.Usage
+	t.Run("daily", func(t *testing.T) {
+		checkUsageInvalidKey(t, usage.Daily, db.DailyUsageResult{Totals: db.UsageTotals{OutputTokens: 500}})
+	})
+	t.Run("plan", func(t *testing.T) {
+		checkUsageInvalidKey(t, usage.Plan, db.PlanUsageSessionCounts{PlanOnly: 2})
+	})
+	t.Run("top", func(t *testing.T) {
+		checkUsageInvalidKey(t, usage.TopTotals, []db.TopSessionEntry{{SessionID: "session-a", OutputTokens: 500}})
+	})
+}
+
+func checkUsageInvalidKey[T any](t *testing.T, read func(context.Context, db.UsageFilter, string, func(context.Context, db.UsageFilter) (T, error)) (T, error), want T) {
+	t.Helper()
+	f := db.UsageFilter{Termination: "\xff"}
+	loads := 0
+	load := func(ctx context.Context, got db.UsageFilter) (T, error) {
+		require.Equal(t, f, got)
+		require.Equal(t, t.Context(), ctx)
+		loads++
+		return want, nil
+	}
+	for range 2 {
+		result, err := read(t.Context(), f, "v1", load)
+		require.NoError(t, err)
+		require.Equal(t, want, result)
+	}
+	require.Equal(t, 2, loads)
+}
+
 func TestUsageConcurrentCancellation(t *testing.T) {
 	for _, cancelBoth := range []bool{false, true} {
 		t.Run(map[bool]string{false: "one leaves", true: "both leave"}[cancelBoth], func(t *testing.T) {
