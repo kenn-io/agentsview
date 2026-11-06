@@ -8,11 +8,11 @@ import (
 	"strconv"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db/testdata/usagefixture"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -69,35 +69,21 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 	tb.Helper()
 	database := testDB(tb)
 	// Project keys include archive identity, so separate runs need the same scope.
-	require.NoError(tb, database.SetArchiveIdentityForTest(tb.Context(), "usage-page-fixture", "0000000000000000000000000000000000000000000000000000000000000001"))
+	require.NoError(tb, database.SetArchiveIdentityForTest(tb.Context(), usagefixture.ArchiveID, usagefixture.ArchiveKey))
 
-	require.NoError(tb, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000}}, {ModelPattern: "journal-other", InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000}}}))
+	var prices []ModelPricing
+	for _, model := range usagefixture.Models {
+		prices = append(prices, ModelPricing{ModelPattern: model, InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000}})
+	}
+	require.NoError(tb, database.UpsertModelPricing(prices))
 	// Stable catalog timestamps make separate base/head runs byte-comparable.
-	_, err := database.getWriter().ExecContext(tb.Context(), `UPDATE model_pricing SET updated_at='2026-08-01T00:00:00Z' WHERE model_pattern IN ('journal-model', 'journal-other')`)
+	_, err := database.getWriter().ExecContext(tb.Context(), `UPDATE model_pricing SET updated_at=? WHERE model_pattern IN ('journal-model', 'journal-other')`, usagefixture.PricingTimestamp)
 	require.NoError(tb, err)
 
 	for start := 0; start < count; start += 256 {
 		var writes []SessionBatchWrite
 		for i := start; i < min(start+256, count); i++ {
-			id := fmt.Sprintf("journal-%05d", i)
-			// Keep 40% in the last seven days and spread the rest over
-			// the preceding months, including the comparison window.
-			day := time.Date(2026, 8, 4+i%5, 12, 0, 0, 0, time.UTC)
-			if i%10 >= 4 {
-				day = time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC).AddDate(0, 0, -4-i/10%80)
-			}
-			started := day.Format(time.RFC3339)
-			write := SessionBatchWrite{Session: Session{ID: id, Project: fmt.Sprintf("project-%d", i%4), Machine: fmt.Sprintf("machine-%d", i/4%2), Agent: []string{"codex", "claude"}[i/8%2], GitBranch: fmt.Sprintf("branch-%d", i%2), StartedAt: &started, UserMessageCount: 1 + i%3, IsAutomated: i%7 == 0}}
-			for j := range 3 {
-				offset := 0
-				if dailyRows == 3 {
-					offset = j
-				} else if i%33 == 0 && j == 2 {
-					offset = 1
-				}
-				write.Messages = append(write.Messages, Message{SessionID: id, Ordinal: j, Role: "assistant", Timestamp: day.AddDate(0, 0, offset).Add(time.Duration(j) * time.Minute).Format(time.RFC3339), Model: []string{"journal-model", "journal-other"}[i/16%2], TokenUsage: []byte(`{"input_tokens":100,"output_tokens":20}`)})
-			}
-			writes = append(writes, write)
+			writes = append(writes, usageFixtureWrite(usagefixture.Journal(i, dailyRows)))
 		}
 		_, err := database.WriteSessionBatchAtomic(tb.Context(), writes)
 		require.NoError(tb, err)
@@ -112,4 +98,12 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 	require.Equal(tb, recent*60, want.Totals.OutputTokens)
 	require.Equal(tb, int64(recent*420), want.Totals.TotalCost.Microdollars)
 	return database, filter, want
+}
+
+func usageFixtureWrite(input usagefixture.Session) SessionBatchWrite {
+	write := SessionBatchWrite{Session: Session{ID: input.ID, Project: input.Project, Machine: input.Machine, Agent: input.Agent, GitBranch: input.GitBranch, StartedAt: &input.StartedAt, UserMessageCount: input.UserMessageCount, IsAutomated: input.IsAutomated}}
+	for _, message := range input.Messages {
+		write.Messages = append(write.Messages, Message{SessionID: input.ID, Ordinal: message.Ordinal, Role: "assistant", Timestamp: message.Timestamp, Model: message.Model, TokenUsage: []byte(message.TokenUsage), ClaudeMessageID: message.ClaudeMessageID, ClaudeRequestID: message.ClaudeRequestID})
+	}
+	return write
 }

@@ -349,7 +349,7 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 			_ = rows.Close()
 			return 0, err
 		}
-		if prepared.kind == usageQueryKindDayTotals {
+		if prepared.kind == usageQueryKindDayTotals && (revision != snapshot.ChangeRevision || pricing != catalog) {
 			_ = rows.Close()
 			return 0, errUsageCacheSourceChanged
 		}

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db/testdata/usagefixture"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
@@ -27,6 +28,22 @@ func assertUsageDayTotals(t *testing.T, cache *usageCache) {
 	var differences int
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), query).Scan(&differences))
 	assert.Zero(t, differences)
+}
+
+func TestUsageDayTotalsRefreshStaysJournaled(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	warmJournaledUsage(t, database, filter)
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":9}`)}}))
+	var reads []bool
+	database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
+		reads = append(reads, journaled)
+	}
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 109, got.Totals.InputTokens)
+	assert.Equal(t, []bool{true}, reads, "the first read after an append must use the journaled path")
 }
 
 func TestUsageDayTotalsFiltersMatchLegacy(t *testing.T) {
@@ -202,19 +219,14 @@ func TestUsageDayTotalsHistoricalRateCollisionMatchesLegacy(t *testing.T) {
 func seedUsageDayTotalsPage(tb testing.TB, count int) *DB {
 	tb.Helper()
 	database, _, _ := seedUsageJournalBenchmark(tb, count, 1)
-	// A prior-period row makes Comparison exercise real data too.
-	started := "2026-08-03T23:30:00Z"
-	_, err := database.WriteSessionBatchAtomic(tb.Context(), []SessionBatchWrite{
-		{Session: Session{ID: "reported", Project: "project-0", Machine: "machine-0", Agent: "copilot", StartedAt: &started, UserMessageCount: 2}, Messages: []Message{
-			{SessionID: "reported", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "journal-model", TokenUsage: []byte(`{"input_tokens":100,"output_tokens":20}`)},
-			{SessionID: "reported", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-04T00:30:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":200,"output_tokens":30}`)},
-		}},
-		{Session: Session{ID: "duplicate-a", Project: "project-0", Agent: "claude", StartedAt: &started, UserMessageCount: 1}, Messages: []Message{{SessionID: "duplicate-a", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "journal-model", TokenUsage: []byte(`{"output_tokens":10}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}},
-		{Session: Session{ID: "duplicate-b", Project: "project-1", Agent: "claude", StartedAt: &started, UserMessageCount: 2}, Messages: []Message{{SessionID: "duplicate-b", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "journal-model", TokenUsage: []byte(`{"output_tokens":20}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}},
-	})
+	var writes []SessionBatchWrite
+	for _, input := range usagefixture.PageExceptions() {
+		writes = append(writes, usageFixtureWrite(input))
+	}
+	_, err := database.WriteSessionBatchAtomic(tb.Context(), writes)
 	require.NoError(tb, err)
-	cost := money.Money{Microdollars: 1234567}
-	require.NoError(tb, database.ReplaceSessionUsageEvents(tb.Context(), "reported", []UsageEvent{{Source: "shutdown", Model: "journal-model", InputTokens: 10, Cost: &cost, CostStatus: "exact", CostSource: CopilotReportedCostSource, OccurredAt: "2026-08-04T01:00:00Z", DedupKey: "reported"}}))
+	cost := money.Money{Microdollars: usagefixture.ReportedCostMicrodollars}
+	require.NoError(tb, database.ReplaceSessionUsageEvents(tb.Context(), "reported", []UsageEvent{{Source: "shutdown", Model: "journal-model", InputTokens: usagefixture.ReportedInputTokens, Cost: &cost, CostStatus: "exact", CostSource: CopilotReportedCostSource, OccurredAt: usagefixture.ReportedTimestamp, DedupKey: "reported"}}))
 	require.NoError(tb, database.StartUsageCacheBackfill(tb.Context()))
 	require.NoError(tb, database.WaitUsageCacheBackfill(tb.Context()))
 	database.StopUsageCacheBackfill()

@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/testdata/usagefixture"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -30,38 +31,24 @@ func seedUsagePageJournalBenchmark(tb testing.TB, count, dailyRows int) (*db.DB,
 	require.NoError(tb, err)
 	tb.Cleanup(func() { require.NoError(tb, database.Close()) })
 	// Project keys include archive identity, so separate runs need the same scope.
-	require.NoError(tb, database.SetArchiveIdentityForTest(tb.Context(), "usage-page-fixture", "0000000000000000000000000000000000000000000000000000000000000001"))
+	require.NoError(tb, database.SetArchiveIdentityForTest(tb.Context(), usagefixture.ArchiveID, usagefixture.ArchiveKey))
 
-	require.NoError(tb, database.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000}}, {ModelPattern: "journal-other", InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000}}}))
+	var prices []db.ModelPricing
+	for _, model := range usagefixture.Models {
+		prices = append(prices, db.ModelPricing{ModelPattern: model, InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000}})
+	}
+	require.NoError(tb, database.UpsertModelPricing(prices))
 	// Stable catalog timestamps make separate base/head runs byte-comparable.
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(tb, err)
-	_, err = conn.ExecContext(tb.Context(), `UPDATE model_pricing SET updated_at='2026-08-01T00:00:00Z' WHERE model_pattern IN ('journal-model', 'journal-other')`)
+	_, err = conn.ExecContext(tb.Context(), `UPDATE model_pricing SET updated_at=? WHERE model_pattern IN ('journal-model', 'journal-other')`, usagefixture.PricingTimestamp)
 	require.NoError(tb, err)
 	require.NoError(tb, conn.Close())
 
 	for start := 0; start < count; start += 256 {
 		var writes []db.SessionBatchWrite
 		for i := start; i < min(start+256, count); i++ {
-			id := fmt.Sprintf("journal-%05d", i)
-			// Keep 40% in the last seven days and spread the rest over
-			// the preceding months, including the comparison window.
-			day := time.Date(2026, 8, 4+i%5, 12, 0, 0, 0, time.UTC)
-			if i%10 >= 4 {
-				day = time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC).AddDate(0, 0, -4-i/10%80)
-			}
-			started := day.Format(time.RFC3339)
-			write := db.SessionBatchWrite{Session: db.Session{ID: id, Project: fmt.Sprintf("project-%d", i%4), Machine: fmt.Sprintf("machine-%d", i/4%2), Agent: []string{"codex", "claude"}[i/8%2], GitBranch: fmt.Sprintf("branch-%d", i%2), StartedAt: &started, UserMessageCount: 1 + i%3, IsAutomated: i%7 == 0}}
-			for j := range 3 {
-				offset := 0
-				if dailyRows == 3 {
-					offset = j
-				} else if i%33 == 0 && j == 2 {
-					offset = 1
-				}
-				write.Messages = append(write.Messages, db.Message{SessionID: id, Ordinal: j, Role: "assistant", Timestamp: day.AddDate(0, 0, offset).Add(time.Duration(j) * time.Minute).Format(time.RFC3339), Model: []string{"journal-model", "journal-other"}[i/16%2], TokenUsage: []byte(`{"input_tokens":100,"output_tokens":20}`)})
-			}
-			writes = append(writes, write)
+			writes = append(writes, usageFixtureWrite(usagefixture.Journal(i, dailyRows)))
 		}
 		_, err := database.WriteSessionBatchAtomic(tb.Context(), writes)
 		require.NoError(tb, err)
@@ -83,19 +70,14 @@ func seedUsagePageJournalBenchmark(tb testing.TB, count, dailyRows int) (*db.DB,
 func seedUsageDayTotalsPage(tb testing.TB, count int) *db.DB {
 	tb.Helper()
 	database, _, _ := seedUsagePageJournalBenchmark(tb, count, 1)
-	// A prior-period row makes Comparison exercise real data too.
-	started := "2026-08-03T23:30:00Z"
-	_, err := database.WriteSessionBatchAtomic(tb.Context(), []db.SessionBatchWrite{
-		{Session: db.Session{ID: "reported", Project: "project-0", Machine: "machine-0", Agent: "copilot", StartedAt: &started, UserMessageCount: 2}, Messages: []db.Message{
-			{SessionID: "reported", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "journal-model", TokenUsage: []byte(`{"input_tokens":100,"output_tokens":20}`)},
-			{SessionID: "reported", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-04T00:30:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":200,"output_tokens":30}`)},
-		}},
-		{Session: db.Session{ID: "duplicate-a", Project: "project-0", Agent: "claude", StartedAt: &started, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "duplicate-a", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "journal-model", TokenUsage: []byte(`{"output_tokens":10}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}},
-		{Session: db.Session{ID: "duplicate-b", Project: "project-1", Agent: "claude", StartedAt: &started, UserMessageCount: 2}, Messages: []db.Message{{SessionID: "duplicate-b", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "journal-model", TokenUsage: []byte(`{"output_tokens":20}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}},
-	})
+	var writes []db.SessionBatchWrite
+	for _, input := range usagefixture.PageExceptions() {
+		writes = append(writes, usageFixtureWrite(input))
+	}
+	_, err := database.WriteSessionBatchAtomic(tb.Context(), writes)
 	require.NoError(tb, err)
-	cost := money.Money{Microdollars: 1234567}
-	require.NoError(tb, database.ReplaceSessionUsageEvents(tb.Context(), "reported", []db.UsageEvent{{Source: "shutdown", Model: "journal-model", InputTokens: 10, Cost: &cost, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-04T01:00:00Z", DedupKey: "reported"}}))
+	cost := money.Money{Microdollars: usagefixture.ReportedCostMicrodollars}
+	require.NoError(tb, database.ReplaceSessionUsageEvents(tb.Context(), "reported", []db.UsageEvent{{Source: "shutdown", Model: "journal-model", InputTokens: usagefixture.ReportedInputTokens, Cost: &cost, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: usagefixture.ReportedTimestamp, DedupKey: "reported"}}))
 	require.NoError(tb, database.StartUsageCacheBackfill(tb.Context()))
 	require.NoError(tb, database.WaitUsageCacheBackfill(tb.Context()))
 	database.StopUsageCacheBackfill()
@@ -192,6 +174,23 @@ func BenchmarkUsageDayTotalsPage(b *testing.B) {
 			}
 		})
 	}
+	ordinal := 3
+	b.Run("first-totals-read-after-append", func(b *testing.B) {
+		b.StopTimer()
+		filter := db.UsageFilter{From: "2026-08-04", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
+		before, err := database.GetDailyUsage(b.Context(), filter)
+		require.NoError(b, err)
+		b.ResetTimer()
+		for i := range b.N {
+			require.NoError(b, database.InsertMessages(b.Context(), []db.Message{{SessionID: "journal-00000", Ordinal: ordinal, Role: "assistant", Timestamp: "2026-08-04T12:03:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":9}`)}}))
+			ordinal++
+			b.StartTimer()
+			got, err := database.GetDailyUsage(b.Context(), filter)
+			b.StopTimer()
+			require.NoError(b, err)
+			require.Equal(b, before.Totals.InputTokens+9*(i+1), got.Totals.InputTokens)
+		}
+	})
 }
 
 func TestUsageDayTotalsPageBudget(t *testing.T) {
@@ -218,4 +217,12 @@ func TestUsageDayTotalsPageBudget(t *testing.T) {
 			checkUsageDayTotalsPage(t, name, got)
 		})
 	}
+}
+
+func usageFixtureWrite(input usagefixture.Session) db.SessionBatchWrite {
+	write := db.SessionBatchWrite{Session: db.Session{ID: input.ID, Project: input.Project, Machine: input.Machine, Agent: input.Agent, GitBranch: input.GitBranch, StartedAt: &input.StartedAt, UserMessageCount: input.UserMessageCount, IsAutomated: input.IsAutomated}}
+	for _, message := range input.Messages {
+		write.Messages = append(write.Messages, db.Message{SessionID: input.ID, Ordinal: message.Ordinal, Role: "assistant", Timestamp: message.Timestamp, Model: message.Model, TokenUsage: []byte(message.TokenUsage), ClaudeMessageID: message.ClaudeMessageID, ClaudeRequestID: message.ClaudeRequestID})
+	}
+	return write
 }
