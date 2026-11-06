@@ -154,6 +154,12 @@ The latest release is
   and from 350 ms to 300 ms on first open. The memory cache for Activity grows
   by about 57 bytes per counted message, at most about 11 MiB.
 
+- The first Usage page after the usage cache is rebuilt, such as after an
+  upgrade, loads sooner. On a 30,000-session test archive, all history went
+  from about 13 s to under 10 s. Filling an empty cache no longer checks which
+  other sessions share each usage record, because nothing built from them
+  exists yet, and the cache prepares each repeated write once.
+
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.
 

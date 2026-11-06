@@ -692,11 +692,13 @@ func installUsageRollupBuilds(
 	if err != nil {
 		return err
 	}
+	stmts := newUsageStatementCache(conn)
+	defer func() { _ = stmts.Close() }()
 	dates := make(map[string]bool)
 	for _, build := range builds {
 		var installID int64
 		var installedFactRevision int64
-		err := conn.QueryRowContext(ctx, `SELECT id, fact_install_revision
+		err := stmts.QueryRowContext(ctx, `SELECT id, fact_install_revision
 			FROM usage_rollup_installs
 			WHERE timezone_id = ? AND session_id = ?`, timezoneID, build.SessionID).
 			Scan(&installID, &installedFactRevision)
@@ -706,7 +708,7 @@ func installUsageRollupBuilds(
 		// A delayed build can replace a newer install, or one a dedup
 		// invalidation removed. Replay journal changes from its snapshot on
 		// the next read, even when the zone already claimed those changes.
-		if _, err := conn.ExecContext(ctx, `UPDATE usage_rollup_timezones
+		if _, err := stmts.ExecContext(ctx, `UPDATE usage_rollup_timezones
 			SET change_revision=MIN(change_revision, ?) WHERE id=?`, build.ChangeRevision, timezoneID); err != nil {
 			return err
 		}
@@ -720,12 +722,12 @@ func installUsageRollupBuilds(
 			for _, table := range []string{
 				"usage_daily_rollups", "usage_activity_rollups", "usage_rollup_exceptions",
 			} {
-				if _, err := conn.ExecContext(ctx, `DELETE FROM `+table+
+				if _, err := stmts.ExecContext(ctx, `DELETE FROM `+table+
 					` WHERE rollup_install_id = ?`, installID); err != nil {
 					return err
 				}
 			}
-			_, err = conn.ExecContext(ctx, `UPDATE usage_rollup_installs SET
+			_, err = stmts.ExecContext(ctx, `UPDATE usage_rollup_installs SET
 				source_sync_marker=?, source_transcript_rev=?, usage_event_fingerprint=?,
 				fact_install_revision=?, baked_agent=?, baked_started_at=?,
 				pricing_inputs=?, pricing_hash=?, install_revision=?, cached_at=?, source_change_revision=?, source_pricing=?
@@ -735,7 +737,7 @@ func installUsageRollupBuilds(
 				build.Agent, build.StartedAt, build.PricingInputs, build.PricingHash,
 				nextRevision, now, build.ChangeRevision, build.SourcePricing, installID)
 		} else {
-			result, insertErr := conn.ExecContext(ctx, `INSERT INTO usage_rollup_installs(
+			result, insertErr := stmts.ExecContext(ctx, `INSERT INTO usage_rollup_installs(
 				timezone_id, session_id, source_sync_marker, source_transcript_rev,
 				usage_event_fingerprint, fact_install_revision, baked_agent,
 				baked_started_at, pricing_inputs, pricing_hash, install_revision,
@@ -753,20 +755,20 @@ func installUsageRollupBuilds(
 		if err != nil {
 			return err
 		}
-		if err := installUsageRollupRows(ctx, conn, installID, build, dates); err != nil {
+		if err := installUsageRollupRows(ctx, stmts, installID, build, dates); err != nil {
 			return err
 		}
-		if _, err := conn.ExecContext(ctx, `DELETE FROM usage_rollup_invalidations WHERE timezone_id=? AND session_id=?`, timezoneID, build.SessionID); err != nil {
+		if _, err := stmts.ExecContext(ctx, `DELETE FROM usage_rollup_invalidations WHERE timezone_id=? AND session_id=?`, timezoneID, build.SessionID); err != nil {
 			return err
 		}
 		nextRevision++
 	}
-	if _, err := conn.ExecContext(ctx, `UPDATE usage_cache_metadata SET value=?
+	if _, err := stmts.ExecContext(ctx, `UPDATE usage_cache_metadata SET value=?
 		WHERE key=?`, strconv.FormatInt(nextRevision, 10),
 		usageCacheMetadataNextRollupRevision); err != nil {
 		return err
 	}
-	if err := installUsageRollupDays(ctx, conn, timezoneID, location, dates); err != nil {
+	if err := installUsageRollupDays(ctx, stmts, timezoneID, location, dates); err != nil {
 		return err
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
@@ -777,7 +779,7 @@ func installUsageRollupBuilds(
 }
 
 func installUsageRollupRows(
-	ctx context.Context, conn *sql.Conn, installID int64,
+	ctx context.Context, conn *usageStatementCache, installID int64,
 	build usageRollupBuild, dates map[string]bool,
 ) error {
 	for _, row := range build.Daily {
@@ -833,7 +835,7 @@ func installUsageRollupRows(
 }
 
 func installUsageRollupDays(
-	ctx context.Context, conn *sql.Conn, timezoneID int64,
+	ctx context.Context, conn *usageStatementCache, timezoneID int64,
 	location *time.Location, dates map[string]bool,
 ) error {
 	if location == nil {
