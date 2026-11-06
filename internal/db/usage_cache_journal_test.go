@@ -290,7 +290,7 @@ func TestUsageJournaledRestoreBetweenCaptureAndFill(t *testing.T) {
 	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "b", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T01:00:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
 
 	identity := usageTimezoneIdentityFor(filter.Location(), nil)
-	zone, lost, window, err := cache.captureUsageZoneWindow(t.Context(), identity, filter)
+	zone, lost, window, err := cache.captureUsageZoneWindow(t.Context(), identity, filter, usageQueryKindToken)
 	require.NoError(t, err)
 	databaseID, err := database.GetDatabaseID(t.Context())
 	require.NoError(t, err)
@@ -472,7 +472,7 @@ func TestUsageJournaledClaimSurvivingInstalls(t *testing.T) {
 				require.True(t, after.revision.Valid)
 				assert.Less(t, after.revision.Int64, snapshot.ChangeRevision, "a missing single-batch install must prevent the coverage claim")
 			} else {
-				zone, lost, window, err := cache.captureUsageZoneWindow(t.Context(), identity, filter)
+				zone, lost, window, err := cache.captureUsageZoneWindow(t.Context(), identity, filter, usageQueryKindToken)
 				require.NoError(t, err)
 				databaseID, err := database.GetDatabaseID(t.Context())
 				require.NoError(t, err)
@@ -598,17 +598,19 @@ func TestUsageJournaledClaimFailureWhileCacheWriterBusy(t *testing.T) {
 	identity := usageTimezoneIdentityFor(filter.Location(), nil)
 	before, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
 	require.NoError(t, err)
-	// Project metadata advances the journal without changing the cached facts
-	// or the fields baked into daily totals.
+	// Rename and restore the project so the journal advances while the fields
+	// baked into daily totals still match. Only the coverage claim needs a write.
 	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project = 'renamed' WHERE id = 'session'`)
+	require.NoError(t, err)
+	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project = 'project' WHERE id = 'session'`)
 	require.NoError(t, err)
 	holdUsageCacheWriter(t, cache)
 	got, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err, "a failed coverage claim must leave valid report data readable")
 	assert.Equal(t, 200, got.Totals.InputTokens)
-	counts, err := database.GetUsageSessionCounts(t.Context(), UsageFilter{Timezone: "UTC", Project: "renamed"})
+	counts, err := database.GetUsageSessionCounts(t.Context(), UsageFilter{Timezone: "UTC", Project: "project"})
 	require.NoError(t, err)
-	assert.Equal(t, 1, counts.Total)
+	assert.Equal(t, 2, counts.Total)
 	after, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
 	require.NoError(t, err)
 	assert.Equal(t, before.revision, after.revision, "a failed claim must leave coverage unchanged")
@@ -934,9 +936,10 @@ func TestUsageJournaledMemoSeparatesTotalsFromTop(t *testing.T) {
 			database := openDailyUsageFixtureDB(t)
 			filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Agent: "claude"}
 			warmJournaledUsage(t, database, filter)
-			var prepares atomic.Int64
+			var prepares, reads atomic.Int64
 			database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
-				assert.True(t, journaled, "memoized rankings and daily totals must use the journaled window")
+				assert.True(t, journaled, "rankings and daily totals must use the journaled window")
+				reads.Add(1)
 			}
 			database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 			ctx := WithUsageWindowMemo(t.Context())
@@ -957,6 +960,11 @@ func TestUsageJournaledMemoSeparatesTotalsFromTop(t *testing.T) {
 			assert.Equal(t, want, got)
 			readTop()
 			assert.EqualValues(t, 2, prepares.Load(), "totals and Top sessions use separate memo entries")
+			wantReads := int64(2)
+			if topFirst {
+				wantReads++
+			}
+			assert.Equal(t, wantReads, reads.Load())
 		})
 	}
 }

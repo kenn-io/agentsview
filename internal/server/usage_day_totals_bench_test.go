@@ -22,14 +22,20 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
+var usageDayTotalsPageWindows = []struct {
+	name string
+	from string
+}{
+	{"7-days", "2026-08-04"},
+	{"30-days", "2026-07-12"},
+	{"90-days", "2026-05-13"},
+	{"all-history", "2026-05-01"},
+}
+
 // The browser starts these three requests together. Pairwise owns its ranking
 // and default side reads; Comparison owns the prior-period range.
-func readUsageDayTotalsPage(ctx context.Context, s *Server, all bool) ([3][]byte, error) {
-	input := UsageFilterInput{From: "2026-08-04", To: "2026-08-10", Timezone: "UTC", IncludeOneShot: true, Breakdowns: true, SessionCounts: true}
-	if all {
-		// Cover the fixture's whole history with the concrete dates the page sends.
-		input.From = "2026-05-01"
-	}
+func readUsageDayTotalsPage(ctx context.Context, s *Server, from string) ([3][]byte, error) {
+	input := UsageFilterInput{From: from, To: "2026-08-10", Timezone: "UTC", IncludeOneShot: true, Breakdowns: true, SessionCounts: true}
 	var results [3][]byte
 	var errs [3]error
 	var wg sync.WaitGroup
@@ -93,18 +99,15 @@ func BenchmarkUsageDayTotalsPage(b *testing.B) {
 	}
 	database := usagefixture.SeedPage(b, count)
 	s := &Server{db: database, sessions: service.NewReadOnlyBackend(database)}
-	for _, all := range []bool{false, true} {
-		name := "7-days"
-		if all {
-			name = "all-history"
-		}
+	for _, window := range usageDayTotalsPageWindows {
+		name := window.name
 		b.Run(name, func(b *testing.B) {
-			_, err := readUsageDayTotalsPage(b.Context(), s, all)
+			_, err := readUsageDayTotalsPage(b.Context(), s, window.from)
 			require.NoError(b, err)
 			runtime.GC()
 			b.ResetTimer()
 			for range b.N {
-				got, err := readUsageDayTotalsPage(b.Context(), s, all)
+				got, err := readUsageDayTotalsPage(b.Context(), s, window.from)
 				b.StopTimer()
 				require.NoError(b, err)
 				checkUsageDayTotalsPage(b, name, got)
@@ -137,17 +140,14 @@ func TestUsageDayTotalsPageBudget(t *testing.T) {
 	}
 	database := usagefixture.SeedPage(t, 30000)
 	s := &Server{db: database, sessions: service.NewReadOnlyBackend(database)}
-	for _, all := range []bool{false, true} {
-		name := "7-days"
-		if all {
-			name = "all-history"
-		}
+	for _, window := range usageDayTotalsPageWindows {
+		name := window.name
 		t.Run(name, func(t *testing.T) {
-			_, err := readUsageDayTotalsPage(t.Context(), s, all)
+			_, err := readUsageDayTotalsPage(t.Context(), s, window.from)
 			require.NoError(t, err)
 			runtime.GC()
 			start := time.Now()
-			got, err := readUsageDayTotalsPage(t.Context(), s, all)
+			got, err := readUsageDayTotalsPage(t.Context(), s, window.from)
 			elapsed := time.Since(start)
 			require.NoError(t, err)
 			t.Logf("warm page=%s", elapsed)

@@ -136,7 +136,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	}
 	timings.capture = captureDuration
 	timings.candidates = len(snapshot.Sessions)
-if err := cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs); err != nil {
+	if err := cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs); err != nil {
 		return usagePreparedWindow{}, false, nil
 	}
 	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings, journaled: true, kind: kind, installSeq: zone.installSeq}, true, nil
