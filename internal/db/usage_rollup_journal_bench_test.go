@@ -91,10 +91,10 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 		require.NoError(tb, err)
 	}
 	filter := UsageFilter{From: "2026-08-04", To: "2026-08-10", Timezone: "UTC", SkipSessionCounts: true}
-	require.NoError(tb, database.StartUsageCacheBackfill(tb.Context()))
-	require.NoError(tb, database.WaitUsageCacheBackfill(tb.Context()))
 	want, err := database.GetDailyUsage(tb.Context(), filter)
 	require.NoError(tb, err)
+	require.NoError(tb, database.StartUsageCacheBackfill(tb.Context()))
+	require.NoError(tb, database.WaitUsageCacheBackfill(tb.Context()))
 	require.Equal(tb, count*300, want.Totals.InputTokens)
 	require.Equal(tb, count*60, want.Totals.OutputTokens)
 	require.Equal(tb, int64(count*420), want.Totals.TotalCost.Microdollars)
