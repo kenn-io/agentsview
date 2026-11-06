@@ -73,7 +73,9 @@
   // asked for a new width: a drag that moved, an arrow key, or a fit
   // (Enter or double-click). Tabbing across handles or a click that does
   // not move keeps nothing.
-  let touched: { column: string; resized: boolean } | undefined;
+  let touched:
+    | { column: string; resized: boolean; pointerId?: number; startX?: number }
+    | undefined;
 
   // The toolbar spans the list's width, and it is laid out before the
   // first rows arrive, when the table sizes its columns.
@@ -119,12 +121,18 @@
 
   function notePointerDown(event: PointerEvent) {
     const column = handleColumn(event);
-    touched = column ? { column, resized: false } : undefined;
+    touched = column
+      ? { column, resized: false, pointerId: event.pointerId, startX: event.clientX }
+      : undefined;
   }
 
   // The handle captures the pointer, so its moves pass through the list.
+  // The handle resizes by clientX, so movement is measured the same way;
+  // some touch pointers report no movementX.
   function notePointerMove(event: PointerEvent) {
-    if (touched && (event.buttons & 1) !== 0 && event.movementX !== 0) touched.resized = true;
+    if (touched?.pointerId === event.pointerId && event.clientX !== touched.startX) {
+      touched.resized = true;
+    }
   }
 
   const RESIZE_KEYS = new Set(["ArrowLeft", "ArrowRight", "Enter"]);

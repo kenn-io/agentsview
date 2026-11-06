@@ -305,6 +305,45 @@ test.describe("Recent Edits feed", () => {
     expect(await keptColumns(page)).toEqual(["file"]);
   });
 
+  test("a drag whose pointer reports no movementX still keeps the width", async ({ page }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    const handle = page.locator(".re-list thead th").first().getByRole("separator");
+    const before = Number(await handle.getAttribute("aria-valuenow"));
+
+    // Some touch pointers move clientX and leave movementX at zero, as
+    // these constructed events do.
+    await handle.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const at = (clientX: number, type: string, buttons: number) =>
+        el.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            pointerId: 1,
+            pointerType: "mouse",
+            isPrimary: true,
+            button: 0,
+            buttons,
+            clientX,
+            clientY: r.top + r.height / 2,
+          }),
+        );
+      const x = r.left + r.width / 2;
+      at(x, "pointerdown", 1);
+      for (const step of [20, 40, 60]) at(x + step, "pointermove", 1);
+      at(x + 60, "pointerup", 0);
+    });
+
+    await expect.poll(async () => Number(await handle.getAttribute("aria-valuenow"))).toBeGreaterThan(
+      before + 40,
+    );
+    await expect.poll(() => keptColumns(page)).toEqual(["project"]);
+  });
+
   test("a phone resize is not kept once the window is wide again", async ({ page }) => {
     await withRecentEdits(page);
     await page.setViewportSize({ width: 400, height: 800 });
