@@ -150,15 +150,16 @@ func checkCatalogBudget(tools *mcp.ListToolsResult, budget int) error {
 	if len(raw) <= budget {
 		return nil
 	}
-	detail := fmt.Sprintf("tool catalog: %d bytes exceeds %d-byte budget", len(raw), budget)
+	var detail strings.Builder
+	fmt.Fprintf(&detail, "tool catalog: %d bytes exceeds %d-byte budget", len(raw), budget)
 	for _, tool := range tools.Tools {
 		raw, err := json.Marshal(tool)
 		if err != nil {
 			return err
 		}
-		detail += fmt.Sprintf("\n%s: %d bytes", tool.Name, len(raw))
+		fmt.Fprintf(&detail, "\n%s: %d bytes", tool.Name, len(raw))
 	}
-	return errors.New(detail)
+	return errors.New(detail.String())
 }
 
 func TestCheckCatalogBudget_FailsOneByteOver(t *testing.T) {
