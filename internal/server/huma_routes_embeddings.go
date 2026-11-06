@@ -225,10 +225,11 @@ func (s *Server) embeddingsManagerAfterSetup(manager EmbeddingsManager, store st
 
 // embeddingsManagerDuringSetup looks store's manager up with the setup state
 // read beside it and replaces setup with that state when setup withheld the
-// manager, leaving a missing or unknown store's setup as it was.
+// manager or failed since setup was read, leaving a missing or unknown
+// store's setup as it was.
 func (s *Server) embeddingsManagerDuringSetup(store string, setup *EmbeddingsSetupStatus) EmbeddingsManager {
 	manager, current := s.embeddingsRuntime.ManagerSetup(store)
-	if manager == nil && current.Busy {
+	if manager == nil && (current.Busy || current.Error != "") {
 		*setup = current
 	}
 	return manager
