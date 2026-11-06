@@ -10,13 +10,11 @@ import (
 // was never called, or the concrete backend doesn't support semantic search
 // at all). Backends with more specific context wrap this classification with
 // SemanticUnavailableError.
-var ErrSemanticUnavailable = errors.New(
-	"semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and run 'agentsview index embeddings build'")
+var ErrSemanticUnavailable = errors.New("semantic search not available")
 
 // SemanticUnavailableError carries a backend-specific reason while retaining
 // ErrSemanticUnavailable as its machine-readable classification. Its rendered
-// message deliberately omits the sentinel's local setup guidance, which is not
-// valid for every storage backend.
+// message adds the backend's own recovery guidance.
 type SemanticUnavailableError struct {
 	Reason string
 }

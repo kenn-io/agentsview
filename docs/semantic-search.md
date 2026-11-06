@@ -910,17 +910,39 @@ anchor — the member the matched text belongs to — so centering `--around` on
 lands in the right part of the run; widen `--before`/`--after` toward the ends
 of `ordinal_range` to read the whole stretch.
 
+## Browser setup
+
+On a local SQLite daemon, Turn on in Settings → Embeddings or the search
+palette enables semantic search, installs missing shared server files, and
+starts indexing. Replica and DuckDB servers have no local setup control.
+
+`GET /api/v1/embeddings/status` includes `setup` when browser setup is available.
+`POST /api/v1/embeddings/setup` accepts an `action` of `turn-on` or
+`use-built-in`, plus `approved_bytes`, the download size disclosed to the user.
+It returns `202` with `{"started":true}` when setup is accepted. A concurrent
+setup or build returns `409`.
+
+Approval covers at most `approved_bytes`. If installation verifies that a
+larger download is required, it declines the download and reports the verified
+size in `setup.missing_bytes`. Retry must disclose and approve that amount.
+
+The generic unavailable search error returns `501` with code
+`semantic_setup_required`. The code lets the palette offer setup where it is
+available; the generic error text makes no assumption about the storage backend.
+Backend-specific readiness errors retain their own recovery message.
+
 ## Error taxonomy
 
 | Situation                                                                                                                       | Message                                                                                                                                                               |
 | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `[vector]` not enabled                                                                                                          | `vector search is not enabled: set [vector] enabled = true in config.toml` (from `agentsview index embeddings ...`)                                                   |
-| No `VectorSearcher` wired (index never built, DuckDB backend, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'`                                                           |
+| DuckDB backend | `semantic search not available: semantic search is not supported by the DuckDB backend` |
+| No `VectorSearcher` wired (index never built, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available`                                                           |
 | Only a building generation exists                                                                                               | same message, plus `: index is building: N% complete`                                                                                                                 |
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |
 | `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                                              | CLI: `--scope requires --semantic or --hybrid`; HTTP and MCP accept scope with substring, regex, terms, semantic, and hybrid                                                        |
-| An unattended search or build needs a first local download                                                                      | `local embeddings: run agentsview index embeddings build to approve the first download`; run `agentsview index embeddings build` in the CLI and approve the download. |
+| An unattended search or build needs a first local download                                                                      | `local embeddings: approve the download in Settings > Embeddings or run agentsview index embeddings build`; the local daemon supports either setup path. |
 | Embeddings endpoint unreachable or timed out                                                                                    | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                                   |
 | Embeddings endpoint returned non-200                                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                           |
 | Embeddings endpoint returned a non-finite or zero-norm vector                                                                   | `[vector.embeddings] invalid embedding at index <n>: ...`; correct the endpoint/cache configuration, then run `agentsview index embeddings build --repair-invalid`    |
