@@ -29,7 +29,6 @@
   // Kept apart from loadError: only a generations read settles it, so a
   // status-only poll leaves a generations failure on screen.
   let generationsError = $state<string | null>(null);
-  const shownError = $derived(loadError ?? generationsError);
   let loaded: boolean = $state(false);
   let elapsedMs: number | null = $state(null);
 
@@ -237,8 +236,8 @@
   {:else if unavailableReason !== null}
     <p class="muted">{m.settings_embeddings_unavailable()}</p>
     <p class="muted detail">{unavailableReason}</p>
-  {:else if shownError !== null}
-    <p class="msg error" role="alert">{shownError}</p>
+  {:else if loadError !== null}
+    <p class="msg error" role="alert">{loadError}</p>
   {:else if status && status.setup?.enabled !== false && !status.setup?.busy}
     {#if status.model || status.dimension || !status.setup}
       <div class="status-grid">
@@ -368,7 +367,9 @@
       <h4 class="subsection-title">
         {m.settings_embeddings_generations_title()}
       </h4>
-      {#if generations.length === 0}
+      {#if generationsError !== null}
+        <p class="msg error" role="alert">{generationsError}</p>
+      {:else if generations.length === 0}
         <p class="muted">{m.settings_embeddings_generations_empty()}</p>
       {:else}
         <ul class="generation-list">
