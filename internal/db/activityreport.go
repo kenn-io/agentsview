@@ -110,7 +110,7 @@ func (db *DB) BuildActivityReportArtifacts(
 		}
 		if version != "" {
 			selection = kept.Selection(f, q)
-			report, hit, err := db.keptActivityReport(ctx, selection, version, revision)
+			report, hit, err := db.keptActivityReport(ctx, selection, version, revision, f, q)
 			if err != nil {
 				return activity.CandidateArtifacts{}, err
 			}
@@ -155,8 +155,6 @@ func (db *DB) BuildActivityReportArtifacts(
 		entry := activityKept{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
 			read: read, labels: activity.ProjectLabels(sessions),
-			filter: f, rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC,
-			usageLowerBound: lowerBound, usageUpperBound: upperBound,
 		}
 		entry.size = activityKeptSize(entry)
 		db.activityKept.Put(selection, version, []activityKept{entry})

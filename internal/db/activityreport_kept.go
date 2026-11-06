@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
@@ -14,13 +15,10 @@ import (
 )
 
 type activityKept struct {
-	report                           kept.Report
-	size                             int64
-	revision                         int64
-	read, labels                     []string
-	filter                           AnalyticsFilter
-	rangeStart, rangeEnd             string
-	usageLowerBound, usageUpperBound string
+	report       kept.Report
+	size         int64
+	revision     int64
+	read, labels []string
 }
 
 func newActivityKeptMemo() kept.Memo[activityKept] {
@@ -58,7 +56,13 @@ func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
 	return fmt.Sprintf("%s|%d", id, pricingRevision), revision, nil
 }
 
-func (db *DB) keptActivityReport(ctx context.Context, selection, version string, revision int64) (kept.Report, bool, error) {
+func (db *DB) keptActivityReport(
+	ctx context.Context,
+	selection, version string,
+	revision int64,
+	filter AnalyticsFilter,
+	q activity.Query,
+) (kept.Report, bool, error) {
 	entries, ok := db.activityKept.Get(selection, version)
 	if !ok {
 		return kept.Report{}, false, nil
@@ -74,14 +78,17 @@ func (db *DB) keptActivityReport(ctx context.Context, selection, version string,
 		}
 	}
 	if len(changed) > 0 {
-		ids, err := json.Marshal(changed)
+		changedJSON, err := json.Marshal(changed)
 		if err != nil {
 			return kept.Report{}, false, err
 		}
+		rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
+		usageLowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
+		usageUpperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 		where, args := activityReportSessionSelectionWhere(
-			entry.filter, entry.rangeStart, entry.rangeEnd,
+			filter, rangeStartUTC, rangeEndUTC,
 		)
-		args = append(args, string(ids))
+		args = append(args, string(changedJSON))
 		var eligible bool
 		err = db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
 			SELECT 1 FROM sessions s
@@ -94,7 +101,11 @@ func (db *DB) keptActivityReport(ctx context.Context, selection, version string,
 			return kept.Report{}, false, nil
 		}
 
-		readIDs, err := json.Marshal(entry.read)
+		candidateIDs := make([]string, len(entry.report.Artifacts.Sessions))
+		for i, session := range entry.report.Artifacts.Sessions {
+			candidateIDs[i] = session.SessionID
+		}
+		candidateIDsJSON, err := json.Marshal(candidateIDs)
 		if err != nil {
 			return kept.Report{}, false, err
 		}
@@ -108,9 +119,9 @@ func (db *DB) keptActivityReport(ctx context.Context, selection, version string,
 				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
 				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
 				AND `+activityReportClaudePeerPredicate("(SELECT value FROM json_each(?))")+`)`,
-			string(ids), entry.usageLowerBound,
-			entry.usageUpperBound, string(readIDs), entry.usageLowerBound,
-			entry.usageUpperBound).Scan(&peerMatches)
+			string(changedJSON), usageLowerBound,
+			usageUpperBound, string(candidateIDsJSON), usageLowerBound,
+			usageUpperBound).Scan(&peerMatches)
 		if err != nil {
 			return kept.Report{}, false, fmt.Errorf("checking kept activity Claude peers: %w", err)
 		}

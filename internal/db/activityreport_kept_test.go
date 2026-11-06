@@ -204,6 +204,50 @@ func TestActivityReportKeptResumedSessionPeerChanges(t *testing.T) {
 	}
 }
 
+func TestActivityReportKeptUnrelatedPeerReplayDoesNotRebuild(t *testing.T) {
+	d := testDB(t)
+	keptActivitySessionWithClaudePair(t, d, "candidate", "project-a", "2026-06-14", "shared-message", "shared-request")
+	insertSession(t, d, "excluded-peer", "project-b", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-06-14T10:01:00Z")
+		s.EndedAt = new("2026-06-14T10:03:00Z")
+		s.MessageCount = 2
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "excluded-peer", Ordinal: 0, Role: "assistant", Content: "matching request",
+			Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model",
+			TokenUsage:      []byte(`{"output_tokens":631}`),
+			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+		},
+		Message{
+			SessionID: "excluded-peer", Ordinal: 1, Role: "assistant", Content: "other request",
+			Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model",
+			TokenUsage:      []byte(`{"output_tokens":900}`),
+			ClaudeMessageID: "other-message", ClaudeRequestID: "other-request",
+		},
+	)
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	before := keptActivityBuild(t, d, f, q, true)
+	requireKeptActivityEqual(t, before, keptActivityBuild(t, d, f, q, false))
+
+	insertSession(t, d, "unrelated-replay", "project-c", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-06-17T10:00:00Z")
+		s.EndedAt = new("2026-06-17T10:01:00Z")
+		s.MessageCount = 1
+	})
+	insertMessages(t, d, Message{
+		SessionID: "unrelated-replay", Ordinal: 0, Role: "assistant", Content: "other request replay",
+		Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model",
+		TokenUsage:      []byte(`{"output_tokens":777}`),
+		ClaudeMessageID: "other-message", ClaudeRequestID: "other-request",
+	})
+
+	after := keptActivityBuild(t, d, f, q, false)
+	requireKeptActivityEqual(t, before, after)
+}
+
 func TestActivityReportKeptJournalReadsChangesPastSnapshot(t *testing.T) {
 	d := testDB(t)
 	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
@@ -225,7 +269,7 @@ func TestActivityReportKeptJournalReadsChangesPastSnapshot(t *testing.T) {
 	require.Greater(t, snapshot, cachedRevision)
 	require.NoError(t, d.RenameSession(t.Context(), "past", new("second rename")))
 
-	_, hit, err := d.keptActivityReport(t.Context(), selection, version, snapshot)
+	_, hit, err := d.keptActivityReport(t.Context(), selection, version, snapshot, f, q)
 	require.NoError(t, err)
 	assert.False(t, hit, "the second write to one session must invalidate the kept report")
 }
