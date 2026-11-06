@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/kept"
 )
 
 const planUsageColumns = db.SessionPlanUsageColumns
