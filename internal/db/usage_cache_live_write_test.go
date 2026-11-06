@@ -330,7 +330,9 @@ func TestUsageNotificationRefreshChunks(t *testing.T) {
 			}
 			var fillSizes []int
 			cache.rollup.observer.beforeAttempt = func(fills map[string]usageFillResult) { fillSizes = append(fillSizes, len(fills)) }
-			database.refreshUsageRollups(t.Context(), cache, fills)
+			revision, err := database.UsageChangeRevision(t.Context())
+			require.NoError(t, err)
+			database.refreshUsageRollups(t.Context(), cache, fills, revision)
 			assert.Len(t, sizes, len(testCase.wantSizes), "failed chunk prevented the later chunk from running")
 			assert.Equal(t, testCase.wantSizes, fillSizes, "rollup attempts received fills outside their notification chunk")
 			assert.Equal(t, testCase.wantInstalls, usageCacheCount(t, cache, "usage_rollup_installs"))
@@ -427,7 +429,7 @@ func TestUsageTimezoneRecencyFollowsRequests(t *testing.T) {
 	require.NoError(t, err)
 	fills, err := cache.fill.Ensure(t.Context(), written.Versions, 0)
 	require.NoError(t, err)
-	database.refreshUsageRollups(t.Context(), cache, fills)
+	database.refreshUsageRollups(t.Context(), cache, fills, written.ChangeRevision)
 	require.Positive(t, installs.Load())
 	assert.Equal(t, []string{"Pacific/Auckland", "Europe/Paris", "Asia/Tokyo"}, recentZones(),
 		"background rebuilds reordered request recency")

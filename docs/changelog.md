@@ -135,6 +135,25 @@ The latest release is
   longer reads every message in the archive; in a benchmark of 100,000 messages
   it went from 192 ms to 7 ms.
 
+- Terms search (`mode=terms`) for a word the substring index lists now starts
+  from the messages that hold it, so it no longer groups every message of every
+  matching session. On a 1.7 million message test archive, a word in 11,600 of
+  30,000 sessions went from 2.5 s to 0.13 s, and the same word paired with a
+  word in every session went from 3.9 s to 0.2 s.
+
+- The Activity page opens about four times faster on the local archive the
+  first time it shows a range. It now pairs each session's messages in one pass
+  instead of looking up each message's successor and model in the database. On
+  a 30,000-session test archive, pairing a month went from 340 ms to 90 ms and a
+  one-year range from 6.0 s to 1.4 s. A report now holds its intervals in memory
+  while it sorts them, about 130 bytes each (about 120 MB for that year).
+
+- The Activity page counts user and assistant messages from the sessions it
+  already holds in memory, so it no longer reads every message twice. On the
+  same archive a month's report went from 250 ms to 210 ms when opened again,
+  and from 350 ms to 300 ms on first open. The memory cache for Activity grows
+  by about 57 bytes per counted message, at most about 11 MiB.
+
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.
 

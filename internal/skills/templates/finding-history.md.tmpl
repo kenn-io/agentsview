@@ -87,8 +87,8 @@ Use the CLI only when the registered MCP tools are unavailable. These examples
 preserve the same search-and-read sequence:
 
 ```bash
-agentsview session search "<concept query>" --hybrid --context 2 --json --limit 10{{.ServerArgs}}
-agentsview session search "<exact string>" --in tool_input,tool_result --exclude-session <this-session-id> --json --limit 10{{.ServerArgs}}
+agentsview session search "<concept query>" --hybrid --include-one-shot --include-automated --context 2 --json --limit 10{{.ServerArgs}}
+agentsview session search "<exact string>" --in tool_input,tool_result --include-one-shot --include-automated --include-children --exclude-session <this-session-id> --json --limit 10{{.ServerArgs}}
 agentsview session messages <session-id> --around <ordinal> --before 8 --after 8 --role user,assistant --json{{.ServerArgs}}
 ```
 {{if .ServerArgs}}

@@ -85,9 +85,9 @@ deletes the timezone rollup installs of every other session holding a changed
 identity, and rollup installation re-verifies inside its transaction that no
 finalized identity gained an outside member, retrying as a moved source
 otherwise. A finalized daily row therefore never survives gaining a sibling, and
-a cross-session winner still changes immediately: the next request verifies
-every candidate session and resolves the group from the latest exception rows of
-all members.
+a cross-session winner still changes immediately: the next request refreshes
+journaled sessions and resolves the group from the latest exception rows of all
+members.
 
 Cursor usage uses the same exception representation under a synthetic source
 install keyed by the Cursor high-water mark. Matching-session activity has
@@ -97,7 +97,7 @@ day: unbounded matching counts include it, while bounded reads exclude it.
 
 ## Freshness contract
 
-An aggregate request:
+Without a trusted timezone claim, an aggregate request:
 
 1. captures the archive database ID, candidate sessions, source fingerprints,
    exact `agent` and `started_at`, live filter metadata, pricing rows, Cursor
@@ -110,6 +110,45 @@ An aggregate request:
 1. rechecks source fingerprints and baked metadata before installing; and
 1. verifies all required installs inside one pinned cache read transaction
    before assembling the result.
+
+After a completed timezone coverage pass, an aggregate request reads the archive
+change journal and refreshes only journaled sessions and cached sessions that
+lost their rollup install. Deleting an install queues its session in an indexed
+worklist in the same transaction. Reinstalling it clears that entry, and
+deleting its cached facts removes it. Requests read window IDs and that worklist
+in one cache transaction, then capture archive revisions, pricing, current
+session metadata, and changed-session fingerprints in one archive transaction.
+Deletion sweeps and notifications lower claims to the revision captured before
+their archive deletion check in the same transaction that removes cached facts.
+That preserves journal replay if another handle has already restored or
+reimported the session.
+
+Every install records the archive revision and catalog digest used to build it.
+Installing a build older than the timezone's claim lowers the claim in the same
+transaction, whether the build replaces a newer install or one that invalidation
+removed. The next read replays the journal from that revision and repairs it. A
+timezone claim records both an archive revision and an install counter. A
+compare-and-set advances the claim from actual installed stamps; concurrent
+claim losers leave it alone. A completed pass uses the revision and install
+counter captured at its start. It records its catalog only when no intervening
+install used another catalog. An unchanged revision, install counter, and
+catalog need no claim write, so warm reads can proceed while another cache
+writer holds its transaction.
+
+A timezone without a completed pass, a new cache generation, a changed pricing
+catalog, or coverage outside the archive's revision range takes the full path.
+An untrusted request starts a coverage pass when background backfill is enabled
+and idle, and the pass retains its timezone. Other zones use the full path;
+serving a request updates their recency for the next pass. Catalog checks
+include handle-specific custom pricing. The captured catalog digest determines
+whether a pass can vouch for the current rates.
+
+Before reading rows, the pinned cache transaction checks timezone coverage,
+pricing, intervening installs for captured sessions, and missing installs. Empty
+windows run the same checks. A conflicting install or invalidated dedup peer
+sends the request's retries through the full path. Activity matching counts
+always take the full path. Warm window reads load filter and attribution
+metadata, including the display fields shared with Top sessions.
 
 Within one Pairwise request, concurrent and sequential reads share one capture,
 fill check, and rollup check when their window, session predicate, and Cursor
