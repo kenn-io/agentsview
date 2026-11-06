@@ -113,7 +113,7 @@ func mirrorWALStamp(path string) (string, error) {
 		return "nowal", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("statting duckdb mirror WAL: %w", err)
+		return "", fmt.Errorf("statting duckdb mirror recovery file: %w", err)
 	}
 	return fmt.Sprintf("%d|%d", info.Size(), info.ModTime().UnixNano()), nil
 }
