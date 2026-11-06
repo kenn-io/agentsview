@@ -13,6 +13,9 @@ The report is built from timestamped session activity and usage rows. It
 includes one-shot and automated sessions by default, then lets you narrow the
 result with the page controls.
 
+On a local archive, reopening an ended range reuses its finished report until a
+session in or entering its padded range, pricing, or project identity changes.
+
 ## Range And Filters
 
 The toolbar uses the shared range picker with calendar **Day**, **Week**,

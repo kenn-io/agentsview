@@ -23,6 +23,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -877,6 +878,8 @@ type DB struct {
 	reads                readRegistry
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
+	activityKept         kept.Memo[activityKept]
+	activityKeptOnce     sync.Once
 	frustrationMemo      frustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
@@ -5665,6 +5668,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
+	db.activityKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.swap(func() { oldReader = db.reader.Swap(reader) })
 	})

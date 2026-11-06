@@ -42,6 +42,25 @@ func TestUsageChangeJournal(t *testing.T) {
 					t.Helper()
 					require.NoError(t, d.ReplaceSessionUsageEvents(ctx, s.ID, nil))
 				}},
+				{"rename", func(t *testing.T, s Session) {
+					t.Helper()
+					require.NoError(t, d.RenameSession(ctx, s.ID, new("New title")))
+				}},
+				{"session name", func(t *testing.T, s Session) {
+					t.Helper()
+					s.SessionName = new("Agent title")
+					require.NoError(t, d.UpsertSession(ctx, s))
+				}},
+				{"relationship", func(t *testing.T, s Session) {
+					t.Helper()
+					s.RelationshipType = "subagent"
+					require.NoError(t, d.UpsertSession(ctx, s))
+				}},
+				{"created at", func(t *testing.T, s Session) {
+					t.Helper()
+					_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET created_at = ? WHERE id = ?", "2026-07-01T10:00:00Z", s.ID)
+					require.NoError(t, err)
+				}},
 				{"start time", func(t *testing.T, s Session) {
 					t.Helper()
 					s.StartedAt = new("2026-07-02T10:00:00Z")
