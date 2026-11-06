@@ -49,7 +49,7 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 		insertMessages(t, d, userMsg(id, 2, "handler"))
 	}
 
-	walk, err := d.walkSearchRanks(ctx, "messages_fts", "messages_fts.rendered MATCH ?", []any{`"handler"`}, 2)
+	walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"handler"`}, 2)
 	require.NoError(t, err)
 	require.NotNil(t, walk, "the walk must serve a page with distinct ranks")
 	assert.False(t, walk.complete)

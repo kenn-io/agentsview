@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"regexp"
 	"sort"
@@ -443,9 +444,16 @@ func (db *DB) Search(
 	// it can stop early; see walkSearchRanks. Recency pages rank every match
 	// inside the query, and so do project and date filters: most matches
 	// fall outside them, so the walk would read nearly all of them.
+	// The walk and the page query share one snapshot: a sync that edits a
+	// walked message between them would leave its snippet NULL.
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return SearchPage{}, fmt.Errorf("starting search read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	var walk *searchRankWalk
 	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
-		walk, err = db.walkSearchRanks(ctx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
+		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
 		if err != nil {
 			return SearchPage{}, err
 		}
@@ -581,7 +589,7 @@ func (db *DB) Search(
 	)
 	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return SearchPage{}, fmt.Errorf("searching: %w", err)
 	}

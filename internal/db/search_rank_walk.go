@@ -53,8 +53,8 @@ type searchRankWalk struct {
 // by rank before the first row, but joins each match to its message and
 // session only as the walk pulls it. The walk returns nil when it reaches
 // more sessions than the page query can bind or reads too many matches.
-func (db *DB) walkSearchRanks(
-	ctx context.Context, table, innerWhereSQL string, ftsArgs []any, need int,
+func walkSearchRanks(
+	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int,
 ) (*searchRankWalk, error) {
 	if need > searchRankWalkMaxSessions {
 		return nil, nil
@@ -65,7 +65,7 @@ func (db *DB) walkSearchRanks(
 		JOIN sessions s2 ON m2.session_id = s2.id
 		WHERE `+innerWhereSQL+`
 		ORDER BY rank`, "messages_fts", table)
-	rows, err := db.getReader().QueryContext(ctx, query, ftsArgs...)
+	rows, err := q.QueryContext(ctx, query, ftsArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("ranking search matches: %w", err)
 	}
