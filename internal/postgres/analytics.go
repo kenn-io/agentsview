@@ -2844,12 +2844,18 @@ func (s *Store) populateFrustrationMarkers(
 		for _, id := range chunk {
 			placeholders = append(placeholders, pb.add(id))
 		}
-		q := `SELECT s.id, s.updated_at, COALESCE(m.content, ''), COALESCE(m.is_system, false)
-			FROM sessions s
-			LEFT JOIN messages m ON m.session_id = s.id
-			  AND m.role = 'user'
-			  AND COALESCE(m.source_subtype, '') <> 'tool_result'
-			WHERE s.id IN (` + strings.Join(placeholders, ",") + `)`
+		in := "(" + strings.Join(placeholders, ",") + ")"
+		// Read each version once and keep the prompt scan on messages, with
+		// both branches sharing one statement's snapshot.
+		q := `SELECT id, updated_at, ''::text, false
+			FROM sessions
+			WHERE id IN ` + in + `
+			UNION ALL
+			SELECT session_id, NULL::timestamptz, content, is_system
+			FROM messages
+			WHERE role = 'user'
+			  AND COALESCE(source_subtype, '') <> 'tool_result'
+			  AND session_id IN ` + in
 		msgRows, err := s.pg.QueryContext(ctx, q, pb.args...)
 		if err != nil {
 			return fmt.Errorf(
@@ -2859,7 +2865,7 @@ func (s *Store) populateFrustrationMarkers(
 		defer msgRows.Close()
 		for msgRows.Next() {
 			var sessionID, content string
-			var updatedAt time.Time
+			var updatedAt *time.Time
 			var isSystem bool
 			if err := msgRows.Scan(
 				&sessionID, &updatedAt, &content, &isSystem,
@@ -2868,7 +2874,10 @@ func (s *Store) populateFrustrationMarkers(
 					"scanning frustration marker: %w", err,
 				)
 			}
-			scannedVersions[sessionID] = updatedAt.UnixMicro()
+			if updatedAt != nil {
+				scannedVersions[sessionID] = updatedAt.UnixMicro()
+				continue
+			}
 			if isSystem {
 				continue
 			}
