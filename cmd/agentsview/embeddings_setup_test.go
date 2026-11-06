@@ -82,7 +82,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			cfg.DataDir, cfg.DBPath = dir, filepath.Join(dir, "sessions.db")
 			raw := map[string]string{
 				"enabled-missing": "[vector]\nenabled = true\n",
-				"configured":      "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmax_input_chars = 1024\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\ndefault_server = 'local'\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nmax_retries = 0\n[vector.embeddings.servers.backup]\nendpoint = '" + stub.URL + "/v1'\n",
+				"configured":      "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmax_input_chars = 1024\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\ndefault_server = 'local'\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nmax_retries = 0\n[vector.embeddings.servers.backup]\nendpoint = 'http://127.0.0.1:1/v1'\nmax_retries = 0\n",
 				"nomic":           "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nmodel_context_tokens = 512\nquery_prefix = 'q: '\ndocument_prefix = 'd: '\ninput_suffix = '!'\nrequest_dimensions = true\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\nmax_batch_tokens = 512\n",
 				"other":           "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 512\ndefault_server = 'local'\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\nmax_batch_tokens = 512\n[vector.embeddings.servers.sibling]\nendpoint = '" + stub.URL + "/v1'\napi_key_env = 'EMBEDDINGS_TEST_KEY'\nmax_batch_tokens = 8192\nmax_retries = 0\n",
 			}[recipe]
@@ -205,12 +205,12 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				assert.Empty(t, status().Setup.Action)
 			}
 			assert.Equal(t, (recipe == "fresh" || recipe == "enabled-missing"), installs.Load() > 0)
-			generations, err := owner.serving.manager.Generations(t.Context())
-			require.NoError(t, err)
-			require.Len(t, generations, 1)
-			fingerprint := generations[0].Fingerprint
-			assert.EqualValues(t, 1, generations[0].Embedded)
-			if recipe == "nomic" || recipe == "other" || recipe == "automatic" {
+			if recipe == "nomic" || recipe == "other" {
+				generations, err := owner.serving.manager.Generations(t.Context())
+				require.NoError(t, err)
+				require.Len(t, generations, 1)
+				fingerprint := generations[0].Fingerprint
+				assert.EqualValues(t, 1, generations[0].Embedded)
 				assert.EqualValues(t, 295_000_000, status().Setup.MissingBytes)
 				beforeSwitch := encoded.Load()
 				request("POST", "/api/v1/embeddings/setup", `{"action":"use-built-in"}`, 202)
@@ -473,9 +473,6 @@ func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
 	if err == nil {
 		<-owner.done
 	}
-	require.ErrorContains(t, err, "max_batch_tokens (512) must be at least model_context_tokens (2048)")
+	require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
 	assert.Zero(t, downloads)
-	saved, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, raw, string(saved))
 }

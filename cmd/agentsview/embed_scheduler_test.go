@@ -638,29 +638,13 @@ func (e *recordingEmitter) count() int {
 }
 
 func TestEmbeddingSyncEmitterForwardsAndNotifiesLiveServing(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("fanout and run-after-sync=%v", enabled), func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				primary := &recordingEmitter{}
-				fake := &fakeEmbedManager{}
-				s := newEmbedScheduler(fake, 10*time.Millisecond, 0, false, nil)
-				go s.Run(t.Context())
-				defer s.Stop()
-				recallNotifications := 0
-				owner := &liveVectorServing{serving: vectorServing{Scheduler: s, RecallMutationNotify: func() { recallNotifications++ }}}
-				owner.cfg.Vector.Embed.RunAfterSync = &enabled
-				wrapEmbeddingSyncEmitter(primary, owner.Notify).Emit("sessions")
-				synctest.Sleep(30 * time.Millisecond)
-				assert.Equal(t, []string{"sessions"}, primary.scopes)
-				assert.Equal(t, 1, recallNotifications, "fanout always reaches Recall")
-				wantBuilds := 0
-				if enabled {
-					wantBuilds = 1
-				}
-				assert.Equal(t, wantBuilds, fake.callCount(), "live serving gates session builds on run_after_sync")
-			})
-		})
-	}
+	primary := &recordingEmitter{}
+	var notifications []bool
+	wrapEmbeddingSyncEmitter(primary, func(recall bool) {
+		assert.Equal(t, []string{"sessions"}, primary.scopes)
+		notifications = append(notifications, recall)
+	}).Emit("sessions")
+	assert.Equal(t, []bool{false, true}, notifications)
 }
 
 func TestRunRemoteHostSyncLoopEmitsSyncedSessions(t *testing.T) {
