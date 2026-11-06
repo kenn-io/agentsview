@@ -315,7 +315,15 @@ func TestLiveEmbeddingsSetupRejectsConcurrentBuild(t *testing.T) {
 	}()
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
-	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	handler := server.New(cfg, database, nil, owner.ServerOptions()...).Handler()
+	ts := startTestServer(t, ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/embeddings/status" {
+			// Setup can finish after the build refusal and before the CLI polls.
+			release()
+			<-owner.done
+		}
+		handler.ServeHTTP(w, r)
+	}))
 	writeDaemonRuntimeForTest(t, dir, cfg.Host, port, "test", false)
 	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
 	<-downloading
