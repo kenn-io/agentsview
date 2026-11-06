@@ -972,9 +972,11 @@
       menu.style.right = "auto";
     };
     place();
-    // Side panels resize the pane without resizing the window.
+    // Side panels resize the pane without resizing the window. Watch the
+    // pane's border box: once the reading column caps its content, a
+    // resize only changes the pane's centring padding.
     const observer = new ResizeObserver(place);
-    observer.observe(pane);
+    observer.observe(pane, { box: "border-box" });
     observer.observe(anchor);
     window.addEventListener("resize", place);
     return () => {
