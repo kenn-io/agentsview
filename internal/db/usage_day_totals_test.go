@@ -45,6 +45,53 @@ func TestUsageDayTotalsRefreshStaysJournaled(t *testing.T) {
 	assert.Equal(t, []bool{true}, reads, "the first read after an append must use the journaled path")
 }
 
+func TestUsageDayTotalsNotificationDuringReadStaysJournaled(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
+	cache := warmJournaledUsage(t, database, filter)
+	captured, err := database.captureUsageSessions(t.Context(), []string{"session"})
+	require.NoError(t, err)
+	fills, err := cache.fill.Ensure(t.Context(), captured.Versions, 0)
+	require.NoError(t, err)
+	var reads []bool
+	database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
+		reads = append(reads, journaled)
+	}
+	installed := false
+	filter.Progress = func(phase string) {
+		if phase != "Reading cached daily totals" || installed {
+			return
+		}
+		installed = true
+		session, err := database.GetSession(t.Context(), "session")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		session.Agent = "claude"
+		require.NoError(t, database.UpsertSession(t.Context(), *session))
+		// Resume a notification's captured facts after the archive metadata
+		// changes, just before the foreground read verifies its snapshot.
+		database.usageBackfillMu.Lock()
+		database.usageBackfillEnabled = true
+		database.usageBackfillMu.Unlock()
+		database.refreshUsageRollups(t.Context(), cache, fills)
+		database.usageBackfillMu.Lock()
+		database.usageBackfillEnabled = false
+		database.usageBackfillMu.Unlock()
+		var agent string
+		require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT baked_agent FROM usage_rollup_installs WHERE session_id='session'`).Scan(&agent))
+		require.Equal(t, "claude", agent)
+	}
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.True(t, installed)
+	assert.Equal(t, []bool{true}, reads, "a notification conflict must retry without a full-window preparation")
+	want, err := database.getDailyUsageLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 100, got.Totals.InputTokens)
+	assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
+}
+
 // CheckUsageDayTotalsFiltersMatchLegacy checks private cache state for the external fixture test.
 func CheckUsageDayTotalsFiltersMatchLegacy(t *testing.T, database *DB) {
 	t.Helper()

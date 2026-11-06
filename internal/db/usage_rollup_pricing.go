@@ -12,7 +12,7 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
-const usageSessionPricingIdentityVersion = "usage-session-pricing-v2"
+const usageSessionPricingIdentityVersion = "usage-session-pricing-v1"
 
 // usagePricingInput's canonical model already applies timestamp-selected aliases.
 type usagePricingInput struct {

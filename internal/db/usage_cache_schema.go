@@ -79,30 +79,30 @@ var usageDayTotalsColumns = []struct {
 	key, sum                 bool
 }{
 	{"timezone_id", "INTEGER NOT NULL REFERENCES usage_rollup_timezones(id) ON DELETE CASCADE", "i.timezone_id", true, false},
-	{"local_date", "TEXT NOT NULL", "r.local_date", true, false},
+	{"local_date", "TEXT NOT NULL", "{row}.local_date", true, false},
 	{"project", "TEXT NOT NULL", "i.project", true, false},
 	{"agent", "TEXT NOT NULL", "i.baked_agent", true, false},
 	{"machine", "TEXT NOT NULL", "i.machine", true, false},
 	{"git_branch", "TEXT NOT NULL", "i.git_branch", true, false},
 	{"is_automated", "INTEGER NOT NULL", "i.is_automated", true, false},
 	{"user_message_count", "INTEGER NOT NULL", "i.user_message_count", true, false},
-	{"reported_model", "TEXT NOT NULL", "r.reported_model", true, false},
-	{"provider_id", "TEXT NOT NULL", "r.provider_id", true, false},
-	{"rate_hash", "TEXT NOT NULL", "r.rate_hash", true, false},
-	{"band_threshold", "INTEGER NOT NULL", "r.band_threshold", true, false},
-	{"priced_model", "TEXT NOT NULL", "r.priced_model", false, false},
-	{"pricing_timestamp", "TEXT NOT NULL", "r.pricing_timestamp", false, false},
+	{"reported_model", "TEXT NOT NULL", "{row}.reported_model", true, false},
+	{"provider_id", "TEXT NOT NULL", "{row}.provider_id", true, false},
+	{"rate_hash", "TEXT NOT NULL", "{row}.rate_hash", true, false},
+	{"band_threshold", "INTEGER NOT NULL", "{row}.band_threshold", true, false},
+	{"priced_model", "TEXT NOT NULL", "{row}.priced_model", false, false},
+	{"pricing_timestamp", "TEXT NOT NULL", "{row}.pricing_timestamp", false, false},
 	{"row_count", "INTEGER NOT NULL", "1", false, true},
-	{"input_tokens", "INTEGER NOT NULL", "r.input_tokens", false, true},
-	{"output_tokens", "INTEGER NOT NULL", "r.output_tokens", false, true},
-	{"cache_creation_tokens", "INTEGER NOT NULL", "r.cache_creation_tokens", false, true},
-	{"cache_read_tokens", "INTEGER NOT NULL", "r.cache_read_tokens", false, true},
-	{"estimated_cost_microdollars", "INTEGER NOT NULL", "r.estimated_cost_microdollars", false, true},
-	{"savings_microdollars", "INTEGER NOT NULL", "r.savings_microdollars", false, true},
-	{"computed_request_count", "INTEGER NOT NULL", "r.computed_request_count", false, true},
-	{"computed_aggregate_count", "INTEGER NOT NULL", "r.computed_aggregate_count", false, true},
-	{"reported_count", "INTEGER NOT NULL", "r.reported_count", false, true},
-	{"base_request_count", "INTEGER NOT NULL", "r.base_request_count", false, true},
+	{"input_tokens", "INTEGER NOT NULL", "{row}.input_tokens", false, true},
+	{"output_tokens", "INTEGER NOT NULL", "{row}.output_tokens", false, true},
+	{"cache_creation_tokens", "INTEGER NOT NULL", "{row}.cache_creation_tokens", false, true},
+	{"cache_read_tokens", "INTEGER NOT NULL", "{row}.cache_read_tokens", false, true},
+	{"estimated_cost_microdollars", "INTEGER NOT NULL", "{row}.estimated_cost_microdollars", false, true},
+	{"savings_microdollars", "INTEGER NOT NULL", "{row}.savings_microdollars", false, true},
+	{"computed_request_count", "INTEGER NOT NULL", "{row}.computed_request_count", false, true},
+	{"computed_aggregate_count", "INTEGER NOT NULL", "{row}.computed_aggregate_count", false, true},
+	{"reported_count", "INTEGER NOT NULL", "{row}.reported_count", false, true},
+	{"base_request_count", "INTEGER NOT NULL", "{row}.base_request_count", false, true},
 }
 
 var usageDayTotalsColumnNames = func() string {
@@ -134,7 +134,7 @@ func usageDayTotalsSchemaSQL() string {
 		}
 		var values, keyValues []string
 		for _, column := range usageDayTotalsColumns {
-			value := strings.ReplaceAll(column.source, "r.", row)
+			value := strings.ReplaceAll(column.source, "{row}.", row)
 			if column.key {
 				keyValues = append(keyValues, value)
 			}
