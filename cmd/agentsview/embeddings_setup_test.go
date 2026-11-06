@@ -351,6 +351,77 @@ func TestLiveEmbeddingsSetupRejectsConcurrentBuild(t *testing.T) {
 	<-owner.done
 }
 
+func TestLiveEmbeddingsSetupStatusDuringProbe(t *testing.T) {
+	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := testDataDir(t)
+	raw := "[vector]\nenabled=true\n[vector.embeddings]\nmodel='nomic-embed-text'\ndimension=768\n[vector.embeddings.servers.ollama]\nendpoint='http://127.0.0.1:11434/v1'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(raw), 0o600))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	probing, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	var inspections atomic.Int32
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		if inspections.Add(1) == 1 {
+			close(probing)
+			<-resume
+		}
+		return embedlocal.Status{DownloadBytes: 295_000_000}, nil
+	}
+	activating := make(chan struct{})
+	localEmbeddingEndpoint = func(ctx context.Context, _ embedlocal.Options) (string, error) {
+		close(activating)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	responseDone := make(chan *http.Response, 1)
+	errorDone := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	go func() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
+		if err != nil {
+			errorDone <- err
+			return
+		}
+		response, err := ts.Client().Do(req)
+		if err != nil {
+			errorDone <- err
+			return
+		}
+		responseDone <- response
+	}()
+	<-probing
+	embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
+	<-activating
+	release()
+	select {
+	case err := <-errorDone:
+		require.NoError(t, err)
+	case response := <-responseDone:
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, response.StatusCode, string(body))
+		var status vector.BuildStatus
+		require.NoError(t, json.Unmarshal(body, &status))
+		require.NotNil(t, status.Setup)
+		assert.True(t, status.Setup.Enabled)
+	}
+}
+
 func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
 	oldInspect, oldEndpoint, oldOnBattery := inspectLocalEmbeddings, localEmbeddingEndpoint, onBattery
 	t.Cleanup(func() {
