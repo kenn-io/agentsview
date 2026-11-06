@@ -35,6 +35,7 @@ func newCLISearchCommand(root *cobra.Command) *cobra.Command {
 		},
 	})
 	cmd.GroupID = groupMeta
+	cmd.Long = "Discover commands from a task description using the local command tree, without configuration, an archive, or a daemon."
 	search := directCLICommand(cmd, "search")
 	registerFormatFlags(search.Flags())
 	// Diagnostics are installed on root after construction. Resolve its flag
