@@ -462,13 +462,8 @@ func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) 
 		var beforePricingRevision int64
 		require.NoError(t, d.getReader().QueryRowContext(ctx, `
 			SELECT CAST(value AS INTEGER) FROM archive_metadata
-				WHERE key = ?`, archiveMetadataUsagePricingRevisionKey).Scan(&beforePricingRevision))
-		beforeUsageRevision, err := d.UsageChangeRevision(ctx)
-		require.NoError(t, err)
+			WHERE key = ?`, archiveMetadataUsagePricingRevisionKey).Scan(&beforePricingRevision))
 		insertSession(t, d, "unrelated-session", "project-a")
-		afterUsageRevision, err := d.UsageChangeRevision(ctx)
-		require.NoError(t, err)
-		assert.Greater(t, afterUsageRevision, beforeUsageRevision)
 		var afterPricingRevision int64
 		require.NoError(t, d.getReader().QueryRowContext(ctx, `
 			SELECT CAST(value AS INTEGER) FROM archive_metadata

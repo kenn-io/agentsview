@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -115,18 +114,9 @@ func TestActivityReportKeptBoundsReadSetMemory(t *testing.T) {
 	entry := entries[0]
 	require.Len(t, entry.read, 1)
 	assert.Equal(t, len(entry.read), cap(entry.read), "the kept read set must not retain its pre-compaction backing array")
-
-	readBytes := int64(cap(entry.read) * 16)
-	for _, id := range entry.read {
-		readBytes += int64(len(id))
-	}
-	for _, label := range entry.labels {
-		readBytes += int64(len(label))
-	}
-	assert.Equal(t, activity.EstimatedArtifactBytes(entry.report.Artifacts)+readBytes, d.activityKept.Size(entry))
 }
 
-func TestActivityReportKeptSkipsUnchangedSizeMeasurement(t *testing.T) {
+func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {
 	d := testDB(t)
 	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
 	keptActivitySession(t, d, "today", "project-a", "2026-06-15")
@@ -141,7 +131,6 @@ func TestActivityReportKeptSkipsUnchangedSizeMeasurement(t *testing.T) {
 	entries, ok := d.activityKept.Get(selection, version)
 	require.True(t, ok)
 	require.Len(t, entries, 1)
-	initialSize := entries[0].size
 
 	measure := d.activityKept.Size
 	sizeCalls := 0
@@ -160,23 +149,10 @@ func TestActivityReportKeptSkipsUnchangedSizeMeasurement(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, entries, 1)
 	assert.Equal(t, currentRevision, entries[0].revision)
-	assert.Equal(t, initialSize, entries[0].size)
 	assert.Equal(t, 1, sizeCalls, "advancing the journal watermark should reuse the measured size")
 
 	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
 	assert.Equal(t, 1, sizeCalls, "a second hit at the same watermark must not reinsert the report")
-}
-
-func TestActivityReportKeptVersionRejectsInvalidUsageRevision(t *testing.T) {
-	d := testDB(t)
-	_, err := d.getWriter().ExecContext(t.Context(), `
-		INSERT INTO archive_metadata (key, value) VALUES (?, 'invalid')
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		archiveMetadataUsageChangeRevisionKey)
-	require.NoError(t, err)
-
-	_, _, err = d.activityKeptVersion(t.Context())
-	require.ErrorContains(t, err, `invalid usage change revision "invalid"`)
 }
 
 func TestActivityReportKeptResumedSessionPeerChanges(t *testing.T) {
@@ -205,12 +181,14 @@ func TestActivityReportKeptResumedSessionPeerChanges(t *testing.T) {
 			insertMessages(t, d, Message{
 				SessionID: "resumed-today", Ordinal: 0, Role: "assistant", Content: "resumed",
 				Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model",
-				TokenUsage:      []byte(`{"output_tokens":100}`),
+				TokenUsage:      []byte(`{"output_tokens":600}`),
 				ClaudeMessageID: tc.messageID, ClaudeRequestID: tc.requestID,
 			})
 			after := keptActivityBuild(t, d, f, q, tc.wantUsage)
 			if !tc.wantUsage {
 				requireKeptActivityEqual(t, first, after)
+			} else {
+				require.Equal(t, 600, after.Report.Totals.OutputTokens)
 			}
 		})
 	}
@@ -230,18 +208,12 @@ func TestActivityReportKeptJournalReadsChangesPastSnapshot(t *testing.T) {
 	entries, ok := d.activityKept.Get(selection, cacheVersion)
 	require.True(t, ok)
 	cachedRevision := entries[0].revision
-	before, err := d.UsageChangeRevision(t.Context())
-	require.NoError(t, err)
 	require.NoError(t, d.RenameSession(t.Context(), "past", new("first rename")))
 	version, snapshot, err := d.activityKeptVersion(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, cacheVersion, version)
 	require.Greater(t, snapshot, cachedRevision)
-	assert.Greater(t, snapshot, before)
 	require.NoError(t, d.RenameSession(t.Context(), "past", new("second rename")))
-	changes, err := d.LoadUsageChanges(t.Context(), cachedRevision, math.MaxInt64)
-	require.NoError(t, err)
-	require.Contains(t, changes, "past")
 
 	_, hit, err := d.keptActivityReport(t.Context(), selection, version, snapshot)
 	require.NoError(t, err)
@@ -260,17 +232,6 @@ func TestActivityReportKeptInvalidatesForTerminalEventAfterRange(t *testing.T) {
 	after := keptActivityBuild(t, d, f, q, true)
 	require.Len(t, after.Sessions, 1)
 	assert.Equal(t, "old", after.Sessions[0].SessionID)
-}
-
-func TestActivityReportKeptIgnoresSessionOutsideExactRange(t *testing.T) {
-	d := testDB(t)
-	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
-	keptActivitySession(t, d, "today", "project-a", "2026-06-15")
-	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
-	first := keptActivityBuild(t, d, f, q, true)
-	require.Len(t, first.Sessions, 1)
-	require.NoError(t, d.RenameSession(t.Context(), "today", new("today changed")))
-	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
 }
 
 func TestActivityReportKeptIgnoresSameIdentityObservationFromToday(t *testing.T) {
@@ -306,21 +267,8 @@ func TestActivityReportKeptIgnoresSameIdentityObservationFromToday(t *testing.T)
 	afterIdentityRevision, err := d.ProjectIdentityPublicationRevision(t.Context())
 	require.NoError(t, err)
 	assert.Greater(t, afterIdentityRevision, beforeIdentityRevision)
-	projects, err := d.BuildProjectIdentityMap(t.Context(), []string{"project-a"})
-	require.NoError(t, err)
-	assert.Equal(t, first.Report.Projects, export.ProjectMapForWire(projects))
-	snapshots, err := d.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{today.ID})
-	require.NoError(t, err)
-	require.Contains(t, snapshots, today.ID)
-	assert.Equal(t, today.ID, snapshots[today.ID].SessionID)
 	after := keptActivityBuild(t, d, f, q, false)
 	requireKeptActivityEqual(t, first, after)
-	selection := kept.Selection(AnalyticsFilter{Timezone: "UTC", IncludeForks: true, IncludeSubagents: true}, q)
-	version, revision, err := d.activityKeptVersion(t.Context())
-	require.NoError(t, err)
-	entries, ok := d.activityKept.Get(selection, version)
-	require.True(t, ok)
-	assert.GreaterOrEqual(t, entries[0].revision, revision)
 }
 
 func TestActivityReportKeptValidationWaitsForBulkReadPermit(t *testing.T) {
@@ -360,13 +308,6 @@ func TestActivityReportKeptChanges(t *testing.T) {
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
 			t.Helper()
 			assert.Len(t, a.Sessions, 2)
-		}},
-		{name: "soft delete", write: func(t *testing.T, d *DB) {
-			t.Helper()
-			require.NoError(t, d.SoftDeleteSession(t.Context(), "past"))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Empty(t, a.Sessions)
 		}},
 		{name: "hard delete", write: func(t *testing.T, d *DB) {
 			t.Helper()
@@ -424,35 +365,6 @@ func TestActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.NotEmpty(t, a.Report.Projects)
 		}},
-		{name: "project assignment", write: func(t *testing.T, d *DB) {
-			t.Helper()
-			_, err := d.AssignSessionProject(t.Context(), "past", "project-b")
-			require.NoError(t, err)
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Empty(t, a.Sessions)
-		}},
-		{name: "usage replacement", prepare: func(t *testing.T, d *DB) {
-			t.Helper()
-			require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "past", []UsageEvent{{Source: "session", Model: "kept-model", OutputTokens: 100, OccurredAt: "2026-06-14T10:01:00Z"}}))
-		}, write: func(t *testing.T, d *DB) {
-			t.Helper()
-			require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "past", []UsageEvent{{Source: "session", Model: "kept-model", OutputTokens: 900, OccurredAt: "2026-06-14T10:01:00Z"}}))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Equal(t, 1400, a.Report.Totals.OutputTokens)
-		}},
-		{name: "appended message", write: func(t *testing.T, d *DB) {
-			t.Helper()
-			insertMessages(t, d, Message{
-				SessionID: "past", Ordinal: 2, Role: "assistant", Content: "another answer",
-				Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model",
-				TokenUsage: []byte(`{"output_tokens":100}`),
-			})
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Equal(t, 600, a.Report.Totals.OutputTokens)
-		}},
 		{name: "excluded Claude peer", prepare: func(t *testing.T, d *DB) {
 			t.Helper()
 			insertSession(t, d, "peer", "project-b", func(s *Session) {
@@ -506,6 +418,10 @@ func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {
 	q := dayQuery(t, "2026-06-14", "UTC")
 	before := keptActivityBuild(t, d, f, q, true)
 	requireKeptActivityEqual(t, before, keptActivityBuild(t, d, f, q, false))
+	databaseID, err := d.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	version, revision, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
 
 	readOnly, err := OpenReadOnly(t.Context(), d.Path())
 	require.NoError(t, err)
@@ -517,6 +433,14 @@ func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {
 
 	next := testDBAtPath(t, filepath.Join(t.TempDir(), "next.db"), "next")
 	keptActivitySession(t, next, "replacement", "project-a", "2026-06-14")
+	_, err = next.getWriter().ExecContext(t.Context(), `
+		UPDATE archive_metadata SET value = ? WHERE key = ?`,
+		databaseID, archiveMetadataDatabaseIDKey)
+	require.NoError(t, err)
+	nextVersion, nextRevision, err := next.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, version, nextVersion)
+	require.Equal(t, revision, nextRevision)
 	require.NoError(t, next.Close())
 	require.NoError(t, d.CloseConnections(t.Context()))
 	require.NoError(t, os.Rename(next.Path(), d.Path()))

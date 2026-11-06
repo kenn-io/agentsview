@@ -822,7 +822,7 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 	}
 }
 
-func TestCopyOrphanedDataDoesNotCarryUsagePricingRevision(t *testing.T) {
+func TestCopySessionMetadataDoesNotCarryUsagePricingRevision(t *testing.T) {
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
 	source := testDBAtPath(t, sourcePath, "source")
@@ -833,9 +833,7 @@ func TestCopyOrphanedDataDoesNotCarryUsagePricingRevision(t *testing.T) {
 
 	destination := testDBAtPath(t, filepath.Join(dir, "destination.db"), "destination")
 	defer destination.Close()
-	require.NoError(t, destination.CopySyncStateFrom(t.Context(), sourcePath))
-	_, err = destination.CopyOrphanedDataFrom(t.Context(), sourcePath)
-	require.NoError(t, err)
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	var revision string
 	err = destination.getReader().QueryRowContext(t.Context(), `
