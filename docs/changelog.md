@@ -114,6 +114,13 @@ The latest release is
 
 **Improvements**
 
+- Substring and regex content search skip messages that cannot contain the
+  search text, using a new substring index in the local archive. On a 1.7
+  million message test archive, searching for rare text went from 2.1 s to 0.4
+  s. The index adds about a fifth of the message text size to the archive, and
+  the first start after upgrading waits while it is built, about a minute per 2
+  GB of message text.
+
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.
 

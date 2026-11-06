@@ -917,6 +917,44 @@ resync defers this index during import and rebuilds it before the replacement
 archive is installed. Read-only opens do not create indexes or collect
 statistics.
 
+### Substring search index
+
+Substring and regex content search narrow their message and thinking branches
+with two FTS5 tables that use the built-in `trigram` tokenizer:
+`message_trigram_fts` over `COALESCE(dialogue_text, content)` and
+`thinking_trigram_fts` over `thinking_text`. Both read from the
+`message_trigram_source` view and store `detail='none'` and `columnsize=0`, so
+they hold only message IDs per three-character sequence, about a fifth of the
+indexed text. Each field gets its own table because a `detail='none'` table
+cannot filter by column; `detail='column'` measured nearly three times larger.
+
+The index only narrows candidates. A search intersects the listed IDs for the
+pattern's sequences, up to 32 of them, and the existing `LIKE` still decides
+every row. The tokenizer folds case for every script while `LIKE` folds only
+ASCII, so the index returns a superset and results stay identical to a scan.
+Patterns shorter than three characters, single-session searches, and branches
+where the index lists more than a quarter of the messages in the scope's
+sessions keep the scan. A capped count of the listed IDs makes that choice; it
+stops as soon as the share is passed. Tool input and tool result branches are
+not indexed.
+
+Triggers keep both tables current on message insert, delete, and edits to
+`content`, `dialogue_text`, or `thinking_text`. Bulk session deletes remove a
+session's entries in one statement each and suspend `messages_trigram_ad`, as
+they do for the other FTS indexes. `DropFTS` and `RebuildFTS` drop and rebuild
+the index with the other FTS tables during a full resync, and searches scan
+while it is absent. Claude.ai and ChatGPT imports drop it on the live archive,
+so a search that chose index filters before the drop gets a missing-table
+error; it reruns once and scans.
+
+The first writable open after column migrations builds the index once for an
+existing archive, before HTTP readiness, and logs that startup is waiting for
+the message scan. Tokenizing costs about 2.7 times the porter FTS index, near 30
+MB of message text per second. Read-only opens use the index when present and
+scan otherwise. Hand-built legacy schemas in tests must drop
+`message_trigram_source` and the index before rebuilding or narrowing
+`messages`, because the view and triggers name its columns.
+
 ### Transcript usage identity
 
 Token usage, Claude message/request identities, and source UUID participate in
