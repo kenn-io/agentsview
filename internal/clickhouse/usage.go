@@ -2204,11 +2204,14 @@ func (s *Store) usageRowMemoKey(
 	if err != nil {
 		return "", "", err
 	}
+	if version == "" {
+		return "", "", nil
+	}
 	slot, err = usageRowMemoKeyFor(kind, f, sessionID, pricingDigest, customModels)
 	return slot, version, err
 }
 
-// chUsageReadTables are the tables a prepared usage read touches besides
+// chUsageReadTables name the rows a prepared usage read depends on besides
 // prepared_usage itself, whose rows the state's stamp identifies.
 var chUsageReadTables = []string{
 	"sessions", "usage_session_snapshots", "cursor_usage_events", "usage_event_prices",
@@ -2219,14 +2222,18 @@ var chUsageReadTables = []string{
 // host is read raw; see preparedUsageState.raw.
 var chRawHostUsageTables = []string{"usage_messages", "usage_events"}
 
-// usageReadFingerprint identifies what a usage read depends on. A prepared
-// read depends on the prepared rows, named by the state's stamp, and on the
-// active parts of the tables it joins or prices from; the large message and
-// event tables, whose background merges rename parts long after a push, are
-// not among them. A raw read depends on the parts of every table.
+// usageReadFingerprint identifies the rows a usage read sees. Fully prepared
+// reads keep their version across merges. Raw and mixed reads name parts.
 func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState) (string, error) {
 	if !state.ready {
 		return s.partsFingerprint(ctx)
+	}
+	if len(state.raw) == 0 {
+		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables)
+		if err != nil || !ok {
+			return "", err
+		}
+		return version + "|" + state.stamp, nil
 	}
 	tables := chUsageReadTables
 	if len(state.raw) > 0 {
@@ -2238,6 +2245,91 @@ func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageSta
 		return "", err
 	}
 	return fingerprint + "|" + state.stamp, nil
+}
+
+type usageTableVersion struct {
+	parts, identity string
+}
+
+// usageRowsVersion probes only tables whose parts changed. A write during
+// the probe leaves the kept identities intact and serves this read uncached.
+func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, bool, error) {
+	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
+	if !ok {
+		var err error
+		snapshot, err = s.readPartsSnapshot(ctx)
+		if err != nil {
+			return "", false, err
+		}
+	}
+	tables = slices.Compact(slices.Sorted(slices.Values(tables)))
+	// The fill mutex shares a probe with concurrent requests, which recheck
+	// the kept digests after acquiring it.
+	s.usageVersions.Lock()
+	defer s.usageVersions.Unlock()
+	var changed []string
+	for _, table := range tables {
+		kept, exists := s.usageVersions.tables[table]
+		if !exists || kept.parts != snapshot[table] {
+			changed = append(changed, table)
+		}
+	}
+	if len(changed) > 0 {
+		identities, err := s.readUsageRowIdentities(ctx, changed)
+		if err != nil {
+			return "", false, err
+		}
+		fresh, err := s.readPartsSnapshot(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		for _, table := range changed {
+			if fresh[table] != snapshot[table] {
+				return "", false, nil
+			}
+		}
+		if s.usageVersions.tables == nil {
+			s.usageVersions.tables = make(map[string]usageTableVersion, len(chUsageReadTables))
+		}
+		for _, table := range changed {
+			s.usageVersions.tables[table] = usageTableVersion{snapshot[table], identities[table]}
+		}
+	}
+	sum := sha256.New()
+	for _, table := range tables {
+		fmt.Fprintf(sum, "%s\x00%s\x00", table, s.usageVersions.tables[table].identity)
+	}
+	return hex.EncodeToString(sum.Sum(nil)), true, nil
+}
+
+func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string) (map[string]string, error) {
+	queries := make([]string, 0, len(tables))
+	for _, table := range tables {
+		columns := "*"
+		if table == "usage_session_snapshots" {
+			columns = "id, revision, push_version"
+		}
+		queries = append(queries, fmt.Sprintf(`SELECT '%s', toString(tuple(count(),
+			sumWithOverflow(reinterpretAsUInt128(sipHash128Reference(tuple(%s)))))) FROM %s`, table, columns, table))
+	}
+	s.usageRowIdentityQueries.Add(1)
+	rows, err := s.queryContext(ctx, strings.Join(queries, " UNION ALL "))
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse usage row identities: %w", err)
+	}
+	defer rows.Close()
+	identities := make(map[string]string, len(tables))
+	for rows.Next() {
+		var table, identity string
+		if err := rows.Scan(&table, &identity); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse usage row identity: %w", err)
+		}
+		identities[table] = identity
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating clickhouse usage row identities: %w", err)
+	}
+	return identities, nil
 }
 
 // usageRowMemoKeyFor renders the key. The filter is JSON and the custom
@@ -2326,8 +2418,8 @@ func (s *Store) withPartsSnapshot(ctx context.Context) (context.Context, error) 
 }
 
 // usageRowMemo keeps the rows of recent usage reads. A slot names the read
-// and holds only the rows of its latest version, which names the parts the
-// rows were read from. A push replaces a slot's rows instead of adding a
+// and holds only the rows of its latest version, which names the rows the
+// read sees. A push replaces a slot's rows instead of adding a
 // second copy beside them, and a stale version is never returned. The
 // empty slot keeps nothing. The oldest written slots go first when the
 // memo is over its slot or byte limit.

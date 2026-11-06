@@ -144,7 +144,7 @@ func (st preparedUsageState) replaced() []string {
 }
 
 func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, error) {
-	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"sessions", "usage_session_snapshots", "usage_event_prices"})
+	fingerprint, stable, err := s.usageRowsVersion(ctx, []string{"sessions", "usage_session_snapshots", "usage_event_prices"})
 	if err != nil {
 		return preparedUsageState{}, err
 	}
@@ -180,14 +180,16 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 		stored.pricingDigest, stored.priceCount)
 	// Coverage and the sessions pushed since the refresh depend on the
 	// tables named in the fingerprint and on the prepared rows, so they only
-	// change when those parts or the stamp do.
+	// change when those rows or the stamp do.
 	live, cached := s.cachedUsageCoverage(fingerprint, stamp)
+	cached = cached && stable
 	if !cached {
 		// One caller fills the cache; the requests of a page load that
 		// arrive together wait for it instead of each reading coverage.
 		s.coverageCache.fill.Lock()
 		defer s.coverageCache.fill.Unlock()
 		live, cached = s.cachedUsageCoverage(fingerprint, stamp)
+		cached = cached && stable
 	}
 	if !cached {
 		live, err = s.readUsageCoverage(ctx, stamp, stored.pricingDigest)
@@ -200,9 +202,11 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 				return preparedUsageState{}, err
 			}
 		}
-		s.coverageCache.mu.Lock()
-		s.coverageCache.fingerprint, s.coverageCache.stamp, s.coverageCache.live = fingerprint, stamp, live
-		s.coverageCache.mu.Unlock()
+		if stable {
+			s.coverageCache.mu.Lock()
+			s.coverageCache.fingerprint, s.coverageCache.stamp, s.coverageCache.live = fingerprint, stamp, live
+			s.coverageCache.mu.Unlock()
+		}
 	}
 	switch {
 	case live.missing == 0:
