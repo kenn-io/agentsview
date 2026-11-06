@@ -3211,6 +3211,18 @@
   "meaning_about_time": "environ {time}",
   "meaning_progress": "Configuration de la recherche par sens",
   "meaning_hint": "La recherche par sens est désactivée",
-  "meaning_documents": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "document", "countPlural=other": "documents"}}],
-  "meaning_chunks": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "segment", "countPlural=other": "segments"}}]
+  "meaning_documents": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "document", "countPlural=other": "documents" }
+    }
+  ],
+  "meaning_chunks": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "segment", "countPlural=other": "segments" }
+    }
+  ]
 }

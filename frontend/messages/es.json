@@ -3211,6 +3211,18 @@
   "meaning_about_time": "unos {time}",
   "meaning_progress": "Configurar búsqueda por significado",
   "meaning_hint": "La búsqueda por significado está desactivada",
-  "meaning_documents": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "documento", "countPlural=other": "documentos"}}],
-  "meaning_chunks": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "fragmento", "countPlural=other": "fragmentos"}}]
+  "meaning_documents": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "documento", "countPlural=other": "documentos" }
+    }
+  ],
+  "meaning_chunks": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "fragmento", "countPlural=other": "fragmentos" }
+    }
+  ]
 }

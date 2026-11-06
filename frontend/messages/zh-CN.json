@@ -3077,6 +3077,18 @@
   "meaning_about_time": "约 {time}",
   "meaning_progress": "按含义搜索设置",
   "meaning_hint": "按含义搜索已关闭",
-  "meaning_documents": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "文档", "countPlural=other": "文档"}}],
-  "meaning_chunks": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "分块", "countPlural=other": "分块"}}]
+  "meaning_documents": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "文档", "countPlural=other": "文档" }
+    }
+  ],
+  "meaning_chunks": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "分块", "countPlural=other": "分块" }
+    }
+  ]
 }

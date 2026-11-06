@@ -3187,6 +3187,18 @@
   "meaning_about_time": "about {time}",
   "meaning_progress": "Search by meaning setup",
   "meaning_hint": "Search by meaning is off",
-  "meaning_documents": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "document", "countPlural=other": "documents"}}],
-  "meaning_chunks": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "chunk", "countPlural=other": "chunks"}}]
+  "meaning_documents": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "document", "countPlural=other": "documents" }
+    }
+  ],
+  "meaning_chunks": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "chunk", "countPlural=other": "chunks" }
+    }
+  ]
 }

@@ -3189,6 +3189,18 @@
   "meaning_about_time": "təxminən {time}",
   "meaning_progress": "Mənaya görə axtarışın qurulması",
   "meaning_hint": "Mənaya görə axtarış söndürülüb",
-  "meaning_documents": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "sənəd", "countPlural=other": "sənəd"}}],
-  "meaning_chunks": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "hissə", "countPlural=other": "hissə"}}]
+  "meaning_documents": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "sənəd", "countPlural=other": "sənəd" }
+    }
+  ],
+  "meaning_chunks": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "hissə", "countPlural=other": "hissə" }
+    }
+  ]
 }

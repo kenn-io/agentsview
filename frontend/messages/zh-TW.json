@@ -3080,6 +3080,18 @@
   "meaning_about_time": "約 {time}",
   "meaning_progress": "依含義搜尋設定",
   "meaning_hint": "依含義搜尋已關閉",
-  "meaning_documents": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "文件", "countPlural=other": "文件"}}],
-  "meaning_chunks": [{"declarations": ["input count", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "區塊", "countPlural=other": "區塊"}}]
+  "meaning_documents": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "文件", "countPlural=other": "文件" }
+    }
+  ],
+  "meaning_chunks": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "區塊", "countPlural=other": "區塊" }
+    }
+  ]
 }
