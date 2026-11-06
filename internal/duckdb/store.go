@@ -115,6 +115,10 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 func (s *Store) mirrorStamp() string {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
+	return s.mirrorStampLocked()
+}
+
+func (s *Store) mirrorStampLocked() string {
 	if s.path == "" {
 		return ""
 	}
@@ -125,10 +129,10 @@ func (s *Store) mirrorStamp() string {
 func (s *Store) keptVersion() string {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
-	if s.path == "" {
+	stamp := s.mirrorStampLocked()
+	if stamp == "" {
 		return ""
 	}
-	stamp := fmt.Sprintf("%d|%d|%s", s.fileInfo.Size(), s.fileInfo.ModTime().UnixNano(), s.walStamp)
 	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath
 }
 
