@@ -86,14 +86,16 @@ for (const width of [1280, 390]) {
       } else {
         await page.getByRole("button", { name: /Search sessions/ }).click();
         if (width === 1280 && entry === "semantic") {
-          const escapeBadge = page.locator(".palette-input-wrap kbd").first();
-          expect
-            .soft(await escapeBadge.evaluate((el) => getComputedStyle(el).fontFamily))
-            .toBe(
-              await page
-                .locator(".palette-input")
-                .evaluate((el) => getComputedStyle(el).fontFamily),
-            );
+          await test.step("preserves the compact palette key badge", async () => {
+            const escapeBadge = page.locator(".palette-input-wrap kbd").first();
+            expect
+              .soft(await escapeBadge.evaluate((el) => getComputedStyle(el).fontFamily))
+              .toBe(
+                await page
+                  .locator(".palette-input")
+                  .evaluate((el) => getComputedStyle(el).fontFamily),
+              );
+          });
         }
         if (entry === "semantic")
           await page.getByRole("radio", { name: "Semantic", exact: true }).click();

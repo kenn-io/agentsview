@@ -753,33 +753,33 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it.each([false, true])(
-    "shows the keyword footer only while meaning search is off (%s)",
-    async (enabled) => {
-      mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
-        running: false,
-        done: 0,
-        total: 0,
-        eta_milliseconds: 0,
-        setup: {
-          enabled,
-          action: enabled ? "" : "turn-on",
-          provider: "built-in",
-          missing_bytes: enabled ? 0 : 295000000,
-          busy: false,
-          installing: false,
-        },
-      });
-      const component = mount(CommandPalette, { target: document.body });
-      await enterSearchQuery();
-      for (let i = 0; i < 10; i++) await tick();
-      expect(document.body.textContent?.includes("Search by meaning is off")).toBe(!enabled);
-      await enterSearchQuery("another query");
-      for (let i = 0; i < 10; i++) await tick();
+  it.each(["turn-on", ""])("shows the keyword footer for the setup action (%s)", async (action) => {
+    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+      running: false,
+      done: 0,
+      total: 0,
+      eta_milliseconds: 0,
+      setup: {
+        enabled: true,
+        action,
+        provider: "built-in",
+        missing_bytes: action === "turn-on" ? 295000000 : 0,
+        busy: false,
+        installing: false,
+      },
+    });
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    for (let i = 0; i < 10; i++) await tick();
+    expect(document.body.textContent?.includes("Search by meaning is off")).toBe(
+      action === "turn-on",
+    );
+    await enterSearchQuery("another query");
+    for (let i = 0; i < 10; i++) await tick();
+    if (action === "turn-on")
       expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);
-      unmount(component);
-    },
-  );
+    unmount(component);
+  });
 
   it.each([
     [

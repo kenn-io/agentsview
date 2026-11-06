@@ -329,7 +329,6 @@ func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
 		require.NoError(t, ix.Close())
 
 		src := newVectorPushSource(cfg)
-
 		export, ok, err := src.BeginExport(ctx, nil)
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -351,7 +350,6 @@ func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
 		cfg := enabledVectorConfig(t)
 		buildTestVectorsDB(t, cfg)
 		src := newVectorPushSource(cfg)
-
 		export, ok, err := src.BeginExport(ctx, nil)
 		require.NoError(t, err)
 		require.True(t, ok)

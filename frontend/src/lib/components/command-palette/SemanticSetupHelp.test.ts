@@ -166,16 +166,25 @@ describe("SemanticSetupHelp", () => {
     total_bytes: 0,
   };
 
-  it("approves the disclosed download when switching a compatible index", async () => {
+  it.each([
+    { label: "compatible index", rebuild: false, copy: ["Downloads 295 MB"] },
+    {
+      label: "another model",
+      rebuild: true,
+      copy: ["Downloads 295 MB", "Switching rebuilds the index", "150 documents"],
+    },
+  ])("discloses and approves the switch for $label", async ({ rebuild, copy }) => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      idleStatus({ setup: { ...ollamaSetup } }),
+      idleStatus({ setup: { ...ollamaSetup, rebuild_required: rebuild } }),
     );
-    embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({ generations: [] });
+    embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
+      generations: [{ id: 1, state: "active", embedded: 123, missing: 27 }],
+    });
     embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     const { component } = mountHelp();
     await settle();
-    expect(text()).toContain("Downloads 295 MB");
-    expect(text()).not.toContain("Switching rebuilds the index");
+    for (const expected of copy) expect(text()).toContain(expected);
+    expect(text().includes("Switching rebuilds the index")).toBe(rebuild);
     const button = [...document.body.querySelectorAll("button")].find(
       (b) => b.textContent?.trim() === "Use built-in instead",
     );
@@ -185,21 +194,6 @@ describe("SemanticSetupHelp", () => {
     expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
       action: "use-built-in",
     });
-    unmount(component);
-  });
-
-  it("discloses the download and rebuild estimate for another model", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      idleStatus({ setup: { ...ollamaSetup, rebuild_required: true } }),
-    );
-    embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
-      generations: [{ id: 1, state: "active", embedded: 123, missing: 27 }],
-    });
-    const { component } = mountHelp();
-    await settle();
-    expect(text()).toContain("Downloads 295 MB");
-    expect(text()).toContain("Switching rebuilds the index");
-    expect(text()).toContain("150 documents");
     unmount(component);
   });
 
