@@ -43,11 +43,12 @@ selection, money rounding, and result assembly.
 
 Installs bake `agent`, `started_at`, `project`, `machine`, `git_branch`,
 `group_key`, `group_label`, `is_automated`, and `user_message_count`.
-`group_label` is the cron label derived from `session_name`. A journaled
-metadata change rebuilds that session's rows and moves its day totals to the
-new dimensions. Name changes on grouped sessions journal through their own
-trigger, which writers that predate it do not drop. Termination and `active_since` filters still
-use archive metadata and per-session rows.
+`group_label` is the cron label derived from `session_name`. Format 18 gives
+these grouping fields a separate generation from format 17 writers. A journaled
+metadata change rebuilds that session's rows and moves its day totals to the new
+dimensions. Name changes on grouped sessions journal through their own trigger,
+which writers that predate it do not drop. Termination and `active_since`
+filters still use archive metadata and per-session rows.
 
 After a completed timezone coverage pass, daily reads apply session and model
 filters to day totals in SQL. They load install metadata only for authoritative
@@ -57,10 +58,9 @@ reads fold exception owners first, then rank their contributions together with
 ordinary session rows in one SQL query. Grouped units take agent and start from
 their newest member and the label from their newest labelled member. Only
 returned individual sessions load archive names. SQL computes the trailing
-remainder from the same units. Daily reads and billed-session counts share the
-distinct count reader. Warm preparations skip window-session
-discovery. Each archive snapshot loads its pricing catalog and computes its
-digest.
+remainder from the same units. Daily reads count in SQL; billed-session counts
+read per-session rows. Warm preparations skip window-session discovery. Each
+archive snapshot loads its pricing catalog and computes its digest.
 
 ### Dedup exceptions
 

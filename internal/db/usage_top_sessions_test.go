@@ -28,22 +28,8 @@ func TestUsageTopSessionsConcurrentRefreshLoadsOnlyReturnedMetadata(t *testing.T
 	t.Cleanup(func() { require.NoError(t, other.Close()) })
 
 	// Count display records read by the foreground request, including retries.
-	database.rawReader().SetMaxOpenConns(1)
-	conn, err := database.getReader().Conn(t.Context())
-	require.NoError(t, err)
 	var loaded []string
-	require.NoError(t, conn.Raw(func(driverConn any) error {
-		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other any) any {
-			if name, ok := value.(string); ok && strings.HasPrefix(name, "Session ") {
-				loaded = append(loaded, name)
-			}
-			if value == other {
-				return nil
-			}
-			return value
-		}, true)
-	}))
-	require.NoError(t, conn.Close())
+	observeUsageTopSessionsMetadata(t, database, "Session ", true, &loaded)
 	refreshed := false
 	filter.Progress = func(phase string) {
 		if phase != "Reading cached daily totals" || refreshed {
@@ -85,22 +71,8 @@ func TestUsageTopSessionsLoadsOnlyReturnedMetadata(t *testing.T) {
 
 	// Observe display-name evaluations at the archive query boundary, preserving
 	// NULLIF semantics. Groups use installed labels and load no names.
-	database.rawReader().SetMaxOpenConns(1)
-	conn, err := database.getReader().Conn(t.Context())
-	require.NoError(t, err)
 	var loaded []string
-	require.NoError(t, conn.Raw(func(driverConn any) error {
-		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other any) any {
-			if name, ok := value.(string); ok && strings.HasPrefix(name, "Owner ") {
-				loaded = append(loaded, name)
-			}
-			if value == other {
-				return nil
-			}
-			return value
-		}, false)
-	}))
-	require.NoError(t, conn.Close())
+	observeUsageTopSessionsMetadata(t, database, "Owner ", false, &loaded)
 	for _, tc := range []struct {
 		name    string
 		grouped bool
@@ -137,6 +109,25 @@ func TestUsageTopSessionsLoadsOnlyReturnedMetadata(t *testing.T) {
 			}
 		})
 	}
+}
+
+func observeUsageTopSessionsMetadata(t *testing.T, database *DB, prefix string, pure bool, loaded *[]string) {
+	t.Helper()
+	database.rawReader().SetMaxOpenConns(1)
+	conn, err := database.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(driverConn any) error {
+		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other any) any {
+			if name, ok := value.(string); ok && strings.HasPrefix(name, prefix) {
+				*loaded = append(*loaded, name)
+			}
+			if value == other {
+				return nil
+			}
+			return value
+		}, pure)
+	}))
+	require.NoError(t, conn.Close())
 }
 
 // CheckUsageTopSessionsMatchLegacy checks cached reads against the archive for the external fixture test.
