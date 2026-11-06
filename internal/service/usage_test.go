@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -971,6 +972,78 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 			assert.Equal(t, rankingFilter.To, sideFilter.To)
 		}
 	})
+}
+
+type pairwisePlanCountStore struct {
+	db.Store
+	planReads int
+}
+
+func (s *pairwisePlanCountStore) GetPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (db.PlanUsageSessionCounts, error) {
+	s.planReads++
+	return s.Store.GetPlanUsageSessionCounts(ctx, f)
+}
+
+func TestUsageModelGroupsPairwisePlanReads(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	started := "2024-06-01T12:00:00Z"
+	msg := dbtest.AsstMsg("plan-only", 1, "done")
+	msg.Model, msg.Timestamp = "plan-model", started
+	dbtest.SeedSessionWithMessages(t, d, "plan-only", "alpha",
+		[]db.Message{dbtest.UserMsg("plan-only", 0, "hello"), msg},
+		dbtest.WithMessageCounts(2, 1), func(s *db.Session) {
+			s.Agent, s.StartedAt, s.EndedAt = "codex-cloud", &started, &started
+		})
+	require.NoError(t, d.ReplaceSessionPlanUsage(t.Context(), "plan-only",
+		&db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(1.5)}))
+	store := &pairwisePlanCountStore{Store: d}
+	be := service.NewReadOnlyBackend(store, service.WithModelGroups(service.NewModelGroups(map[string]string{
+		"claude-sonnet-4-20250514": "group", "plan-model": "group", "gpt-4o": "other",
+	})))
+	req := service.UsagePairwiseComparisonRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true, GroupModels: true,
+	}
+	grouped, err := be.UsagePairwiseComparison(t.Context(), req)
+	require.NoError(t, err)
+	assert.Zero(t, store.planReads)
+	assert.Equal(t, "group", grouped.Left.Value)
+	assert.Equal(t, "other", grouped.Right.Value)
+	assert.Equal(t, 170, grouped.Left.InputTokens)
+	assert.Equal(t, 30, grouped.Right.InputTokens)
+	wantJSON, err := json.Marshal(grouped)
+	require.NoError(t, err)
+
+	// An absent explicit side forces the same default pair through the plan read.
+	req.LeftDimension, req.LeftValue = "model", "missing-model"
+	req.RightDimension, req.RightValue = "model", "other"
+	req.FallbackToDefault = true
+	store.planReads = 0
+	fallback, err := be.UsagePairwiseComparison(t.Context(), req)
+	require.NoError(t, err)
+	assert.Equal(t, 1, store.planReads)
+	fallbackJSON, err := json.Marshal(fallback)
+	require.NoError(t, err)
+	assert.Equal(t, string(wantJSON), string(fallbackJSON))
+
+	// A plan-only member remains a valid explicit side instead of defaulting.
+	req.LeftValue = "plan-model"
+	store.planReads = 0
+	explicit, err := be.UsagePairwiseComparison(t.Context(), req)
+	require.NoError(t, err)
+	assert.Equal(t, 1, store.planReads)
+	assert.Equal(t, "plan-model", explicit.Left.Value)
+	assert.Zero(t, explicit.Left.InputTokens)
+	assert.Equal(t, "other", explicit.Right.Value)
+	assert.Equal(t, 30, explicit.Right.InputTokens)
+	wantExplicitJSON, err := json.Marshal(explicit)
+	require.NoError(t, err)
+	req.FallbackToDefault = false
+	explicit, err = be.UsagePairwiseComparison(t.Context(), req)
+	require.NoError(t, err)
+	explicitJSON, err := json.Marshal(explicit)
+	require.NoError(t, err)
+	assert.Equal(t, string(wantExplicitJSON), string(explicitJSON))
 }
 
 func TestUsageModelGroups(t *testing.T) {

@@ -40,7 +40,7 @@ func (u *Usage) Clear() {
 }
 
 func usageRows[T any](ctx context.Context, memo *usageMemo[T], f db.UsageFilter, version string, load func(context.Context, db.UsageFilter) ([]T, error)) ([]T, error) {
-	key, err := json.Marshal(f, json.Deterministic(true))
+	key, err := json.Marshal(f, json.Deterministic(true), json.FormatNilSliceAsNull(true))
 	if err != nil {
 		return load(ctx, f)
 	}

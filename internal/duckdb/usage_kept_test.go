@@ -131,3 +131,26 @@ func TestUsageKeptBorrowedHandleReadsEveryTime(t *testing.T) {
 	}
 	require.Equal(t, 6, reads)
 }
+
+func TestUsageKeptDistinguishesEmptyProjectLabels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	f := db.UsageFilter{Project: "does-not-exist"}
+	missing, err := store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Zero(t, missing.Totals.OutputTokens)
+	f.ProjectLabels = []string{}
+	all, err := store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, 500, all.Totals.OutputTokens)
+	fresh, err := NewStoreFromDB(store.DB()).GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, fresh, all)
+	f.ProjectLabels = nil
+	missing, err = store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Zero(t, missing.Totals.OutputTokens)
+}
