@@ -117,12 +117,13 @@ func usageLocationName(location *time.Location) string {
 }
 
 func usageRateHash(
-	model, pricedModel, pattern string, ok bool, rates export.ModelRates,
+	model, pricedModel, pattern, adjustment string, ok bool, rates export.ModelRates,
 ) string {
 	digest := sha256.New()
 	writeUsageHashString(digest, model)
 	writeUsageHashString(digest, pricedModel)
 	writeUsageHashString(digest, pattern)
+	writeUsageHashString(digest, adjustment)
 	writeUsageHashBool(digest, ok)
 	writeUsageRatesHash(digest, rates)
 	return hex.EncodeToString(digest.Sum(nil))
@@ -137,7 +138,7 @@ func usagePricingIdentity(rows []export.EffectivePricingRow) (string, error) {
 }
 
 func usagePricingIdentityWithDigest(digest string) string {
-	return digest + "\x00" + pricingpkg.BillingPolicyVersion()
+	return digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + usageSessionPricingIdentityVersion
 }
 
 func writeUsageRatesHash(digest hash.Hash, rates export.ModelRates) {

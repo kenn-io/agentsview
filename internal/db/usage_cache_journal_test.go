@@ -639,7 +639,9 @@ func TestUsageJournaledPartialRefresh(t *testing.T) {
 	for i := range 260 {
 		seedJournaledUsage(t, database, fmt.Sprintf("session-%03d", i))
 	}
-	filter := UsageFilter{Timezone: "UTC"}
+	// Per-session reads can validate intervening installs against captured
+	// metadata. Totals reads instead retry through full source validation.
+	filter := UsageFilter{Timezone: "UTC", ActiveSince: "2026-08-01T00:00:00Z"}
 	cache := warmJournaledUsage(t, database, filter)
 	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=?`, time.Now().UTC().Format(time.RFC3339Nano))
 	require.NoError(t, err)
@@ -741,6 +743,47 @@ func TestUsageJournaledNotificationCapturesNewerMetadata(t *testing.T) {
 			assertJournaledUsageLegacy(t, database, filter)
 		})
 	}
+}
+
+func TestUsageDayTotalsRejectsDelayedNotification(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
+	cache := warmJournaledUsage(t, database, filter)
+	// Pause the notification after it captures the original usage facts.
+	captured, err := database.captureUsageSessions(t.Context(), []string{"session"})
+	require.NoError(t, err)
+	fills, err := cache.fill.Ensure(t.Context(), captured.Versions, 0)
+	require.NoError(t, err)
+	prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindDayTotals, true, true, nil)
+	require.NoError(t, err)
+	require.True(t, prepared.journaled)
+	require.Empty(t, prepared.snapshot.Sessions)
+	require.Equal(t, captured.ChangeRevision, prepared.snapshot.ChangeRevision)
+	session, err := database.GetSession(t.Context(), "session")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	session.Project = "moved-project"
+	_, err = database.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{Session: *session, ReplaceMessages: true, Messages: []Message{{SessionID: "session", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T23:30:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":600,"output_tokens":20}`)}}}})
+	require.NoError(t, err)
+	// Resuming pairs old facts and revision with the project's new metadata.
+	database.usageBackfillMu.Lock()
+	database.usageBackfillEnabled = true
+	database.usageBackfillMu.Unlock()
+	database.refreshUsageRollups(t.Context(), cache, fills, captured.ChangeRevision)
+	var revision int64
+	var project string
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision, project FROM usage_rollup_installs WHERE session_id='session'`).Scan(&revision, &project))
+	require.Equal(t, captured.ChangeRevision, revision)
+	require.Equal(t, "moved-project", project)
+	_, err = cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows))
+	require.ErrorIs(t, err, errUsageCacheSourceChanged)
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	want, err := database.getDailyUsageLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 600, got.Totals.InputTokens)
+	assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
 }
 
 func TestUsageJournaledOlderRollupRepaired(t *testing.T) {

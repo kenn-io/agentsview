@@ -159,6 +159,46 @@ func TestUsageDayTotalsDeleteFirstPricingTimestamp(t *testing.T) {
 	assertUsageDayTotals(t, cache)
 }
 
+func TestUsageDayTotalsHistoricalRateCollisionMatchesLegacy(t *testing.T) {
+	for _, sameSession := range []bool{false, true} {
+		name := "separate sessions"
+		if sameSession {
+			name = "same session"
+		}
+		t.Run(name, func(t *testing.T) {
+			database := testDB(t)
+			// A computed $1 base rate bills at $1.10, equal to the next
+			// period's reported base rate. Both periods fall on one local day.
+			data := []byte(`[{"id":"test","name":"Test","api_pattern":"https://example.invalid","model_match":{"starts_with":"dated-"},
+				"models":[{"id":"dated-model","match":{"equals":"dated-model"},"prices":[
+					{"prices":{"input_mtok":1}},
+					{"constraint":{"start_date":"2026-08-11"},"prices":{"input_mtok":1.1}}
+				]}]}]`)
+			prices, err := pricingpkg.ParseGenAIPrices(data)
+			require.NoError(t, err)
+			require.NoError(t, database.UpsertGenAIPricing(t.Context(), GenAIPricingDocument{Version: prices.Version(), Source: GenAIPricingSourceFetched, Data: data}))
+			insertSession(t, database, "computed", "project-a", func(s *Session) { s.Agent = "posit-assistant"; s.StartedAt = new("2026-08-10T23:30:00Z") })
+			require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "computed", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T23:30:00Z", Model: "dated-model", ProviderID: "positai", TokenUsage: []byte(`{"input_tokens":1000000}`)}}))
+			reportedSession := "computed"
+			if !sameSession {
+				reportedSession = "reported"
+				insertSession(t, database, reportedSession, "project-a", func(s *Session) { s.Agent = "posit-assistant"; s.StartedAt = new("2026-08-11T01:30:00Z") })
+			}
+			cost := money.MustParseDollars("2")
+			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), reportedSession, []UsageEvent{{Source: "request", Model: "dated-model", ProviderID: "positai", InputTokens: 1_000_000, Cost: &cost, CostStatus: "exact", CostSource: "provider-reported", OccurredAt: "2026-08-11T01:30:00Z", DedupKey: "reported"}}))
+			filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "America/New_York", Breakdowns: true}
+			warmJournaledUsage(t, database, filter)
+			got, err := database.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			want, err := database.getDailyUsageLegacy(t.Context(), filter)
+			require.NoError(t, err)
+			assert.Equal(t, 2_000_000, got.Totals.InputTokens)
+			assert.Equal(t, money.MustParseDollars("3.1"), got.Totals.TotalCost)
+			assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
+		})
+	}
+}
+
 func seedUsageDayTotalsPage(tb testing.TB, count int) *DB {
 	tb.Helper()
 	database, _, _ := seedUsageJournalBenchmark(tb, count, 1)

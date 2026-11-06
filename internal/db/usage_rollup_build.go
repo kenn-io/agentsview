@@ -42,7 +42,7 @@ type usagePriceResult struct {
 // persistence compute it on demand; provenance-only callers skip it.
 func (p usagePriceResult) rateHash() string {
 	return usageRateHash(
-		p.model, p.PricedModel, p.MatchedPattern, p.RateOK, p.lookup.Rates)
+		p.model, p.PricedModel, p.MatchedPattern, p.lookup.Adjustment, p.RateOK, p.lookup.Rates)
 }
 
 type usageRollupFact struct {
