@@ -249,6 +249,9 @@ func TestSearchContentHintsExpandedGate(t *testing.T) {
 				return &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "hidden"}}}, nil
 			}}
 			req := service.ContentSearchRequest{Pattern: "marker", Project: "selected", Limit: 10, IncludeChildren: true, IncludeAutomated: tc.single}
+			if tc.page.CandidateTruncated {
+				req.Pattern, req.Concepts = "", []string{"error handling", "session history"}
+			}
 			hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
 			assert.Equal(t, tc.wantCalls, calls)
 			require.Len(t, hints, tc.wantHints)
@@ -290,7 +293,7 @@ func TestSearchContentHintsFilteredResultGuards(t *testing.T) {
 		page   service.ContentSearchResult
 	}{
 		{name: "request cursor", cursor: 1},
-		{name: "continuation", page: service.ContentSearchResult{NextCursor: 50}},
+		{name: "continuation", page: service.ContentSearchResult{NextCursor: 1}},
 		{name: "truncated", page: service.ContentSearchResult{CandidateTruncated: true}},
 		{name: "backend filtered", page: service.ContentSearchResult{ActiveFilterApplied: true}},
 	} {
@@ -301,7 +304,11 @@ func TestSearchContentHintsFilteredResultGuards(t *testing.T) {
 				calls++
 				return &service.ContentSearchResult{}, nil
 			}}
-			assert.Empty(t, service.SearchContentHints(t.Context(), svc, service.ContentSearchRequest{Pattern: "marker", Cursor: tc.cursor}, &tc.page, false, func(db.ContentMatch) bool { return false }))
+			req := service.ContentSearchRequest{Pattern: "marker", Limit: 1, Cursor: tc.cursor}
+			if tc.page.CandidateTruncated {
+				req.Pattern, req.Concepts = "", []string{"error handling", "session history"}
+			}
+			assert.Empty(t, service.SearchContentHints(t.Context(), svc, req, &tc.page, false, func(db.ContentMatch) bool { return false }))
 			assert.Zero(t, calls)
 		})
 	}

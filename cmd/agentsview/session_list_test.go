@@ -338,9 +338,9 @@ func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 		date               bool
 		flatCount          int
 	}{
-		{"subagent", "Excluded 1 session by default: 1 child. Use --include-children to include them.\n", false, 2},
+		{"subagent", "Excluded 1 child session by default. Use --include-children to include them.\n", false, 2},
 		{"continuation", "", false, 1},
-		{"subagent", "Excluded 1 session by default: 1 child. Use --include-children to include them.\n", true, 2},
+		{"subagent", "Excluded 1 child session by default. Use --include-children to include them.\n", true, 2},
 	} {
 		t.Run(fmt.Sprintf("%s/date=%v", tc.relationship, tc.date), func(t *testing.T) {
 			dataDir := newAgentDataDir(t)
@@ -397,7 +397,7 @@ func TestSessionListChildMembershipPartialPage(t *testing.T) {
 		children bool
 		want     string
 	}{
-		{"partial page", true, "Excluded at least 2 sessions by default: at least 2 child. Use --include-children to include them."},
+		{"partial page", true, "Excluded at least 2 child sessions by default. Use --include-children to include them."},
 		{"no observed child", false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

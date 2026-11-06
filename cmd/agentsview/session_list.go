@@ -337,13 +337,11 @@ func sessionListDefaultExclusionNotice(
 		}
 		separator = " "
 	}
-	return fmt.Sprintf(
-		"Excluded %s%d %s by default: %s. Use %s to include them.",
-		lowerBound, hiddenTotal,
-		pluralSession(hiddenTotal),
-		strings.Join(hiddenParts, ", "),
-		strings.Join(flagParts, separator),
-	), nil
+	summary := fmt.Sprintf("%s%d %s by default: %s", lowerBound, hiddenTotal, pluralSession(hiddenTotal), strings.Join(hiddenParts, ", "))
+	if hiddenOneShot == 0 && hiddenAutomated == 0 {
+		summary = fmt.Sprintf("%s%d child %s by default", lowerBound, hiddenChildren, pluralSession(hiddenChildren))
+	}
+	return fmt.Sprintf("Excluded %s. Use %s to include them.", summary, strings.Join(flagParts, separator)), nil
 }
 
 func sessionListCountFilter(f service.ListFilter) service.ListFilter {
