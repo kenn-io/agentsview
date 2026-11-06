@@ -42,7 +42,7 @@ func activityKeptSize(e activityKept) int64 {
 func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
 	// In-memory pricing setters run before writable reports are kept or on
 	// read-only handles, which skip this cache.
-	id, pricingRevision, err := db.databaseIDAndUsagePricingRevision(ctx)
+	databaseID, pricingRevision, err := db.databaseIDAndUsagePricingRevision(ctx)
 	if err != nil {
 		return "", 0, fmt.Errorf("reading kept activity version: %w", err)
 	}
@@ -50,10 +50,7 @@ func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	if id == "" {
-		return "", revision, nil
-	}
-	return fmt.Sprintf("%s|%d", id, pricingRevision), revision, nil
+	return fmt.Sprintf("%s|%d", databaseID, pricingRevision), revision, nil
 }
 
 func (db *DB) keptActivityReport(
