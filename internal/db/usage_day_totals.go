@@ -8,31 +8,6 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-// Group only this batch's new installs. Delete triggers still subtract replaced
-// rows before their dimensions change, and rollback restores the bulk marker.
-func installUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID, firstRevision, nextRevision int64) error {
-	var values, keys, updates []string
-	for _, column := range usageDayTotalsColumns {
-		value := column.source
-		if column.key {
-			keys = append(keys, column.name)
-		}
-		if column.sum {
-			value = "SUM(" + value + ")"
-			updates = append(updates, column.name+"=usage_day_totals."+column.name+"+excluded."+column.name)
-		}
-		values = append(values, value+" AS "+column.name)
-	}
-	_, err := conn.ExecContext(ctx, `INSERT INTO usage_day_totals (`+usageDayTotalsColumnNames+`)
-		SELECT `+strings.Join(values, ", ")+` FROM usage_rollup_installs i
-		JOIN usage_daily_rollups r ON r.rollup_install_id=i.id
-		WHERE i.timezone_id=? AND i.install_revision>=? AND i.install_revision<? AND i.has_authoritative=0
-		GROUP BY `+strings.Join(keys, ", ")+`
-		ON CONFLICT (`+strings.Join(keys, ", ")+`) DO UPDATE SET `+strings.Join(updates, ", "),
-		timezoneID, firstRevision, nextRevision)
-	return err
-}
-
 // readUsageDayTotals reads ordinary totals and prepares the exceptional session
 // metadata for the shared rollup query's exception fold.
 func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) (usageFactsResult, error) {
