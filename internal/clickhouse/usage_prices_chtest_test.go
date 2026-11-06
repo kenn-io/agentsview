@@ -624,13 +624,13 @@ func TestServeStoreBackgroundPricesWithCustomRates(t *testing.T) {
 	assertDailyUsageParity(t, local, serve)
 }
 
-func TestTopSessionsCopilotCostFollowsLatestEvent(t *testing.T) {
+func TestCopilotCostFollowsLatestEvent(t *testing.T) {
 	t.Parallel()
-	local, target := seedUsagePriceFixture(t)
+	local, target := seedFixture(t)
 	firstCost := money.MustParseDollars("0.30")
 	latestCost := money.MustParseDollars("0.50")
 	session := fixtureSession(
-		"copilot-order", "gamma", "copilot order", "2026-01-12T05:00:00.000Z", 1,
+		"copilot-order", "gamma", "copilot order", "2026-01-12T05:00:00.000Z", 0,
 	)
 	session.Agent = "copilot"
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{

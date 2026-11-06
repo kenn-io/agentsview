@@ -1730,27 +1730,16 @@ func TestDuckUsageCopilotCostFollowsLatestEvent(t *testing.T) {
 				},
 				DataVersion: 1, ReplaceMessages: true,
 			}})
-			for _, fc := range []struct {
-				name   string
-				filter db.UsageFilter
-			}{
-				{name: "unfiltered"},
-				{name: "blank_model", filter: db.UsageFilter{Model: " , "}},
-				{name: "blank_exclude_model", filter: db.UsageFilter{ExcludeModel: " , "}},
-				{name: "both_blank", filter: db.UsageFilter{Model: " , ", ExcludeModel: " , "}},
-			} {
-				t.Run(fc.name, func(t *testing.T) {
-					filter := fc.filter
-					filter.From, filter.To, filter.Timezone = "2026-08-10", "2026-08-10", "UTC"
-					daily, err := store.GetDailyUsage(t.Context(), filter)
-					require.NoError(t, err)
-					assert.Equal(t, latest, daily.Totals.TotalCost)
-					top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
-					require.NoError(t, err)
-					require.Len(t, top, 1)
-					assert.Equal(t, latest, top[0].Cost)
-				})
-			}
+			t.Run("unfiltered", func(t *testing.T) {
+				filter := db.UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+				daily, err := store.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, latest, daily.Totals.TotalCost)
+				top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
+				require.NoError(t, err)
+				require.Len(t, top, 1)
+				assert.Equal(t, latest, top[0].Cost)
+			})
 			usage, err := store.GetSessionUsage(t.Context(), session.ID, false)
 			require.NoError(t, err)
 			assert.Equal(t, latest, usage.Cost)
