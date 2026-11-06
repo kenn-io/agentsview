@@ -435,6 +435,25 @@ describe("WorktreeMappingRules", () => {
     expect(document.body.textContent).not.toContain("local-project");
   });
 
+  it("shows an apply failure beside Apply, above the list and the form", async () => {
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
+    settingsService.postApiV1SettingsWorktreeMappingsApply.mockRejectedValue(
+      new Error("apply failed"),
+    );
+    component = mountRules();
+    await flush();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Apply mappings" }));
+    await flush();
+
+    const message = screen.getByText("apply failed");
+    const table = document.querySelector("table")!;
+    const form = screen.getByRole("region", { name: "New mapping" });
+    expect(message.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(message.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByText("apply failed")).toHaveLength(1);
+  });
+
   it("does not show a stale apply error after the selected machine changes", async () => {
     const apply = deferred<unknown>();
     dataService.getApiV1DataProjectRules

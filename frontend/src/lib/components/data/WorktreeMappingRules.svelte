@@ -71,6 +71,9 @@
   let applying = $state(false);
   let error = $state("");
   let applyMessage = $state("");
+  // Apply failures show beside the Apply action above the list; save and
+  // delete failures keep showing under the form.
+  let applyError = $state("");
   let editingId: number | null = $state(null);
   let editingWasEnabled = $state(false);
   let pathPrefix = $state("");
@@ -183,6 +186,7 @@
     saving = false;
     applying = false;
     applyMessage = "";
+    applyError = "";
     error = "";
     resetForm();
     void loadMappings(value);
@@ -200,6 +204,7 @@
     project = mapping.project;
     enabled = mapping.enabled;
     applyMessage = "";
+    applyError = "";
     error = "";
   }
 
@@ -232,6 +237,7 @@
     saving = true;
     error = "";
     applyMessage = "";
+    applyError = "";
     try {
       if (id == null) {
         await SettingsService.postApiV1SettingsWorktreeMappings(input);
@@ -262,6 +268,7 @@
     saving = true;
     error = "";
     applyMessage = "";
+    applyError = "";
     try {
       await SettingsService.deleteApiV1SettingsWorktreeMappingsById({
           id: String(mapping.id),
@@ -295,6 +302,7 @@
     applying = true;
     error = "";
     applyMessage = "";
+    applyError = "";
     try {
       const res = await SettingsService.postApiV1SettingsWorktreeMappingsApply({ machine: initiatingMachine });
       onMutated?.();
@@ -305,7 +313,7 @@
       });
     } catch (err) {
       if (!isCurrentMachine(initiatingMachine, generation)) return;
-      error = err instanceof Error ? err.message : m.worktree_failed_apply();
+      applyError = err instanceof Error ? err.message : m.worktree_failed_apply();
     } finally {
       if (isCurrentMachine(initiatingMachine, generation)) applying = false;
     }
@@ -378,6 +386,9 @@
         />
       {/if}
     </div>
+    {#if applyError}
+      <div class="error-text">{applyError}</div>
+    {/if}
     {#if applyMessage}
       <div class="success-text">{applyMessage}</div>
     {/if}
