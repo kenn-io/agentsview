@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -283,4 +284,43 @@ func TestSubstringSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
 	require.Len(t, page.Matches, 1)
 	assert.Equal(t, "message", page.Matches[0].Location)
 	assert.Equal(t, 0, page.Matches[0].Ordinal)
+}
+
+// SQLite compiles a query when it is prepared but reads the schema again on
+// the first row. A regex search whose candidate query was prepared just
+// before an import dropped the index must still rerun as a scan.
+func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", "where is the rare-token"},
+		{"assistant", "nothing to see"},
+	})
+	countMessagesForSubstringIndex(t, d, "s1")
+	f := ContentSearchFilter{
+		Pattern: `rare-tok(en)`, Mode: "regex", Limit: 50,
+		Sources: []string{"messages", "thinking", "tool_input", "tool_result"},
+	}
+	re, err := regexp.Compile(f.Pattern)
+	require.NoError(t, err)
+	lit := LiteralPrefix(f.Pattern)
+
+	var usedIndex []bool
+	matches, err := searchWithSubstringCandidates(ctx, d, f, lit,
+		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
+			usedIndex = append(usedIndex, candidates.message.sql != "")
+			rows, err := d.regexCandidateRows(ctx, f, lit, candidates)
+			if err != nil {
+				return nil, err
+			}
+			if len(usedIndex) == 1 {
+				require.NoError(t, d.DropFTS(ctx))
+			}
+			return regexMatches(f, re, rows)
+		})
+	require.NoError(t, err)
+	assert.Equal(t, []bool{true, false}, usedIndex)
+	require.Len(t, matches, 1)
+	assert.Equal(t, "message", matches[0].Location)
+	assert.Equal(t, 0, matches[0].Ordinal)
 }

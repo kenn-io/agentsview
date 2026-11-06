@@ -621,15 +621,31 @@ func (db *DB) searchContentRegex(
 	}
 
 	lit := LiteralPrefix(f.Pattern)
-	rows, err := searchWithSubstringCandidates(ctx, db, f, lit,
-		func(candidates substringCandidateFilters) (*sql.Rows, error) {
-			return db.regexCandidateRows(ctx, f, lit, candidates)
+	out, err := searchWithSubstringCandidates(ctx, db, f, lit,
+		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
+			rows, err := db.regexCandidateRows(ctx, f, lit, candidates)
+			if err != nil {
+				return nil, err
+			}
+			return regexMatches(f, re, rows)
 		})
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
-	defer rows.Close()
+	page := f.Page(out)
+	if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
+		return ContentSearchPage{}, err
+	}
+	return page, nil
+}
 
+// regexMatches reads candidate rows and keeps the RE2 matches for the page
+// at f.Cursor, plus one more for cursor detection. SQLite reads the schema
+// again on the first row, so a missing index table can surface here.
+func regexMatches(
+	f ContentSearchFilter, re *regexp.Regexp, rows *sql.Rows,
+) ([]ContentMatch, error) {
+	defer rows.Close()
 	out := make([]ContentMatch, 0)
 	var dedupe LegacyThinkingDedupe
 	// Regex paging has no SQL OFFSET: each page re-fetches and re-matches
@@ -646,7 +662,7 @@ func (db *DB) searchContentRegex(
 			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&m.Timestamp, &body, &rowID, &legacyThinking); err != nil {
-			return ContentSearchPage{}, fmt.Errorf("scan candidate: %w", err)
+			return nil, fmt.Errorf("scan candidate: %w", err)
 		}
 		loc := re.FindStringIndex(body)
 		if loc == nil {
@@ -668,20 +684,16 @@ func (db *DB) searchContentRegex(
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return ContentSearchPage{}, err
+		return nil, err
 	}
 	// Close the candidate cursor before deriving units: the loop breaks out
 	// with rows still open once Limit+1 matches are collected, and
 	// deriveLexicalUnits issues new queries that could otherwise block on a
 	// constrained connection pool while this cursor pins a connection.
 	if err := rows.Close(); err != nil {
-		return ContentSearchPage{}, fmt.Errorf("closing regex candidates: %w", err)
+		return nil, fmt.Errorf("closing regex candidates: %w", err)
 	}
-	page := f.Page(out)
-	if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
-		return ContentSearchPage{}, err
-	}
-	return page, nil
+	return out, nil
 }
 
 // regexCandidateRows returns full-body rows for the selected sources,
