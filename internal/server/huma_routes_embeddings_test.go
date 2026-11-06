@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -306,6 +307,39 @@ func TestEmbeddingsBuildUnknownServerReturnsBadRequest(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusBadRequest)
 	assert.Contains(t, w.Body.String(), "unknown embeddings server",
 		"the response must carry the manager's actionable message, not a generic 500")
+}
+
+type statusEmbeddingsRuntime struct {
+	EmbeddingsRuntime
+	manager EmbeddingsManager
+	setup   EmbeddingsSetupStatus
+	err     error
+}
+
+func (r statusEmbeddingsRuntime) Manager(string) EmbeddingsManager { return r.manager }
+func (r statusEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
+	return r.setup, r.err
+}
+
+func TestEmbeddingsStatusKeepsBuildDuringSetupError(t *testing.T) {
+	for _, inspectionError := range []bool{false, true} {
+		t.Run(strconv.FormatBool(inspectionError), func(t *testing.T) {
+			fake := &fakeEmbeddingsManager{status: vector.BuildStatus{Running: true, Done: 3, Total: 5}}
+			runtime := statusEmbeddingsRuntime{manager: fake, setup: EmbeddingsSetupStatus{Enabled: true, Error: "previous setup failed"}}
+			if inspectionError {
+				runtime.err = errors.New("model directory unavailable")
+			}
+			s := testServer(t, 0, WithEmbeddingsRuntime(runtime))
+			w := serveGet(t, s, "/api/v1/embeddings/status")
+			assertRecorderStatus(t, w, http.StatusOK)
+			var status vector.BuildStatus
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &status))
+			assert.True(t, status.Running)
+			assert.Equal(t, int64(3), status.Done)
+			require.NotNil(t, status.Setup)
+			assert.NotEmpty(t, status.Setup.Error)
+		})
+	}
 }
 
 func TestEmbeddingsStatusReturnsCurrentStatus(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,6 +36,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			dir := testDataDir(t)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+			building, resume := make(chan struct{}), make(chan struct{})
+			resumeBuild := sync.OnceFunc(func() { close(resume) })
+			defer resumeBuild()
 			var encoded, installs atomic.Int64
 			stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
@@ -48,6 +52,14 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				dimension := 768
 				if request.Model == "test-model" {
 					dimension = 3
+				}
+				if recipe == "fresh" && encoded.Load() == 0 {
+					close(building)
+					select {
+					case <-resume:
+					case <-r.Context().Done():
+						return
+					}
 				}
 				encoded.Add(int64(len(request.Input)))
 				data := make([]map[string]any, len(request.Input))
@@ -80,7 +92,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			var installed atomic.Bool
 			inspectLocalEmbeddings = func(_ context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
 				if recipe == "automatic" && !opts.SkipOllama {
-					return embedlocal.Status{OllamaAvailable: true}, nil
+					return embedlocal.Status{OllamaAvailable: true, DownloadBytes: 295_000_000}, nil
 				}
 				if installed.Load() {
 					return embedlocal.Status{}, nil
@@ -104,12 +116,17 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				opts.Progress(100, 295_000_000)
 				if recipe == "fresh" {
 					// Simulate a file edit while the approved download is in progress.
-					require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("port = 12345\n[vector.embeddings]\nquery_prefix = 'edited: '\n"), 0o600))
+					require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("port = 12345\n[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'edited: '\n"), 0o600))
 				}
 				installed.Store(true)
 				return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
 			}
-			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+			var idleFired atomic.Bool
+			var idle *server.IdleTracker
+			if recipe == "fresh" {
+				idle = server.NewIdleTracker(time.Second, func() { idleFired.Store(true) })
+			}
+			owner, err := newLiveVectorServing(t.Context(), cfg, database, idle, config.LoadReadOnly)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, owner.Close()) }()
 			ln, port := listenLoopback(t)
@@ -135,6 +152,15 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				assert.True(t, initial.Setup.RebuildRequired)
 			}
 			request("POST", "/api/v1/embeddings/setup", `{"action":"turn-on"}`, 202)
+			if recipe == "fresh" {
+				<-building
+				<-owner.done
+				idleCtx, stopIdle := context.WithCancel(t.Context())
+				go idle.Run(idleCtx)
+				assert.Never(t, idleFired.Load, 2*time.Second, 25*time.Millisecond)
+				stopIdle()
+				resumeBuild()
+			}
 			awaitBuild := func() vector.BuildStatus {
 				var result vector.BuildStatus
 				require.Eventually(t, func() bool {
@@ -162,6 +188,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			fingerprint := generations[0].Fingerprint
 			assert.EqualValues(t, 1, generations[0].Embedded)
 			if recipe == "nomic" || recipe == "other" || recipe == "automatic" {
+				assert.EqualValues(t, 295_000_000, status().Setup.MissingBytes)
 				beforeSwitch := encoded.Load()
 				request("POST", "/api/v1/embeddings/setup", `{"action":"use-built-in"}`, 202)
 				awaitBuild()
@@ -188,6 +215,14 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			require.NotEmpty(t, result.Matches)
 			assert.Equal(t, "session-one", result.Matches[0].SessionID)
 			if recipe == "fresh" {
+				dbtest.SeedSessionWithMessages(t, database, "automated", "sample", []db.Message{dbtest.UserMsg("automated", 0, "automated connections")}, func(s *db.Session) { s.IsAutomated = true })
+				request("POST", "/api/v1/embeddings/build", `{"full_rebuild":true}`, 202)
+				awaitBuild()
+				generations, err := owner.serving.manager.Generations(t.Context())
+				require.NoError(t, err)
+				assert.EqualValues(t, 2, generations[0].Embedded)
+				request("DELETE", "/api/v1/sessions/automated", "", 204)
+				request("DELETE", "/api/v1/sessions/automated/permanent", "", 204)
 				request("DELETE", "/api/v1/sessions/session-one", "", 204)
 				request("DELETE", "/api/v1/sessions/session-one/permanent", "", 204)
 				require.Eventually(t, func() bool {

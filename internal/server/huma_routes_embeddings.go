@@ -13,6 +13,7 @@ import (
 // EmbeddingsRuntime owns the writable daemon's live vector setup.
 type EmbeddingsRuntime interface {
 	Manager(store string) EmbeddingsManager
+	IncludeAutomated() bool
 	SetupStatus(context.Context) (EmbeddingsSetupStatus, error)
 	Setup(action string) error
 }
@@ -180,6 +181,9 @@ func (s *Server) humaEmbeddingsBuild(
 		return nil, s.embeddingsUnavailableError()
 	}
 	includeAutomated := s.embeddingsIncludeAutomatedDefault
+	if s.embeddingsRuntime != nil {
+		includeAutomated = s.embeddingsRuntime.IncludeAutomated()
+	}
 	if in.Body.IncludeAutomated != nil {
 		includeAutomated = *in.Body.IncludeAutomated
 	}
@@ -227,15 +231,18 @@ func (s *Server) humaEmbeddingsStatus(
 	if s.embeddingsRuntime != nil {
 		setup, err := s.embeddingsRuntime.SetupStatus(ctx)
 		if err != nil {
-			return nil, internalError("inspect embeddings setup", err)
+			setup.Error = err.Error()
 		}
 		body.Setup = &setup
-		if setup.Busy || !setup.Enabled || setup.Error != "" {
+		if setup.Busy || !setup.Enabled {
 			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
 		}
 	}
 	manager := s.embeddingsManagerFor(in.Store)
 	if manager == nil {
+		if body.Setup != nil && body.Setup.Error != "" {
+			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
+		}
 		return nil, s.embeddingsUnavailableError()
 	}
 	setup := body.Setup

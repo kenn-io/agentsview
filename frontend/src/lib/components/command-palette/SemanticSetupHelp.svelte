@@ -134,7 +134,7 @@ enabled = true`;
       const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
       updateSetupStatus(status);
-      if (status.setup && (status.setup.action === "turn-on" || !status.setup.enabled || status.setup.busy || status.setup.installing || status.setup.error)) {
+      if (!status.running && status.setup && (status.setup.action === "turn-on" || !status.setup.enabled || status.setup.busy || status.setup.installing || status.setup.error)) {
         phase = "unconfigured";
         if (status.setup.busy || status.setup.installing) schedulePoll();
       } else if (status.running) {

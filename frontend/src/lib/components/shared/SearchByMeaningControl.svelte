@@ -22,13 +22,14 @@
     if (setup.provider === "ollama") return !setup.rebuild_required ? { kind: "ollama" } : { kind: "ollama-other", itemCount: documents, rebuildMs: documents / ROUGH_DOCUMENTS_PER_SECOND * 1000 };
     return { kind: "on" };
   });
+  const downloadLabel = $derived(m.meaning_download({ size: new Intl.NumberFormat(getLocale(), { style: "unit", unit: "megabyte", maximumFractionDigits: 0 }).format((setup?.missing_bytes ?? 0) / 1000000) }));
   const labels = $derived({
     name: m.meaning_name(), off: m.meaning_off(), on: m.meaning_on(), ollama: m.meaning_ollama(),
     turningOn: m.meaning_turning_on(), turnOn: m.meaning_turn_on(), useBuiltIn: m.meaning_use_builtin(),
     download: m.meaning_download({ size: "{size}" }), downloaded: setup?.provider === "ollama" ? m.meaning_uses_ollama() : setup?.provider === "configured" ? m.meaning_configured() : m.meaning_downloaded(),
     keepsIndex: m.meaning_keeps_index(), rebuild: m.meaning_rebuild({ time: "{time}", countLabel: "{count}", items: "{items}" }), downloading: setup?.total_bytes ? m.meaning_downloading({ done: "{done}", total: "{total}" }) : m.meaning_turning_on(),
     indexing: m.meaning_indexing({ done: "{done}", total: "{total}", items: "{items}" }), timeLeft: m.meaning_time_left({ time: "{time}" }), meanwhile: m.meaning_meanwhile(),
-    underMinute: m.meaning_under_minute(), aboutTime: m.meaning_about_time({ time: "{time}" }), progress: m.meaning_progress(), hint: setup?.provider === "built-in" && setup.missing_bytes > 0 ? `${m.meaning_hint()} · ${m.meaning_download({ size: new Intl.NumberFormat(getLocale(), { style: "unit", unit: "megabyte", maximumFractionDigits: 0 }).format(setup.missing_bytes / 1000000) })}` : m.meaning_hint(),
+    underMinute: m.meaning_under_minute(), aboutTime: m.meaning_about_time({ time: "{time}" }), progress: m.meaning_progress(), hint: setup?.provider === "built-in" && setup.missing_bytes > 0 ? `${m.meaning_hint()} · ${downloadLabel}` : m.meaning_hint(),
   });
   async function activate() {
     const action = setup?.action;
@@ -50,6 +51,9 @@
     {/if}
   {:else}
     <SearchByMeaningRow state={rowState} {labels} readonly={!setup.action} itemNoun={status?.running ? m.meaning_chunks({ count: status?.total ?? 0 }) : m.meaning_documents({ count: documents })} onturnon={() => void activate()} onusebuiltin={() => void activate()} />
+  {/if}
+  {#if !hint && setup.action === "use-built-in" && setup.missing_bytes > 0}
+    <p>{downloadLabel}</p>
   {/if}
   {#if error || setup.error}
     <p role="alert">{error || setup.error}</p>

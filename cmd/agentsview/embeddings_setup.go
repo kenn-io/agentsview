@@ -119,7 +119,6 @@ func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 func (v *liveVectorServing) ServerOptions() []server.Option {
 	options := []server.Option{
 		server.WithEmbeddingsRuntime(v),
-		server.WithEmbeddingsIncludeAutomatedDefault(v.cfg.Vector.IncludeAutomated),
 		server.WithVectorPushSource(v.push),
 		server.WithSessionMutationNotifier(func() { v.Notify(false); v.Notify(true) }),
 		server.WithRecallCorpusMutationNotifier(func() { v.Notify(true) }),
@@ -128,6 +127,12 @@ func (v *liveVectorServing) ServerOptions() []server.Option {
 		options = append(options, v.serving.ServerOpts...)
 	}
 	return options
+}
+
+func (v *liveVectorServing) IncludeAutomated() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.cfg.Vector.IncludeAutomated
 }
 
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
@@ -151,7 +156,7 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 	if err != nil && cfg.Vector.Embeddings.Model != "" {
 		return status, err
 	}
-	status.RebuildRequired = !cfg.Vector.Embeddings.IsNomic()
+	status.RebuildRequired = cfg.Vector.Embeddings.Model != "" && !cfg.Vector.Embeddings.IsNomic()
 	status.Provider = "built-in"
 	if deployment.Endpoint != "" {
 		status.Provider = "configured"
@@ -161,9 +166,11 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 		if status.Enabled && status.Provider == "ollama" && status.Action == "" {
 			status.Action = "use-built-in"
 		}
-		return status, nil
+		if status.Provider != "ollama" {
+			return status, nil
+		}
 	}
-	inspected, err := inspectLocalEmbeddings(ctx, embedlocal.Options{SkipOllama: deployment.Local})
+	inspected, err := inspectLocalEmbeddings(ctx, embedlocal.Options{SkipOllama: deployment.Local || deployment.Endpoint != ""})
 	if err != nil {
 		return status, err
 	}
@@ -215,8 +222,12 @@ func (v *liveVectorServing) Setup(action string) error {
 		} else {
 			v.setup.Action = ""
 		}
+		manager := v.serving.manager
 		close(v.done)
 		v.mu.Unlock()
+		if err == nil && manager != nil {
+			manager.Wait()
+		}
 	}()
 	return nil
 }
