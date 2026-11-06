@@ -1,9 +1,10 @@
 package db_test
 
 import (
+	"testing"
+
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"testing"
 )
 
 func TestUsageSlot(t *testing.T) {
