@@ -59,7 +59,6 @@ type Store struct {
 		sync.Mutex
 		tables map[string]usageTableVersion
 	}
-	usageRowIdentityQueries atomic.Int64
 	// deltaCache keeps the prepared rows of changed snapshots.
 	deltaCache usageDeltaCache
 	// The usage row memos keep recent range reads per rows and filter.

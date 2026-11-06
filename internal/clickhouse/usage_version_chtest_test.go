@@ -15,6 +15,20 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+// QueryStart also records the identity probe while its progress callback runs.
+func usageQueryCounts(t *testing.T, store *Store) (probes, results uint64) {
+	t.Helper()
+	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
+		SELECT countIf(startsWith(query, 'SELECT [assumeNotNull(')),
+			countIf(startsWith(trimLeft(query, ' \n\t\r'), 'WITH usage_raw AS') AND
+				(position(query, 'FROM usage_classified') > 0 OR position(query, 'FROM usage_localized') > 0))
+		FROM system.query_log
+		WHERE current_database = currentDatabase() AND type = 'QueryStart' AND is_initial_query = 1
+	`).Scan(&probes, &results))
+	return probes, results
+}
+
 func TestUsageRowsVersionProbeFailure(t *testing.T) {
 	store, _, _ := newPushedStore(t)
 	_, ok, err := store.usageRowsVersion(t.Context(), chUsageReadTables)
@@ -54,9 +68,12 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	for _, memo := range memos() {
 		require.NotEmpty(t, memo)
 	}
-	probes := store.usageRowIdentityQueries.Load()
+	probes, results := usageQueryCounts(t, store)
+	require.EqualValues(t, 3, results, "cold read must run all three result queries")
 	require.Equal(t, before, read())
-	require.Equal(t, probes, store.usageRowIdentityQueries.Load(), "unchanged parts need no probes")
+	warmProbes, warmResults := usageQueryCounts(t, store)
+	require.Equal(t, probes, warmProbes, "unchanged parts need no probes")
+	require.Equal(t, results, warmResults, "unchanged parts need no result queries")
 	for _, table := range chUsageReadTables {
 		t.Run(table, func(t *testing.T) {
 			kept := memos()
@@ -67,9 +84,11 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 			merged, err := store.readPartsSnapshot(ctx)
 			require.NoError(t, err)
 			require.NotEqual(t, parts[table], merged[table])
-			probes := store.usageRowIdentityQueries.Load()
+			probes, results := usageQueryCounts(t, store)
 			require.Equal(t, before, read())
-			require.Equal(t, probes+1, store.usageRowIdentityQueries.Load())
+			mergedProbes, mergedResults := usageQueryCounts(t, store)
+			require.Equal(t, probes+1, mergedProbes)
+			require.Equal(t, results, mergedResults, "merge must reuse daily usage, Top sessions, and session count results")
 			require.Equal(t, kept, memos(), "reads must be answered from all three memos")
 		})
 	}
@@ -140,10 +159,14 @@ func TestUsageReadsStayFreshAfterPushDuringIdentityProbe(t *testing.T) {
 				DataVersion: 1, ReplaceMessages: true,
 			}})
 			require.NoError(t, err)
-			probes := store.usageRowIdentityQueries.Load()
+			probes, _ := usageQueryCounts(t, store)
 			var pushed atomic.Bool
 			ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(*chdriver.Progress) {
-				if store.usageRowIdentityQueries.Load() > probes && pushed.CompareAndSwap(false, true) {
+				if pushed.Load() {
+					return
+				}
+				current, _ := usageQueryCounts(t, store)
+				if current > probes && pushed.CompareAndSwap(false, true) {
 					pushPreparedUsage(t, syncer)
 				}
 			}))
