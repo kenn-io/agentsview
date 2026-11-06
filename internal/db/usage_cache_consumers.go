@@ -396,17 +396,15 @@ func foldUsageTopSessions(sessions []usageQuerySession, groups []usageFactsGroup
 }
 
 // GetUsageSessionCounts returns distinct billed survivor owners by metadata.
-func (db *DB) GetUsageSessionCounts(ctx context.Context, filter UsageFilter) (UsageSessionCounts, error) {
-	kind := usageQueryKindToken
-	if filter.ActiveSince == "" && filter.Termination == "" {
-		kind = usageQueryKindDayTotals
-	}
-	filter.SkipSessionCounts = false
-	_, facts, _, err := db.queryUsageRollups(ctx, filter, kind, false, 0)
+func (db *DB) GetUsageSessionCounts(
+	ctx context.Context, filter UsageFilter,
+) (UsageSessionCounts, error) {
+	_, facts, _, err := db.queryUsageRollups(
+		ctx, filter, usageQueryKindToken, false, 0)
 	if err != nil {
 		return UsageSessionCounts{}, err
 	}
-	return usageSessionCounts(facts), nil
+	return NewUsageSessionCounts(facts.MatchingSessions), nil
 }
 
 func usageSessionCounts(facts usageFactsResult) UsageSessionCounts {

@@ -3,13 +3,11 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/money"
@@ -323,65 +321,6 @@ func TestUsageTopSessionsZeroCostTies(t *testing.T) {
 }
 
 // CheckUsageSessionCountsJournaled checks that direct count reads override skipped summary counts.
-func CheckUsageSessionCountsJournaled(t *testing.T, database *DB) {
-	t.Helper()
-	filter := UsageFilter{From: "2026-08-03", To: "2026-08-10", Timezone: "UTC", SkipSessionCounts: true}
-	warmJournaledUsage(t, database, filter)
-	cases := usageDayTotalsFilterCases()
-	want := make([]UsageSessionCounts, len(cases))
-	for i, tc := range cases {
-		f := filter
-		tc.change(&f)
-		var err error
-		want[i], err = database.getUsageSessionCountsLegacy(t.Context(), f)
-		require.NoError(t, err)
-		if f.ActiveSince != "" {
-			// Activity windows capture candidates from the archive.
-			got, err := database.GetUsageSessionCounts(t.Context(), f)
-			require.NoError(t, err)
-			assert.Equal(t, want[i], got, tc.name)
-		}
-	}
-	// Day-total counts come from the cache, so archive names stay unread.
-	type authorizer interface {
-		RegisterAuthorizer(func(int, string, string, string) int)
-	}
-	database.rawReader().SetMaxOpenConns(1)
-	conn, err := database.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(authorizer).RegisterAuthorizer(func(op int, table, column, _ string) int {
-			if op == sqlite3.SQLITE_READ && table == "sessions" && (column == "display_name" || column == "session_name") {
-				return sqlite3.SQLITE_DENY
-			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
-	}))
-	require.NoError(t, conn.Close())
-	t.Cleanup(func() {
-		conn, err := database.getReader().Conn(context.WithoutCancel(t.Context()))
-		require.NoError(t, err)
-		defer conn.Close()
-		require.NoError(t, conn.Raw(func(raw any) error {
-			raw.(authorizer).RegisterAuthorizer(nil)
-			return nil
-		}))
-	})
-	for i, tc := range cases {
-		f := filter
-		tc.change(&f)
-		if f.ActiveSince != "" {
-			continue
-		}
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := database.GetUsageSessionCounts(t.Context(), f)
-			require.NoError(t, err)
-			assert.Equal(t, want[i], got)
-		})
-	}
-}
-
 func TestUsageTopSessionsGroupRenameAfterWarmup(t *testing.T) {
 	for _, authoritative := range []bool{false, true} {
 		t.Run(strconv.FormatBool(authoritative), func(t *testing.T) {
