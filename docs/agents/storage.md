@@ -940,7 +940,9 @@ Triggers keep both tables current on message insert, delete, and edits to
 session's entries in one statement each and suspend `messages_trigram_ad`, as
 they do for the other FTS indexes. `DropFTS` and `RebuildFTS` drop and rebuild
 the index with the other FTS tables during a full resync, and searches scan
-while it is absent.
+while it is absent. Claude.ai and ChatGPT imports drop it on the live archive,
+so a search that chose index filters before the drop gets a missing-table
+error; it reruns once and scans.
 
 The first writable open after column migrations builds the index once for an
 existing archive, before HTTP readiness, and logs that startup is waiting for

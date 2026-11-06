@@ -356,15 +356,21 @@ func (db *DB) searchContentSubstring(
 		}
 		defer release()
 	}
+	return searchWithSubstringCandidates(ctx, db, f, f.Pattern,
+		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
+			return db.substringSearchPage(ctx, f, candidates)
+		})
+}
 
+// substringSearchPage runs the substring search, limiting the message and
+// thinking branches to the rows candidates lists.
+func (db *DB) substringSearchPage(
+	ctx context.Context, f ContentSearchFilter, candidates substringCandidateFilters,
+) (ContentSearchPage, error) {
 	scope, scopeArgs := sessionScopeSubquery(f)
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
 
 	like := "%" + escapeLike(f.Pattern) + "%"
-	candidates, err := db.substringCandidates(ctx, f, f.Pattern)
-	if err != nil {
-		return ContentSearchPage{}, err
-	}
 
 	var branches []string
 	var args []any
@@ -615,7 +621,10 @@ func (db *DB) searchContentRegex(
 	}
 
 	lit := LiteralPrefix(f.Pattern)
-	rows, err := db.regexCandidateRows(ctx, f, lit)
+	rows, err := searchWithSubstringCandidates(ctx, db, f, lit,
+		func(candidates substringCandidateFilters) (*sql.Rows, error) {
+			return db.regexCandidateRows(ctx, f, lit, candidates)
+		})
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
@@ -679,16 +688,13 @@ func (db *DB) searchContentRegex(
 // LIKE-prefiltered by lit when non-empty, ordered for stable paging.
 // Each branch selects: session_id, project, agent, transcript_revision,
 // location, role, tool_name, ordinal, ts AS ts, body, sort_ts, src, row_id,
-// legacy_thinking.
+// legacy_thinking. The message and thinking branches keep only the rows
+// candidates lists.
 func (db *DB) regexCandidateRows(
-	ctx context.Context, f ContentSearchFilter, lit string,
+	ctx context.Context, f ContentSearchFilter, lit string, candidates substringCandidateFilters,
 ) (*sql.Rows, error) {
 	scope, scopeArgs := sessionScopeSubquery(f)
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
-	candidates, err := db.substringCandidates(ctx, f, lit)
-	if err != nil {
-		return nil, err
-	}
 
 	var branches []string
 	var args []any

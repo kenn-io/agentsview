@@ -129,6 +129,41 @@ func (db *DB) hasSubstringIndex(ctx context.Context) bool {
 	return err == nil
 }
 
+// substringIndexDropped reports whether err came from a query that named a
+// substring index table after DropFTS removed it.
+func substringIndexDropped(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no such table: message_trigram_fts") ||
+		strings.Contains(msg, "no such table: thinking_trigram_fts")
+}
+
+// searchWithSubstringCandidates chooses index filters for literal and runs
+// search with them. An archive import can drop the index between those
+// steps, because each query reads its own snapshot, so a search that then
+// names a missing index table runs once more. The second attempt finds no
+// index and scans.
+func searchWithSubstringCandidates[T any](
+	ctx context.Context, db *DB, f ContentSearchFilter, literal string,
+	search func(substringCandidateFilters) (T, error),
+) (T, error) {
+	attempt := func() (T, error) {
+		candidates, err := db.substringCandidates(ctx, f, literal)
+		if err != nil {
+			var zero T
+			return zero, err
+		}
+		return search(candidates)
+	}
+	out, err := attempt()
+	if substringIndexDropped(err) {
+		return attempt()
+	}
+	return out, err
+}
+
 // maxSubstringIndexTrigrams bounds the lists one lookup intersects. Fewer
 // sequences only widen the candidate set, which the LIKE check then narrows.
 const maxSubstringIndexTrigrams = 32

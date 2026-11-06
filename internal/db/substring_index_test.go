@@ -252,3 +252,35 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 		substringHits(t, d, ContentSearchFilter{Pattern: "rare-token", Limit: 50}))
 	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "common", Limit: 50}), 7)
 }
+
+// An archive import drops the index with the other FTS tables. A search that
+// chose index filters just before the drop must rerun as a scan instead of
+// failing on the missing tables.
+func TestSubstringSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", "where is the rare-token"},
+		{"assistant", "nothing to see"},
+	})
+	countMessagesForSubstringIndex(t, d, "s1")
+	f := ContentSearchFilter{
+		Pattern: "rare-token", Limit: 50,
+		Sources: []string{"messages", "thinking", "tool_input", "tool_result"},
+	}
+
+	var usedIndex []bool
+	page, err := searchWithSubstringCandidates(ctx, d, f, f.Pattern,
+		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
+			usedIndex = append(usedIndex, candidates.message.sql != "")
+			if len(usedIndex) == 1 {
+				require.NoError(t, d.DropFTS(ctx))
+			}
+			return d.substringSearchPage(ctx, f, candidates)
+		})
+	require.NoError(t, err)
+	assert.Equal(t, []bool{true, false}, usedIndex)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "message", page.Matches[0].Location)
+	assert.Equal(t, 0, page.Matches[0].Ordinal)
+}
