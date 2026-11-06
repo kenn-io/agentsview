@@ -441,3 +441,30 @@ func TestEmbeddingsRetireUnknownGenerationReturnsNotFound(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusNotFound)
 	assert.Contains(t, w.Body.String(), "999")
 }
+
+// busyEmbeddingsRuntime keeps its existing manager available during installation.
+type busyEmbeddingsRuntime struct{ EmbeddingsManager }
+
+func (r busyEmbeddingsRuntime) Manager(string) EmbeddingsManager { return r.EmbeddingsManager }
+func (busyEmbeddingsRuntime) IncludeAutomated() bool             { return false }
+func (busyEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
+	return EmbeddingsSetupStatus{Enabled: true, Busy: true, Action: "turn-on"}, nil
+}
+func (busyEmbeddingsRuntime) Setup(int64) error { return nil }
+
+func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
+	manager := &fakeEmbeddingsManager{status: vector.BuildStatus{
+		Running:    true,
+		LastResult: &vector.BuildResult{Activated: true},
+	}}
+	s := testServer(t, 0, WithEmbeddingsRuntime(busyEmbeddingsRuntime{manager}))
+	w := serveJSON(t, s.mux, http.MethodGet, "/api/v1/embeddings/status", nil)
+	assertRecorderStatus(t, w, http.StatusOK)
+	var status vector.BuildStatus
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &status))
+	assert.True(t, status.Running, "CLI polling must keep following the build during installation")
+	require.NotNil(t, status.LastResult)
+	assert.True(t, status.LastResult.Activated)
+	require.NotNil(t, status.Setup)
+	assert.True(t, status.Setup.Busy)
+}

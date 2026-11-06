@@ -236,7 +236,7 @@ func (s *Server) humaEmbeddingsStatus(ctx context.Context, in *embeddingsStoreIn
 			status.Error = err.Error()
 		}
 		setup = &status
-		if status.Busy || !status.Enabled {
+		if !status.Enabled {
 			return &jsonOutput[vector.BuildStatus]{Body: vector.BuildStatus{Setup: setup}}, nil
 		}
 	}
