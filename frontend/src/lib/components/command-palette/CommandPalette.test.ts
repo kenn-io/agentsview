@@ -776,8 +776,7 @@ describe("CommandPalette", () => {
     );
     await enterSearchQuery("another query");
     for (let i = 0; i < 10; i++) await tick();
-    if (action === "turn-on")
-      expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);
+    expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);
     unmount(component);
   });
 

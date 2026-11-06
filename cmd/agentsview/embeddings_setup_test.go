@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -487,7 +486,7 @@ func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
 	require.Empty(t, owner.setup.Error)
 }
 
-func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
+func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
 	t.Cleanup(func() {
 		inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint
@@ -608,19 +607,22 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 }
 
 func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
-	for _, inspectFailure := range []bool{false, true} {
-		t.Run(strconv.FormatBool(inspectFailure), func(t *testing.T) {
+	for _, failure := range []string{"configured provider", "model inspection", "config read"} {
+		t.Run(failure, func(t *testing.T) {
 			dir := testDataDir(t)
 			cfg, err := config.Default()
 			require.NoError(t, err)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 			cfg.DataDir = dir
 			action, want := "use-built-in", http.StatusBadRequest
-			if inspectFailure {
+			if failure != "configured provider" {
 				oldInspect := inspectLocalEmbeddings
 				t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
 				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-					return embedlocal.Status{}, errors.New("model status unavailable")
+					if failure == "model inspection" {
+						return embedlocal.Status{}, errors.New("model status unavailable")
+					}
+					return embedlocal.Status{}, nil
 				}
 				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": {Local: true}}
 				action, want = "turn-on", http.StatusInternalServerError
@@ -631,19 +633,17 @@ func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 			ln, port := listenLoopback(t)
 			cfg.Host, cfg.Port = "127.0.0.1", port
 			ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-			if !inspectFailure {
+			if failure == "configured provider" {
 				var status vector.BuildStatus
 				data := embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/embeddings/status", "", nil, http.StatusOK)
 				require.NoError(t, json.Unmarshal(data, &status))
 				require.NotNil(t, status.Setup)
 				assert.Empty(t, status.Setup.Action)
 			}
-			embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"`+action+`"}`), want)
-			if inspectFailure {
-				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) { return embedlocal.Status{}, nil }
+			if failure == "config read" {
 				require.NoError(t, os.Mkdir(filepath.Join(dir, "config.toml"), 0o700))
-				embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"turn-on"}`), http.StatusInternalServerError)
 			}
+			embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"`+action+`"}`), want)
 		})
 	}
 }
