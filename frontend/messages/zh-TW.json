@@ -3097,5 +3097,6 @@
   ],
   "empty_archive_title": "尚無對話",
   "empty_archive_desc": "AgentsView 會從這些資料夾讀取對話。代理寫入其中任一資料夾後，對話就會顯示在這裡。",
-  "empty_archive_choose_folders": "選擇資料夾"
+  "empty_archive_choose_folders": "選擇資料夾",
+  "usage_tooltip_no_usage": "無使用"
 }

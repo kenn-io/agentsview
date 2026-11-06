@@ -3205,5 +3205,6 @@
   ],
   "empty_archive_title": "Hələ sessiya yoxdur",
   "empty_archive_desc": "AgentsView sessiyaları bu qovluqlardan oxuyur. Agent onlardan birinə yazan kimi sessiyalar burada görünəcək.",
-  "empty_archive_choose_folders": "Qovluqları seçin"
+  "empty_archive_choose_folders": "Qovluqları seçin",
+  "usage_tooltip_no_usage": "İstifadə yoxdur"
 }

@@ -3168,5 +3168,6 @@
   ],
   "empty_archive_title": "まだセッションがありません",
   "empty_archive_desc": "AgentsView はこれらのフォルダーからセッションを読み取ります。エージェントがいずれかに書き込むと、ここに表示されます。",
-  "empty_archive_choose_folders": "フォルダーを選択"
+  "empty_archive_choose_folders": "フォルダーを選択",
+  "usage_tooltip_no_usage": "使用なし"
 }

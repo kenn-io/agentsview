@@ -3237,5 +3237,6 @@
   ],
   "empty_archive_title": "Aucune session pour l'instant",
   "empty_archive_desc": "AgentsView lit les sessions dans ces dossiers. Elles apparaîtront ici dès qu'un agent écrira dans l'un d'eux.",
-  "empty_archive_choose_folders": "Choisir les dossiers"
+  "empty_archive_choose_folders": "Choisir les dossiers",
+  "usage_tooltip_no_usage": "Aucune utilisation"
 }
