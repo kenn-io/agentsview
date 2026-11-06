@@ -98,11 +98,12 @@ var termsSQLByDialect = map[string]termsSQLFragments{
 func BuildTermsSearchSQL(
 	f ContentSearchFilter, terms []string, dialect QueryDialect,
 ) (string, []any, error) {
-	frag, ok := termsSQLByDialect[dialect.name]
-	if !ok {
-		return "", nil, searchInputErrorf(
-			"search: terms mode is not supported on the %s backend", dialect.name)
-	}
+	return buildTermsSearchSQL(f, terms, dialect, nil)
+}
+
+// termsScopeSQL renders the sessions WHERE clause that scopes a terms search,
+// with its bind arguments.
+func termsScopeSQL(f ContentSearchFilter, dialect QueryDialect) (string, []any) {
 	sf := ContentSessionFilter(f)
 	sf.ChildExemptOneShot = true
 	where, scopeArgs := BuildSessionBaseFilterSQL(sf, dialect)
@@ -114,6 +115,23 @@ func BuildTermsSearchSQL(
 		}
 		where += " AND id NOT IN (" + strings.Join(phs, ",") + ")"
 	}
+	return where, append(scopeArgs, b.Args()...)
+}
+
+// buildTermsSearchSQL renders the terms query. indexed holds the SQLite
+// substring index query for each term the index should prefilter; the
+// session prefilter then reads only the messages the index lists.
+func buildTermsSearchSQL(
+	f ContentSearchFilter, terms []string, dialect QueryDialect,
+	indexed map[string]string,
+) (string, []any, error) {
+	frag, ok := termsSQLByDialect[dialect.name]
+	if !ok {
+		return "", nil, searchInputErrorf(
+			"search: terms mode is not supported on the %s backend", dialect.name)
+	}
+	where, scopeArgs := termsScopeSQL(f, dialect)
+	b := NewQueryBuilder(dialect, len(scopeArgs))
 
 	// SQLite binds ? placeholders by position, so the hit flags in the
 	// eligible select list take their arguments before the prefilter.
@@ -128,10 +146,15 @@ func BuildTermsSearchSQL(
 	}
 	var prefilter strings.Builder
 	for _, term := range terms {
+		listed := ""
+		if query, ok := indexed[term]; ok {
+			listed = "id IN (SELECT rowid FROM message_trigram_fts WHERE message_trigram_fts MATCH " +
+				b.Add(query) + ")\n\t\t\t\t  AND "
+		}
 		prefilter.WriteString(`
 			  AND m.session_id IN (
 				SELECT session_id FROM messages
-				WHERE session_id IN (SELECT id FROM scoped)
+				WHERE ` + listed + `session_id IN (SELECT id FROM scoped)
 				  AND ` + b.ContainsPredicate(frag.prefilterText, term) + ")")
 	}
 	predicates := make([]string, 0, len(terms)+1)

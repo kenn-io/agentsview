@@ -157,6 +157,13 @@ func searchWithSubstringCandidates[T any](
 		}
 		return search(candidates)
 	}
+	return retryWhenSubstringIndexDropped(attempt)
+}
+
+// retryWhenSubstringIndexDropped runs attempt, and runs it once more when it
+// named a substring index table an archive import dropped after the attempt
+// chose to use the index. The second attempt finds no index and scans.
+func retryWhenSubstringIndexDropped[T any](attempt func() (T, error)) (T, error) {
 	out, err := attempt()
 	if substringIndexDropped(err) {
 		return attempt()
@@ -225,15 +232,11 @@ func (db *DB) substringCandidates(
 		return out, nil
 	}
 	scope, scopeArgs := sessionScopeSubquery(f)
-	var scopeMessages int64
-	if err := db.getReader().QueryRow(ctx,
-		`SELECT COALESCE(SUM(message_count), 0)
-		 FROM (SELECT id AS session_id, message_count FROM sessions) WHERE `+scope,
-		scopeArgs...,
-	).Scan(&scopeMessages); err != nil {
-		return out, fmt.Errorf("sizing substring search scope: %w", err)
+	scopeMessages, err := db.substringScopeMessages(ctx,
+		"(SELECT id AS session_id, message_count FROM sessions) WHERE "+scope, scopeArgs)
+	if err != nil {
+		return out, err
 	}
-	limit := scopeMessages / substringIndexMaxShare
 	for _, branch := range []struct {
 		table  string
 		filter *substringFilter
@@ -241,14 +244,11 @@ func (db *DB) substringCandidates(
 		{"message_trigram_fts", &out.message},
 		{"thinking_trigram_fts", &out.thinking},
 	} {
-		var listed int64
-		if err := db.getReader().QueryRow(ctx,
-			`SELECT count(*) FROM (SELECT 1 FROM `+branch.table+` WHERE `+branch.table+` MATCH ? LIMIT ?)`,
-			query, limit+1,
-		).Scan(&listed); err != nil {
-			return out, fmt.Errorf("counting substring candidates: %w", err)
+		selective, err := db.substringIndexSelective(ctx, branch.table, query, scopeMessages)
+		if err != nil {
+			return out, err
 		}
-		if listed > limit {
+		if !selective {
 			continue
 		}
 		*branch.filter = substringFilter{
@@ -257,4 +257,65 @@ func (db *DB) substringCandidates(
 		}
 	}
 	return out, nil
+}
+
+// substringScopeMessages sums message_count over the sessions that from,
+// a FROM clause with its WHERE, selects.
+func (db *DB) substringScopeMessages(ctx context.Context, from string, args []any) (int64, error) {
+	var scopeMessages int64
+	if err := db.getReader().QueryRow(ctx,
+		`SELECT COALESCE(SUM(message_count), 0) FROM `+from, args...,
+	).Scan(&scopeMessages); err != nil {
+		return 0, fmt.Errorf("sizing substring search scope: %w", err)
+	}
+	return scopeMessages, nil
+}
+
+// substringIndexSelective reports whether table lists at most a
+// substringIndexMaxShare share of scopeMessages for query. The capped count
+// stops as soon as it passes that share.
+func (db *DB) substringIndexSelective(
+	ctx context.Context, table, query string, scopeMessages int64,
+) (bool, error) {
+	limit := scopeMessages / substringIndexMaxShare
+	var listed int64
+	if err := db.getReader().QueryRow(ctx,
+		`SELECT count(*) FROM (SELECT 1 FROM `+table+` WHERE `+table+` MATCH ? LIMIT ?)`,
+		query, limit+1,
+	).Scan(&listed); err != nil {
+		return false, fmt.Errorf("counting substring candidates: %w", err)
+	}
+	return listed <= limit, nil
+}
+
+// termsIndexQueries returns the substring index query for each term the
+// index lists selectively within a terms search's scope. Terms it cannot
+// look up, or lists for more than a quarter of the scope's messages, keep
+// the session prefilter's scan.
+func (db *DB) termsIndexQueries(
+	ctx context.Context, f ContentSearchFilter, terms []string,
+) (map[string]string, error) {
+	if f.SessionID != "" || !db.hasSubstringIndex(ctx) {
+		return nil, nil
+	}
+	where, args := termsScopeSQL(f, SQLiteQueryDialect())
+	scopeMessages, err := db.substringScopeMessages(ctx, "sessions WHERE "+where, args)
+	if err != nil {
+		return nil, err
+	}
+	indexed := make(map[string]string, len(terms))
+	for _, term := range terms {
+		query, ok := substringIndexQuery(term)
+		if !ok {
+			continue
+		}
+		selective, err := db.substringIndexSelective(ctx, "message_trigram_fts", query, scopeMessages)
+		if err != nil {
+			return nil, err
+		}
+		if selective {
+			indexed[term] = query
+		}
+	}
+	return indexed, nil
 }

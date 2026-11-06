@@ -80,3 +80,14 @@ func BenchmarkSearchContentSubstringCommonText(b *testing.B) {
 		require.Len(b, page.Matches, 50)
 	}
 }
+
+func BenchmarkSearchContentTermsRareText(b *testing.B) {
+	d := seedSubstringSearchBenchmark(b)
+	f := ContentSearchFilter{Pattern: "deploy-window", Mode: "terms", Limit: 50}
+	b.ReportAllocs()
+	for b.Loop() {
+		page, err := d.SearchContent(b.Context(), f)
+		require.NoError(b, err)
+		require.Len(b, page.Matches, 20)
+	}
+}

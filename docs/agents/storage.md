@@ -938,6 +938,10 @@ sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches are
 not indexed.
 
+Terms search uses `message_trigram_fts` in its session prefilter, which finds
+the sessions where each term occurs, under the same share rule per term. The
+exchange grouping still reads every message of those sessions.
+
 Triggers keep both tables current on message insert, delete, and edits to
 `content`, `dialogue_text`, or `thinking_text`. Bulk session deletes remove a
 session's entries in one statement each and suspend `messages_trigram_ad`, as
