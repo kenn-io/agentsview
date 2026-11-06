@@ -2637,6 +2637,9 @@ func (s *Store) GetAnalyticsSignalSessions(
 	}, nil
 }
 
+// pgSignalVersion matches time.Time.UnixMicro for PostgreSQL's microsecond timestamps.
+const pgSignalVersion = `(EXTRACT(EPOCH FROM updated_at) * 1000000)::bigint`
+
 func (s *Store) signalRows(
 	ctx context.Context,
 	f db.AnalyticsFilter,
@@ -2664,7 +2667,7 @@ func (s *Store) signalRows(
 		short_prompt_count, unstructured_start,
 		missing_success_criteria_count,
 		missing_verification_count, duplicate_prompt_count,
-		no_code_context_count, runaway_tool_loop_count, updated_at
+		no_code_context_count, runaway_tool_loop_count, ` + pgSignalVersion + `
 		FROM sessions WHERE ` + where
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
@@ -2702,9 +2705,9 @@ func scanPGSignalRow(
 	loc *time.Location,
 ) (db.SignalRow, int64, error) {
 	var (
-		r         db.SignalRow
-		ts        *time.Time
-		updatedAt time.Time
+		r       db.SignalRow
+		ts      *time.Time
+		version int64
 	)
 	if err := rows.Scan(
 		&r.ID, &r.Agent, &r.Project,
@@ -2720,14 +2723,14 @@ func scanPGSignalRow(
 		&r.MissingSuccessCriteriaCount,
 		&r.MissingVerificationCount,
 		&r.DuplicatePromptCount,
-		&r.NoCodeContextCount, &r.RunawayToolLoopCount, &updatedAt,
+		&r.NoCodeContextCount, &r.RunawayToolLoopCount, &version,
 	); err != nil {
 		return db.SignalRow{}, 0, fmt.Errorf(
 			"scanning signal row: %w", err,
 		)
 	}
 	r.Date = db.LocalDate(scanDateCol(ts), loc)
-	return r, updatedAt.UnixMicro(), nil
+	return r, version, nil
 }
 
 func (s *Store) signalMessages(
@@ -2847,11 +2850,11 @@ func (s *Store) populateFrustrationMarkers(
 		in := "(" + strings.Join(placeholders, ",") + ")"
 		// Read each version once and keep the prompt scan on messages, with
 		// both branches sharing one statement's snapshot.
-		q := `SELECT id, updated_at, ''::text, false
+		q := `SELECT id, ` + pgSignalVersion + `, ''::text, false
 			FROM sessions
 			WHERE id IN ` + in + `
 			UNION ALL
-			SELECT session_id, NULL::timestamptz, content, is_system
+			SELECT session_id, NULL::bigint, content, is_system
 			FROM messages
 			WHERE role = 'user'
 			  AND COALESCE(source_subtype, '') <> 'tool_result'
@@ -2865,17 +2868,17 @@ func (s *Store) populateFrustrationMarkers(
 		defer msgRows.Close()
 		for msgRows.Next() {
 			var sessionID, content string
-			var updatedAt *time.Time
+			var version *int64
 			var isSystem bool
 			if err := msgRows.Scan(
-				&sessionID, &updatedAt, &content, &isSystem,
+				&sessionID, &version, &content, &isSystem,
 			); err != nil {
 				return fmt.Errorf(
 					"scanning frustration marker: %w", err,
 				)
 			}
-			if updatedAt != nil {
-				scannedVersions[sessionID] = updatedAt.UnixMicro()
+			if version != nil {
+				scannedVersions[sessionID] = *version
 				continue
 			}
 			if isSystem {

@@ -12,6 +12,53 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+func TestSignalVersionMicroseconds(t *testing.T) {
+	const schema = "agentsview_signals_version_test"
+	const id = "signals-version"
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
+	url := testPGURL(t)
+	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
+		ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+		SessionID: id, Ordinal: 0, Role: "user", Content: "this is broken",
+	}}))
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(ctx, url, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	for _, test := range []struct {
+		name      string
+		timestamp string
+		want      int64
+	}{
+		{"before-epoch", "1969-12-31T23:59:59.999999Z", -1},
+		{"epoch", "1970-01-01T00:00:00Z", 0},
+		{"after-epoch", "1970-01-01T00:00:00.000001Z", 1},
+		{"fractional", "2023-11-14T22:13:20.123456Z", 1700000000123456},
+		{"offset", "2023-11-14T17:13:20.654321-05:00", 1700000000654321},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var updatedAt time.Time
+			require.NoError(t, pg.QueryRowContext(ctx, `UPDATE sessions SET updated_at = $1::timestamptz WHERE id = $2 RETURNING updated_at`, test.timestamp, id).Scan(&updatedAt))
+			rows, versions, err := store.signalRows(ctx, db.AnalyticsFilter{})
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			assert.Equal(t, test.want, versions[id])
+			assert.Equal(t, updatedAt.UnixMicro(), versions[id])
+
+			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions))
+			assert.Equal(t, 1, rows[0].FrustrationMarkerCount)
+			count, hit := store.runtimeState().frustrationMarkers.Lookup(id, test.want)
+			assert.True(t, hit, "both queries must use the same microsecond version")
+			assert.Equal(t, 1, count)
+		})
+	}
+}
+
 func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 	for _, test := range []struct {
 		name string
