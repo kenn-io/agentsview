@@ -85,6 +85,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		}
 		return tx.Commit()
 	}
+	if _, err = tx.ExecContext(ctx, dropUsageChangeJournalSQL); err != nil {
+		return err
+	}
 	if err = preflightHostedAdoption(ctx, tx, schema, tenant); err != nil {
 		return err
 	}
