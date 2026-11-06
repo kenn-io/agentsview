@@ -4159,6 +4159,9 @@ func patchVectorSetup(section map[string]any, builtIn bool) error {
 	}
 	delete(deployment, "endpoint")
 	delete(deployment, "ollama_cpu_fallback")
+	if recipe.Model != "" && !recipe.IsNomic() {
+		delete(deployment, "max_batch_tokens")
+	}
 	deployment["local"] = true
 	return nil
 }

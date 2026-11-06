@@ -69,6 +69,9 @@ func closeVectorPushSource(src storage.VectorPushSource) {
 func (s *vectorPushSource) openIndex(ctx context.Context) (*vector.Index, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.cfg.Vector.Enabled {
+		return nil, nil
+	}
 	if s.ix != nil {
 		return s.ix, nil
 	}
@@ -132,6 +135,8 @@ func (s *vectorPushSource) BeginExport(
 // carries the recipe for publication unless the recipe was adopted from the
 // replica.
 func (s *vectorPushSource) configuredGeneration() storage.VectorGenerationInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	gen := vectorGeneration(s.cfg.Vector.Embeddings)
 	info := storage.VectorGenerationInfo{
 		Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: gen.Dimensions,

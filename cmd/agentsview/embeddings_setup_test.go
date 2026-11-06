@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedlocal"
 )
@@ -81,8 +82,8 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			raw := map[string]string{
 				"enabled-missing": "[vector]\nenabled = true\n",
 				"configured":      "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmax_input_chars = 1024\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\ndefault_server = 'local'\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nmax_retries = 0\n[vector.embeddings.servers.backup]\nendpoint = '" + stub.URL + "/v1'\n",
-				"nomic":           "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nquery_prefix = 'q: '\ndocument_prefix = 'd: '\ninput_suffix = '!'\nrequest_dimensions = true\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\n",
-				"other":           "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\ndefault_server = 'local'\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\n[vector.embeddings.servers.sibling]\nendpoint = '" + stub.URL + "/v1'\napi_key_env = 'EMBEDDINGS_TEST_KEY'\nmax_retries = 0\n",
+				"nomic":           "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nmodel_context_tokens = 512\nquery_prefix = 'q: '\ndocument_prefix = 'd: '\ninput_suffix = '!'\nrequest_dimensions = true\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\nmax_batch_tokens = 512\n",
+				"other":           "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 512\ndefault_server = 'local'\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\nmax_batch_tokens = 512\n[vector.embeddings.servers.sibling]\nendpoint = '" + stub.URL + "/v1'\napi_key_env = 'EMBEDDINGS_TEST_KEY'\nmax_batch_tokens = 8192\nmax_retries = 0\n",
 			}[recipe]
 			if raw != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(raw), 0o600))
@@ -135,7 +136,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			defer func() { require.NoError(t, owner.Close()) }()
 			ln, port := listenLoopback(t)
 			cfg.Host, cfg.Port = "127.0.0.1", port
-			ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+			replica := &embedPushReplica{Replica: pgReplica{}}
+			options := append(owner.ServerOptions(), server.WithReplicas(replica), server.WithBaseContext(t.Context()))
+			ts := startTestServer(t, ln, server.New(cfg, database, nil, options...).Handler())
 			request := func(method, path, body string, wantStatus int) []byte {
 				return embeddingRequest(t, ts.Client(), ts.URL, method, path, "application/json", strings.NewReader(body), wantStatus)
 			}
@@ -143,6 +146,14 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				var result vector.BuildStatus
 				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/embeddings/status", "", 200), &result))
 				return result
+			}
+			push := func() storage.PushResult {
+				var result storage.PushResult
+				require.NoError(t, json.Unmarshal(request("POST", "/api/v1/push/pg", `{"full":false,"replica":{"url":"postgres://hub.example/agentsview","machine_name":"receiver","push_vectors":true}}`, 200), &result))
+				return result
+			}
+			if recipe == "fresh" {
+				assert.True(t, push().Vectors.Skipped)
 			}
 			initial := status()
 			require.NotNil(t, initial.Setup)
@@ -180,6 +191,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				return result
 			}
 			awaitBuild()
+			assert.False(t, push().Vectors.Skipped, "browser activation must publish vectors without restart")
+			require.Len(t, replica.pushed, 1)
+			assert.NotEmpty(t, replica.pushed[0].Params)
 			if recipe == "configured" {
 				assert.Empty(t, status().Setup.Action)
 				request("POST", "/api/v1/embeddings/setup", `{"action":"use-built-in"}`, 400)
@@ -213,6 +227,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 					}
 				}
 			}
+			assert.False(t, push().Vectors.Skipped)
+			require.Len(t, replica.pushed, 2)
+			assert.NotEmpty(t, replica.pushed[1].Params, "switched vectors must carry their current recipe")
 			var result db.ContentSearchPage
 			require.NoError(t, json.Unmarshal(request("GET", "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", 200), &result))
 			require.NotEmpty(t, result.Matches)
@@ -239,6 +256,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			assert.Equal(t, persisted.Vector, owner.cfg.Vector)
 			if recipe == "other" {
 				assert.Equal(t, expected.Embeddings.Servers["sibling"], persisted.Vector.Embeddings.Servers["sibling"])
+			}
+			if recipe == "nomic" {
+				assert.Equal(t, 512, persisted.Vector.Embeddings.Servers["local"].MaxBatchTokens)
 			}
 			if recipe == "fresh" {
 				stored, err := os.ReadFile(filepath.Join(dir, "config.toml"))

@@ -32,6 +32,7 @@ type liveVectorServing struct {
 	done        chan struct{}
 	setup       server.EmbeddingsSetupStatus
 	reload      func() (config.Config, error)
+	push        *vectorPushSource
 }
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
@@ -44,6 +45,7 @@ func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.D
 	v := &liveVectorServing{
 		serving: serving, cfg: cfg, database: database,
 		ctx: ctx, cancel: cancel, idle: idle, reload: reload,
+		push: &vectorPushSource{cfg: cfg},
 	}
 	v.startSchedulers()
 	return v, nil
@@ -83,6 +85,7 @@ func (v *liveVectorServing) Close() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.stopBuilders()
+	closeVectorPushSource(v.push)
 	if v.serving.Close != nil {
 		return v.serving.Close()
 	}
@@ -119,6 +122,7 @@ func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 func (v *liveVectorServing) ServerOptions() []server.Option {
 	options := []server.Option{
 		server.WithEmbeddingsRuntime(v),
+		server.WithVectorPushSource(v.push),
 		server.WithSessionMutationNotifier(func() { v.Notify(false); v.Notify(true) }),
 		server.WithRecallCorpusMutationNotifier(func() { v.Notify(true) }),
 	}
@@ -293,5 +297,8 @@ func (v *liveVectorServing) activate(action string) error {
 		return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.
 	}
 	v.startSchedulers()
+	v.push.mu.Lock()
+	v.push.cfg = cfg
+	v.push.mu.Unlock()
 	return serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 }

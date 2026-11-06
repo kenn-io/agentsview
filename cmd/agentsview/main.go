@@ -611,9 +611,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if !cfg.ArchiveContent.UsageOnly() && !database.ArchiveContent().UsageOnly() {
 		srvOpts = append(srvOpts, vectorServe.ServerOptions()...)
 	}
-	if src := newVectorPushSource(cfg); src != nil {
-		srvOpts = append(srvOpts, server.WithVectorPushSource(src))
-	}
 	if extractSched != nil {
 		// Trash, restore, and permanent-delete routes change extraction
 		// eligibility; the retraction pass must hear about them even when

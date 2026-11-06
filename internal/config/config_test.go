@@ -3183,7 +3183,6 @@ func TestSaveVectorSetupRejectsIncompatibleSwitch(t *testing.T) {
 	}{
 		{"oversized Nomic", "model = 'nomic-embed-text:v1.5'\ndimension = 1024\n", "", "dimension must be at most 768"},
 		{"small Nomic without selection", "model = 'nomic-embed-text:v1.5'\ndimension = 256\n", "", "request_dimensions must be true"},
-		{"selected server token cap", "model = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\n", "max_batch_tokens = 512\n", "max_batch_tokens (512) must be at least model_context_tokens (2048)"},
 		{"sibling server token cap", "model = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\n", "[vector.embeddings.servers.sibling]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n", "max_batch_tokens (512) must be at least model_context_tokens (2048)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3200,4 +3199,21 @@ func TestSaveVectorSetupRejectsIncompatibleSwitch(t *testing.T) {
 			assert.Equal(t, original, string(saved))
 		})
 	}
+}
+
+func TestSaveVectorSetupReplacesOllamaTokenCap(t *testing.T) {
+	dir := setupTestEnv(t)
+	original := "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\ndefault_server = 'ollama'\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n[vector.embeddings.servers.sibling]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 8192\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(original), 0o600))
+	cfg, err := LoadReadOnly()
+	require.NoError(t, err)
+	require.NoError(t, cfg.Vector.Validate())
+	require.NoError(t, cfg.SaveVectorSetup(true))
+	saved, err := LoadReadOnly()
+	require.NoError(t, err)
+	require.NoError(t, saved.Vector.Validate())
+	assert.Equal(t, 2048, saved.Vector.Embeddings.ModelContextTokens)
+	assert.True(t, saved.Vector.Embeddings.Servers["ollama"].Local)
+	assert.Zero(t, saved.Vector.Embeddings.Servers["ollama"].MaxBatchTokens)
+	assert.Equal(t, cfg.Vector.Embeddings.Servers["sibling"], saved.Vector.Embeddings.Servers["sibling"])
 }
