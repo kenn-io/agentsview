@@ -1193,6 +1193,45 @@ func TestUsageJournaledUntrustedReadsSharePass(t *testing.T) {
 	assert.EqualValues(t, 1, starts.Load())
 }
 
+func TestUsageJournaledDefaultZoneRewarmOutsideRetained(t *testing.T) {
+	// Model a platform whose resolved report zone differs from time.Local.
+	local, err := time.LoadLocation("Asia/Kolkata")
+	require.NoError(t, err)
+	if usageTimezoneIdentityFor(local, nil).Key == usageTimezoneIdentityFor(nil, nil).Key {
+		local, err = time.LoadLocation("Europe/Berlin")
+		require.NoError(t, err)
+	}
+	setUsageLocalLocation(t, local)
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	require.NoError(t, database.UpsertModelPricingContext(t.Context(), []ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 1_000_000}}}))
+	got, err := database.GetDailyUsage(t.Context(), UsageFilter{})
+	require.NoError(t, err)
+	require.EqualValues(t, 100, got.Totals.TotalCost.Microdollars)
+	// Nine newer explicit zones push the default outside the retention limit.
+	for _, zone := range []string{"Pacific/Honolulu", "America/Anchorage", "America/Los_Angeles", "America/Denver", "America/Chicago", "America/New_York", "Europe/London", "Europe/Paris", "Asia/Tokyo"} {
+		_, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: zone})
+		require.NoError(t, err)
+	}
+	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
+	t.Cleanup(database.StopUsageCacheBackfill)
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	var starts atomic.Int64
+	database.SetUsageCacheBackfillStarted(func() { starts.Add(1) })
+	other, err := OpenIsolatedContext(t.Context(), database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	require.NoError(t, other.UpsertModelPricingContext(t.Context(), []ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 2_000_000}}}))
+	got, err = database.GetDailyUsage(t.Context(), UsageFilter{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 200, got.Totals.TotalCost.Microdollars)
+	require.EqualValues(t, 1, starts.Load(), "the default zone always belongs to the coverage pass")
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	_, trusted, err := database.prepareJournaledUsageWindow(t.Context(), UsageFilter{}, usageQueryKindToken, false, nil)
+	require.NoError(t, err)
+	assert.True(t, trusted, "the next default-zone read must reuse journaled coverage")
+}
+
 func TestUsageJournaledUnretainedZoneBoundsPasses(t *testing.T) {
 	database := testDB(t)
 	seedJournaledUsage(t, database, "session")

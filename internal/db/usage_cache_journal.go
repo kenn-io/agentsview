@@ -105,7 +105,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		if !db.isUsageBackfillEnabled() {
 			return nil
 		}
-		locations, err := usageBackfillLocations(ctx, cache, time.Local) //nolint:forbidigo // Match the pass's process-local zone and retained explicit zones.
+		locations, err := usageBackfillLocations(ctx, cache, (UsageFilter{}).Location())
 		if err != nil {
 			return err
 		}
