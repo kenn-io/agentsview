@@ -39,12 +39,12 @@ func (a admittedManager) StartBuild(req vector.BuildRequest) error {
 	return a.admitted(func() error { return a.Manager.StartBuild(req) })
 }
 
-// Wait runs after the build route starts a build; once that build activates an
-// index, the setup failure it recovered from is cleared so status recomputes
+// Wait runs after the build route starts a build; once that build succeeds,
+// the setup failure it recovered from is cleared so status recomputes
 // the action from the installed runtime.
 func (a admittedManager) Wait() {
 	a.Manager.Wait()
-	if result := a.Status().LastResult; result != nil && result.Activated {
+	if status := a.Status(); status.LastResult != nil && status.LastError == "" {
 		_ = a.admitted(func() error { a.owner.setup = server.EmbeddingsSetupStatus{}; return nil })
 	}
 }
