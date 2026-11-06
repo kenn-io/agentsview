@@ -263,7 +263,6 @@ CREATE TABLE usage_rollup_installs (
     fact_install_revision INTEGER NOT NULL,
     baked_agent TEXT NOT NULL,
     group_key TEXT NOT NULL DEFAULT '',
-    group_label TEXT NOT NULL DEFAULT '',
     baked_started_at TEXT NOT NULL,
     project TEXT NOT NULL DEFAULT '',
     machine TEXT NOT NULL DEFAULT '',
@@ -934,7 +933,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		`SELECT timezone_id, session_id FROM usage_rollup_invalidations LIMIT 0`,
 		`SELECT id, timezone_id, session_id, source_change_revision, source_pricing, source_sync_marker,
 		        source_transcript_rev, usage_event_fingerprint,
-		        fact_install_revision, group_key, group_label, baked_agent, baked_started_at, project, machine, git_branch, is_automated, user_message_count, has_authoritative,
+		        fact_install_revision, group_key, baked_agent, baked_started_at, project, machine, git_branch, is_automated, user_message_count, has_authoritative,
 		        pricing_inputs, pricing_hash, install_revision, cached_at
 		 FROM usage_rollup_installs LIMIT 0`,
 		`SELECT rollup_install_id, local_date, reported_model, priced_model,

@@ -52,13 +52,15 @@ filters to day totals in SQL. They load install metadata only for authoritative
 sessions and exception owners. SQL counts ordinary sessions by project and
 agent; surviving exception owners add their distinct counts. Warm Top sessions
 reads fold exception owners first, then rank their contributions together with
-ordinary session rows in one SQL query. Grouped reads select at most three
-representatives per returned group for the agent, latest start, and latest
-usable cron label. SQL computes the trailing remainder from the same units.
-Individual sessions load archive names only for returned rows; grouped rows use
-cached labels. Daily reads and billed-session counts share the distinct count
-reader. Warm preparations skip window-session discovery. Each archive snapshot
-loads its pricing catalog and computes its digest.
+ordinary session rows in one SQL query. Grouped reads select representatives for
+the agent and latest start, and retain contributor IDs for returned groups. The
+archive selects each group's latest currently named contributor. Those
+representatives and returned individual sessions share the bounded metadata
+load. SQL computes the trailing remainder from the same units. Daily reads and
+billed-session counts share the distinct count reader. Direct count reads skip
+the day-total cost and token groups. Warm preparations skip window-session
+discovery. Each archive snapshot loads its pricing catalog and computes its
+digest.
 
 ### Dedup exceptions
 

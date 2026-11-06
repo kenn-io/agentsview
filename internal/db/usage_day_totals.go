@@ -11,6 +11,14 @@ import (
 // readUsageDayTotals reads ordinary totals and prepares the exceptional session
 // metadata for the shared rollup query's exception fold.
 func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) (usageFactsResult, error) {
+	if filter.sessionCountsOnly {
+		if err := readUsageOwners(ctx, conn, timezoneID, snapshot, filter); err != nil {
+			return usageFactsResult{}, err
+		}
+		result := usageFactsResult{MatchingSessions: make(map[string]UsageSessionInfo)}
+		err := readUsageSessionCounts(ctx, conn, timezoneID, *snapshot, filter, &result)
+		return result, err
+	}
 	from, to := usageRollupDateBounds(*snapshot)
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	where := `s.timezone_id=` + b.Add(timezoneID)
@@ -119,9 +127,11 @@ func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snap
 	if passing == "" {
 		passing = "1=1"
 	}
-	args := append(b.Args(), timezoneID)
-	args = append(args, b.Args()...)
-	b = NewQueryBuilder(SQLiteQueryDialect(), 0)
+	where := `s.timezone_id=` + b.Add(timezoneID)
+	authoritativeScope := strings.Join(BuildUsageSessionFilter(filter, b, ""), " AND ")
+	if authoritativeScope == "" {
+		authoritativeScope = "1=1"
+	}
 	dates := "1=1"
 	if from != "" {
 		dates += ` AND local_date>=` + b.Add(from)
@@ -129,12 +139,10 @@ func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snap
 	if to != "" {
 		dates += ` AND local_date<=` + b.Add(to)
 	}
-	args = append(args, b.Args()...)
-	args = append(args, b.Args()...)
-	rows, err := conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, s.group_key, s.group_label, (`+passing+`)
-        FROM (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s WHERE s.timezone_id=? AND ((s.has_authoritative=1 AND (`+passing+`) AND s.id IN (
-        SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE `+dates+`)) OR s.id IN (
-        SELECT e.rollup_install_id FROM usage_rollup_exceptions e WHERE `+dates+`))`, args...)
+	authoritativeScope += ` AND s.id IN (SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE ` + dates + `)`
+	owner := usageOwnerPredicate("s", b, from, to, authoritativeScope)
+	rows, err := conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, s.group_key, (`+passing+`)
+        FROM (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s WHERE `+where+` AND (`+owner+`)`, b.Args()...)
 	if err != nil {
 		return err
 	}
@@ -142,7 +150,7 @@ func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snap
 	snapshot.Sessions = nil
 	for rows.Next() {
 		var session usageQuerySession
-		if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.GroupKey, &session.GroupLabel, &session.PassesFilter); err != nil {
+		if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.GroupKey, &session.PassesFilter); err != nil {
 			return err
 		}
 		if millis, _, _ := usagefacts.ParseTimestamp(session.StartedAt); millis != nil {
@@ -160,7 +168,11 @@ func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snap
 	return nil
 }
 
-func usageOwnerPredicate(alias string, b *QueryBuilder, from, to string) string {
+func usageOwnerPredicate(alias string, b *QueryBuilder, from, to, authoritativeScope string) string {
+	authoritative := alias + `.has_authoritative=1`
+	if authoritativeScope != "" {
+		authoritative += ` AND (` + authoritativeScope + `)`
+	}
 	dates := "1=1"
 	if from != "" {
 		dates += ` AND local_date>=` + b.Add(from)
@@ -168,14 +180,14 @@ func usageOwnerPredicate(alias string, b *QueryBuilder, from, to string) string 
 	if to != "" {
 		dates += ` AND local_date<=` + b.Add(to)
 	}
-	return alias + `.has_authoritative=1 OR ` + alias + `.id IN (SELECT rollup_install_id FROM usage_rollup_exceptions WHERE ` + dates + `)`
+	return `(` + authoritative + `) OR ` + alias + `.id IN (SELECT e.rollup_install_id FROM usage_rollup_exceptions e WHERE ` + dates + `)`
 }
 
 // usageOrdinaryWindowWhere shares the daily-row window and owner classification.
 // Bind the owner expression first because counts select it before their WHERE.
 func usageOrdinaryWindowWhere(b *QueryBuilder, timezoneID int64, snapshot usageQuerySnapshot, filter UsageFilter) (string, string) {
 	from, to := usageRollupDateBounds(snapshot)
-	owner := usageOwnerPredicate("s", b, from, to)
+	owner := usageOwnerPredicate("s", b, from, to, "")
 	where := `s.timezone_id=` + b.Add(timezoneID)
 	if from != "" {
 		where += ` AND r.local_date>=` + b.Add(from)

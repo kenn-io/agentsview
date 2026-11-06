@@ -46,7 +46,6 @@ func (v usageSourceVersion) Equal(other usageSourceVersion) bool {
 type usageQuerySession struct {
 	ID                string
 	GroupKey          string
-	GroupLabel        string
 	SessionName       string
 	Project           string
 	Machine           string

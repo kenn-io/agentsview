@@ -3,10 +3,13 @@
 package db
 
 import (
+	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/money"
@@ -31,7 +34,7 @@ func TestUsageTopSessionsLoadsOnlyReturnedMetadata(t *testing.T) {
 	warmJournaledUsage(t, database, filter)
 
 	// Observe display-name evaluations at the archive query boundary, preserving
-	// NULLIF semantics. Cached group labels require no archive name reads.
+	// NULLIF semantics. Groups load only their current label representative.
 	database.rawReader().SetMaxOpenConns(1)
 	conn, err := database.getReader().Conn(t.Context())
 	require.NoError(t, err)
@@ -55,8 +58,8 @@ func TestUsageTopSessionsLoadsOnlyReturnedMetadata(t *testing.T) {
 		loaded  []string
 	}{
 		{"individual", false, 1, []string{"Owner 127"}},
-		{"group", true, 1, nil},
-		{"group and individual", true, 2, []string{"Owner 125"}},
+		{"group", true, 1, []string{"Owner 127"}},
+		{"group and individual", true, 2, []string{"Owner 125", "Owner 127"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loaded = nil
@@ -196,7 +199,7 @@ func CheckUsageTopSessionsBoundedGroupMembers(t *testing.T, database *DB, filter
 	assert.Equal(t, int64(140), got[1].Cost.Microdollars)
 	assert.Empty(t, got[1].SessionID)
 
-	// A name-only edit must refresh the cached label and select its successor.
+	// A name-only edit must select the next currently named member.
 	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_name='daily · run' WHERE id='journal-00003'`)
 	require.NoError(t, err)
 	got, err = database.GetTopSessionsByCost(t.Context(), filter, 1)
@@ -271,10 +274,71 @@ func TestUsageTopSessionsZeroCostTies(t *testing.T) {
 func CheckUsageSessionCountsJournaled(t *testing.T, database *DB) {
 	t.Helper()
 	filter := UsageFilter{From: "2026-08-03", To: "2026-08-10", Timezone: "UTC", SkipSessionCounts: true}
-	warmJournaledUsage(t, database, filter)
+	cache := warmJournaledUsage(t, database, filter)
 	want, err := database.getUsageSessionCountsLegacy(t.Context(), filter)
 	require.NoError(t, err)
+	cache.db.SetMaxOpenConns(1)
+	conn, err := cache.db.Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && (table == "usage_day_totals" || table == "usage_daily_rollups" && (column == "input_tokens" || column == "estimated_cost_microdollars")) {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	t.Cleanup(func() {
+		conn, err := cache.db.Conn(context.WithoutCancel(t.Context()))
+		require.NoError(t, err)
+		defer conn.Close()
+		require.NoError(t, conn.Raw(func(raw any) error {
+			raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
+			return nil
+		}))
+	})
 	got, err := database.GetUsageSessionCounts(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+}
+
+func TestUsageTopSessionsGroupRenameAfterWarmup(t *testing.T) {
+	for _, authoritative := range []bool{false, true} {
+		t.Run(strconv.FormatBool(authoritative), func(t *testing.T) {
+			database := testDB(t)
+			seedJournaledUsage(t, database, "grouped")
+			_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET group_key='daily:job', session_name='Original report · run' WHERE id='grouped'`)
+			require.NoError(t, err)
+			if authoritative {
+				cost := money.Money{Microdollars: 1000}
+				require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "grouped", []UsageEvent{{Source: "shutdown", Model: "journal-model", InputTokens: 10, Cost: &cost, CostStatus: "exact", CostSource: CopilotReportedCostSource, OccurredAt: "2026-08-10T23:30:00Z"}}))
+			}
+			filter := UsageFilter{Timezone: "UTC", TopSessionsByGroup: true}
+			warmJournaledUsage(t, database, filter)
+			got, err := database.GetTopSessionsByCost(t.Context(), filter, 1)
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, "Original report", got[0].GroupLabel)
+			before, err := database.UsageChangeRevision(t.Context())
+			require.NoError(t, err)
+			for _, tc := range []struct{ name, label, display string }{
+				{"Renamed report · run", "Renamed report", "Renamed report"},
+				{"daily · run", "", "daily"},
+				{"Another report · run", "Another report", "Another report"},
+			} {
+				_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_name=? WHERE id='grouped'`, tc.name)
+				require.NoError(t, err)
+				after, err := database.UsageChangeRevision(t.Context())
+				require.NoError(t, err)
+				assert.Equal(t, before, after, "name edits do not enter the usage journal")
+				got, err = database.GetTopSessionsByCost(t.Context(), filter, 1)
+				require.NoError(t, err)
+				require.Len(t, got, 1)
+				assert.Equal(t, tc.label, got[0].GroupLabel)
+				assert.Equal(t, tc.display, got[0].DisplayName)
+			}
+		})
+	}
 }

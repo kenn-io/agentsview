@@ -113,6 +113,8 @@ type UsageFilter struct {
 
 	// Progress reports the work this query is waiting for, without session data.
 	Progress func(string) `json:"-"`
+
+	sessionCountsOnly bool // read distinct owners without day-total cost and token groups
 }
 
 // HasModelFilter reports whether normalized include or exclude values restrict models.
@@ -2657,6 +2659,8 @@ func (db *DB) getDailyUsageLegacy(
 
 // TopSessionEntry is one row in the "top sessions by cost" result.
 type TopSessionEntry struct {
+	labelCandidates string
+
 	Machine             string      `json:"machine,omitempty"`
 	GroupKey            string      `json:"groupKey,omitempty"`
 	SessionName         string      `json:"-"`

@@ -388,7 +388,6 @@ func foldUsageTopSessions(sessions []usageQuerySession, groups []usageFactsGroup
 			entry.StartedAt = session.StartedAt
 			entry.Machine = session.Machine
 			entry.GroupKey = session.GroupKey
-			entry.GroupLabel = session.GroupLabel
 			entry.SessionName = session.SessionName
 		}
 		result = append(result, entry)
@@ -403,6 +402,7 @@ func (db *DB) GetUsageSessionCounts(ctx context.Context, filter UsageFilter) (Us
 		kind = usageQueryKindDayTotals
 	}
 	filter.SkipSessionCounts = false
+	filter.sessionCountsOnly = true
 	_, facts, _, err := db.queryUsageRollups(ctx, filter, kind, false, 0)
 	if err != nil {
 		return UsageSessionCounts{}, err
