@@ -695,7 +695,7 @@ func pollDaemonBuildStatus(
 ) error {
 	var progress buildProgressPrinter
 	for {
-		status, err := daemonBuildStatus(ctx, client)
+		status, err := client.status(ctx)
 		if err != nil {
 			return err
 		}
@@ -711,28 +711,19 @@ func pollDaemonBuildStatus(
 	}
 }
 
-// daemonBuildStatus fails if setup hides the followed build's outcome.
-// Its empty build status must not turn a failed build into success.
-func daemonBuildStatus(
-	ctx context.Context, client embeddingsDaemonClient,
-) (vector.BuildStatus, error) {
-	status, err := client.status(ctx)
-	if err == nil && status.Setup != nil && status.Setup.Busy {
-		err = errors.New("search by meaning is being set up; run the build again when it finishes")
-	}
-	return status, err
-}
-
 // finalizeBuildStatus reports a stopped build's outcome. LastResult prints
 // the same final summary the direct path prints, including partial results
 // from a failed attempt; a non-empty LastError then becomes the returned
-// non-zero-exit error.
+// non-zero-exit error. An absent outcome asks the caller to retry.
 func finalizeBuildStatus(out io.Writer, status vector.BuildStatus) error {
 	if status.LastResult != nil {
 		printBuildSummary(out, *status.LastResult)
 	}
 	if status.LastError != "" {
 		return errors.New(status.LastError)
+	}
+	if status.LastResult == nil {
+		return errors.New("search by meaning was set up while the build ran; run the build again")
 	}
 	return nil
 }

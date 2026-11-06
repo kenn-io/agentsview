@@ -1119,7 +1119,7 @@ func TestEmbeddingsBuildIncludeAutomatedFlagThreadsToDaemonRequest(t *testing.T)
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
+			_ = json.MarshalWrite(w, vector.BuildStatus{LastResult: &vector.BuildResult{}})
 		},
 	})
 
@@ -1148,7 +1148,7 @@ func TestRecallEmbeddingsBuildNormalizesIncludeAutomatedForDaemon(t *testing.T) 
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
+			_ = json.MarshalWrite(w, vector.BuildStatus{LastResult: &vector.BuildResult{}})
 		},
 	})
 
@@ -1197,7 +1197,7 @@ max_retries = 1
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
+			_ = json.MarshalWrite(w, vector.BuildStatus{LastResult: &vector.BuildResult{}})
 		},
 	})
 
@@ -1563,13 +1563,15 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 		code       string
 		message    string
 		setupBusy  bool
+		replaced   bool
 		wantError  string
 		wantPolls  int32
 		wantNotice bool
 	}{
 		{name: "running build", message: "an embeddings build is already running", wantPolls: 2, wantNotice: true},
 		{name: "setup refusal", code: "embeddings_setup_busy", message: "search by meaning is being set up", wantError: "being set up"},
-		{name: "setup hides the followed build outcome", message: "an embeddings build is already running", setupBusy: true, wantError: "being set up", wantPolls: 1, wantNotice: true},
+		{name: "setup hides the followed build outcome", message: "an embeddings build is already running", setupBusy: true, wantError: "run the build again", wantPolls: 1, wantNotice: true},
+		{name: "setup finished between polls", message: "an embeddings build is already running", replaced: true, wantError: "run the build again", wantPolls: 2, wantNotice: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var statusCalls atomic.Int32
@@ -1584,7 +1586,7 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 				status := vector.BuildStatus{Running: n < 2}
 				if tc.setupBusy {
 					status = vector.BuildStatus{Setup: &vector.SetupStatus{Enabled: true, Busy: true}}
-				} else if n >= 2 {
+				} else if n >= 2 && !tc.replaced {
 					status.LastResult = &vector.BuildResult{
 						Activated: true,
 						Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},
@@ -1629,7 +1631,7 @@ func TestBuildViaDaemonAlwaysSendsIncludeAutomated(t *testing.T) {
 			})
 			mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
+				_ = json.MarshalWrite(w, vector.BuildStatus{LastResult: &vector.BuildResult{}})
 			})
 			srv := httptest.NewServer(mux)
 			defer srv.Close()

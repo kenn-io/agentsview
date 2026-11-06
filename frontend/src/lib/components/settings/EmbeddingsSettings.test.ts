@@ -100,11 +100,15 @@ describe("EmbeddingsSettings", () => {
   }
 
   it.each([
-    ["Settings", EmbeddingsSettings],
-    ["Semantic setup", SemanticSetupHelp],
+    { entry: "Settings", render: () => mount(EmbeddingsSettings, { target: document.body }) },
+    {
+      entry: "Semantic setup",
+      render: () =>
+        mount(SemanticSetupHelp, { target: document.body, props: { onResolved: vi.fn() } }),
+    },
   ])(
-    "%s approves only the disclosed download when retrying after Ollama stops",
-    async (_entry, Component) => {
+    "$entry approves only the disclosed download when retrying after Ollama stops",
+    async ({ render }) => {
       const setup = {
         enabled: false,
         action: "turn-on",
@@ -118,7 +122,7 @@ describe("EmbeddingsSettings", () => {
       };
       embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
       embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
-      const component = mount(Component, { target: document.body });
+      const component = render();
       try {
         await settle();
         expect(document.body.textContent).toContain("Uses Ollama");
