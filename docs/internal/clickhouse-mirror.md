@@ -214,8 +214,10 @@ partition rewrites nothing. Lightweight deletes would write patch parts as large
 as the deleted rows on servers in `lightweight_update` mode.
 
 A push that revives a digest idle for 24 hours while another push drops it can
-lose part of that digest's records. Reads stay correct: they price rows without
-a record per request until the next whole pass.
+lose part of that digest's records, or keep records whose contexts were dropped.
+Reads stay correct. They price rows without a record per request until the next
+whole pass. A read that still finds a record without its context after three
+attempts prices every row per request.
 
 Serve stays read-only. Missing prices and reader-specific custom rates are
 computed for that request using the current pricing rules while push fills the

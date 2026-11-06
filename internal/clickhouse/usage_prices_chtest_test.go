@@ -800,7 +800,9 @@ func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
 	assert.Equal(t, want, top)
 }
 
-func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
+// A read whose records keep naming contexts it did not load prices every
+// row per request once its retries are spent.
+func TestTopSessionsPricePerRequestWhenRetriesExhaust(t *testing.T) {
 	t.Parallel()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
@@ -829,19 +831,37 @@ func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
 	}))
 	filter := db.UsageFilter{Timezone: "UTC", Project: "gamma"}
 	top, err := store.GetTopSessionsByCost(ctx, filter, 20)
-	require.ErrorIs(t, err, errUsagePriceContextChanged)
-	assert.Empty(t, top)
+	require.NoError(t, err)
 	require.EqualValues(t, 3, attempts.Load())
 	for range 3 {
 		require.NoError(t, <-changes)
 	}
-
-	// With the changes finished, the next read must return complete totals.
 	want, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
 	require.NoError(t, err)
 	require.NotEmpty(t, want)
 	normalizeSQLiteTopSessions(t, want)
-	top, err = store.GetTopSessionsByCost(t.Context(), filter, 20)
+	assert.Equal(t, want, top)
+}
+
+// Records can outlive their contexts when a push revives a digest while
+// another push drops its partitions. Reads still answer, priced per request.
+func TestUsageReadsPriceRecordsWithoutContextsPerRequest(t *testing.T) {
+	t.Parallel()
+	store, _, local := newUsagePriceStore(t)
+	ctx := t.Context()
+	digest := pricedDigest(t, store.conn)
+	require.NotZero(t, pricingDigestRows(t, store.conn)[digest])
+	_, err := store.conn.ExecContext(ctx,
+		"ALTER TABLE usage_price_contexts DROP PARTITION ?", digest)
+	require.NoError(t, err)
+
+	assertDailyUsageParity(t, local, store)
+	filter := db.UsageFilter{Timezone: "UTC"}
+	want, err := local.GetTopSessionsByCost(ctx, filter, 20)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+	normalizeSQLiteTopSessions(t, want)
+	top, err := store.GetTopSessionsByCost(ctx, filter, 20)
 	require.NoError(t, err)
 	assert.Equal(t, want, top)
 }

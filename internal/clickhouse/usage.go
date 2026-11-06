@@ -1548,8 +1548,9 @@ func chCustomPricedModels(
 	return out
 }
 
-// chDailyUsageLoadAttempts bounds how often a read restarts because a push
-// added price contexts between the context load and the usage query.
+// chDailyUsageLoadAttempts bounds how often a read restarts with stored
+// prices because a push added price contexts between the context load and
+// the usage query.
 const chDailyUsageLoadAttempts = 3
 
 var errUsagePriceContextChanged = errors.New("usage price context changed during read")
@@ -1567,18 +1568,33 @@ func (s *Store) GetDailyUsage(
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
-	return retryUsagePriceContexts(func() (db.DailyUsageResult, error) {
+	return retryUsagePriceContexts(snapshot, func(snapshot *pricingSnapshot) (db.DailyUsageResult, error) {
 		return s.dailyUsageForCatalog(ctx, f, snapshot)
 	})
 }
 
-func retryUsagePriceContexts[T any](load func() (T, error)) (T, error) {
-	for attempt := 1; ; attempt++ {
-		result, err := load()
-		if !errors.Is(err, errUsagePriceContextChanged) || attempt == chDailyUsageLoadAttempts {
+// chUsageUnstoredDigest names no price records, so a read under it prices
+// every row from the catalog per request.
+const chUsageUnstoredDigest = ""
+
+// retryUsagePriceContexts runs load, and again with fresh contexts when a
+// price record names a context the read did not load. When every attempt
+// finds one, the read prices every row per request instead of failing:
+// besides a push adding contexts mid-read, a push that revives a digest
+// while another push drops it leaves records whose contexts are gone for
+// good.
+func retryUsagePriceContexts[T any](
+	snapshot *pricingSnapshot, load func(*pricingSnapshot) (T, error),
+) (T, error) {
+	for range chDailyUsageLoadAttempts {
+		result, err := load(snapshot)
+		if !errors.Is(err, errUsagePriceContextChanged) {
 			return result, err
 		}
 	}
+	unstored := *snapshot
+	unstored.catalog.digest = chUsageUnstoredDigest
+	return load(&unstored)
 }
 
 func (s *Store) usagePricingForCatalog(
@@ -2098,7 +2114,7 @@ func (s *Store) GetTopSessionsByCost(
 			slices.Clone(kept), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
 		), nil
 	}
-	out, err := retryUsagePriceContexts(func() ([]db.TopSessionEntry, error) {
+	out, err := retryUsagePriceContexts(pricing, func(pricing *pricingSnapshot) ([]db.TopSessionEntry, error) {
 		return s.topSessionsForCatalog(ctx, f, pricing)
 	})
 	if err != nil {
