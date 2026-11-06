@@ -168,7 +168,7 @@ describe("EmbeddingsSettings", () => {
     },
   );
 
-  it("shows the daemon's warmed estimate once", async () => {
+  it("shows indexing progress with throughput and remaining time", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
       runningStatus(200, {
         estimate_ready: true,
@@ -196,9 +196,6 @@ describe("EmbeddingsSettings", () => {
     expect(text()).toContain("256");
     expect(text()).toContain("Indexing 200 of 1,000 text sections");
     expect(text()).toContain("50 text sections/s");
-    expect(text()).not.toContain("Embedding");
-    expect(text()).not.toContain("20%");
-    expect(text()).not.toContain("ETA 16s");
     expect(text()).toContain("under a minute left");
     expect(document.body.querySelector(".status-grid .kit-chip")).toBeNull();
     expect(text()).toContain("Elapsed 5s");

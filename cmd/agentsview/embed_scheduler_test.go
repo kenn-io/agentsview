@@ -647,24 +647,6 @@ func TestEmbeddingSyncEmitterForwardsAndNotifiesLiveServing(t *testing.T) {
 	assert.Equal(t, []bool{false, true}, notifications)
 }
 
-func TestRunRemoteHostSyncLoopEmitsSyncedSessions(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		primary := &recordingEmitter{}
-		done := make(chan struct{})
-		exited := make(chan struct{})
-		go func() {
-			runRemoteHostSyncLoop(t.Context(), "remote-host", 5*time.Millisecond, func() (int, error) { return 1, nil }, primary, nil, done)
-			close(exited)
-		}()
-		synctest.Wait()
-		synctest.Sleep(5 * time.Millisecond)
-		assert.Equal(t, []string{"sessions"}, primary.scopes)
-		close(done)
-		synctest.Wait()
-		<-exited
-	})
-}
-
 // --- searcherAdapter error taxonomy ---
 
 func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T) {

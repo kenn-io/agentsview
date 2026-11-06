@@ -64,7 +64,6 @@ const {
   mockEmbeddingsService: {
     getApiV1EmbeddingsStatus: vi.fn(),
     postApiV1EmbeddingsBuild: vi.fn(),
-    postApiV1EmbeddingsSetup: vi.fn(),
   },
 }));
 

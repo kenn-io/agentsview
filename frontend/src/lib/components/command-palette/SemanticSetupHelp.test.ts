@@ -154,48 +154,54 @@ describe("SemanticSetupHelp", () => {
     unmount(component);
   });
 
-  it.each([false, true])(
-    "shows switch download approval (rebuild %s)",
-    async (rebuild_required) => {
-      const setup = {
-        enabled: true,
-        action: "use-built-in",
-        provider: "ollama",
-        rebuild_required,
-        missing_bytes: 295000000,
-        installing: false,
-        busy: false,
-        downloaded_bytes: 0,
-        total_bytes: 0,
-      };
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup }));
-      embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
-        generations: [{ id: 1, state: "active", embedded: 123, missing: 27 }],
-      });
-      const { component } = mountHelp();
-      await settle();
-      expect(text()).toContain("Downloads 295 MB");
-      if (rebuild_required) {
-        expect(text()).toContain("Switching rebuilds the index");
-        expect(text()).toContain("150 documents");
-      } else {
-        expect(text()).not.toContain("Switching rebuilds the index");
-      }
-      if (!rebuild_required) {
-        embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
-        const button = [...document.body.querySelectorAll("button")].find(
-          (b) => b.textContent?.trim() === "Use built-in instead",
-        );
-        expect(button).toBeTruthy();
-        button!.click();
-        await settle();
-        expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
-          action: "use-built-in",
-        });
-      }
-      unmount(component);
-    },
-  );
+  const ollamaSetup = {
+    enabled: true,
+    action: "use-built-in",
+    provider: "ollama",
+    rebuild_required: false,
+    missing_bytes: 295000000,
+    installing: false,
+    busy: false,
+    downloaded_bytes: 0,
+    total_bytes: 0,
+  };
+
+  it("approves the disclosed download when switching a compatible index", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      idleStatus({ setup: { ...ollamaSetup } }),
+    );
+    embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({ generations: [] });
+    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+    const { component } = mountHelp();
+    await settle();
+    expect(text()).toContain("Downloads 295 MB");
+    expect(text()).not.toContain("Switching rebuilds the index");
+    const button = [...document.body.querySelectorAll("button")].find(
+      (b) => b.textContent?.trim() === "Use built-in instead",
+    );
+    expect(button).toBeTruthy();
+    button!.click();
+    await settle();
+    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
+      action: "use-built-in",
+    });
+    unmount(component);
+  });
+
+  it("discloses the download and rebuild estimate for another model", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      idleStatus({ setup: { ...ollamaSetup, rebuild_required: true } }),
+    );
+    embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
+      generations: [{ id: 1, state: "active", embedded: 123, missing: 27 }],
+    });
+    const { component } = mountHelp();
+    await settle();
+    expect(text()).toContain("Downloads 295 MB");
+    expect(text()).toContain("Switching rebuilds the index");
+    expect(text()).toContain("150 documents");
+    unmount(component);
+  });
 
   it("shows a specific unavailable reason verbatim instead of the walkthrough", async () => {
     const reason =

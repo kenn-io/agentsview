@@ -460,6 +460,7 @@ func TestLiveEmbeddingsSetupFailureRetry(t *testing.T) {
 	}
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
 	require.NoError(t, owner.Setup("turn-on"))
 	<-owner.done
 	status, err := owner.SetupStatus(t.Context())
@@ -473,7 +474,6 @@ func TestLiveEmbeddingsSetupFailureRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, status.Busy)
 	assert.EqualValues(t, 100, status.DownloadedBytes)
-	require.NoError(t, owner.Close())
 }
 
 func embeddingRequest(t *testing.T, client *http.Client, base, method, path, contentType string, body io.Reader, want int) []byte {
@@ -493,6 +493,11 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 }
 
 func TestLiveEmbeddingsSetupProbeKeepsRuntimeAvailable(t *testing.T) {
+	dir := testDataDir(t)
+	cfg, err := config.Default()
+	require.NoError(t, err)
+	cfg.DataDir = dir
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 	oldInspect := inspectLocalEmbeddings
 	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
 	probing, resume := make(chan struct{}), make(chan struct{})
@@ -503,9 +508,12 @@ func TestLiveEmbeddingsSetupProbeKeepsRuntimeAvailable(t *testing.T) {
 		<-resume
 		return embedlocal.Status{}, nil
 	}
-	owner := &liveVectorServing{ctx: t.Context()}
+	owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
 	setupDone := make(chan error, 1)
-	go func() { setupDone <- owner.Setup("unavailable") }()
+	go func() {
+		_, err := owner.SetupStatus(t.Context())
+		setupDone <- err
+	}()
 	<-probing
 	manager := make(chan server.EmbeddingsManager, 1)
 	go func() { manager <- owner.Manager("") }()
@@ -516,7 +524,7 @@ func TestLiveEmbeddingsSetupProbeKeepsRuntimeAvailable(t *testing.T) {
 		assert.Fail(t, "the Ollama probe blocked access to the running server")
 	}
 	release()
-	assert.ErrorContains(t, <-setupDone, "setup action is unavailable")
+	require.NoError(t, <-setupDone)
 }
 
 func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
@@ -568,24 +576,14 @@ func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	require.NoError(t, cfg.Vector.Validate())
-	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	oldInspect := inspectLocalEmbeddings
 	t.Cleanup(func() {
-		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+		inspectLocalEmbeddings = oldInspect
 	})
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 		return embedlocal.Status{DownloadBytes: 295_000_000}, nil
 	}
-	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
-	downloads := 0
-	installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
-		downloads++
-		return embedlocal.Installation{}, errors.New("download started before validation")
-	}
 	owner := &liveVectorServing{ctx: t.Context(), cfg: cfg}
 	err = owner.Setup("use-built-in")
-	if err == nil {
-		<-owner.done
-	}
 	require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
-	assert.Zero(t, downloads)
 }

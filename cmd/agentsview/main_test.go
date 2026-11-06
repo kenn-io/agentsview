@@ -1508,6 +1508,24 @@ func (e *scopedEmitter) Emit(scope string) {
 	}
 }
 
+func TestRunRemoteHostSyncLoopEmitsSyncedSessions(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		primary := &recordingEmitter{}
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "remote-host", 5*time.Millisecond, func() (int, error) { return 1, nil }, primary, nil, done)
+			close(exited)
+		}()
+		synctest.Wait()
+		synctest.Sleep(5 * time.Millisecond)
+		assert.Equal(t, []string{"sessions"}, primary.scopes)
+		close(done)
+		synctest.Wait()
+		<-exited
+	})
+}
+
 func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		em := &scopedEmitter{scopes: make(chan string, 1)}
