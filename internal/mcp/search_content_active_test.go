@@ -90,16 +90,16 @@ func TestSearchContent_ActivityCutoffContinuationInputs(t *testing.T) {
 			_, out, err := ts.searchContent(t.Context(), nil, in)
 			if tc.wantErr != "" {
 				require.EqualError(t, err, tc.wantErr)
-				assert.Empty(t, fake.lastReq.Pattern)
+				assert.Empty(t, fake.request.Pattern)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, in.Cursor, fake.lastReq.Cursor)
-			assert.Equal(t, tc.cutoff, fake.lastReq.ExcludeActiveSince)
+			assert.Equal(t, in.Cursor, fake.request.Cursor)
+			assert.Equal(t, tc.cutoff, fake.request.ExcludeActiveSince)
 			assert.Equal(t, tc.cutoff, out.ActivityCutoff)
 			assert.Equal(t, tc.cutoff != "", out.Exclusions.RecentActive)
 			if in.CurrentSessionID != "current" {
-				assert.Empty(t, fake.lastReq.ExcludeSessionIDs)
+				assert.Empty(t, fake.request.ExcludeSessionIDs)
 				assert.Empty(t, out.Exclusions.CurrentSessionID)
 			}
 		})
@@ -173,6 +173,55 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 			}
 			assert.ElementsMatch(t, []string{"idle", "malformed", "missing-idle", "boundary"}, ids)
 			assert.Equal(t, map[string]int{"active": 1, "idle": 1, "malformed": 1, "missing-active": 1, "missing-idle": 1, "boundary": 1, "crossing": 1}, lookups)
+		})
+	}
+}
+
+func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
+	for _, response := range []string{"active", "mixed", "idle"} {
+		t.Run(response, func(t *testing.T) {
+			lookups := map[string]int{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api/v1/search/content" {
+					assert.Equal(t, "2024-06-15T11:50:00Z", r.URL.Query().Get("exclude_active_since"))
+					if r.URL.Query().Get("include_one_shot") != "true" {
+						_, _ = w.Write([]byte(`{"matches":[]}`))
+						return
+					}
+					if response == "active" {
+						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"}]}`))
+					} else if response == "idle" {
+						_, _ = w.Write([]byte(`{"matches":[{"session_id":"idle"}],"next_cursor":50}`))
+					} else {
+						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"},{"session_id":"idle"}],"next_cursor":50}`))
+					}
+					return
+				}
+				id := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
+				lookups[id]++
+				activity := "2024-06-15T11:59:00Z"
+				if id == "idle" {
+					activity = "2024-06-15T10:00:00Z"
+				}
+				_, _ = fmt.Fprintf(w, `{"id":%q,"ended_at":%q}`, id, activity)
+			}))
+			defer srv.Close()
+			ts := &toolset{svc: servicehttp.NewHTTPBackend(srv.URL, "", false, ""), now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "marker"})
+			require.NoError(t, err)
+			assert.Empty(t, out.Matches)
+			if response != "idle" {
+				assert.Equal(t, 1, lookups["active"])
+			}
+			if response == "active" {
+				assert.Empty(t, out.Hints)
+				return
+			}
+			require.Len(t, out.Hints, 1)
+			assert.Equal(t, "at least 1 match is in one-shot sessions, hidden by default", out.Hints[0].Message)
+			assert.Equal(t, map[string]any{"include_one_shot": true}, out.Hints[0].RetryWith)
+			assert.Equal(t, 1, lookups["idle"])
 		})
 	}
 }

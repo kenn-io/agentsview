@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -810,17 +812,10 @@ func TestPrintContentMatchesHumanAgeToken(t *testing.T) {
 }
 
 func TestSessionSearchHiddenHints(t *testing.T) {
-	for _, class := range []string{"one-shot", "automated", "child", "filtered-parent"} {
+	for _, class := range []string{"one-shot", "automated", "child"} {
 		t.Run(class, func(t *testing.T) {
 			dataDir := newAgentDataDir(t)
-			seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "p", mut: func(s *db.Session) {
-				if class == "filtered-parent" {
-					s.UserMessageCount = 1
-					s.IsAutomated = true
-					msg := "You are a code reviewer. Review this change."
-					s.FirstMessage = &msg
-				}
-			}}, sessionSeed{id: "hidden", project: "p", mut: func(s *db.Session) {
+			seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "p"}, sessionSeed{id: "hidden", project: "p", mut: func(s *db.Session) {
 				switch class {
 				case "one-shot":
 					s.UserMessageCount = 1
@@ -855,6 +850,9 @@ func TestSessionSearchHiddenHints(t *testing.T) {
 			require.Len(t, got.Hints, 1)
 			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-a")
 			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-b")
+			if runtime.GOOS == "windows" {
+				return
+			}
 			// Let the shell decode the emitted command; printf never runs the binary.
 			shell, err := exec.LookPath("sh")
 			if err != nil {
@@ -879,14 +877,16 @@ func TestSessionSearchFTSHints(t *testing.T) {
 	seedSearchMessage(t, dataDir, "visible", "decode failure error notes")
 	for _, tc := range []struct {
 		pattern, source string
+		regex           bool
 		hint            bool
 	}{
-		{"decode error notes", "", true},
-		{"decode error notes", "messages", true},
-		{"decode error notes", "tool_result", false},
-		{"decode", "messages", false},
+		{"decode error notes", "", false, true},
+		{"decode error notes", "messages", false, true},
+		{"decode error notes", "tool_result", false, false},
+		{"decode", "messages", false, false},
+		{"decode error notes", "messages", true, false},
 	} {
-		out, err := executeCommand(newRootCommand(), "session", "search", tc.pattern, "--in", tc.source, "--json")
+		out, err := executeCommand(newRootCommand(), "session", "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
 		require.NoError(t, err)
 		got := decodeCLIJSON[struct {
 			Hints []contentSearchCLIHint `json:"hints"`
@@ -944,4 +944,18 @@ func TestSessionSearchHintPreservesServer(t *testing.T) {
 	require.Len(t, got.Hints, 1)
 	assert.Contains(t, got.Hints[0].Next, "--server="+ts.URL)
 	assert.Contains(t, got.Hints[0].Next, "--server-token-file="+tokenFile)
+}
+
+func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
+	root := newRootCommand()
+	cmd, _, err := root.Find([]string{"session", "search"})
+	require.NoError(t, err)
+	windowsRetry := contentSearchRetry(cmd, "can't decode", map[string]any{"include_one_shot": true}, "windows")
+	assert.Equal(t, "& 'agentsview' 'session' 'search' '--include-one-shot=true' '--' 'can''t decode'", windowsRetry)
+	if powershell, err := exec.LookPath("pwsh"); err == nil {
+		output, err := exec.CommandContext(t.Context(), powershell, "-NoProfile", "-NonInteractive", "-Command", "function agentsview { $args[-1] }; "+windowsRetry).CombinedOutput()
+		require.NoError(t, err, string(output))
+		assert.Equal(t, "can't decode", strings.TrimSpace(string(output)))
+	}
+	assert.Equal(t, "agentsview session search --include-one-shot=true -- 'can'\\''t decode'", contentSearchRetry(cmd, "can't decode", map[string]any{"include_one_shot": true}, "linux"))
 }

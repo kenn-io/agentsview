@@ -944,16 +944,20 @@ func (t *toolset) searchContent(
 		out.EffectiveScope = scope
 	}
 	activity := make(map[string]string)
-	for _, m := range res.Matches {
-		if legacy {
+	var keepMatch func(db.ContentMatch) bool
+	if cutoff != "" {
+		keepMatch = func(m db.ContentMatch) bool {
 			ts, ok := t.lookupActivity(ctx, m.SessionID, activity)
 			if !ok {
 				ts = m.Timestamp
 			}
-			if isActiveSince(ts, cutoffTime.Add(activeExclusionWindow)) {
-				out.ExcludedActive++
-				continue
-			}
+			return !isActiveSince(ts, cutoffTime.Add(activeExclusionWindow))
+		}
+	}
+	for _, m := range res.Matches {
+		if legacy && !keepMatch(m) {
+			out.ExcludedActive++
+			continue
 		}
 		out.Matches = append(out.Matches, contentMatch{
 			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
@@ -973,7 +977,7 @@ func (t *toolset) searchContent(
 		out.NextCursor = &nc
 	}
 	if out.ExcludedActive == 0 {
-		out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false)
+		out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
 	}
 	return nil, out, nil
 }

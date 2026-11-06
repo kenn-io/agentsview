@@ -3,12 +3,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -99,18 +101,7 @@ func newSessionSearchCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			hints := service.SearchContentHints(cmd.Context(), svc, req, res, true)
-			if len(res.Matches) == 0 && cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && mode == "substring" && len(strings.Fields(args[0])) > 1 && (len(sources) == 0 || len(sources) == 1 && sources[0] == "messages") {
-				retry := req
-				retry.Mode = "fts"
-				if page, err := svc.SearchContent(cmd.Context(), retry); err == nil && len(page.Matches) > 0 {
-					hints = append(hints, service.ContentSearchHint{Code: "try_fts", Message: fmt.Sprintf("substring search looks for the exact text %q; --fts matches the words anywhere in a message", args[0]), RetryWith: map[string]any{"fts": true}})
-				}
-			}
-			cliHints := make([]contentSearchCLIHint, 0, len(hints))
-			for _, hint := range hints {
-				cliHints = append(cliHints, contentSearchCLIHint{Code: hint.Code, Message: hint.Message, Next: contentSearchRetry(cmd, args[0], hint.RetryWith)})
-			}
+			cliHints := contentSearchHints(cmd.Context(), cmd, svc, req, res)
 			if reveal {
 				fmt.Fprintln(cmd.ErrOrStderr(),
 					"WARNING: --reveal prints full secret values; "+
@@ -514,7 +505,7 @@ type contentSearchCLIHint struct {
 	Next    string `json:"next"`
 }
 
-func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]any) string {
+func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]any, platform string) string {
 	parts := strings.Fields(cmd.CommandPath())
 	remaining := make(map[string]any, len(changes))
 	for name, value := range changes {
@@ -542,7 +533,31 @@ func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]a
 	}
 	parts = append(parts, "--", pattern)
 	for i, part := range parts {
-		parts[i] = shellquote.POSIX(part)
+		if platform == "windows" {
+			parts[i] = shellquote.PowerShell(part)
+		} else {
+			parts[i] = shellquote.POSIX(part)
+		}
+	}
+	if platform == "windows" {
+		return "& " + strings.Join(parts, " ")
 	}
 	return strings.Join(parts, " ")
+}
+
+func contentSearchHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest, res *service.ContentSearchResult) []contentSearchCLIHint {
+	hints := service.SearchContentHints(ctx, svc, req, res, true, nil)
+	messagesOnly := len(req.Sources) == 0 || len(req.Sources) == 1 && req.Sources[0] == "messages"
+	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly {
+		retry := req
+		retry.Mode = "fts"
+		if page, err := svc.SearchContent(ctx, retry); err == nil && len(page.Matches) > 0 {
+			hints = append(hints, service.ContentSearchHint{Code: "try_fts", Message: fmt.Sprintf("substring search looks for the exact text %q; --fts matches the words anywhere in a message", req.Pattern), RetryWith: map[string]any{"fts": true}})
+		}
+	}
+	cliHints := make([]contentSearchCLIHint, 0, len(hints))
+	for _, hint := range hints {
+		cliHints = append(cliHints, contentSearchCLIHint{Code: hint.Code, Message: hint.Message, Next: contentSearchRetry(cmd, req.Pattern, hint.RetryWith, runtime.GOOS)})
+	}
+	return cliHints
 }
