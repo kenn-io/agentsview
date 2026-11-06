@@ -53,6 +53,9 @@ func buildMirrorFixture(t *testing.T, path, sessionID string, prompts ...string)
 		Messages: []db.Message{
 			syncMessage(sessionID, 0, "user", prompt, ts),
 		},
+		Signals: db.SessionSignalUpdate{
+			QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+		},
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
@@ -61,11 +64,6 @@ func buildMirrorFixture(t *testing.T, path, sessionID string, prompts ...string)
 	_, err = rebuildMirror(
 		t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil,
 	)
-	require.NoError(t, err)
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	defer conn.Close()
-	_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET quality_signal_version = ?", db.CurrentQualitySignalVersion)
 	require.NoError(t, err)
 }
 

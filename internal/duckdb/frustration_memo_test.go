@@ -13,8 +13,10 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestDuckDBFrustrationMemoReuse(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+func TestDuckDBFrustrationMemoFollowsMirrorReplacement(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
 	buildMirrorFixture(t, path, "session", "this is broken")
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
@@ -30,27 +32,12 @@ func TestDuckDBFrustrationMemoReuse(t *testing.T) {
 	resp, err = store.GetAnalyticsSignals(t.Context(), db.AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 7, resp.QualityHealth.Totals.FrustrationMarkerCount)
-}
-
-func TestDuckDBFrustrationMemoFollowsMirrorReplacement(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "mirror.duckdb")
-	buildMirrorFixture(t, path, "session", "this is broken")
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer store.Close()
-	for range 2 {
-		resp, err := store.GetAnalyticsSignals(t.Context(), db.AnalyticsFilter{})
-		require.NoError(t, err)
-		assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	}
 
 	nextPath := filepath.Join(dir, "next.duckdb")
 	buildMirrorFixture(t, nextPath, "session", "Please explain this function.")
 	require.NoError(t, os.Rename(nextPath, path))
 	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
-	resp, err := store.GetAnalyticsSignals(t.Context(), db.AnalyticsFilter{})
+	resp, err = store.GetAnalyticsSignals(t.Context(), db.AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Zero(t, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
