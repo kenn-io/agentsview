@@ -12,7 +12,7 @@
   import { formatCount, formatRelativeTime } from "../../utils/format.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
-  import StateNotice from "../shared/StateNotice.svelte";
+  import MissingData from "../shared/MissingData.svelte";
   import { LatestRead } from "../../utils/latest-read.js";
   import {
     loadColumnWidths,
@@ -316,11 +316,11 @@
   {#if loading && files.length === 0}
     <div class="re-loading">{m.recent_edits_loading()}</div>
   {:else if files.length === 0}
-    <StateNotice class="re-empty" description={m.recent_edits_empty()}>
+    <MissingData title={m.recent_edits_empty()}>
       {#snippet icon()}
-        <PencilIcon size="16" strokeWidth="2" />
+        <PencilIcon size="24" strokeWidth="1.75" />
       {/snippet}
-    </StateNotice>
+    </MissingData>
   {:else}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div

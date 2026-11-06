@@ -10,9 +10,6 @@
     icon?: Snippet;
     children?: Snippet;
     role?: "status" | "note" | "alert";
-    /** `empty` is a quiet centered page state with no frame, kept apart
-        from the framed notices for read-only or unavailable states. */
-    variant?: "notice" | "empty";
     class?: string;
   }
 
@@ -22,16 +19,16 @@
     icon = undefined,
     children = undefined,
     role = undefined,
-    variant = "notice",
     class: className = "",
   }: Props = $props();
 </script>
 
-<!-- One inline block for read-only, unavailable, and empty-with-explanation
-     states on library pages: a muted surface, secondary body text, and an
-     optional neutral icon. It sits at the top of the content area, so every
-     page shows its state in the same place. -->
-<div class="state-notice {className}" class:state-notice--empty={variant === "empty"} {role}>
+<!-- One framed inline note for read-only and scope explanations on library
+     pages: a muted surface, secondary body text, and an optional neutral
+     icon. It sits at the top of the content area, so every page shows its
+     note in the same place. A page or panel with nothing to show uses
+     MissingData instead. -->
+<div class="state-notice {className}" {role}>
   {#if icon}
     <span class="state-notice__icon" aria-hidden="true">{@render icon()}</span>
   {/if}
@@ -86,48 +83,5 @@
     margin-right: 0.35em;
     color: var(--text-primary);
     font-weight: 600;
-  }
-
-  /* Empty page state: no frame or fill, centered, the title stacked over
-     its explanation, so it cannot be mistaken for an alert or filter bar. */
-  .state-notice.state-notice--empty {
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-3);
-    padding: 48px 16px;
-    border: 0;
-    background: transparent;
-    text-align: center;
-  }
-
-  :global(:root:not(.dark)) .state-notice.state-notice--empty {
-    background: transparent;
-  }
-
-  .state-notice--empty .state-notice__icon {
-    margin-top: 0;
-  }
-
-  .state-notice--empty .state-notice__icon :global(svg) {
-    width: 24px;
-    height: 24px;
-  }
-
-  /* Centered text keeps balanced lines so a lone phrase does not dangle. */
-  .state-notice--empty .state-notice__body {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    max-width: 44ch;
-    text-wrap: balance;
-  }
-
-  .state-notice--empty .state-notice__title {
-    margin-right: 0;
-  }
-
-  /* The explanation sits a clear step below the title. */
-  .state-notice--empty .state-notice__description {
-    color: var(--text-muted);
   }
 </style>
