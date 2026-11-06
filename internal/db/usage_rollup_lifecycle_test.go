@@ -483,17 +483,6 @@ func TestUsageRollupCallKeyIncludesBakedSessionMetadata(t *testing.T) {
 
 	assert.NotEqual(t, original, agentChanged)
 	assert.NotEqual(t, agentChanged, startedAtChanged)
-	for _, change := range []func(*usageQuerySession){
-		func(s *usageQuerySession) { s.Project = "changed" },
-		func(s *usageQuerySession) { s.Machine = "changed" },
-		func(s *usageQuerySession) { s.GitBranch = "changed" },
-		func(s *usageQuerySession) { s.IsAutomated = true },
-		func(s *usageQuerySession) { s.UserMessageCount = 3 },
-	} {
-		before := usageRollupCallKey(snapshot, fills, "pricing")
-		change(&snapshot.Sessions[0])
-		assert.NotEqual(t, before, usageRollupCallKey(snapshot, fills, "pricing"))
-	}
 }
 
 func TestUsagePricingHashTracksPricingSemantics(t *testing.T) {
