@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -245,7 +246,7 @@ func dailyUsageGroupRowStats(
 	require.NoError(t, err)
 	customModels := chCustomPricedModels(contexts, export.NewPricingResolver(catalog.rows))
 	var stats usageGroupRowStats
-	err = store.forEachDailyUsageGroupRow(t.Context(), filter, catalog.digest, customModels, func(r chDailyUsageGroupRow) error {
+	err = store.forEachDailyUsageGroupRow(t.Context(), filter, catalog.digest, customModels, false, func(r chDailyUsageGroupRow) error {
 		stats.rows++
 		stats.events += r.events
 		if r.explicit {
@@ -582,4 +583,57 @@ func TestServeStoreBackgroundPricesWithCustomRates(t *testing.T) {
 
 	local.SetCustomPricing(custom)
 	assertDailyUsageParity(t, local, serve)
+}
+
+func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
+	for _, custom := range []map[string]config.CustomModelRate{
+		nil,
+		{"round-test": {InputMicrodollarsPerMTok: 2_000_000, OutputMicrodollarsPerMTok: 3_000_000}},
+	} {
+		store, _, local := newUsagePriceStore(t)
+		local.SetCustomPricing(custom)
+		store.SetCustomPricing(custom)
+		for name, filter := range usagePriceFilters() {
+			for _, group := range []bool{false, true} {
+				filter.TopSessionsByGroup = group
+				for _, sort := range []string{"cost", "tokens"} {
+					filter.TopSessionsSort = sort
+					for _, limit := range []int{20, 2} {
+						want, err := local.GetTopSessionsByCost(t.Context(), filter, limit)
+						require.NoError(t, err, name)
+						for i := range want {
+							if want[i].StartedAt != "" {
+								parsed, err := time.Parse(time.RFC3339Nano, want[i].StartedAt)
+								require.NoError(t, err)
+								want[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
+							}
+							if want[i].Machine == "local" {
+								want[i].Machine = fixtureMachine
+							}
+						}
+						got, err := store.GetTopSessionsByCost(t.Context(), filter, limit)
+						require.NoError(t, err, name)
+						require.Equal(t, want, got, name)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newUsagePriceStore(t)
+	// Progress callbacks don't identify the query whose read has started.
+	// Keep contexts missing across attempts to exercise the bounded retry
+	// without depending on when a concurrent push reaches the group query.
+	_, err := store.conn.ExecContext(t.Context(), "TRUNCATE TABLE usage_price_contexts")
+	require.NoError(t, err)
+	filter := db.UsageFilter{Timezone: "UTC"}
+	top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
+	assert.ErrorIs(t, err, errUsagePriceContextChanged)
+	assert.Empty(t, top)
+	assert.Empty(t, store.topSessionTotals.entries, "a failed attempt must not cache partial totals")
+	_, err = store.GetDailyUsage(t.Context(), filter)
+	assert.ErrorIs(t, err, errUsagePriceContextChanged)
 }
