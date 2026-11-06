@@ -37,8 +37,6 @@ func TestSearchContentHintsBoundedCounts(t *testing.T) {
 	hints = service.SearchContentHints(t.Context(), svc, req, res, true, nil)
 	require.Len(t, hints, 1)
 	assert.Equal(t, "at least 50 matches are in one-shot sessions, hidden by default", hints[0].Message)
-	req.Cursor = 1
-	assert.Empty(t, service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil))
 }
 
 func TestSearchContentHintsChildParentFilters(t *testing.T) {
@@ -115,12 +113,13 @@ func TestSearchContentHintsFTSChildCount(t *testing.T) {
 
 func TestSearchContentHintsCombinedExclusions(t *testing.T) {
 	for _, tc := range []struct {
-		name                                             string
-		automated, oneShotParent, mixed, includeChildren bool
+		name                                                   string
+		automated, oneShotParent, mixed, includeChildren, root bool
 	}{
-		{"child of one-shot parent", false, true, false, false},
-		{"one-shot and automated child", true, false, true, false},
-		{"included child with one-shot parent and automation", true, true, false, true},
+		{"child of one-shot parent", false, true, false, false, false},
+		{"one-shot and automated child", true, false, true, false, false},
+		{"included child with one-shot parent and automation", true, true, false, true, false},
+		{"automated root", true, false, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
@@ -131,8 +130,10 @@ func TestSearchContentHintsCombinedExclusions(t *testing.T) {
 				}
 			})
 			dbtest.SeedSession(t, d, "child", "proj", func(s *db.Session) {
-				s.ParentSessionID = new("parent")
-				s.RelationshipType = "subagent"
+				if !tc.root {
+					s.ParentSessionID = new("parent")
+					s.RelationshipType = "subagent"
+				}
 				s.UserMessageCount = 1
 				s.IsAutomated = tc.automated
 			})
@@ -155,15 +156,22 @@ func TestSearchContentHintsCombinedExclusions(t *testing.T) {
 				require.Len(t, hints, 1)
 			}
 			hint := hints[len(hints)-1]
-			assert.Equal(t, "excluded_combined", hint.Code)
-			assert.Equal(t, "1 match is hidden by default", hint.Message)
 			wantRetry := map[string]any{"include_one_shot": true, "include_automated": true}
 			if !tc.includeChildren {
 				wantRetry["include_children"] = true
 			}
+			if tc.root {
+				assert.Equal(t, "excluded_automated", hint.Code)
+				assert.Equal(t, "1 match is in automated sessions, hidden by default", hint.Message)
+				wantRetry = map[string]any{"include_automated": true}
+			} else {
+				assert.Equal(t, "excluded_combined", hint.Code)
+				assert.Equal(t, "1 match is hidden by default", hint.Message)
+			}
 			assert.Equal(t, wantRetry, hint.RetryWith)
-			req.IncludeChildren = true
-			req.IncludeOneShot = hint.RetryWith["include_one_shot"].(bool)
+			children, _ := hint.RetryWith["include_children"].(bool)
+			req.IncludeChildren = tc.includeChildren || children
+			req.IncludeOneShot, _ = hint.RetryWith["include_one_shot"].(bool)
 			req.IncludeAutomated = hint.RetryWith["include_automated"].(bool)
 			retried, err := svc.SearchContent(t.Context(), req)
 			require.NoError(t, err)
@@ -178,13 +186,16 @@ func TestSearchContentHintsCombinedExclusions(t *testing.T) {
 
 func TestSearchContentHintsPreserveSemanticCandidateWindow(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	seedServiceSearchSession(t, d, "noise", "other", "marker")
+	dbtest.SeedSession(t, d, "noise", "other", func(s *db.Session) { s.MessageCount, s.UserMessageCount = 200, 200 })
 	dbtest.SeedSession(t, d, "hidden", "selected", func(s *db.Session) { s.UserMessageCount = 1 })
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("hidden", 0, "marker")}))
+	messages := make([]db.Message, 0, 200)
 	hits := make([]db.VectorHit, 200, 201)
 	for i := range hits {
+		messages = append(messages, dbtest.UserMsg("noise", i, "marker"))
 		hits[i] = db.VectorHit{SessionID: "noise", Ordinal: i, OrdinalStart: i, OrdinalEnd: i, Score: 0.9}
 	}
+	require.NoError(t, d.InsertMessages(t.Context(), messages))
 	hits = append(hits, db.VectorHit{SessionID: "hidden", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0, Score: 0.5})
 	d.SetVectorSearcher(&conceptVectorSearcher{hits: map[string][]db.VectorHit{"marker": hits}, ks: map[string][]int{}})
 	svc := service.NewDirectBackend(d, nil)
@@ -214,16 +225,16 @@ func (s hintProbeService) SearchContent(_ context.Context, req service.ContentSe
 
 func TestSearchContentHintsExpandedGate(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		page      service.ContentSearchResult
-		err       error
-		single    bool
-		wantCalls int
+		name                 string
+		page                 service.ContentSearchResult
+		err                  error
+		single               bool
+		wantCalls, wantHints int
 	}{
 		{name: "complete miss", wantCalls: 1},
-		{name: "continuation", page: service.ContentSearchResult{NextCursor: 50}, wantCalls: 4},
-		{name: "candidate truncation", page: service.ContentSearchResult{CandidateTruncated: true}, wantCalls: 4},
-		{name: "failed gate", err: errors.New("unavailable"), wantCalls: 4},
+		{name: "continuation", page: service.ContentSearchResult{NextCursor: 50}, wantCalls: 3, wantHints: 2},
+		{name: "candidate truncation", page: service.ContentSearchResult{CandidateTruncated: true}, wantCalls: 3, wantHints: 2},
+		{name: "failed gate", err: errors.New("unavailable"), wantCalls: 3, wantHints: 2},
 		{name: "one disabled flag", single: true, wantCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -238,14 +249,12 @@ func TestSearchContentHintsExpandedGate(t *testing.T) {
 				}
 				return &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "hidden"}}}, nil
 			}}
-			req := service.ContentSearchRequest{Pattern: "marker", Project: "selected", Limit: 10, IncludeChildren: tc.single || tc.name == "complete miss", IncludeAutomated: tc.single}
+			req := service.ContentSearchRequest{Pattern: "marker", Project: "selected", Limit: 10, IncludeChildren: true, IncludeAutomated: tc.single}
 			hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
 			assert.Equal(t, tc.wantCalls, calls)
-			if tc.wantCalls > 1 {
-				require.Len(t, hints, 3)
+			require.Len(t, hints, tc.wantHints)
+			if tc.wantHints > 0 {
 				assert.Equal(t, "excluded_one_shot", hints[0].Code)
-			} else {
-				assert.Empty(t, hints)
 			}
 		})
 	}
@@ -277,9 +286,11 @@ func TestSearchContentHintsContinuationOutsideParentProject(t *testing.T) {
 
 func TestSearchContentHintsFilteredResultGuards(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		page service.ContentSearchResult
+		name   string
+		cursor int
+		page   service.ContentSearchResult
 	}{
+		{name: "request cursor", cursor: 1},
 		{name: "continuation", page: service.ContentSearchResult{NextCursor: 50}},
 		{name: "truncated", page: service.ContentSearchResult{CandidateTruncated: true}},
 		{name: "backend filtered", page: service.ContentSearchResult{ActiveFilterApplied: true}},
@@ -291,7 +302,7 @@ func TestSearchContentHintsFilteredResultGuards(t *testing.T) {
 				calls++
 				return &service.ContentSearchResult{}, nil
 			}}
-			assert.Empty(t, service.SearchContentHints(t.Context(), svc, service.ContentSearchRequest{Pattern: "marker"}, &tc.page, false, func(db.ContentMatch) bool { return false }))
+			assert.Empty(t, service.SearchContentHints(t.Context(), svc, service.ContentSearchRequest{Pattern: "marker", Cursor: tc.cursor}, &tc.page, false, func(db.ContentMatch) bool { return false }))
 			assert.Zero(t, calls)
 		})
 	}

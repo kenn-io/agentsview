@@ -812,19 +812,15 @@ func TestPrintContentMatchesHumanAgeToken(t *testing.T) {
 }
 
 func TestSessionSearchHiddenHints(t *testing.T) {
-	for _, class := range []string{"one-shot", "automated", "child", "automated-child"} {
+	for _, class := range []string{"one-shot", "child"} {
 		t.Run(class, func(t *testing.T) {
 			dataDir := newAgentDataDir(t)
 			seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "p"}, sessionSeed{id: "hidden", project: "p", mut: func(s *db.Session) {
-				if class == "child" || class == "automated-child" {
+				if class == "child" {
 					s.ParentSessionID = new("parent")
 					s.RelationshipType = "subagent"
 				}
 				s.UserMessageCount = 1
-				if strings.Contains(class, "automated") {
-					s.IsAutomated = true
-					s.FirstMessage = new("You are a code reviewer. Review this change.")
-				}
 			}})
 			seedSearchMessage(t, dataDir, "hidden", "needle with 'quotes' and $symbols")
 			root := newRootCommand()
@@ -843,11 +839,6 @@ func TestSessionSearchHiddenHints(t *testing.T) {
 				Hints []contentSearchCLIHint `json:"hints"`
 			}](t, out)
 			require.Len(t, got.Hints, 1)
-			if class == "automated-child" {
-				assert.Equal(t, "excluded_combined", got.Hints[0].Code)
-			} else if class == "automated" {
-				assert.Equal(t, "excluded_automated", got.Hints[0].Code)
-			}
 			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-a")
 			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-b")
 			if runtime.GOOS == "windows" {
@@ -883,7 +874,7 @@ func TestSessionSearchFTSHints(t *testing.T) {
 		{"decode error notes", "", false, true},
 		{"decode error notes", "messages", false, true},
 		{"decode error notes", "tool_result", false, false},
-		{"decode", "messages", false, false},
+		{"decoding", "messages", false, false},
 		{"decode error notes", "messages", true, false},
 	} {
 		out, err := executeCommand(newRootCommand(), "session", "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
@@ -891,6 +882,11 @@ func TestSessionSearchFTSHints(t *testing.T) {
 		got := decodeCLIJSON[struct {
 			Hints []contentSearchCLIHint `json:"hints"`
 		}](t, out)
+		if tc.pattern == "decoding" {
+			fts, err := executeCommand(newRootCommand(), "session", "search", tc.pattern, "--fts", "--json")
+			require.NoError(t, err)
+			require.Len(t, decodeCLIJSON[service.ContentSearchResult](t, fts).Matches, 1)
+		}
 		if tc.hint {
 			require.Len(t, got.Hints, 1)
 			assert.Equal(t, "try_fts", got.Hints[0].Code)

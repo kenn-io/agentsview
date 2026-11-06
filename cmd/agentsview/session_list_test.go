@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -128,7 +129,7 @@ func TestSessionListIncludeSource(t *testing.T) {
 	})
 }
 
-func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
+func TestSessionListLabelsSkipChildCountsWithExplicitExclusions(t *testing.T) {
 	for _, toggle := range []string{"--include-one-shot=false", "--include-automated=false"} {
 		dataDir := newAgentDataDir(t)
 		seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "proj"}, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
@@ -268,13 +269,7 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 	require.Equal(t, 1, got.Total)
 	require.Len(t, got.Sessions, 1)
 	assert.Equal(t, "included", got.Sessions[0]["id"])
-	assert.Contains(t, stderr.String(), "Excluded 3 sessions by default")
-	assert.Contains(t, stderr.String(), "1 one-shot")
-	assert.Contains(t, stderr.String(), "1 automated")
-	assert.Contains(t, stderr.String(), "1 child")
-	assert.Contains(t, stderr.String(), "--include-children")
-	assert.Contains(t, stderr.String(), "--include-one-shot")
-	assert.Contains(t, stderr.String(), "--include-automated")
+	assert.Equal(t, "Excluded 3 sessions by default: 1 one-shot, 1 automated, 1 child. Use --include-one-shot --include-automated --include-children to include them.\n", stderr.String())
 }
 
 // TestResolveSinceFlag_ResolvesRelativeWindow is a fast unit test of the
@@ -312,53 +307,28 @@ func TestResolveSinceFlag_RejectsBothSet(t *testing.T) {
 }
 
 func TestSessionListReportsCombinedDefaultExclusions(t *testing.T) {
-	for _, included := range []bool{false, true} {
-		t.Run(fmt.Sprint(included), func(t *testing.T) {
-			dataDir := newAgentDataDir(t)
-			seedSessionsWithOpts(t, dataDir,
-				sessionSeed{id: "parent", project: "proj", mut: func(s *db.Session) {
-					if included {
-						s.UserMessageCount = 1
-					}
-				}},
-				sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
-					s.ParentSessionID = new("parent")
-					s.RelationshipType = "subagent"
-					s.UserMessageCount = 1
-					s.FirstMessage = new("You are a code reviewer. Review this change.")
-				}},
-			)
-			root := newRootCommand()
-			var stdout, stderr bytes.Buffer
-			root.SetOut(&stdout)
-			root.SetErr(&stderr)
-			args := []string{"session", "list", "--json"}
-			flags := "--include-one-shot --include-automated"
-			if included {
-				args = append(args, "--include-children")
-			} else {
-				flags += " --include-children"
-			}
-			root.SetArgs(args)
-			require.NoError(t, root.Execute())
-			wantNotice := "Excluded 1 session by default: 1 child. Use " + flags + " to include them.\n"
-			if included {
-				wantNotice = "Excluded 2 sessions by default: 1 one-shot, 1 child. Use " + flags + " to include them.\n"
-			}
-			assert.Equal(t, wantNotice, stderr.String())
-			visible := decodeCLIJSON[cliSessionList](t, stdout.String())
-			if included {
-				assert.Empty(t, visible.Sessions)
-			} else {
-				require.Len(t, visible.Sessions, 1)
-			}
-			out, err := executeCommand(newRootCommand(), "session", "list", "--json", "--include-one-shot", "--include-automated", "--include-children")
-			require.NoError(t, err)
-			retried := decodeCLIJSON[cliSessionList](t, out)
-			require.Len(t, retried.Sessions, 2)
-			assert.ElementsMatch(t, []any{"parent", "child"}, []any{retried.Sessions[0]["id"], retried.Sessions[1]["id"]})
-		})
-	}
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "parent", project: "proj", mut: func(s *db.Session) { s.UserMessageCount = 1 }},
+		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
+			s.ParentSessionID = new("parent")
+			s.RelationshipType = "subagent"
+			s.UserMessageCount = 1
+			s.FirstMessage = new("You are a code reviewer. Review this change.")
+		}},
+	)
+	root := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"session", "list", "--json", "--include-children"})
+	require.NoError(t, root.Execute())
+	assert.Equal(t, "Excluded 2 sessions by default: 1 one-shot, 1 child. Use --include-one-shot --include-automated to include them.\n", stderr.String())
+	visible := decodeCLIJSON[cliSessionList](t, stdout.String())
+	assert.Empty(t, visible.Sessions)
+	out, err := executeCommand(newRootCommand(), "session", "list", "--json", "--include-one-shot", "--include-automated", "--include-children")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"parent", "child"}, sessionListIDs(t, out))
 }
 
 func TestSessionListChildMembershipWithContinuations(t *testing.T) {
@@ -421,12 +391,25 @@ func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 }
 
 func TestSessionListChildMembershipPartialPage(t *testing.T) {
-	for _, tc := range []struct{ name, page, want string }{
-		{"cursor", `{"sessions":[{"id":"a","relationship_type":"subagent"},{"id":"b","relationship_type":"fork"}],"total":2,"next_cursor":"next"}`, "Excluded at least 2 sessions by default: at least 2 child. Use --include-children to include them."},
-		{"total without cursor", `{"sessions":[{"id":"a","relationship_type":"subagent"},{"id":"b","relationship_type":"fork"}],"total":501}`, "Excluded at least 2 sessions by default: at least 2 child. Use --include-children to include them."},
-		{"no observed child", `{"sessions":[{"id":"a","relationship_type":"continuation"}],"total":501,"next_cursor":"next"}`, ""},
+	for _, tc := range []struct {
+		name     string
+		children bool
+		want     string
+	}{
+		{"partial page", true, "Excluded at least 2 sessions by default: at least 2 child. Use --include-children to include them."},
+		{"no observed child", false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			page := service.SessionList{Sessions: make([]db.Session, db.MaxSessionLimit), Total: 501, NextCursor: "next"}
+			for i := range page.Sessions {
+				page.Sessions[i].ID = fmt.Sprintf("session-%d", i)
+			}
+			page.Sessions[0].RelationshipType = "continuation"
+			if tc.children {
+				page.Sessions[0].RelationshipType, page.Sessions[1].RelationshipType = "subagent", "fork"
+			}
+			body, err := json.Marshal(page)
+			require.NoError(t, err)
 			calls := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
@@ -434,7 +417,7 @@ func TestSessionListChildMembershipPartialPage(t *testing.T) {
 					assert.Equal(t, want, r.URL.Query().Get(key), key)
 				}
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = fmt.Fprint(w, tc.page)
+				_, _ = w.Write(body)
 			}))
 			defer srv.Close()
 			svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
@@ -456,34 +439,22 @@ func TestSessionListKeepsResultsWhenChildCountFails(t *testing.T) {
 			return
 		}
 		calls++
-		assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
-		assert.Equal(t, "true", r.URL.Query().Get("include_automated"))
-		if r.URL.Query().Get("include_children") == "true" {
-			http.Error(w, "child count unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		_, _ = w.Write([]byte(`{"sessions":[{"id":"visible"}],"total":1}`))
-	}))
-	defer srv.Close()
-	out, err := executeCommand(newRootCommand(), "session", "list", "--server", srv.URL, "--include-one-shot", "--include-automated", "--json")
-	require.NoError(t, err)
-	assert.Equal(t, 2, calls)
-	assert.Equal(t, []string{"visible"}, sessionListIDs(t, out))
-}
-
-func TestSessionListKeepsMeasuredCountsWhenChildCountFails(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("include_children") == "true" {
 			http.Error(w, "child count unavailable", http.StatusServiceUnavailable)
 		} else if r.URL.Query().Get("include_one_shot") == "true" {
 			_, _ = w.Write([]byte(`{"total":2}`))
 		} else {
-			_, _ = w.Write([]byte(`{"total":1}`))
+			_, _ = w.Write([]byte(`{"sessions":[{"id":"visible"}],"total":1}`))
 		}
 	}))
 	defer srv.Close()
-	notice, err := sessionListDefaultExclusionNotice(t.Context(), servicehttp.NewHTTPBackend(srv.URL, "", false, ""), service.ListFilter{}, 1)
-	require.NoError(t, err)
-	assert.Equal(t, "Excluded 1 session by default: 1 one-shot. Use --include-one-shot to include them.", notice)
+	root := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"session", "list", "--server", srv.URL, "--json"})
+	require.NoError(t, root.Execute())
+	assert.Equal(t, 4, calls)
+	assert.Equal(t, "Excluded 1 session by default: 1 one-shot. Use --include-one-shot to include them.\n", stderr.String())
+	assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
 }

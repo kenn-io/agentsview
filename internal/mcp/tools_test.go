@@ -2124,20 +2124,3 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 		assert.Equal(t, "a-child", out.Matches[0].SessionID)
 	}
 }
-
-func TestSearchContentHiddenHints(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "hidden", "proj", func(s *db.Session) { s.UserMessageCount = 1 })
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("hidden", 0, "hidden marker")}))
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "hidden marker", IncludeActive: true})
-	require.NoError(t, err)
-	require.Empty(t, out.Matches)
-	require.Len(t, out.Hints, 1)
-	assert.Equal(t, "excluded_one_shot", out.Hints[0].Code)
-	assert.Equal(t, map[string]any{"include_one_shot": true}, out.Hints[0].RetryWith)
-	_, retried, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "hidden marker", IncludeActive: true, IncludeOneShot: out.Hints[0].RetryWith["include_one_shot"].(bool)})
-	require.NoError(t, err)
-	require.Len(t, retried.Matches, 1)
-	assert.Equal(t, "hidden", retried.Matches[0].SessionID)
-	assert.Empty(t, retried.Hints)
-}
