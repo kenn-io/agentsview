@@ -153,8 +153,10 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 			return db.activityReportCandidateSQL(misses, wide, keepCounted)(ctx, func(c activity.IntervalCandidate) error {
 				if buffer, ok := buffers[c.SessionID]; ok {
 					if buffered == activityMemoMaxCandidates {
-						// Skip storing reports that cannot fit to avoid cache churn.
+						// Skip storing reports that cannot fit to avoid cache churn,
+						// and stop keeping counted messages nothing will store.
 						buffers = nil
+						counted = nil
 					} else {
 						buffers[c.SessionID] = append(buffer, c)
 						buffered++
