@@ -649,6 +649,63 @@ func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 	}
 }
 
+func TestLiveEmbeddingsSetupRequiresConsentAfterOllamaStops(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+	})
+	var ollama, approved atomic.Bool
+	ollama.Store(true)
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{OllamaAvailable: ollama.Load(), DownloadBytes: 295_000_000}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		return "", embedlocal.ErrNotFound
+	}
+	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		consent, err := opts.Confirm(ctx, 295_000_000)
+		approved.Store(consent)
+		if err != nil {
+			return embedlocal.Installation{}, err
+		}
+		if consent {
+			return embedlocal.Installation{}, errors.New("unexpected download started")
+		}
+		return embedlocal.Installation{}, errors.New("download was not approved")
+	}
+	owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	status := func() vector.BuildStatus {
+		var result vector.BuildStatus
+		body := embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/embeddings/status", "", nil, http.StatusOK)
+		require.NoError(t, json.Unmarshal(body, &result))
+		require.NotNil(t, result.Setup)
+		return result
+	}
+	initial := status()
+	require.Equal(t, "ollama", initial.Setup.Provider)
+	require.Equal(t, "turn-on", initial.Setup.Action)
+	// The Ollama row shows no download disclosure. Its server can stop after
+	// that status response, before the user's Turn on request is admitted.
+	ollama.Store(false)
+	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"turn-on"}`), http.StatusAccepted)
+	<-owner.done
+	assert.False(t, approved.Load(), "Turn on after an Ollama status must not approve an undisclosed 295 MB download")
+	recovery := status()
+	assert.Equal(t, "built-in", recovery.Setup.Provider)
+	assert.EqualValues(t, 295_000_000, recovery.Setup.MissingBytes)
+	assert.Equal(t, "turn-on", recovery.Setup.Action)
+	assert.Contains(t, recovery.Setup.Error, "download")
+}
+
 func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
 	dir := testDataDir(t)
 	raw := "[vector]\nenabled = true\n[vector.embeddings]\ndefault_server = 'ollama'\nmodel = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\n[vector.embeddings.servers.sibling]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n"
