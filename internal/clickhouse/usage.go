@@ -2249,7 +2249,7 @@ func (s *Store) usageRowMemoKey(
 	if sessionID != "" {
 		version, err = s.partsFingerprint(ctx)
 	} else {
-		version, err = s.usageReadFingerprint(ctx, state)
+		version, err = s.usageReadFingerprint(ctx, state, pricingDigest)
 	}
 	if err != nil {
 		return "", "", err
@@ -2274,12 +2274,13 @@ var chRawHostUsageTables = []string{"usage_messages", "usage_events"}
 
 // usageReadFingerprint identifies the rows a usage read sees. Fully prepared
 // reads keep their version across merges. Raw and mixed reads name parts.
-func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState) (string, error) {
+// pricingDigest names the price records the read joins; see usageRowsVersion.
+func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState, pricingDigest string) (string, error) {
 	if !state.ready {
 		return s.partsFingerprint(ctx)
 	}
 	if len(state.raw) == 0 {
-		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables)
+		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables, pricingDigest)
 		if err != nil || !ok {
 			return "", err
 		}
@@ -2298,9 +2299,27 @@ type usageTableVersion struct {
 	parts, identity string
 }
 
+// chUsagePriceTable keeps the price records of every pricing digest the
+// mirror was ever priced under, and a push never removes a digest's records,
+// so the table grows by a full set of records with each catalog change. A
+// read joins only the records of one digest.
+const chUsagePriceTable = "usage_event_prices"
+
+// usageVersionKey names the rows of a table a read can see: the whole table,
+// or for chUsagePriceTable only the records of pricingDigest.
+func usageVersionKey(table, pricingDigest string) string {
+	if table == chUsagePriceTable {
+		return table + "@" + pricingDigest
+	}
+	return table
+}
+
 // usageRowsVersion probes only tables whose parts changed. If parts move
-// during the probe or the probe fails, the read is served uncached.
-func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, bool, error) {
+// during the probe or the probe fails, the read is served uncached. The
+// version names only pricingDigest's price records: hashing every digest's
+// records read the whole table, which took two minutes on a mirror holding
+// hundreds of digests.
+func (s *Store) usageRowsVersion(ctx context.Context, tables []string, pricingDigest string) (string, bool, error) {
 	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	if !ok {
 		var err error
@@ -2314,13 +2333,13 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 	defer s.usageVersions.Unlock()
 	var changed []string
 	for _, table := range tables {
-		kept, exists := s.usageVersions.tables[table]
+		kept, exists := s.usageVersions.tables[usageVersionKey(table, pricingDigest)]
 		if !exists || kept.parts != snapshot[table] {
 			changed = append(changed, table)
 		}
 	}
 	if len(changed) > 0 {
-		identities, err := s.readUsageRowIdentities(ctx, changed)
+		identities, err := s.readUsageRowIdentities(ctx, changed, pricingDigest)
 		if err != nil {
 			s.logUsageReadiness(fmt.Sprintf("row identity probe failed, serving uncached: %v", err))
 			return "", false, nil
@@ -2336,11 +2355,11 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 			}
 		}
 		for i, table := range changed {
-			s.usageVersions.tables[table] = usageTableVersion{snapshot[table], identities[i]}
+			s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{snapshot[table], identities[i]}
 		}
 	}
 	return tableValuesFingerprint(tables, func(table string) string {
-		return s.usageVersions.tables[table].identity
+		return s.usageVersions.tables[usageVersionKey(table, pricingDigest)].identity
 	}), true, nil
 }
 
@@ -2348,20 +2367,27 @@ func chUsageRowHashSQL(columns string) string {
 	return "reinterpretAsUInt128(sipHash128Reference(tuple(" + columns + ")))"
 }
 
-// readUsageRowIdentities returns one identity per table, in order.
-func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string) ([]string, error) {
+// readUsageRowIdentities returns one identity per table, in order. The
+// price table's identity covers only pricingDigest's records, which the
+// table's sort key reads without touching the other digests.
+func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string, pricingDigest string) ([]string, error) {
 	queries := make([]string, len(tables))
+	var args []any
 	for i, table := range tables {
-		columns := "*"
-		if table == "usage_session_snapshots" {
+		columns, where := "*", ""
+		switch table {
+		case "usage_session_snapshots":
 			// Revision identifies the usage arrays without hashing them; push_version identifies publication.
 			columns = "id, revision, push_version"
+		case chUsagePriceTable:
+			where = " WHERE pricing_digest = ?"
+			args = append(args, pricingDigest)
 		}
-		queries[i] = fmt.Sprintf("assumeNotNull((SELECT toString(tuple(count(), sumWithOverflow(%s))) FROM %s))",
-			chUsageRowHashSQL(columns), table)
+		queries[i] = fmt.Sprintf("assumeNotNull((SELECT toString(tuple(count(), sumWithOverflow(%s))) FROM %s%s))",
+			chUsageRowHashSQL(columns), table, where)
 	}
 	identities := make([]string, len(tables))
-	if err := s.queryRowContext(ctx, "SELECT ["+strings.Join(queries, ",")+"]").Scan(&identities); err != nil {
+	if err := s.queryRowContext(ctx, "SELECT ["+strings.Join(queries, ",")+"]", args...).Scan(&identities); err != nil {
 		return nil, fmt.Errorf("reading clickhouse usage row identities: %w", err)
 	}
 	return identities, nil
