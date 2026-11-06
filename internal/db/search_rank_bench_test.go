@@ -7,7 +7,8 @@ import (
 )
 
 // seedSearchRankBenchmark writes 2,000 sessions of 50 messages with 1-3 KB
-// bodies. Every assistant message mentions "handler", and every user message
+// bodies of varying word counts, so their ranks differ as transcript ranks
+// do. Every assistant message mentions "handler", and every user message
 // and session title mentions "refactor", so a search matches 50,000 messages
 // across all sessions and has to rank them to fill one page of sessions.
 func seedSearchRankBenchmark(b *testing.B) *DB {
@@ -30,7 +31,7 @@ func seedSearchRankBenchmark(b *testing.B) *DB {
 		SELECT s.id, n.i,
 			CASE WHEN n.i % 2 = 0 THEN 'user' ELSE 'assistant' END,
 			CASE WHEN n.i % 2 = 1 THEN 'the handler checks ' ELSE 'please refactor ' END
-				|| hex(randomblob(500 + (n.i * 397) % 1000)),
+				|| replace(hex(randomblob(500 + (n.i * 397 + CAST(substr(s.id, 6) AS INTEGER) * 7919) % 1000)), '0', ' '),
 			strftime('%Y-%m-%dT%H:%M:%SZ', s.started_at, printf('+%d minutes', n.i)),
 			1000 + (n.i * 397) % 2000,
 			CASE WHEN n.i % 2 = 1 THEN 'claude-sonnet-4-5' ELSE '' END
