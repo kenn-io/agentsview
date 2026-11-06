@@ -18,9 +18,9 @@ reader connections so quick reads always get one. Each holder uses one reader
 connection at a time. Validate input before acquiring a permit. Release it
 before waiting for another bulk reader or doing host git/GitHub lookups.
 
-The archive writer and readers each cache up to 64 prepared SQL statements per
-connection to avoid compiling repeated import and freshness queries. Each cache
-stays in memory and closes with its connection.
+The archive writer caches up to 64 prepared SQL statements per connection to
+avoid compiling repeated import queries. The cache stays in memory and closes
+with its connection.
 
 The startup worker snapshots freshness for digest-capable providers while it
 holds the archive write lock, before the daemon opens the archive; later passes
