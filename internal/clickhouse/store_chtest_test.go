@@ -13,6 +13,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
+	"go.kenn.io/agentsview/internal/readbase/readbasetest"
 )
 
 func TestReadStatusHonorsProjectFilters(t *testing.T) {
@@ -137,26 +139,19 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NotEmpty(t, window)
 		assert.Equal(t, 1, window[len(window)-1].Ordinal)
 
-		first, err := store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{Limit: 1, Asc: true})
-		require.NoError(t, err)
-		require.Len(t, first, 1)
-		assert.Equal(t, 0, first[0].Ordinal)
-		assert.Empty(t, first[0].ToolCalls)
+		recorder := &readbasetest.RecordingSessions{SessionsBackend: sessionsSQL{store}, T: t}
+		reader := readbase.NewSessions(recorder)
 		for _, tc := range []struct {
-			ordinal int
-			counts  [2]int
-		}{{0, [2]int{0, 0}}, {1, [2]int{2, 1}}} {
-			for i, query := range []string{sessionsSQL{store}.ToolCallsSQL(1), sessionsSQL{store}.ToolResultEventsSQL(1)} {
-				rows, err := store.queryContext(ctx, query, fixtureAlphaID, tc.ordinal)
-				require.NoError(t, err)
-				count := 0
-				for rows.Next() {
-					count++
-				}
-				require.NoError(t, rows.Err())
-				require.NoError(t, rows.Close())
-				assert.Equal(t, tc.counts[i], count)
-			}
+			ordinal      int
+			toolOrdinals [][]int
+		}{{0, [][]int{{}, {}}}, {1, [][]int{{1, 1}, {1}}}} {
+			recorder.ToolOrdinals = nil
+			window, err := reader.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{From: &tc.ordinal, Limit: 1, Asc: true})
+			require.NoError(t, err)
+			require.Len(t, window, 1)
+			assert.Equal(t, tc.ordinal, window[0].Ordinal)
+			assert.Equal(t, asc[tc.ordinal].ToolCalls, window[0].ToolCalls)
+			assert.Equal(t, tc.toolOrdinals, recorder.ToolOrdinals)
 		}
 
 		counts, err := store.GetResumeModelCounts(ctx, fixtureAlphaID)

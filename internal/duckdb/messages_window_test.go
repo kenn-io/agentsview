@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
+	"go.kenn.io/agentsview/internal/readbase/readbasetest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -244,26 +246,6 @@ func TestDuckGetMessagesWindowReadsOnlyWindowToolRows(t *testing.T) {
 		_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: *sess, Messages: msgs, ReplaceMessages: true, DataVersion: 1}})
 		require.NoError(t, err)
 	})
-	for _, query := range []string{sessionsSQL{store}.ToolCallsSQL(2), sessionsSQL{store}.ToolResultEventsSQL(2)} {
-		rows, err := store.queryContext(ctx, query, "tools", 6, 11)
-		require.NoError(t, err)
-		columns, err := rows.Columns()
-		require.NoError(t, err)
-		values := make([]any, len(columns))
-		var ordinal int
-		values[0] = &ordinal
-		for i := 1; i < len(values); i++ {
-			values[i] = new(any)
-		}
-		var ordinals []int
-		for rows.Next() {
-			require.NoError(t, rows.Scan(values...))
-			ordinals = append(ordinals, ordinal)
-		}
-		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
-		assert.Equal(t, []int{6, 11}, ordinals)
-	}
 	all, err := store.GetAllMessages(ctx, "tools")
 	require.NoError(t, err)
 	require.Len(t, all, 12)
@@ -271,13 +253,18 @@ func TestDuckGetMessagesWindowReadsOnlyWindowToolRows(t *testing.T) {
 	assert.Equal(t, "result", all[6].ToolCalls[0].ResultContent)
 	require.Len(t, all[6].ToolCalls[0].ResultEvents, 1)
 	from := 5
+	recorder := &readbasetest.RecordingSessions{SessionsBackend: sessionsSQL{store}, T: t}
+	reader := readbase.NewSessions(recorder)
 	for _, roles := range [][]string{nil, {"assistant"}} {
-		window, err := store.GetMessagesWindow(ctx, "tools", db.MessageWindow{From: &from, Limit: 4, Asc: true, Roles: roles})
+		recorder.ToolOrdinals = nil
+		window, err := reader.GetMessagesWindow(ctx, "tools", db.MessageWindow{From: &from, Limit: 4, Asc: true, Roles: roles})
 		require.NoError(t, err)
 		if roles == nil {
 			assert.Equal(t, []int{5, 6, 7, 8}, duckOrdinalsOf(window))
+			assert.Equal(t, [][]int{{6, 8}, {6, 8}}, recorder.ToolOrdinals)
 		} else {
 			assert.Equal(t, []int{6, 8, 11}, duckOrdinalsOf(window))
+			assert.Equal(t, [][]int{{6, 8, 11}, {6, 8, 11}}, recorder.ToolOrdinals)
 		}
 		for _, msg := range window {
 			assert.Equal(t, all[msg.Ordinal].ToolCalls, msg.ToolCalls)

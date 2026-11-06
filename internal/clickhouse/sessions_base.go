@@ -3,7 +3,6 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -97,10 +96,7 @@ func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Mess
 }
 
 func (s sessionsSQL) ToolCallsSQL(ordinals int) string {
-	filter := ""
-	if ordinals > 0 {
-		filter = " AND message_ordinal IN (" + strings.TrimSuffix(strings.Repeat("?,", ordinals), ",") + ")"
-	}
+	filter := readbase.OrdinalFilterSQL("message_ordinal", ordinals)
 	return `
 		SELECT message_ordinal, call_index, tool_name, category,
 			tool_use_id, input_json, skill_name, result_content_length,
@@ -111,10 +107,7 @@ func (s sessionsSQL) ToolCallsSQL(ordinals int) string {
 }
 
 func (s sessionsSQL) ToolResultEventsSQL(ordinals int) string {
-	filter := ""
-	if ordinals > 0 {
-		filter = " AND tool_call_message_ordinal IN (" + strings.TrimSuffix(strings.Repeat("?,", ordinals), ",") + ")"
-	}
+	filter := readbase.OrdinalFilterSQL("tool_call_message_ordinal", ordinals)
 	return `
 		SELECT tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id, source, status,
