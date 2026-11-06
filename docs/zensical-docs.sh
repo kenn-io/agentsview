@@ -90,8 +90,7 @@ tmp_config_base=""
 # libarchive's bsdtar strips the leading './' from the pattern and matches it
 # at the start of any path element, so it also dropped nested paths such as
 # assets/generated/screenshots/. Picking the top-level entries here gives both
-# tars the same result. '--exclude ./*.go' stays on tar: '*' crosses '/' in
-# both, so both drop .go files at any depth.
+# tars the same result.
 copy_entries=()
 while IFS= read -r -d '' entry; do
   case "${entry#./}" in
@@ -113,18 +112,16 @@ if [[ ${#copy_entries[@]} -eq 0 ]]; then
   exit 1
 fi
 
+# find also names every path below those entries, so tar archives no excluded
+# member: .go files at any depth, and anything named *.sh below the top-level
+# assets/. Extracting an excluded member and deleting it later fails on
+# Windows, where tar cannot create a symlink before its target exists.
 (
   cd "$docs_root"
-  tar \
-    --exclude './*.go' \
-    -cf - "${copy_entries[@]}"
+  find "${copy_entries[@]}" \
+    \( -name '*.go' -o -path './assets/*' -name '*.sh' \) -prune -o -print0 |
+    tar --null --no-recursion -cf - -T -
 ) | (cd "$tmp_docs" && tar -xf -)
-
-# Below the top-level assets/ only, drop everything named *.sh at any depth
-# (files, links and directories), as GNU tar's './assets/*.sh' exclude did.
-if [[ -d "$tmp_docs/assets" ]]; then
-  find "$tmp_docs/assets" -name '*.sh' -prune -exec rm -rf -- {} +
-fi
 
 # Docs render under /docs/; the hand-written website tier owns the site root.
 docs_output_dir="$site_output_dir/docs"
