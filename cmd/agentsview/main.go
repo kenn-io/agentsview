@@ -130,8 +130,7 @@ type serveOptions struct {
 	BasePath        string
 	Pprof           bool
 	// ReloadConfig rebuilds the configuration with the same layers and flags
-	// as startup so saved provider settings apply without a restart. Nil
-	// leaves the startup provider set in place until the daemon restarts.
+	// as startup so saved provider settings apply without a restart.
 	ReloadConfig func() (config.Config, error)
 }
 
