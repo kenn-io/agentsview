@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 
@@ -13,12 +14,12 @@ import (
 )
 
 type activityKept struct {
-	report                   kept.Report
-	revision                 int64
-	read, labels             []string
-	rangeStart, rangeEnd     string
-	paddedLower, paddedUpper string
-	startInstant, endInstant string
+	report                           kept.Report
+	revision                         int64
+	read, labels                     []string
+	filter                           AnalyticsFilter
+	rangeStart, rangeEnd             string
+	usageLowerBound, usageUpperBound string
 }
 
 func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
@@ -52,11 +53,11 @@ func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
 
 func (db *DB) keptActivityReport(ctx context.Context, selection, version string, revision int64) (kept.Report, bool, error) {
 	entries, ok := db.activityKept.Get(selection, version)
-	if !ok || revision < entries[0].revision {
+	if !ok {
 		return kept.Report{}, false, nil
 	}
 	entry := entries[0]
-	changed, latestRevision, err := db.loadKeptActivityUsageChanges(ctx, entry.revision)
+	changed, err := db.LoadUsageChanges(ctx, entry.revision, math.MaxInt64)
 	if err != nil {
 		return kept.Report{}, false, err
 	}
@@ -70,21 +71,45 @@ func (db *DB) keptActivityReport(ctx context.Context, selection, version string,
 		if err != nil {
 			return kept.Report{}, false, err
 		}
-		var overlaps bool
+		where, args := activityReportSessionSelectionWhere(
+			entry.filter, entry.rangeStart, entry.rangeEnd,
+		)
+		args = append(args, string(ids))
+		var eligible bool
 		err = db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
-			SELECT 1 FROM json_each(?) changed JOIN sessions s ON s.id = changed.value
-			WHERE (`+activityReportSessionWindowPredicate()+`)
-			OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id
-				AND m.timestamp >= ? AND m.timestamp < ?
-				AND agentsview_timestamp_unix_micro(m.timestamp) IS NOT NULL
-				AND agentsview_timestamp_unix_micro(m.timestamp) >= agentsview_timestamp_unix_micro(?)
-				AND agentsview_timestamp_unix_micro(m.timestamp) < agentsview_timestamp_unix_micro(?))
-			LIMIT 1)`, string(ids), entry.rangeStart, entry.rangeStart, entry.rangeEnd,
-			entry.paddedLower, entry.paddedUpper, entry.startInstant, entry.endInstant).Scan(&overlaps)
+			SELECT 1 FROM sessions s
+			WHERE `+where+`
+				AND s.id IN (SELECT value FROM json_each(?))
+			LIMIT 1)`, args...).Scan(&eligible)
 		if err != nil {
-			return kept.Report{}, false, fmt.Errorf("checking kept activity changes: %w", err)
+			return kept.Report{}, false, fmt.Errorf("checking kept activity session changes: %w", err)
 		}
-		if overlaps {
+		if eligible {
+			return kept.Report{}, false, nil
+		}
+
+		readIDs, err := json.Marshal(entry.read)
+		if err != nil {
+			return kept.Report{}, false, err
+		}
+		var peerMatches bool
+		err = db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1
+			FROM json_each(?) changed
+			JOIN messages m ON m.session_id = changed.value
+			JOIN sessions s ON s.id = m.session_id
+			WHERE `+usageMessageEligibility+`
+				AND m.session_id NOT IN (SELECT value FROM json_each(?))
+				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
+				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
+				AND `+activityReportClaudePeerPredicate("(SELECT value FROM json_each(?))")+`
+			LIMIT 1)`, string(ids), string(readIDs), entry.usageLowerBound,
+			entry.usageUpperBound, string(readIDs), entry.usageLowerBound,
+			entry.usageUpperBound).Scan(&peerMatches)
+		if err != nil {
+			return kept.Report{}, false, fmt.Errorf("checking kept activity Claude peers: %w", err)
+		}
+		if peerMatches {
 			return kept.Report{}, false, nil
 		}
 	}
@@ -95,43 +120,9 @@ func (db *DB) keptActivityReport(ctx context.Context, selection, version string,
 	if !reflect.DeepEqual(export.ProjectMapForWire(projects), entry.report.Artifacts.Report.Projects) {
 		return kept.Report{}, false, nil
 	}
-	if latestRevision > revision {
-		revision = latestRevision
+	if revision > entry.revision {
+		entry.revision = revision
 	}
-	entry.revision = revision
 	db.activityKept.Put(selection, version, []activityKept{entry})
 	return entry.report, true, nil
-}
-
-func (db *DB) loadKeptActivityUsageChanges(ctx context.Context, afterRevision int64) ([]string, int64, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT session_id, revision
-		FROM usage_session_changes
-		WHERE revision > ?
-		ORDER BY revision`, afterRevision)
-	if err != nil {
-		return nil, afterRevision, fmt.Errorf("listing kept activity usage changes: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []string
-	latestRevision := afterRevision
-	for rows.Next() {
-		var id string
-		var changedRevision int64
-		if err := rows.Scan(&id, &changedRevision); err != nil {
-			return nil, afterRevision, fmt.Errorf("scanning kept activity usage change: %w", err)
-		}
-		ids = append(ids, id)
-		if changedRevision > latestRevision {
-			latestRevision = changedRevision
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, afterRevision, fmt.Errorf("iterating kept activity usage changes: %w", err)
-	}
-	return ids, latestRevision, nil
 }

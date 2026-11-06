@@ -116,8 +116,6 @@ func (db *DB) BuildActivityReportArtifacts(
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
 	lowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-	startInstant := q.RangeStart.UTC().Format(time.RFC3339Nano)
-	endInstant := q.RangeEnd.UTC().Format(time.RFC3339Nano)
 
 	sessions, ids, err := db.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC)
@@ -142,9 +140,8 @@ func (db *DB) BuildActivityReportArtifacts(
 		db.activityKept.Put(selection, version, []activityKept{{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
 			read: read, labels: activity.ProjectLabels(sessions),
-			rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC,
-			paddedLower: lowerBound, paddedUpper: upperBound,
-			startInstant: startInstant, endInstant: endInstant,
+			filter: f, rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC,
+			usageLowerBound: lowerBound, usageUpperBound: upperBound,
 		}})
 	}
 	return artifacts, err
@@ -458,8 +455,7 @@ func (db *DB) activityReportSessionsFrom(
 	f AnalyticsFilter,
 	rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
-	where, args := f.buildWhereWithDate("", false, "s.id")
-	args = append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
+	where, args := activityReportSessionSelectionWhere(f, rangeStartUTC, rangeEndUTC)
 
 	// Each Title candidate is NULLIF'd independently (not a nested
 	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
@@ -476,8 +472,7 @@ func (db *DB) activityReportSessionsFrom(
 		COALESCE(s.is_automated, 0),
 		s.relationship_type = 'subagent'
 	FROM sessions s
-	WHERE ` + where + `
-		AND ` + activityReportSessionWindowPredicate()
+	WHERE ` + where
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -512,6 +507,15 @@ func (db *DB) activityReportSessionsFrom(
 		ids = append(ids, session.SessionID)
 	}
 	return sessions, ids, nil
+}
+
+func activityReportSessionSelectionWhere(
+	f AnalyticsFilter,
+	rangeStartUTC, rangeEndUTC string,
+) (string, []any) {
+	where, args := f.buildWhereWithDate("", false, "s.id")
+	args = append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
+	return where + " AND " + activityReportSessionWindowPredicate(), args
 }
 
 func activityReportSessionWindowPredicate() string {
@@ -973,6 +977,22 @@ type activityReportUsageCandidate struct {
 	ordinal int64
 }
 
+func activityReportClaudePeerPredicate(candidateSessions string) string {
+	return `m.claude_message_id != ''
+		AND m.claude_request_id != ''
+		AND (m.claude_message_id, m.claude_request_id) IN (
+			SELECT m.claude_message_id, m.claude_request_id
+			FROM messages m
+			JOIN sessions s ON s.id = m.session_id
+			WHERE ` + usageMessageEligibility + `
+				AND m.session_id IN ` + candidateSessions + `
+				AND m.claude_message_id != ''
+				AND m.claude_request_id != ''
+				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
+				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
+		)`
+}
+
 func (db *DB) loadActivityReportUsageCandidatesFrom(
 	ctx context.Context,
 	source sessionExportQuerier,
@@ -1012,19 +1032,7 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 		// Exclude candidate sessions here: UNION ALL must not load them twice.
 		peerWhere := usageMessageEligibility + `
 			AND m.session_id NOT IN ` + candidateSessions + `
-			AND m.claude_message_id != ''
-			AND m.claude_request_id != ''
-			AND (m.claude_message_id, m.claude_request_id) IN (
-				SELECT m.claude_message_id, m.claude_request_id
-				FROM messages m
-				JOIN sessions s ON s.id = m.session_id
-				WHERE ` + usageMessageEligibility + `
-					AND m.session_id IN ` + candidateSessions + `
-					AND m.claude_message_id != ''
-					AND m.claude_request_id != ''
-					AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
-					AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
-			)`
+			AND ` + activityReportClaudePeerPredicate(candidateSessions)
 		rowsSQL += "\nUNION ALL\n" + fmt.Sprintf(
 			dailyUsageMessageRowsSQLTemplate, "messages", peerWhere,
 		)

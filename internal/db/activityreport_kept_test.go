@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +30,17 @@ func keptActivitySession(t *testing.T, d *DB, id, project, date string) {
 		Message{SessionID: id, Ordinal: 0, Role: "user", Content: "question", Timestamp: date + "T10:00:00Z"},
 		Message{SessionID: id, Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: date + "T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":500}`)},
 	)
+}
+
+func keptActivitySessionWithClaudePair(
+	t *testing.T, d *DB, id, project, date, messageID, requestID string,
+) {
+	t.Helper()
+	keptActivitySession(t, d, id, project, date)
+	_, err := d.getWriter().ExecContext(t.Context(), `
+		UPDATE messages SET claude_message_id = ?, claude_request_id = ?
+		WHERE session_id = ? AND ordinal = 1`, messageID, requestID, id)
+	require.NoError(t, err)
 }
 
 func keptActivityBuild(t *testing.T, d *DB, f AnalyticsFilter, q activity.Query, wantUsage bool) activity.CandidateArtifacts {
@@ -60,7 +72,7 @@ func clearKeptActivity(d *DB) { d.activityKept.DeleteSlots(func(string) bool { r
 
 func TestActivityReportKeptReuse(t *testing.T) {
 	d := testDB(t)
-	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	keptActivitySessionWithClaudePair(t, d, "past", "project-a", "2026-06-14", "past-message", "past-request")
 	keptActivitySession(t, d, "current", "project-a", "2026-06-17")
 	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
 	first := keptActivityBuild(t, d, f, q, true)
@@ -76,6 +88,43 @@ func TestActivityReportKeptReuse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, result.WrittenSessions)
 	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+}
+
+func TestActivityReportKeptResumedSessionPeerChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		messageID string
+		requestID string
+		wantUsage bool
+	}{
+		{name: "fresh Claude IDs"},
+		{name: "matching Claude IDs", messageID: "past-message", requestID: "past-request", wantUsage: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			keptActivitySessionWithClaudePair(t, d, "past", "project-a", "2026-06-14", "past-message", "past-request")
+			q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+			first := keptActivityBuild(t, d, f, q, true)
+			require.Len(t, first.Sessions, 1)
+
+			insertSession(t, d, "resumed-today", "project-a", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = new("2026-06-17T10:00:00Z")
+				s.EndedAt = new("2026-06-17T10:01:00Z")
+				s.MessageCount = 1
+			})
+			insertMessages(t, d, Message{
+				SessionID: "resumed-today", Ordinal: 0, Role: "assistant", Content: "resumed",
+				Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model",
+				TokenUsage:      []byte(`{"output_tokens":100}`),
+				ClaudeMessageID: tc.messageID, ClaudeRequestID: tc.requestID,
+			})
+			after := keptActivityBuild(t, d, f, q, tc.wantUsage)
+			if !tc.wantUsage {
+				requireKeptActivityEqual(t, first, after)
+			}
+		})
+	}
 }
 
 func TestActivityReportKeptJournalReadsChangesPastSnapshot(t *testing.T) {
@@ -101,51 +150,13 @@ func TestActivityReportKeptJournalReadsChangesPastSnapshot(t *testing.T) {
 	require.Greater(t, snapshot, cachedRevision)
 	assert.Greater(t, snapshot, before)
 	require.NoError(t, d.RenameSession(t.Context(), "past", new("second rename")))
-	var latestJournalRevision int64
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(),
-		`SELECT revision FROM usage_session_changes WHERE session_id = 'past'`).Scan(&latestJournalRevision))
-	require.Greater(t, latestJournalRevision, snapshot)
-	boundedChanges, err := d.LoadUsageChanges(t.Context(), cachedRevision, snapshot)
+	changes, err := d.LoadUsageChanges(t.Context(), cachedRevision, math.MaxInt64)
 	require.NoError(t, err)
-	require.Empty(t, boundedChanges)
+	require.Contains(t, changes, "past")
 
 	_, hit, err := d.keptActivityReport(t.Context(), selection, version, snapshot)
 	require.NoError(t, err)
 	assert.False(t, hit, "the second write to one session must invalidate the kept report")
-}
-
-func TestActivityReportKeptAdvancesPastJournalSnapshot(t *testing.T) {
-	d := testDB(t)
-	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
-	keptActivitySession(t, d, "today", "project-a", "2026-06-17")
-	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{
-		Timezone: "UTC", IncludeForks: true, IncludeSubagents: true,
-	}
-	keptActivityBuild(t, d, f, q, true)
-	selection := kept.Selection(f, q)
-	cacheVersion, _, err := d.activityKeptVersion(t.Context())
-	require.NoError(t, err)
-	entries, ok := d.activityKept.Get(selection, cacheVersion)
-	require.True(t, ok)
-	cachedRevision := entries[0].revision
-
-	require.NoError(t, d.RenameSession(t.Context(), "today", new("first rename")))
-	version, snapshot, err := d.activityKeptVersion(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, cacheVersion, version)
-	require.NoError(t, d.RenameSession(t.Context(), "today", new("second rename")))
-	var latestJournalRevision int64
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(),
-		`SELECT revision FROM usage_session_changes WHERE session_id = 'today'`).Scan(&latestJournalRevision))
-	require.Greater(t, latestJournalRevision, snapshot)
-
-	_, hit, err := d.keptActivityReport(t.Context(), selection, version, snapshot)
-	require.NoError(t, err)
-	require.True(t, hit)
-	entries, ok = d.activityKept.Get(selection, version)
-	require.True(t, ok)
-	assert.Equal(t, latestJournalRevision, entries[0].revision)
-	assert.Greater(t, entries[0].revision, cachedRevision)
 }
 
 func TestActivityReportKeptInvalidatesForTerminalEventAfterRange(t *testing.T) {
@@ -313,6 +324,22 @@ func TestActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.Equal(t, money.MustParseDollars("0.005"), a.Report.Totals.Cost)
 		}},
+		{name: "effective pricing", write: func(t *testing.T, d *DB) {
+			t.Helper()
+			rate := export.ModelRates{OutputPerMTok: money.MustParseDollars("20"), Source: export.PricingRowSourceFetched}
+			d.SetEffectivePricing(map[string]export.ModelRates{"kept-model": rate})
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Equal(t, money.MustParseDollars("0.01"), a.Report.Totals.Cost)
+		}},
+		{name: "empty catalog pricing", write: func(t *testing.T, d *DB) {
+			t.Helper()
+			rate := export.ModelRates{OutputPerMTok: money.MustParseDollars("20"), Source: export.PricingRowSourceEmbedded}
+			d.SetEmptyCatalogPricing(map[string]export.ModelRates{"kept-model": rate})
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Equal(t, money.MustParseDollars("0.01"), a.Report.Totals.Cost)
+		}},
 		{name: "custom pricing", write: func(t *testing.T, d *DB) {
 			t.Helper()
 			d.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
@@ -348,6 +375,17 @@ func TestActivityReportKeptChanges(t *testing.T) {
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
 			t.Helper()
 			assert.Equal(t, 1400, a.Report.Totals.OutputTokens)
+		}},
+		{name: "appended message", write: func(t *testing.T, d *DB) {
+			t.Helper()
+			insertMessages(t, d, Message{
+				SessionID: "past", Ordinal: 2, Role: "assistant", Content: "another answer",
+				Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model",
+				TokenUsage: []byte(`{"output_tokens":100}`),
+			})
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Equal(t, 600, a.Report.Totals.OutputTokens)
 		}},
 		{name: "excluded Claude peer", prepare: func(t *testing.T, d *DB) {
 			t.Helper()
@@ -388,6 +426,34 @@ func TestActivityReportKeptChanges(t *testing.T) {
 			requireKeptActivityEqual(t, changed, keptActivityBuild(t, d, f, q, false))
 		})
 	}
+}
+
+func TestActivityReportKeptUsesCurrentActiveFilterForChangedSessions(t *testing.T) {
+	d := testDB(t)
+	now := time.Now().UTC()
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "custom", From: now.Add(-time.Hour).Format(time.RFC3339),
+		To: now.Add(time.Hour).Format(time.RFC3339), Timezone: "UTC",
+	}, now.Add(2*time.Hour))
+	require.NoError(t, err)
+	insertAt := func(id string, at time.Time) {
+		timestamp := at.UTC().Format(time.RFC3339)
+		insertSession(t, d, id, "project-a", func(s *Session) {
+			s.Agent = "claude"
+			s.StartedAt = new(timestamp)
+			s.EndedAt = new(timestamp)
+			s.MessageCount = 1
+		})
+	}
+	insertAt("active", now)
+	f := AnalyticsFilter{
+		Timezone: "UTC", Project: "project-a", Termination: "active",
+	}
+	first := keptActivityBuild(t, d, f, q, true)
+	require.Len(t, first.Sessions, 1)
+
+	insertAt("inactive", now.Add(-20*time.Minute))
+	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
 }
 
 func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {

@@ -821,3 +821,24 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 		}
 	}
 }
+
+func TestCopyOrphanedDataDoesNotCarryUsagePricingRevision(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	source := testDBAtPath(t, sourcePath, "source")
+	_, err := source.getWriter().ExecContext(t.Context(), `
+		INSERT INTO archive_metadata (key, value) VALUES ('usage_pricing_revision', '42')`)
+	require.NoError(t, err)
+	require.NoError(t, source.Close())
+
+	destination := testDBAtPath(t, filepath.Join(dir, "destination.db"), "destination")
+	defer destination.Close()
+	require.NoError(t, destination.CopySyncStateFrom(t.Context(), sourcePath))
+	_, err = destination.CopyOrphanedDataFrom(t.Context(), sourcePath)
+	require.NoError(t, err)
+
+	var revision string
+	err = destination.getReader().QueryRowContext(t.Context(), `
+		SELECT value FROM archive_metadata WHERE key = 'usage_pricing_revision'`).Scan(&revision)
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+}

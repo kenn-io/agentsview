@@ -13,8 +13,9 @@ The report is built from timestamped session activity and usage rows. It
 includes one-shot and automated sessions by default, then lets you narrow the
 result with the page controls.
 
-On a local archive, reopening an ended range reuses its finished report until a
-session in or entering its range, pricing, or project identity changes.
+On a local archive, reopening an ended range reuses its finished report while
+later sessions sync; changes to report sessions, matching Claude usage, pricing,
+or project identity make the next open rebuild.
 
 ## Range And Filters
 
