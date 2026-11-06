@@ -15,6 +15,9 @@ import (
 func TestUsageGrokImportsCSVWithoutSessions(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	// Server and vector settings are unused by a local billing import.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(
+		"public_url = 'not-a-url'\n[vector]\nenabled = true\n[vector.embeddings.servers]\n"), 0o600))
 	path := filepath.Join(t.TempDir(), "usage.csv")
 	content := `Billing Item ID,Event Time,Product,Charge Category,Usage Type,Principal Type,Principal ID,Usage,Pricing Currency,Pricing Contracted,Model,User Email
 item-a,2026-11-05T00:30:00Z,grok-build,usage,included,user,user-a,"{""Prompt text tokens"":""300000001"",""Completion text tokens"":""100000002"",""Cached prompt text tokens"":""400000003"",""cache-write-text-tokens"":""200000004""}",USD,0,,member@example.com

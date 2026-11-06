@@ -483,7 +483,7 @@ func loadCursorUsageRollupBuild(
 		fact.Fact.Source = fact.Agent
 		fact.Fact.Model = fact.Model
 		fact.Fact.CostSource = fact.Agent + "-reported"
-		fact.Fact.RequestScoped = true
+		// Account totals do not establish a single request's context size.
 		fact.Fact.TokenEligible = true
 		fact.Fact.ReportedCostMicrodollars = &charged
 		if millis.Valid {

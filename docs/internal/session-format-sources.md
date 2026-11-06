@@ -1803,8 +1803,9 @@ fixtures retain this field; missing identities remain source-local.
   for included usage. Products observed
   are `grok-build`, `grok-bot`, and `cursor`. Grok models can be blank. Billing
   IDs identify account events, with no native session or request identity for
-  cross-source reconciliation. `agentsview usage grok` imports these events
-  without reconstructing conversations or inferring models.
+  cross-source reconciliation. Unknown per-request context sizes keep cache
+  savings estimates at base model rates. `agentsview usage grok` imports these
+  events without reconstructing conversations or inferring models.
 
 - **Format:** Workspace-scoped session directories containing `summary.json`, a
   derived `chat_history.jsonl` model-message cache, and an authoritative

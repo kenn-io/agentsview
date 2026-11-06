@@ -29,7 +29,7 @@ func newUsageGrokCommand() *cobra.Command {
 			if closeErr != nil {
 				return closeErr
 			}
-			cfg, err := config.LoadMinimal()
+			cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 			if err != nil {
 				return err
 			}

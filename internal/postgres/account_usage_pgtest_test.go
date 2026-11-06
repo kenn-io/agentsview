@@ -74,6 +74,29 @@ func TestAccountUsageAgentsPostgresParity(t *testing.T) {
 	requireCompleteUsageParity(t, local, remote, db.UsageFilter{
 		From: "2026-08-12", To: "2026-08-12", Timezone: "America/New_York", Breakdowns: true,
 	})
+
+	t.Run("aggregate billing cache savings", func(t *testing.T) {
+		require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+			ModelPattern: "billing-banded", InputPerMTok: money.MustParseDollars("10"),
+			CacheCreationPerMTok: money.MustParseDollars("12"), CacheReadPerMTok: money.MustParseDollars("1"),
+			Bands: []db.PricingBand{{
+				AboveInputTokens: 200_000, InputPerMTok: money.MustParseDollars("20"),
+				CacheCreationPerMTok: money.MustParseDollars("24"), CacheReadPerMTok: money.MustParseDollars("2"),
+			}},
+		}}))
+		require.NoError(t, local.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
+			Agent: "grok", OccurredAt: "2026-11-04T13:00:00Z", Model: "billing-banded",
+			InputTokens: 300_000, CacheWriteTokens: 100_000, CacheReadTokens: 400_000, DedupKey: "xai:banded",
+		}}))
+		_, err := syncer.Push(t.Context(), false, nil)
+		require.NoError(t, err)
+		filter := db.UsageFilter{From: "2026-11-04", To: "2026-11-04", Timezone: "UTC", Agent: "grok", Model: "billing-banded"}
+		requireCompleteUsageParity(t, local, remote, filter)
+		got, err := remote.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Zero(t, got.Totals.TotalCost.Microdollars)
+		assert.Equal(t, money.MustParseDollars("3.40"), got.Totals.CacheSavings)
+	})
 }
 
 func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {

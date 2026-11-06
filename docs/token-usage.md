@@ -174,6 +174,8 @@ Prompt, completion, cached prompt, and cache-write counters stay separate.
 Billing counters may aggregate many requests and have no per-request token cap.
 Costs come from the export's USD `Pricing Contracted` field, rounded to
 microdollars. A reported $0 stays $0 even when model pricing is available.
+Cache savings are estimates at base model rates; aggregate counters do not
+establish a single request's context size for pricing bands.
 Blank models remain blank in the archive and display as `<unknown>` in reports.
 Event timestamps retain their instant in UTC; reports use the selected timezone.
 

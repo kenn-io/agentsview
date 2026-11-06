@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestAccountUsageEventsKeepAgentsDatesAndReportedZero(t *testing.T) {
@@ -72,11 +74,39 @@ func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 	_, err = OpenReadOnly(t.Context(), path)
 	require.Error(t, err)
 	assert.True(t, IsSchemaUpgradeRequired(err))
-	d = testDBAtPath(t, path, "migration")
-	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{event}))
-	rows, err := d.GetCursorUsageEvents(t.Context(), 0)
+	migrated, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, migrated.Close()) })
+	rows, err := migrated.GetCursorUsageEvents(t.Context(), 0)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "cursor", rows[0].Agent)
+	assert.Equal(t, event.OccurredAt, rows[0].OccurredAt)
+	assert.Equal(t, event.Model, rows[0].Model)
+	assert.Equal(t, event.DedupKey, rows[0].DedupKey)
 	assert.Equal(t, 12, rows[0].InputTokens)
+}
+
+func TestAccountUsageUsesBaseRatesForCacheSavings(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "billing-banded", InputPerMTok: money.MustParseDollars("10"),
+		CacheCreationPerMTok: money.MustParseDollars("12"), CacheReadPerMTok: money.MustParseDollars("1"),
+		Bands: []PricingBand{{
+			AboveInputTokens: 200_000, InputPerMTok: money.MustParseDollars("20"),
+			CacheCreationPerMTok: money.MustParseDollars("24"), CacheReadPerMTok: money.MustParseDollars("2"),
+		}},
+	}}))
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
+		Agent: "grok", OccurredAt: "2026-11-04T13:00:00Z", Model: "billing-banded",
+		InputTokens: 300_000, CacheWriteTokens: 100_000, CacheReadTokens: 400_000, DedupKey: "xai:banded",
+	}}))
+	filter := UsageFilter{From: "2026-11-04", To: "2026-11-04", Timezone: "UTC", Agent: "grok"}
+	got, err := d.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Zero(t, got.Totals.TotalCost.Microdollars)
+	assert.Equal(t, money.MustParseDollars("3.40"), got.Totals.CacheSavings)
+	live, err := d.getDailyUsageLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, live.Totals, got.Totals)
 }

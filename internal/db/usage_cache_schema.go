@@ -60,7 +60,8 @@ const (
 	// 17 caches without them, so keeping 17 would fail their schema check and
 	// leave those archives on a temporary cache after every restart.
 	// Version 19 preserves account agents and uncapped billing counters.
-	usageCacheFormatVersion             = 19
+	// Version 20 rebuilds account billing rollups without request pricing bands.
+	usageCacheFormatVersion             = 20
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
