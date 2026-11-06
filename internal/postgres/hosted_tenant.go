@@ -89,7 +89,7 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		DROP TABLE IF EXISTS usage_session_changes;
 		DO $cleanup$ BEGIN
 		IF to_regclass('sync_metadata') IS NOT NULL THEN
-		    DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock');
+		    DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version');
 		END IF;
 		END $cleanup$;`); err != nil {
 		return err

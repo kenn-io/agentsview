@@ -14,23 +14,21 @@ The PostgreSQL usage optimization baseline and its architecture boundary are
 recorded in `docs/internal/pg-usage-native-optimization.md`.
 
 On the current development branch, the schema owner's next push installs a usage
-change journal for future report reuse. Installation briefly blocks writes on
-the watched tables. Restricted publishers can use the installed journal; an
-owner must install it first. CockroachDB skips this journal.
+change journal for future report reuse. Creating missing triggers takes a
+`SHARE ROW EXCLUSIVE` lock on the watched tables until installation commits.
+Reads continue, and writes wait for installation. The installer grants journal
+reads to roles that already have `SELECT` on `sessions`. Restricted publishers
+can use the installed journal; an owner must install it first. CockroachDB skips
+this journal.
 
-`BenchmarkPGConcurrentPush` measures four concurrent pushes into an empty schema,
-with 400 sessions, 8,000 messages, and 800 usage events per writer. Five
-interleaved runs of each build on PostgreSQL 18.6 produced these wall times;
-fixture creation and schema setup were outside the timer.
+The journal records messages, usage events, and plan usage through the push's
+`sessions.updated_at` update. Journal readers return the revision and changed
+session IDs from the same snapshot. Consumers use that returned revision as the
+starting point for their next read. A journal version in `sync_metadata` keeps
+older binaries from replacing or reading a newer journal format.
 
-| Build | Median | Range |
-| --- | --- | --- |
-| Base | 60.0 s | 18.1 to 101.7 s |
-| Base again, A/A control | 17.3 s | 16.1 to 54.7 s |
-| With journal | 34.2 s | 12.0 to 87.0 s |
-
-The two base medians differ by 71%, so these runs cannot isolate the journal's
-concurrent-push cost. The benchmark file runs unchanged on both builds.
+`BenchmarkPGConcurrentPush` compares four concurrent pushes on base and branch.
+Fixture creation and schema setup run outside the timer.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes

@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -43,8 +42,10 @@ BEGIN
 END;
 `
 
+const usageChangeJournalVersionPG = 1
+
 var usageChangeTablesPG = []struct{ table, sessionColumn string }{
-	{"sessions", "id"}, {"usage_events", "session_id"}, {"session_plan_usage", "session_id"},
+	{"sessions", "id"},
 	{"model_pricing", ""}, {"model_pricing_bands", ""}, {"genai_pricing", ""}, {"cursor_usage_events", ""},
 	{"source_project_identity_observations", ""}, {"source_project_identity_observation_scopes", ""},
 	{"source_session_project_identity_snapshots", ""}, {"source_session_project_identity_snapshot_scopes", ""},
@@ -53,13 +54,9 @@ var usageChangeTablesPG = []struct{ table, sessionColumn string }{
 
 func usageChangeJournalCurrentPG(ctx context.Context, q hostedQuerier) (bool, error) {
 	var current bool
-	err := q.QueryRowContext(ctx, `SELECT
-    to_regclass('usage_session_changes') IS NOT NULL
-    AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_revision')
-    AND EXISTS (SELECT 1 FROM pg_proc WHERE oid = to_regprocedure('mark_usage_change()') AND prosrc = $1)
-    AND (SELECT count(*) FROM pg_trigger WHERE tgfoid = to_regprocedure('mark_usage_change()')
-         AND tgenabled = 'O' AND tgdeferrable AND tginitdeferred) = $2`,
-		usageChangeFunctionBodyPG, len(usageChangeTablesPG)*3).Scan(&current)
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (
+ SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value::bigint >= $1
+)`, usageChangeJournalVersionPG).Scan(&current)
 	return current, err
 }
 
@@ -116,48 +113,88 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
 			name := "trg_uc_" + table.table + "_" + strings.ToLower(event)
 			condition := ""
+			if table.table == "model_pricing" || table.table == "model_pricing_bands" {
+				const oldModel = `OLD.model_pattern NOT LIKE '\_%'`
+				const newModel = `NEW.model_pattern NOT LIKE '\_%'`
+				switch event {
+				case "INSERT":
+					condition = newModel
+				case "DELETE":
+					condition = oldModel
+				case "UPDATE":
+					condition = "(" + oldModel + " OR " + newModel + ") AND "
+				}
+			}
 			if event == "UPDATE" {
-				condition = "WHEN (OLD.* IS DISTINCT FROM NEW.*)"
+				condition += "OLD.* IS DISTINCT FROM NEW.*"
+			}
+			if condition != "" {
+				condition = "WHEN (" + condition + ")"
 			}
 			argument := ""
 			if table.sessionColumn != "" {
 				argument = "'" + table.sessionColumn + "'"
 			}
-			fmt.Fprintf(&triggers, "DROP TRIGGER IF EXISTS %s ON %s; CREATE CONSTRAINT TRIGGER %s AFTER %s ON %s DEFERRABLE INITIALLY DEFERRED FOR EACH ROW %s EXECUTE FUNCTION mark_usage_change(%s);\n", name, table.table, name, event, table.table, condition, argument)
+			fmt.Fprintf(&triggers, `DO $trigger$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = '%s'::regclass AND tgname = '%s') THEN
+ CREATE CONSTRAINT TRIGGER %s AFTER %s ON %s DEFERRABLE INITIALLY DEFERRED FOR EACH ROW %s EXECUTE FUNCTION mark_usage_change(%s);
+ END IF;
+ END $trigger$;
+`, table.table, name, name, event, table.table, condition, argument)
 		}
 	}
-	_, err = tx.ExecContext(ctx, ddl+triggers.String())
+	if _, err = tx.ExecContext(ctx, ddl+triggers.String()+`
+ DO $grants$ DECLARE reader text; BEGIN
+ FOR reader IN
+     SELECT DISTINCT CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(acl.grantee)) END
+     FROM pg_class c, LATERAL aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) acl
+     WHERE c.oid = 'sessions'::regclass AND acl.privilege_type = 'SELECT'
+ LOOP
+     EXECUTE 'GRANT SELECT ON usage_session_changes TO ' || reader;
+ END LOOP;
+ END $grants$;`); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)
+ ON CONFLICT(key) DO UPDATE SET value=excluded.value`, fmt.Sprint(usageChangeJournalVersionPG))
 	return err
 }
 
-// UsageChangeRevision returns 0 when this archive has no journal.
+const usageChangeRevisionQueryPG = `SELECT coalesce((
+ SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
+ AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value::bigint = $1)
+), 0) AS revision`
+
+// UsageChangeRevision returns 0 when the journal is absent or its version is unsupported.
 func (s *Store) UsageChangeRevision(ctx context.Context) (int64, error) {
 	var revision int64
-	err := s.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'`).Scan(&revision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
-	}
+	err := s.pg.QueryRowContext(ctx, usageChangeRevisionQueryPG, usageChangeJournalVersionPG).Scan(&revision)
 	return revision, err
 }
 
-// LoadUsageChanges includes hard-deleted sessions whose latest change falls in
-// (afterRevision, throughRevision]. Global changes only advance the revision.
-func (s *Store) LoadUsageChanges(ctx context.Context, afterRevision, throughRevision int64) ([]string, error) {
-	if afterRevision > throughRevision {
-		return nil, fmt.Errorf("usage change window: after revision exceeds through revision")
-	}
-	rows, err := s.pg.QueryContext(ctx, `SELECT session_id FROM usage_session_changes WHERE revision > $1 AND revision <= $2 ORDER BY revision, session_id`, afterRevision, throughRevision)
+// LoadUsageChanges returns the current revision and sessions changed after
+// afterRevision from one snapshot, including hard-deleted sessions. Global
+// changes only advance the revision. A write committed after this snapshot
+// appears in the next call when the caller uses the returned revision.
+func (s *Store) LoadUsageChanges(ctx context.Context, afterRevision int64) (int64, []string, error) {
+	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id
+ FROM (`+usageChangeRevisionQueryPG+`) r
+ LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision
+ ORDER BY c.revision, c.session_id`, usageChangeJournalVersionPG, afterRevision)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	defer rows.Close()
+	var revision int64
 	var ids []string
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var id sql.NullString
+		if err := rows.Scan(&revision, &id); err != nil {
+			return 0, nil, err
 		}
-		ids = append(ids, id)
+		if id.Valid {
+			ids = append(ids, id.String)
+		}
 	}
-	return ids, rows.Err()
+	return revision, ids, rows.Err()
 }
