@@ -1097,14 +1097,17 @@ func (db *DB) queryRecallEntriesLexical(
 	return page, nil
 }
 
+var errRecallUnavailable = NewSemanticUnavailableError(
+	"recall index is not available; run 'agentsview index embeddings build --store recall'",
+)
+
 func (db *DB) queryRecallEntriesVector(
 	ctx context.Context, q RecallQuery,
 ) (RecallPage, error) {
-	searcher := db.getRecallVectorSearcher()
+	searcher, release := db.getRecallVectorSearcher()
+	defer release()
 	if searcher == nil {
-		return RecallPage{}, NewSemanticUnavailableError(
-			"recall index is not available; run 'agentsview index embeddings build --store recall'",
-		)
+		return RecallPage{}, errRecallUnavailable
 	}
 	limit := recallLimit(q.Limit)
 	ceiling := searcher.MaxRecallSearchCandidates()

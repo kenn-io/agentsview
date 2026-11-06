@@ -249,9 +249,12 @@ func (v *liveVectorServing) Setup(action string) error {
 	return nil
 }
 
-// closeServing releases the current indexes and records cfg; setup.Busy keeps
-// Setup out and Close waits on done until activate installs the replacement.
+// closeServing drains searches outside v.mu so status answers, then releases
+// the current indexes and records cfg; setup.Busy keeps Setup out and Close
+// waits on done until activate installs the replacement.
 func (v *liveVectorServing) closeServing(cfg config.Config) error {
+	v.database.SetVectorSearcher(nil)
+	v.database.SetRecallVectorSearcher(nil)
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.stopBuilders()
@@ -264,8 +267,6 @@ func (v *liveVectorServing) closeServing(cfg config.Config) error {
 	v.push.mu.Lock()
 	v.push.cfg = cfg
 	v.push.mu.Unlock()
-	v.database.SetVectorSearcher(nil)
-	v.database.SetRecallVectorSearcher(nil)
 	return nil
 }
 

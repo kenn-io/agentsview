@@ -176,15 +176,15 @@ func (db *DB) HasSemantic() bool {
 // SemanticReadiness reports the wired searcher's metadata-only readiness.
 // Searchers predating this capability remain usable but have unknown detail.
 func (db *DB) SemanticReadiness(ctx context.Context) (SemanticReadiness, error) {
-	searcher := db.getVectorSearcher()
-	if searcher == nil {
+	db.vectorMu.RLock()
+	defer db.vectorMu.RUnlock()
+	if provider, ok := db.vectorSearcher.(SemanticReadinessProvider); ok {
+		return provider.SemanticReadiness(ctx)
+	}
+	if db.vectorSearcher == nil {
 		return SemanticReadiness{State: "unavailable", Reason: "not_configured"}, nil
 	}
-	provider, ok := searcher.(SemanticReadinessProvider)
-	if !ok {
-		return SemanticReadiness{State: "unknown", Reason: "status_unsupported"}, nil
-	}
-	return provider.SemanticReadiness(ctx)
+	return SemanticReadiness{State: "unknown", Reason: "status_unsupported"}, nil
 }
 
 // getVectorSearcher returns the currently wired VectorSearcher, or nil.
@@ -194,8 +194,23 @@ func (db *DB) getVectorSearcher() VectorSearcher {
 	return db.vectorSearcher
 }
 
-func (db *DB) getRecallVectorSearcher() RecallVectorSearcher {
+// semanticSearcher validates f and returns the wired VectorSearcher, held
+// against replacement until release.
+func (db *DB) semanticSearcher(f ContentSearchFilter) (VectorSearcher, func(), error) {
+	if err := ValidateSemanticFilter(f); err != nil {
+		return nil, func() {}, err
+	}
 	db.vectorMu.RLock()
-	defer db.vectorMu.RUnlock()
-	return db.recallSearcher
+	if db.vectorSearcher == nil {
+		db.vectorMu.RUnlock()
+		return nil, func() {}, ErrSemanticUnavailable
+	}
+	return db.vectorSearcher, db.vectorMu.RUnlock, nil
+}
+
+// getRecallVectorSearcher returns the wired RecallVectorSearcher, or nil,
+// held against replacement until release.
+func (db *DB) getRecallVectorSearcher() (RecallVectorSearcher, func()) {
+	db.vectorMu.RLock()
+	return db.recallSearcher, db.vectorMu.RUnlock
 }
