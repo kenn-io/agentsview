@@ -794,9 +794,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "Desglose por agente",
   "analytics_top_skills_agents": "Agentes",
-  "analytics_top_skills_projects": "Proyectos: {projects}",
+  "analytics_top_skills_col_skill": "Skill",
+  "analytics_top_skills_col_share": "Proporción",
+  "analytics_top_skills_col_calls": "Llamadas",
+  "analytics_top_skills_col_sessions": "Sesiones",
+  "analytics_top_skills_col_last_used": "Último uso",
+  "analytics_top_skills_projects_label": "Proyectos",
   "analytics_top_skills_empty": "Sin datos de uso de skills",
   "analytics_skill_trend_title": "Uso de skills a lo largo del tiempo",
   "analytics_skill_trend_other": "Otros",

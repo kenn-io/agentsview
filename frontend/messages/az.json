@@ -794,9 +794,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "Agent bölgüsü",
   "analytics_top_skills_agents": "Agentlər",
-  "analytics_top_skills_projects": "Layihələr: {projects}",
+  "analytics_top_skills_col_skill": "Bacarıq",
+  "analytics_top_skills_col_share": "Pay",
+  "analytics_top_skills_col_calls": "Çağırışlar",
+  "analytics_top_skills_col_sessions": "Sessiyalar",
+  "analytics_top_skills_col_last_used": "Son istifadə",
+  "analytics_top_skills_projects_label": "Layihələr",
   "analytics_top_skills_empty": "Bacarıq istifadəsi məlumatları yoxdur",
   "analytics_skill_trend_title": "Zaman üzrə bacarıq istifadəsi",
   "analytics_skill_trend_other": "Digər",

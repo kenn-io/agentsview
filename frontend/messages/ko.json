@@ -767,9 +767,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "에이전트별 세부 내역",
   "analytics_top_skills_agents": "에이전트",
-  "analytics_top_skills_projects": "프로젝트: {projects}",
+  "analytics_top_skills_col_skill": "스킬",
+  "analytics_top_skills_col_share": "비중",
+  "analytics_top_skills_col_calls": "호출",
+  "analytics_top_skills_col_sessions": "세션",
+  "analytics_top_skills_col_last_used": "마지막 사용",
+  "analytics_top_skills_projects_label": "프로젝트",
   "analytics_top_skills_empty": "스킬 사용 데이터가 없습니다",
   "analytics_skill_trend_title": "시간별 스킬 사용량",
   "analytics_skill_trend_other": "기타",

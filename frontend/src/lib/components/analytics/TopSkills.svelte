@@ -1,11 +1,23 @@
 <script lang="ts">
+  import { SvelteSet } from "svelte/reactivity";
   import { formatCount } from "../../utils/format.js";
-  import { Chip } from "@kenn-io/kit-ui";
+  import { Chip, Table, TableHeaderCell } from "@kenn-io/kit-ui";
+  import { ChevronRightIcon } from "../../icons.js";
   import { analytics } from "../../stores/analytics.svelte.js";
-  import type { DbSkillAgentBreakdown as SkillAgentBreakdown, DbSkillProjectBreakdown as SkillProjectBreakdown, DbSkillUsage as SkillUsage } from "../../api/generated/index.js";
+  import type { DbSkillAgentBreakdown as SkillAgentBreakdown, DbSkillUsage as SkillUsage } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
+  const uid = $props.id();
   const skills = $derived(analytics.skills?.by_skill ?? []);
+
+  // Skills whose agent and project breakdown row is open, by name, so a
+  // refresh that reorders the list keeps the same skills open.
+  const expanded = new SvelteSet<string>();
+
+  function toggle(name: string) {
+    if (expanded.has(name)) expanded.delete(name);
+    else expanded.add(name);
+  }
 
   const maxCount = $derived(
     skills.length > 0
@@ -25,18 +37,6 @@
       month: "short",
       day: "numeric",
     });
-  }
-
-  function projectBreakdownLabel(
-    items: SkillProjectBreakdown[] | null,
-  ): string {
-    const top = (items ?? []).slice(0, 2);
-    if (top.length === 0) return m.shared_none();
-    return top
-      .map((item) => {
-        return `${item.project}: ${formatCount(item.count)}`;
-      })
-      .join(", ");
   }
 
   function agentPct(item: SkillAgentBreakdown, total: number): string {
@@ -105,59 +105,100 @@
       </button>
     </div>
   {:else if skills.length > 0}
-    <div class="skill-list">
-      {#each skills.slice(0, 8) as skill}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-          class="skill-row"
-          onmouseenter={(e) => handleSkillHover(e, skill)}
-          onmouseleave={handleLeave}
-        >
-          <span class="skill-name">{skill.skill_name}</span>
-          <span class="bar-track">
-            <span
-              class="bar-fill"
-              style="width: {barWidth(skill.call_count)}%"
-            ></span>
-          </span>
-          <span class="bar-value">
-            {formatCount(skill.call_count)}
-          </span>
-          <span class="session-value">
-            {m.analytics_session_shape_session_count({
-              count: skill.session_count,
-              countLabel: formatCount(skill.session_count),
-            })}
-          </span>
-          <span class="last-used">
-            {formatLastUsed(skill.last_used_at)}
-          </span>
-        </div>
-        <div class="breakdowns">
-          <div class="agent-breakdown" aria-label={m.analytics_top_skills_agent_breakdown()}>
-            <span class="breakdown-label">{m.analytics_top_skills_agents()}</span>
-            {#if skill.agent_breakdown?.length}
-              {#each skill.agent_breakdown as agent}
-                <Chip size="xs" uppercase={false} class="agent-chip">
-                  <span class="agent-name">{agent.agent}</span>
-                  <span class="agent-count">{formatCount(agent.count)}</span>
-                  <span class="agent-pct">
-                    {agentPct(agent, skill.call_count)}
+    <Table bare unsorted class="skills-table" ariaLabel={m.analytics_top_skills_title()}>
+      <thead>
+        <tr>
+          <TableHeaderCell label={m.analytics_top_skills_col_skill()} class="col-skill" />
+          <TableHeaderCell label={m.analytics_top_skills_col_share()} class="col-share" />
+          <TableHeaderCell label={m.analytics_top_skills_col_calls()} numeric />
+          <TableHeaderCell label={m.analytics_top_skills_col_sessions()} numeric />
+          <TableHeaderCell label={m.analytics_top_skills_col_last_used()} numeric />
+        </tr>
+      </thead>
+      <tbody>
+        {#each skills.slice(0, 8) as skill, index (skill.skill_name)}
+          {@const open = expanded.has(skill.skill_name)}
+          {@const detailId = `${uid}-skill-${index}`}
+          <tr class="skill-row" class:open>
+            <th scope="row" class="skill-cell">
+              <button
+                type="button"
+                class="disclosure"
+                aria-expanded={open}
+                aria-controls={detailId}
+                onclick={() => toggle(skill.skill_name)}
+              >
+                <ChevronRightIcon size={12} class="chevron" aria-hidden="true" />
+                <span class="skill-name">{skill.skill_name}</span>
+              </button>
+            </th>
+            <td class="share-cell">
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <span
+                class="bar-track"
+                onmouseenter={(e) => handleSkillHover(e, skill)}
+                onmouseleave={handleLeave}
+              >
+                <span
+                  class="bar-fill"
+                  style="width: {barWidth(skill.call_count)}%"
+                ></span>
+              </span>
+            </td>
+            <td class="num">{formatCount(skill.call_count)}</td>
+            <td class="num">{formatCount(skill.session_count)}</td>
+            <td class="num last-used">{formatLastUsed(skill.last_used_at)}</td>
+          </tr>
+          <tr id={detailId} class="detail-row" hidden={!open}>
+            <td colspan="5">
+              <div class="breakdowns">
+                <div class="breakdown">
+                  <span class="breakdown-label" id="{detailId}-agents">
+                    {m.analytics_top_skills_agents()}
                   </span>
-                </Chip>
-              {/each}
-            {:else}
-              <span class="muted">{m.shared_none()}</span>
-            {/if}
-          </div>
-          <span class="project-breakdown">
-            {m.analytics_top_skills_projects({
-              projects: projectBreakdownLabel(skill.project_breakdown),
-            })}
-          </span>
-        </div>
-      {/each}
-    </div>
+                  {#if skill.agent_breakdown?.length}
+                    <ul class="breakdown-items" aria-labelledby="{detailId}-agents">
+                      {#each skill.agent_breakdown as agent (agent.agent)}
+                        <li>
+                          <Chip size="xs" uppercase={false} class="breakdown-chip">
+                            <span class="item-name">{agent.agent}</span>
+                            <span class="item-count">{formatCount(agent.count)}</span>
+                            <span class="item-pct">
+                              {agentPct(agent, skill.call_count)}
+                            </span>
+                          </Chip>
+                        </li>
+                      {/each}
+                    </ul>
+                  {:else}
+                    <span class="muted">{m.shared_none()}</span>
+                  {/if}
+                </div>
+                <div class="breakdown">
+                  <span class="breakdown-label" id="{detailId}-projects">
+                    {m.analytics_top_skills_projects_label()}
+                  </span>
+                  {#if skill.project_breakdown?.length}
+                    <ul class="breakdown-items" aria-labelledby="{detailId}-projects">
+                      {#each skill.project_breakdown as project (project.project)}
+                        <li>
+                          <Chip size="xs" uppercase={false} class="breakdown-chip">
+                            <span class="item-name">{project.project}</span>
+                            <span class="item-count">{formatCount(project.count)}</span>
+                          </Chip>
+                        </li>
+                      {/each}
+                    </ul>
+                  {:else}
+                    <span class="muted">{m.shared_none()}</span>
+                  {/if}
+                </div>
+              </div>
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </Table>
 
     {#if tooltip}
       <div
@@ -198,28 +239,86 @@
     white-space: nowrap;
   }
 
-  .skill-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+  .skills-container :global(.skills-table) {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 11px;
   }
 
-  .skill-row {
-    display: grid;
-    grid-template-columns: minmax(84px, 1.4fr) minmax(48px, 1fr) 52px 72px 44px;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 3px 4px;
-    border-radius: var(--radius-sm);
+  /* Header row: kit-ui header cells on the card surface, with a hairline
+     under them like the panel's other mini tables. */
+  .skills-container :global(.skills-table .kit-th) {
+    padding: 4px 6px;
     background: transparent;
-    color: inherit;
-    text-align: left;
-    transition: background 0.1s;
+    box-shadow: inset 0 -1px 0 var(--border-muted);
+    font-weight: 500;
+  }
+
+  .skills-container :global(.skills-table .kit-th.col-skill) {
+    width: 30%;
+    /* Lines the header up with the name after the disclosure chevron. */
+    padding-inline-start: 26px;
+  }
+
+  .skills-container :global(.skills-table .kit-th.col-share) {
+    width: auto;
+  }
+
+  .skills-container :global(.skills-table .kit-th.kit-th--numeric) {
+    width: 76px;
+  }
+
+  .skill-row > th,
+  .skill-row > td {
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--border-muted);
+    vertical-align: middle;
+  }
+
+  .skill-row.open > th,
+  .skill-row.open > td {
+    border-bottom-color: transparent;
   }
 
   .skill-row:hover {
     background: var(--bg-surface-hover);
+  }
+
+  .skill-cell {
+    padding-inline-start: 2px;
+    font-weight: 400;
+    text-align: left;
+  }
+
+  .disclosure {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .disclosure:hover {
+    color: var(--text-primary);
+  }
+
+  .disclosure :global(.chevron) {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    transition: transform 0.12s ease;
+  }
+
+  .disclosure[aria-expanded="true"] :global(.chevron) {
+    transform: rotate(90deg);
   }
 
   .skill-name {
@@ -227,12 +326,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 11px;
-    color: var(--text-secondary);
   }
 
   .bar-track {
-    height: 12px;
+    display: block;
+    height: 10px;
     background: var(--bg-inset);
     border-radius: 2px;
     overflow: hidden;
@@ -246,64 +344,69 @@
     background: var(--accent-green, #10b981);
   }
 
-  .bar-value,
-  .session-value,
-  .last-used {
-    font-size: 11px;
+  .num {
     color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
     white-space: nowrap;
   }
 
-  .bar-value {
-    text-align: right;
-    font-family: var(--font-mono);
+  .detail-row > td {
+    padding: 2px 6px 8px 26px;
+    border-bottom: 1px solid var(--border-muted);
   }
 
   .breakdowns {
     display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-5);
+    flex-direction: column;
+    gap: 4px;
     min-width: 0;
-    padding: 0 4px 6px;
     color: var(--text-secondary);
-    font-size: 11px;
   }
 
-  .agent-breakdown {
+  .breakdown {
     display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 4px;
+    align-items: baseline;
+    gap: 8px;
     min-width: 0;
   }
 
   .breakdown-label {
-    font-weight: 600;
+    flex: 0 0 64px;
+    color: var(--text-muted);
+  }
+
+  .breakdown-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  :global(.breakdown-chip.kit-chip) {
+    max-width: 200px;
     color: var(--text-secondary);
   }
 
-  :global(.agent-chip.kit-chip) {
-    max-width: 160px;
-    color: var(--text-secondary);
-  }
-
-  .agent-name,
-  .project-breakdown {
+  .item-name {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .agent-count {
-    font-family: var(--font-mono);
+  .item-count {
     color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
   }
 
-  .agent-pct,
+  .item-pct,
   .muted {
     color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
   }
 
   .tooltip {

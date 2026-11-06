@@ -792,9 +792,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "Répartition par agent",
   "analytics_top_skills_agents": "Agents",
-  "analytics_top_skills_projects": "Projets\u202f: {projects}",
+  "analytics_top_skills_col_skill": "Skill",
+  "analytics_top_skills_col_share": "Part",
+  "analytics_top_skills_col_calls": "Appels",
+  "analytics_top_skills_col_sessions": "Sessions",
+  "analytics_top_skills_col_last_used": "Dernière utilisation",
+  "analytics_top_skills_projects_label": "Projets",
   "analytics_top_skills_empty": "Aucune donnée d'utilisation des skills",
   "analytics_skill_trend_title": "Utilisation des skills dans le temps",
   "analytics_skill_trend_other": "Autre",

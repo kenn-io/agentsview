@@ -767,9 +767,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "Agent 分解",
   "analytics_top_skills_agents": "Agents",
-  "analytics_top_skills_projects": "專案：{projects}",
+  "analytics_top_skills_col_skill": "Skill",
+  "analytics_top_skills_col_share": "占比",
+  "analytics_top_skills_col_calls": "調用",
+  "analytics_top_skills_col_sessions": "對話",
+  "analytics_top_skills_col_last_used": "最近使用",
+  "analytics_top_skills_projects_label": "專案",
   "analytics_top_skills_empty": "無 skill 使用資料",
   "analytics_skill_trend_title": "Skill 使用趨勢",
   "analytics_skill_trend_other": "其他",

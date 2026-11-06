@@ -791,9 +791,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "エージェントの内訳",
   "analytics_top_skills_agents": "エージェント",
-  "analytics_top_skills_projects": "プロジェクト: {projects}",
+  "analytics_top_skills_col_skill": "スキル",
+  "analytics_top_skills_col_share": "割合",
+  "analytics_top_skills_col_calls": "呼び出し",
+  "analytics_top_skills_col_sessions": "セッション",
+  "analytics_top_skills_col_last_used": "最終使用",
+  "analytics_top_skills_projects_label": "プロジェクト",
   "analytics_top_skills_empty": "スキル使用データがありません",
   "analytics_skill_trend_title": "時間の経過に伴うスキルの使用状況",
   "analytics_skill_trend_other": "他の",
