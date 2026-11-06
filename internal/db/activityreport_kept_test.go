@@ -84,61 +84,102 @@ func TestActivityReportKeptChanges(t *testing.T) {
 		check   func(*testing.T, activity.CandidateArtifacts)
 	}{
 		{name: "late import", write: func(t *testing.T, d *DB) {
+			t.Helper()
 			keptActivitySession(t, d, "late", "project-a", "2026-06-14")
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) { assert.Len(t, a.Sessions, 2) }},
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Len(t, a.Sessions, 2)
+		}},
 		{name: "soft delete", write: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.SoftDeleteSession(t.Context(), "past"))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) { assert.Empty(t, a.Sessions) }},
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Empty(t, a.Sessions)
+		}},
 		{name: "hard delete", write: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.DeleteSession(t.Context(), "past"))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) { assert.Empty(t, a.Sessions) }},
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Empty(t, a.Sessions)
+		}},
 		{name: "restore", prepare: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.SoftDeleteSession(t.Context(), "past"))
 		}, write: func(t *testing.T, d *DB) {
+			t.Helper()
 			_, err := d.RestoreSession(t.Context(), "past")
 			require.NoError(t, err)
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) { assert.Len(t, a.Sessions, 1) }},
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Len(t, a.Sessions, 1)
+		}},
 		{name: "redate", write: func(t *testing.T, d *DB) {
+			t.Helper()
 			s, err := d.GetSession(t.Context(), "past")
 			require.NoError(t, err)
 			require.NotNil(t, s)
 			s.StartedAt = new("2026-06-17T10:00:00Z")
 			s.EndedAt = new("2026-06-17T10:01:00Z")
 			require.NoError(t, d.UpsertSession(t.Context(), *s))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) { assert.Empty(t, a.Sessions) }},
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Empty(t, a.Sessions)
+		}},
 		{name: "rename", write: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.RenameSession(t.Context(), "past", new("Renamed report session")))
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
 			require.Len(t, a.Sessions, 1)
 			assert.Equal(t, "Renamed report session", a.Sessions[0].Title)
 		}},
 		{name: "catalog pricing", write: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.UpsertModelPricing([]ModelPricing{{ModelPattern: "kept-model", OutputPerMTok: money.MustParseDollars("10")}}))
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
 			assert.Equal(t, money.MustParseDollars("0.005"), a.Report.Totals.Cost)
 		}},
 		{name: "custom pricing", write: func(t *testing.T, d *DB) {
+			t.Helper()
 			d.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
 			assert.Equal(t, money.MustParseDollars("0.01"), a.Report.Totals.Cost)
 		}},
 		{name: "project identity", write: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), export.ProjectIdentityObservation{
 				SessionID: "past", Project: "project-a", Machine: defaultMachine,
 				RootPath: "/work/project-a", GitRemote: "https://example.com/team/project-a.git",
 				ObservedAt: time.Date(2026, 6, 14, 11, 0, 0, 0, time.UTC),
 			}))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) { assert.NotEmpty(t, a.Report.Projects) }},
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.NotEmpty(t, a.Report.Projects)
+		}},
 		{name: "project assignment", write: func(t *testing.T, d *DB) {
+			t.Helper()
 			_, err := d.AssignSessionProject(t.Context(), "past", "project-b")
 			require.NoError(t, err)
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) { assert.Empty(t, a.Sessions) }},
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Empty(t, a.Sessions)
+		}},
 		{name: "usage replacement", prepare: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "past", []UsageEvent{{Source: "session", Model: "kept-model", OutputTokens: 100, OccurredAt: "2026-06-14T10:01:00Z"}}))
 		}, write: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "past", []UsageEvent{{Source: "session", Model: "kept-model", OutputTokens: 900, OccurredAt: "2026-06-14T10:01:00Z"}}))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) { assert.Equal(t, 1400, a.Report.Totals.OutputTokens) }},
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Equal(t, 1400, a.Report.Totals.OutputTokens)
+		}},
 		{name: "excluded Claude peer", prepare: func(t *testing.T, d *DB) {
+			t.Helper()
 			insertSession(t, d, "peer", "project-b", func(s *Session) {
 				s.Agent = "claude"
 				s.StartedAt = new("2026-06-14T10:01:00Z")
@@ -147,8 +188,12 @@ func TestActivityReportKeptChanges(t *testing.T) {
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "past", []Message{{SessionID: "past", Ordinal: 0, Role: "assistant", Content: "partial", Timestamp: "2026-06-14T10:00:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":5}`), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"}}))
 			insertMessages(t, d, Message{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":631}`), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"})
 		}, write: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.DeleteSession(t.Context(), "peer"))
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) { assert.Equal(t, 5, a.Report.Totals.OutputTokens) }},
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Equal(t, 5, a.Report.Totals.OutputTokens)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
