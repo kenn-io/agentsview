@@ -80,8 +80,7 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 			var id, project, agent string
 			var count int
 			if err := rows.Scan(&id, &project, &agent, &count); err != nil {
-				_ = rows.Close()
-				return usageFactsResult{}, err
+					return usageFactsResult{}, err
 			}
 			if id != "" {
 				result.MatchingSessions[id] = UsageSessionInfo{Project: project, Agent: agent}
@@ -92,7 +91,6 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 			result.SessionCounts.ByAgent[agent] += count
 		}
 		if err := rows.Err(); err != nil {
-			_ = rows.Close()
 			return usageFactsResult{}, err
 		}
 		if err := rows.Close(); err != nil {
@@ -123,7 +121,7 @@ func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snap
 	}
 	args = append(args, b.Args()...)
 	args = append(args, b.Args()...)
-	rows, err := conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, s.group_key, (`+passing+`)
+	rows, err := conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, s.group_key, s.group_label, (`+passing+`)
         FROM (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s WHERE s.timezone_id=? AND ((s.has_authoritative=1 AND (`+passing+`) AND s.id IN (
         SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE `+dates+`)) OR s.id IN (
         SELECT e.rollup_install_id FROM usage_rollup_exceptions e WHERE `+dates+`))`, args...)
@@ -134,7 +132,7 @@ func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snap
 	snapshot.Sessions = nil
 	for rows.Next() {
 		var session usageQuerySession
-		if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.GroupKey, &session.PassesFilter); err != nil {
+		if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.GroupKey, &session.GroupLabel, &session.PassesFilter); err != nil {
 			return err
 		}
 		if millis, _, _ := usagefacts.ParseTimestamp(session.StartedAt); millis != nil {

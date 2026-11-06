@@ -4,11 +4,87 @@ package db
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 )
+
+func TestUsageTopSessionsLoadsOnlyReturnedMetadata(t *testing.T) {
+	database := testDB(t)
+	for i := range 128 {
+		id := fmt.Sprintf("owner-%03d", i)
+		seedJournaledUsage(t, database, id)
+		groupKey := ""
+		if i >= 126 {
+			groupKey = "daily:job"
+		}
+		_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET display_name=?, session_name=?, group_key=? WHERE id=?`, fmt.Sprintf("Owner %03d", i), fmt.Sprintf("Report %03d · run", i), groupKey, id)
+		require.NoError(t, err)
+		cost := money.Money{Microdollars: int64(i+1) * 1000}
+		require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), id, []UsageEvent{{Source: "shutdown", Model: "journal-model", InputTokens: 10, Cost: &cost, CostStatus: "exact", CostSource: CopilotReportedCostSource, OccurredAt: "2026-08-10T23:30:00Z", DedupKey: id}}))
+	}
+	seedJournaledUsage(t, database, "ordinary")
+	filter := UsageFilter{Timezone: "UTC"}
+	warmJournaledUsage(t, database, filter)
+
+	// Observe display-name evaluations at the archive query boundary, preserving
+	// NULLIF semantics. Cached group labels require no archive name reads.
+	database.rawReader().SetMaxOpenConns(1)
+	conn, err := database.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	var loaded []string
+	require.NoError(t, conn.Raw(func(driverConn any) error {
+		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other any) any {
+			if name, ok := value.(string); ok && strings.HasPrefix(name, "Owner ") {
+				loaded = append(loaded, name)
+			}
+			if value == other {
+				return nil
+			}
+			return value
+		}, false)
+	}))
+	require.NoError(t, conn.Close())
+	for _, tc := range []struct {
+		name    string
+		grouped bool
+		limit   int
+		loaded  []string
+	}{
+		{"individual", false, 1, []string{"Owner 127"}},
+		{"group", true, 1, nil},
+		{"group and individual", true, 2, []string{"Owner 125"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loaded = nil
+			filter.TopSessionsByGroup = tc.grouped
+			got, err := database.GetTopSessionsByCost(t.Context(), filter, tc.limit)
+			require.NoError(t, err)
+			assert.Equal(t, tc.loaded, loaded)
+			if tc.grouped {
+				require.Len(t, got, tc.limit+1)
+				assert.Equal(t, "Report 127", got[0].GroupLabel)
+				assert.Equal(t, "Report 127", got[0].DisplayName)
+				assert.Equal(t, int64(255000), got[0].Cost.Microdollars)
+				if tc.limit == 2 {
+					assert.Equal(t, "owner-125", got[1].SessionID)
+					assert.Equal(t, "Owner 125", got[1].DisplayName)
+					assert.Equal(t, "Report 125 · run", got[1].SessionName)
+					assert.Empty(t, got[1].GroupLabel)
+				}
+			} else {
+				require.Len(t, got, 1)
+				assert.Equal(t, "owner-127", got[0].SessionID)
+				assert.Equal(t, "Owner 127", got[0].DisplayName)
+				assert.Equal(t, "Report 127 · run", got[0].SessionName)
+				assert.Empty(t, got[0].GroupLabel)
+			}
+		})
+	}
+}
 
 // CheckUsageTopSessionsMatchLegacy checks cached reads against the archive for the external fixture test.
 func CheckUsageTopSessionsMatchLegacy(t *testing.T, database *DB) {
@@ -61,8 +137,9 @@ func CheckUsageTopSessionsMatchLegacy(t *testing.T, database *DB) {
 	}
 }
 
-func TestUsageTopSessionsBoundedGroupMembers(t *testing.T) {
-	database, filter, _ := seedUsageJournalBenchmark(t, 1000, 1)
+// CheckUsageTopSessionsBoundedGroupMembers checks bounded candidates for the external fixture test.
+func CheckUsageTopSessionsBoundedGroupMembers(t *testing.T, database *DB, filter UsageFilter) {
+	t.Helper()
 	database.StopUsageCacheBackfill()
 	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project='project-0', machine='machine-0', group_key='daily:job', started_at='invalid', session_name=''`)
 	require.NoError(t, err)

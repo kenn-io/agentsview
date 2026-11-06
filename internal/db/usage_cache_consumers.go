@@ -388,6 +388,9 @@ func foldUsageTopSessions(sessions []usageQuerySession, groups []usageFactsGroup
 			entry.StartedAt = session.StartedAt
 			entry.Machine = session.Machine
 			entry.GroupKey = session.GroupKey
+			if filter.TopSessionsByGroup && session.GroupKey != "" {
+				entry.GroupLabel = session.GroupLabel
+			}
 			entry.SessionName = session.SessionName
 		}
 		result = append(result, entry)

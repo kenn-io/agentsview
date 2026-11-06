@@ -54,6 +54,9 @@ func usageChangeJournalSQL() (string, string) {
 	changes := make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
+		if column == "session_name" {
+			changes[i] = "(" + changes[i] + " AND (OLD.group_key!='' OR NEW.group_key!=''))"
+		}
 	}
 	add("trg_sessions_usage_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "NEW.id")
 	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id")

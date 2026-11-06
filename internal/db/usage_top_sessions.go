@@ -162,39 +162,35 @@ func (db *DB) finishUsageTopSessions(ctx context.Context, facts usageFactsResult
 	}
 
 	entries := append(candidates.Entries, owners...)
+	if filter.TopSessionsByGroup {
+		slices.SortFunc(entries, func(a, b TopSessionEntry) int { return strings.Compare(a.SessionID, b.SessionID) })
+		entries, err = mergeTopSessions(entries)
+		if err != nil {
+			return nil, err
+		}
+		entries, err = limitGroupedTopSessions(entries, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes, total, candidates.Units+len(entries)-candidates.SelectedUnits)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		entries = SortAndLimitTopSessions(entries, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes)
+	}
+
 	ids := make([]string, 0, len(entries))
-	for _, entry := range candidates.Entries {
-		if !filter.TopSessionsByGroup || entry.GroupKey == "" {
+	for _, entry := range entries {
+		if entry.SessionID != "" {
 			ids = append(ids, entry.SessionID)
 		}
 	}
-	for _, owner := range owners {
-		ids = append(ids, owner.SessionID)
-	}
-
-	err = queryChunked(ids, func(chunk []string) error {
-		metadata, err := db.loadTopSessionMetadata(ctx, chunk)
-		if err != nil {
-			return err
-		}
-		for i := range entries {
-			if meta, ok := metadata[entries[i].SessionID]; ok {
-				entries[i].DisplayName = meta.displayName
-				entries[i].SessionName = meta.sessionName
-			}
-		}
-		return nil
-	})
+	metadata, err := db.loadTopSessionMetadata(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
-	if !filter.TopSessionsByGroup {
-		return SortAndLimitTopSessions(entries, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes), nil
+	for i := range entries {
+		if meta, ok := metadata[entries[i].SessionID]; ok {
+			entries[i].DisplayName = meta.displayName
+			entries[i].SessionName = meta.sessionName
+		}
 	}
-	slices.SortFunc(entries, func(a, b TopSessionEntry) int { return strings.Compare(a.SessionID, b.SessionID) })
-	entries, err = mergeTopSessions(entries)
-	if err != nil {
-		return nil, err
-	}
-	return limitGroupedTopSessions(entries, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes, total, candidates.Units+len(entries)-candidates.SelectedUnits)
+	return entries, nil
 }

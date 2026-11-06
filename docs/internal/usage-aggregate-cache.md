@@ -53,9 +53,10 @@ sessions and exception owners. SQL counts ordinary sessions by project and
 agent; surviving exception owners add their distinct counts. Warm Top sessions
 reads rank session or group units in SQL. Grouped candidates load at most three
 representatives per group for the agent, latest start, and latest usable cron
-label. Individual sessions load names only for candidates. Owners keep their
-per-session fold, and grouped reads retain the trailing remainder row. Warm
-preparations skip window-session discovery. Each archive snapshot loads its
+label. After merging owners and applying the final limit, individual sessions
+load names only for returned rows. Grouped rows use cached labels. Owners keep
+their per-session fold, and grouped reads retain the trailing remainder row.
+Warm preparations skip window-session discovery. Each archive snapshot loads its
 pricing catalog and computes its digest.
 
 ### Dedup exceptions
