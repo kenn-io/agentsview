@@ -879,7 +879,6 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
-	activityKeptOnce     sync.Once
 	frustrationMemo      frustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
@@ -1981,7 +1980,8 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 	}
 	db := &DB{
 		path: path, readOnly: true,
-		usageCache: newUsageCacheManager(path),
+		usageCache:   newUsageCacheManager(path),
+		activityKept: newActivityKeptMemo(),
 	}
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
@@ -4843,7 +4843,10 @@ func openAndInit(
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
 
-	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
+	db := &DB{
+		path: path, usageCache: newUsageCacheManager(path),
+		activityKept: newActivityKeptMemo(),
+	}
 	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)

@@ -137,6 +137,9 @@ func (db *DB) BuildActivityReportArtifacts(
 	if err == nil && selection != "" {
 		slices.Sort(read)
 		read = slices.Compact(read)
+		boundedRead := make([]string, len(read))
+		copy(boundedRead, read)
+		read = boundedRead
 		db.activityKept.Put(selection, version, []activityKept{{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
 			read: read, labels: activity.ProjectLabels(sessions),

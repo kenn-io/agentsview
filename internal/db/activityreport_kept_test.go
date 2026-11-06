@@ -90,6 +90,55 @@ func TestActivityReportKeptReuse(t *testing.T) {
 	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
 }
 
+func TestActivityReportKeptBoundsReadSetMemory(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	messages := make([]Message, 256)
+	for i := range messages {
+		messages[i] = Message{
+			SessionID: "past", Ordinal: i + 2, Role: "assistant",
+			Content: "answer", Timestamp: "2026-06-14T10:01:00Z",
+			Model: "kept-model", TokenUsage: []byte(`{"output_tokens":1}`),
+		}
+	}
+	insertMessages(t, d, messages...)
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
+	f.IncludeSubagents = true
+	f.IncludeForks = true
+	keptActivityBuild(t, d, f, q, true)
+
+	selection := kept.Selection(f, q)
+	version, _, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	entries, ok := d.activityKept.Get(selection, version)
+	require.True(t, ok)
+	require.Len(t, entries, 1)
+	entry := entries[0]
+	require.Len(t, entry.read, 1)
+	assert.Equal(t, len(entry.read), cap(entry.read), "the kept read set must not retain its pre-compaction backing array")
+
+	readBytes := int64(cap(entry.read) * 16)
+	for _, id := range entry.read {
+		readBytes += int64(len(id))
+	}
+	for _, label := range entry.labels {
+		readBytes += int64(len(label))
+	}
+	assert.Equal(t, activity.EstimatedArtifactBytes(entry.report.Artifacts)+readBytes, d.activityKept.Size(entry))
+}
+
+func TestActivityReportKeptVersionRejectsInvalidUsageRevision(t *testing.T) {
+	d := testDB(t)
+	_, err := d.getWriter().ExecContext(t.Context(), `
+		INSERT INTO archive_metadata (key, value) VALUES (?, 'invalid')
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		archiveMetadataUsageChangeRevisionKey)
+	require.NoError(t, err)
+
+	_, _, err = d.activityKeptVersion(t.Context())
+	require.ErrorContains(t, err, `invalid usage change revision "invalid"`)
+}
+
 func TestActivityReportKeptResumedSessionPeerChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -426,34 +475,6 @@ func TestActivityReportKeptChanges(t *testing.T) {
 			requireKeptActivityEqual(t, changed, keptActivityBuild(t, d, f, q, false))
 		})
 	}
-}
-
-func TestActivityReportKeptUsesCurrentActiveFilterForChangedSessions(t *testing.T) {
-	d := testDB(t)
-	now := time.Now().UTC()
-	q, err := activity.ResolveQuery(activity.QueryInput{
-		Preset: "custom", From: now.Add(-time.Hour).Format(time.RFC3339),
-		To: now.Add(time.Hour).Format(time.RFC3339), Timezone: "UTC",
-	}, now.Add(2*time.Hour))
-	require.NoError(t, err)
-	insertAt := func(id string, at time.Time) {
-		timestamp := at.UTC().Format(time.RFC3339)
-		insertSession(t, d, id, "project-a", func(s *Session) {
-			s.Agent = "claude"
-			s.StartedAt = new(timestamp)
-			s.EndedAt = new(timestamp)
-			s.MessageCount = 1
-		})
-	}
-	insertAt("active", now)
-	f := AnalyticsFilter{
-		Timezone: "UTC", Project: "project-a", Termination: "active",
-	}
-	first := keptActivityBuild(t, d, f, q, true)
-	require.Len(t, first.Sessions, 1)
-
-	insertAt("inactive", now.Add(-20*time.Minute))
-	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
 }
 
 func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {

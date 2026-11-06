@@ -22,28 +22,30 @@ type activityKept struct {
 	usageLowerBound, usageUpperBound string
 }
 
-func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
-	db.activityKeptOnce.Do(func() {
-		db.activityKept.Size = func(e activityKept) int64 {
-			size := activity.EstimatedArtifactBytes(e.report.Artifacts) + int64(len(e.read))*16
+func newActivityKeptMemo() kept.Memo[activityKept] {
+	return kept.Memo[activityKept]{
+		Size: func(e activityKept) int64 {
+			size := activity.EstimatedArtifactBytes(e.report.Artifacts) + int64(cap(e.read))*16
+			for _, id := range e.read {
+				size += int64(len(id))
+			}
 			for _, label := range e.labels {
 				size += int64(len(label))
 			}
 			return size
-		}
-		db.activityKept.MaxBytes = 128 << 20
-	})
-	var id string
-	var revision, pricingRevision int64
-	err := db.getReader().QueryRowContext(ctx, `SELECT
-		COALESCE(MAX(CASE WHEN key = 'database_id' THEN value END), ''),
-		COALESCE(MAX(CASE WHEN key = 'usage_change_revision' THEN CAST(value AS INTEGER) END), 0),
-		COALESCE(MAX(CASE WHEN key = ? THEN CAST(value AS INTEGER) END), 0)
-		FROM archive_metadata WHERE key IN ('database_id', 'usage_change_revision', ?)`,
-		archiveMetadataUsagePricingRevisionKey, archiveMetadataUsagePricingRevisionKey,
-	).Scan(&id, &revision, &pricingRevision)
+		},
+		MaxBytes: 128 << 20,
+	}
+}
+
+func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
+	id, pricingRevision, err := db.databaseIDAndUsagePricingRevision(ctx)
 	if err != nil {
 		return "", 0, fmt.Errorf("reading kept activity version: %w", err)
+	}
+	revision, err := db.UsageChangeRevision(ctx)
+	if err != nil {
+		return "", 0, err
 	}
 	if id == "" {
 		return "", revision, nil
@@ -79,8 +81,7 @@ func (db *DB) keptActivityReport(ctx context.Context, selection, version string,
 		err = db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
 			SELECT 1 FROM sessions s
 			WHERE `+where+`
-				AND s.id IN (SELECT value FROM json_each(?))
-			LIMIT 1)`, args...).Scan(&eligible)
+				AND s.id IN (SELECT value FROM json_each(?)))`, args...).Scan(&eligible)
 		if err != nil {
 			return kept.Report{}, false, fmt.Errorf("checking kept activity session changes: %w", err)
 		}
@@ -99,11 +100,10 @@ func (db *DB) keptActivityReport(ctx context.Context, selection, version string,
 			JOIN messages m ON m.session_id = changed.value
 			JOIN sessions s ON s.id = m.session_id
 			WHERE `+usageMessageEligibility+`
-				AND m.session_id NOT IN (SELECT value FROM json_each(?))
 				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
 				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
-				AND `+activityReportClaudePeerPredicate("(SELECT value FROM json_each(?))")+`
-			LIMIT 1)`, string(ids), string(readIDs), entry.usageLowerBound,
+				AND `+activityReportClaudePeerPredicate("(SELECT value FROM json_each(?))")+`)`,
+			string(ids), entry.usageLowerBound,
 			entry.usageUpperBound, string(readIDs), entry.usageLowerBound,
 			entry.usageUpperBound).Scan(&peerMatches)
 		if err != nil {
