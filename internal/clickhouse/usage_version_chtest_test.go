@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
@@ -76,21 +75,6 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	for _, table := range chUsageReadTables {
 		execPreparedUsage(t, store, "SYSTEM START MERGES "+table)
 	}
-	for _, custom := range []map[string]config.CustomModelRate{
-		{"round-test": {InputMicrodollarsPerMTok: 5_000_000}},
-		{"claude-test": {InputMicrodollarsPerMTok: 7_000_000}},
-	} {
-		before := read()
-		daily := maps.Clone(store.dailyUsageRows.entries)
-		top := maps.Clone(store.topSessionTotals.entries)
-		store.SetCustomPricing(custom)
-		after := read()
-		require.NotEqual(t, daily, store.dailyUsageRows.entries)
-		require.NotEqual(t, top, store.topSessionTotals.entries)
-		require.NotEqual(t, before.daily.Totals.TotalCost, after.daily.Totals.TotalCost)
-		require.NotEqual(t, before.top, after.top)
-	}
-	store.SetCustomPricing(nil)
 	// Each real change must update every memo, even when a
 	// particular result, such as session counts after repricing, stays equal.
 	requireMiss := func(change func()) preparedUsageRead {
