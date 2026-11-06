@@ -133,6 +133,34 @@ describe("SessionVitals", () => {
     expect(document.querySelector(".filter-chip")?.textContent).toContain("Bash");
   });
 
+  it("clears the category filter when the panel switches sessions", async () => {
+    const timed = timingWithCall();
+    timed.by_category = [{ category: "Bash", duration_ms: 400, call_count: 1 }];
+    const untimed = timingWithCall();
+    untimed.session_id = "sess-2";
+    untimed.tool_duration_ms = 0;
+    untimed.turns[0]!.calls[0]!.duration_ms = null;
+    untimed.turns[0]!.calls[0]!.category = "Read";
+    untimed.by_category = [{ category: "Read", duration_ms: 0, call_count: 1 }];
+    mocks.fetchSessionTiming.mockImplementation(async ({ id }: { id: string }) =>
+      id === "sess-2" ? untimed : timed,
+    );
+    const view = render(SessionVitals, { sessionId: "sess-1", session: traceSession });
+    await vi.waitFor(() => expect(document.querySelector(".agg-row")).not.toBeNull());
+    const bash = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
+      (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Bash",
+    );
+    await fireEvent.click(bash!);
+    expect(document.querySelector(".filter-chip")?.textContent).toContain("Bash");
+
+    await view.rerender({ sessionId: "sess-2", session: { ...traceSession, id: "sess-2" } });
+    await vi.waitFor(() =>
+      expect(document.querySelector(".calls .call .cn")?.textContent).toBe("Read"),
+    );
+    expect(document.querySelector(".filter-chip")).toBeNull();
+    expect(document.querySelectorAll(".calls .call.dimmed")).toHaveLength(0);
+  });
+
   it("hides Time spent when no tool call has timing", async () => {
     const timing = timingWithCall();
     timing.tool_duration_ms = 0;

@@ -63,6 +63,14 @@
 
   let categoryFilter = $state<string | null>(null);
 
+  // The panel stays mounted across sessions. A filter belongs to the session
+  // it was set on; carried over, it could dim a session whose Time spent
+  // section (and its clear control) is hidden.
+  $effect.pre(() => {
+    void sessionId;
+    categoryFilter = null;
+  });
+
   function toggleCategory(cat: string) {
     categoryFilter = categoryFilter === cat ? null : cat;
   }

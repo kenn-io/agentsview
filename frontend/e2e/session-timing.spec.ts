@@ -336,7 +336,8 @@ test.describe("Session Vital Signs", () => {
     const timeSpent = page.locator(".v-section").filter({
       has: page.locator(".v-h", { hasText: "Time spent" }),
     });
-    await expect(timeSpent.locator(".agg-name")).toHaveText(["Bash", "Task"]);
+    // Rows run longest first: Task measured 2m, Bash 20s.
+    await expect(timeSpent.locator(".agg-name")).toHaveText(["Task", "Bash"]);
     await expect(timeSpent).not.toContainText("Not measured");
   });
 
