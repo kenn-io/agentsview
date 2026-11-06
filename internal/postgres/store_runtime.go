@@ -47,11 +47,15 @@ func (s *Store) readView(tx *sql.Tx) *Store {
 	}
 }
 
+func (s *Store) supportsConcurrentReads() bool {
+	return s.readTx == nil
+}
+
 // runIndependentReads runs reads that do not depend on each other. On the
 // owned pool they run concurrently. A read snapshot shares one transaction,
 // which cannot run statements at once, so there they run in order.
 func (s *Store) runIndependentReads(reads ...func()) {
-	if s.readTx != nil {
+	if !s.supportsConcurrentReads() {
 		for _, read := range reads {
 			read()
 		}

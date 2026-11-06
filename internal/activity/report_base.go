@@ -93,7 +93,7 @@ func BuildReportArtifacts(
 			cancel(err)
 		}
 		<-ready
-		if err != nil || usageErr != nil {
+		if err != nil {
 			// Keep the initiating stage's error, before its peer observes cancellation.
 			return CandidateArtifacts{}, Progress{}, context.Cause(readCtx)
 		}

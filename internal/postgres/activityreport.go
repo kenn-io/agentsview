@@ -44,7 +44,7 @@ type activityReportBackend struct {
 }
 
 func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
-	return func() {}, b.readTx == nil
+	return func() {}, b.supportsConcurrentReads()
 }
 
 func (b activityReportBackend) ActivityReportUsage(
