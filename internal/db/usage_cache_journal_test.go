@@ -259,6 +259,48 @@ func TestUsageJournaledLostAndDeleted(t *testing.T) {
 	assert.Zero(t, remaining)
 }
 
+func TestUsageJournaledRestoreBetweenCaptureAndFill(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "a")
+	seedJournaledUsage(t, database, "b")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "a"))
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "b", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T01:00:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
+
+	identity := usageTimezoneIdentityFor(filter.Location(), nil)
+	zone, lost, window, err := cache.captureUsageZoneWindow(t.Context(), identity, filter)
+	require.NoError(t, err)
+	databaseID, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	snapshot, refresh, ids, trusted, err := database.captureJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, databaseID, zone, lost, window)
+	require.NoError(t, err)
+	require.True(t, trusted)
+	require.Equal(t, []string{"a", "b"}, ids)
+	require.Len(t, refresh.Versions, 1)
+	wantSource := refresh.Versions[0]
+	require.Equal(t, "b", wantSource.SessionID)
+
+	_, err = database.RestoreSession(t.Context(), "a")
+	require.NoError(t, err)
+	installs, _, err := cache.refreshJournaledUsageWindow(t.Context(), &snapshot, refresh, ids, func(string) {})
+	require.NoError(t, err)
+	require.Contains(t, installs, "b")
+	var gotSource usageSourceVersion
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `
+		SELECT session_id, source_sync_marker, source_transcript_rev, usage_event_fingerprint
+		FROM usage_rollup_installs WHERE id = ?`, installs["b"].ID,
+	).Scan(&gotSource.SessionID, &gotSource.SyncMarker, &gotSource.TranscriptRevision, &gotSource.UsageEventFingerprint))
+	assert.True(t, wantSource.Equal(gotSource), "b's install must use b's captured source version")
+
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 250, got.Totals.InputTokens, "the next read must include restored session a")
+	want, err := database.getDailyUsageLegacy(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
 func TestUsageJournaledStaleDeletionAfterPeerRestore(t *testing.T) {
 	for _, tc := range []struct {
 		name string
