@@ -210,13 +210,24 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	if len(rows) == 0 {
 		return nil
 	}
+	cache := s.path != ""
+	generation := s.frustrationMemo.Generation()
 	idx := make(map[string]int, len(rows))
-	placeholders := make([]string, len(rows))
-	args := make([]any, len(rows))
+	placeholders := make([]string, 0, len(rows))
+	args := make([]any, 0, len(rows))
 	for i := range rows {
+		if cache {
+			if count, ok := s.frustrationMemo.Lookup(generation, rows[i].ID, ""); ok {
+				rows[i].FrustrationMarkerCount = count
+				continue
+			}
+		}
 		idx[rows[i].ID] = i
-		placeholders[i] = "?"
-		args[i] = rows[i].ID
+		placeholders = append(placeholders, "?")
+		args = append(args, rows[i].ID)
+	}
+	if len(args) == 0 {
+		return nil
 	}
 	q := `SELECT session_id, content, is_system
 		FROM messages
@@ -245,6 +256,14 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	if err := msgRows.Err(); err != nil {
 		return fmt.Errorf("iterating duckdb frustration markers: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cache {
+		for id, i := range idx {
+			s.frustrationMemo.Store(generation, id, "", rows[i].FrustrationMarkerCount)
+		}
 	}
 	return nil
 }
