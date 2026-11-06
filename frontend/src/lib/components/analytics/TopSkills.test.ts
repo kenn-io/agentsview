@@ -127,8 +127,11 @@ describe("TopSkills", () => {
     const groups = [...details.querySelectorAll("ul")].map((list) => ({
       label: document.getElementById(list.getAttribute("aria-labelledby")!)!
         .textContent!.trim(),
+      // Name, count, and share as separate pieces of each chip.
       items: [...list.querySelectorAll("li")].map((item) =>
-        item.textContent!.replace(/\s+/g, " ").trim(),
+        [...item.querySelectorAll(".kit-chip__label, .item-count, .item-pct")]
+          .map((part) => part.textContent!.trim())
+          .join(" "),
       ),
     }));
     expect(groups).toEqual([
@@ -144,6 +147,39 @@ describe("TopSkills", () => {
 
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(details.hidden).toBe(true);
+    await unmount(component);
+  });
+
+  it("draws each share bar as the skill's part of all skill calls", async () => {
+    const component = mountWithData();
+    await tick();
+
+    // 7 of 9 calls: the bar fills 77.8% of its track, as the tooltip says,
+    // even though this is the only (and so the largest) skill shown.
+    const fill = document.querySelector<HTMLElement>(".bar-fill");
+    expect(fill!.style.width).toBe("77.8%");
+    await unmount(component);
+  });
+
+  it("keeps breakdown counts outside the truncated name", async () => {
+    const component = mountWithData();
+    await tick();
+
+    disclosure().click();
+    await tick();
+
+    const chips = [...detailRow(disclosure()).querySelectorAll(".kit-chip")];
+    const parts = chips.map((chip) => ({
+      name: chip.querySelector(".kit-chip__label")!.textContent!.trim(),
+      title: chip.getAttribute("title"),
+    }));
+    expect(parts).toEqual([
+      { name: "codex", title: "codex" },
+      { name: "cursor", title: "cursor" },
+      { name: "claude", title: "claude" },
+      { name: "agentsview", title: "agentsview" },
+      { name: "notes", title: "notes" },
+    ]);
     await unmount(component);
   });
 

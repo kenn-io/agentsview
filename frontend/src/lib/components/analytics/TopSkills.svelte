@@ -19,14 +19,10 @@
     else expanded.add(name);
   }
 
-  const maxCount = $derived(
-    skills.length > 0
-      ? Math.max(...skills.map((s) => s.call_count), 1)
-      : 1,
-  );
-
-  function barWidth(count: number): number {
-    return (count / maxCount) * 100;
+  // Share is the skill's part of all skill calls, so the full track is
+  // 100% and the bar agrees with its tooltip.
+  function barWidth(pct: number): number {
+    return Math.min(100, Math.max(0, pct));
   }
 
   function formatLastUsed(value: string): string {
@@ -141,7 +137,7 @@
               >
                 <span
                   class="bar-fill"
-                  style="width: {barWidth(skill.call_count)}%"
+                  style="width: {barWidth(skill.pct)}%"
                 ></span>
               </span>
             </td>
@@ -160,12 +156,14 @@
                     <ul class="breakdown-items" aria-labelledby="{detailId}-agents">
                       {#each skill.agent_breakdown as agent (agent.agent)}
                         <li>
-                          <Chip size="xs" uppercase={false} class="breakdown-chip">
-                            <span class="item-name">{agent.agent}</span>
-                            <span class="item-count">{formatCount(agent.count)}</span>
-                            <span class="item-pct">
-                              {agentPct(agent, skill.call_count)}
-                            </span>
+                          <Chip size="xs" uppercase={false} class="breakdown-chip" title={agent.agent}>
+                            {agent.agent}
+                            {#snippet trailing()}
+                              <span class="item-count">{formatCount(agent.count)}</span>
+                              <span class="item-pct">
+                                {agentPct(agent, skill.call_count)}
+                              </span>
+                            {/snippet}
                           </Chip>
                         </li>
                       {/each}
@@ -182,9 +180,11 @@
                     <ul class="breakdown-items" aria-labelledby="{detailId}-projects">
                       {#each skill.project_breakdown as project (project.project)}
                         <li>
-                          <Chip size="xs" uppercase={false} class="breakdown-chip">
-                            <span class="item-name">{project.project}</span>
-                            <span class="item-count">{formatCount(project.count)}</span>
+                          <Chip size="xs" uppercase={false} class="breakdown-chip" title={project.project}>
+                            {project.project}
+                            {#snippet trailing()}
+                              <span class="item-count">{formatCount(project.count)}</span>
+                            {/snippet}
                           </Chip>
                         </li>
                       {/each}
@@ -253,6 +253,10 @@
     background: transparent;
     box-shadow: inset 0 -1px 0 var(--border-muted);
     font-weight: 500;
+    /* Longer translated labels ("Dernière utilisation") wrap within their
+       column instead of running into the next header. */
+    white-space: normal;
+    vertical-align: bottom;
   }
 
   .skills-container :global(.skills-table .kit-th.col-skill) {
@@ -391,11 +395,10 @@
     color: var(--text-secondary);
   }
 
-  .item-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  /* Count and share sit in the chip's trailing slot, outside its
+     truncating label, so a long name never hides them. */
+  .item-pct {
+    margin-inline-start: 4px;
   }
 
   .item-count {
