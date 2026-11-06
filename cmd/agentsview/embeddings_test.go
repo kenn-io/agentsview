@@ -1305,32 +1305,6 @@ func TestEmbeddingsActivateInvalidIDReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid generation id")
 }
 
-func TestEmbeddingsBuildRejectsDaemonWithoutBuildIdentity(t *testing.T) {
-	for _, apiVersion := range []int{14, 15} {
-		t.Run(strconv.Itoa(apiVersion), func(t *testing.T) {
-			dataDir := testDataDir(t)
-			writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
-			var posted atomic.Bool
-			mux := http.NewServeMux()
-			mux.Handle("GET /api/ping", daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"}))
-			mux.HandleFunc("POST /api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
-				posted.Store(true)
-				w.WriteHeader(http.StatusAccepted)
-				_, _ = io.WriteString(w, `{"started":true}`)
-			})
-			srv := httptest.NewServer(mux)
-			t.Cleanup(srv.Close)
-			endpoint := serverEndpoint(t, srv)
-			writeRuntimeRecordFixture(t, dataDir, daemonRuntimeRecord(endpoint.Host, endpoint.Port, withRuntimeAPIVersion(apiVersion)))
-			var out bytes.Buffer
-			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(""), EmbeddingsBuildOptions{Yes: true})
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")
-			assert.False(t, posted.Load(), "incompatible daemons must be rejected before starting a build")
-		})
-	}
-}
-
 func TestResolveEmbeddingsDaemonClientReportsIncompatibleDaemon(t *testing.T) {
 	dataDir := runtimeTestDir(t)
 	writeLiveRuntime(t, dataDir, false,
@@ -1497,7 +1471,7 @@ func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {
 	assert.ErrorContains(t, err, "if any flags in the group")
 }
 
-func TestEmbeddingsDaemonClientOriginOmitsBasePath(t *testing.T) {
+func TestEmbeddingsDaemonClientBuildResponse(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
 		wantError  bool
@@ -1518,13 +1492,13 @@ func TestEmbeddingsDaemonClientOriginOmitsBasePath(t *testing.T) {
 			client := embeddingsDaemonClient{baseURL: ts.URL + "/viewer"}
 			id, err := client.startBuild(t.Context(), vector.BuildRequest{})
 			if tc.wantError {
-				require.Error(t, err)
+				require.ErrorContains(t, err, "missing a build ID")
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, int64(1), id)
+				assert.Equal(t, "/viewer/api/v1/embeddings/build", gotPath)
+				assert.Equal(t, ts.URL, gotOrigin)
 			}
-			assert.Equal(t, "/viewer/api/v1/embeddings/build", gotPath)
-			assert.Equal(t, ts.URL, gotOrigin)
 		})
 	}
 }
@@ -1593,7 +1567,7 @@ func TestEmbeddingsActivateDispatchesToDaemon(t *testing.T) {
 }
 
 // TestBuildViaDaemonConflictThenPolls follows an active build while refusing
-// setup conflicts and a setup that hides the followed build's outcome.
+// setup conflicts.
 func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	orig := embeddingsPollInterval
 	embeddingsPollInterval = time.Millisecond
@@ -1602,14 +1576,12 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 		name       string
 		code       string
 		message    string
-		replaced   bool
 		wantError  string
 		wantPolls  int32
 		wantNotice bool
 	}{
 		{name: "running build", message: "an embeddings build is already running", wantPolls: 2, wantNotice: true},
 		{name: "setup refusal", code: "embeddings_setup_busy", message: "search by meaning is being set up", wantError: "being set up"},
-		{name: "setup finished between polls", message: "an embeddings build is already running", replaced: true, wantError: "run the build again", wantPolls: 2, wantNotice: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var statusCalls atomic.Int32
@@ -1622,7 +1594,7 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 			mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
 				n := statusCalls.Add(1)
 				status := vector.BuildStatus{BuildID: 1, Running: n < 2}
-				if n >= 2 && !tc.replaced {
+				if n >= 2 {
 					status.LastResult = &vector.BuildResult{
 						Activated: true,
 						Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},

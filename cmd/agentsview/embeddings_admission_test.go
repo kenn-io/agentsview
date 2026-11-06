@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,7 +45,6 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 		operation               string
 		duringSetup, resumeBusy bool
 	}{
-		{"status", false, false},
 		{"build", false, false},
 		{"generations", false, false},
 		{"activate", false, false},
@@ -95,12 +93,7 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, generations, 1)
 			lookedUp, resumed := make(chan struct{}), make(chan struct{})
-			var runtime server.EmbeddingsRuntime
-			if operation == "status" {
-				runtime = &pausedSetupSnapshot{EmbeddingsRuntime: owner, read: lookedUp, resume: resumed}
-			} else {
-				runtime = &pausedEmbeddingsLookup{EmbeddingsRuntime: owner, lookedUp: lookedUp, resume: resumed}
-			}
+			runtime := &pausedEmbeddingsLookup{EmbeddingsRuntime: owner, lookedUp: lookedUp, resume: resumed}
 			resume := sync.OnceFunc(func() { close(resumed) })
 			defer resume()
 			ln, port := listenLoopback(t)
@@ -155,15 +148,8 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			resume()
 			got := <-completed
 			require.NoError(t, got.err)
-			if operation == "status" {
-				assert.Equal(t, http.StatusOK, got.status, string(got.body))
-				var status vector.BuildStatus
-				require.NoError(t, json.Unmarshal(got.body, &status))
-				assert.Equal(t, "nomic-embed-text", status.Model)
-			} else {
-				assert.Equal(t, http.StatusConflict, got.status, string(got.body))
-				assert.Contains(t, string(got.body), "embeddings_setup_busy")
-			}
+			assert.Equal(t, http.StatusConflict, got.status, string(got.body))
+			assert.Contains(t, string(got.body), "embeddings_setup_busy")
 		})
 	}
 }

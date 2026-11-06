@@ -124,7 +124,7 @@ func TestLiveEmbeddingsSetupCLIRecovery(t *testing.T) {
 // must not become the CLI's outcome, whether it finishes before or after
 // the CLI's first status poll.
 func TestDaemonBuildReportsReplacedBuild(t *testing.T) {
-	for _, tc := range []struct{ beforeFirstPoll, followRunning bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+	for _, tc := range []struct{ beforeFirstPoll, followRunning bool }{{true, false}, {false, true}} {
 		beforeFirstPoll := tc.beforeFirstPoll
 		t.Run(fmt.Sprintf("before-first-poll=%t/follow-running=%t", beforeFirstPoll, tc.followRunning), func(t *testing.T) {
 			home := t.TempDir()

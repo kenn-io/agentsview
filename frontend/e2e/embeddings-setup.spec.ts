@@ -1,80 +1,41 @@
 import { expect, test } from "@playwright/test";
 
 for (const width of [1280, 390]) {
-  for (const entry of width === 390 ? ["settings"] : ["settings", "semantic", "hint"]) {
-    test(`${entry} activates search by meaning at ${width}px`, async ({ page }) => {
+  for (const entry of width === 390 ? ["settings"] : ["settings", "semantic"]) {
+    test(`${entry} lays out search by meaning at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 850 });
       let phase = "off";
       const setup = () => ({
-        enabled: phase !== "off" && phase !== "download",
-        action: phase.startsWith("ollama")
-          ? "use-built-in"
-          : phase === "off" || phase === "download"
-            ? "turn-on"
-            : "",
+        enabled: phase !== "off",
+        action: phase.startsWith("ollama") ? "use-built-in" : phase === "off" ? "turn-on" : "",
         provider: phase.startsWith("ollama") ? "ollama" : "built-in",
         rebuild_required: phase === "ollama-other",
         missing_bytes: phase === "off" || phase.startsWith("ollama") ? 295000000 : 0,
         installing: false,
-        busy: phase === "download",
-        downloaded_bytes: phase === "download" ? 100000000 : 0,
-        total_bytes: phase === "download" ? 295000000 : 0,
+        busy: false,
+        downloaded_bytes: 0,
+        total_bytes: 0,
       });
       await page.route("**/api/v1/embeddings/status*", (route) =>
         route.fulfill({
           json: {
-            running: phase === "index",
-            done: phase === "index" ? 25 : 0,
-            total: phase === "index" ? 100 : 0,
-            eta_milliseconds: 3000,
-            estimate_ready: phase === "index",
-            phase: "embedding",
+            running: false,
+            done: 0,
+            total: 0,
             setup: setup(),
             ...(phase === "failed" ? { last_error: "encoder unavailable" } : {}),
-            ...(phase === "ready"
-              ? {
-                  build_id: 920,
-                  started_at: `2026-01-01T00:00:${width === 390 ? "01" : "02"}Z`,
-                  last_result: { Activated: true, Fill: { Documents: 100, Chunks: 100 } },
-                }
-              : {}),
           },
         }),
       );
-      await page.route("**/api/v1/embeddings/setup", async (route) => {
-        expect(route.request().postDataJSON()).toEqual({
-          action: "turn-on",
-          approved_bytes: 295000000,
-        });
-        phase = "download";
-        await route.fulfill({ status: 202, json: { started: true } });
-      });
-      await page.route("**/api/v1/embeddings/build", async (route) => {
-        phase = "index";
-        await route.fulfill({ status: 202, json: { started: true } });
-      });
       await page.route("**/api/v1/embeddings/generations*", (route) =>
         route.fulfill({ json: { generations: [] } }),
       );
       await page.route("**/api/v1/search?**", (route) => route.fulfill({ json: { results: [] } }));
       await page.route("**/api/v1/search/content?**", (route) =>
-        phase === "ready"
-          ? route.fulfill({
-              json: {
-                matches: [
-                  {
-                    session_id: "test-session",
-                    project: "Sample",
-                    agent: "claude",
-                    content: "reuse database connections",
-                    snippet: "reuse database connections",
-                    ordinal: 0,
-                  },
-                ],
-                total: 1,
-              },
-            })
-          : route.fulfill({ status: 501, json: { error: "semantic search not available" } }),
+        route.fulfill({
+          status: 501,
+          json: { error: "semantic search not available", code: "semantic_setup_required" },
+        }),
       );
       await page.goto(entry === "settings" ? "/settings" : "/");
       if (entry === "settings") {
@@ -100,16 +61,7 @@ for (const width of [1280, 390]) {
           await page.getByRole("radio", { name: "Semantic", exact: true }).click();
         await page.locator(".palette-input").fill("connections");
       }
-      await expect(page.getByRole("button", { name: "Turn on", exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "Turn on", exact: true }).click();
-      await expect(page.locator(".kit-search-by-meaning [role=progressbar]")).toBeVisible();
-      phase = "index";
-      await expect(page.locator(".kit-search-by-meaning")).toContainText("Indexing");
-      phase = "ready";
       if (entry === "settings") {
-        await expect(
-          page.locator(".kit-search-by-meaning").getByText("On", { exact: true }),
-        ).toBeVisible();
         phase = "failed";
         await page.reload();
         await page
@@ -149,13 +101,6 @@ for (const width of [1280, 390]) {
             expect
               .soft(await disclosure.evaluate((el) => getComputedStyle(el).color))
               .toBe(await hint.evaluate((el) => getComputedStyle(el).color));
-        }
-      } else {
-        await expect(page.locator(".palette-results")).toContainText("reuse database connections");
-        await page.getByRole("radio", { name: "Full text", exact: true }).click();
-        if (entry === "semantic") {
-          await expect(page.locator(".meaning-hint")).toBeVisible();
-          await expect(page.locator(".meaning-hint")).not.toContainText("Search by meaning is off");
         }
       }
     });

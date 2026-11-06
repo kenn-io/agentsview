@@ -148,6 +148,49 @@ describe("SemanticSetupHelp", () => {
     return { component, onResolved };
   }
 
+  it("refreshes the download disclosure after Ollama stops", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "ollama",
+      missing_bytes: 295000000,
+      busy: false,
+      installing: false,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+      rebuild_required: false,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+    const component = mount(SemanticSetupHelp, {
+      target: document.body,
+      props: { onResolved: vi.fn() },
+    });
+    try {
+      await settle();
+      expect(document.body.textContent).toContain("Uses Ollama");
+      expect(document.body.textContent).not.toContain("Downloads 295 MB");
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+        running: false,
+        setup: {
+          ...setup,
+          provider: "built-in",
+          error: "embedding download declined; approve installation to use local embeddings",
+        },
+      });
+      [...document.body.querySelectorAll("button")]
+        .find((b) => b.textContent?.trim() === "Turn on")!
+        .click();
+      await settle();
+      expect(document.body.textContent).toContain("Downloads 295 MB");
+      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
+        "download declined",
+      );
+    } finally {
+      unmount(component);
+    }
+  });
+
   it("shows the config walkthrough when the daemon has no embeddings manager", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
       new ApiError(501, "embeddings manager not available"),

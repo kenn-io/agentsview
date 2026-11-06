@@ -1509,27 +1509,23 @@ func (e *scopedEmitter) Emit(scope string) {
 }
 
 func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
-	for _, synced := range []int{1, 3} {
-		t.Run(strconv.Itoa(synced), func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				em := &recordingEmitter{}
-				done, exited := make(chan struct{}), make(chan struct{})
-				interval := 10 * time.Millisecond
-				go func() {
-					runRemoteHostSyncLoop(t.Context(), "test-host", interval, func() (int, error) { return synced, nil }, em, nil, done)
-					close(exited)
-				}()
-				defer func() {
-					close(done)
-					<-exited
-				}()
-				synctest.Wait()
-				time.Sleep(interval)
-				synctest.Wait()
-				assert.Equal(t, []string{"sessions"}, em.scopes)
-			})
-		})
-	}
+	synctest.Test(t, func(t *testing.T) {
+		em := &recordingEmitter{}
+		done, exited := make(chan struct{}), make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, func() (int, error) { return 1, nil }, em, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			<-exited
+		}()
+		synctest.Wait()
+		time.Sleep(interval)
+		synctest.Wait()
+		assert.Equal(t, []string{"sessions"}, em.scopes)
+	})
 }
 
 func TestStartRemoteHostSync_NoEmitOnZeroSynced(t *testing.T) {

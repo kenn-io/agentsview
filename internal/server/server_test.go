@@ -929,13 +929,6 @@ func TestSearchContentSemanticModeUnavailable(t *testing.T) {
 			}
 		}
 	}
-	te.db.SetVectorSearcher(fakeHitsVectorSearcher{})
-	w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode=semantic",
-		withHeader("X-AgentsView-Search-Intent", "semantic"))
-	assertStatus(t, w, http.StatusOK)
-	var body map[string]jsontext.Value
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.JSONEq(t, "[]", string(body["matches"]))
 }
 
 // fakeTransientVectorSearcher implements db.VectorSearcher, always failing

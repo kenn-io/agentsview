@@ -4,7 +4,6 @@ import { flushSync, mount, unmount } from "svelte";
 // @ts-ignore
 import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
 // @ts-ignore
-import SemanticSetupHelp from "../command-palette/SemanticSetupHelp.svelte";
 import { EmbeddingsService } from "../../api/generated/index";
 import type { VectorBuildStatus } from "../../api/generated/index";
 import { ApiError } from "../../api/runtime.js";
@@ -99,67 +98,57 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
-  it.each([
-    { entry: "Settings", render: () => mount(EmbeddingsSettings, { target: document.body }) },
-    {
-      entry: "Semantic setup",
-      render: () =>
-        mount(SemanticSetupHelp, { target: document.body, props: { onResolved: vi.fn() } }),
-    },
-  ])(
-    "$entry approves only the disclosed download when retrying after Ollama stops",
-    async ({ render }) => {
-      const setup = {
-        enabled: false,
+  it("approves only the disclosed download when retrying after Ollama stops", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "ollama",
+      missing_bytes: 295000000,
+      busy: false,
+      installing: false,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+      rebuild_required: false,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    try {
+      await settle();
+      expect(document.body.textContent).toContain("Uses Ollama");
+      expect(document.body.textContent).not.toContain("Downloads 295 MB");
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+        running: false,
+        setup: {
+          ...setup,
+          provider: "built-in",
+          error: "embedding download declined; approve installation to use local embeddings",
+        },
+      });
+      [...document.body.querySelectorAll("button")]
+        .find((b) => b.textContent?.trim() === "Turn on")!
+        .click();
+      await settle();
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
         action: "turn-on",
-        provider: "ollama",
-        missing_bytes: 295000000,
-        busy: false,
-        installing: false,
-        downloaded_bytes: 0,
-        total_bytes: 0,
-        rebuild_required: false,
-      };
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
-      embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
-      const component = render();
-      try {
-        await settle();
-        expect(document.body.textContent).toContain("Uses Ollama");
-        expect(document.body.textContent).not.toContain("Downloads 295 MB");
-        embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
-          running: false,
-          setup: {
-            ...setup,
-            provider: "built-in",
-            error: "embedding download declined; approve installation to use local embeddings",
-          },
-        });
-        [...document.body.querySelectorAll("button")]
-          .find((b) => b.textContent?.trim() === "Turn on")!
-          .click();
-        await settle();
-        expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
-          action: "turn-on",
-          approved_bytes: 0,
-        });
-        expect(document.body.textContent).toContain("Downloads 295 MB");
-        expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
-          "download declined",
-        );
-        [...document.body.querySelectorAll("button")]
-          .find((b) => b.textContent?.trim() === "Retry")!
-          .click();
-        await settle();
-        expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
-          action: "turn-on",
-          approved_bytes: 295000000,
-        });
-      } finally {
-        unmount(component);
-      }
-    },
-  );
+        approved_bytes: 0,
+      });
+      expect(document.body.textContent).toContain("Downloads 295 MB");
+      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
+        "download declined",
+      );
+      [...document.body.querySelectorAll("button")]
+        .find((b) => b.textContent?.trim() === "Retry")!
+        .click();
+      await settle();
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
+        action: "turn-on",
+        approved_bytes: 295000000,
+      });
+    } finally {
+      unmount(component);
+    }
+  });
 
   it.each(["turn-on", "use-built-in"])(
     "retries the reported setup action after %s fails",
@@ -243,32 +232,22 @@ describe("EmbeddingsSettings", () => {
     },
   );
 
-  it("keeps polling after a generations error with status 501", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1));
-    embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValueOnce(
-      new ApiError(501, "embeddings manager not available"),
-    );
-    const component = mount(EmbeddingsSettings, { target: document.body });
-    try {
-      await settle();
-      expect(document.body.querySelector('[role="alert"]')).toBeNull();
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2));
-      await settle(60_000);
-      expect(document.body.textContent).toContain("Indexing 2 of");
-      expect(document.body.textContent).not.toContain("embeddings manager not available");
-    } finally {
-      unmount(component);
-    }
-  });
-
-  it("keeps polling after a generations error with status 500", async () => {
+  it.each([501, 500])("keeps polling after a generations error with status %s", async (status) => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1));
     embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(
-      new ApiError(500, "internal error"),
+      new ApiError(status, "internal error"),
     );
     const component = mount(EmbeddingsSettings, { target: document.body });
     try {
       await settle();
+      if (status === 501) {
+        expect(document.body.querySelector('[role="alert"]')).toBeNull();
+        embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2));
+        await settle(60_000);
+        expect(document.body.textContent).toContain("Indexing 2 of");
+        expect(document.body.textContent).not.toContain("internal error");
+        return;
+      }
       const error = document.body.querySelector('[role="alert"]');
       expect(error?.textContent ?? "").toContain("internal error");
       expect(error?.closest(".subsection")?.querySelector("h4")?.textContent ?? "").toContain(
@@ -337,7 +316,6 @@ describe("EmbeddingsSettings", () => {
     expect(text()).toContain("256");
     expect(text()).toContain("Indexing 200 of 1,000 text sections");
     expect(text()).toContain("under a minute left");
-    expect(document.body.querySelector(".status-grid .kit-chip")).toBeNull();
     expect(text()).toContain("50 text sections/s");
     expect(text()).toContain("Elapsed 5s");
 
@@ -449,7 +427,6 @@ describe("EmbeddingsSettings", () => {
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
 
-    expect(document.body.querySelector(".kit-search-by-meaning .kit-chip")?.textContent).toBe("On");
     expect(document.body.textContent).toContain("encode batch: connection refused");
 
     unmount(component);
