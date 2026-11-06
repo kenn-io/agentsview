@@ -2025,6 +2025,38 @@ describe("SessionBreadcrumb", () => {
       unmount(component);
     });
 
+    it.each([
+      { grade: undefined, offered: true },
+      { grade: "B", offered: false },
+    ])(
+      "offers the health panel in the actions menu only without a grade chip (grade $grade)",
+      async ({ grade, offered }) => {
+        ui.signalPanelOpen = false;
+        const component = mount(SessionBreadcrumb, {
+          target: document.body,
+          props: {
+            session: makeSession("claude", { health_grade: grade }),
+            onBack: () => {},
+          },
+        });
+        await tick();
+        document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
+        await tick();
+        const item = Array.from(
+          document.querySelectorAll<HTMLButtonElement>(".actions-menu-item"),
+        ).find((el) => el.textContent?.trim() === "Session health and tool sequences");
+        expect(item !== undefined).toBe(offered);
+        if (item) {
+          item.click();
+          await tick();
+          expect(ui.signalPanelOpen).toBe(true);
+          expect(document.querySelector(".actions-menu")).toBeNull();
+        }
+        ui.signalPanelOpen = false;
+        unmount(component);
+      },
+    );
+
     it("leaves out the grade chip and empty groups when fields are missing", async () => {
       const component = mount(SessionBreadcrumb, {
         target: document.body,
