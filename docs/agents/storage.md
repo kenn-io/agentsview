@@ -701,12 +701,15 @@ The usage cache filename is derived from its format version and the archive
 not migrate or rewrite the archive. Facts contain only message- and
 usage-event-derived data. Aggregate fingerprints additionally bake the exact
 session `agent`, `started_at`, `project`, `machine`, `git_branch`, `group_key`,
-`is_automated`, and `user_message_count`. Those fields determine deduplication,
-day bucketing, and the filter dimensions of stored day totals. Journaled changes
-rebuild the session's rows and totals. Warm daily reads filter totals in SQL and
-read per-session rows for authoritative costs and dedup exceptions. Warm Top
-sessions rank session or group units in cache SQL and load candidate names.
-Session counts group ordinary daily rows in SQL and add surviving owners.
+the derived cron label, `is_automated`, and `user_message_count`. Those fields
+determine deduplication, day bucketing, and the filter dimensions of stored day
+totals. Journaled changes rebuild the session's rows and totals. Warm daily
+reads filter totals in SQL and read per-session rows for authoritative costs
+and dedup exceptions. Warm Top
+sessions rank session or group units in cache SQL. Grouped candidates load at
+most three representatives per group for the agent, latest start, and latest
+usable cron label. Individual sessions load their candidate names. Session
+counts group ordinary daily rows in SQL and add surviving owners.
 Termination and `active_since` filters still use the archive snapshot. Do not
 widen or narrow this live/baked boundary implicitly.
 

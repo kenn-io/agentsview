@@ -107,7 +107,6 @@ type UsageFilter struct {
 	// TopSessionsTokenTypes selects the counters used for token ranking.
 	// The zero value means all token types.
 	TopSessionsTokenTypes UsageTokenTypes
-	topSessionsLimit      int
 
 	// ModelAliases groups plan-only model counts before per-session deduplication.
 	ModelAliases map[string]string
@@ -2722,7 +2721,10 @@ func mergeTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 			row.StartedAt = entry.StartedAt
 			row.started, row.sessionID = started, entry.SessionID
 		}
-		label := parser.HermesCronJobName(entry.GroupKey, entry.SessionName)
+		label := entry.GroupLabel
+		if label == "" {
+			label = parser.HermesCronJobName(entry.GroupKey, entry.SessionName)
+		}
 		if label != "" && (row.GroupLabel == "" || started.After(row.labelStarted) || started.Equal(row.labelStarted) && entry.SessionID > row.labelSessionID) {
 			row.GroupLabel = label
 			row.labelStarted, row.labelSessionID = started, entry.SessionID

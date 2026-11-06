@@ -892,7 +892,7 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 	}
 	result, err := cache.usageRollupQuery(
 		t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter,
-		export.NewPricingResolver(newSnapshot.PricingRows))
+		export.NewPricingResolver(newSnapshot.PricingRows), 0)
 	require.NoError(t, err)
 	require.Len(t, result.Groups, 1)
 	assert.Equal(t, int64(20), result.Groups[0].OutputTokens)
@@ -960,7 +960,7 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 
 	result, err := cache.usageRollupQuery(
 		t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: newInstalls}, filter,
-		export.NewPricingResolver(newSnapshot.PricingRows))
+		export.NewPricingResolver(newSnapshot.PricingRows), 0)
 	require.NoError(t, err)
 	var inputTokens int64
 	for _, group := range result.Groups {

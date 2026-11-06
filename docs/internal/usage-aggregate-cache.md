@@ -42,19 +42,21 @@ counts, and discarded-snapshot output. Go owns model resolution, rate-band
 selection, money rounding, and result assembly.
 
 Rollup installs bake `agent`, `started_at`, `project`, `machine`, `git_branch`,
-`group_key`, `is_automated`, and `user_message_count`. A journaled metadata
-change rebuilds that session's rows and moves its day totals to the new
-dimensions. Termination and `active_since` filters still use archive metadata
-and per-session rows.
+`group_key`, the derived cron label, `is_automated`, and `user_message_count`. A
+journaled metadata change rebuilds that session's rows and moves its day totals
+to the new dimensions. Termination and `active_since` filters still use archive
+metadata and per-session rows.
 
 After a completed timezone coverage pass, daily reads apply session and model
 filters to day totals in SQL. They load install metadata only for authoritative
 sessions and exception owners. SQL counts ordinary sessions by project and
 agent; surviving exception owners add their distinct counts. Warm Top sessions
-reads rank session or group units in SQL and load names only for candidates and
-their members. Owners keep their per-session fold, and grouped reads retain the
-trailing remainder row. Warm preparations skip window-session discovery. Each
-archive snapshot loads its pricing catalog and computes its digest.
+reads rank session or group units in SQL. Grouped candidates load at most three
+representatives per group for the agent, latest start, and latest usable cron
+label. Individual sessions load names only for candidates. Owners keep their
+per-session fold, and grouped reads retain the trailing remainder row. Warm
+preparations skip window-session discovery. Each archive snapshot loads its
+pricing catalog and computes its digest.
 
 ### Dedup exceptions
 

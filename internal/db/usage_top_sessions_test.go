@@ -60,3 +60,53 @@ func CheckUsageTopSessionsMatchLegacy(t *testing.T, database *DB) {
 		}
 	}
 }
+
+func TestUsageTopSessionsBoundedGroupMembers(t *testing.T) {
+	database, filter, _ := seedUsageJournalBenchmark(t, 1000, 1)
+	database.StopUsageCacheBackfill()
+	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project='project-0', machine='machine-0', group_key='daily:job', started_at='invalid', session_name=''`)
+	require.NoError(t, err)
+	for _, row := range []struct{ id, started, name string }{
+		{"journal-00001", "2026-08-08T13:00:00.000000009+01:00", "Earlier report · run"},
+		{"journal-00002", "2026-08-08T12:00:00.000000010Z", "Tied report · run"},
+		{"journal-00003", "2026-08-08T08:00:00.000000010-04:00", "Latest report · run"},
+		{"journal-00010", "2026-08-09T12:00:00Z", "daily · run"},
+	} {
+		_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET started_at=?, session_name=? WHERE id=?`, row.started, row.name, row.id)
+		require.NoError(t, err)
+	}
+	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='claude' WHERE id='journal-00010'`)
+	require.NoError(t, err)
+	filter.TopSessionsByGroup = true
+	warmJournaledUsage(t, database, filter)
+	_, facts, _, err := database.queryUsageRollups(t.Context(), filter, usageQueryKindTopSessions, false, 1)
+	require.NoError(t, err)
+	require.NotNil(t, facts.TopSessions)
+	var loaded []string
+	for _, entry := range facts.TopSessions.Entries {
+		loaded = append(loaded, entry.SessionID)
+	}
+	// Replacing representative selection with all members loads 400 rows.
+	assert.Equal(t, []string{"journal-00000", "journal-00003", "journal-00010"}, loaded)
+	got, err := database.GetTopSessionsByCost(t.Context(), filter, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].SessionID)
+	assert.Equal(t, "codex", got[0].Agent)
+	assert.Equal(t, "2026-08-09T12:00:00Z", got[0].StartedAt)
+	assert.Equal(t, "Latest report", got[0].GroupLabel)
+	assert.Equal(t, "Latest report", got[0].DisplayName)
+	assert.Equal(t, 120000, got[0].InputTokens)
+	assert.Equal(t, 24000, got[0].OutputTokens)
+	assert.Equal(t, 144000, got[0].TotalTokens)
+	assert.Equal(t, int64(168000), got[0].Cost.Microdollars)
+
+	// A name-only edit must refresh the cached label and select its successor.
+	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_name='daily · run' WHERE id='journal-00003'`)
+	require.NoError(t, err)
+	got, err = database.GetTopSessionsByCost(t.Context(), filter, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "Tied report", got[0].GroupLabel)
+	assert.Equal(t, int64(168000), got[0].Cost.Microdollars)
+}

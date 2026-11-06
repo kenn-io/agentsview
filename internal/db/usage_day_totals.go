@@ -66,21 +66,11 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	result.MatchingSessions = authoritative.MatchingSessions
 	if !filter.SkipSessionCounts {
 		b = NewQueryBuilder(SQLiteQueryDialect(), 0)
-		where = `s.timezone_id=` + b.Add(timezoneID)
-		if from != "" {
-			where += ` AND r.local_date>=` + b.Add(from)
-		}
-		if to != "" {
-			where += ` AND r.local_date<=` + b.Add(to)
-		}
-		where = AppendUsagePredicates(where, BuildUsageSessionFilter(filter, b, ""), "")
-		where = AppendUsagePredicates(where, BuildUsageSourceFilter(filter, b, "r.reported_model"), "")
-		owner := usageOwnerPredicate("s", b, from, to)
-		rows, err = conn.QueryContext(ctx, `WITH eligible AS (
-            SELECT s.session_id, s.project, s.baked_agent, s.id, s.has_authoritative FROM usage_daily_rollups r
-            JOIN (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s ON s.id=r.rollup_install_id WHERE `+where+`
-        ) SELECT CASE WHEN (`+owner+`) THEN s.session_id ELSE '' END AS owner_id,
-            s.project, s.baked_agent, COUNT(DISTINCT s.session_id) FROM eligible s
+		where, owner := usageOrdinaryWindowWhere(b, timezoneID, *snapshot, filter)
+		rows, err = conn.QueryContext(ctx, `SELECT CASE WHEN (`+owner+`) THEN s.session_id ELSE '' END AS owner_id, s.project, s.baked_agent, COUNT(DISTINCT s.session_id)
+            FROM usage_daily_rollups r
+            JOIN (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s ON s.id=r.rollup_install_id
+            WHERE `+where+`
             GROUP BY owner_id, s.project, s.baked_agent`, b.Args()...)
 		if err != nil {
 			return usageFactsResult{}, err
@@ -171,4 +161,21 @@ func usageOwnerPredicate(alias string, b *QueryBuilder, from, to string) string 
 		dates += ` AND local_date<=` + b.Add(to)
 	}
 	return alias + `.has_authoritative=1 OR ` + alias + `.id IN (SELECT rollup_install_id FROM usage_rollup_exceptions WHERE ` + dates + `)`
+}
+
+// usageOrdinaryWindowWhere shares the daily-row window and owner classification.
+// Bind the owner expression first because counts select it before their WHERE.
+func usageOrdinaryWindowWhere(b *QueryBuilder, timezoneID int64, snapshot usageQuerySnapshot, filter UsageFilter) (string, string) {
+	from, to := usageRollupDateBounds(snapshot)
+	owner := usageOwnerPredicate("s", b, from, to)
+	where := `s.timezone_id=` + b.Add(timezoneID)
+	if from != "" {
+		where += ` AND r.local_date>=` + b.Add(from)
+	}
+	if to != "" {
+		where += ` AND r.local_date<=` + b.Add(to)
+	}
+	where = AppendUsagePredicates(where, BuildUsageSessionFilter(filter, b, ""), "")
+	where = AppendUsagePredicates(where, BuildUsageSourceFilter(filter, b, "r.reported_model"), "")
+	return where, owner
 }

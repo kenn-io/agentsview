@@ -59,7 +59,7 @@ func usageCursorIncluded(filter UsageFilter) bool {
 // deduplication can depend on the requested window or live session filters.
 func (cache *usageCache) usageRollupQuery(
 	ctx context.Context, prepared usagePreparedWindow, filter UsageFilter,
-	resolver *export.PricingResolver,
+	resolver *export.PricingResolver, topSessionsLimit int,
 ) (usageFactsResult, error) {
 	snapshot := prepared.snapshot
 	if !prepared.journaled && len(snapshot.Sessions) == 0 && snapshot.CursorHighWater == 0 {
@@ -91,7 +91,7 @@ func (cache *usageCache) usageRollupQuery(
 	if prepared.journaled && prepared.kind == usageQueryKindDayTotals {
 		result, err = readUsageDayTotals(ctx, conn, timezoneID, &snapshot, filter)
 	} else if prepared.journaled && prepared.kind == usageQueryKindTopSessions {
-		result, err = readUsageTopSessions(ctx, conn, timezoneID, &snapshot, filter)
+		result, err = readUsageTopSessions(ctx, conn, timezoneID, &snapshot, filter, topSessionsLimit)
 	} else {
 		result, err = readUsageDailyRollups(ctx, conn, timezoneID, snapshot, filter, "")
 	}

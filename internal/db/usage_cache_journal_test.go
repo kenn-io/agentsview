@@ -693,7 +693,7 @@ func TestUsageJournaledForeignInstall(t *testing.T) {
 				_, _, err = cache.rollup.Ensure(t.Context(), snapshot, fills, export.NewPricingResolver(snapshot.PricingRows))
 				require.NoError(t, err)
 			}
-			_, err = cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows))
+			_, err = cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows), 0)
 			if name == "lost install" {
 				var missing *usageCacheMissingSessionError
 				require.ErrorAs(t, err, &missing)
@@ -748,7 +748,7 @@ func TestUsageJournaledNotificationCapturesNewerMetadata(t *testing.T) {
 				assert.Equal(t, metadata.ChangeRevision, installedRevision)
 				require.Equal(t, session.Agent, agent)
 				require.Equal(t, *session.StartedAt, startedAt)
-				_, err = cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows))
+				_, err = cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows), 0)
 				require.ErrorIs(t, err, errUsageCacheSourceChanged)
 				assertJournaledUsageLegacy(t, database, filter)
 			})
@@ -1041,7 +1041,7 @@ func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
 					prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
 					require.NoError(t, err)
 					require.True(t, prepared.journaled)
-					facts, err := cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows))
+					facts, err := cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows), 0)
 					require.NoError(t, err)
 					require.Len(t, facts.Groups, 1)
 					assert.EqualValues(t, 100, facts.Groups[0].InputTokens)

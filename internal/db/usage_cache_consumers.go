@@ -231,7 +231,7 @@ func (cache *usageCache) fillUsageWindow(ctx context.Context, snapshot *usageQue
 
 func (db *DB) queryUsageRollups(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
-	includeCursor bool,
+	includeCursor bool, topSessionsLimit int,
 ) (usageQuerySnapshot, usageFactsResult, *export.PricingResolver, error) {
 	// Retirement and cache-side install invalidation require a fresh capture.
 	var lastErr error
@@ -283,7 +283,7 @@ func (db *DB) queryUsageRollups(
 			matching, queryErr = cache.usageRollupActivityQuery(ctx, snapshot, filter, prepared.installs)
 			facts.MatchingSessions = matching
 		} else {
-			facts, queryErr = cache.usageRollupQuery(ctx, prepared, filter, resolver)
+			facts, queryErr = cache.usageRollupQuery(ctx, prepared, filter, resolver, topSessionsLimit)
 		}
 		timings := prepared.timings
 		timings.read = time.Since(readStarted)
@@ -313,9 +313,8 @@ func (db *DB) GetTopSessionsByCost(
 	if filter.ActiveSince == "" && filter.Termination == "" {
 		kind = usageQueryKindTopSessions
 	}
-	filter.topSessionsLimit = limit
 	snapshot, facts, _, err := db.queryUsageRollups(
-		ctx, filter, kind, false)
+		ctx, filter, kind, false, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +400,7 @@ func (db *DB) GetUsageSessionCounts(
 	ctx context.Context, filter UsageFilter,
 ) (UsageSessionCounts, error) {
 	_, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindToken, false)
+		ctx, filter, usageQueryKindToken, false, 0)
 	if err != nil {
 		return UsageSessionCounts{}, err
 	}
@@ -413,7 +412,7 @@ func (db *DB) GetUsageMatchingSessionCount(
 	ctx context.Context, filter UsageFilter,
 ) (int, error) {
 	_, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindActivity, false)
+		ctx, filter, usageQueryKindActivity, false, 0)
 	if err != nil {
 		return 0, err
 	}
