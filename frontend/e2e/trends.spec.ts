@@ -52,3 +52,32 @@ for (const termCount of [3, 12]) {
     expect(layout.tableScrolls).toBe(termCount === 12);
   });
 }
+
+test("enlarging the terms field keeps its resize handle and some counts in view", async ({
+  page,
+}) => {
+  await openTrends(page, 12);
+  await expect(page.locator(".term-table-wrap tbody tr")).toHaveCount(12);
+  const field = page.locator("#trend-terms");
+  const box = (await field.boundingBox())!;
+  // Drag the resize handle at the field's bottom-right corner far down.
+  await page.mouse.move(box.x + box.width - 3, box.y + box.height - 3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 3, box.y + box.height + 800, { steps: 8 });
+  await page.mouse.up();
+
+  const layout = await page.evaluate(() => {
+    const rect = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+    return {
+      field: rect("#trend-terms"),
+      panel: rect(".terms-panel"),
+      table: rect(".table-panel"),
+    };
+  });
+  // The drag did make the field taller.
+  expect(layout.field.height, JSON.stringify(layout)).toBeGreaterThan(box.height + 20);
+  // Its bottom edge, where the handle is, stays inside the panel, and the
+  // counts keep at least a few rows.
+  expect(layout.field.bottom).toBeLessThanOrEqual(layout.panel.bottom);
+  expect(layout.table.height).toBeGreaterThanOrEqual(100);
+});

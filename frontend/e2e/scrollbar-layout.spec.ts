@@ -134,15 +134,16 @@ test.describe("Scrollbar layout", () => {
     const before = await leftEdge(heading);
 
     release();
-    await expect(page.locator(".re-file-row")).toHaveCount(30);
+    // The list is virtualized, so only the rows near the viewport mount.
+    await expect(page.locator(".re-file-row").first()).toBeVisible();
     await expectScrollbarAppeared(scroller);
 
     expect(await leftEdge(heading)).toBe(before);
   });
 
-  test("keeps the Trends layout in place when results make the page scroll", async ({ page }) => {
-    // Thirty terms fill the term table, so the page scrolls at this viewport
-    // whatever the fixture archive holds.
+  test("keeps the Trends layout in place when results fill the term table", async ({ page }) => {
+    // Thirty terms outgrow the term table, which scrolls inside its panel
+    // beside the fixed-height chart; the page itself does not scroll.
     const release = await holdRequests(page, "**/api/v1/trends/terms*", (route) =>
       route.fulfill({ json: syntheticTrendsResponse }),
     );
