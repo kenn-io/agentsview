@@ -631,13 +631,12 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		query.RangeEnd.UTC().Format(time.RFC3339), 14,
 	)
 	rows, err := tx.QueryContext(ctx, `
-		SELECT occurred_at, model,
+		SELECT agent, occurred_at, COALESCE(NULLIF(model, ''), '<unknown>'),
 			input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens,
 			charged_microdollars, dedup_key
 		FROM cursor_usage_events
-		WHERE model != ''
-			AND occurred_at >= ?
+		WHERE occurred_at >= ?
 			AND occurred_at <= ?`,
 		lowerBound, upperBound,
 	)
@@ -652,6 +651,7 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		var inputTokens, outputTokens int
 		var cacheCreationTokens, cacheReadTokens int
 		if err := rows.Scan(
+			&row.Agent,
 			&row.Timestamp,
 			&row.Model,
 			&inputTokens,
@@ -665,19 +665,12 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 				"scanning standalone reporting usage: %w", err,
 			)
 		}
-		row.InputTokens,
-			row.OutputTokens,
-			row.CacheCreationTokens,
-			row.CacheReadTokens = UsageEventRowTokens(
-			"cursor",
-			inputTokens,
-			outputTokens,
-			cacheCreationTokens,
-			cacheReadTokens,
-		)
-		row.Agent = "cursor"
+		row.InputTokens = max(inputTokens, 0)
+		row.OutputTokens = max(outputTokens, 0)
+		row.CacheCreationTokens = max(cacheCreationTokens, 0)
+		row.CacheReadTokens = max(cacheReadTokens, 0)
 		row.MessageOrdinal = -1
-		row.UsageSource = "cursor"
+		row.UsageSource = row.Agent
 		row.CostSource = export.CostSourceReported
 		row.Priced = true
 		row.Contributes = true

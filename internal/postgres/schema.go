@@ -320,6 +320,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
 ` + sessionPlanUsageDDL + `
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
     id BIGSERIAL PRIMARY KEY,
+    agent TEXT NOT NULL DEFAULT 'cursor',
     occurred_at TIMESTAMPTZ NOT NULL,
     model TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT '',
@@ -2392,7 +2393,7 @@ func CheckSchemaCompat(
 
 	if pgHasTable(ctx, db, "cursor_usage_events") {
 		_, err = db.ExecContext(ctx,
-			`SELECT id, occurred_at, model, kind,
+			`SELECT id, agent, occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,

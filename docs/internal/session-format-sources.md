@@ -1787,6 +1787,25 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Grok Build (`grok`)
 
+- **Account CSV export (observed 2026-11-06):** A user-supplied xAI unified usage
+  export has `Billing Item ID`, `Event Time`, `Product`, `Charge Category`,
+  `Usage Type`, `Principal Type`, `Principal ID`, `Usage`, `Pricing Currency`,
+  `Pricing Contracted`, `Model`, and `User Email` columns. This is observed
+  export evidence, separate from the native session format below. Synthetic
+  examples are tested in `internal/xaiusage/csv_test.go`. `Usage` is a JSON
+  object of string-valued integer counters. Observed names include
+  `Prompt text tokens`, `Cached prompt text tokens`, `Completion text tokens`,
+  and the hyphenated forms `prompt-text-tokens`, `cached-prompt-text-tokens`,
+  `completion-text-tokens`, and `cache-write-text-tokens`. Missing counters
+  mean zero. Account counters may aggregate many requests and are preserved
+  without the native request-level plausibility cap. `Event Time` is RFC3339;
+  `Pricing Contracted` is a decimal USD amount, including authoritative zero
+  for included usage. Products observed
+  are `grok-build`, `grok-bot`, and `cursor`. Grok models can be blank. Billing
+  IDs identify account events, with no native session or request identity for
+  cross-source reconciliation. `agentsview usage grok` imports these events
+  without reconstructing conversations or inferring models.
+
 - **Format:** Workspace-scoped session directories containing `summary.json`, a
   derived `chat_history.jsonl` model-message cache, and an authoritative
   `updates.jsonl` stream of timestamped ACP and xAI session notifications.

@@ -16,7 +16,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -326,6 +326,7 @@ var mirrorTables = []tableSpec{
 		name: "cursor_usage_events",
 		columns: []columnSpec{
 			col("id", tInt),
+			colDefault("agent", tString, "'cursor'"),
 			col("occurred_at", tNullTime),
 			col("model", tString),
 			col("kind", tString),

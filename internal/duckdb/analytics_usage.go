@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -466,10 +465,10 @@ const duckDailyCursorUsageRowsSQLTemplate = `
 SELECT
 	'' AS session_id,
 	NULL AS message_ordinal,
-	'cursor' AS source,
+	cu.agent AS source,
 	cu.occurred_at AS ts,
 	cu.occurred_at AS pricing_ts,
-	cu.model AS model,
+	COALESCE(NULLIF(cu.model, ''), '<unknown>') AS model,
 	'' AS provider_id,
 	'' AS token_json,
 	'' AS claude_message_id,
@@ -482,9 +481,9 @@ SELECT
 	cu.cache_read_tokens AS cache_read,
 	0 AS reasoning_tokens,
 	cu.charged_microdollars AS cost_microdollars,
-	'cursor-reported' AS cost_source,
+	cu.agent || '-reported' AS cost_source,
 	'' AS project,
-	'cursor' AS agent,
+	cu.agent AS agent,
 	'' AS machine,
 	0 AS user_message_count,
 	cu.is_headless AS is_automated,
@@ -640,7 +639,7 @@ func duckCursorUsageRowsSQLForBounds(
 	f db.UsageFilter, b duckUsageBounds,
 ) (string, []any, bool) {
 	hasTermFilter := f.Termination != "" && f.Termination != "all"
-	// Cursor usage rows carry no project or git branch and bypass the session
+	// Account usage rows carry no project or git branch and bypass the session
 	// filter, so any filter they cannot satisfy (project, machine, branch)
 	// must exclude them entirely rather than let them leak into totals.
 	if len(f.ProjectFilterLabels()) > 0 ||
@@ -650,21 +649,21 @@ func duckCursorUsageRowsSQLForBounds(
 		f.ActiveSince != "" {
 		return "", nil, false
 	}
-	if vals := db.CSVFilterValues(f.Agent); len(vals) > 0 && !slices.Contains(vals, "cursor") {
-		return "", nil, false
+	where := "TRUE"
+	builder := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+	if pred := builder.ValuesPredicate("cu.agent", db.CSVFilterValues(f.Agent), true); pred != "" {
+		where += "\n\tAND " + pred
 	}
-	if vals := db.CSVFilterValues(f.ExcludeAgent); slices.Contains(vals, "cursor") {
-		return "", nil, false
+	if pred := builder.ValuesPredicate("cu.agent", db.CSVFilterValues(f.ExcludeAgent), false); pred != "" {
+		where += "\n\tAND " + pred
 	}
-
-	where := "cu.model != ''"
-	var args []any
+	args := builder.Args()
 	scope := db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	if pred := db.DuckDBQueryDialect().AutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
 		where += "\n\tAND " + pred
 	}
 	where, args = appendDuckUsageSourceFilterClauses(
-		where, args, "cu.model", f,
+		where, args, "COALESCE(NULLIF(cu.model, ''), '<unknown>')", f,
 	)
 	where, args = appendDuckUsageColumnBounds(
 		where, "cu.occurred_at", b, args,
@@ -884,17 +883,17 @@ func duckUsageCTEFromRaw(
 			SELECT *,
 				CASE
 					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[4]d)
-					WHEN source = 'session' THEN GREATEST(input_tokens, 0)
+					WHEN (source = 'session' OR session_id = '') THEN GREATEST(input_tokens, 0)
 					ELSE LEAST(GREATEST(input_tokens, 0), %[4]d)
 				END AS input_tokens_norm,
 				CASE
 					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[4]d)
-					WHEN source = 'session' THEN GREATEST(output_tokens, 0)
+					WHEN (source = 'session' OR session_id = '') THEN GREATEST(output_tokens, 0)
 					ELSE LEAST(GREATEST(output_tokens, 0), %[4]d)
 				END AS output_tokens_norm,
 				CASE
 					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[4]d)
-					WHEN source = 'session' THEN GREATEST(cache_create, 0)
+					WHEN (source = 'session' OR session_id = '') THEN GREATEST(cache_create, 0)
 					ELSE LEAST(GREATEST(cache_create, 0), %[4]d)
 				END AS cache_create_norm,
 					-- 1h-TTL subset of cache_create_norm from the nested
@@ -905,12 +904,12 @@ func duckUsageCTEFromRaw(
 					END AS cache_create_1h_norm,
 					CASE
 						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[4]d)
-						WHEN source = 'session' THEN GREATEST(cache_read, 0)
+						WHEN (source = 'session' OR session_id = '') THEN GREATEST(cache_read, 0)
 						ELSE LEAST(GREATEST(cache_read, 0), %[4]d)
 					END AS cache_read_norm,
 					CASE
 						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.reasoning_tokens') AS BIGINT), 0), 0), %[4]d)
-						WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
+						WHEN (source = 'session' OR session_id = '') THEN GREATEST(reasoning_tokens, 0)
 						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[4]d)
 					END AS reasoning_tokens_norm,
 					-- Anthropic bills server-side web search per request on

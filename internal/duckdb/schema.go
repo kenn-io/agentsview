@@ -26,7 +26,8 @@ import (
 // (session_plan_usage).
 // v21 adds messages.dialogue_text.
 // v22 adds commit provenance and copied prompts.
-const SchemaVersion = 22
+// v23 adds the agent identity to imported account usage rows.
+const SchemaVersion = 23
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -465,6 +466,7 @@ var mirrorTables = []tableSpec{
 		name: "cursor_usage_events",
 		create: `CREATE TABLE IF NOT EXISTS cursor_usage_events (
 			id BIGINT,
+			agent TEXT NOT NULL DEFAULT 'cursor',
 			occurred_at TIMESTAMP NOT NULL,
 			model TEXT NOT NULL,
 			kind TEXT NOT NULL DEFAULT '',
@@ -481,6 +483,7 @@ var mirrorTables = []tableSpec{
 		)`,
 		columns: []columnSpec{
 			{"id", "id BIGINT"},
+			{"agent", "agent TEXT NOT NULL DEFAULT 'cursor'"},
 			{"occurred_at", "occurred_at TIMESTAMP NOT NULL"},
 			{"model", "model TEXT NOT NULL DEFAULT ''"},
 			{"kind", "kind TEXT NOT NULL DEFAULT ''"},

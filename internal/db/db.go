@@ -2186,6 +2186,16 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
+	var missingAccountAgent bool
+	if err := conn.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_events')
+		AND NOT EXISTS(SELECT 1 FROM pragma_table_info('cursor_usage_events') WHERE name = 'agent')`,
+	).Scan(&missingAccountAgent); err != nil {
+		return fmt.Errorf("checking account usage schema: %w", err)
+	}
+	if missingAccountAgent {
+		return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: "agent"}
+	}
 	for _, index := range []string{
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
@@ -2425,6 +2435,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"excluded_sessions", "include_codex_pages",
 			"ALTER TABLE excluded_sessions ADD COLUMN include_codex_pages INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"cursor_usage_events", "agent",
+			"ALTER TABLE cursor_usage_events ADD COLUMN agent TEXT NOT NULL DEFAULT 'cursor'",
 		},
 		{
 			"session_project_assignments", "original_project",

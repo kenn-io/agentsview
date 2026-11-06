@@ -5683,6 +5683,10 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 			IsHeadless:     true,
 			DedupKey:       "second",
 		},
+		{
+			Agent: "grok", OccurredAt: "2026-11-04T13:00:00Z",
+			InputTokens: 12, DedupKey: "xai:item-a",
+		},
 	}), "InsertCursorUsageEvents src")
 	wantFingerprint, err := srcDB.CursorUsageEventFingerprint(ctx)
 	require.NoError(t, err, "CursorUsageEventFingerprint src")
@@ -5704,7 +5708,7 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 
 	gotEvents, err := dstDB.GetCursorUsageEvents(ctx, 0)
 	require.NoError(t, err, "GetCursorUsageEvents")
-	require.Len(t, gotEvents, 2, "cursor usage events")
+	require.Len(t, gotEvents, 3, "account usage events")
 	gotFingerprint, err := dstDB.CursorUsageEventFingerprint(ctx)
 	require.NoError(t, err, "CursorUsageEventFingerprint dst")
 	assert.Equal(t, wantFingerprint, gotFingerprint,
