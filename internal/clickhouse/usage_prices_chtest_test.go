@@ -7,9 +7,12 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -159,6 +162,9 @@ func seedUsagePriceFixture(t *testing.T) (*db.DB, Target) {
 		},
 	}
 	for i := range writes {
+		if i < 2 {
+			writes[i].Session.GroupKey = "cron:price-check"
+		}
 		writes[i].DataVersion = 1
 		writes[i].ReplaceMessages = true
 	}
@@ -598,22 +604,28 @@ func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 				filter.TopSessionsByGroup = group
 				for _, sort := range []string{"cost", "tokens"} {
 					filter.TopSessionsSort = sort
-					for _, limit := range []int{20, 2} {
-						want, err := local.GetTopSessionsByCost(t.Context(), filter, limit)
-						require.NoError(t, err, name)
-						for i := range want {
-							if want[i].StartedAt != "" {
-								parsed, err := time.Parse(time.RFC3339Nano, want[i].StartedAt)
-								require.NoError(t, err)
-								want[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
+					for _, tokenTypes := range []db.UsageTokenTypes{
+						0, db.UsageTokenTypeInput, db.UsageTokenTypeOutput,
+						db.UsageTokenTypeCacheRead | db.UsageTokenTypeCacheWrite,
+					} {
+						filter.TopSessionsTokenTypes = tokenTypes
+						for _, limit := range []int{20, 2} {
+							want, err := local.GetTopSessionsByCost(t.Context(), filter, limit)
+							require.NoError(t, err, name)
+							for i := range want {
+								if want[i].StartedAt != "" {
+									parsed, err := time.Parse(time.RFC3339Nano, want[i].StartedAt)
+									require.NoError(t, err)
+									want[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
+								}
+								if want[i].Machine == "local" {
+									want[i].Machine = fixtureMachine
+								}
 							}
-							if want[i].Machine == "local" {
-								want[i].Machine = fixtureMachine
-							}
+							got, err := store.GetTopSessionsByCost(t.Context(), filter, limit)
+							require.NoError(t, err, name)
+							require.Equal(t, want, got, name)
 						}
-						got, err := store.GetTopSessionsByCost(t.Context(), filter, limit)
-						require.NoError(t, err, name)
-						require.Equal(t, want, got, name)
 					}
 				}
 			}
@@ -623,17 +635,53 @@ func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 
 func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newUsagePriceStore(t)
-	// Progress callbacks don't identify the query whose read has started.
-	// Keep contexts missing across attempts to exercise the bounded retry
-	// without depending on when a concurrent push reaches the group query.
-	_, err := store.conn.ExecContext(t.Context(), "TRUNCATE TABLE usage_price_contexts")
+	local, target := seedUsagePriceFixture(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "push-test", InputPerMTok: money.MustParseDollars("1"),
+	}}))
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	filter := db.UsageFilter{Timezone: "UTC"}
-	top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
-	assert.ErrorIs(t, err, errUsagePriceContextChanged)
-	assert.Empty(t, top)
-	assert.Empty(t, store.topSessionTotals.entries, "a failed attempt must not cache partial totals")
-	_, err = store.GetDailyUsage(t.Context(), filter)
-	assert.ErrorIs(t, err, errUsagePriceContextChanged)
+
+	// The driver's query log identifies the context SELECT. Its progress
+	// callback runs after the server reads those contexts and before the
+	// caller can issue the group query.
+	var readingContexts, pushed atomic.Bool
+	options, err := parseDSN(target.URL)
+	require.NoError(t, err)
+	options.Auth.Database = target.Database
+	options.Settings["final"] = 1
+	options.Debug = true
+	options.Debugf = func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		if strings.Contains(line, "sending query") {
+			readingContexts.Store(strings.Contains(line, "FROM usage_price_contexts"))
+		}
+	}
+	store := NewStoreFromDB(chdriver.OpenDB(options))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	stamp := "2026-01-13T05:00:00.000Z"
+	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session: fixtureSession("pushed-price", "gamma", "pushed first", stamp, 1),
+		Messages: []db.Message{usagePriceMessage("pushed-price", 0, stamp,
+			"push-test", `{"input_tokens":1000000}`)},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	pushResult := make(chan error, 1)
+	ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(p *chdriver.Progress) {
+		if p.Rows == 0 || !readingContexts.Load() || !pushed.CompareAndSwap(false, true) {
+			return
+		}
+		_, err := syncer.Push(t.Context(), false, nil)
+		pushResult <- err
+	}))
+	top, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{Timezone: "UTC", Model: "push-test"}, 10)
+	require.True(t, pushed.Load(), "the push must land after the context SELECT reads its rows")
+	require.NoError(t, <-pushResult)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, "pushed-price", top[0].SessionID)
+	assert.Equal(t, money.MustParseDollars("1"), top[0].Cost)
+	assert.Equal(t, 1_000_000, top[0].TotalTokens)
 }

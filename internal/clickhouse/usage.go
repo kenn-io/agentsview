@@ -1320,8 +1320,10 @@ func (s *Store) forEachDailyUsageGroupRow(
 			return nil
 		}
 	}
-	source := usageCTEFor(state, f, "")
-	if !top {
+	var source chUsageSource
+	if top {
+		source = usageCTEFor(state, f, "")
+	} else {
 		source, err = s.dailyUsageCTE(ctx, state, f)
 		if err != nil {
 			return err
@@ -1555,18 +1557,29 @@ func retryUsagePriceContexts[T any](load func() (T, error)) (T, error) {
 
 // Each attempt owns its accumulator and resolver. If a push adds a context
 // during the query, retry with fresh contexts instead of retaining raw rows.
+func (s *Store) usagePricingForCatalog(
+	ctx context.Context, snapshot *pricingSnapshot,
+) (*export.PricingResolver, map[string]chUsagePriceContext, [][2]string, error) {
+	catalog := snapshot.catalog
+	resolver := export.NewPricingResolverWithDigest(catalog.rows, snapshot.catalogDigest)
+	contexts, err := loadUsagePriceContexts(ctx, s.conn, catalog.digest)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var customModels [][2]string
+	if len(s.customPricing) > 0 {
+		customModels = chCustomPricedModels(contexts, resolver)
+	}
+	return resolver, contexts, customModels, nil
+}
+
 func (s *Store) dailyUsageForCatalog(
 	ctx context.Context, f db.UsageFilter, snapshot *pricingSnapshot,
 ) (db.DailyUsageResult, error) {
 	catalog := snapshot.catalog
-	rateResolver := export.NewPricingResolverWithDigest(catalog.rows, snapshot.catalogDigest)
-	priceContexts, err := loadUsagePriceContexts(ctx, s.conn, catalog.digest)
+	rateResolver, priceContexts, customModels, err := s.usagePricingForCatalog(ctx, snapshot)
 	if err != nil {
 		return db.DailyUsageResult{}, err
-	}
-	var customModels [][2]string
-	if len(s.customPricing) > 0 {
-		customModels = chCustomPricedModels(priceContexts, rateResolver)
 	}
 	type usageAccumKey struct {
 		date       string
@@ -1968,9 +1981,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		r.ts = formatDBTime(ts)
 		r.pricingTS = formatDBTime(pricingTS)
 		r.startedAt = formatDBTime(startedAt)
-		if memoSlot != "" {
-			memo = append(memo, r)
-		}
+		memo = append(memo, r)
 		if err := visit(r); err != nil {
 			return err
 		}
@@ -2093,14 +2104,9 @@ func (s *Store) topSessionsForCatalog(
 	ctx context.Context, f db.UsageFilter, snapshot *pricingSnapshot,
 ) ([]db.TopSessionEntry, error) {
 	catalog := snapshot.catalog
-	rateResolver := export.NewPricingResolverWithDigest(catalog.rows, snapshot.catalogDigest)
-	priceContexts, err := loadUsagePriceContexts(ctx, s.conn, catalog.digest)
+	rateResolver, priceContexts, customModels, err := s.usagePricingForCatalog(ctx, snapshot)
 	if err != nil {
 		return nil, err
-	}
-	var customModels [][2]string
-	if len(s.customPricing) > 0 {
-		customModels = chCustomPricedModels(priceContexts, rateResolver)
 	}
 	type acc struct {
 		row               db.TopSessionEntry
