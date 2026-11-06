@@ -47,7 +47,7 @@ type Store struct {
 	walStamp      string
 	reports       kept.Reports
 	dailyUsage    kept.Reads[db.DailyUsageResult]
-	planUsage     kept.Reads[*db.PlanUsageCountTally]
+	planUsage     kept.Reads[*db.PlanUsageCountSummary]
 	topUsage      kept.Reads[[]db.TopSessionEntry]
 	pricingDigest string
 	aliasPath     string
@@ -99,7 +99,16 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{path: path, duck: conn, fileInfo: info, walStamp: walStamp}, nil
+	return &Store{
+		path: path, duck: conn, fileInfo: info, walStamp: walStamp,
+		topUsage: kept.Reads[[]db.TopSessionEntry]{Size: func(entries []db.TopSessionEntry) int64 {
+			var n int64
+			for _, entry := range entries {
+				n += kept.TopSessionBytes(entry)
+			}
+			return n
+		}},
+	}, nil
 }
 
 // mirrorStamp names the immutable handle's main file and opening WAL state.

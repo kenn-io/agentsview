@@ -2,8 +2,10 @@ package db
 
 import (
 	"context"
-	"encoding/json/v2"
 	"fmt"
+	"slices"
+	"strings"
+	"unsafe"
 )
 
 // PlanUsageSessionCounts reports the sessions a usage report's token and
@@ -81,13 +83,72 @@ func (t *PlanUsageCountTally) Counts() PlanUsageSessionCounts {
 	return t.CountsFor(t.filter.ModelAliases)
 }
 
-// Bytes measures the raw rows retained by the tally.
-func (t *PlanUsageCountTally) Bytes() int64 {
-	encoded, err := json.Marshal([]any{t.filter, t.planOnly, t.partly})
-	if err != nil {
-		return 1<<63 - 1
+// PlanUsageCountSummary keeps session totals and the frequency of each raw
+// model set, without retaining session IDs or the request filter.
+type PlanUsageCountSummary struct {
+	planOnly, partly int
+	sets             []planUsageModelSet
+}
+
+type planUsageModelSet struct {
+	models   []string
+	sessions int
+}
+
+// Compact finishes the tally into a value suitable for keeping across requests.
+func (t *PlanUsageCountTally) Compact() *PlanUsageCountSummary {
+	out := &PlanUsageCountSummary{planOnly: len(t.planOnly), partly: len(t.partly)}
+	indices := map[string]int{}
+	for _, models := range t.planOnly {
+		names := make([]string, 0, len(models))
+		for model := range models {
+			names = append(names, model)
+		}
+		slices.Sort(names)
+		// Quoting keeps distinct sets apart even when model names contain separators.
+		key := fmt.Sprintf("%q", names)
+		if i, ok := indices[key]; ok {
+			out.sets[i].sessions++
+			continue
+		}
+		for i := range names {
+			names[i] = strings.Clone(names[i])
+		}
+		indices[key] = len(out.sets)
+		out.sets = append(out.sets, planUsageModelSet{models: names, sessions: 1})
 	}
-	return int64(len(encoded))
+	return out
+}
+
+// Bytes estimates retained allocations, including slice capacity and a
+// conservative allowance for allocator rounding on each allocation.
+func (s *PlanUsageCountSummary) Bytes() int64 {
+	n := int64(unsafe.Sizeof(*s)) + 32 + int64(cap(s.sets))*int64(unsafe.Sizeof(planUsageModelSet{})) + 32
+	for _, set := range s.sets {
+		n += int64(cap(set.models))*int64(unsafe.Sizeof("")) + 32
+		for _, model := range set.models {
+			n += int64(len(model)) + 32
+		}
+	}
+	return n
+}
+
+// CountsFor folds aliases and counts each session once per resulting model.
+func (s *PlanUsageCountSummary) CountsFor(aliases map[string]string) PlanUsageSessionCounts {
+	out := PlanUsageSessionCounts{PlanOnly: s.planOnly, PartlyCaptured: s.partly, PlanOnlyByModel: map[string]int{}}
+	for _, set := range s.sets {
+		seen := make(map[string]struct{}, len(set.models))
+		for _, model := range set.models {
+			if alias, ok := aliases[model]; ok {
+				model = alias
+			}
+			seen[model] = struct{}{}
+		}
+		for model := range seen {
+			out.PlanOnlyByModel[model] += set.sessions
+		}
+	}
+	return out
 }
 
 // CountsFor folds raw models into aliases, counting each session once per alias.

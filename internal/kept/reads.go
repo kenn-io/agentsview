@@ -11,6 +11,8 @@ import (
 // Reads keeps one finished value per selection and version and shares equal loads.
 // Its zero value is ready to use.
 type Reads[T any] struct {
+	// Size overrides JSON sizing. Set it before the first Do call.
+	Size    func(T) int64
 	once    sync.Once
 	memo    Memo[T]
 	flights Flights[T]
@@ -22,6 +24,10 @@ func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(conte
 		return load(ctx)
 	}
 	r.once.Do(func() {
+		if r.Size != nil {
+			r.memo.Size = r.Size
+			return
+		}
 		r.memo.Size = func(value T) int64 {
 			if sized, ok := any(value).(interface{ Bytes() int64 }); ok {
 				return sized.Bytes()

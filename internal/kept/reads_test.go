@@ -33,6 +33,23 @@ func TestReadsRetention(t *testing.T) {
 	require.Equal(t, 3, loads)
 }
 
+func TestReadsExplicitSizeIncludesHiddenFields(t *testing.T) {
+	type value struct {
+		Hidden string `json:"-"`
+	}
+	reads := kept.Reads[value]{Size: func(v value) int64 { return int64(len(v.Hidden)) }}
+	loads := 0
+	for range 2 {
+		got, err := reads.Do(t.Context(), "selection", "v1", func(context.Context) (value, error) {
+			loads++
+			return value{Hidden: strings.Repeat("x", (64<<20)+1)}, nil
+		})
+		require.NoError(t, err)
+		require.Len(t, got.Hidden, (64<<20)+1)
+	}
+	require.Equal(t, 2, loads)
+}
+
 func TestReadsUnkept(t *testing.T) {
 	for _, tc := range []struct {
 		name, slot, version, value string

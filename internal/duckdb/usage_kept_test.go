@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
+	"time"
+	"weak"
 
 	"github.com/stretchr/testify/require"
 
@@ -146,6 +149,78 @@ func TestUsageKeptBorrowedHandleReadsEveryTime(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Equal(t, 6, reads)
+}
+
+func TestUsageKeptReleasesPlanProgressCallback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptUsageMirror(t, path)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	request := func() weak.Pointer[[1024]byte] {
+		payload := new([1024]byte)
+		ref := weak.Make(payload)
+		counts, err := store.GetPlanUsageSessionCounts(t.Context(), db.UsageFilter{
+			Progress: func(string) { runtime.KeepAlive(payload) },
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, counts.PlanOnly)
+		return ref
+	}()
+	require.Eventually(t, func() bool {
+		runtime.GC()
+		return request.Value() == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	counts, err := store.GetPlanUsageSessionCounts(t.Context(), db.UsageFilter{})
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"plan-a": 1, "plan-b": 1}, counts.PlanOnlyByModel)
+}
+
+func TestUsageKeptBorrowedRankingSkipsSessionCountAllocations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	borrowed := NewStoreFromDB(store.DB())
+	f := db.UsageFilter{SkipSessionCounts: true}
+	measure := func(read func() (db.DailyUsageResult, error)) float64 {
+		return testing.AllocsPerRun(5, func() {
+			result, err := read()
+			require.NoError(t, err)
+			require.Equal(t, 500, result.Totals.OutputTokens)
+			require.Empty(t, result.SessionCounts)
+		})
+	}
+	direct := measure(func() (db.DailyUsageResult, error) { return borrowed.readDailyUsage(t.Context(), f) })
+	ranking := measure(func() (db.DailyUsageResult, error) { return borrowed.GetDailyUsage(t.Context(), f) })
+	require.LessOrEqual(t, ranking, direct+1, "borrowed ranking should allocate no session counts or kept copy")
+}
+
+func TestUsageKeptTopSessionNameOverBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET display_name = 'Short title', session_name = repeat('x', 67108865)`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(string) { reads++ }
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	for range 2 {
+		top, err := store.GetTopSessionsByCost(t.Context(), db.UsageFilter{}, 1)
+		require.NoError(t, err)
+		require.Len(t, top, 1)
+		require.Equal(t, "Short title", top[0].DisplayName)
+		require.Len(t, top[0].SessionName, (64<<20)+1)
+	}
+	require.Equal(t, 2, reads, "hidden session names must count toward the kept byte cap")
 }
 
 func TestUsageKeptDistinguishesEmptyProjectLabels(t *testing.T) {

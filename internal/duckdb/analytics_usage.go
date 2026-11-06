@@ -1338,7 +1338,15 @@ func (s *Store) forEachDailyUsageAggregateRow(
 }
 
 func (s *Store) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
-	result, err := s.dailyUsage.Do(ctx, kept.UsageSlot(f, true), s.keptVersion(), func(ctx context.Context) (db.DailyUsageResult, error) {
+	version := s.keptVersion()
+	if version == "" {
+		return s.readDailyUsage(ctx, f)
+	}
+	slot := kept.UsageSlot(f, true)
+	if slot == "" {
+		return s.readDailyUsage(ctx, f)
+	}
+	result, err := s.dailyUsage.Do(ctx, slot, version, func(ctx context.Context) (db.DailyUsageResult, error) {
 		full := f
 		full.SkipSessionCounts = false
 		return s.readDailyUsage(ctx, full)
