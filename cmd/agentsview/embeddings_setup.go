@@ -197,6 +197,15 @@ func (v *liveVectorServing) buildRunning() bool {
 		(v.serving.recallManager != nil && v.serving.recallManager.Status().Running)
 }
 
+// setupRequestError reports rejected candidate settings as a bad request and
+// leaves config read failures internal.
+func setupRequestError(err error) error {
+	if errors.Is(err, config.ErrInvalidVectorSetup) {
+		return fmt.Errorf("%w: %w", vector.ErrInvalidBuildRequest, err)
+	}
+	return err
+}
+
 func (v *liveVectorServing) Setup(action string) error {
 	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
@@ -212,7 +221,7 @@ func (v *liveVectorServing) Setup(action string) error {
 	}
 	deployment, err := v.cfg.VectorSetupServer(action == "use-built-in")
 	if err != nil {
-		return fmt.Errorf("%w: %w", vector.ErrInvalidBuildRequest, err)
+		return setupRequestError(err)
 	}
 	release, ok := v.idle.BeginWork()
 	if !ok {

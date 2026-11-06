@@ -4090,6 +4090,16 @@ func (c *Config) SaveGithubToken(token string) error {
 	})
 }
 
+// ErrInvalidVectorSetup marks settings a vector setup would reject, as
+// opposed to failures reading or locking the config file.
+var ErrInvalidVectorSetup = errors.New("invalid vector setup")
+
+type invalidVectorSetupError struct{ error }
+
+func (e invalidVectorSetupError) Unwrap() error { return e.error }
+
+func (invalidVectorSetupError) Is(target error) bool { return target == ErrInvalidVectorSetup }
+
 // VectorSetupServer returns the default embeddings server SaveVectorSetup
 // would save now, or the reason it would refuse, so callers can check before slow work.
 func (c *Config) VectorSetupServer(builtIn bool) (VectorEmbeddingsServerConfig, error) {
@@ -4097,7 +4107,9 @@ func (c *Config) VectorSetupServer(builtIn bool) (VectorEmbeddingsServerConfig, 
 	err := c.withConfigLock(func() error {
 		_, candidate, err := c.vectorSetupCandidate(builtIn)
 		if err == nil {
-			_, server, err = candidate.Vector.Embeddings.Server("")
+			if _, server, err = candidate.Vector.Embeddings.Server(""); err != nil {
+				err = invalidVectorSetupError{err}
+			}
 		}
 		return err
 	})
@@ -4125,7 +4137,7 @@ func (c *Config) vectorSetupCandidate(builtIn bool) (map[string]any, Config, err
 		section = make(map[string]any)
 	}
 	if err := patchVectorSetup(section, builtIn); err != nil {
-		return nil, Config{}, err
+		return nil, Config{}, invalidVectorSetupError{err}
 	}
 	existing["vector"] = section
 	encoded, err := toml.Marshal(existing)
@@ -4138,10 +4150,10 @@ func (c *Config) vectorSetupCandidate(builtIn bool) (map[string]any, Config, err
 	}
 	candidate.DataDir = c.DataDir
 	if err := candidate.applyConfigTOML(string(encoded)); err != nil {
-		return nil, Config{}, err
+		return nil, Config{}, invalidVectorSetupError{err}
 	}
 	if err := candidate.Vector.Validate(); err != nil {
-		return nil, Config{}, err
+		return nil, Config{}, invalidVectorSetupError{err}
 	}
 	return existing, candidate, nil
 }
