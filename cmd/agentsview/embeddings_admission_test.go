@@ -112,7 +112,7 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			defer func() { releaseInstall(); require.NoError(t, owner.Close()) }()
 			initialManager, _ := owner.ManagerSetup("")
 			require.NotNil(t, initialManager)
-			_, err = initialManager.StartBuild(vector.BuildRequest{})
+			initialBuildID, err := initialManager.StartBuild(vector.BuildRequest{})
 			require.NoError(t, err)
 			initialManager.Wait()
 			generations, err := initialManager.Generations(t.Context())
@@ -208,6 +208,10 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 					assert.Empty(t, status.Setup.Error)
 					if tc.outcome == "ready" {
 						assert.Equal(t, "nomic-embed-text", status.Model)
+						replacement, _ := owner.ManagerSetup("")
+						require.NotNil(t, replacement)
+						assert.Equal(t, replacement.Status().BuildID, status.BuildID)
+						assert.NotEqual(t, initialBuildID, status.BuildID)
 					}
 				}
 			} else {
