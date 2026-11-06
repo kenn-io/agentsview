@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -281,13 +280,9 @@ func sessionListDefaultExclusionNotice(
 	}
 
 	hiddenChildren := 0
-	if !f.IncludeChildren && (len(f.Labels) > 0 || f.PR != "") {
-		var err error
-		hiddenChildren, err = sessionListAnnotationHiddenChildren(ctx, svc, f)
-		if err != nil {
-			return "", fmt.Errorf("counting child session exclusions: %w", err)
-		}
-	} else if !f.IncludeChildren {
+	// Annotation filters already select matching children. Tree expansion adds
+	// context outside those matches.
+	if !f.IncludeChildren && len(f.Labels) == 0 && f.PR == "" {
 		withChildren := sessionListCountFilter(f)
 		withChildren.IncludeChildren = true
 		list, err := svc.List(ctx, withChildren)
@@ -325,59 +320,6 @@ func sessionListDefaultExclusionNotice(
 		strings.Join(hiddenParts, ", "),
 		strings.Join(flagParts, " and/or "),
 	), nil
-}
-
-// Annotation expansion adds ancestors as well as descendants. Count new rows
-// after removing every ancestor of a session the flat selection already shows.
-func sessionListAnnotationHiddenChildren(ctx context.Context, svc service.SessionService, f service.ListFilter) (int, error) {
-	rows := [2]map[string]db.Session{make(map[string]db.Session), make(map[string]db.Session)}
-	for i := range rows {
-		f.IncludeChildren = i == 1
-		f.Cursor = ""
-		f.Limit = db.MaxSessionLimit
-		for {
-			page, err := svc.List(ctx, f)
-			if err != nil {
-				return 0, err
-			}
-			for _, session := range page.Sessions {
-				rows[i][session.ID] = session
-			}
-			f.Cursor = page.NextCursor
-			if f.Cursor == "" {
-				break
-			}
-		}
-	}
-	ancestors := make(map[string]bool)
-	pending := make([]db.Session, 0, len(rows[0]))
-	for _, session := range rows[0] {
-		pending = append(pending, session)
-	}
-	for len(pending) > 0 {
-		session := pending[len(pending)-1]
-		pending = pending[:len(pending)-1]
-		parents := slices.Clone(session.ParentSessionIDs)
-		if session.ParentSessionID != nil {
-			parents = append(parents, *session.ParentSessionID)
-		}
-		for _, id := range parents {
-			if id == "" || ancestors[id] {
-				continue
-			}
-			ancestors[id] = true
-			if parent, ok := rows[1][id]; ok {
-				pending = append(pending, parent)
-			}
-		}
-	}
-	count := 0
-	for id := range rows[1] {
-		if _, visible := rows[0][id]; !visible && !ancestors[id] {
-			count++
-		}
-	}
-	return count, nil
 }
 
 func sessionListCountFilter(f service.ListFilter) service.ListFilter {

@@ -126,7 +126,7 @@ func TestSessionListIncludeSource(t *testing.T) {
 func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 	for _, toggle := range []string{"--include-one-shot=false", "--include-automated=false"} {
 		dataDir := newAgentDataDir(t)
-		seedSessionsWithOpts(t, dataDir, sessionSeed{id: "grandparent", project: "proj"}, sessionSeed{id: "parent", project: "proj", mut: func(s *db.Session) { s.ParentSessionID = new("grandparent"); s.RelationshipType = "subagent" }}, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
+		seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "proj"}, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
 			s.ParentSessionID = new("parent")
 			s.RelationshipType = "subagent"
 			s.UserMessageCount = 1
@@ -325,33 +325,4 @@ func TestResolveSinceFlag_RejectsBothSet(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(),
 		"--since and --active-since are mutually exclusive")
-}
-
-func TestSessionListLabelledParentReportsHiddenChild(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	seedSessionsWithOpts(t, dataDir,
-		sessionSeed{id: "parent", project: "proj"},
-		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
-			s.ParentSessionID = new("parent")
-			s.RelationshipType = "subagent"
-			s.UserMessageCount = 1
-		}},
-	)
-	_, err := executeCommand(newRootCommand(), "session", "label", "parent", "nightly")
-	require.NoError(t, err)
-	root := newRootCommand()
-	var stdout, stderr bytes.Buffer
-	root.SetOut(&stdout)
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"session", "list", "--json", "--label", "nightly"})
-	require.NoError(t, root.Execute())
-	visible := decodeCLIJSON[cliSessionList](t, stdout.String())
-	require.Len(t, visible.Sessions, 1)
-	assert.Equal(t, "parent", visible.Sessions[0]["id"])
-	assert.Contains(t, stderr.String(), "Excluded 1 session by default: 1 child")
-	out, err := executeCommand(newRootCommand(), "session", "list", "--json", "--label", "nightly", "--include-children")
-	require.NoError(t, err)
-	retried := decodeCLIJSON[cliSessionList](t, out)
-	require.Len(t, retried.Sessions, 2)
-	assert.ElementsMatch(t, []any{"parent", "child"}, []any{retried.Sessions[0]["id"], retried.Sessions[1]["id"]})
 }
