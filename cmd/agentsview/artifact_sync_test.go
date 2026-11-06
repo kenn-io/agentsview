@@ -294,7 +294,7 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 	assert.Equal(t, 3, result.PublishedArtifacts)
 }
 
-func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
+func TestDaemonArtifactExchangeNotifiesClientsAfterImport(
 	t *testing.T,
 ) {
 	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
@@ -305,26 +305,9 @@ func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 	events, unsubscribe := broadcaster.Subscribe()
 	t.Cleanup(unsubscribe)
 
-	embedManager := &fakeEmbedManager{}
-	embedScheduler := newEmbedScheduler(
-		embedManager,
-		time.Millisecond,
-		0,
-		false,
-		nil,
-	)
-	go embedScheduler.Run(t.Context())
-	t.Cleanup(embedScheduler.Stop)
-
-	recallNotified := make(chan struct{}, 1)
-	owner := &liveVectorServing{serving: vectorServing{
-		Scheduler:            embedScheduler,
-		RecallMutationNotify: func() { recallNotified <- struct{}{} },
-	}}
-	emitter := wrapEmbeddingSyncEmitter(broadcaster, owner.Notify)
 	engine := agentsync.NewEngine(t.Context(),
 		database,
-		agentsync.EngineConfig{Emitter: emitter},
+		agentsync.EngineConfig{Emitter: broadcaster},
 	)
 	t.Cleanup(engine.Close)
 
@@ -345,7 +328,7 @@ func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 		config.Config{DataDir: t.TempDir()},
 		database,
 		engine,
-		emitter,
+		broadcaster,
 	)
 	result, err := runner(t.Context(), server.ArtifactExchangeRequest{
 		Target: t.TempDir(),
@@ -358,16 +341,6 @@ func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 		assert.Equal(t, "sessions", event.Scope)
 	case <-time.After(time.Second):
 		require.Fail(t, "artifact import did not notify SSE subscribers")
-	}
-	waitForSchedulerCondition(
-		t,
-		func() bool { return embedManager.callCount() == 1 },
-		"artifact import did not notify the embedding scheduler",
-	)
-	select {
-	case <-recallNotified:
-	case <-time.After(time.Second):
-		require.Fail(t, "artifact import did not notify the recall scheduler")
 	}
 }
 

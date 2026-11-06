@@ -50,12 +50,26 @@
       <SearchByMeaningHint {labels} onturnon={() => void activate()} />
     {/if}
   {:else}
-    <SearchByMeaningRow state={rowState} {labels} readonly={!setup.action} itemNoun={status?.running ? m.meaning_chunks({ count: status?.total ?? 0 }) : m.meaning_documents({ count: documents })} onturnon={() => void activate()} onusebuiltin={() => void activate()} />
+    <div class:build-failed={!!status?.last_error && !status?.running}>
+      <SearchByMeaningRow state={rowState} {labels} readonly={!setup.action} itemNoun={status?.running ? m.meaning_chunks({ count: status?.total ?? 0 }) : m.meaning_documents({ count: documents })} onturnon={() => void activate()} onusebuiltin={() => void activate()} />
+    </div>
   {/if}
   {#if !hint && setup.action === "use-built-in" && setup.missing_bytes > 0}
-    <p>{downloadLabel}</p>
+    <p class="download-size">{downloadLabel}</p>
   {/if}
   {#if error || setup.error}
     <p role="alert">{error || setup.error}</p>
   {/if}
 {/if}
+
+<style>
+  .download-size {
+    margin: 0;
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+  .build-failed :global(.kit-chip) {
+    display: none;
+  }
+</style>

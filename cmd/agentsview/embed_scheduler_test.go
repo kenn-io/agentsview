@@ -638,7 +638,7 @@ func (e *recordingEmitter) count() int {
 	return len(e.scopes)
 }
 
-func TestEmbeddingSyncEmitterAlwaysCallsPrimaryAndGatesSchedulerOnRunAfterSync(t *testing.T) {
+func TestEmbeddingSyncEmitterForwardsAndNotifiesLiveServing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		primary := &recordingEmitter{}
 		fake := &fakeEmbedManager{}
@@ -646,42 +646,27 @@ func TestEmbeddingSyncEmitterAlwaysCallsPrimaryAndGatesSchedulerOnRunAfterSync(t
 		go s.Run(t.Context())
 		defer s.Stop()
 
-		owner := &liveVectorServing{serving: vectorServing{Scheduler: s}}
+		recallNotifications := 0
+		owner := &liveVectorServing{serving: vectorServing{Scheduler: s, RecallMutationNotify: func() { recallNotifications++ }}}
 		owner.cfg.Vector.Embed.RunAfterSync = new(false)
-		disabled := wrapEmbeddingSyncEmitter(primary, owner.Notify)
-		disabled.Emit("sessions")
+		emitter := wrapEmbeddingSyncEmitter(primary, owner.Notify)
+		emitter.Emit("sessions")
 		assert.Equal(t, 1, primary.count())
+		assert.Equal(t, 1, recallNotifications)
 		synctest.Sleep(30 * time.Millisecond)
 		assert.Equal(t, 0, fake.callCount(), "runAfterSync=false must not notify the scheduler")
 
 		owner.cfg.Vector.Embed.RunAfterSync = new(true)
-		enabled := wrapEmbeddingSyncEmitter(primary, owner.Notify)
-		enabled.Emit("sessions")
+		emitter.Emit("sessions")
 		assert.Equal(t, 2, primary.count())
+		assert.Equal(t, 2, recallNotifications)
 		synctest.Sleep(30 * time.Millisecond)
 		require.Equal(t, 1, fake.callCount(), "runAfterSync=true must notify the scheduler")
 	})
 }
 
-// TestRunRemoteHostSyncLoop_EmitsThroughTeeNotifiesScheduler is a
-// regression test for a bug where runServe wired startPeriodicSync's
-// scheduled remote-host sync path to the bare SSE broadcaster instead of
-// the wrapped teeEmitter, so remote-synced sessions notified SSE clients
-// but never reached the embed scheduler until an unrelated local sync or
-// the 24h backstop ran. It drives runRemoteHostSyncLoop — the function
-// startPeriodicSync spawns per configured remote host — with a teeEmitter
-// and a syncFn reporting synced sessions, and asserts the scheduler
-// actually receives a build trigger through that path.
-func TestRunRemoteHostSyncLoop_EmitsThroughTeeNotifiesScheduler(t *testing.T) {
+func TestRunRemoteHostSyncLoopEmitsSyncedSessions(t *testing.T) {
 	primary := &recordingEmitter{}
-	fake := &fakeEmbedManager{}
-	s := newEmbedScheduler(fake, 5*time.Millisecond, 0, false, nil)
-	schedCtx := t.Context()
-	go s.Run(schedCtx)
-	defer s.Stop()
-
-	owner := &liveVectorServing{serving: vectorServing{Scheduler: s}}
-	tee := wrapEmbeddingSyncEmitter(primary, owner.Notify)
 
 	syncFn := func() (int, error) {
 		return 1, nil // one session synced on this remote host
@@ -690,14 +675,11 @@ func TestRunRemoteHostSyncLoop_EmitsThroughTeeNotifiesScheduler(t *testing.T) {
 	loopCtx := t.Context()
 	done := make(chan struct{})
 	go runRemoteHostSyncLoop(
-		loopCtx, "remote-host", 5*time.Millisecond, syncFn, tee, nil, done,
+		loopCtx, "remote-host", 5*time.Millisecond, syncFn, primary, nil, done,
 	)
 	defer close(done)
 
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-		"a scheduled remote sync reaching the tee emitter must notify the embed scheduler")
-	assert.NotZero(t, primary.count(),
-		"the tee must still forward remote sync completions to the SSE broadcaster")
+	require.Eventually(t, func() bool { return primary.count() > 0 }, time.Second, 5*time.Millisecond)
 }
 
 // --- searcherAdapter error taxonomy ---

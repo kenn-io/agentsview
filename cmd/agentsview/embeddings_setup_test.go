@@ -299,9 +299,16 @@ func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 		require.NotNil(t, status.Setup)
 		assert.True(t, status.Setup.Busy)
 	}
+	<-owner.done
+	var status vector.BuildStatus
+	require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
+	require.NotNil(t, status.Setup)
+	assert.False(t, status.Setup.Busy)
+	assert.Equal(t, "use-built-in", status.Setup.Action)
+	assert.Contains(t, status.Setup.Error, "vectors.write.lock")
 }
 
-func TestLiveEmbeddingsSetupFailureRetryAndCancellation(t *testing.T) {
+func TestLiveEmbeddingsSetupFailureRetry(t *testing.T) {
 	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall

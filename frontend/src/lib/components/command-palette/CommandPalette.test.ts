@@ -755,7 +755,7 @@ describe("CommandPalette", () => {
   });
 
   it.each([false, true])("shows the keyword footer only while meaning search is off (%s)", async (enabled) => {
-    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, done: 0, total: 0, eta_milliseconds: 0, setup: { enabled, action: enabled ? "" : "turn-on", provider: "built-in", missing_bytes: 295000000, busy: false, installing: false } });
+    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, done: 0, total: 0, eta_milliseconds: 0, setup: { enabled, action: enabled ? "" : "turn-on", provider: "built-in", missing_bytes: enabled ? 0 : 295000000, busy: false, installing: false } });
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
     for (let i = 0; i < 10; i++) await tick();
