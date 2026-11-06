@@ -177,7 +177,7 @@ describe("EmbeddingsSettings", () => {
       total_bytes: 0,
       rebuild_required: false,
     };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1, { setup }));
     const error = new ApiError(
       code,
       code === 501 ? "embeddings manager not available" : "internal error",
