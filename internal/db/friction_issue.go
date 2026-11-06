@@ -61,8 +61,15 @@ type FrictionIssueLinkWriter interface {
 	// returns the pattern's link afterward: l, or the one saved first. Filing
 	// uses it so it never replaces a link a person made meanwhile.
 	AddFrictionIssueLink(ctx context.Context, l FrictionIssueLink) (FrictionIssueLink, error)
-	// DeleteFrictionIssueLink reports whether a link existed.
+	// AddFrictionIssueLinkUnlessPaused is AddFrictionIssueLink for automatic
+	// filing: it also leaves a pattern a person paused unlinked, and then
+	// reports false.
+	AddFrictionIssueLinkUnlessPaused(ctx context.Context, l FrictionIssueLink) (FrictionIssueLink, bool, error)
+	// DeleteFrictionIssueLink removes the link and pauses automatic filing
+	// for the pattern in one write. It reports whether a link existed.
 	DeleteFrictionIssueLink(ctx context.Context, fingerprint string) (bool, error)
+	// SaveFrictionFilingState records why automatic filing left the pattern
+	// unlinked, unless a person linked or paused it meanwhile.
 	SaveFrictionFilingState(ctx context.Context, st FrictionFilingState) error
 }
 
@@ -100,21 +107,25 @@ func (db *DB) SaveFrictionIssueLink(ctx context.Context, l FrictionIssueLink) er
 	return tx.Commit()
 }
 
-// SaveFrictionFilingState records st, replacing any state for its pattern.
+// SaveFrictionFilingState records st unless the pattern has a link or a
+// person paused it.
 func (db *DB) SaveFrictionFilingState(ctx context.Context, st FrictionFilingState) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	_, err := db.getWriter().ExecContext(ctx, `
 		INSERT INTO friction_filing_state (fingerprint, state, attempts,
 			first_failed_at, next_attempt_at, last_error, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		SELECT ?, ?, ?, ?, ?, ?, ?
+		WHERE NOT EXISTS (SELECT 1 FROM friction_issue_links WHERE fingerprint = ?)
 		ON CONFLICT(fingerprint) DO UPDATE SET
 			state = excluded.state, attempts = excluded.attempts,
 			first_failed_at = excluded.first_failed_at,
 			next_attempt_at = excluded.next_attempt_at,
-			last_error = excluded.last_error, updated_at = excluded.updated_at`,
+			last_error = excluded.last_error, updated_at = excluded.updated_at
+		WHERE friction_filing_state.state <> ?`,
 		st.Fingerprint, st.State, st.Attempts, timeText(st.FirstFailedAt),
-		timeText(st.NextAttemptAt), st.LastError, st.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		timeText(st.NextAttemptAt), st.LastError, st.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		st.Fingerprint, FrictionFilingPaused)
 	if err != nil {
 		return fmt.Errorf("saving friction filing state: %w", err)
 	}
@@ -124,13 +135,34 @@ func (db *DB) SaveFrictionFilingState(ctx context.Context, st FrictionFilingStat
 // AddFrictionIssueLink records l unless its pattern is already linked,
 // clearing the filing state when it does, and returns the stored link.
 func (db *DB) AddFrictionIssueLink(ctx context.Context, l FrictionIssueLink) (FrictionIssueLink, error) {
+	link, _, err := db.addFrictionIssueLink(ctx, l, false)
+	return link, err
+}
+
+// AddFrictionIssueLinkUnlessPaused adds l like AddFrictionIssueLink unless
+// a person paused the pattern, and reports whether the pattern is linked.
+func (db *DB) AddFrictionIssueLinkUnlessPaused(ctx context.Context, l FrictionIssueLink) (FrictionIssueLink, bool, error) {
+	return db.addFrictionIssueLink(ctx, l, true)
+}
+
+func (db *DB) addFrictionIssueLink(ctx context.Context, l FrictionIssueLink, respectPause bool) (FrictionIssueLink, bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
-		return FrictionIssueLink{}, fmt.Errorf("adding friction issue link: %w", err)
+		return FrictionIssueLink{}, false, fmt.Errorf("adding friction issue link: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if respectPause {
+		var paused int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM friction_filing_state
+			WHERE fingerprint = ? AND state = ?`, l.Fingerprint, FrictionFilingPaused).Scan(&paused); err != nil {
+			return FrictionIssueLink{}, false, fmt.Errorf("reading friction filing state: %w", err)
+		}
+		if paused > 0 {
+			return FrictionIssueLink{}, false, nil
+		}
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO friction_issue_links (fingerprint, kata_instance_uid,
 			kata_project_uid, issue_uid, qualified_id, web_url, source, linked_at)
@@ -139,33 +171,32 @@ func (db *DB) AddFrictionIssueLink(ctx context.Context, l FrictionIssueLink) (Fr
 		l.Fingerprint, l.KataInstanceUID, l.KataProjectUID, l.IssueUID,
 		l.QualifiedID, l.WebURL, l.Source, l.LinkedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
-		return FrictionIssueLink{}, fmt.Errorf("adding friction issue link: %w", err)
+		return FrictionIssueLink{}, false, fmt.Errorf("adding friction issue link: %w", err)
 	}
 	added, err := res.RowsAffected()
 	if err != nil {
-		return FrictionIssueLink{}, fmt.Errorf("adding friction issue link: %w", err)
+		return FrictionIssueLink{}, false, fmt.Errorf("adding friction issue link: %w", err)
 	}
 	if added > 0 {
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM friction_filing_state WHERE fingerprint = ?`, l.Fingerprint); err != nil {
-			return FrictionIssueLink{}, fmt.Errorf("clearing friction filing state: %w", err)
+			return FrictionIssueLink{}, false, fmt.Errorf("clearing friction filing state: %w", err)
 		}
 	}
 	stored := FrictionIssueLink{Fingerprint: l.Fingerprint}
 	var linkedAt string
-	err = tx.QueryRowContext(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 		SELECT kata_instance_uid, kata_project_uid, issue_uid, qualified_id,
 			web_url, source, linked_at
 		FROM friction_issue_links WHERE fingerprint = ?`, l.Fingerprint).Scan(
 		&stored.KataInstanceUID, &stored.KataProjectUID, &stored.IssueUID,
-		&stored.QualifiedID, &stored.WebURL, &stored.Source, &linkedAt)
-	if err != nil {
-		return FrictionIssueLink{}, fmt.Errorf("reading friction issue link: %w", err)
+		&stored.QualifiedID, &stored.WebURL, &stored.Source, &linkedAt); err != nil {
+		return FrictionIssueLink{}, false, fmt.Errorf("reading friction issue link: %w", err)
 	}
 	if stored.LinkedAt, err = time.Parse(time.RFC3339Nano, linkedAt); err != nil {
-		return FrictionIssueLink{}, fmt.Errorf("parsing friction issue link time: %w", err)
+		return FrictionIssueLink{}, false, fmt.Errorf("parsing friction issue link time: %w", err)
 	}
-	return stored, tx.Commit()
+	return stored, true, tx.Commit()
 }
 
 func timeText(t *time.Time) any {
@@ -175,11 +206,18 @@ func timeText(t *time.Time) any {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-// DeleteFrictionIssueLink removes the local link only; the Kata issue stays.
+// DeleteFrictionIssueLink removes the local link and pauses automatic
+// filing for the pattern, which would otherwise link the same issue again.
+// Both happen in one transaction. The Kata issue stays.
 func (db *DB) DeleteFrictionIssueLink(ctx context.Context, fingerprint string) (bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	res, err := db.getWriter().ExecContext(ctx,
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("deleting friction issue link: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx,
 		`DELETE FROM friction_issue_links WHERE fingerprint = ?`, fingerprint)
 	if err != nil {
 		return false, fmt.Errorf("deleting friction issue link: %w", err)
@@ -188,7 +226,19 @@ func (db *DB) DeleteFrictionIssueLink(ctx context.Context, fingerprint string) (
 	if err != nil {
 		return false, fmt.Errorf("deleting friction issue link: %w", err)
 	}
-	return n > 0, nil
+	if n == 0 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO friction_filing_state (fingerprint, state, attempts, last_error, updated_at)
+		VALUES (?, ?, 0, '', ?)
+		ON CONFLICT(fingerprint) DO UPDATE SET
+			state = excluded.state, attempts = 0, first_failed_at = NULL,
+			next_attempt_at = NULL, last_error = '', updated_at = excluded.updated_at`,
+		fingerprint, FrictionFilingPaused, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return false, fmt.Errorf("pausing friction filing: %w", err)
+	}
+	return true, tx.Commit()
 }
 
 // frictionIssueColumns are the link and filing-state columns a pattern read

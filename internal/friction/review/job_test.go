@@ -67,11 +67,8 @@ func TestJobRunsAfterCatchUpWork(t *testing.T) {
 	seed(t, d, subject{id: "s", ended: "2026-09-21T10:00:00Z"})
 	r := newRunner(d)
 	r.BackfillDays = 1
-	job := review.Job(r, nil)
-	require.NoError(t, job.Run(t.Context()), "nothing installed yet")
-
 	inExclusive := false
-	job = review.Job(r, func(work func() error) error {
+	job := review.Job(r, func(work func() error) error {
 		inExclusive = true
 		defer func() { inExclusive = false }()
 		return work()

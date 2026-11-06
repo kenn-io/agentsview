@@ -61,8 +61,10 @@ type FrictionPatternFilter struct {
 	Kind         string
 	Since        string
 	Fingerprints []string
-	Limit        int
-	Cursor       string
+	// FilingState keeps patterns in this automatic filing state.
+	FilingState string
+	Limit       int
+	Cursor      string
 }
 
 // MaxFrictionFingerprints bounds one fingerprint filter, keeping SQLite and
@@ -250,6 +252,10 @@ func (db *DB) ListFrictionPatterns(
 	if f.Since != "" {
 		preds = append(preds, "p.last_seen_date >= ?")
 		args = append(args, f.Since)
+	}
+	if f.FilingState != "" {
+		preds = append(preds, "f.state = ?")
+		args = append(args, f.FilingState)
 	}
 	if f.Fingerprints != nil {
 		if len(f.Fingerprints) == 0 {

@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/service"
@@ -419,6 +420,14 @@ func printFrictionFindings(w io.Writer, page *service.FrictionFindingPage) error
 	return nil
 }
 
+// frictionFilingLabel says why automatic filing has not linked a pattern.
+func frictionFilingLabel(state string) string {
+	if state == db.FrictionFilingNeedsPerson {
+		return "(file or link)"
+	}
+	return "(" + state + ")"
+}
+
 func printFrictionPatterns(w io.Writer, page *service.FrictionPatternPage) error {
 	if len(page.Patterns) == 0 {
 		_, err := fmt.Fprintln(w, "(no friction patterns)")
@@ -432,8 +441,7 @@ func printFrictionPatterns(w io.Writer, page *service.FrictionPatternPage) error
 		case p.Issue != nil:
 			issue = p.Issue.QualifiedID
 		case p.Filing != nil:
-			// Why automatic filing has not linked it: retry, needs_person or paused.
-			issue = "(" + p.Filing.State + ")"
+			issue = frictionFilingLabel(p.Filing.State)
 		}
 		_, _ = fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\t%s\t%s\n", p.OccurrenceCount, p.SessionCount,
 			sanitizeTerminal(p.LastSeenDate), sanitizeTerminal(p.Kind),

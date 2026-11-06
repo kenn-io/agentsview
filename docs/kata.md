@@ -119,14 +119,14 @@ kinds = ["correction", "pattern"] # Optional; empty means every kind that can be
   holds instead of filing a duplicate.
 - While Kata is not ready, the job files nothing and records no failures.
 - After a failed request, the job tries again in 1 hour, then doubles the wait
-  up to 24 hours. After 14 days of failures, or when Kata rejects the request
-  or holds several candidate issues, the pattern waits for you to file or link
-  it.
+  up to 24 hours, even once the pattern is older than `backfill_days`. After
+  14 days of failures, or when Kata rejects the request or holds several
+  candidate issues, the pattern waits for you to file or link it.
 - Unlinking a pattern stops automatic filing for it. Filing or linking it by
   hand starts it again.
 
 A pattern without an issue shows why: a note on the Friction Log page,
-`(retry)`, `(needs_person)`, or `(paused)` in the `ISSUE` column of
+`(retry)`, `(file or link)`, or `(paused)` in the `ISSUE` column of
 `friction patterns`, and the `filing` field in API and MCP results.
 
 ## Limits

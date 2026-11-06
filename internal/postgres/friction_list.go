@@ -140,6 +140,14 @@ func (s *Store) ListFrictionPatterns(
 	if f.Since != "" {
 		preds = append(preds, "p.last_seen_date >= "+pb.add(f.Since))
 	}
+	issueColumns, issueJoin := s.frictionIssueSelect(ctx)
+	if f.FilingState != "" {
+		if !strings.Contains(issueJoin, "friction_filing_state") {
+			// A schema without filing state has no pattern in any state.
+			return []db.FrictionPattern{}, "", nil
+		}
+		preds = append(preds, "f.state = "+pb.add(f.FilingState))
+	}
 	if f.Fingerprints != nil {
 		if len(f.Fingerprints) == 0 {
 			return []db.FrictionPattern{}, "", nil
@@ -152,7 +160,6 @@ func (s *Store) ListFrictionPatterns(
 	}
 	limitParam := pb.add(limit + 1)
 	offsetParam := pb.add(offset)
-	issueColumns, issueJoin := s.frictionIssueSelect(ctx)
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT p.fingerprint, p.kind, p.title, p.first_seen_date,
 			p.last_seen_date, p.occurrence_count, p.session_count,

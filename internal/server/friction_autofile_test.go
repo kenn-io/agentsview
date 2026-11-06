@@ -81,3 +81,26 @@ func TestFrictionJobDoesNotFileWhereLinksCannotBeSaved(t *testing.T) {
 	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
 	assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"), "no issue is created without a place for its link")
 }
+
+// The local daemon starts the friction job after the server exists and
+// installs it with WithFriction then; automatic filing must still run.
+func TestFrictionJobFilesWhenInstalledAfterTheServer(t *testing.T) {
+	s := katatest.New(t)
+	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
+	runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }, BackfillDays: 7}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithKataConn(kata.NewConn(kata.Config{
+			Enabled: true, Hub: true, Endpoint: s.Endpoint(), Project: katatest.DefaultProjectName,
+		})),
+	}, func(c *config.Config) {
+		c.Friction.BackfillDays = 7
+		c.Friction.Kata.AutoFile = true
+	})
+	runner.Store = te.db
+	const date = "2026-09-14"
+	seedFrictionDigest(t, te.db, date)
+	server.WithFriction(runner, nil)(te.srv)
+
+	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
+	require.NotNil(t, patternIssue(t, te, frictionTestSnapshot(date).Signals[0].Fingerprint()))
+}

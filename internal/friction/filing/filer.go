@@ -125,6 +125,16 @@ func (f *Filer) Preview(ctx context.Context, fingerprint string) (kata.CreateIss
 // link, and so does one a person links while File waits on Kata: File only
 // adds a link, never replaces one.
 func (f *Filer) File(ctx context.Context, fingerprint string) (Result, error) {
+	return f.file(ctx, fingerprint, false)
+}
+
+// errPaused reports that a person paused the pattern while automatic filing
+// worked on it, so the automatic link was not saved.
+var errPaused = errors.New("a person paused automatic filing for this pattern")
+
+// file is File; automatic filing sets auto, so its link never undoes a
+// pause a person set meanwhile.
+func (f *Filer) file(ctx context.Context, fingerprint string, auto bool) (Result, error) {
 	p, err := f.pattern(ctx, fingerprint)
 	if err != nil {
 		return Result{}, err
@@ -146,7 +156,7 @@ func (f *Filer) File(ctx context.Context, fingerprint string) (Result, error) {
 	switch len(matches) {
 	case 0:
 	case 1:
-		link, err := f.add(ctx, fingerprint, matches[0], db.FrictionIssueSourceFound)
+		link, err := f.add(ctx, fingerprint, matches[0], db.FrictionIssueSourceFound, auto)
 		return Result{Link: link}, err
 	default:
 		return Result{}, &AmbiguousError{Candidates: matches}
@@ -156,19 +166,19 @@ func (f *Filer) File(ctx context.Context, fingerprint string) (Result, error) {
 	// issue the first attempt made.
 	created, err := f.Kata.CreateIssue(ctx, "friction-"+fingerprint, req)
 	if err != nil {
-		return f.onCreateError(ctx, fingerprint, err)
+		return f.onCreateError(ctx, fingerprint, err, auto)
 	}
 	source := db.FrictionIssueSourceCreated
 	if created.Reused {
 		source = db.FrictionIssueSourceFound
 	}
-	link, err := f.add(ctx, fingerprint, created.Issue, source)
+	link, err := f.add(ctx, fingerprint, created.Issue, source, auto)
 	return Result{Link: link, Created: !created.Reused && link.IssueUID == created.Issue.UID}, err
 }
 
 // onCreateError links the issue Kata names when an earlier create with the
 // same key carried different text, and surfaces look-alike candidates.
-func (f *Filer) onCreateError(ctx context.Context, fingerprint string, err error) (Result, error) {
+func (f *Filer) onCreateError(ctx context.Context, fingerprint string, err error, auto bool) (Result, error) {
 	apiErr, ok := errors.AsType[*kata.APIError](err)
 	if !ok {
 		return Result{}, err
@@ -185,7 +195,7 @@ func (f *Filer) onCreateError(ctx context.Context, fingerprint string, err error
 		if gerr != nil {
 			return Result{}, gerr
 		}
-		link, serr := f.add(ctx, fingerprint, is, db.FrictionIssueSourceFound)
+		link, serr := f.add(ctx, fingerprint, is, db.FrictionIssueSourceFound, auto)
 		return Result{Link: link}, serr
 	case "duplicate_candidates":
 		var data struct {
@@ -229,18 +239,18 @@ func (f *Filer) Link(ctx context.Context, fingerprint, ref string) (db.FrictionI
 // pattern, which would otherwise link the same issue again. Filing or
 // linking it by hand clears the pause. The Kata issue is left as it is.
 func (f *Filer) Unlink(ctx context.Context, fingerprint string) error {
-	return f.write(func() error {
-		removed, err := f.Store.DeleteFrictionIssueLink(ctx, fingerprint)
-		if err != nil {
-			return err
-		}
-		if !removed {
-			return ErrNotLinked
-		}
-		return f.Store.SaveFrictionFilingState(ctx, db.FrictionFilingState{
-			Fingerprint: fingerprint, State: db.FrictionFilingPaused, UpdatedAt: f.now().UTC(),
-		})
+	var removed bool
+	err := f.write(func() (err error) {
+		removed, err = f.Store.DeleteFrictionIssueLink(ctx, fingerprint)
+		return err
 	})
+	if err != nil {
+		return err
+	}
+	if !removed {
+		return ErrNotLinked
+	}
+	return nil
 }
 
 func (f *Filer) ready(ctx context.Context) error {
@@ -263,15 +273,24 @@ func (f *Filer) newLink(ctx context.Context, fingerprint string, is kata.Issue, 
 }
 
 // add links the pattern to is unless it got a link meanwhile, and returns
-// the pattern's link.
-func (f *Filer) add(ctx context.Context, fingerprint string, is kata.Issue, source string) (db.FrictionIssueLink, error) {
+// the pattern's link. An automatic add also leaves a paused pattern alone
+// and returns errPaused.
+func (f *Filer) add(ctx context.Context, fingerprint string, is kata.Issue, source string, auto bool) (db.FrictionIssueLink, error) {
 	link, err := f.newLink(ctx, fingerprint, is, source)
 	if err != nil {
 		return db.FrictionIssueLink{}, err
 	}
 	var stored db.FrictionIssueLink
 	err = f.write(func() (err error) {
-		stored, err = f.Store.AddFrictionIssueLink(ctx, link)
+		if !auto {
+			stored, err = f.Store.AddFrictionIssueLink(ctx, link)
+			return err
+		}
+		var linked bool
+		stored, linked, err = f.Store.AddFrictionIssueLinkUnlessPaused(ctx, link)
+		if err == nil && !linked {
+			err = errPaused
+		}
 		return err
 	})
 	return stored, err

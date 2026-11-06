@@ -235,6 +235,8 @@ type Server struct {
 	// kata is the optional Kata spoke connection; never nil after New.
 	kata              *kata.Conn
 	frictionExclusive func(func() error) error
+	// constructed is set when New returns; see WithFriction.
+	constructed       bool
 	rawSyncDeviceAuth RawSyncDeviceAuth
 	rawSyncCustody    RawSyncCustody
 	rawSyncStatus     RawSyncStatusReader
@@ -341,6 +343,8 @@ func New(
 	}
 	s.assetCache = newAssetCache()
 	s.routes()
+	s.constructed = true
+	s.installAutoFile()
 	return s
 }
 
@@ -607,9 +611,19 @@ func WithFriction(runner *review.Runner, exclusive func(func() error) error) Opt
 	return func(s *Server) {
 		s.frictionRunner = runner
 		s.frictionExclusive = exclusive
-		if runner != nil {
-			runner.SetAfterCatchUp(s.autoFileFriction)
+		// Within New the job may already be running, so New installs
+		// automatic filing once the Kata connection exists.
+		if s.constructed {
+			s.installAutoFile()
 		}
+	}
+}
+
+// installAutoFile gives the friction job its automatic filing pass. Every
+// field the pass reads must be set first.
+func (s *Server) installAutoFile() {
+	if s.frictionRunner != nil {
+		s.frictionRunner.SetAfterCatchUp(s.autoFileFriction)
 	}
 }
 

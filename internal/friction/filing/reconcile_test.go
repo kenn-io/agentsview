@@ -1,6 +1,8 @@
 package filing_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/filing"
+	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/kata/katatest"
 )
 
@@ -219,4 +222,73 @@ func TestReconcileWaitsWhileKataIsNotReady(t *testing.T) {
 	assert.Zero(t, rep)
 	assert.Nil(t, patternRow(t, d, correction.Fingerprint()).Filing, "an outage costs no attempts")
 	assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"))
+}
+
+func TestReconcileRetriesPatternsOlderThanTheWindow(t *testing.T) {
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+	fp := correction.Fingerprint()
+	now := f.Now()
+	first, next := now.Add(-3*24*time.Hour), now.Add(-time.Minute)
+	require.NoError(t, d.SaveFrictionFilingState(t.Context(), db.FrictionFilingState{
+		Fingerprint: fp, State: db.FrictionFilingRetry, Attempts: 3,
+		FirstFailedAt: &first, NextAttemptAt: &next, UpdatedAt: next,
+	}))
+	// The pattern was last seen before the window that finds new patterns.
+	policy := filing.Policy{Kinds: friction.FileableKinds, Since: "2026-09-15"}
+
+	rep, err := f.Reconcile(t.Context(), policy)
+	require.NoError(t, err)
+	assert.Equal(t, filing.ReconcileReport{Created: 1}, rep)
+	assert.NotNil(t, patternRow(t, d, fp).Issue)
+}
+
+// unlinkDuringCreate is Kata that, while the create request is in flight,
+// lets a person link the pattern and unlink it again, then answers fail.
+type unlinkDuringCreate struct {
+	filing.Kata
+	store       *db.DB
+	fingerprint string
+	fail        error
+}
+
+func (k unlinkDuringCreate) CreateIssue(ctx context.Context, key string, req kata.CreateIssue) (kata.CreateResult, error) {
+	manual := db.FrictionIssueLink{
+		Fingerprint: k.fingerprint, KataInstanceUID: "i", KataProjectUID: "p", IssueUID: "manual",
+		QualifiedID: "agentsview#m001", Source: db.FrictionIssueSourceManual, LinkedAt: time.Now(),
+	}
+	if err := k.store.SaveFrictionIssueLink(ctx, manual); err != nil {
+		return kata.CreateResult{}, err
+	}
+	if _, err := k.store.DeleteFrictionIssueLink(ctx, k.fingerprint); err != nil {
+		return kata.CreateResult{}, err
+	}
+	if k.fail != nil {
+		return kata.CreateResult{}, k.fail
+	}
+	return k.Kata.CreateIssue(ctx, key, req)
+}
+
+func TestReconcileKeepsAPauseAPersonSetMeanwhile(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		fail error
+	}{
+		{name: "filing_succeeds"},
+		{name: "filing_fails", fail: errors.New("kata: HTTP 503")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := katatest.New(t)
+			f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+			fp := correction.Fingerprint()
+			f.Kata = unlinkDuringCreate{Kata: f.Kata, store: d, fingerprint: fp, fail: tt.fail}
+
+			_, err := f.Reconcile(t.Context(), allKinds)
+			require.NoError(t, err)
+			row := patternRow(t, d, fp)
+			assert.Nil(t, row.Issue, "the automatic result does not undo the unlink")
+			require.NotNil(t, row.Filing)
+			assert.Equal(t, db.FrictionFilingPaused, row.Filing.State)
+		})
+	}
 }
