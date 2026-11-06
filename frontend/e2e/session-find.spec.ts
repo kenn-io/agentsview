@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { renderedContrast } from "./helpers/contrast";
 import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
 
@@ -210,6 +210,20 @@ async function currentGeometry(page: Page) {
         target.left < right,
     };
   });
+}
+
+/** Step to the tool-output occurrence, letting each occurrence mount and
+ * show before moving on, so a virtualized row is never skipped. */
+async function goToToolOutput(page: Page, input: Locator) {
+  const announcement = page.locator(".search-announcement");
+  for (let i = 0; i < ALL_MATCHES; i++) {
+    await expect.poll(async () => (await currentGeometry(page))?.visible).toBe(true);
+    if ((await currentGeometry(page))?.key === "12:tool-output:0") return;
+    const before = (await announcement.textContent()) ?? "";
+    await input.press("Enter");
+    await expect(announcement).not.toHaveText(before);
+  }
+  throw new Error("the tool-output occurrence never became current");
 }
 
 /** Step through every occurrence, asserting each one is truly visible. */
@@ -528,13 +542,10 @@ test("tool output controls stay usable beside the raw-output hint in a narrow pa
   const input = await openFind(page);
   releaseHistory();
   await expect(page.locator(".search-announcement")).toContainText(String(ALL_MATCHES));
+  await goToToolOutput(page, input);
   // In the narrowest panes the hint may give way entirely, so wait for it
   // to be rendered rather than visible.
   const hint = page.locator(".search-output-hint");
-  for (let i = 0; i < ALL_MATCHES && (await hint.count()) === 0; i++) {
-    await input.press("Enter");
-    await expect(page.locator(".search-announcement")).toBeAttached();
-  }
   await expect(hint).toHaveCount(1);
   const pane = await page.locator(".message-list-scroll").boundingBox();
   expect(pane!.width).toBeLessThan(320);
@@ -601,12 +612,34 @@ test(`the find field and its buttons stay usable in a narrow pane at ${viewport}
 });
 }
 
+test("the raw-output hint shows whole beside the output controls in a wide pane", async ({ page }) => {
+  const { releaseHistory } = await installFixture(page);
+  await page.addInitScript(() => localStorage.setItem("agentsview-message-layout", "default"));
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await openSession(page);
+  const input = await openFind(page);
+  releaseHistory();
+  await expectCompleteIndex(page);
+  await goToToolOutput(page, input);
+  const hint = page.locator(".search-output-hint");
+  await expect(hint).toBeVisible();
+  const shown = await hint.evaluate((el) => ({
+    width: el.getBoundingClientRect().width,
+    whole: el.scrollWidth <= el.clientWidth + 1,
+  }));
+  expect(shown.width).toBeGreaterThan(0);
+  expect(shown.whole, JSON.stringify(shown)).toBe(true);
+});
+
 test("find results share the find field's edge on a wide pane", async ({ page }) => {
   const { releaseHistory } = await installFixture(page);
   await page.setViewportSize({ width: 1700, height: 900 });
   await openSession(page);
   await openFind(page);
   releaseHistory();
+  // Results measured before the debounced query runs would not exercise
+  // the active-search layout.
+  await expectCompleteIndex(page);
   await openResults(page);
   const field = await page.locator(".session-find .find-field").boundingBox();
   const heading = await page.getByRole("region", { name: "Search results" }).locator("h2").boundingBox();

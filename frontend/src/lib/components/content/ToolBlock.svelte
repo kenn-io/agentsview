@@ -261,7 +261,7 @@
       {/if}
     {/if}
     {#if toolCall?.result_content}
-      <div class="output-header-row">
+      <div class="output-header-row" class:with-hint={!outputCollapsed && !!sourceTextForSearch}>
         <button class="output-header" aria-expanded={!outputCollapsed} onclick={(e) => {
           e.stopPropagation();
           const sel = window.getSelection();
@@ -403,6 +403,10 @@
     font-size: 12px; color: var(--text-secondary); min-width: 0; transition: background 0.1s; user-select: text; flex: 1 1 auto;
   }
   :global(.tool-block .output-mode) { flex: 0 0 auto; margin-left: auto; }
+  /* Beside the hint the header starts from its content's width, not the
+     row's, so in a wide pane the hint keeps its whole text and only a
+     narrow pane makes it give way. */
+  .output-header-row.with-hint .output-header { width: auto; }
   .formatted-output :global(pre) { white-space: pre-wrap; }
   .tool-preview, .meta-value { position: relative; }
   :global(.tool-preview .kit-sr-only), :global(.meta-tag .kit-sr-only) {
@@ -440,9 +444,12 @@
     background: color-mix(in srgb, var(--text-primary) 4%, transparent);
     border-top-color: var(--border-muted);
   }
+  /* A long function context wraps inside the strip instead of running
+     past the block's clipped edge. */
   .diff-strip-hunk {
     font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
-    margin-inline-start: auto; white-space: nowrap; font-variant-numeric: tabular-nums;
+    margin-inline-start: auto; min-width: 0; max-width: 100%; overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
   }
   .diff-view.after-strip { border-top: none; }
   .diff-line { display: inline-block; min-width: 100%; padding: 0 14px; white-space: pre; }
