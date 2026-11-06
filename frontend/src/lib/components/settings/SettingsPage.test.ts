@@ -254,7 +254,7 @@ describe("SettingsPage", () => {
       ).toBe(false);
       const found = nav.querySelectorAll("button");
       expect(found).toHaveLength(1);
-      expect(found[0].textContent).toContain("Appearance");
+      expect(found[0]?.textContent).toContain("Appearance");
 
       unmount(component);
     },
