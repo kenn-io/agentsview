@@ -154,6 +154,51 @@ describe("SessionVitals", () => {
     expect(document.querySelector(".call .cn")?.textContent).toBe("Bash");
   });
 
+  it.each([
+    { name: "some calls have durations", durations: [400, null], running: false },
+    { name: "no call has a duration", durations: [null, null], running: false },
+    { name: "the last call is running", durations: [null, null], running: true },
+  ])("shows call timing columns only when needed: $name", async ({ durations, running }) => {
+    const timing = timingWithCall();
+    timing.running = running;
+    timing.turns[0]!.duration_ms = running ? null : 400;
+    timing.turns[0]!.started_at = new Date(Date.now() - 3000).toISOString();
+    timing.turns[0]!.calls = durations.map((duration_ms, i) => ({
+      tool_use_id: `call-${i}`,
+      tool_name: "Bash",
+      category: "Bash",
+      duration_ms,
+      is_parallel: true,
+      input_preview: "pwd",
+    }));
+    timing.tool_call_count = durations.length;
+    mocks.fetchSessionTiming.mockResolvedValue(timing);
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: traceSession },
+    });
+    await tick();
+    await tick();
+
+    const labels = [...document.querySelectorAll(".calls .cd")].map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(document.querySelector(".calls")?.textContent).not.toContain("unknown");
+    if (running) {
+      expect(labels[0]).toBe("");
+      expect(labels[1]).toMatch(/^running /);
+      expect(document.querySelector(".scale-axis")).not.toBeNull();
+    } else if (durations.some((d) => d != null)) {
+      expect(labels).toEqual(["400ms", ""]);
+      expect(document.querySelector(".scale-axis")).not.toBeNull();
+    } else {
+      expect(labels).toEqual([]);
+      expect(document.querySelectorAll(".calls .cbar-wrap")).toHaveLength(0);
+      expect(document.querySelectorAll(".calls .call.untimed")).toHaveLength(2);
+      expect(document.querySelector(".scale-axis")).toBeNull();
+    }
+  });
+
   it("renders measured activity and unattributed time and jumps to the prompt", async () => {
     const timing = timingWithCall();
     timing.total_duration_ms = 6000;
@@ -214,7 +259,7 @@ describe("SessionVitals", () => {
     );
     expect([...document.querySelectorAll(".cd")].map((el) => el.textContent?.trim())).toEqual([
       "2.0s",
-      "unknown",
+      "",
     ]);
     expect(
       [...document.querySelectorAll<HTMLElement>(".cbar")].map((el) => el.style.width),

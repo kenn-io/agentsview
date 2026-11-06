@@ -9,7 +9,7 @@
   } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
   import { formatCount } from "../../utils/format.js";
-  import { turnHasCategory } from "../../utils/timing.js";
+  import { callsHaveTiming, turnHasCategory } from "../../utils/timing.js";
   import CallRow from "./CallRow.svelte";
   import CallGroup from "./CallGroup.svelte";
 
@@ -34,6 +34,8 @@
   function noopExpand(_c: CallTiming): void {
     /* no-op for nested rows */
   }
+
+  let showTiming = $derived(callsHaveTiming(timing));
 
   function isLastTurn(idx: number): boolean {
     return idx === timing.turns.length - 1;
@@ -71,6 +73,7 @@
           isLive={isLive}
           liveDurationMs={liveElapsed}
           expandable={false}
+          {showTiming}
           dimmed={categoryFilter !== null &&
             call.category !== categoryFilter}
         />
@@ -81,6 +84,7 @@
           isLive={isLive}
           liveDurationMs={liveElapsed}
           expandable={false}
+          {showTiming}
           dimmed={categoryFilter !== null && !turnHasCategory(turn, categoryFilter)}
           onCallClick={() => {}}
           onSubagentExpand={noopExpand}

@@ -10,7 +10,7 @@
   import { formatDuration } from "../../utils/duration.js";
   import { categoryToken } from "../../utils/categoryToken.js";
   import { activityToken, type ActivityKind } from "../../utils/activityToken.js";
-  import { turnHasCategory } from "../../utils/timing.js";
+  import { callsHaveTiming, turnHasCategory } from "../../utils/timing.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { m } from "../../i18n/index.js";
@@ -54,6 +54,7 @@
       .map((call) => call.category),
   ));
   let measuredRows = $derived(timing?.by_category.filter((cat) => measuredCategories.has(cat.category)) ?? []);
+  let showCallTiming = $derived(!!timing && callsHaveTiming(timing));
   let toolTimeMeasured = $derived(timing?.tool_call_count === 0 || measuredCategories.size > 0);
   let activityKinds: { kind: ActivityKind; label: string }[] = $derived([
     { kind: "tool", label: m.session_vitals_activity_tool() },
@@ -682,21 +683,23 @@
           </button>
         </header>
         {#if ui.vitalsCallsExpanded}
-          <div class="scale-axis">
-            <span>0</span>
-            <span>{formatDuration(timing.total_duration_ms / 4)}</span>
-            <span>{formatDuration(timing.total_duration_ms / 2)}</span>
-            <span
-              >{formatDuration(
-                (3 * timing.total_duration_ms) / 4,
-              )}</span
-            >
-            <span class:now={timing.running}
-              >{timing.running
-                ? m.session_vitals_now()
-                : formatDuration(timing.total_duration_ms)}</span
-            >
-          </div>
+          {#if showCallTiming}
+            <div class="scale-axis">
+              <span>0</span>
+              <span>{formatDuration(timing.total_duration_ms / 4)}</span>
+              <span>{formatDuration(timing.total_duration_ms / 2)}</span>
+              <span
+                >{formatDuration(
+                  (3 * timing.total_duration_ms) / 4,
+                )}</span
+              >
+              <span class:now={timing.running}
+                >{timing.running
+                  ? m.session_vitals_now()
+                  : formatDuration(timing.total_duration_ms)}</span
+              >
+            </div>
+          {/if}
           <div class="calls">
             {#each timing.turns as turn (turn.message_id)}
               {@const isLive =
@@ -712,6 +715,7 @@
                   isSlow={isSlowCall(call)}
                   {isLive}
                   liveDurationMs={liveElapsed}
+                  showTiming={showCallTiming}
                   dimmed={categoryFilter !== null &&
                     call.category !== categoryFilter}
                   isSubagentExpanded={!!call.subagent_session_id &&
@@ -739,6 +743,7 @@
                   barScalePct={(c) => callBarPct(c, timing)}
                   {isLive}
                   liveDurationMs={liveElapsed}
+                  showTiming={showCallTiming}
                   isSlow={isSlowCall}
                   dimmed={categoryFilter !== null && !turnHasCategory(turn, categoryFilter)}
                   onCallClick={() => ui.scrollToOrdinal(turn.ordinal)}

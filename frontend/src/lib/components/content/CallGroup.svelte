@@ -21,6 +21,8 @@
     isSlow?: (call: CallTiming) => boolean;
     expandable?: boolean;
     dimmed?: boolean;
+    /** False when no call in the list has timing; see CallRow. */
+    showTiming?: boolean;
   }
 
   let {
@@ -34,6 +36,7 @@
     isSlow,
     expandable = true,
     dimmed = false,
+    showTiming = true,
   }: Props = $props();
 </script>
 
@@ -57,6 +60,7 @@
         liveDurationMs={isLastLive ? liveDurationMs : undefined}
         isSlow={isSlow ? isSlow(call) : false}
         {expandable}
+        {showTiming}
         isSubagentExpanded={call.subagent_session_id != null &&
           expandedSubagentIds.has(call.subagent_session_id)}
         onClick={() => onCallClick(call)}

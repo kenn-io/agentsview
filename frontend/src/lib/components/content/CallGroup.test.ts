@@ -47,7 +47,7 @@ describe("CallGroup measured timing", () => {
 
     expect([...document.querySelectorAll(".cd")].map((el) => el.textContent?.trim())).toEqual([
       "2.0s",
-      isLive ? "running 6.0s+" : "unknown",
+      isLive ? "running 6.0s+" : "",
     ]);
     expect(
       [...document.querySelectorAll<HTMLElement>(".cbar")].map((el) => el.style.width),
