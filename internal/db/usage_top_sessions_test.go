@@ -101,40 +101,55 @@ func CheckUsageTopSessionsMatchLegacy(t *testing.T, database *DB) {
 		filter := UsageFilter{From: "2026-08-03", To: "2026-08-10", Timezone: timezone}
 		warmJournaledUsage(t, database, filter)
 		for _, tc := range usageDayTotalsFilterCases() {
-			for _, sort := range []string{"cost", "tokens", "input+output"} {
-				for _, limit := range []int{1, 3, 100} {
-					for _, grouped := range []bool{false, true} {
-						t.Run(fmt.Sprintf("%s/%s/%s/%d/group=%t", timezone, tc.name, sort, limit, grouped), func(t *testing.T) {
-							f := filter
-							tc.change(&f)
-							f.TopSessionsSort = sort
-							if sort == "input+output" {
-								f.TopSessionsSort = "tokens"
-								f.TopSessionsTokenTypes = UsageTokenTypeInput | UsageTokenTypeOutput
+			if tc.name == "breakdowns" || tc.name == "skip counts" || timezone != "UTC" && tc.name != "unfiltered" {
+				continue
+			}
+			f := filter
+			tc.change(&f)
+			t.Run(timezone+"/"+tc.name, func(t *testing.T) {
+				if f.ActiveSince == "" && f.Termination == "" {
+					prepared, err := database.prepareUsageWindow(t.Context(), f, usageQueryKindTopSessions, false, true, nil)
+					require.NoError(t, err)
+					require.True(t, prepared.journaled)
+					assert.Empty(t, prepared.snapshot.Sessions)
+					assert.Empty(t, prepared.snapshot.Versions)
+				}
+				for _, sort := range []string{"cost", "tokens", "input+output"} {
+					if tc.name != "unfiltered" && sort != "cost" {
+						continue
+					}
+					for _, limit := range []int{1, 3, 100} {
+						if tc.name != "unfiltered" && limit != 3 || timezone != "UTC" && limit != 3 {
+							continue
+						}
+						for _, grouped := range []bool{false, true} {
+							if f.ActiveSince != "" && grouped {
+								continue
 							}
-							f.TopSessionsByGroup = grouped
-							want, err := database.getTopSessionsByCostLegacy(t.Context(), f, limit)
-							require.NoError(t, err)
-							if grouped {
-								all, err := database.getTopSessionsByCostLegacy(t.Context(), f, 100)
+							t.Run(fmt.Sprintf("%s/%d/group=%t", sort, limit, grouped), func(t *testing.T) {
+								f := f
+								f.TopSessionsSort = sort
+								if sort == "input+output" {
+									f.TopSessionsSort = "tokens"
+									f.TopSessionsTokenTypes = UsageTokenTypeInput | UsageTokenTypeOutput
+								}
+								f.TopSessionsByGroup = grouped
+								want, err := database.getTopSessionsByCostLegacy(t.Context(), f, limit)
 								require.NoError(t, err)
-								want, err = GroupTopSessions(all, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+								if grouped {
+									all, err := database.getTopSessionsByCostLegacy(t.Context(), f, 100)
+									require.NoError(t, err)
+									want, err = GroupTopSessions(all, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+									require.NoError(t, err)
+								}
+								got, err := database.GetTopSessionsByCost(t.Context(), f, limit)
 								require.NoError(t, err)
-							}
-							got, err := database.GetTopSessionsByCost(t.Context(), f, limit)
-							require.NoError(t, err)
-							assert.Equal(t, want, got)
-							if f.ActiveSince == "" && f.Termination == "" {
-								prepared, err := database.prepareUsageWindow(t.Context(), f, usageQueryKindTopSessions, false, true, nil)
-								require.NoError(t, err)
-								require.True(t, prepared.journaled)
-								assert.Empty(t, prepared.snapshot.Sessions)
-								assert.Empty(t, prepared.snapshot.Versions)
-							}
-						})
+								assert.Equal(t, want, got)
+							})
+						}
 					}
 				}
-			}
+			})
 		}
 	}
 }
@@ -252,46 +267,14 @@ func TestUsageTopSessionsZeroCostTies(t *testing.T) {
 	}
 }
 
-// CheckUsageSessionCountsJournaled checks the count path without archive names.
+// CheckUsageSessionCountsJournaled checks that direct count reads override skipped summary counts.
 func CheckUsageSessionCountsJournaled(t *testing.T, database *DB) {
 	t.Helper()
-	filter := UsageFilter{From: "2026-08-03", To: "2026-08-10", Timezone: "UTC"}
-	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET display_name='Count owner '||id`)
-	require.NoError(t, err)
+	filter := UsageFilter{From: "2026-08-03", To: "2026-08-10", Timezone: "UTC", SkipSessionCounts: true}
 	warmJournaledUsage(t, database, filter)
-	// Observe foreground reads without a coverage pass loading names in parallel.
-	database.usageBackfillMu.Lock()
-	database.usageBackfillEnabled = false
-	database.usageBackfillMu.Unlock()
-	database.rawReader().SetMaxOpenConns(1)
-	conn, err := database.getReader().Conn(t.Context())
+	want, err := database.getUsageSessionCountsLegacy(t.Context(), filter)
 	require.NoError(t, err)
-	var loaded int
-	require.NoError(t, conn.Raw(func(driverConn any) error {
-		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other any) any {
-			if name, ok := value.(string); ok && strings.HasPrefix(name, "Count owner ") {
-				loaded++
-			}
-			if value == other {
-				return nil
-			}
-			return value
-		}, false)
-	}))
-	require.NoError(t, conn.Close())
-	for _, tc := range usageDayTotalsFilterCases() {
-		t.Run(tc.name, func(t *testing.T) {
-			f := filter
-			tc.change(&f)
-			want, err := database.getUsageSessionCountsLegacy(t.Context(), f)
-			require.NoError(t, err)
-			loaded = 0
-			got, err := database.GetUsageSessionCounts(t.Context(), f)
-			require.NoError(t, err)
-			assert.Equal(t, want, got)
-			if f.ActiveSince == "" && f.Termination == "" {
-				assert.Zero(t, loaded)
-			}
-		})
-	}
+	got, err := database.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
 }

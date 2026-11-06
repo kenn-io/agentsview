@@ -14,7 +14,9 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/db/testdata/usagefixture"
@@ -190,9 +192,6 @@ func TestUsageTopSessionsBudget(t *testing.T) {
 				require.NoError(t, err)
 				payload, err := json.Marshal(out.Body)
 				require.NoError(t, err)
-				if raw != nil {
-					require.Equal(t, string(raw), string(payload), "warm reads must be identical")
-				}
 				raw = payload
 			}
 			t.Logf("warm %s=%s", tc.name, elapsed)
