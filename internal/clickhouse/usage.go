@@ -2272,6 +2272,7 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 	if len(changed) > 0 {
 		identities, err := s.readUsageRowIdentities(ctx, changed)
 		if err != nil {
+			s.logUsageReadiness(fmt.Sprintf("row identity probe failed, serving uncached: %v", err))
 			return "", false, nil
 		}
 		fresh, err := s.readPartsSnapshot(ctx)
