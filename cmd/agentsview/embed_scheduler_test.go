@@ -1683,9 +1683,11 @@ func TestSetupVectorServingDisabled(t *testing.T) {
 	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
 	vs, err := setupVectorServing(t.Context(), cfg, database, nil)
 	require.NoError(t, err)
-	assert.Nil(t, vs.Scheduler)
-	assert.Nil(t, vs.Close)
-	assert.Empty(t, vs.ServerOpts)
+	owner := liveVectorServingFixture(t, cfg, database, vs)
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/build", "application/json", strings.NewReader(`{}`), http.StatusNotImplemented)
 }
 
 // --- installDirectVectorSearcher (direct, non-daemon CLI path) ---

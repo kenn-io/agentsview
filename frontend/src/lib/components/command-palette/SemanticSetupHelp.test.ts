@@ -291,7 +291,9 @@ describe("SemanticSetupHelp", () => {
     expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
 
     await settle(2000);
-    expect(text()).toContain("Indexing 500 of 1,000 text sections");
+    expect(document.body.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe(
+      "500",
+    );
 
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_result: undefined }),
@@ -411,7 +413,9 @@ describe("SemanticSetupHelp", () => {
     const { component } = mountHelp();
     await settle();
 
-    expect(text()).toContain("Indexing 250 of 1,000 text sections");
+    expect(document.body.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe(
+      "250",
+    );
 
     unmount(component);
   });
@@ -423,7 +427,7 @@ describe("SemanticSetupHelp", () => {
 
     const { component, onResolved } = mountHelp();
     await settle();
-    expect(text()).toContain("Indexing");
+    expect(document.body.querySelector('[role="progressbar"]')).not.toBeNull();
 
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_error: "embeddings endpoint refused the connection" }),

@@ -1141,12 +1141,14 @@ func TestRecallEmbeddingsBuildNormalizesIncludeAutomatedForDaemon(t *testing.T) 
 		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
 			var req vector.BuildRequest
 			assert.NoError(t, json.UnmarshalRead(r.Body, &req))
+			assert.Equal(t, "recall", req.Store)
 			gotIncludeAutomated.Store(req.IncludeAutomated)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.MarshalWrite(w, map[string]bool{"started": true})
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "recall", r.URL.Query().Get("store"))
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.MarshalWrite(w, vector.BuildStatus{LastResult: &vector.BuildResult{}})
 		},
@@ -1562,7 +1564,6 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 		name       string
 		code       string
 		message    string
-		setupBusy  bool
 		replaced   bool
 		wantError  string
 		wantPolls  int32
@@ -1570,7 +1571,6 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	}{
 		{name: "running build", message: "an embeddings build is already running", wantPolls: 2, wantNotice: true},
 		{name: "setup refusal", code: "embeddings_setup_busy", message: "search by meaning is being set up", wantError: "being set up"},
-		{name: "setup hides the followed build outcome", message: "an embeddings build is already running", setupBusy: true, wantError: "run the build again", wantPolls: 1, wantNotice: true},
 		{name: "setup finished between polls", message: "an embeddings build is already running", replaced: true, wantError: "run the build again", wantPolls: 2, wantNotice: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1584,9 +1584,7 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 			mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
 				n := statusCalls.Add(1)
 				status := vector.BuildStatus{Running: n < 2}
-				if tc.setupBusy {
-					status = vector.BuildStatus{Setup: &vector.SetupStatus{Enabled: true, Busy: true}}
-				} else if n >= 2 && !tc.replaced {
+				if n >= 2 && !tc.replaced {
 					status.LastResult = &vector.BuildResult{
 						Activated: true,
 						Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,9 +97,14 @@ func TestLiveEmbeddingsSetupCLIRecovery(t *testing.T) {
 			command.SetIn(strings.NewReader("y\n"))
 			command.SetArgs([]string{"--yes"})
 			require.NoError(t, command.Execute())
+			require.Eventually(t, func() bool {
+				status, err := owner.SetupStatus(t.Context())
+				return err == nil && status.Error == "" && status.Action == ""
+			}, time.Second, 10*time.Millisecond, "a completed recovery must reach setup status")
 			var build vector.BuildStatus
 			raw := embeddingRequest(t, ts.Client(), ts.URL, http.MethodGet, "/api/v1/embeddings/status", "", nil, http.StatusOK)
 			require.NoError(t, json.Unmarshal(raw, &build))
+			require.NotNil(t, build.Setup)
 			require.NotNil(t, build.LastResult)
 			require.Empty(t, build.LastError)
 			assert.Equal(t, tc.wantActivated, build.LastResult.Activated)
