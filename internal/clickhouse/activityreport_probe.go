@@ -239,20 +239,24 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 // chStringArrayLiteral renders values as a ClickHouse Array(String)
 // literal, the text form of a query parameter.
 func chStringArrayLiteral(values []string) string {
-	escape := strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 	var b strings.Builder
 	b.WriteByte('[')
 	for i, v := range values {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteByte('\'')
-		b.WriteString(escape.Replace(v))
-		b.WriteByte('\'')
+		b.WriteString(chStringLiteral(v))
 	}
 	b.WriteByte(']')
 	return b.String()
 }
+
+// chStringLiteral quotes v as a ClickHouse string literal.
+func chStringLiteral(v string) string {
+	return "'" + chStringEscaper.Replace(v) + "'"
+}
+
+var chStringEscaper = strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 
 // readUsageCoverage relates the live sessions and snapshots to the prepared
 // rows. The comparisons run in Go over the identities ClickHouse returns:

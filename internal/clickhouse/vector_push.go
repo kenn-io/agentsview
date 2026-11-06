@@ -8,10 +8,11 @@ import (
 	"log"
 	"maps"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/ClickHouse/clickhouse-go/v2/ext"
 
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -484,8 +485,12 @@ type vectorBatch struct {
 	stateHashes []string
 	docRows     [][]any
 	chunkRows   [][]any
-	docs        int
-	bytes       int
+	// docKeys and chunkKeys hold each row's key as a ClickHouse tuple
+	// literal, for the flush's vector_flushed_* query parameters.
+	docKeys   []string
+	chunkKeys []string
+	docs      int
+	bytes     int
 }
 
 func (s *Sync) newVectorBatch(fingerprint string) *vectorBatch {
@@ -512,6 +517,8 @@ func (b *vectorBatch) add(sessionID, aggHash string, docs []storage.VectorPushDo
 			int64(doc.Ordinal), int64(doc.OrdinalEnd), doc.Subordinate,
 			offsets, doc.Content, doc.ContentHash, nil,
 		})
+		b.docKeys = append(b.docKeys,
+			"("+chStringLiteral(doc.SessionID)+","+chStringLiteral(doc.DocKey)+")")
 		b.bytes += len(doc.DocKey) + len(doc.SessionID) + len(doc.SourceUUID) +
 			len(offsets) + len(doc.Content) + len(doc.ContentHash)
 		for _, chunk := range doc.Chunks {
@@ -519,6 +526,8 @@ func (b *vectorBatch) add(sessionID, aggHash string, docs []storage.VectorPushDo
 				b.fingerprint, doc.DocKey, int64(chunk.ChunkIndex), sessionID,
 				chunk.Embedding, nil,
 			})
+			b.chunkKeys = append(b.chunkKeys,
+				"("+chStringLiteral(doc.DocKey)+","+strconv.Itoa(chunk.ChunkIndex)+")")
 			b.bytes += len(doc.DocKey) + len(sessionID) + 4*len(chunk.Embedding)
 		}
 	}
@@ -533,6 +542,7 @@ func (b *vectorBatch) full() bool {
 func (b *vectorBatch) reset() {
 	b.sessions, b.stateHashes = b.sessions[:0], b.stateHashes[:0]
 	b.docRows, b.chunkRows = nil, nil
+	b.docKeys, b.chunkKeys = nil, nil
 	b.docs, b.bytes = 0, 0
 }
 
@@ -565,31 +575,28 @@ func (s *Sync) flushVectorBatch(ctx context.Context, b *vectorBatch) error {
 	// which keeps the newest version on merge and on every final=1 read.
 	// Deleting them too would write a patch row per rewritten row, and every
 	// later read of the table applies those patches until merges fold them
-	// in. The flush's keys travel as external tables, so each DELETE reads
+	// in. The flush's keys travel as query parameters, so each DELETE reads
 	// its own table once. The vanished-doc check pairs doc_key with
 	// session_id, so a doc that moved to another session still counts as
 	// vanished from its old one. Rows at or above this version belong to
 	// this flush or to a later push and are never deleted.
-	keyCtx, err := withVectorFlushedKeys(ctx, b)
-	if err != nil {
-		return err
-	}
-	placeholders, ids := inArgs(b.sessions)
-	if _, err := s.conn.ExecContext(keyCtx, `
+	paramCtx := withVectorFlushParams(ctx, b, version)
+	if _, err := s.conn.ExecContext(paramCtx, `
 		DELETE FROM vector_chunks
-		WHERE session_id IN (`+placeholders+`) AND push_version < ? AND (
-			(session_id, doc_key) NOT IN (SELECT session_id, doc_key FROM vector_flushed_docs)
-			OR (generation_fingerprint = ? AND (doc_key, chunk_index) NOT IN (
-				SELECT doc_key, chunk_index FROM vector_flushed_chunks)))`,
-		slices.Concat(ids, []any{version, b.fingerprint})...); err != nil {
-		return fmt.Errorf("deleting stale clickhouse vector chunks for %d session(s): %w", len(ids), err)
+		WHERE has({vector_flush_sessions:Array(String)}, session_id)
+		  AND push_version < {vector_flush_version:UInt64} AND (
+			(session_id, doc_key) NOT IN (`+vectorFlushedDocsSQL+`)
+			OR (generation_fingerprint = {vector_flush_fingerprint:String}
+			    AND (doc_key, chunk_index) NOT IN (`+vectorFlushedChunksSQL+`)))`); err != nil {
+		return fmt.Errorf("deleting stale clickhouse vector chunks for %d session(s): %w", len(b.sessions), err)
 	}
-	if _, err := s.conn.ExecContext(keyCtx, `
+	if _, err := s.conn.ExecContext(paramCtx, `
 		DELETE FROM vector_documents
-		WHERE session_id IN (`+placeholders+`) AND push_version < ?
-		  AND doc_key NOT IN (SELECT doc_key FROM vector_flushed_docs)`,
-		slices.Concat(ids, []any{version})...); err != nil {
-		return fmt.Errorf("deleting stale clickhouse vector documents for %d session(s): %w", len(ids), err)
+		WHERE has({vector_flush_sessions:Array(String)}, session_id)
+		  AND push_version < {vector_flush_version:UInt64}
+		  AND doc_key NOT IN (SELECT tupleElement(k, 2) FROM (SELECT arrayJoin(
+			{vector_flushed_docs:Array(Tuple(String, String))}) AS k))`); err != nil {
+		return fmt.Errorf("deleting stale clickhouse vector documents for %d session(s): %w", len(b.sessions), err)
 	}
 	if s.hooks != nil && s.hooks.beforeVectorState != nil {
 		if err := s.hooks.beforeVectorState(b.sessions); err != nil {
@@ -603,32 +610,31 @@ func (s *Sync) flushVectorBatch(ctx context.Context, b *vectorBatch) error {
 	return insertRows(ctx, s.conn, "vector_push_state", stateRows)
 }
 
-// withVectorFlushedKeys attaches the batch's document keys, with their
-// sessions, and chunk keys as the external tables vector_flushed_docs and
-// vector_flushed_chunks. They travel beside the query, so their size does
-// not count against max_query_size.
-func withVectorFlushedKeys(ctx context.Context, b *vectorBatch) (context.Context, error) {
-	docs, err := ext.NewTable("vector_flushed_docs",
-		ext.Column("session_id", "String"), ext.Column("doc_key", "String"))
-	if err != nil {
-		return nil, fmt.Errorf("creating flushed vector docs table: %w", err)
-	}
-	for _, row := range b.docRows {
-		if err := docs.Append(row[1], row[0]); err != nil {
-			return nil, fmt.Errorf("adding flushed vector doc: %w", err)
-		}
-	}
-	chunks, err := ext.NewTable("vector_flushed_chunks",
-		ext.Column("doc_key", "String"), ext.Column("chunk_index", tInt))
-	if err != nil {
-		return nil, fmt.Errorf("creating flushed vector chunks table: %w", err)
-	}
-	for _, row := range b.chunkRows {
-		if err := chunks.Append(row[1], row[2]); err != nil {
-			return nil, fmt.Errorf("adding flushed vector chunk: %w", err)
-		}
-	}
-	return chdriver.Context(ctx, chdriver.WithExternalTable(docs, chunks)), nil
+// vectorFlushedDocsSQL and vectorFlushedChunksSQL select the (session_id,
+// doc_key) and (doc_key, chunk_index) keys a flush rewrote, from the query
+// parameters withVectorFlushParams attaches.
+const (
+	vectorFlushedDocsSQL   = "SELECT untuple(arrayJoin({vector_flushed_docs:Array(Tuple(String, String))}))"
+	vectorFlushedChunksSQL = "SELECT untuple(arrayJoin({vector_flushed_chunks:Array(Tuple(String, Int64))}))"
+)
+
+// withVectorFlushParams attaches the flush's sessions, generation, and
+// version, and the keys it rewrote, as query parameters: vector_flushed_docs
+// holds each document's (session_id, doc_key) and vector_flushed_chunks each
+// chunk's (doc_key, chunk_index). Under the default lightweight_delete_mode a
+// DELETE runs as a mutation, which cannot see the query's external tables;
+// ClickHouse substitutes parameters before it runs or stores a statement, so
+// a mutation sees them. A parameter is not query text, so its size does not
+// count against max_query_size. The driver skips positional binding when a statement has
+// parameters, so every value the flush DELETEs use travels here.
+func withVectorFlushParams(ctx context.Context, b *vectorBatch, version uint64) context.Context {
+	return chdriver.Context(ctx, chdriver.WithParameters(chdriver.Parameters{
+		"vector_flush_sessions":    chStringArrayLiteral(b.sessions),
+		"vector_flush_fingerprint": b.fingerprint,
+		"vector_flush_version":     strconv.FormatUint(version, 10),
+		"vector_flushed_docs":      "[" + strings.Join(b.docKeys, ",") + "]",
+		"vector_flushed_chunks":    "[" + strings.Join(b.chunkKeys, ",") + "]",
+	}))
 }
 
 // evictVectorSessions drops this archive's push state for sessionIDs in one
