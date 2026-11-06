@@ -23,7 +23,7 @@ concurrency, and the search path — see
 
 Semantic search is disabled by default. Open **Settings → Embeddings** and choose **Turn on**, or choose it from the search palette. AgentsView asks for the required download through that button, shows download and indexing progress, and starts semantic search without a restart. Full-text search remains available during indexing.
 
-An existing Ollama setup offers **Use built-in instead**. Nomic recipes keep their indexed content; another model requires a rebuild, with a rough estimate shown before switching.
+For Ollama on its standard port, Settings offers **Use built-in instead**. Nomic recipes keep their indexed content; another model requires a rebuild, with a rough estimate shown before switching.
 
 For CLI setup, add a `[vector]` section to
 `~/.agentsview/config.toml`:
