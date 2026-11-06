@@ -44,7 +44,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		return kept.Report{}, through, false, err
 	}
 	entry := entries[0]
-	if through == entry.revision && len(changed) == 0 {
+	if through == entry.revision {
 		return entry.report, through, true, nil
 	}
 	if through < entry.revision {
@@ -66,6 +66,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		err = s.pg.QueryRowContext(ctx, `SELECT EXISTS (
    SELECT 1 FROM messages m JOIN sessions s ON s.id = m.session_id
    WHERE m.session_id = ANY($1)
+    AND m.claude_message_id != '' AND m.claude_request_id != ''
     AND (`+activityReportClaudePeerPredicate("$2", "$3", "$4")+`)
     AND COALESCE(m.timestamp, s.started_at) >= $3::timestamptz
     AND COALESCE(m.timestamp, s.started_at) <= $4::timestamptz)`,
