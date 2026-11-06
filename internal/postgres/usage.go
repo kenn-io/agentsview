@@ -1562,21 +1562,15 @@ func (s *Store) querySessionUsageRows(
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
-	version := s.keptUsageVersion(ctx)
-	slot := kept.UsageSlot(f, true)
+	slot := db.UsageSlot(f, true)
+	version := s.keptUsageVersion(ctx, slot)
 	if version == "" || slot == "" {
 		return s.readDailyUsage(ctx, f)
 	}
-	result, err := s.runtimeState().dailyUsage.Do(ctx, slot, version, func(ctx context.Context) (db.DailyUsageResult, error) {
-		full := f
-		full.SkipSessionCounts = false
+	return db.DailyUsage(ctx, &s.runtimeState().dailyUsage, slot, version, f, func(ctx context.Context, full db.UsageFilter) (db.DailyUsageResult, error) {
+		s.forgetPricingLoad()
 		return s.readDailyUsage(ctx, full)
 	})
-	result = result.Clone()
-	if f.SkipSessionCounts {
-		result.SessionCounts = db.UsageSessionCounts{}
-	}
-	return result, err
 }
 
 func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
@@ -2169,11 +2163,15 @@ func (s *Store) GetTopSessionsByCost(
 	if limit > 100 {
 		limit = 100
 	}
-	slot := kept.UsageSlot(f, false)
+	slot := db.UsageSlot(f, false)
 	if slot != "" {
 		slot += fmt.Sprintf("|%d|%t|%s|%d", limit, f.TopSessionsByGroup, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
-	out, err := s.runtimeState().topUsage.Do(ctx, slot, s.keptUsageVersion(ctx), func(ctx context.Context) ([]db.TopSessionEntry, error) {
+	version := s.keptUsageVersion(ctx, slot)
+	out, err := s.runtimeState().topUsage.Do(ctx, slot, version, func(ctx context.Context) ([]db.TopSessionEntry, error) {
+		if slot != "" && version != "" {
+			s.forgetPricingLoad()
+		}
 		return s.readTopSessions(ctx, f, limit)
 	})
 	return slices.Clone(out), err

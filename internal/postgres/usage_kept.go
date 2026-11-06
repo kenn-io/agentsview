@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-func (s *Store) keptUsageVersion(ctx context.Context) string {
-	if s.readTx != nil || s.hostedRelations {
+func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
+	if slot == "" || s.readTx != nil || s.hostedRelations {
 		return ""
 	}
 	revision, err := s.UsageChangeRevision(ctx)

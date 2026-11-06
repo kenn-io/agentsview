@@ -8,7 +8,9 @@ import (
 	"maps"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,11 +22,98 @@ import (
 
 type usageReadCounter struct {
 	storeExecutor
-	mu      sync.Mutex
-	queries map[string]int
+	mu            sync.Mutex
+	queries       map[string]int
+	revisionReads int
+}
+
+// Hold the first pricing query after PostgreSQL has taken its statement snapshot.
+type heldUsagePricing struct {
+	storeExecutor
+	held    atomic.Bool
+	started chan struct{}
+	release chan struct{}
+}
+
+func (h *heldUsagePricing) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	rows, err := h.storeExecutor.QueryContext(ctx, query, args...)
+	if err == nil && query == pgModelPricingSelect && h.held.CompareAndSwap(false, true) {
+		close(h.started)
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+		}
+	}
+	return rows, err
+}
+
+func TestUsageKeptMissAfterPricingPush(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{"daily", "0.0125"},
+		{"top", "0.01"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			local, syncer, store, _ := keptUsageFixture(t)
+			ctx := t.Context()
+			held := &heldUsagePricing{storeExecutor: store.pg, started: make(chan struct{}), release: make(chan struct{})}
+			store.pg = held
+			release := sync.OnceFunc(func() { close(held.release) })
+			old := store.startPricingLoad()
+			var finished chan struct{}
+			defer func() {
+				release()
+				old.cancel()
+				<-old.done
+				if finished != nil {
+					<-finished
+				}
+			}()
+			<-held.started
+			require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "paid-a", OutputPerMTok: money.MustParseDollars("20")}}))
+			pushed, err := syncer.Push(ctx, false, nil)
+			require.NoError(t, err)
+			require.Empty(t, pushed.Errors)
+			f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+			var cost money.Money
+			var readErr error
+			finished = make(chan struct{})
+			go func() {
+				defer close(finished)
+				if tc.name == "daily" {
+					result, err := store.GetDailyUsage(ctx, f)
+					cost, readErr = result.Totals.TotalCost, err
+				} else {
+					result, err := store.GetTopSessionsByCost(ctx, f, 1)
+					readErr = err
+					if len(result) == 1 {
+						cost = result[0].Cost
+					}
+				}
+			}()
+			// The new read either replaces the older flight or joins it.
+			runtime := store.runtimeState()
+			require.Eventually(t, func() bool {
+				runtime.pricingLoadMu.Lock()
+				defer runtime.pricingLoadMu.Unlock()
+				return runtime.pricingLoad != old || old.waiters > 1
+			}, 5*time.Second, 10*time.Millisecond)
+			release()
+			<-finished
+			require.NoError(t, readErr)
+			assert.Equal(t, money.MustParseDollars(tc.want), cost)
+		})
+	}
 }
 
 func (c *usageReadCounter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, "usage_change_revision") {
+		c.mu.Lock()
+		c.revisionReads++
+		c.mu.Unlock()
+	}
 	if strings.Contains(query, "usage_events") && !strings.Contains(query, "usage_session_changes") {
 		c.mu.Lock()
 		c.queries[query]++
@@ -162,6 +251,7 @@ func TestUsageKeptBypasses(t *testing.T) {
 				}
 			}
 			require.NotEmpty(t, firstReads)
+			assert.Zero(t, counter.revisionReads)
 			for query, count := range firstReads {
 				assert.Equal(t, 2*count, counter.queries[query])
 			}

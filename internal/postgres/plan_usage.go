@@ -83,15 +83,8 @@ func (s *Store) GetSessionPlanUsage(
 func (s *Store) GetPlanUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.PlanUsageSessionCounts, error) {
-	tally, err := s.runtimeState().planUsage.Do(ctx, kept.UsageSlot(f, false), s.keptUsageVersion(ctx), func(ctx context.Context) (*db.PlanUsageCountSummary, error) {
-		raw := f
-		raw.ModelAliases = nil
-		return s.readPlanUsageSessionCounts(ctx, raw)
-	})
-	if err != nil {
-		return db.PlanUsageSessionCounts{}, err
-	}
-	return tally.CountsFor(f.ModelAliases), nil
+	slot := db.UsageSlot(f, false)
+	return db.PlanUsageCounts(ctx, &s.runtimeState().planUsage, slot, s.keptUsageVersion(ctx, slot), f, s.readPlanUsageSessionCounts)
 }
 
 func (s *Store) readPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (*db.PlanUsageCountSummary, error) {

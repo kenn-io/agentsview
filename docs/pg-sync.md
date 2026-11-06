@@ -26,6 +26,11 @@ On `pg serve`, ended Activity ranges are reused in memory until a push touches
 their sessions or range, pricing changes, or project identity changes.
 Hosted PostgreSQL and archives without the journal rebuild every time.
 
+`pg serve` keeps finished Usage results in memory, up to 64 selections and
+64 MiB per read kind, until the journal revision or custom pricing changes.
+Hosted PostgreSQL, CockroachDB, readers without access to the journal, and
+filters that compare against the current time read every time.
+
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
 the session browser, analytics dashboard, search, and, as of 0.23.0, the Usage
