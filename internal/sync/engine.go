@@ -9504,17 +9504,17 @@ func musePersonalCompositeMtime(path string) (int64, error) {
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			if target.required {
-				return 0, fmt.Errorf("Muse Personal source path is a symlink: %s", target.path)
+				return 0, fmt.Errorf("invalid Muse Personal source path (symlink): %s", target.path)
 			}
 			continue
 		}
 		if target.directory {
 			if !info.IsDir() {
-				return 0, fmt.Errorf("Muse Personal sessions path is not a directory: %s", target.path)
+				return 0, fmt.Errorf("invalid Muse Personal sessions path (not a directory): %s", target.path)
 			}
 		} else if !info.Mode().IsRegular() {
 			if target.required {
-				return 0, fmt.Errorf("Muse Personal transcript is not a regular file: %s", target.path)
+				return 0, fmt.Errorf("invalid Muse Personal transcript (not a regular file): %s", target.path)
 			}
 			continue
 		}
