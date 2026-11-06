@@ -3,7 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/parser"
