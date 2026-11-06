@@ -317,3 +317,52 @@ func TestReconcileRetriesEveryPageOfOldRetries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filing.ReconcileReport{Created: n}, rep)
 }
+
+// pauseOtherDuringCreate is Kata that, during the pass's first create,
+// lets a person link and unlink another pattern still waiting its turn.
+type pauseOtherDuringCreate struct {
+	filing.Kata
+	store  *db.DB
+	others []string
+	done   *bool
+}
+
+func (k pauseOtherDuringCreate) CreateIssue(ctx context.Context, key string, req kata.CreateIssue) (kata.CreateResult, error) {
+	if !*k.done {
+		*k.done = true
+		for _, fp := range k.others {
+			if fp == req.Metadata[filing.MetadataFingerprint] {
+				continue
+			}
+			manual := db.FrictionIssueLink{
+				Fingerprint: fp, KataInstanceUID: "i", KataProjectUID: "p", IssueUID: "manual",
+				QualifiedID: "agentsview#m001", Source: db.FrictionIssueSourceManual, LinkedAt: time.Now(),
+			}
+			if err := k.store.SaveFrictionIssueLink(ctx, manual); err != nil {
+				return kata.CreateResult{}, err
+			}
+			if _, err := k.store.DeleteFrictionIssueLink(ctx, fp); err != nil {
+				return kata.CreateResult{}, err
+			}
+		}
+	}
+	return k.Kata.CreateIssue(ctx, key, req)
+}
+
+func TestReconcileSkipsAQueuedPatternPausedMeanwhile(t *testing.T) {
+	// Two patterns of one kind are chosen together, before either is filed.
+	other := correction
+	other.SubjectID = "claude:s2"
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, correction, other)
+	done := false
+	f.Kata = pauseOtherDuringCreate{
+		Kata: f.Kata, store: d, done: &done,
+		others: []string{correction.Fingerprint(), other.Fingerprint()},
+	}
+
+	rep, err := f.Reconcile(t.Context(), allKinds)
+	require.NoError(t, err)
+	assert.Equal(t, filing.ReconcileReport{Created: 1}, rep)
+	assert.Len(t, s.RequestsMatching(http.MethodPost, "/issues"), 1, "no issue is created for the paused pattern")
+}

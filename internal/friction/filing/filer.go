@@ -142,6 +142,10 @@ func (f *Filer) file(ctx context.Context, fingerprint string, auto bool) (Result
 	if p.Issue != nil {
 		return Result{Link: *p.Issue}, nil
 	}
+	if auto && p.Filing != nil && p.Filing.State == db.FrictionFilingPaused {
+		// A person paused it after the pass chose it; Kata is not contacted.
+		return Result{}, errPaused
+	}
 	sig, date, err := f.lastSignal(ctx, p)
 	if err != nil {
 		return Result{}, err
