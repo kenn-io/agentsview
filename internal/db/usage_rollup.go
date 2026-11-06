@@ -996,7 +996,7 @@ func usageRollupCallKey(
 		writeUsageHashString(digest, session.Machine)
 		writeUsageHashString(digest, session.GitBranch)
 		writeUsageHashString(digest, session.GroupKey)
-		writeUsageHashString(digest, parser.HermesCronJobName(session.GroupKey, session.SessionName))
+		writeUsageHashString(digest, bakedUsageSession(session).GroupLabel)
 		writeUsageHashBool(digest, session.IsAutomated)
 		writeUsageHashInt64(digest, int64(session.UserMessageCount))
 	}
@@ -1031,5 +1031,9 @@ type usageBakedSession struct {
 }
 
 func bakedUsageSession(session usageQuerySession) usageBakedSession {
-	return usageBakedSession{session.Agent, session.StartedAt, session.Project, session.Machine, session.GitBranch, session.GroupKey, parser.HermesCronJobName(session.GroupKey, session.SessionName), session.IsAutomated, session.UserMessageCount}
+	groupLabel := ""
+	if session.GroupKey != "" {
+		groupLabel = parser.HermesCronJobName(session.GroupKey, session.SessionName)
+	}
+	return usageBakedSession{session.Agent, session.StartedAt, session.Project, session.Machine, session.GitBranch, session.GroupKey, groupLabel, session.IsAutomated, session.UserMessageCount}
 }

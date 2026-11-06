@@ -311,6 +311,32 @@ func TestUsageTopSessionsZeroCostTies(t *testing.T) {
 	}
 }
 
+func TestUsageTopSessionsUngroupedRenameKeepsEmptyInstalledLabel(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "ungrouped")
+	original := "Original report · run"
+	require.NoError(t, database.RefreshSessionName(t.Context(), "ungrouped", &original))
+	filter := UsageFilter{Timezone: "UTC", TopSessionsByGroup: true}
+	cache := warmJournaledUsage(t, database, filter)
+	var label string
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT group_label FROM usage_rollup_installs WHERE session_id='ungrouped'`).Scan(&label))
+	assert.Empty(t, label)
+	before, err := database.UsageChangeRevision(t.Context())
+	require.NoError(t, err)
+	renamed := "Renamed report · run"
+	require.NoError(t, database.RefreshSessionName(t.Context(), "ungrouped", &renamed))
+	after, err := database.UsageChangeRevision(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	got, err := database.GetTopSessionsByCost(t.Context(), filter, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, renamed, got[0].SessionName)
+	assert.Empty(t, got[0].GroupLabel)
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT group_label FROM usage_rollup_installs WHERE session_id='ungrouped'`).Scan(&label))
+	assert.Empty(t, label)
+}
+
 // CheckUsageSessionCountsJournaled checks that direct count reads override skipped summary counts.
 func TestUsageTopSessionsGroupRenameAfterWarmup(t *testing.T) {
 	for _, authoritative := range []bool{false, true} {

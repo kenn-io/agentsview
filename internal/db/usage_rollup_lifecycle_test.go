@@ -515,6 +515,31 @@ func TestUsageRollupCallKeyIncludesBakedSessionMetadata(t *testing.T) {
 	assert.NotEqual(t, agentChanged, startedAtChanged)
 }
 
+func TestUsageRollupCallKeyTracksOnlyGroupedSessionNames(t *testing.T) {
+	for _, groupKey := range []string{"", "daily:job"} {
+		t.Run(groupKey, func(t *testing.T) {
+			snapshot := usageQuerySnapshot{
+				location: time.UTC,
+				Versions: []usageSourceVersion{{SessionID: "session-a"}},
+				Sessions: []usageQuerySession{{ID: "session-a", GroupKey: groupKey, SessionName: "Original report · run"}},
+			}
+			before := usageRollupCallKey(snapshot, nil, "pricing")
+			baked := bakedUsageSession(snapshot.Sessions[0])
+			snapshot.Sessions[0].SessionName = "Renamed report · run"
+			after := usageRollupCallKey(snapshot, nil, "pricing")
+			if groupKey == "" {
+				assert.Empty(t, baked.GroupLabel)
+				assert.Equal(t, baked, bakedUsageSession(snapshot.Sessions[0]))
+				assert.Equal(t, before, after)
+			} else {
+				assert.Equal(t, "Original report", baked.GroupLabel)
+				assert.Equal(t, "Renamed report", bakedUsageSession(snapshot.Sessions[0]).GroupLabel)
+				assert.NotEqual(t, before, after)
+			}
+		})
+	}
+}
+
 func TestUsagePricingHashTracksPricingSemantics(t *testing.T) {
 	base := []export.EffectivePricingRow{{
 		ModelPattern: "model-*",
