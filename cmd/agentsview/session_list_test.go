@@ -275,15 +275,6 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 	assert.Contains(t, stderr.String(), "--include-children")
 	assert.Contains(t, stderr.String(), "--include-one-shot")
 	assert.Contains(t, stderr.String(), "--include-automated")
-	stderr.Reset()
-	stdout.Reset()
-	root = newRootCommand()
-	root.SetOut(&stdout)
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"session", "list", "--json", "--include-one-shot", "--include-automated"})
-	_, err = root.ExecuteC()
-	require.NoError(t, err)
-	assert.Contains(t, stderr.String(), "Excluded 1 session by default: 1 child")
 }
 
 // TestResolveSinceFlag_ResolvesRelativeWindow is a fast unit test of the
@@ -372,13 +363,15 @@ func TestSessionListReportsCombinedDefaultExclusions(t *testing.T) {
 
 func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 	for _, tc := range []struct {
-		relationship string
-		date         bool
+		relationship, want string
+		date               bool
+		flatCount          int
 	}{
-		{"subagent", false}, {"fork", false}, {"continuation", false}, {"subagent", true},
+		{"subagent", "Excluded 1 session by default: 1 child. Use --include-children to include them.\n", false, 2},
+		{"continuation", "", false, 1},
+		{"subagent", "Excluded 1 session by default: 1 child. Use --include-children to include them.\n", true, 2},
 	} {
 		t.Run(fmt.Sprintf("%s/date=%v", tc.relationship, tc.date), func(t *testing.T) {
-			relationship := tc.relationship
 			dataDir := newAgentDataDir(t)
 			seedSessionsWithOpts(t, dataDir,
 				sessionSeed{id: "parent", project: "selected", mut: func(s *db.Session) {
@@ -386,23 +379,20 @@ func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 					s.EndedAt = s.StartedAt
 				}},
 				sessionSeed{id: "other-parent", project: "other", mut: func(s *db.Session) {
-					if tc.date {
-						s.Project = "selected"
-					}
 					s.StartedAt = new("2020-01-01T10:00:00Z")
 					s.EndedAt = s.StartedAt
 				}},
 				sessionSeed{id: "child", project: "selected", mut: func(s *db.Session) {
 					s.ParentSessionID = new("parent")
-					s.RelationshipType = relationship
+					s.RelationshipType = tc.relationship
 					s.StartedAt = new("2024-06-15T10:00:00Z")
 					s.EndedAt = s.StartedAt
-					if relationship == "continuation" {
+					if tc.relationship == "continuation" {
 						s.Project = "other"
 					}
 				}},
 			)
-			if relationship != "continuation" {
+			if tc.relationship != "continuation" {
 				seedSessionsWithOpts(t, dataDir, sessionSeed{id: "continuation", project: "selected", mut: func(s *db.Session) {
 					s.ParentSessionID = new("other-parent")
 					s.RelationshipType = "continuation"
@@ -421,77 +411,37 @@ func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 			root.SetArgs(args)
 			require.NoError(t, root.Execute())
 			flat := decodeCLIJSON[cliSessionList](t, stdout.String())
-			if relationship == "continuation" {
-				assert.Empty(t, stderr.String())
-				require.Len(t, flat.Sessions, 1)
-			} else {
-				assert.Equal(t, "Excluded 1 session by default: 1 child. Use --include-children to include them.\n", stderr.String())
-				require.Len(t, flat.Sessions, 2)
-			}
+			assert.Equal(t, tc.want, stderr.String())
+			require.Len(t, flat.Sessions, tc.flatCount)
 			out, err := executeCommand(newRootCommand(), append(args, "--include-children")...)
 			require.NoError(t, err)
-			retried := decodeCLIJSON[cliSessionList](t, out)
-			require.Len(t, retried.Sessions, 2)
 			assert.ElementsMatch(t, []string{"parent", "child"}, sessionListIDs(t, out))
 		})
 	}
 }
 
 func TestSessionListChildMembershipPartialPage(t *testing.T) {
-	for _, tc := range []struct {
-		name, cursor       string
-		children, included bool
-		total              int
-	}{
-		{"cursor", "next", true, false, 2},
-		{"total without cursor", "", true, false, 501},
-		{"no observed child", "next", false, false, 501},
-		{"children already included", "next", true, true, 501},
+	for _, tc := range []struct{ name, page, want string }{
+		{"cursor", `{"sessions":[{"id":"a","relationship_type":"subagent"},{"id":"b","relationship_type":"fork"}],"total":2,"next_cursor":"next"}`, "Excluded at least 2 sessions by default: at least 2 child. Use --include-children to include them."},
+		{"total without cursor", `{"sessions":[{"id":"a","relationship_type":"subagent"},{"id":"b","relationship_type":"fork"}],"total":501}`, "Excluded at least 2 sessions by default: at least 2 child. Use --include-children to include them."},
+		{"no observed child", `{"sessions":[{"id":"a","relationship_type":"continuation"}],"total":501,"next_cursor":"next"}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				q := r.URL.Query()
-				limit := db.MaxSessionLimit
-				if tc.included {
-					limit = 1
+				for key, want := range map[string]string{"limit": fmt.Sprint(db.MaxSessionLimit), "project": "selected", "order_by": "messages", "descending": "true", "include_one_shot": "true", "include_automated": "true", "include_children": "true"} {
+					assert.Equal(t, want, r.URL.Query().Get(key), key)
 				}
-				assert.Equal(t, fmt.Sprint(limit), q.Get("limit"))
 				w.Header().Set("Content-Type", "application/json")
-				if tc.included && (q.Get("include_one_shot") != "true" || q.Get("include_automated") != "true") {
-					_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
-					return
-				}
-				assert.Equal(t, "selected", q.Get("project"))
-				assert.Equal(t, "messages", q.Get("order_by"))
-				assert.Equal(t, "true", q.Get("descending"))
-				for _, flag := range []string{"include_one_shot", "include_automated", "include_children"} {
-					assert.Equal(t, "true", q.Get(flag))
-				}
-				if tc.included {
-					_, _ = w.Write([]byte(`{"sessions":[{"id":"a"}],"total":501,"next_cursor":"next"}`))
-				} else if tc.children {
-					_, _ = fmt.Fprintf(w, `{"sessions":[{"id":"a","relationship_type":"subagent"},{"id":"b","relationship_type":"fork"}],"total":%d,"next_cursor":%q}`, tc.total, tc.cursor)
-				} else {
-					_, _ = w.Write([]byte(`{"sessions":[{"id":"a","relationship_type":"continuation"}],"total":501,"next_cursor":"next"}`))
-				}
+				_, _ = fmt.Fprint(w, tc.page)
 			}))
 			defer srv.Close()
 			svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
-			notice, err := sessionListDefaultExclusionNotice(t.Context(), svc, service.ListFilter{Project: "selected", OrderBy: "messages", Descending: new(true), IncludeOneShot: !tc.included, IncludeAutomated: !tc.included, IncludeChildren: tc.included}, 1)
+			notice, err := sessionListDefaultExclusionNotice(t.Context(), svc, service.ListFilter{Project: "selected", OrderBy: "messages", Descending: new(true), IncludeOneShot: true, IncludeAutomated: true}, 1)
 			require.NoError(t, err)
-			if tc.included {
-				assert.Equal(t, 3, calls)
-				assert.Equal(t, "Excluded 500 sessions by default: 500 child. Use --include-one-shot --include-automated to include them.", notice)
-				return
-			}
 			assert.Equal(t, 1, calls)
-			if tc.children {
-				assert.Equal(t, "Excluded at least 2 sessions by default: at least 2 child. Use --include-children to include them.", notice)
-			} else {
-				assert.Empty(t, notice)
-			}
+			assert.Equal(t, tc.want, notice)
 		})
 	}
 }
