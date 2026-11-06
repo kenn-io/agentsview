@@ -247,6 +247,7 @@ func (s *Server) humaEmbeddingsStatus(
 	ctx context.Context, in *embeddingsStoreInput,
 ) (*jsonOutput[vector.BuildStatus], error) {
 	var body vector.BuildStatus
+	manager := s.embeddingsManagerFor(in.Store)
 	if s.embeddingsRuntime != nil {
 		setup, err := s.embeddingsRuntime.SetupStatus(ctx)
 		if err != nil {
@@ -257,7 +258,6 @@ func (s *Server) humaEmbeddingsStatus(
 			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
 		}
 	}
-	manager := s.embeddingsManagerFor(in.Store)
 	if manager == nil {
 		if body.Setup != nil && body.Setup.Error != "" {
 			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
