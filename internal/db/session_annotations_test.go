@@ -219,7 +219,7 @@ func TestPermanentDeletionRemovesOnlyStoredSessionAnnotations(t *testing.T) {
 					if err := excludeSessionIDTx(ctx, tx, "worker", sql.NullString{}); err != nil {
 						return err
 					}
-					_, err := purgeExcludedSessionsTx(ctx, tx)
+					_, err := purgeExcludedSessionsTx(ctx, tx, false)
 					return err
 				}))
 			}

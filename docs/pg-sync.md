@@ -37,6 +37,12 @@ dashboard as well.
     read-only PostgreSQL serving keep their existing behavior; `pg push` refuses
     a schema that has been adopted for hosted raw processing.
 
+Commit lookups return the copied links and prompts.
+The first push after upgrading is a full push to copy existing commit links.
+A deleted session remains visible as a missing record. Project filters use the
+project saved with its links in SQLite, including after a rebuild or a deletion
+before the first push.
+
 ## Hosted raw processing
 
 For uploads that the server parses itself, provision a schema and tenant with

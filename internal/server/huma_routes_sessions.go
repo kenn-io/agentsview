@@ -37,6 +37,7 @@ func (s *Server) registerSessionRoutes() {
 	s.get(group, "/session-ids/resolve", "Resolve session IDs", s.humaResolveSessionIDs)
 	s.get(group, "/sessions/{id}", "Get session", s.humaGetSession)
 	s.get(group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
+	s.get(group, "/sessions/{id}/commits", "List session commits", s.humaSessionCommits)
 	s.get(group, "/sessions/{id}/file-references", "Find session images in Docbank", s.humaFileReferences)
 	s.get(group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
 	s.get(group, "/sessions/{id}/tool-sequences", "Get session tool sequences", s.humaToolSequences)

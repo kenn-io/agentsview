@@ -11,6 +11,28 @@ The latest release is
 
 **New features**
 
+- Find editor commits through `Agent-Session` trailers in local Git history.
+  Session commit lookups show the source and suggest the last prompt at or
+  before the commit time, marked as estimated, when the session has a message
+  within the preceding five minutes. Idle sessions have no suggested turn.
+  Trailer links survive transcript rewrites and checkout removal.
+
+- Find a commit's session and prompt on PostgreSQL, DuckDB, and ClickHouse
+  replicas after pushing the archive. Deleted sessions remain visible as missing
+  records when the replica has project evidence for them. Hosted PostgreSQL
+  keeps returning HTTP 501.
+
+- Find the session and prompt behind a Git commit through the session API, or
+  list a session's commits with `agentsview session commits <id>`. Links come
+  from stored Git summaries, including Codex output received through later
+  polls. Summaries need SHAs of 7 to 64 characters; quiet commits have no link.
+  The prompt is the last user turn before the commit call. Repository paths
+  follow the first commit invocation in each call, using the last `cd` before
+  it and any `git -C` options.
+  Transcript-only and usage-only archives retain no links. Deleted sessions
+  remain visible as missing records. Sessions permanently deleted before this
+  release have no links.
+
 - PostgreSQL archives now keep a change journal. Installing it requires
   `CREATE` on the schema and `TRIGGER` on the watched tables. Roles without
   these privileges keep working without the journal.

@@ -1998,6 +1998,8 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 }
 
 var readOnlyRequiredTables = []string{
+	"commit_trailers",
+	"commit_links",
 	"sessions",
 	"messages",
 	"stats",
@@ -3311,6 +3313,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	if err := db.backfillToolCallFieldsLocked(ctx, w); err != nil {
+		return err
+	}
+	if err := db.backfillCommitLinksLocked(ctx, w); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {

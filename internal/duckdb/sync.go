@@ -426,6 +426,9 @@ func (s *Sync) runIncrementalPush(
 	identityRevision := probe.IdentityRevision
 	mappingRevision := probe.MappingRevision
 	if result.Errors == 0 {
+		if err := s.replaceRetainedCommitLinks(ctx); err != nil {
+			return result, err
+		}
 		refreshed, err := s.refreshCurationIfChanged(ctx)
 		if err != nil {
 			return result, err
@@ -980,6 +983,10 @@ func (s *Sync) sessionFingerprints(
 	if err != nil {
 		return nil, fmt.Errorf("computing plan usage fingerprints: %w", err)
 	}
+	commitLinks, err := s.local.SessionCommitLinkRowsBySession(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]string, len(sessions))
 	for _, sess := range sessions {
 		msgs, err := s.local.GetAllMessages(ctx, sess.ID)
@@ -1010,6 +1017,7 @@ func (s *Sync) sessionFingerprints(
 			SecretFindings []db.SecretFinding
 			Pins           []db.PinnedMessage
 			PlanUsage      string
+			CommitLinks    []db.CommitLinkRow `json:",omitzero"`
 		}{
 			SessionFields: duckSessionFingerprintFields(
 				sess, db.MirroredSessionMachine(sess, s.machine),
@@ -1021,6 +1029,7 @@ func (s *Sync) sessionFingerprints(
 			SecretFindings: findings,
 			Pins:           pins,
 			PlanUsage:      planUsage[sess.ID],
+			CommitLinks:    commitLinks[sess.ID],
 		}
 		data, err := json.Marshal(payload)
 		if err != nil {

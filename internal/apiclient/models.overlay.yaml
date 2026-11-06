@@ -267,6 +267,36 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/rawsync
         name: rawsync
+  - target: $.components.schemas.DbCommitLink
+    update:
+      x-go-type: db.CommitLink
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbCommitTurn
+    update:
+      x-go-type: db.CommitTurn
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbSessionCommitList
+    update:
+      x-go-type: db.SessionCommitList
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbCommitSessionMatch
+    update:
+      x-go-type: db.CommitSessionMatch
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbCommitSessionList
+    update:
+      x-go-type: db.CommitSessionList
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
   - target: $.components.schemas.ServiceFileReferencesResult
     update:
       x-go-type: service.FileReferencesResult

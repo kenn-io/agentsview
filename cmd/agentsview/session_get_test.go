@@ -851,3 +851,11 @@ func TestCodebuffMachineMatches_EmptyFilter(t *testing.T) {
 		"other", "", "test-machine",
 	), "empty filter must still reject mismatched machines")
 }
+
+func (s *stubGetService) SessionCommits(context.Context, string) (*db.SessionCommitList, error) {
+	panic("SessionCommits not expected")
+}
+
+func (s *stubGetService) CommitSessions(context.Context, []string) (*db.CommitSessionList, error) {
+	panic("CommitSessions not expected")
+}

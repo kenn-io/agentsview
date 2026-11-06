@@ -31,6 +31,7 @@ const (
 	sessionAliasBackfillStateKey           = "pg_session_alias_backfill_v1"
 	legacyProjectIdentityStateKey          = "project_identity_publication_revision_v2"
 	projectIdentityPublicationStateKey     = "project_identity_publication_revision_v3"
+	commitLinksBackfillStateKey            = "pg_commit_links_backfill_v1"
 	messageDialogueBackfillStateKey        = "pg_message_dialogue_backfill_v1"
 	transcriptRevisionBackfillStateKey     = "pg_transcript_revision_backfill_v1"
 	sessionProvenanceBackfillStateKey      = "pg_session_provenance_backfill_v2"
@@ -103,6 +104,7 @@ func (s *Sync) PushWithOptions(
 	s.fullRun = nil
 	switch {
 	case err == nil:
+		err = s.replaceRetainedCommitLinks(ctx)
 	case run != nil:
 		// Keep what the run committed since its last checkpoint. The push
 		// may have failed because ctx ended, so save without it, but within
@@ -312,6 +314,14 @@ func (s *Sync) pushWithOptions(
 		)
 		noteFull("backfilling transcript revisions")
 	}
+	var commitLinksBackfillNeeded bool
+	full, commitLinksBackfillNeeded, err = applyBackfillRequirement(ctx, state, commitLinksBackfillStateKey, full)
+	if err != nil {
+		return result, err
+	}
+	if commitLinksBackfillNeeded {
+		noteFull("backfilling commit links")
+	}
 	var messageDialogueBackfillNeeded bool
 	full, messageDialogueBackfillNeeded, err = applyBackfillRequirement(ctx, state, messageDialogueBackfillStateKey, full)
 	if err != nil {
@@ -338,6 +348,7 @@ func (s *Sync) pushWithOptions(
 		transcriptRevisionBackfillStateKey:     transcriptRevisionBackfillNeeded,
 		timestampNormalizationBackfillStateKey: timestampNormalizationBackfillNeeded,
 		messageDialogueBackfillStateKey:        messageDialogueBackfillNeeded,
+		commitLinksBackfillStateKey:            commitLinksBackfillNeeded,
 	} {
 		if needed {
 			backfills = append(backfills, key)
@@ -673,6 +684,9 @@ func (s *Sync) pushWithOptions(
 		); err != nil {
 			return result, err
 		}
+		if err := completeBackfill(ctx, state, commitLinksBackfillStateKey, commitLinksBackfillNeeded, result); err != nil {
+			return result, err
+		}
 		if err := completeBackfill(ctx, state, messageDialogueBackfillStateKey, messageDialogueBackfillNeeded, result); err != nil {
 			return result, err
 		}
@@ -810,6 +824,9 @@ func (s *Sync) pushWithOptions(
 	if err := completeBackfill(ctx,
 		state, transcriptRevisionBackfillStateKey, transcriptRevisionBackfillNeeded, result,
 	); err != nil {
+		return result, err
+	}
+	if err := completeBackfill(ctx, state, commitLinksBackfillStateKey, commitLinksBackfillNeeded, result); err != nil {
 		return result, err
 	}
 	if err := completeBackfill(ctx, state, messageDialogueBackfillStateKey, messageDialogueBackfillNeeded, result); err != nil {
@@ -1447,6 +1464,13 @@ func (s *Sync) pushBatchAttempt(
 			*pushed = (*pushed)[:len(*pushed)-n]
 			return batchResult{}, nil
 		}
+		commitLinksChanged, err := s.pushCommitLinks(ctx, tx, sess.ID)
+		if err != nil {
+			log.Printf("pgsync: commit links %s: %v", sess.ID, err)
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
+		}
 		frictionChanged := false
 		if !frictionUnchanged {
 			frictionChanged, err = s.pushFrictionFindings(ctx, tx, sess.ID)
@@ -1469,9 +1493,9 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
-		// Publish findings, friction, or plan usage changes to read-mode
-		// watchers unless pushMessages already advanced updated_at.
-		if !messagesChanged && (findingsChanged || frictionChanged || planUsageChanged) {
+		// Publish findings, commit links, friction, or plan usage changes to
+		// read-mode watchers unless pushMessages already advanced updated_at.
+		if !messagesChanged && (findingsChanged || commitLinksChanged || frictionChanged || planUsageChanged) {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE sessions
 				SET updated_at = NOW()
@@ -2156,7 +2180,7 @@ func (s *Sync) reconcilePGMissingSessions(
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	return db.QueryChunkedSize(ids, pushComparisonBatchSize, func(chunk []string) error {
+	err = db.QueryChunkedSize(ids, pushComparisonBatchSize, func(chunk []string) error {
 		// Read live presence, including trashed and out-of-scope local rows.
 		// A sync may have added a session since the push listed its candidates.
 		present, err := s.local.SessionProjectsByIDs(ctx, chunk)
@@ -2259,6 +2283,10 @@ func (s *Sync) reconcilePGMissingSessions(
 		}
 		return tx.Commit()
 	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Sync) reconcilePGProjectScopeMoves(
