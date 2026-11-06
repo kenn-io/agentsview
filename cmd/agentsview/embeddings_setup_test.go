@@ -416,6 +416,7 @@ func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 		t.Run(strconv.FormatBool(filesystemFailure), func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			dir := testDataDir(t)
 			cfg, err := config.Default()
 			require.NoError(t, err)
