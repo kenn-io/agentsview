@@ -247,6 +247,25 @@ test.describe("Recent Edits feed", () => {
     expect(await keptColumns(page)).toEqual([]);
   });
 
+  test("clicking Last edit's handle after narrowing a column keeps no Last edit width", async ({
+    page,
+  }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    const handles = page.locator(".re-list thead th").getByRole("separator");
+
+    // Narrow Project by four keyboard steps; Last edit stretches to fill.
+    await handles.first().focus();
+    for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
+    await expect.poll(() => keptColumns(page)).toEqual(["project"]);
+
+    const box = (await handles.nth(3).boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    expect(await keptColumns(page)).toEqual(["project"]);
+  });
+
   test("a phone resize is not kept once the window is wide again", async ({ page }) => {
     await withRecentEdits(page);
     await page.setViewportSize({ width: 400, height: 800 });
