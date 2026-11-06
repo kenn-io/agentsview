@@ -5,6 +5,7 @@ package duckdb
 import (
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -68,6 +69,72 @@ func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 	_, err = store.GetPlanUsageSessionCounts(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, 9, reads)
+}
+
+func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	next := filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, next, "session-b", 900)
+	nextInfo, err := os.Stat(next)
+	require.NoError(t, err)
+	require.Equal(t, info.Size(), nextInfo.Size())
+	require.NoError(t, os.Chtimes(next, info.ModTime(), info.ModTime()))
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	stamp := store.mirrorStamp()
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	var resumeOnce sync.Once
+	unpause := func() { resumeOnce.Do(func() { close(resume) }) }
+	// Sizing runs after the read finishes, before the memo publishes it.
+	store.dailyUsage.Size = func(result db.DailyUsageResult) int64 {
+		if result.Totals.OutputTokens == 500 {
+			close(paused)
+			<-resume
+		}
+		return 1
+	}
+	var first db.DailyUsageResult
+	var firstErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		first, firstErr = store.GetDailyUsage(t.Context(), db.UsageFilter{})
+	}()
+	defer func() {
+		unpause()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("paused Usage read did not finish")
+		}
+	}()
+	select {
+	case <-paused:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Usage read did not reach publication")
+	}
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+	require.NotEmpty(t, store.aliasPath, "replacement must be adopted")
+	require.Equal(t, stamp, store.mirrorStamp(), "replacement must preserve the file and WAL stamp")
+	unpause()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Usage read did not finish after replacement")
+	}
+	require.NoError(t, firstErr)
+	require.Equal(t, 500, first.Totals.OutputTokens)
+	changed, err := store.GetDailyUsage(t.Context(), db.UsageFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 900, changed.Totals.OutputTokens)
 }
 
 func TestUsageKeptBorrowedHandleReadsEveryTime(t *testing.T) {

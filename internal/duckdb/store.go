@@ -121,12 +121,15 @@ func (s *Store) mirrorStamp() string {
 	return fmt.Sprintf("%d|%d|%s", s.fileInfo.Size(), s.fileInfo.ModTime().UnixNano(), s.walStamp)
 }
 
-// keptVersion names the mirror and custom pricing used by finished reads.
+// keptVersion names the mirror handle and custom pricing used by in-memory Usage reads.
 func (s *Store) keptVersion() string {
-	if stamp := s.mirrorStamp(); stamp != "" {
-		return stamp + "|" + s.pricingDigest
+	s.handleMu.RLock()
+	defer s.handleMu.RUnlock()
+	if s.path == "" {
+		return ""
 	}
-	return ""
+	stamp := fmt.Sprintf("%d|%d|%s", s.fileInfo.Size(), s.fileInfo.ModTime().UnixNano(), s.walStamp)
+	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath
 }
 
 // Capture before opening: DuckDB may replay a leftover WAL on open.

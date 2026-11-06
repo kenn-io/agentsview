@@ -75,9 +75,9 @@ func (s *Store) BuildActivityReportArtifacts(
 	// stays under the old stamp, which later requests cannot reach.
 	var selection, key string
 	onDisk := !q.Partial && kept.DayPreset(q, time.Now())
-	if version := s.keptVersion(); !q.Partial && version != "" && !db.TerminationUsesTime(f.Termination) {
+	if stamp := s.mirrorStamp(); !q.Partial && stamp != "" && !db.TerminationUsesTime(f.Termination) {
 		selection = kept.Selection(f, q)
-		key = version
+		key = stamp + "|" + s.pricingDigest
 		if report, ok := s.reports.Get(selection, key, onDisk); ok {
 			activity.ReportProgress(onProgress, report.Done)
 			return report.Artifacts, nil
