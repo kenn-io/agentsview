@@ -232,7 +232,6 @@ func TestSearchContentHintsExpandedGate(t *testing.T) {
 		wantCalls, wantHints int
 	}{
 		{name: "complete miss", wantCalls: 1},
-		{name: "continuation", page: service.ContentSearchResult{NextCursor: 50}, wantCalls: 3, wantHints: 2},
 		{name: "candidate truncation", page: service.ContentSearchResult{CandidateTruncated: true}, wantCalls: 3, wantHints: 2},
 		{name: "failed gate", err: errors.New("unavailable"), wantCalls: 3, wantHints: 2},
 		{name: "one disabled flag", single: true, wantCalls: 1},

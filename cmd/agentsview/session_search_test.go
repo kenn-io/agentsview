@@ -931,6 +931,12 @@ func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 	root := newRootCommand()
 	cmd, _, err := root.Find([]string{"session", "search"})
 	require.NoError(t, err)
+	if shell, err := exec.LookPath("sh"); err == nil {
+		retry := contentSearchRetry(cmd, "~/needle", map[string]any{"include_one_shot": true}, "linux")
+		output, err := exec.CommandContext(t.Context(), shell, "-c", "set -- "+retry+`; for arg do :; done; printf '%s' "$arg"`).CombinedOutput()
+		require.NoError(t, err, string(output))
+		assert.Equal(t, "~/needle", string(output))
+	}
 	windowsRetry := contentSearchRetry(cmd, "can't decode", map[string]any{"include_one_shot": true}, "windows")
 	assert.Equal(t, "& 'agentsview' 'session' 'search' '--include-one-shot=true' '--' 'can''t decode'", windowsRetry)
 	if powershell, err := exec.LookPath("pwsh"); err == nil {
