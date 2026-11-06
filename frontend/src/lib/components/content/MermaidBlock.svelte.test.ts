@@ -28,7 +28,7 @@ const MERMAID_THEME_VARS: Record<string, string> = {
 
 function fakeMermaidApi(run: MarkdownMermaidAPI["run"]): MarkdownMermaidAPI {
   return {
-    version: "12.0.0",
+    version: "12.2.0",
     initialize: vi.fn(),
     run: vi.fn(run),
   };

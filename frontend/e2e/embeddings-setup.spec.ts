@@ -32,7 +32,6 @@ for (const width of [1280, 390]) {
             estimate_ready: phase === "index",
             phase: "embedding",
             setup: setup(),
-            ...(phase === "failed" ? { last_error: "encoder unavailable" } : {}),
             ...(phase === "ready"
               ? {
                   build_id: 920,
@@ -107,24 +106,6 @@ for (const width of [1280, 390]) {
         await expect(
           page.locator(".kit-search-by-meaning").getByText("On", { exact: true }),
         ).toBeVisible();
-        phase = "failed";
-        await page.reload();
-        await page
-          .getByRole("navigation", { name: "Settings" })
-          .getByRole("button", { name: /^Embeddings/ })
-          .click();
-        const retry = page.getByRole("button", { name: "Retry", exact: true });
-        await expect(retry).toBeVisible();
-        await expect
-          .soft(page.locator(".kit-search-by-meaning").getByText("On", { exact: true }))
-          .not.toBeVisible();
-        expect.soft((await retry.boundingBox())!.width).toBeLessThan(160);
-        const errorBox = (await page
-          .getByRole("alert")
-          .filter({ hasText: "encoder unavailable" })
-          .boundingBox())!;
-        const retryBox = (await retry.boundingBox())!;
-        expect.soft(Math.max(0, retryBox.y - errorBox.y - errorBox.height)).toBeLessThanOrEqual(8);
         for (const provider of ["ollama", "ollama-other"]) {
           phase = provider;
           await page.reload();

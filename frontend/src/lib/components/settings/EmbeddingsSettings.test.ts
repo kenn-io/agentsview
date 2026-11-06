@@ -22,7 +22,6 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
       getApiV1EmbeddingsStatus: vi.fn(),
       getApiV1EmbeddingsGenerations: vi.fn(),
       postApiV1EmbeddingsSetup: vi.fn(),
-      postApiV1EmbeddingsBuild: vi.fn(),
     },
   };
 });
@@ -31,7 +30,6 @@ const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   getApiV1EmbeddingsGenerations: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
-  postApiV1EmbeddingsBuild: ReturnType<typeof vi.fn>;
 };
 
 function runningStatus(
@@ -69,7 +67,6 @@ describe("EmbeddingsSettings", () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockReset();
     embeddingsService.postApiV1EmbeddingsSetup.mockReset();
-    embeddingsService.postApiV1EmbeddingsBuild.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
       generations: [BUILDING_GENERATION],
     });
@@ -152,40 +149,6 @@ describe("EmbeddingsSettings", () => {
     unmount(component);
   });
 
-  it("retries a failed first build without repeating installation", async () => {
-    const setup = {
-      enabled: true,
-      action: "",
-      provider: "built-in",
-      rebuild_required: false,
-      busy: false,
-      installing: false,
-      missing_bytes: 0,
-      downloaded_bytes: 0,
-      total_bytes: 0,
-    };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
-      running: false,
-      last_error: "encoder unavailable",
-      setup,
-    });
-    embeddingsService.postApiV1EmbeddingsBuild.mockImplementation(async () => {
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1, { setup }));
-      return { started: true };
-    });
-    const component = mount(EmbeddingsSettings, { target: document.body });
-    await settle();
-    expect(document.body.textContent).toContain("encoder unavailable");
-    [...document.body.querySelectorAll("button")]
-      .find((b) => b.textContent?.trim() === "Retry")!
-      .click();
-    await settle();
-    expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
-    expect(embeddingsService.postApiV1EmbeddingsSetup).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Indexing");
-    unmount(component);
-  });
-
   it.each([false, true])(
     "shows the daemon's warmed estimate once (setup %s)",
     async (withSetup) => {
@@ -227,6 +190,7 @@ describe("EmbeddingsSettings", () => {
       if (withSetup) expect(text()).toContain("left");
       expect(text()).toContain("Elapsed 5s");
 
+      expect(document.body.querySelectorAll('[role="progressbar"]')).toHaveLength(1);
       const progressbar = document.body.querySelector('[role="progressbar"]');
       expect(progressbar?.getAttribute("aria-valuenow")).toBe("200");
       expect(progressbar?.getAttribute("aria-valuemax")).toBe("1000");

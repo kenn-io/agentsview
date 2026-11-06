@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,16 +99,6 @@ func buildTestVectorsDB(t *testing.T, cfg config.Config) {
 	require.True(t, result.Activated)
 }
 
-// closePushSource registers a cleanup that closes the adapter's vectors.db
-// handle. Required on Windows, where TempDir removal fails while the sqlite
-// file is still open.
-func closePushSource(t *testing.T, src storage.VectorPushSource) {
-	t.Helper()
-	t.Cleanup(func() {
-		require.NoError(t, src.(*vectorPushSource).Close())
-	})
-}
-
 func TestNewVectorPushSourceDisabled(t *testing.T) {
 	cfg := config.Config{} // [vector] disabled
 	assert.Nil(t, newVectorPushSource(cfg))
@@ -117,7 +108,6 @@ func TestVectorPushSourceMissingFile(t *testing.T) {
 	cfg := enabledVectorConfig(t)
 	src := newVectorPushSource(cfg)
 	require.NotNil(t, src)
-	closePushSource(t, src)
 
 	_, ok, err := src.BeginExport(t.Context(), nil)
 	require.NoError(t, err)
@@ -133,7 +123,6 @@ func TestVectorPushSourceMissingFileThenBuilt(t *testing.T) {
 	cfg := enabledVectorConfig(t)
 	src := newVectorPushSource(cfg)
 	require.NotNil(t, src)
-	closePushSource(t, src)
 
 	_, ok, err := src.BeginExport(ctx, nil)
 	require.NoError(t, err)
@@ -183,7 +172,6 @@ func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
 
 	src := newVectorPushSource(cfg)
 	require.NotNil(t, src)
-	closePushSource(t, src)
 
 	_, ok, err := src.BeginExport(ctx, []string{"session-1"})
 	require.Error(t, err)
@@ -221,7 +209,6 @@ func TestVectorPushSourceScopedGenerationIgnoresOutOfScopePendingDocs(t *testing
 
 	src := newVectorPushSource(cfg)
 	require.NotNil(t, src)
-	closePushSource(t, src)
 
 	export, ok, err := src.BeginExport(ctx, []string{"session-1"})
 	require.NoError(t, err)
@@ -242,7 +229,6 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 
 	src := newVectorPushSource(cfg)
 	require.NotNil(t, src)
-	closePushSource(t, src)
 
 	export, ok, err := src.BeginExport(ctx, nil)
 	require.NoError(t, err)
@@ -299,35 +285,40 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	}
 }
 
-// TestCloseVectorPushSource pins the creator-owned handle lifecycle: closing
-// releases the memoized read-only vectors.db handle (so per-push and
-// per-watch-loop sources do not leak SQLite handles), a nil source is a
-// no-op, and a closed adapter transparently reopens on the next call.
-func TestCloseVectorPushSource(t *testing.T) {
-	closeVectorPushSource(nil) // must not panic
-
+// Existing exports keep their snapshot when activation changes the database path.
+func TestVectorPushSourceDatabasePathChange(t *testing.T) {
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
-	src := newVectorPushSource(cfg)
-	require.NotNil(t, src)
-
-	ctx := t.Context()
-	export, ok, err := src.BeginExport(ctx, nil)
+	src := newVectorPushSource(cfg).(*vectorPushSource)
+	old, ok, err := src.BeginExport(t.Context(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
-	defer export.Close()
-	adapter := src.(*vectorPushSource)
-	require.NotNil(t, adapter.ix, "Generation memoizes the open handle")
-
-	closeVectorPushSource(src)
-	assert.Nil(t, adapter.ix, "close releases the memoized handle")
-	closeVectorPushSource(src) // idempotent
-
-	export, ok, err = src.BeginExport(ctx, nil)
+	defer old.Close()
+	cfg.Vector.DBPath = filepath.Join(cfg.DataDir, "replacement.db")
+	ix, err := vector.Open(t.Context(), cfg.Vector.DBPath, false, 8192)
 	require.NoError(t, err)
-	assert.True(t, ok, "a closed adapter reopens lazily")
-	require.NoError(t, export.Close())
-	closePushSource(t, src)
+	_, err = ix.Build(t.Context(), fakePushUnitSource{units: []db.EmbeddableUnit{{SessionID: "replacement-session", Kind: "user", SourceUUID: "replacement-user", Content: "replacement content"}}}, fakePushEncoder(), vectorGeneration(cfg.Vector.Embeddings), vector.BuildOptions{})
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
+	src.mu.Lock()
+	src.cfg = cfg
+	src.mu.Unlock()
+	next, ok, err := src.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	defer next.Close()
+	hashes, err := next.SessionDocHashes(t.Context(), nil)
+	require.NoError(t, err)
+	assert.Len(t, hashes, 1)
+	assert.Contains(t, hashes, "replacement-session")
+	oldHashes, err := old.SessionDocHashes(t.Context(), nil)
+	require.NoError(t, err)
+	assert.Len(t, oldHashes, 2)
+	assert.Contains(t, oldHashes, "session-1")
+	docs, _, err := old.SessionDocs(t.Context(), "session-1")
+	require.NoError(t, err)
+	require.Len(t, docs, 2)
+	assert.Equal(t, []float32{1, 0, 0, 0}, docs[0].Chunks[0].Embedding)
 }
 
 func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
@@ -346,7 +337,7 @@ func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
 		require.NoError(t, ix.Close())
 
 		src := newVectorPushSource(cfg)
-		closePushSource(t, src)
+
 		export, ok, err := src.BeginExport(ctx, nil)
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -368,7 +359,7 @@ func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
 		cfg := enabledVectorConfig(t)
 		buildTestVectorsDB(t, cfg)
 		src := newVectorPushSource(cfg)
-		closePushSource(t, src)
+
 		export, ok, err := src.BeginExport(ctx, nil)
 		require.NoError(t, err)
 		require.True(t, ok)

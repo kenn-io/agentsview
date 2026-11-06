@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
+  import { Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
   import { EmbeddingsService } from "../../api/generated/index";
@@ -9,7 +9,6 @@
     isAbortError,
   } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
-  import { sync } from "../../stores/sync.svelte.js";
 
   import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
 
@@ -128,16 +127,6 @@
     }
   }
 
-  async function retryBuild(): Promise<void> {
-    try {
-      await EmbeddingsService.postApiV1EmbeddingsBuild({});
-      await refresh(true);
-      schedule();
-    } catch (e) {
-      loadError = e instanceof Error ? e.message : m.settings_embeddings_load_failed();
-    }
-  }
-
   function updateElapsed(s: VectorBuildStatus): void {
     if (!s.running) {
       elapsedMs = null;
@@ -249,19 +238,21 @@
         </p>
       {:else}
         <div class="progress-block" aria-live="polite">
-          <div
-            class="progress-track"
-            role="progressbar"
-            aria-label={m.settings_embeddings_progress_aria()}
-            aria-valuemin={0}
-            aria-valuemax={status.total}
-            aria-valuenow={status.done}
-          >
+          {#if !status.setup}
             <div
-              class="progress-fill"
-              style:width={`${(progressFraction ?? 0) * 100}%`}
-            ></div>
-          </div>
+              class="progress-track"
+              role="progressbar"
+              aria-label={m.settings_embeddings_progress_aria()}
+              aria-valuemin={0}
+              aria-valuemax={status.total}
+              aria-valuenow={status.done}
+            >
+              <div
+                class="progress-fill"
+                style:width={`${(progressFraction ?? 0) * 100}%`}
+              ></div>
+            </div>
+          {/if}
           <div class="progress-stats">
             {#if !status.setup}
               <span>
@@ -307,12 +298,7 @@
         </div>
       {/if}
     {:else if status.last_error}
-      <div class="build-error">
-        <p class="msg error" role="alert">{status.last_error}</p>
-        {#if status.setup?.enabled && !sync.readOnly}
-          <Button size="sm" label={m.shared_retry()} onclick={() => void retryBuild()} />
-        {/if}
-      </div>
+      <p class="msg error" role="alert">{status.last_error}</p>
     {:else if status.last_result}
       <div class="status-grid">
         <span class="row-label">{m.settings_embeddings_last_build_label()}</span
@@ -366,12 +352,6 @@
 </div>
 
 <style>
-  .build-error {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-3);
-  }
   .embeddings-settings {
     display: flex;
     flex-direction: column;

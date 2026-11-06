@@ -83,7 +83,6 @@ func (v *liveVectorServing) Close() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.stopBuilders()
-	closeVectorPushSource(v.push)
 	if v.serving.Close != nil {
 		return v.serving.Close()
 	}

@@ -820,7 +820,6 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 		vectorSource = embedder
 	} else {
 		vectorSource = replicaVectorPushSource(b.appCfg, target, cfg)
-		defer closeVectorPushSource(vectorSource)
 	}
 	session := archivepush.ReplicaSession{
 		Connect: func(c context.Context) (storage.Pusher, error) {
@@ -1054,11 +1053,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 			defer closeVectorPushSource(embedder)
 		}
 	} else {
-		// One vectors.db adapter for the watch loop's lifetime: connect runs on
-		// every reconnect, and a fresh source per reconnect would leak the
-		// previous one's memoized read-only handle (the pusher never closes
-		// its source). The adapter is designed for reuse — it reopens lazily
-		// after transient failures.
+		// Reuse the configured vector source across reconnects.
 		var vectorSource storage.VectorPushSource
 		if embedder != nil {
 			vectorSource = embedder

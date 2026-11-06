@@ -16,22 +16,14 @@ import (
 	"go.kenn.io/agentsview/internal/vector"
 )
 
-// vectorPushSource adapts a read-only vector.Index to
-// storage.VectorPushSource, opening vectors.db lazily so a pg push whose
-// target has vectors disabled never touches the file. Only a successful open is
-// memoized; a missing file or open failure is never cached, so a daemon push
-// that starts before embeddings exist picks up a build that lands afterward.
-// BeginExport owns one SQLite read transaction for the complete push phase. The
-// read-only handle stays open for the adapter's lifetime; the creator owns
-// that lifetime and must release it via closeVectorPushSource — per push in
-// PGPush, at loop exit in the watch path (which reuses one adapter across
-// reconnects) — since the pusher never closes its source.
+// vectorPushSource opens the configured vectors.db for each export. The export's
+// snapshot owns its read transaction, so a later export can use a new path while
+// an existing push finishes reading its original database.
 type vectorPushSource struct {
 	cfg     config.Config
 	adopted bool
 
 	mu sync.Mutex
-	ix *vector.Index
 }
 
 // newVectorPushSource returns a lazy vectors.db push adapter, or nil when
@@ -44,12 +36,7 @@ func newVectorPushSource(appCfg config.Config) storage.VectorPushSource {
 	return &vectorPushSource{cfg: appCfg}
 }
 
-// closeVectorPushSource releases a push source's memoized read-only
-// vectors.db handle. the pusher never closes its source — the creator
-// owns the handle's lifetime — so every call site that builds a source must
-// close it when the push (or watch loop) is done, or repeated pushes leak
-// one SQLite handle each. Safe on a nil source and on sources holding no
-// handle.
+// closeVectorPushSource releases sources that own background builders.
 func closeVectorPushSource(src storage.VectorPushSource) {
 	c, ok := src.(io.Closer)
 	if !ok {
@@ -60,20 +47,12 @@ func closeVectorPushSource(src storage.VectorPushSource) {
 	}
 }
 
-// openIndex opens vectors.db read-only and memoizes only a successful open. A
-// missing file (no build yet) and any open failure are NOT cached, so a later
-// call — a daemon push that starts before embeddings exist — reopens and picks
-// up a build that lands afterward. A nil index without error means the file is
-// absent ("nothing to push"); the pointer's own nil checks gate every
-// dereference.
+// openIndex returns nil when vectors are disabled or the database is absent.
 func (s *vectorPushSource) openIndex(ctx context.Context) (*vector.Index, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.cfg.Vector.Enabled {
 		return nil, nil
-	}
-	if s.ix != nil {
-		return s.ix, nil
 	}
 	path := s.cfg.Vector.ResolvedDBPath(s.cfg.DataDir)
 	if _, err := os.Stat(path); err != nil {
@@ -86,22 +65,7 @@ func (s *vectorPushSource) openIndex(ctx context.Context) (*vector.Index, error)
 	if err != nil {
 		return nil, fmt.Errorf("opening vectors.db: %w", err)
 	}
-	s.ix = ix
 	return ix, nil
-}
-
-// Close releases the memoized read-only vectors.db handle, if one was opened.
-// Safe to call multiple times; a later interface call reopens the file via
-// openIndex's uncached-miss path.
-func (s *vectorPushSource) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ix == nil {
-		return nil
-	}
-	err := s.ix.Close()
-	s.ix = nil
-	return err
 }
 
 func (s *vectorPushSource) BeginExport(
@@ -111,6 +75,8 @@ func (s *vectorPushSource) BeginExport(
 	if err != nil || ix == nil {
 		return nil, false, err
 	}
+	// Closing the pool leaves the export transaction usable until exp.Close.
+	defer func() { _ = ix.Close() }()
 	exp, ok, err := ix.BeginExport(ctx, sessionIDs)
 	if err != nil {
 		if errors.Is(err, vector.ErrExportNotReady) {
