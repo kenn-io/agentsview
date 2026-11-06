@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { flushSync, mount, unmount } from "svelte";
 // @ts-ignore
 import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
+// @ts-ignore
+import SemanticSetupHelp from "../command-palette/SemanticSetupHelp.svelte";
 import { EmbeddingsService } from "../../api/generated/index";
 import type { VectorBuildStatus } from "../../api/generated/index";
 import { ApiError } from "../../api/runtime.js";
@@ -97,6 +99,64 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
+  it.each([
+    ["Settings", EmbeddingsSettings],
+    ["Semantic setup", SemanticSetupHelp],
+  ])(
+    "%s approves only the disclosed download when retrying after Ollama stops",
+    async (_entry, Component) => {
+      const setup = {
+        enabled: false,
+        action: "turn-on",
+        provider: "ollama",
+        missing_bytes: 295000000,
+        busy: false,
+        installing: false,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        rebuild_required: false,
+      };
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+      embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+      const component = mount(Component, { target: document.body });
+      try {
+        await settle();
+        expect(document.body.textContent).toContain("Uses Ollama");
+        expect(document.body.textContent).not.toContain("Downloads 295 MB");
+        embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+          running: false,
+          setup: {
+            ...setup,
+            provider: "built-in",
+            error: "embedding download declined; approve installation to use local embeddings",
+          },
+        });
+        [...document.body.querySelectorAll("button")]
+          .find((b) => b.textContent?.trim() === "Turn on")!
+          .click();
+        await settle();
+        expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
+          action: "turn-on",
+          approved_bytes: 0,
+        });
+        expect(document.body.textContent).toContain("Downloads 295 MB");
+        expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
+          "download declined",
+        );
+        [...document.body.querySelectorAll("button")]
+          .find((b) => b.textContent?.trim() === "Retry")!
+          .click();
+        await settle();
+        expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
+          action: "turn-on",
+          approved_bytes: 295000000,
+        });
+      } finally {
+        unmount(component);
+      }
+    },
+  );
+
   it.each(["turn-on", "use-built-in"])(
     "retries the reported setup action after %s fails",
     async (action) => {
@@ -124,7 +184,10 @@ describe("EmbeddingsSettings", () => {
       expect(document.body.querySelectorAll("button")).toHaveLength(1);
       button!.click();
       await settle();
-      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ action, approved_bytes: 0 });
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
+        action,
+        approved_bytes: 0,
+      });
       unmount(component);
     },
   );

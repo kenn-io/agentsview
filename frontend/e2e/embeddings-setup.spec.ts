@@ -42,6 +42,10 @@ for (const width of [1280, 390]) {
         }),
       );
       await page.route("**/api/v1/embeddings/setup", async (route) => {
+        expect(route.request().postDataJSON()).toEqual({
+          action: "turn-on",
+          approved_bytes: 295000000,
+        });
         phase = "download";
         await route.fulfill({ status: 202, json: { started: true } });
       });
