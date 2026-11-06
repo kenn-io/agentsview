@@ -239,69 +239,67 @@ describe("EmbeddingsSettings", () => {
     },
   );
 
-  it.each([501, 500])("keeps polling after a generations error with status %i", async (code) => {
-    const setup = {
-      enabled: true,
-      action: "",
-      provider: "built-in",
-      busy: false,
-      installing: false,
-      missing_bytes: 0,
-      downloaded_bytes: 0,
-      total_bytes: 0,
-      rebuild_required: false,
-    };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1, { setup }));
-    const error = new ApiError(
-      code,
-      code === 501 ? "embeddings manager not available" : "internal error",
+  it("keeps polling after a generations error with status 501", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1));
+    embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValueOnce(
+      new ApiError(501, "embeddings manager not available"),
     );
-    if (code === 501) embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValueOnce(error);
-    else embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(error);
     const component = mount(EmbeddingsSettings, { target: document.body });
     try {
       await settle();
-      if (code === 500) {
-        const error = document.body.querySelector('[role="alert"]');
-        expect(error?.textContent ?? "").toContain("internal error");
-        expect(error?.closest(".subsection")?.querySelector("h4")?.textContent ?? "").toContain(
-          "Generations",
-        );
-        expect(document.body.textContent).toContain("test-embed-model");
-        expect(document.body.textContent).toContain("256");
-        expect(document.body.textContent).toContain("Elapsed 5s");
-      }
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2, { setup }));
+      expect(document.body.querySelector('[role="alert"]')).toBeNull();
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2));
       await settle(60_000);
       expect(document.body.textContent).toContain("Indexing 2 of");
-      if (code === 501)
-        expect(document.body.textContent).not.toContain("embeddings manager not available");
-      else {
-        expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
-          "internal error",
-        );
-        await settle(2000);
-        expect(document.body.textContent).toContain("Indexing 2 of");
-        expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
-          "internal error",
-        );
-        embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValueOnce(
-          new ApiError(500, "status read failed"),
-        );
-        await settle(2000);
-        expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
-          "status read failed",
-        );
-        await settle(2000);
-        expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
-          "internal error",
-        );
-        embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
-          generations: [BUILDING_GENERATION],
-        });
-        await settle(4000);
-        expect(document.body.querySelector('[role="alert"]')).toBeNull();
-      }
+      expect(document.body.textContent).not.toContain("embeddings manager not available");
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("keeps polling after a generations error with status 500", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1));
+    embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(
+      new ApiError(500, "internal error"),
+    );
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    try {
+      await settle();
+      const error = document.body.querySelector('[role="alert"]');
+      expect(error?.textContent ?? "").toContain("internal error");
+      expect(error?.closest(".subsection")?.querySelector("h4")?.textContent ?? "").toContain(
+        "Generations",
+      );
+      expect(document.body.textContent).toContain("test-embed-model");
+      expect(document.body.textContent).toContain("256");
+      expect(document.body.textContent).toContain("Elapsed 5s");
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2));
+      await settle(60_000);
+      expect(document.body.textContent).toContain("Indexing 2 of");
+      expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
+        "internal error",
+      );
+      await settle(2000);
+      expect(document.body.textContent).toContain("Indexing 2 of");
+      expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
+        "internal error",
+      );
+      embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValueOnce(
+        new ApiError(500, "status read failed"),
+      );
+      await settle(2000);
+      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
+        "status read failed",
+      );
+      await settle(2000);
+      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
+        "internal error",
+      );
+      embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
+        generations: [BUILDING_GENERATION],
+      });
+      await settle(4000);
+      expect(document.body.querySelector('[role="alert"]')).toBeNull();
     } finally {
       unmount(component);
     }
@@ -349,14 +347,17 @@ describe("EmbeddingsSettings", () => {
 
   it("shows indexing while the daemon warms its estimate", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      runningStatus(100, { estimate_ready: false }),
+      runningStatus(100, { estimate_ready: false, eta_milliseconds: 16_000 }),
     );
 
     const component = mount(EmbeddingsSettings, { target: document.body });
-    await settle();
-    expect(document.body.textContent).toContain("Indexing 100 of 1,000 text sections");
-
-    unmount(component);
+    try {
+      await settle();
+      expect(document.body.textContent).toContain("Indexing 100 of 1,000 text sections");
+      expect(document.body.textContent).not.toContain("under a minute left");
+    } finally {
+      unmount(component);
+    }
   });
 
   it("shows the scanning state without inventing totals", async () => {

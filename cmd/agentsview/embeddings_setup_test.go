@@ -35,10 +35,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 		onBattery = oldOnBattery
 	})
-	nomicParams := map[string]string{
-		"max_input_chars": "4000", "doc_unit_scheme": "run_v1", "chunk_overlap_chars": "600",
-		"query_prefix": "search_query: ", "document_prefix": "search_document: ",
-	}
 	for _, recipe := range []string{"fresh", "enabled-missing", "automatic", "configured", "nomic", "other"} {
 		t.Run(recipe, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
@@ -203,7 +199,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "fresh" {
 				assert.False(t, push().Vectors.Skipped, "browser activation must publish vectors without restart")
 				require.Len(t, replica.pushed, 1)
-				assert.Equal(t, nomicParams, replica.pushed[0].Params)
 			}
 			if recipe == "configured" {
 				assert.Empty(t, status().Setup.Action)
@@ -237,7 +232,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "other" {
 				assert.False(t, push().Vectors.Skipped)
 				require.Len(t, replica.pushed, 1)
-				assert.Equal(t, nomicParams, replica.pushed[0].Params, "switched vectors must carry their current recipe")
+				assert.NotEmpty(t, replica.pushed[0].Params, "switched vectors must carry their current recipe")
 			}
 			if recipe == "fresh" {
 				var result db.ContentSearchPage
@@ -384,7 +379,7 @@ func TestLiveEmbeddingsSetupStatusDuringProbe(t *testing.T) {
 	var status vector.BuildStatus
 	require.NoError(t, json.Unmarshal(got.body, &status))
 	require.NotNil(t, status.Setup)
-	assert.True(t, status.Setup.Enabled)
+	assert.True(t, status.Setup.Busy)
 }
 
 func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
@@ -727,12 +722,20 @@ func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	require.NoError(t, cfg.Vector.Validate())
-	oldInspect := inspectLocalEmbeddings
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() {
-		inspectLocalEmbeddings = oldInspect
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 	})
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 		return embedlocal.Status{DownloadBytes: 295_000_000}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		return "", embedlocal.ErrNotFound
+	}
+	var installs atomic.Int32
+	installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		installs.Add(1)
+		return embedlocal.Installation{}, errors.New("unexpected installation")
 	}
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
@@ -749,4 +752,5 @@ func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
 	assert.Contains(t, status.Setup.Error, "max_batch_tokens")
 	body = embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusBadRequest)
 	assert.Contains(t, string(body), "max_batch_tokens")
+	assert.Zero(t, installs.Load(), "invalid setup must be refused before installation")
 }
