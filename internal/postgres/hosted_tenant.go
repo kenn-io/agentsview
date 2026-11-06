@@ -86,7 +86,6 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		return tx.Commit()
 	}
 	if _, err = tx.ExecContext(ctx, `DROP TABLE IF EXISTS usage_session_changes;
-		DROP FUNCTION IF EXISTS mark_usage_change() CASCADE;
 		DROP FUNCTION IF EXISTS stamp_usage_change();
 		DO $cleanup$ BEGIN
 		IF to_regclass('sync_metadata') IS NOT NULL THEN
@@ -94,6 +93,11 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		END IF;
 		END $cleanup$;`); err != nil {
 		return err
+	}
+	for _, table := range usageChangeTablesPG {
+		if _, err = tx.ExecContext(ctx, "DROP FUNCTION IF EXISTS mark_usage_"+table.table+"() CASCADE"); err != nil {
+			return err
+		}
 	}
 	if err = preflightHostedAdoption(ctx, tx, schema, tenant); err != nil {
 		return err

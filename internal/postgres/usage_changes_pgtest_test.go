@@ -20,8 +20,14 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-const dropUsageChangeJournalSQL = `DROP TABLE usage_session_changes; DROP FUNCTION mark_usage_change() CASCADE; DROP FUNCTION stamp_usage_change();
- DELETE FROM sync_metadata WHERE key IN ('usage_change_revision','usage_change_journal_version')`
+var dropUsageChangeJournalSQL = func() string {
+	ddl := `DROP TABLE usage_session_changes; DROP FUNCTION stamp_usage_change();
+ DELETE FROM sync_metadata WHERE key IN ('usage_change_revision','usage_change_journal_version');`
+	for _, table := range usageChangeTablesPG {
+		ddl += "DROP FUNCTION mark_usage_" + table.table + "() CASCADE;"
+	}
+	return ddl
+}()
 
 func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 	t.Helper()
@@ -114,6 +120,15 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, before+1, through, query)
 				assert.Equal(t, tc.ids[step], ids, query)
+				if step == 1 {
+					// Identity mapping upserts can rewrite unchanged rows.
+					_, err = syncer.pg.ExecContext(ctx, query)
+					require.NoError(t, err)
+					unchanged, unchangedIDs, err := store.LoadUsageChanges(ctx, through)
+					require.NoError(t, err)
+					assert.Equal(t, through, unchanged, query)
+					assert.Empty(t, unchangedIDs, query)
+				}
 			}
 		})
 	}
@@ -256,7 +271,7 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	ctx := t.Context()
 	before, err := store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
-	require.Greater(t, before, int64(1000000000000000), "installation seeds a clock-based generation")
+	require.Greater(t, before, int64(1000000000000000), "installation seeds a clock-based revision")
 	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
 	after, err := store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
@@ -279,11 +294,11 @@ func TestUsageChangeJournalNewerVersion(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	_, err := syncer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version';
- CREATE OR REPLACE FUNCTION mark_usage_change() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END;'`)
+ CREATE OR REPLACE FUNCTION mark_usage_sessions() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END;'`)
 	require.NoError(t, err)
 	require.NoError(t, ensureUsageChangeJournalPG(ctx, syncer.pg))
 	var body string
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure('mark_usage_change()')`).Scan(&body))
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure('mark_usage_sessions()')`).Scan(&body))
 	assert.Equal(t, "BEGIN RETURN NULL; END;", body, "an older binary must preserve the newer journal")
 	through, ids, err := store.LoadUsageChanges(ctx, 0)
 	require.NoError(t, err)

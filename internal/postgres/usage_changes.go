@@ -13,27 +13,23 @@ import (
 // Statement triggers mark each changed session pending with revision 0 in one
 // set-based write. The empty session ID marks pricing and identity changes.
 const markUsageChangeFunctionBodyPG = `
-DECLARE
-    session_key text := '''''';
-    filter text := 'true';
-    changed text := 'SELECT * FROM new_rows';
 BEGIN
-    IF TG_ARGV[0] <> '' THEN
-        session_key := quote_ident(TG_ARGV[0]);
-    END IF;
-    IF TG_TABLE_NAME IN ('model_pricing', 'model_pricing_bands') THEN
-        filter := 'model_pattern NOT LIKE ''\_%''';
-    END IF;
     IF TG_OP = 'DELETE' THEN
-        changed := 'SELECT * FROM old_rows';
+        INSERT INTO usage_session_changes(session_id, revision)
+        SELECT DISTINCT %[1]s, 0 FROM old_rows WHERE %[2]s
+        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
     ELSIF TG_OP = 'UPDATE' THEN
-        changed := '(SELECT * FROM old_rows EXCEPT SELECT * FROM new_rows)
- UNION ALL (SELECT * FROM new_rows EXCEPT SELECT * FROM old_rows)';
+        INSERT INTO usage_session_changes(session_id, revision)
+        SELECT DISTINCT %[1]s, 0 FROM (
+            (SELECT * FROM old_rows EXCEPT SELECT * FROM new_rows)
+            UNION ALL (SELECT * FROM new_rows EXCEPT SELECT * FROM old_rows)
+        ) changed WHERE %[2]s
+        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
+    ELSE
+        INSERT INTO usage_session_changes(session_id, revision)
+        SELECT DISTINCT %[1]s, 0 FROM new_rows WHERE %[2]s
+        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
     END IF;
-    EXECUTE format('INSERT INTO usage_session_changes(session_id, revision)
- SELECT DISTINCT %s, 0 FROM (%s) changed WHERE %s
- ON CONFLICT(session_id) DO UPDATE SET revision = 0',
-        session_key, changed, filter);
     RETURN NULL;
 END;
 `
@@ -113,26 +109,36 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
  CREATE INDEX IF NOT EXISTS idx_usage_session_changes_revision ON usage_session_changes(revision);
  INSERT INTO sync_metadata(key, value) VALUES('usage_change_revision', (extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text) ON CONFLICT(key) DO NOTHING;
 `)
-	for _, function := range []struct{ name, body string }{
-		{"mark_usage_change", markUsageChangeFunctionBodyPG},
-		{"stamp_usage_change", stampUsageChangeFunctionBodyPG},
-	} {
-		fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;
- REVOKE ALL ON FUNCTION %s() FROM PUBLIC;
-`, function.name, quoted, function.body, function.name)
-	}
+ REVOKE ALL ON FUNCTION stamp_usage_change() FROM PUBLIC;
+`, quoted, stampUsageChangeFunctionBodyPG)
 	ddl.WriteString(`CREATE CONSTRAINT TRIGGER trg_uc_stamp AFTER INSERT OR UPDATE ON usage_session_changes
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.revision = 0) EXECUTE FUNCTION stamp_usage_change();
 `)
 	for _, table := range usageChangeTablesPG {
+		sessionKey, filter := "''", "true"
+		if table.sessionColumn != "" {
+			sessionKey, err = quoteIdentifier(table.sessionColumn)
+			if err != nil {
+				return err
+			}
+		}
+		if table.table == "model_pricing" || table.table == "model_pricing_bands" {
+			filter = `model_pattern NOT LIKE '\_%'`
+		}
+		function := "mark_usage_" + table.table
+		fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;
+ REVOKE ALL ON FUNCTION %s() FROM PUBLIC;
+`, function, quoted, fmt.Sprintf(markUsageChangeFunctionBodyPG, sessionKey, filter), function)
 		for _, trigger := range []struct{ event, referencing string }{
 			{"INSERT", "NEW TABLE AS new_rows"},
 			{"UPDATE", "OLD TABLE AS old_rows NEW TABLE AS new_rows"},
 			{"DELETE", "OLD TABLE AS old_rows"},
 		} {
-			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_%s_%s AFTER %s ON %s REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION mark_usage_change('%s');\n",
-				table.table, strings.ToLower(trigger.event), trigger.event, table.table, trigger.referencing, table.sessionColumn)
+			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_%s_%s AFTER %s ON %s REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION %s();\n",
+				table.table, strings.ToLower(trigger.event), trigger.event, table.table, trigger.referencing, function)
 		}
 	}
 	ddl.WriteString(`DO $grants$ DECLARE reader text; BEGIN
@@ -163,8 +169,8 @@ func (s *Store) UsageChangeRevision(ctx context.Context) (int64, error) {
 // and project identity changes only advance the revision. A write committed
 // after this snapshot appears in the next call when the caller uses the
 // returned revision. Revision 0 means the journal is absent, unreadable, or
-// in another version; a revision below afterRevision means a rebuilt archive.
-// Callers rebuild in both cases.
+// in another version. A rebuilt schema seeds a newer clock value, so the
+// revision cannot identify a reset. Readers must start fresh after a reset.
 func (s *Store) LoadUsageChanges(ctx context.Context, afterRevision int64) (int64, []string, error) {
 	revision, ids, err := s.loadUsageChanges(ctx, afterRevision)
 	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
