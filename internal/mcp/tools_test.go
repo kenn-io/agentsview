@@ -1428,7 +1428,7 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 // when IncludeActive is set, which skips the session-activity lookup).
 type fakeContentSearchService struct {
 	service.SessionService
-	request service.ContentSearchRequest
+	lastReq service.ContentSearchRequest
 	result  *service.ContentSearchResult
 	err     error
 }
@@ -1436,8 +1436,8 @@ type fakeContentSearchService struct {
 func (f *fakeContentSearchService) SearchContent(
 	_ context.Context, req service.ContentSearchRequest,
 ) (*service.ContentSearchResult, error) {
-	if f.request.Pattern == "" && len(f.request.Concepts) == 0 {
-		f.request = req
+	if f.lastReq.Pattern == "" && len(f.lastReq.Concepts) == 0 {
+		f.lastReq = req
 	}
 	if f.err != nil {
 		return nil, f.err
@@ -1459,7 +1459,7 @@ func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, service.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "embeddings build")
-	assert.Equal(t, "semantic", fake.request.Mode)
+	assert.Equal(t, "semantic", fake.lastReq.Mode)
 }
 
 func TestSearchContent_ScopeRejectedForFTS(t *testing.T) {
@@ -1470,7 +1470,7 @@ func TestSearchContent_ScopeRejectedForFTS(t *testing.T) {
 		Pattern: "needle", Mode: "fts", Scope: "top", IncludeActive: true,
 	})
 	require.EqualError(t, err, db.ContentSearchScopeUnsupportedMsg)
-	assert.Empty(t, fake.request.Pattern,
+	assert.Empty(t, fake.lastReq.Pattern,
 		"a rejected request must not reach the service")
 }
 
@@ -1485,8 +1485,8 @@ func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
 				Pattern: "retries", Mode: mode, Scope: "subordinate", IncludeActive: true,
 			})
 			require.NoError(t, err)
-			assert.Equal(t, mode, fake.request.Mode)
-			assert.Equal(t, "subordinate", fake.request.Scope,
+			assert.Equal(t, mode, fake.lastReq.Mode)
+			assert.Equal(t, "subordinate", fake.lastReq.Scope,
 				"scope must reach the service untouched")
 			assert.Equal(t, "subordinate", out.EffectiveScope)
 		})
@@ -1500,14 +1500,14 @@ func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "all", out.EffectiveScope)
 
-	fake.request = service.ContentSearchRequest{}
+	fake.lastReq = service.ContentSearchRequest{}
 	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "retries", IncludeActive: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "substring", out.EffectiveMode)
 	assert.Equal(t, "all", out.EffectiveScope)
-	assert.Equal(t, "all", fake.request.Scope)
+	assert.Equal(t, "all", fake.lastReq.Scope)
 	assert.False(t, out.Exclusions.Children)
 	for _, tc := range []struct {
 		mode, scope, sessionID, effectiveScope string
@@ -1518,12 +1518,12 @@ func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
 		{mode: "fts", children: true},
 		{mode: "fts", sessionID: "child"},
 	} {
-		fake.request = service.ContentSearchRequest{}
+		fake.lastReq = service.ContentSearchRequest{}
 		_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 			Pattern: "retries", Mode: tc.mode, Scope: tc.scope, SessionID: tc.sessionID, IncludeActive: true,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, tc.effectiveScope, fake.request.Scope)
+		assert.Equal(t, tc.effectiveScope, fake.lastReq.Scope)
 		assert.Equal(t, tc.effectiveScope, out.EffectiveScope)
 		assert.Equal(t, tc.children, out.Exclusions.Children)
 	}
@@ -1548,12 +1548,12 @@ func TestSearchContent_RecallContractMapping(t *testing.T) {
 		DateFrom: "2026-08-01", DateTo: "2026-09-20", Limit: 50,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "terms", fake.request.Mode)
-	assert.Equal(t, "subordinate", fake.request.Scope)
-	assert.Equal(t, "older", fake.request.SessionID)
-	assert.Equal(t, "feature/memory", fake.request.GitBranchExact)
-	assert.Equal(t, []string{"current"}, fake.request.ExcludeSessionIDs)
-	assert.Equal(t, 50, fake.request.Limit)
+	assert.Equal(t, "terms", fake.lastReq.Mode)
+	assert.Equal(t, "subordinate", fake.lastReq.Scope)
+	assert.Equal(t, "older", fake.lastReq.SessionID)
+	assert.Equal(t, "feature/memory", fake.lastReq.GitBranchExact)
+	assert.Equal(t, []string{"current"}, fake.lastReq.ExcludeSessionIDs)
+	assert.Equal(t, 50, fake.lastReq.Limit)
 	assert.Equal(t, "terms", out.EffectiveMode)
 	assert.Equal(t, "subordinate", out.EffectiveScope)
 	assert.Equal(t, "current", out.Exclusions.CurrentSessionID)
@@ -1584,8 +1584,8 @@ func TestSearchContent_ConceptsMapping(t *testing.T) {
 		IncludeActive: true,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"auth model", "retry policy"}, fake.request.Concepts)
-	assert.Equal(t, "top", fake.request.Scope)
+	assert.Equal(t, []string{"auth model", "retry policy"}, fake.lastReq.Concepts)
+	assert.Equal(t, "top", fake.lastReq.Scope)
 	assert.Equal(t, "semantic", out.EffectiveMode)
 	assert.Equal(t, "top", out.EffectiveScope)
 	assert.True(t, out.CandidateTruncated)
@@ -1611,8 +1611,8 @@ func TestSearchContent_ConceptsRejectedBeforeService(t *testing.T) {
 			_, _, err := ts.searchContent(t.Context(), nil, tc.in)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.want)
-			assert.Empty(t, fake.request.Concepts, "a rejected request must not reach the service")
-			assert.Empty(t, fake.request.Pattern, "a rejected request must not reach the service")
+			assert.Empty(t, fake.lastReq.Concepts, "a rejected request must not reach the service")
+			assert.Empty(t, fake.lastReq.Pattern, "a rejected request must not reach the service")
 		})
 	}
 }
@@ -1626,7 +1626,7 @@ func TestSearchContent_OutOfRangeLimitUsesDefault(t *testing.T) {
 				Pattern: "needle", Limit: limit, IncludeActive: true,
 			})
 			require.NoError(t, err)
-			assert.Equal(t, 10, fake.request.Limit)
+			assert.Equal(t, 10, fake.lastReq.Limit)
 		})
 	}
 }
@@ -1640,7 +1640,7 @@ func TestSearchContent_RejectsInvalidDates(t *testing.T) {
 		ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 		_, _, err := ts.searchContent(t.Context(), nil, in)
 		require.Error(t, err)
-		assert.Empty(t, fake.request.Pattern)
+		assert.Empty(t, fake.lastReq.Pattern)
 	}
 }
 
@@ -1672,7 +1672,7 @@ func TestSearchContent_ContextThreading(t *testing.T) {
 		Pattern: "hit", Context: 5, IncludeActive: true,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 5, fake.request.Context, "context param must reach the service")
+	assert.Equal(t, 5, fake.lastReq.Context, "context param must reach the service")
 	require.Len(t, out.Matches, 1)
 	m := out.Matches[0]
 	require.NotNil(t, m.Score)

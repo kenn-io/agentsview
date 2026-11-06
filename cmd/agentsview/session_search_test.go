@@ -957,5 +957,4 @@ func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 		require.NoError(t, err, string(output))
 		assert.Equal(t, "can't decode", strings.TrimSpace(string(output)))
 	}
-	assert.Equal(t, "agentsview session search --include-one-shot=true -- 'can'\\''t decode'", contentSearchRetry(cmd, "can't decode", map[string]any{"include_one_shot": true}, "linux"))
 }

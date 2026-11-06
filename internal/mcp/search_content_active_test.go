@@ -90,16 +90,16 @@ func TestSearchContent_ActivityCutoffContinuationInputs(t *testing.T) {
 			_, out, err := ts.searchContent(t.Context(), nil, in)
 			if tc.wantErr != "" {
 				require.EqualError(t, err, tc.wantErr)
-				assert.Empty(t, fake.request.Pattern)
+				assert.Empty(t, fake.lastReq.Pattern)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, in.Cursor, fake.request.Cursor)
-			assert.Equal(t, tc.cutoff, fake.request.ExcludeActiveSince)
+			assert.Equal(t, in.Cursor, fake.lastReq.Cursor)
+			assert.Equal(t, tc.cutoff, fake.lastReq.ExcludeActiveSince)
 			assert.Equal(t, tc.cutoff, out.ActivityCutoff)
 			assert.Equal(t, tc.cutoff != "", out.Exclusions.RecentActive)
 			if in.CurrentSessionID != "current" {
-				assert.Empty(t, fake.request.ExcludeSessionIDs)
+				assert.Empty(t, fake.lastReq.ExcludeSessionIDs)
 				assert.Empty(t, out.Exclusions.CurrentSessionID)
 			}
 		})
@@ -194,7 +194,7 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 					} else if response == "idle" {
 						_, _ = w.Write([]byte(`{"matches":[{"session_id":"idle"}],"next_cursor":50}`))
 					} else {
-						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"},{"session_id":"idle"}],"next_cursor":50}`))
+						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"},{"session_id":"idle"}]}`))
 					}
 					return
 				}

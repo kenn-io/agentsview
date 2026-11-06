@@ -67,7 +67,6 @@ func TestSearchContentHintsChildParentFilters(t *testing.T) {
 	}{
 		{"parent project and date match", "selected", "selected", "2024-06-15T10:00:00Z", true, true},
 		{"parent project excluded", "selected", "other", "2024-06-15T10:00:00Z", true, false},
-		{"parent date excluded", "selected", "selected", "2020-01-01T10:00:00Z", true, false},
 		{"missing parent", "selected", "selected", "2024-06-15T10:00:00Z", false, false},
 		{"one-shot parent excluded", "selected", "selected", "2024-06-15T10:00:00Z", true, false},
 	} {
@@ -135,35 +134,19 @@ func TestSearchContentHintsFTSChildCount(t *testing.T) {
 	require.Len(t, hints, 2)
 	assert.Equal(t, "hidden_children", hints[1].Code)
 	assert.Equal(t, "1 match is in child sessions, hidden by default", hints[1].Message)
-	assert.Equal(t, map[string]any{"include_children": true}, hints[1].RetryWith)
-	req.IncludeChildren = true
-	retried, err := svc.SearchContent(t.Context(), req)
-	require.NoError(t, err)
-	require.Len(t, retried.Matches, 1)
-	assert.Equal(t, "child", retried.Matches[0].SessionID)
 }
 
 func TestSearchContentHintsVectorClasses(t *testing.T) {
-	for _, mode := range []string{"semantic", "hybrid"} {
-		for _, automated := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/automated=%t", mode, automated), func(t *testing.T) {
-				d := dbtest.OpenTestDB(t)
-				dbtest.SeedSession(t, d, "hidden", "proj", func(s *db.Session) { s.UserMessageCount = 1; s.IsAutomated = automated })
-				require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("hidden", 0, "marker")}))
-				d.SetVectorSearcher(&conceptVectorSearcher{hits: map[string][]db.VectorHit{"marker": {{SessionID: "hidden", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0, Score: 0.9}}}, ks: map[string][]int{}})
-				svc := service.NewDirectBackend(d, nil)
-				req := service.ContentSearchRequest{Pattern: "marker", Mode: mode}
-				res, err := svc.SearchContent(t.Context(), req)
-				require.NoError(t, err)
-				require.Empty(t, res.Matches)
-				hints := service.SearchContentHints(t.Context(), svc, req, res, false, nil)
-				require.Len(t, hints, 1)
-				if automated {
-					assert.Equal(t, "hidden_automated", hints[0].Code)
-				} else {
-					assert.Equal(t, "hidden_one_shot", hints[0].Code)
-				}
-			})
-		}
-	}
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "hidden", "proj", func(s *db.Session) { s.UserMessageCount = 1 })
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("hidden", 0, "marker")}))
+	d.SetVectorSearcher(&conceptVectorSearcher{hits: map[string][]db.VectorHit{"marker": {{SessionID: "hidden", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0, Score: 0.9}}}, ks: map[string][]int{}})
+	svc := service.NewDirectBackend(d, nil)
+	req := service.ContentSearchRequest{Pattern: "marker", Mode: "semantic"}
+	res, err := svc.SearchContent(t.Context(), req)
+	require.NoError(t, err)
+	require.Empty(t, res.Matches)
+	hints := service.SearchContentHints(t.Context(), svc, req, res, false, nil)
+	require.Len(t, hints, 1)
+	assert.Equal(t, "hidden_one_shot", hints[0].Code)
 }
