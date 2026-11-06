@@ -213,7 +213,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"surrounding conversation with each match. Matches from the last 10 minutes (including the " +
 			"current conversation) are excluded unless include_active is set; current_session_id replaces " +
 			"that heuristic with one exact exclusion. One-shot and automated " +
-			"sessions are excluded by default; set include_one_shot or include_automated to include them.",
+			"sessions are excluded by default; set include_one_shot or include_automated to include them. " +
+			"Empty first pages return measured hints with code, message, and retry_with arguments; preserve other arguments when retrying.",
 		Annotations: readOnly,
 	}, t.searchContent)
 

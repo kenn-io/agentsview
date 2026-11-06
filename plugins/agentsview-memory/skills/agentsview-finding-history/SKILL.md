@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:1dd83a08549bf88a62e8451042481f98ddbef4cb5a21ed2f018ac52843614320 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:ec918a5a6ff31111750026cdd62b674b9a665a6b7fed78d69439ae4ef7b55e47 — do not edit; re-run `agentsview skills install`
 name: agentsview-finding-history
 description: Use proactively when prior decisions, rationale, solutions, pitfalls, project context, or repeated workflows may help, when stuck, or before guessing about something learned previously — searches AgentsView conversation history for evidence.
 ---
@@ -88,8 +88,8 @@ Use the CLI only when the registered MCP tools are unavailable. These examples
 preserve the same search-and-read sequence:
 
 ```bash
-agentsview session search "<concept query>" --hybrid --context 2 --json --limit 10
-agentsview session search "<exact string>" --in tool_input,tool_result --exclude-session <this-session-id> --json --limit 10
+agentsview session search "<concept query>" --hybrid --include-one-shot --include-automated --context 2 --json --limit 10
+agentsview session search "<exact string>" --in tool_input,tool_result --include-one-shot --include-automated --include-children --exclude-session <this-session-id> --json --limit 10
 agentsview session messages <session-id> --around <ordinal> --before 8 --after 8 --role user,assistant --json
 ```
 
