@@ -479,6 +479,22 @@
     color: var(--text-primary);
   }
 
+  /* The open collapsed menu: the fallback option looks like the others
+     and carries no check. */
+  :global(:root .kit-top-bar.no-current-tab .kit-select-dropdown__option.selected) {
+    color: var(--text-secondary);
+    font-weight: inherit;
+  }
+
+  :global(:root .kit-top-bar.no-current-tab .kit-select-dropdown__option.selected:hover:not(:disabled)),
+  :global(:root .kit-top-bar.no-current-tab .kit-select-dropdown__option.selected.highlighted) {
+    color: var(--text-primary);
+  }
+
+  :global(.kit-top-bar.no-current-tab .kit-select-dropdown__option .kit-select-dropdown__check svg) {
+    visibility: hidden;
+  }
+
   /* FitStages' sizing contract: the host is sized by the flexible search
    * region, never by its own content. */
   :global(.search-fit) {

@@ -36,7 +36,7 @@ export function topBarNoCurrentTab(node: HTMLElement, initial: TopBarNoCurrentTa
       childList: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ["aria-current", "aria-label"],
+      attributeFilter: ["aria-current", "aria-label", "aria-selected"],
     });
   }
 
@@ -89,10 +89,28 @@ export function topBarNoCurrentTab(node: HTMLElement, initial: TopBarNoCurrentTa
     }
   }
 
+  // The open collapsed menu marks the fallback tab as its selected
+  // option. CSS in AppHeader.svelte hides its selected look and check;
+  // this keeps aria-selected in step. Options exist only while the menu
+  // is open, and the fallback keeps the same `selected` class whichever
+  // route is current, so that class tells which option to restore.
+  function syncOptions(): void {
+    const options = node.querySelectorAll<HTMLElement>(
+      '.kit-top-bar__nav-select [role="option"]',
+    );
+    for (const option of options) {
+      const want = params.active !== "" && option.classList.contains("selected");
+      if (option.getAttribute("aria-selected") !== String(want)) {
+        option.setAttribute("aria-selected", String(want));
+      }
+    }
+  }
+
   function sync(): void {
     observer.disconnect();
     syncTabs();
     syncTrigger();
+    syncOptions();
     observer.takeRecords();
     observe();
   }

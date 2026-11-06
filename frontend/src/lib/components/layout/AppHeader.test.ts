@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 const mocks = vi.hoisted(() => ({
   downloadExport: vi.fn().mockResolvedValue(undefined),
@@ -468,6 +468,47 @@ describe("AppHeader export actions", () => {
     router.route = "usage";
     await tick();
     expect(shown()).toEqual({ text: "Usage", label: "Primary navigation: Usage" });
+  });
+
+  it("selects no option in the open collapsed menu on Settings", async () => {
+    // jsdom has no scrollIntoView; the menu scrolls its highlight into view.
+    Element.prototype.scrollIntoView = vi.fn();
+    onTestFinished(() => {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    });
+    router.route = "settings";
+    restoreWidths = stubTopBarWidths(2000, 600);
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const trigger = () =>
+      document.querySelector<HTMLElement>(
+        ".kit-top-bar__nav-select .kit-select-dropdown__trigger",
+      )!;
+    // Opens the menu, reads which options claim to be selected, closes it.
+    const selectedOptions = async () => {
+      trigger().click();
+      await tick();
+      const options = [...document.querySelectorAll('.kit-top-bar__nav-select [role="option"]')];
+      expect(options.length).toBeGreaterThan(0);
+      const names = options
+        .filter((option) => option.getAttribute("aria-selected") === "true")
+        .map((option) => option.textContent?.trim());
+      trigger().click();
+      await tick();
+      expect(document.querySelector('.kit-top-bar__nav-select [role="option"]')).toBeNull();
+      return names;
+    };
+
+    expect(await selectedOptions()).toEqual([]);
+
+    router.route = "sessions";
+    await tick();
+    expect(await selectedOptions()).toEqual(["Sessions"]);
+
+    router.route = "settings";
+    await tick();
+    expect(await selectedOptions()).toEqual([]);
   });
 
   it("distinguishes global sync from page refresh controls", async () => {
