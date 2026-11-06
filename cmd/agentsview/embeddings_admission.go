@@ -40,16 +40,6 @@ func (a admittedManager) StartBuild(req vector.BuildRequest) (id int64, err erro
 	return id, err
 }
 
-// Wait runs after the build route starts a build; once that build succeeds,
-// the setup failure it recovered from is cleared so status recomputes
-// the action from the installed runtime.
-func (a admittedManager) Wait() {
-	a.Manager.Wait()
-	if status := a.Status(); status.LastResult != nil && status.LastError == "" {
-		_ = a.admitted(func() error { a.owner.setup = server.EmbeddingsSetupStatus{}; return nil })
-	}
-}
-
 func (a admittedManager) Generations(ctx context.Context) ([]vector.GenerationInfo, error) {
 	var gens []vector.GenerationInfo
 	err := a.admitted(func() (err error) {

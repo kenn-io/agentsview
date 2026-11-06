@@ -34,6 +34,8 @@ type liveVectorServing struct {
 	setup       server.EmbeddingsSetupStatus
 	reload      func() (config.Config, error)
 	push        *vectorPushSource
+
+	setupFailedBuild int64
 }
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
@@ -108,7 +110,7 @@ func (v *liveVectorServing) Notify(recall bool) {
 func (v *liveVectorServing) ManagerSetup(store string) (server.EmbeddingsManager, server.EmbeddingsSetupStatus) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	status := v.setup
+	status := v.setupLocked()
 	status.Enabled = v.cfg.Vector.Enabled
 	return v.managerLocked(store), status
 }
@@ -147,9 +149,21 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 	return v.cfg.Vector.IncludeAutomated
 }
 
+// setupLocked clears an installation failure only after a later message build
+// succeeds. Callers hold v.mu.
+func (v *liveVectorServing) setupLocked() server.EmbeddingsSetupStatus {
+	if v.setup.Error != "" && !v.setup.Busy && v.serving.manager != nil {
+		status := v.serving.manager.Status()
+		if !status.Running && status.BuildID > v.setupFailedBuild && status.LastResult != nil && status.LastError == "" {
+			v.setup = server.EmbeddingsSetupStatus{}
+		}
+	}
+	return v.setup
+}
+
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
 	v.mu.Lock()
-	status, cfg, running := v.setup, v.cfg, v.buildRunning()
+	status, cfg, running := v.setupLocked(), v.cfg, v.buildRunning()
 	v.mu.Unlock()
 	if status.Busy || running {
 		status.Enabled = cfg.Vector.Enabled
@@ -258,6 +272,10 @@ func (v *liveVectorServing) Setup(action string, approvedBytes int64) error {
 		v.setup.Busy = false
 		if err != nil {
 			v.setup.Error = err.Error()
+			v.setupFailedBuild = 0
+			if v.serving.manager != nil {
+				v.setupFailedBuild = v.serving.manager.Status().BuildID
+			}
 		} else {
 			v.setup.Action = ""
 		}

@@ -28,13 +28,15 @@ import (
 
 func TestLiveEmbeddingsSetupCLIRecovery(t *testing.T) {
 	for _, tc := range []struct {
-		name                    string
+		name, caller            string
 		prebuilt, wantActivated bool
 	}{
-		{"first build", false, true},
-		{"existing index", true, false},
+		{"first build", "cli", false, true},
+		{"existing index", "cli", true, false},
+		{"first build", "scheduler", false, true},
+		{"existing index", "scheduler", true, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.caller+"/"+tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
@@ -95,17 +97,24 @@ func TestLiveEmbeddingsSetupCLIRecovery(t *testing.T) {
 			status, err := owner.SetupStatus(t.Context())
 			require.NoError(t, err)
 			require.Equal(t, "download was not approved", status.Error)
-			command := newEmbeddingsBuildCommand()
-			command.SetContext(t.Context())
-			command.SetOut(io.Discard)
-			command.SetErr(io.Discard)
-			command.SetIn(strings.NewReader("y\n"))
-			command.SetArgs([]string{"--yes"})
-			require.NoError(t, command.Execute())
-			require.Eventually(t, func() bool {
-				status, err := owner.SetupStatus(t.Context())
-				return err == nil && status.Error == "" && status.Action == ""
-			}, time.Second, 10*time.Millisecond, "a completed recovery must reach setup status")
+			if tc.caller == "scheduler" {
+				installed.Store(true)
+				started, err := owner.serving.manager.TryBuild(t.Context(), vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
+				require.NoError(t, err)
+				require.True(t, started)
+			} else {
+				command := newEmbeddingsBuildCommand()
+				command.SetContext(t.Context())
+				command.SetOut(io.Discard)
+				command.SetErr(io.Discard)
+				command.SetIn(strings.NewReader("y\n"))
+				command.SetArgs([]string{"--yes"})
+				require.NoError(t, command.Execute())
+			}
+			status, err = owner.SetupStatus(t.Context())
+			require.NoError(t, err)
+			assert.Empty(t, status.Error, "a completed recovery must reach setup status")
+			assert.Empty(t, status.Action)
 			var build vector.BuildStatus
 			raw := embeddingRequest(t, ts.Client(), ts.URL, http.MethodGet, "/api/v1/embeddings/status", "", nil, http.StatusOK)
 			require.NoError(t, json.Unmarshal(raw, &build))
@@ -113,8 +122,13 @@ func TestLiveEmbeddingsSetupCLIRecovery(t *testing.T) {
 			require.NotNil(t, build.LastResult)
 			require.Empty(t, build.LastError)
 			assert.Equal(t, tc.wantActivated, build.LastResult.Activated)
-			assert.Empty(t, build.Setup.Error, "a successful CLI recovery must clear the stale setup failure")
+			assert.Empty(t, build.Setup.Error, "a successful recovery must clear the stale setup failure")
 			assert.Empty(t, build.Setup.Action, "a built index must stop offering Turn on")
+			var results db.ContentSearchPage
+			raw = embeddingRequest(t, ts.Client(), ts.URL, http.MethodGet, "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", nil, http.StatusOK)
+			require.NoError(t, json.Unmarshal(raw, &results))
+			require.NotEmpty(t, results.Matches)
+			assert.Equal(t, "session-one", results.Matches[0].SessionID)
 		})
 	}
 }
