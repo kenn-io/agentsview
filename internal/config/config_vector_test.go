@@ -719,7 +719,7 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 					"endpoint":            "/v1",
 					"ollama_cpu_fallback": true,
 				},
-				wantErr: "ollama_cpu_fallback requires an absolute HTTP(S) endpoint",
+				wantErr: "[vector.embeddings.servers.local] embed endpoint must use http or https",
 			},
 			{
 				name:    "explicit zero backstop_interval",
