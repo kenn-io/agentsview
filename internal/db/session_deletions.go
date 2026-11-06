@@ -40,8 +40,12 @@ func (db *DB) archiveJournalRevision(ctx context.Context, key, description strin
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	return archiveJournalRevision(ctx, db.getReader(), key, description)
+}
+
+func archiveJournalRevision(ctx context.Context, q sessionExportQuerier, key, description string) (int64, error) {
 	var raw string
-	err := db.getReader().QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT value FROM archive_metadata WHERE key = ?`,
 		key,
 	).Scan(&raw)
@@ -133,14 +137,15 @@ func (db *DB) loadSessionJournalChanges(
 			description, afterRevision, throughRevision,
 		)
 	}
+	return loadSessionJournalChanges(ctx, db.getReader(), table, description, afterRevision, throughRevision)
+}
+
+func loadSessionJournalChanges(ctx context.Context, q sessionExportQuerier, table, description string, afterRevision, throughRevision int64) ([]string, error) {
 	if afterRevision == throughRevision {
 		return nil, nil
 	}
-
-	where, args := sessionDeletionPublicationChangeWhere(
-		"c", afterRevision, throughRevision, nil, nil,
-	)
-	rows, err := db.getReader().QueryContext(ctx, `
+	where, args := sessionDeletionPublicationChangeWhere("c", afterRevision, throughRevision, nil, nil)
+	rows, err := q.QueryContext(ctx, `
 		SELECT c.session_id
 		FROM `+table+` c
 		`+where+`
