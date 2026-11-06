@@ -179,7 +179,7 @@ func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot,
 		var mu sync.Mutex
 		for chunk := range slices.Chunk(snapshot.Versions, (len(snapshot.Versions)+shards-1)/shards) {
 			wait.Go(func() {
-				results, fillErr := cache.fill.Ensure(ctx, chunk, snapshot.CursorHighWater)
+				results, fillErr := cache.fill.Ensure(ctx, chunk, 0)
 				mu.Lock()
 				defer mu.Unlock()
 				maps.Copy(fills, results)
@@ -187,6 +187,9 @@ func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot,
 			})
 		}
 		wait.Wait()
+		if err == nil && snapshot.CursorHighWater > 0 {
+			err = cache.fill.ensureCursor(ctx, snapshot.CursorHighWater)
+		}
 	}
 	if err != nil {
 		return nil, timings, err

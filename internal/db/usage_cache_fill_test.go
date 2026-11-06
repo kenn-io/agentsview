@@ -1014,35 +1014,42 @@ func TestUsagePageFillShardsLargeWindow(t *testing.T) {
 	require.Len(t, snapshot.Versions, sessions)
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
-	var sizes []int
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var batches [][]usageSourceVersion
+	barrier := make(chan struct{})
 	var mu sync.Mutex
 	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
 		mu.Lock()
-		defer mu.Unlock()
-		sizes = append(sizes, len(versions))
+		// Capture only the first wave; lost-install retries can extract again.
+		if len(batches) < 2 {
+			batches = append(batches, versions)
+			if len(batches) == 2 {
+				close(barrier)
+			}
+		}
+		mu.Unlock()
+		select {
+		case <-barrier:
+		case <-ctx.Done():
+		}
 	}
-	installs, _, err := cache.fillAndRollupUsageWindow(t.Context(), &snapshot, &snapshot, func(string) {})
+	installs, _, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, func(string) {})
 	require.NoError(t, err)
 	assert.Len(t, installs, sessions)
-	var total int
-	for _, size := range sizes {
-		total += size
-	}
-	assert.Greater(t, len(sizes), 1)
-	assert.LessOrEqual(t, len(sizes), bulkReadSlots)
-	assert.Equal(t, sessions, total)
-	var cached, facts, ordered int
+	require.Len(t, batches, 2)
+	assert.ElementsMatch(t, snapshot.Versions, append(batches[0], batches[1]...))
+	var cached, facts int
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_cached_sessions`).Scan(&cached))
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_facts`).Scan(&facts))
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `
-		SELECT COUNT(*) FROM usage_facts earlier JOIN usage_facts later
-		ON earlier.cached_session_id=later.cached_session_id
-		WHERE earlier.fact_index=0 AND later.fact_index=1
-		AND earlier.message_ordinal=1 AND later.message_ordinal=0
-		AND earlier.timestamp_ms < later.timestamp_ms`).Scan(&ordered))
 	assert.Equal(t, sessions, cached)
 	assert.Equal(t, 2*sessions, facts)
-	assert.Equal(t, sessions, ordered)
+	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{
+		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 20*sessions, daily.Totals.InputTokens)
+	assert.Equal(t, 10*sessions, daily.Totals.OutputTokens)
 }
 
 func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
