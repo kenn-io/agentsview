@@ -582,13 +582,16 @@ describe("CommandPalette", () => {
 
   it("announces searching through a status region that is already mounted", async () => {
     const component = mount(CommandPalette, { target: document.body });
-    await enterSearchQuery();
+    await tick();
+    // Mounted and empty before any query.
     const status = document.querySelector('[role="status"].palette-search-status');
     expect(status).not.toBeNull();
     expect(status?.textContent?.trim()).toBe("");
 
+    // The store mock is not reactive; entering the query is the change
+    // that re-renders the palette with the search running.
     mockSearchStore.isSearching = true;
-    await enterSearchQuery("match again");
+    await enterSearchQuery();
     // Same node, new text: live regions announce changes, not insertions.
     expect(document.querySelector('[role="status"].palette-search-status')).toBe(status);
     expect(status?.textContent?.trim()).toBe("Searching...");
