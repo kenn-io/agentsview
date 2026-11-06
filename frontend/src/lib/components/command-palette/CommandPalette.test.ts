@@ -741,8 +741,7 @@ describe("CommandPalette", () => {
   it("renders the semantic setup panel instead of the raw error for semantic-unavailable", async () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
-      detail:
-        "semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and run 'agentsview index embeddings build'",
+      detail: "semantic search not available",
       code: "semantic_setup_required",
       kind: "semantic-unavailable",
     };
@@ -819,8 +818,7 @@ describe("CommandPalette", () => {
       arrangeStatus();
       mockSearchStore.mode = "semantic";
       mockSearchStore.error = {
-        detail:
-          "semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and run 'agentsview index embeddings build'",
+        detail: "semantic search not available",
         code: "semantic_setup_required",
         kind: "semantic-unavailable",
       };
@@ -864,8 +862,7 @@ describe("CommandPalette", () => {
     );
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
-      detail:
-        "semantic search not available: turn on Search by meaning in Settings > Embeddings, or enable [vector] in config.toml and run 'agentsview index embeddings build'",
+      detail: "semantic search not available",
       code: "semantic_setup_required",
       kind: "semantic-unavailable",
     };
