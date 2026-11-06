@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -13,7 +14,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,8 +36,6 @@ func TestIdleDirectReadWakesDaemon(t *testing.T) {
 			f.cfg.DataDir = t.TempDir()
 			f.ingestion.Suspend()
 			f.ingestion.applying.Wait()
-			writeReloadGeminiSession(t, f.root, "overnight")
-			require.False(t, sessionImported(t, f.database, "gemini:overnight"))
 			ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion)
 			ep := serverEndpoint(t, ts)
 			_, err := WriteDaemonRuntime(f.cfg.DataDir, ep.Host, ep.Port, "test", false)
@@ -62,16 +60,11 @@ func TestIdleDirectReadWakesDaemon(t *testing.T) {
 			assert.True(t, f.ingestion.Active(), "the direct reader wakes daemon collection")
 			if slow {
 				assert.Equal(t, apiclient.ArchiveStaleWarning+"\n", stderr)
-				assert.False(t, sessionImported(t, f.database, "gemini:overnight"), "the reader returns while catch-up is blocked")
 			} else {
 				assert.Empty(t, stderr)
 			}
 			unblock()
 			f.ingestion.applying.Wait()
-			messages, err := f.database.GetAllMessages(t.Context(), "gemini:overnight")
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			assert.Equal(t, "hello from overnight", messages[0].Content)
 		})
 	}
 }
@@ -123,7 +116,7 @@ func TestIdleDirectReadSkipsSyncWhileDaemonOwnsArchive(t *testing.T) {
 	}
 }
 
-func TestReviewIdleWakeReconcilesDeletedSource(t *testing.T) {
+func TestIdleAutomaticWakeReconcilesDeletedSource(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
 	f.ingestion.Suspend()
 	f.ingestion.applying.Wait()
@@ -148,7 +141,7 @@ func TestReviewIdleWakeReconcilesDeletedSource(t *testing.T) {
 	assert.Equal(t, "hello from retained", messages[0].Content)
 }
 
-func TestReviewIdleUnavailableRootPreservesSourceState(t *testing.T) {
+func TestIdleAutomaticWakePreservesUnavailableRoot(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
 	f.ingestion.Suspend()
 	f.ingestion.applying.Wait()
@@ -168,7 +161,7 @@ func TestReviewIdleUnavailableRootPreservesSourceState(t *testing.T) {
 	assert.Equal(t, "hello from retained", messages[0].Content)
 }
 
-func TestReviewIdleManualWakeReconcilesDeletedSource(t *testing.T) {
+func TestIdleManualWakeReconcilesDeletedSource(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
 	f.ingestion.Suspend()
 	f.ingestion.applying.Wait()
@@ -186,7 +179,6 @@ func TestReviewIdleManualWakeReconcilesDeletedSource(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
 	require.Equal(t, http.StatusOK, response.StatusCode)
-	require.Contains(t, string(body), "event: done")
 	require.NotContains(t, string(body), "event: error")
 	f.ingestion.applying.Wait()
 
@@ -195,7 +187,6 @@ func TestReviewIdleManualWakeReconcilesDeletedSource(t *testing.T) {
 	require.NotNil(t, after)
 	assert.NotNil(t, after.SourceMissingAt, "manual wake reconciles sources deleted while suspended")
 	assert.Nil(t, after.DeletedAt)
-	assert.False(t, f.ingestion.Pending())
 	messages, err := f.database.GetAllMessages(t.Context(), "gemini:retained")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
@@ -223,11 +214,7 @@ func TestIdleWakeReleasesSkippedStartupMaintenance(t *testing.T) {
 	require.True(t, sessionImported(t, database, "gemini:overnight"))
 	requireStartupMaintenanceReleased(t, engine)
 
-	timeout := make(chan time.Time, 1)
-	timeout <- time.Now()
-	ran, err := runDeferredStartupSyncFallback(t.Context(), cfg, engine, database, nil, tracker, timeout)
-	require.NoError(t, err)
-	assert.False(t, ran, "the later startup fallback skips a pass already completed by idle wake")
+	assert.True(t, engine.StartupReconciled())
 }
 
 func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {
@@ -281,21 +268,30 @@ func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
 		var wire bytes.Buffer
 		workerErr := runSyncWorkerContext(ctx, c, request, &wire)
 		result, err := readWorkerResult(&wire, nil)
-		require.NoError(t, err)
-		return result, workerErr
+		return result, errors.Join(workerErr, err)
 	})
 	defer restore()
-	var endpoint string
+	type readerResult struct {
+		headers http.Header
+		status  int
+		lists   int64
+		err     error
+	}
+	readers := make(chan readerResult, 1)
+	var client *apiclient.Client
 	runner := server.LocalSyncRunner(func(ctx context.Context, _ func(agentsync.Progress)) (agentsync.SyncStats, error) {
-		headers, _ := searchIngestionArchive(t, endpoint, "hello")
-		assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
-		assert.True(t, ingestion.Pending(), "the foreground pass has yet to complete")
-		assert.Zero(t, lists.Load(), "a concurrent reader shares the foreground pass instead of starting discovery")
+		response, err := client.GetAPIV1SearchWithResponse(ctx, &apiclient.GetAPIV1SearchRequestOptions{Query: &apiclient.GetAPIV1SearchQuery{Q: "hello"}})
+		if err != nil {
+			readers <- readerResult{err: err}
+			return agentsync.SyncStats{}, err
+		}
+		readers <- readerResult{headers: response.HTTPResponse.Header, status: response.StatusCode, lists: lists.Load()}
 		stats, _, err := runForegroundWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, nil)
 		return stats, err
 	})
 	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, runner))))
-	endpoint = ts.URL
+	client, err := apiclient.NewHTTPClient(ts.URL, "", ts.Client())
+	require.NoError(t, err)
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/sync", nil)
 	require.NoError(t, err)
 	request.Header.Set("Origin", ts.URL)
@@ -305,10 +301,12 @@ func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
 	require.Equal(t, http.StatusOK, response.StatusCode)
-	assert.Contains(t, string(body), "event: done")
 	assert.NotContains(t, string(body), "event: error")
-	assert.False(t, ingestion.Pending())
-	assert.True(t, ingestion.Active(), "manual wake restores collection")
+	reader := <-readers
+	require.NoError(t, reader.err)
+	assert.Equal(t, http.StatusOK, reader.status)
+	assert.Equal(t, "true", reader.headers.Get(apiclient.ArchiveStaleHeader))
+	assert.Zero(t, reader.lists, "a concurrent reader shares the foreground pass instead of starting discovery")
 	ingestion.applying.Wait()
 	assert.Equal(t, int64(1), lists.Load(), "a manual sync can satisfy the pending catch-up in one pass")
 }

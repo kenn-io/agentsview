@@ -430,7 +430,8 @@ func TestArchiveAuditLoopLogsBackoffWhileRunning(t *testing.T) {
 }
 
 // TestStartArchiveAuditSelectsFirstDelay checks that stale archives rebuild
-// after an hour and routine audits wait a day, then defer while on battery.
+// after an hour and routine audits wait a day. Idle collection defers both;
+// battery power defers only routine audits.
 func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 	type attempt struct {
 		delay time.Duration
@@ -482,17 +483,12 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 					defer close(done)
 					startArchiveAudit(ctx, cfg, engine, database, lock, nil, nil, nil, ingestion, battery.Load)
 				}()
-				if tc.idle && tc.stale {
-					synctest.Sleep(archiveAuditRetryInitial)
-					synctest.Wait()
-					assert.Empty(t, attempts, "the idle rebuild waits for collection to resume")
-					ingestion.mu.Lock()
-					ingestion.watchers = &ingestionWatchers{}
-					ingestion.mu.Unlock()
-					synctest.Wait()
-				}
-				if tc.idle && !tc.stale {
-					synctest.Sleep(archiveAuditInterval)
+				if tc.idle {
+					first := archiveAuditInterval
+					if tc.stale {
+						first = archiveAuditRetryInitial
+					}
+					synctest.Sleep(first)
 					synctest.Wait()
 					assert.Empty(t, attempts, "the due audit waits for collection to resume")
 					ingestion.mu.Lock()

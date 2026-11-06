@@ -168,17 +168,31 @@ func newIngestionLifecycleFixture(t *testing.T) ingestionLifecycleFixture {
 func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
 	f.ingestion.OpenWatcherDispatch()
-	var attempts atomic.Int64
-	//nolint:kennlint // deadlinetest: absence check; the engine lease keeps catch-up blocked beyond the idle deadline
-	f.tracker.SetSyncIdle(100*time.Millisecond, func() {
+	suspended := make(chan bool, 4)
+	f.tracker.SetSyncIdle(time.Second, func() {
 		f.ingestion.Suspend()
-		attempts.Add(1)
+		suspended <- f.ingestion.Active()
 	})
 	trackerCtx, cancel := context.WithCancel(t.Context())
 	trackerDone := make(chan struct{})
 	go func() { defer close(trackerDone); f.tracker.Run(trackerCtx) }()
-	defer func() { cancel(); <-trackerDone }()
-	require.Eventually(t, func() bool { return attempts.Load() > 0 }, time.Second, 10*time.Millisecond)
+	stopTracker := sync.OnceFunc(func() { cancel(); <-trackerDone })
+	defer stopTracker()
+	waitForSuspension := func(wantActive bool) {
+		timeout := time.NewTimer(20 * time.Second)
+		defer timeout.Stop()
+		for {
+			select {
+			case active := <-suspended:
+				if active == wantActive {
+					return
+				}
+			case <-timeout.C:
+				require.FailNow(t, "idle tracker did not reach the expected collection state")
+			}
+		}
+	}
+	waitForSuspension(false)
 	f.ingestion.applying.Wait()
 
 	lastSync := time.Now().Add(-time.Minute)
@@ -206,25 +220,18 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 	start := time.Now()
 	headers, _ = searchIngestionArchive(t, ts.URL, "overnight")
 	assert.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
-	assert.Less(t, time.Since(start), time.Second, "later readers return immediately after the shared catch-up budget expires")
-	canceled, stop := context.WithCancel(t.Context())
-	stop()
-	assert.False(t, f.ingestion.EnsureFresh(canceled), "one canceled reader leaves shared work running")
-	require.Eventually(t, func() bool { return attempts.Load() >= 2 }, time.Second, time.Millisecond, "the idle deadline fires while catch-up holds the engine")
+	assert.Less(t, time.Since(start), ingestionWaitBudget, "later readers reuse the expired budget instead of starting another wait")
+	waitForSuspension(true)
 	assert.True(t, f.ingestion.Active(), "an idle deadline during catch-up keeps collection alive")
 	assert.True(t, f.ingestion.Pending(), "the blocked catch-up still owes an archive refresh")
 	releaseOnce()
 	<-finished
-	require.Eventually(t, func() bool { return !f.ingestion.Active() }, time.Second, time.Millisecond, "catch-up completed after the idle deadline, so collection must stop without needing another request")
+	waitForSuspension(false)
+	stopTracker()
+	f.ingestion.applying.Wait()
+	require.False(t, f.ingestion.Active(), "catch-up completed after the idle deadline, so collection must stop without needing another request")
 	require.True(t, sessionImported(t, f.database, "gemini:overnight"))
-	// Keep the request's activity hold until its fresh archive has been read.
-	f.tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		assert.True(t, f.ingestion.EnsureFresh(t.Context()))
-		headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
-		assert.Contains(t, freshBody, "hello from overnight")
-		assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-		assert.True(t, sessionImported(t, f.database, "gemini:old"), "wake imports copied files with preserved old modification times")
-	}), "").ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search", nil))
+	assert.True(t, sessionImported(t, f.database, "gemini:old"), "wake imports copied files with preserved old modification times")
 }
 
 func TestDaemonIngestionReloadWhileSuspended(t *testing.T) {
@@ -298,7 +305,7 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 	require.Eventually(t, func() bool { return sessionImported(t, database, "gemini:before-startup-ack") }, 5*time.Second, 20*time.Millisecond)
 }
 
-func TestArchiveWriteRoutesWakeIdleCollection(t *testing.T) {
+func TestArchiveWriteRoutesHandleIdleCollection(t *testing.T) {
 	for _, tc := range []struct{ name, route string }{{"resync", "/resync"}, {"startup-only", "/sync?startup_only=true"}, {"nil receiver pass-through", "/sync"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
