@@ -46,12 +46,13 @@ type activityReportBackend struct {
 	lowerBound, upperBound string
 	read                   map[string]struct{}
 	pricing                []export.EffectivePricingRow
+	pricingDigest          string
 }
 
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q, b.read, b.pricing)
+	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q, b.read, b.pricing, b.pricingDigest)
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
@@ -76,11 +77,15 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, fmt.Errorf("loading pg pricing: %w", err)
 	}
+	pricingDigest, err := export.EffectivePricingDigest(pricing)
+	if err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
 
 	var selection, version string
 	var revision int64
-	if !q.Partial && !s.hostedRelations {
-		version, err = s.activityKeptVersion(ctx, pricing)
+	if !q.Partial && !s.hostedRelations && !db.TerminationUsesTime(f.Termination) {
+		version, err = s.activityKeptVersion(ctx, pricingDigest)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
@@ -117,10 +122,11 @@ func (s *Store) BuildActivityReportArtifacts(
 		read = make(map[string]struct{}, len(ids))
 	}
 	backend := activityReportBackend{
-		read:       read,
-		pricing:    pricing,
-		Store:      s,
-		lowerBound: lowerBound, upperBound: upperBound,
+		read:          read,
+		pricing:       pricing,
+		pricingDigest: pricingDigest,
+		Store:         s,
+		lowerBound:    lowerBound, upperBound: upperBound,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating pg activity report")
@@ -133,7 +139,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
 			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
-			labels: slices.Clip(slices.Clone(activity.ProjectLabels(sessions))),
+			labels: activity.ProjectLabels(sessions),
 		}})
 	}
 	return artifacts, err
@@ -677,11 +683,11 @@ func activityReportClaudePeerPredicate(sessions, lower, upper string) string {
 // computed after selection so filtered rows do not affect pricing metadata.
 func (s *Store) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
-	read map[string]struct{}, pricing []export.EffectivePricingRow,
+	read map[string]struct{}, pricing []export.EffectivePricingRow, pricingDigest string,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
 
-	rateResolver := export.NewPricingResolver(pricing)
+	rateResolver := export.NewPricingResolverWithDigest(pricing, pricingDigest)
 	if len(ids) == 0 {
 		block, err := rateResolver.BuildBlock()
 		if err != nil {

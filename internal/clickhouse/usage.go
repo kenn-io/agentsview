@@ -132,18 +132,6 @@ func appendChUsageSessionFilterClauses(
 	return where, append(args, b.Args()...)
 }
 
-// chTerminationUsesTime reports whether a termination filter compares
-// session times with the current time.
-func chTerminationUsesTime(status string) bool {
-	for part := range strings.SplitSeq(status, ",") {
-		switch strings.TrimSpace(part) {
-		case "active", "stale", "unclean":
-			return true
-		}
-	}
-	return false
-}
-
 const chDailyCursorUsageRowsSQLTemplate = `
 SELECT
 	'' AS session_id,
@@ -2247,7 +2235,7 @@ func usageRowMemoKeyFor(
 	kind string, f db.UsageFilter, sessionID, pricingDigest string,
 	customModels [][2]string,
 ) (string, error) {
-	if chTerminationUsesTime(f.Termination) {
+	if db.TerminationUsesTime(f.Termination) {
 		return "", nil
 	}
 	filter, err := json.Marshal(f)

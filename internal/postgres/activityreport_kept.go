@@ -18,7 +18,7 @@ type pgActivityKept struct {
 	candidates, peers, labels []string
 }
 
-func (s *Store) activityKeptVersion(ctx context.Context, pricing []export.EffectivePricingRow) (string, error) {
+func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, error) {
 	// Include the table identity so recreating the journal
 	// cannot validate a report built against the previous schema.
 	var oid uint32
@@ -29,8 +29,7 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricing []export.Effect
 	if err != nil {
 		return "", fmt.Errorf("reading kept activity version: %w", err)
 	}
-	digest, err := export.EffectivePricingDigest(pricing)
-	return fmt.Sprintf("%d|%s", oid, digest), err
+	return fmt.Sprintf("%d|%s", oid, pricingDigest), nil
 }
 
 func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, bool, error) {
@@ -45,6 +44,9 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		return kept.Report{}, through, false, err
 	}
 	entry := entries[0]
+	if through == entry.revision && len(changed) == 0 {
+		return entry.report, through, true, nil
+	}
 	if through < entry.revision {
 		return kept.Report{}, through, false, nil
 	}

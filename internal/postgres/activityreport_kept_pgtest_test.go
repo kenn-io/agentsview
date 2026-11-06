@@ -278,13 +278,17 @@ func TestPGActivityReportKeptPushDuringBuild(t *testing.T) {
 }
 
 func TestPGActivityReportKeptBypasses(t *testing.T) {
-	for _, mode := range []string{"partial", "hosted", "missing journal", "unreadable journal"} {
+	for _, mode := range []string{"partial", "hosted", "missing journal", "unreadable journal", "active", "stale", "unclean", "clean, active"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
 			pgKeptSession(t, local, "past", "project-a", "2026-06-14")
 			pgKeptPush(t, syncer, false)
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+			wantTokens := 500
 			switch mode {
+			case "active", "stale", "unclean", "clean, active":
+				f.Termination = mode
+				wantTokens = 0
 			case "partial":
 				var err error
 				q, err = activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-06-14", Timezone: "UTC"}, time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC))
@@ -301,7 +305,7 @@ func TestPGActivityReportKeptBypasses(t *testing.T) {
 				store = reader
 			}
 			for range 2 {
-				assert.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+				assert.Equal(t, wantTokens, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
 			}
 		})
 	}

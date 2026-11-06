@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -594,7 +595,9 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	upper := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 	pricing, err := store.loadPricingMap(ctx)
 	require.NoError(t, err)
-	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil, pricing)
+	digest, err := export.EffectivePricingDigest(pricing)
+	require.NoError(t, err)
+	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil, pricing, digest)
 	require.NoError(t, err)
 
 	// The shared dedup identity leaves one survivor.
