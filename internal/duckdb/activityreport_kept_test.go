@@ -137,3 +137,25 @@ func TestActivityReportKeptExcludesPartialAndBorrowedHandles(t *testing.T) {
 		keptActivityBuild(t, store, q, true)
 	}
 }
+
+func TestActivityReportKeptExcludesTimeDependentTermination(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	q := duckDayQuery(t, "2026-01-01", "UTC")
+	for _, termination := range []string{"active", "stale", "unclean", "clean, active"} {
+		t.Run(termination, func(t *testing.T) {
+			for range 2 {
+				var phases []activity.ProgressPhase
+				_, err := store.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{
+					Timezone: "UTC", Termination: termination,
+				}, q, func(p activity.Progress) { phases = append(phases, p.Phase) })
+				require.NoError(t, err)
+				require.Contains(t, phases, activity.ProgressLoadingUsage,
+					"time-dependent session membership must be rebuilt on every read")
+			}
+		})
+	}
+}

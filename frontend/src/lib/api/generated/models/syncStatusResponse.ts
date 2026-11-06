@@ -12,4 +12,6 @@ export interface SyncStatusResponse {
   /** Startup ingestion has not completed successfully */
   startup_pending: boolean;
   stats: SyncSyncStats;
+  /** Local ingestion is catching up after an idle period */
+  sync_pending: boolean;
 }

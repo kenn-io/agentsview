@@ -643,6 +643,9 @@ external request or daemon-owned job is active. Periodic sync and file-watcher
 work prevent exit while they run, but do not keep the daemon alive forever by
 themselves.
 
+`sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
+pause.
+
 #### CLI daemon behavior
 
 Ordinary session commands, including `session list`, `session get`, and

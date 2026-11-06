@@ -39,6 +39,7 @@ func syncEventDescription(op *huma.Operation) {
 }
 
 type syncStatusResponse struct {
+	SyncPending    bool               `json:"sync_pending" doc:"Local ingestion is catching up after an idle period"`
 	ArchiveStale   bool               `json:"archive_stale" doc:"Results may reflect the archive before a required parser rebuild"`
 	StartupPending bool               `json:"startup_pending" doc:"Startup ingestion has not completed successfully"`
 	LastSync       string             `json:"last_sync"`
@@ -187,7 +188,7 @@ func (s *Server) humaSyncStatus(
 ) (*jsonOutput[syncStatusResponse], error) {
 	engine := s.syncStatusEngine()
 	if engine == nil {
-		return &jsonOutput[syncStatusResponse]{Body: syncStatusResponse{ArchiveStale: s.archiveStale()}}, nil
+		return &jsonOutput[syncStatusResponse]{Body: syncStatusResponse{ArchiveStale: s.archiveStale(), SyncPending: s.syncPending()}}, nil
 	}
 	startupPending := s.engine != nil && !s.engine.StartupReconciled()
 	lastSync := engine.LastSync()
@@ -203,6 +204,7 @@ func (s *Server) humaSyncStatus(
 	return &jsonOutput[syncStatusResponse]{
 		Body: syncStatusResponse{
 			ArchiveStale:   s.archiveStale(),
+			SyncPending:    s.syncPending(),
 			StartupPending: startupPending,
 			LastSync:       lastSyncStr,
 			Stats:          &stats,
@@ -365,6 +367,10 @@ func (s *Server) runSyncWhenReady(
 // the CLI can retry through /api/v1/resync instead of surfacing a raw HTTP
 // error. The body remains the human-readable explanation.
 const ResyncRequiredHeader = "X-Agentsview-Resync-Required"
+
+func (s *Server) syncPending() bool {
+	return s.ingestionFreshness != nil && s.ingestionFreshness.Pending()
+}
 
 func (s *Server) archiveStale() bool {
 	local, ok := s.db.(*db.DB)
