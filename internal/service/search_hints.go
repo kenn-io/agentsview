@@ -58,15 +58,12 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		probe("hidden_automated", "automated", retry, map[string]any{"include_automated": true}, false)
 	}
 	lexical := req.Mode == "" || req.Mode == "substring" || req.Mode == "regex" || req.Mode == "fts"
-	if explainChildren && (req.Scope == "top" || lexical && req.Scope == "" && !req.IncludeChildren) {
+	if explainChildren && lexical && req.Scope == "" && !req.IncludeChildren {
 		retry := req
 		retry.IncludeChildren, retry.IncludeOneShot, retry.IncludeAutomated = true, true, true
 		args := map[string]any{"include_children": true, "include_one_shot": true, "include_automated": true}
 		if req.Mode != "fts" {
 			retry.Scope = "subordinate"
-		}
-		if req.Scope != "" {
-			args["scope"] = "all"
 		}
 		probe("hidden_children", "child", retry, args, true)
 	}

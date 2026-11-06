@@ -33,3 +33,29 @@ func TestSearchContentHintsBoundedCounts(t *testing.T) {
 	req.Cursor = 1
 	assert.Empty(t, service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true))
 }
+
+func TestSearchContentHintsPreserveExplicitScope(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "parent", "proj")
+	dbtest.SeedSession(t, d, "child", "proj", func(s *db.Session) {
+		s.ParentSessionID = new("parent")
+		s.RelationshipType = "subagent"
+	})
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("child", 0, "marker")}))
+	svc := service.NewDirectBackend(d, nil)
+	for _, scope := range []string{"", "top"} {
+		t.Run(scope, func(t *testing.T) {
+			req := service.ContentSearchRequest{Pattern: "marker", Mode: "substring", Scope: scope, IncludeOneShot: true, IncludeAutomated: true}
+			res, err := svc.SearchContent(t.Context(), req)
+			require.NoError(t, err)
+			require.Empty(t, res.Matches)
+			hints := service.SearchContentHints(t.Context(), svc, req, res, true)
+			if scope == "" {
+				require.Len(t, hints, 1)
+				assert.Equal(t, "hidden_children", hints[0].Code)
+			} else {
+				assert.Empty(t, hints)
+			}
+		})
+	}
+}
