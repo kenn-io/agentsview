@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -267,9 +268,10 @@ func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 	})
 	t.Setenv("HOME", t.TempDir())
 	dir := testDataDir(t)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
+	buildTestVectorsDB(t, cfg)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 	held, err := tryAcquireNamedLock(dir, vectorsWriteLockFile)
 	require.NoError(t, err)
@@ -293,7 +295,7 @@ func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), 202)
+	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"turn-on"}`), 202)
 	<-reloaded
 	client := &http.Client{Timeout: time.Second}
 	before := inspections.Load()
@@ -312,8 +314,15 @@ func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 	require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
 	require.NotNil(t, status.Setup)
 	assert.False(t, status.Setup.Busy)
-	assert.Equal(t, "use-built-in", status.Setup.Action)
+	assert.Equal(t, "turn-on", status.Setup.Action)
 	assert.Equal(t, "Another process may be using search. Close it and retry.", status.Setup.Error)
+	export, ok, err := owner.push.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok, "push must see the generation built by the process holding the write lock")
+	defer export.Close()
+	hashes, err := export.SessionDocHashes(t.Context(), nil)
+	require.NoError(t, err)
+	assert.Contains(t, hashes, "session-1")
 }
 
 func TestLiveEmbeddingsSetupFailureRetry(t *testing.T) {
@@ -407,4 +416,31 @@ func TestLiveEmbeddingsSetupProbeKeepsRuntimeAvailable(t *testing.T) {
 	}
 	release()
 	assert.ErrorContains(t, <-setupDone, "setup action is unavailable")
+}
+
+func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
+	for _, filesystemFailure := range []bool{false, true} {
+		t.Run(strconv.FormatBool(filesystemFailure), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			dir := testDataDir(t)
+			cfg, err := config.Default()
+			require.NoError(t, err)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			cfg.DataDir = dir
+			action, want := "use-built-in", http.StatusBadRequest
+			if filesystemFailure {
+				require.NoError(t, os.WriteFile(filepath.Join(home, ".kenn"), []byte("not a directory"), 0o600))
+				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": {Local: true}}
+				action, want = "turn-on", http.StatusInternalServerError
+			} else {
+				cfg.DeploymentEmbeddings = &config.VectorEmbeddingsServerConfig{Endpoint: "https://embeddings.example/v1"}
+			}
+			owner := &liveVectorServing{ctx: t.Context(), cfg: cfg}
+			ln, port := listenLoopback(t)
+			cfg.Host, cfg.Port = "127.0.0.1", port
+			ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+			embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"`+action+`"}`), want)
+		})
+	}
 }

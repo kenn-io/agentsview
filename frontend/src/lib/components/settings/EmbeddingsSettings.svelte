@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Chip, type ChipTone } from "@kenn-io/kit-ui";
+  import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
   import { EmbeddingsService } from "../../api/generated/index";
@@ -9,6 +9,7 @@
     isAbortError,
   } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import { sync } from "../../stores/sync.svelte.js";
 
   import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
 
@@ -127,6 +128,18 @@
     }
   }
 
+  async function retryBuild(): Promise<void> {
+    try {
+      await EmbeddingsService.postApiV1EmbeddingsBuild({}).catch((e) => {
+        if (!(e instanceof ApiError && e.status === 409)) throw e;
+      });
+      await refresh(true);
+      schedule();
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : m.settings_embeddings_load_failed();
+    }
+  }
+
   function updateElapsed(s: VectorBuildStatus): void {
     if (!s.running) {
       elapsedMs = null;
@@ -208,35 +221,39 @@
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
   {:else if status && status.setup?.enabled !== false && !status.setup?.busy}
-    <div class="status-grid">
-      {#if status.model}
-        <span class="row-label">{m.settings_embeddings_model_label()}</span>
-        <span class="row-value mono">{status.model}</span>
-      {/if}
-      {#if status.dimension}
-        <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
-        <span class="row-value">{numberFormat.format(status.dimension)}</span>
-      {/if}
-      <span class="row-label">{m.settings_embeddings_status_label()}</span>
-      <span class="row-value">
-        {#if running}
-          <Chip size="xs" tone="warning">{phaseLabel()}</Chip>
-        {:else if status.last_error}
-          <Chip size="xs" tone="danger">
-            {m.settings_embeddings_last_build_failed()}
-          </Chip>
-        {:else}
-          {m.settings_embeddings_status_idle()}
+    {#if status.model || status.dimension || !status.setup || !running}
+      <div class="status-grid">
+        {#if status.model}
+          <span class="row-label">{m.settings_embeddings_model_label()}</span>
+          <span class="row-value mono">{status.model}</span>
         {/if}
-      </span>
-    </div>
+        {#if status.dimension}
+          <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
+          <span class="row-value">{numberFormat.format(status.dimension)}</span>
+        {/if}
+        {#if !status.setup || !running}
+          <span class="row-label">{m.settings_embeddings_status_label()}</span>
+          <span class="row-value">
+            {#if running}
+              <Chip size="xs" tone="warning">{phaseLabel()}</Chip>
+            {:else if status.last_error}
+              <Chip size="xs" tone="danger">
+                {m.settings_embeddings_last_build_failed()}
+              </Chip>
+            {:else}
+              {m.settings_embeddings_status_idle()}
+            {/if}
+          </span>
+        {/if}
+      </div>
+    {/if}
 
     {#if running}
       {#if phase === "scanning" || status.total <= 0}
         <p class="muted" aria-live="polite">
           {m.settings_embeddings_scanning_hint()}
         </p>
-      {:else}
+      {:else if !status.setup || (estimateReady && ratePerSecond !== null) || elapsedMs !== null}
         <div class="progress-block" aria-live="polite">
           {#if !status.setup}
             <div
@@ -263,7 +280,7 @@
                 })}
               </span>
             {/if}
-            {#if progressFraction !== null}
+            {#if !status.setup && progressFraction !== null}
               <span>{percentFormat.format(progressFraction)}</span>
             {/if}
             {#if estimateReady && ratePerSecond !== null}
@@ -298,7 +315,12 @@
         </div>
       {/if}
     {:else if status.last_error}
-      <p class="msg error" role="alert">{status.last_error}</p>
+      <div class="build-error">
+        <p class="msg error" role="alert">{status.last_error}</p>
+        {#if status.setup?.enabled && !sync.readOnly}
+          <Button size="sm" label={m.shared_retry()} onclick={() => void retryBuild()} />
+        {/if}
+      </div>
     {:else if status.last_result}
       <div class="status-grid">
         <span class="row-label">{m.settings_embeddings_last_build_label()}</span
@@ -352,6 +374,12 @@
 </div>
 
 <style>
+  .build-error {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
   .embeddings-settings {
     display: flex;
     flex-direction: column;

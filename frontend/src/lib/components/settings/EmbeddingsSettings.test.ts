@@ -22,6 +22,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
       getApiV1EmbeddingsStatus: vi.fn(),
       getApiV1EmbeddingsGenerations: vi.fn(),
       postApiV1EmbeddingsSetup: vi.fn(),
+      postApiV1EmbeddingsBuild: vi.fn(),
     },
   };
 });
@@ -30,6 +31,7 @@ const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   getApiV1EmbeddingsGenerations: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
+  postApiV1EmbeddingsBuild: ReturnType<typeof vi.fn>;
 };
 
 function runningStatus(
@@ -67,6 +69,7 @@ describe("EmbeddingsSettings", () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockReset();
     embeddingsService.postApiV1EmbeddingsSetup.mockReset();
+    embeddingsService.postApiV1EmbeddingsBuild.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
       generations: [BUILDING_GENERATION],
     });
@@ -118,36 +121,52 @@ describe("EmbeddingsSettings", () => {
     },
   );
 
-  it("follows a concurrent build after setup returns 409 without retaining an error", async () => {
-    const setup = {
-      enabled: false,
-      action: "turn-on",
-      provider: "built-in",
-      rebuild_required: false,
-      busy: false,
-      installing: false,
-      missing_bytes: 0,
-      downloaded_bytes: 0,
-      total_bytes: 0,
-    };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
-    embeddingsService.postApiV1EmbeddingsSetup.mockImplementation(async () => {
+  it.each(["setup", "build"])(
+    "follows a concurrent build after %s returns 409 without retaining an error",
+    async (action) => {
+      const setup = {
+        enabled: false,
+        action: action === "build" ? "" : "turn-on",
+        provider: "built-in",
+        rebuild_required: false,
+        busy: false,
+        installing: false,
+        missing_bytes: 0,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+      };
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+        running: false,
+        setup: { ...setup, enabled: action === "build" },
+        ...(action === "build" ? { last_error: "encoder unavailable" } : {}),
+      });
+      const request =
+        action === "build"
+          ? embeddingsService.postApiV1EmbeddingsBuild
+          : embeddingsService.postApiV1EmbeddingsSetup;
+      request.mockImplementation(async () => {
+        embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+          runningStatus(1, { setup: { ...setup, enabled: true, action: "" } }),
+        );
+        throw new ApiError(409, "embedding build already running");
+      });
+      const component = mount(EmbeddingsSettings, { target: document.body });
+      await settle();
+      [...document.body.querySelectorAll("button")]
+        .find((b) => b.textContent?.trim() === (action === "build" ? "Retry" : "Turn on"))!
+        .click();
+      await settle();
+      expect(document.body.textContent).toContain("Indexing");
+      expect(document.body.textContent).not.toContain("embedding build already running");
+      expect(document.body.querySelector('[role="alert"]')).toBeNull();
       embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-        runningStatus(1, { setup: { ...setup, enabled: true, action: "" } }),
+        runningStatus(2, { setup: { ...setup, enabled: true, action: "" } }),
       );
-      throw new ApiError(409, "embedding build already running");
-    });
-    const component = mount(EmbeddingsSettings, { target: document.body });
-    await settle();
-    [...document.body.querySelectorAll("button")]
-      .find((b) => b.textContent?.trim() === "Turn on")!
-      .click();
-    await settle();
-    expect(document.body.textContent).toContain("Indexing");
-    expect(document.body.textContent).not.toContain("embedding build already running");
-    expect(document.body.querySelector('[role="alert"]')).toBeNull();
-    unmount(component);
-  });
+      await settle(2000);
+      expect(document.body.textContent).toContain("Indexing 2 of");
+      unmount(component);
+    },
+  );
 
   it.each([false, true])(
     "shows the daemon's warmed estimate once (setup %s)",
@@ -181,10 +200,10 @@ describe("EmbeddingsSettings", () => {
       const text = () => document.body.textContent ?? "";
       expect(text()).toContain("test-embed-model");
       expect(text()).toContain("256");
-      expect(text()).toContain("Embedding");
+      expect(text().includes("Embedding")).toBe(!withSetup);
       expect(text().match(/200/g)).toHaveLength(1);
       expect(text()).toContain(withSetup ? "Indexing 200 of 1,000 chunks" : "200 / 1,000 chunks");
-      expect(text()).toContain("20%");
+      expect(text().includes("20%")).toBe(!withSetup);
       expect(text()).toContain("50 chunks/s");
       expect(text().includes("ETA 16s")).toBe(!withSetup);
       if (withSetup) expect(text()).toContain("left");

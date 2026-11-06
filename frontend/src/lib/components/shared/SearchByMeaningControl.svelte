@@ -84,6 +84,9 @@
     color: var(--text-muted);
     line-height: 1.45;
   }
+  .build-failed :global(.kit-search-by-meaning) {
+    min-height: 0;
+  }
   .build-failed :global(.kit-chip) {
     display: none;
   }

@@ -32,6 +32,7 @@ for (const width of [1280, 390]) {
             estimate_ready: phase === "index",
             phase: "embedding",
             setup: setup(),
+            ...(phase === "failed" ? { last_error: "encoder unavailable" } : {}),
             ...(phase === "ready"
               ? {
                   build_id: 920,
@@ -45,6 +46,11 @@ for (const width of [1280, 390]) {
       await page.route("**/api/v1/embeddings/setup", async (route) => {
         actions.push(route.request().postDataJSON());
         phase = "download";
+        await route.fulfill({ status: 202, json: { started: true } });
+      });
+      await page.route("**/api/v1/embeddings/build", async (route) => {
+        expect(route.request().postDataJSON()).toEqual({});
+        phase = "index";
         await route.fulfill({ status: 202, json: { started: true } });
       });
       await page.route("**/api/v1/embeddings/generations*", (route) =>
@@ -101,11 +107,30 @@ for (const width of [1280, 390]) {
         "aria-valuenow",
         "25",
       );
+      const name = page.locator(".kit-search-by-meaning__name");
+      const indexingNameTop = entry === "settings" ? (await name.boundingBox())!.y : 0;
       phase = "ready";
       if (entry === "settings") {
         await expect(
           page.locator(".kit-search-by-meaning").getByText("On", { exact: true }),
         ).toBeVisible();
+        phase = "failed";
+        await page.reload();
+        await page
+          .getByRole("navigation", { name: "Settings" })
+          .getByRole("button", { name: /^Embeddings/ })
+          .click();
+        await expect(page.getByRole("alert")).toContainText("encoder unavailable");
+        expect((await name.boundingBox())!.y).toBe(indexingNameTop);
+        const retry = page.getByRole("button", { name: "Retry", exact: true });
+        const errorBox = (await page.getByRole("alert").boundingBox())!;
+        const retryBox = (await retry.boundingBox())!;
+        expect(Math.max(0, retryBox.y - errorBox.y - errorBox.height)).toBeLessThanOrEqual(8);
+        await retry.click();
+        await expect(page.locator(".kit-search-by-meaning [role=progressbar]")).toHaveAttribute(
+          "aria-valuenow",
+          "25",
+        );
         for (const provider of ["ollama", "ollama-other"]) {
           phase = provider;
           await page.reload();

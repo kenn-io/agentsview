@@ -38,7 +38,10 @@ func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput
 		if errors.Is(err, vector.ErrBuildRunning) {
 			return nil, embeddingsActionError(err)
 		}
-		return nil, apiError(http.StatusBadRequest, err.Error())
+		if errors.Is(err, vector.ErrInvalidBuildRequest) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		}
+		return nil, internalError("set up embeddings", err)
 	}
 	return &embeddingsBuildOutput{Status: http.StatusAccepted, Body: embeddingsBuildResponse{Started: true}}, nil
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"sync"
 
@@ -207,7 +208,7 @@ func (v *liveVectorServing) Setup(action string) error {
 		return vector.ErrBuildRunning
 	}
 	if action != status.Action {
-		return errors.New("setup action is unavailable for the current embeddings provider")
+		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
 	}
 	release, ok := v.idle.BeginWork()
 	if !ok {
@@ -247,6 +248,9 @@ func (v *liveVectorServing) closeServing(cfg config.Config) error {
 		}
 	}
 	v.serving, v.cfg = vectorServing{}, cfg
+	v.push.mu.Lock()
+	v.push.cfg = cfg
+	v.push.mu.Unlock()
 	v.database.SetVectorSearcher(nil)
 	v.database.SetRecallVectorSearcher(nil)
 	return nil
@@ -294,8 +298,5 @@ func (v *liveVectorServing) activate(action string) error {
 		return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.
 	}
 	v.startSchedulers()
-	v.push.mu.Lock()
-	v.push.cfg = cfg
-	v.push.mu.Unlock()
 	return serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 }
