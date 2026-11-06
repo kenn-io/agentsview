@@ -138,7 +138,7 @@
       ariaLabel={m.header_view_layout_heading()}
     >
       {#each LAYOUTS as layout (layout.id)}
-        <MenuRadioItem value={layout.id} closeOnSelect textValue={layout.name()} class="view-option">
+        <MenuRadioItem value={layout.id} closeOnSelect={false} textValue={layout.name()} class="view-option">
           <!-- The schematic sits at the right edge, so layout names share one
                text column with the mode and block-visibility labels. -->
           <span class="option">
@@ -159,7 +159,7 @@
       ariaLabel={m.header_view_mode_heading()}
     >
       {#each MODES as mode (mode.id)}
-        <MenuRadioItem value={mode.id} closeOnSelect textValue={mode.name()} class="view-option">
+        <MenuRadioItem value={mode.id} closeOnSelect={false} textValue={mode.name()} class="view-option">
           <span class="option-text">
             <span class="option-name">{mode.name()}</span>
             <span class="option-description">{mode.description()}</span>

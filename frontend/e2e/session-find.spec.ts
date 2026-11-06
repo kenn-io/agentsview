@@ -151,6 +151,9 @@ async function setTranscriptMode(page: Page, mode: "normal" | "focused") {
   await page
     .getByRole("menuitemradio", { name: mode === "normal" ? "Everything" : "Prompts and final answers" })
     .click();
+  // Mode picks keep the View menu open; close it so the transcript gets input.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu", { name: "Transcript view" })).toHaveCount(0);
 }
 
 /** Inspect actual browser ranges and clipping, not a mocked virtualizer. */
