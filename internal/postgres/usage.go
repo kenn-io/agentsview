@@ -2174,9 +2174,6 @@ func (s *Store) GetTopSessionsByCost(
 		}
 		return s.readTopSessions(ctx, f, limit)
 	})
-	if version == "" {
-		return out, err
-	}
 	return slices.Clone(out), err
 }
 
