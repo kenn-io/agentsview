@@ -233,6 +233,27 @@ test.describe("Top bar current tab", () => {
     await expect(trigger).toHaveText("—");
     await expect(trigger).toHaveAccessibleName("Primary navigation");
     await expect(page.locator('[aria-current="page"]')).toHaveCount(0);
+
+    // The open menu presents no option as selected: no check, no selected
+    // colour or weight, and no aria-selected.
+    await page.mouse.move(0, 0);
+    await trigger.click();
+    const options = page.locator(".kit-top-bar__nav-select [role=option]");
+    await expect(options.first()).toBeVisible();
+    await expect(page.locator(".kit-top-bar__nav-select [role=option][aria-selected=true]"))
+      .toHaveCount(0);
+    await expect(page.locator(".kit-top-bar__nav-select .kit-select-dropdown__check svg:visible"))
+      .toHaveCount(0);
+    // Move the highlight off Sessions so it is measured at rest.
+    await options.last().hover();
+    await expect(options.first()).not.toHaveClass(/highlighted/);
+    const looks = await options.evaluateAll((els) =>
+      els
+        .filter((el) => !el.matches(".highlighted, :disabled"))
+        .map((el) => `${getComputedStyle(el).color} ${getComputedStyle(el).fontWeight}`),
+    );
+    expect(looks.length).toBeGreaterThan(1);
+    expect(new Set(looks).size).toBe(1);
   });
 });
 
