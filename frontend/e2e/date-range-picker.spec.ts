@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 for (const theme of ["light", "dark"] as const) {
-  test(`date presets hang from the mode control as a narrower tray in ${theme}`, async ({
+  test(`date presets are a second segmented control under the mode tabs in ${theme}`, async ({
     page,
   }) => {
     await page.addInitScript((t) => localStorage.setItem("theme", t), theme);
@@ -12,32 +12,57 @@ for (const theme of ["light", "dark"] as const) {
 
     for (const mode of [0, 1]) {
       await panel.locator(".kit-segmented__btn").nth(mode).click();
-      const geometry = await panel.evaluate((el) => {
+      const geometry = await panel.evaluate(async (el) => {
+        // Switching modes fades the old and new selected fills; read them
+        // once those transitions settle.
+        await Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished));
         const track = el.querySelector(".kit-date-range-picker__tabs .kit-segmented")!;
-        const tray = el.querySelector(".kit-date-range-picker__pills")!;
-        const chosenMode = el.querySelector(".kit-segmented__btn.active")!;
-        const chosenOption = tray.querySelector(".kit-date-range-picker__pill.active");
+        const presets = el.querySelector(".kit-date-range-picker__pills")!;
+        const chosenMode = track.querySelector(".kit-segmented__btn.active")!;
+        const otherMode = track.querySelector(".kit-segmented__btn:not(.active)")!;
+        const chosenOption = presets.querySelector(".kit-date-range-picker__pill.active")!;
+        const otherOption = presets.querySelector(".kit-date-range-picker__pill:not(.active)")!;
         const t = track.getBoundingClientRect();
-        const r = tray.getBoundingClientRect();
+        const p = presets.getBoundingClientRect();
+        const style = (node: Element) => getComputedStyle(node);
+        const corners = (node: Element) => {
+          const s = style(node);
+          return [s.borderTopLeftRadius, s.borderTopRightRadius, s.borderBottomRightRadius, s.borderBottomLeftRadius];
+        };
         return {
-          gap: r.top - t.bottom,
-          insetLeft: r.left - t.left,
-          insetRight: t.right - r.right,
-          trayFill: getComputedStyle(tray).backgroundColor,
-          trackFill: getComputedStyle(track).backgroundColor,
-          modeShadow: getComputedStyle(chosenMode).boxShadow,
-          optionShadow: chosenOption ? getComputedStyle(chosenOption).boxShadow : "none",
+          gap: p.top - t.bottom,
+          left: p.left - t.left,
+          right: t.right - p.right,
+          trackCorners: corners(track),
+          presetCorners: corners(presets),
+          trackFill: style(track).backgroundColor,
+          presetFill: style(presets).backgroundColor,
+          modeButtonCorners: corners(chosenMode),
+          optionCorners: corners(chosenOption),
+          modeHeight: chosenMode.getBoundingClientRect().height,
+          optionHeight: chosenOption.getBoundingClientRect().height,
+          chosenMode: [style(chosenMode).backgroundColor, style(chosenMode).boxShadow, style(chosenMode).fontWeight],
+          chosenOption: [style(chosenOption).backgroundColor, style(chosenOption).boxShadow, style(chosenOption).fontWeight],
+          otherModeFill: style(otherMode).backgroundColor,
+          otherOptionFill: style(otherOption).backgroundColor,
+          ornaments: [getComputedStyle(presets, "::before").content, getComputedStyle(presets, "::after").content],
         };
       });
-      // Attached to the track's bottom edge, inset from both ends, in the
-      // same fill so the two read as one shape.
-      expect(Math.abs(geometry.gap), JSON.stringify(geometry)).toBeLessThanOrEqual(0.5);
-      expect(geometry.insetLeft).toBeGreaterThanOrEqual(8);
-      expect(geometry.insetRight).toBeGreaterThanOrEqual(8);
-      expect(geometry.trayFill).toBe(geometry.trackFill);
-      // Only the chosen mode is raised; the chosen option is flat.
-      expect(geometry.modeShadow).not.toBe("none");
-      expect(geometry.optionShadow).toBe("none");
+      const info = JSON.stringify(geometry);
+      // Its own row below the mode tabs, the same width, not joined to them.
+      expect(geometry.gap, info).toBeGreaterThanOrEqual(4);
+      expect(Math.abs(geometry.left), info).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(geometry.right), info).toBeLessThanOrEqual(0.5);
+      expect(geometry.ornaments, info).toEqual(["none", "none"]);
+      // The same track and option shape as the mode tabs.
+      expect(geometry.presetCorners, info).toEqual(geometry.trackCorners);
+      expect(geometry.presetFill, info).toBe(geometry.trackFill);
+      expect(geometry.optionCorners, info).toEqual(geometry.modeButtonCorners);
+      expect(geometry.otherOptionFill, info).toBe(geometry.otherModeFill);
+      // The chosen preset uses the same selected pill as the chosen mode.
+      expect(geometry.chosenOption, info).toEqual(geometry.chosenMode);
+      // Subordinate only by size: presets are no taller than the mode tabs.
+      expect(geometry.optionHeight, info).toBeLessThan(geometry.modeHeight);
     }
   });
 }

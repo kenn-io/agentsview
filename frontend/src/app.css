@@ -334,44 +334,6 @@
     0 1px 2px rgba(0, 0, 0, 0.35); /* kit-ui-check-ignore: dark raised pill shadow, upstream later */
 }
 
-/* Date presets read as one segmented control, like the Relative /
-   Calendar / Custom tabs above them: a single inset track with flat
-   options, so the raised chosen preset is the only lifted shape. Separate
-   filled pills made the chosen one look like just another chip. */
-:root .kit-date-range-picker__pills {
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--radius-md);
-  background: var(--bg-inset);
-}
-
-:root .kit-date-range-picker__pills .kit-date-range-picker__pill {
-  height: 26px;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-weight: 400;
-}
-
-:root .kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active):hover {
-  background: transparent;
-  color: var(--text-primary);
-}
-
-:root.dark .kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active) {
-  color: var(--text-muted);
-}
-
-:root.dark .kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active):hover {
-  color: var(--text-primary);
-}
-
-:root .kit-date-range-picker__pills .kit-date-range-picker__pill.active {
-  background: var(--selected-strong-bg);
-  color: var(--text-primary);
-  font-weight: var(--selected-strong-weight);
-  box-shadow: var(--selected-strong-edge);
-}
-
 /* An unclean ending is a warning, not an error. kit-ui paints it red;
    the warning orange keeps it apart from the amber stale dot and from
    real failures. Used by the sidebar, Top sessions rows, and its pill. */
