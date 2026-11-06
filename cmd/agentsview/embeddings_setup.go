@@ -68,8 +68,6 @@ func (v *liveVectorServing) stopBuilders() {
 		return
 	}
 	v.schedCancel()
-	v.serving.manager.Shutdown()
-	v.serving.recallManager.Shutdown()
 	v.serving.Scheduler.Stop()
 	v.serving.RecallScheduler.Stop()
 }

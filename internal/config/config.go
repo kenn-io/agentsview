@@ -323,6 +323,13 @@ type VectorEmbeddingsServerConfig struct {
 
 const defaultNomicModel = "nomic-embed-text"
 
+func defaultNomicRecipe() VectorEmbeddingsConfig {
+	return VectorEmbeddingsConfig{
+		Model: defaultNomicModel, Dimension: 768, MaxInputChars: 4000,
+		ModelContextTokens: 2048, QueryPrefix: "search_query: ", DocumentPrefix: "search_document: ",
+	}
+}
+
 // IsNomic reports whether the recipe can keep its index on the built-in server.
 func (c VectorEmbeddingsConfig) IsNomic() bool {
 	return isNomicModel(c.Model)
@@ -2156,21 +2163,22 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Vector.Embeddings.Servers = normalizedEmbeddingsServers(file.Vector.Embeddings.Servers, meta)
 	}
 	if c.Vector.Enabled && c.Vector.Embeddings.Model == "" && (!meta.IsDefined("vector", "embeddings", "servers") || allEmbeddingsServersLocal(c.Vector.Embeddings.Servers)) {
-		c.Vector.Embeddings.Model = defaultNomicModel
+		defaults := defaultNomicRecipe()
+		c.Vector.Embeddings.Model = defaults.Model
 		if !meta.IsDefined("vector", "embeddings", "dimension") {
-			c.Vector.Embeddings.Dimension = 768
+			c.Vector.Embeddings.Dimension = defaults.Dimension
 		}
 		if !meta.IsDefined("vector", "embeddings", "max_input_chars") {
-			c.Vector.Embeddings.MaxInputChars = 4000
+			c.Vector.Embeddings.MaxInputChars = defaults.MaxInputChars
 		}
 		if !meta.IsDefined("vector", "embeddings", "model_context_tokens") {
-			c.Vector.Embeddings.ModelContextTokens = 2048
+			c.Vector.Embeddings.ModelContextTokens = defaults.ModelContextTokens
 		}
 		if !meta.IsDefined("vector", "embeddings", "query_prefix") {
-			c.Vector.Embeddings.QueryPrefix = "search_query: "
+			c.Vector.Embeddings.QueryPrefix = defaults.QueryPrefix
 		}
 		if !meta.IsDefined("vector", "embeddings", "document_prefix") {
-			c.Vector.Embeddings.DocumentPrefix = "search_document: "
+			c.Vector.Embeddings.DocumentPrefix = defaults.DocumentPrefix
 		}
 	}
 	if file.Vector.Embed.RunAfterSync != nil {
@@ -4149,8 +4157,12 @@ func patchVectorSetup(section map[string]any, builtIn bool) error {
 		embeddings["servers"] = servers
 	}
 	if recipe.Model != "" && !recipe.IsNomic() {
-		defaults := map[string]any{"model": defaultNomicModel, "dimension": 768, "max_input_chars": 4000, "model_context_tokens": 2048, "query_prefix": "search_query: ", "document_prefix": "search_document: ", "input_suffix": "", "request_dimensions": false}
-		maps.Copy(embeddings, defaults)
+		defaults := defaultNomicRecipe()
+		maps.Copy(embeddings, map[string]any{
+			"model": defaults.Model, "dimension": defaults.Dimension, "max_input_chars": defaults.MaxInputChars,
+			"model_context_tokens": defaults.ModelContextTokens, "query_prefix": defaults.QueryPrefix, "document_prefix": defaults.DocumentPrefix,
+			"input_suffix": defaults.InputSuffix, "request_dimensions": defaults.RequestDimensions,
+		})
 	}
 	deployment, _ := servers[name].(map[string]any)
 	if deployment == nil {
