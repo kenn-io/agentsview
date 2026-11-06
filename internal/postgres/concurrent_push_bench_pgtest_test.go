@@ -15,22 +15,27 @@ import (
 )
 
 // This file also runs unchanged on the base revision. One operation publishes
-// four independent archives concurrently, including their messages and usage.
+// updates from four independent archives concurrently, including messages and usage.
 func BenchmarkPGConcurrentPush(b *testing.B) {
 	const writers, sessions, messages = 4, 400, 20
 	pgURL := testPGURL(b)
 	schema := pgUsageBenchmarkSchema(b)
 	b.Cleanup(func() { cleanNamedPGSchema(b, pgURL, schema) })
 	syncers := make([]*Sync, writers)
+	locals := make([]*db.DB, writers)
+	writerSessions := make([][]db.Session, writers)
 	for writer := range writers {
 		local, err := db.Open(b.Context(), filepath.Join(b.TempDir(), "archive.db"))
 		require.NoError(b, err)
 		b.Cleanup(func() { require.NoError(b, local.Close()) })
+		locals[writer] = local
 		machine := fmt.Sprintf("writer-%d", writer)
 		for session := range sessions {
 			id := fmt.Sprintf("%s-session-%d", machine, session)
 			started := "2026-10-01T09:00:00Z"
-			require.NoError(b, local.UpsertSession(b.Context(), db.Session{ID: id, Machine: machine, Project: fmt.Sprintf("project-%d", session%10), Agent: "codex", StartedAt: &started, CreatedAt: started, MessageCount: messages, UserMessageCount: messages / 2}))
+			row := db.Session{ID: id, Machine: machine, Project: fmt.Sprintf("project-%d", session%10), Agent: "codex", StartedAt: &started, CreatedAt: started, MessageCount: messages, UserMessageCount: messages / 2}
+			require.NoError(b, local.UpsertSession(b.Context(), row))
+			writerSessions[writer] = append(writerSessions[writer], row)
 			batch := make([]db.Message, messages)
 			for ordinal := range messages {
 				role := "user"
@@ -50,12 +55,22 @@ func BenchmarkPGConcurrentPush(b *testing.B) {
 		b.Cleanup(func() { require.NoError(b, syncer.Close()) })
 		require.NoError(b, syncer.EnsureSchema(b.Context()))
 		syncers[writer] = syncer
+		result, err := syncer.Push(b.Context(), true, nil)
+		require.NoError(b, err)
+		require.Zero(b, result.Errors)
+		require.Equal(b, sessions, result.SessionsPushed)
+		require.Equal(b, sessions*messages, result.MessagesPushed)
 	}
 	b.ResetTimer()
-	for range b.N {
+	for iteration := range b.N {
 		b.StopTimer()
-		cleanNamedPGSchema(b, pgURL, schema)
-		require.NoError(b, EnsureSchema(b.Context(), syncers[0].pg, schema))
+		for writer, local := range locals {
+			for i := range writerSessions[writer] {
+				row := &writerSessions[writer][i]
+				row.FirstMessage = new(fmt.Sprintf("Updated preview %d", iteration))
+				require.NoError(b, local.UpsertSession(b.Context(), *row))
+			}
+		}
 		b.StartTimer()
 		var group sync.WaitGroup
 		errors := make(chan error, writers)
