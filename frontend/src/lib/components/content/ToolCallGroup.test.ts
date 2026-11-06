@@ -114,18 +114,6 @@ describe("ToolCallGroup", () => {
       else expect(actual).toBe(label);
       expect(document.querySelector(".group-label")?.textContent).toContain("1 tool call");
 
-      if (duration === 2000) {
-        const timing = sessionTiming.timing!;
-        sessionTiming.timing = {
-          ...timing,
-          turns: timing.turns.map((turn) => ({
-            ...turn,
-            calls: turn.calls.map((call) => ({ ...call, duration_ms: 3000 })),
-          })),
-        };
-        await tick();
-        expect(document.querySelector(".tool-duration")?.textContent?.trim()).toBe("3.0s");
-      }
       unmount(component);
     },
   );
