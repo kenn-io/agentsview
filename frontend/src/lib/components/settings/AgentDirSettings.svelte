@@ -187,18 +187,26 @@
 </div>
 
 <style>
+  /* Three columns: provider name, switch, configuration. The list owns the
+     columns and every row is a subgrid of them, so the name column is only
+     as wide as the longest provider name (capped at the settings label
+     width, where longer names wrap) and the switches and paths still line
+     up down the list. This panel trades lining up with the label column of
+     the other settings panels for a tighter name column. */
   .provider-list {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: fit-content(var(--setting-label-width, 222px)) auto minmax(0, 1fr);
+    column-gap: 12px;
   }
 
-  /* Three columns per provider: the name in the label column shared by
-     every settings panel, the switch where the other panels start their
-     controls, then the configuration. The switch column has the same width
-     in every row, so switches and configuration line up across providers. */
+  .provider-list > :not(.provider-row) {
+    grid-column: 1 / -1;
+  }
+
   .provider-row {
     display: grid;
-    grid-template-columns: var(--setting-label-width, 222px) auto minmax(0, 1fr);
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
     align-items: start;
     column-gap: 12px;
     row-gap: var(--space-2);
@@ -301,6 +309,11 @@
      The name and switch share the header line and the configuration
      takes the row's full width below them. */
   @media (max-width: 640px) {
+    .provider-list {
+      display: flex;
+      flex-direction: column;
+    }
+
     .provider-row {
       grid-template-columns: minmax(0, 1fr) auto;
     }

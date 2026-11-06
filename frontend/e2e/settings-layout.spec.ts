@@ -147,7 +147,22 @@ test.describe("Settings layout", () => {
     await openPanel("Session providers");
     const switches = await leftOf(".provider-row > .kit-toggle");
     expect(switches.length).toBeGreaterThan(0);
-    expect(new Set(switches)).toEqual(new Set([column]));
+    // The switches share one left edge down the list, but the name column
+    // is only as wide as the longest provider name (not the settings label
+    // column): the switches start one 12px gap past the widest name.
+    expect(new Set(switches).size).toBe(1);
+    const widestNameRight = Math.max(
+      ...(await panel.locator(".provider-name").evaluateAll((names) =>
+        names.map((name) => {
+          const range = document.createRange();
+          range.selectNodeContents(name);
+          return range.getBoundingClientRect().right;
+        }),
+      )),
+    );
+    expect(switches[0]! - widestNameRight).toBeGreaterThanOrEqual(11);
+    expect(switches[0]! - widestNameRight).toBeLessThanOrEqual(13);
+    expect(switches[0]!).toBeLessThan(column!);
     const nameOnSwitchLine = await panel.locator(".provider-row").evaluateAll((rows) =>
       rows.map((row) => {
         const name = row.querySelector(".provider-name")!.getBoundingClientRect();
