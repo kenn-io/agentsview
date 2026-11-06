@@ -192,6 +192,12 @@ The latest release is
   first start after upgrading waits while it is rebuilt, about 6 s for 1.7
   million messages.
 
+- A busy week opens in Activity about a third faster the first time on the
+  local archive. On a 30,000-session test archive with about 10,000 sessions in
+  one week, the page went from about 3.5 s to about 2.4 s. Message counts reuse
+  the messages Activity already read to pair intervals, and usage rows are
+  sorted without copying each row many times.
+
 - The first Usage page after the usage cache is rebuilt, such as after an
   upgrade, loads in about half the time. On a 30,000-session test archive, all
   history went from about 13 s to about 7 s. Filling an empty cache no longer
