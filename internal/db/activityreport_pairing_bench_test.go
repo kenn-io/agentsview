@@ -56,7 +56,7 @@ func seedActivityTranscriptBenchmark(b *testing.B) (*DB, []string, activity.Quer
 func BenchmarkSQLiteActivityReportPairTranscripts(b *testing.B) {
 	d, ids, q := seedActivityTranscriptBenchmark(b)
 	sessionCount := len(ids)
-	source := d.activityReportCandidateSQL(ids, q)
+	source := d.activityReportCandidateSQL(ids, q, nil)
 	b.ReportAllocs()
 	for b.Loop() {
 		count := 0

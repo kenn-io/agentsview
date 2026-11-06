@@ -415,7 +415,7 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 
 func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 	d, ids, q := seedSQLiteActivityReportCandidateBenchmark(b)
-	source := d.activityReportCandidateSQL(ids, q)
+	source := d.activityReportCandidateSQL(ids, q, nil)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -532,7 +532,7 @@ func BenchmarkSQLiteActivityReportCandidateSourceLongSession(b *testing.B) {
 		{name: "narrow-3900", q: narrow, want: 3900},
 	} {
 		b.Run(benchmark.name, func(b *testing.B) {
-			source := d.activityReportCandidateSQL([]string{"bench-long"}, benchmark.q)
+			source := d.activityReportCandidateSQL([]string{"bench-long"}, benchmark.q, nil)
 			b.ReportAllocs()
 			for range b.N {
 				count := 0
@@ -583,7 +583,7 @@ func BenchmarkSQLiteActivityReportCandidateSourceModelless(b *testing.B) {
 		Preset: "month", Date: "2026-07-01", Timezone: "UTC",
 	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(b, err)
-	source := d.activityReportCandidateSQL([]string{"bench-modelless"}, q)
+	source := d.activityReportCandidateSQL([]string{"bench-modelless"}, q, nil)
 	b.ReportAllocs()
 	for b.Loop() {
 		count := 0

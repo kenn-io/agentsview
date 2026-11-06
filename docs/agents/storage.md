@@ -826,9 +826,13 @@ SQLite keeps paired candidates in memory per session and range start, with
 separate limits of 200,000 candidates and 4,096 entries. A full cache measured
 64.3 MiB of resident Go heap on Windows amd64, using the post-GC
 `runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
-with 36-byte session IDs, 24-byte models, and append-grown slices. Empty
-sessions use only the entry budget. A week report then a month report keep
-separate entries for their range starts. Entries run to
+with 36-byte session IDs, 24-byte models, and append-grown slices. Each entry
+also keeps the window's counted user and assistant messages; message counts read
+storage only for sessions without a matching entry. Every counted message except
+a session's last starts a candidate, so the candidate budget bounds them too.
+They add about 57 bytes each: on Linux amd64 a full cache grew from 48.3 MiB to
+59.3 MiB. Empty sessions use only the entry budget. A week report then a month
+report keep separate entries for their range starts. Entries run to
 `max(EffectiveEnd, RangeEnd)` and remain valid while the transcript revision and
 session creation time match. Reader swaps clear the entries and reject stores
 from earlier generations. Reports exceeding the entry limit reuse retained hits

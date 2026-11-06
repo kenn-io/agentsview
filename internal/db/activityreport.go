@@ -118,12 +118,29 @@ func (db *DB) activityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
 	counts := activity.NewMessageAccumulator(q, artifacts)
-	return queryChunked(ids, func(chunk []string) error {
+	lower := PaddedUTCBound(q.RangeStart.Format(time.RFC3339Nano), -14)
+	upper := PaddedUTCBound(q.EffectiveEnd.Format(time.RFC3339Nano), 14)
+	add := func(sessionID, role, timestamp string) {
+		if timestamp < lower || timestamp >= upper {
+			return
+		}
+		if parsed, err := parseTimestamp(timestamp); err == nil {
+			counts.Add(sessionID, role, parsed)
+		}
+	}
+	unread, err := db.activityMemoCountedMessages(ctx, ids, q, func(sessionID string, m activityCountedMessage) {
+		role := "assistant"
+		if m.user {
+			role = "user"
+		}
+		add(sessionID, role, m.timestamp)
+	})
+	if err != nil {
+		return err
+	}
+	return queryChunked(unread, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
-		args = append(args,
-			PaddedUTCBound(q.RangeStart.Format(time.RFC3339Nano), -14),
-			PaddedUTCBound(q.EffectiveEnd.Format(time.RFC3339Nano), 14),
-		)
+		args = append(args, lower, upper)
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT session_id, role, timestamp
 			FROM messages INDEXED BY idx_messages_velocity
@@ -140,9 +157,7 @@ func (db *DB) activityReportMessageCounts(
 			if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
 				return fmt.Errorf("scanning activity message counts: %w", err)
 			}
-			if parsed, err := parseTimestamp(timestamp); err == nil {
-				counts.Add(sessionID, role, parsed)
-			}
+			add(sessionID, role, timestamp)
 		}
 		return rows.Err()
 	})
@@ -571,12 +586,21 @@ func (db *DB) activityReportCandidates(
 // activityReportMessagesSQL reads the timestamped messages of the candidate
 // sessions in transcript order. Pairing them in Go parses each timestamp once;
 // correlated successor and prior-model lookups in SQL parsed it many times per
-// pair through a Go callback.
-const activityReportMessagesSQL = `SELECT session_id, ordinal, role, timestamp, model
+// pair through a Go callback. The last column marks messages that message
+// counts include.
+const activityReportMessagesSQL = `SELECT session_id, ordinal, role, timestamp, model,
+	is_system = 0 AND COALESCE(source_subtype, '') <> 'tool_result'
 FROM messages INDEXED BY idx_messages_velocity
 WHERE session_id IN (SELECT value FROM json_each(?))
 	AND timestamp IS NOT NULL AND timestamp != ''
 ORDER BY session_id, ordinal`
+
+// activityCountedMessage is a user or assistant message that Activity message
+// counts include, kept with its stored timestamp.
+type activityCountedMessage struct {
+	timestamp string
+	user      bool
+}
 
 // activityPairMessage is one parseable message of a session. starts marks a
 // message inside the pairing window, which may start a pair.
@@ -755,7 +779,11 @@ ORDER BY agentsview_timestamp_unix_micro(candidate.start_timestamp),
 	candidate.session_id, candidate.start_ordinal,
 	candidate.call_index, candidate.event_index`
 
-func (db *DB) activityReportCandidateSQL(ids []string, q activity.Query) activity.CandidateSource {
+// activityReportCandidateSQL pairs the sessions' messages. When counted is set,
+// it also receives each counted message whose time lies in the pairing window.
+func (db *DB) activityReportCandidateSQL(
+	ids []string, q activity.Query, counted func(string, activityCountedMessage),
+) activity.CandidateSource {
 	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
 		encoded, err := json.Marshal(ids)
 		if err != nil {
@@ -837,14 +865,17 @@ func (db *DB) activityReportCandidateSQL(ids []string, q activity.Query) activit
 			var pairs []activity.IntervalCandidate
 			var sessionID string
 			var session []activityPairMessage
+			// Scan targets live outside the loop: Scan takes their addresses,
+			// so per-row variables would each escape to the heap.
+			var id, timestamp string
+			var m activityPairMessage
+			var countable bool
 			for rows.Next() {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				var id, timestamp string
-				var m activityPairMessage
 				if err := rows.Scan(
-					&id, &m.ordinal, &m.role, &timestamp, &m.model,
+					&id, &m.ordinal, &m.role, &timestamp, &m.model, &countable,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning activity report message: %w", err)
@@ -858,6 +889,11 @@ func (db *DB) activityReportCandidateSQL(ids []string, q activity.Query) activit
 					continue
 				}
 				m.at = at.UTC()
+				if counted != nil && countable &&
+					(m.role == "user" || m.role == "assistant") &&
+					!m.at.Before(lowerTime) && m.at.Before(upperTime) {
+					counted(id, activityCountedMessage{timestamp, m.role == "user"})
+				}
 				us := m.at.UnixMicro()
 				m.starts = us >= lower && us < upper &&
 					timestamp >= paddedLower && timestamp < paddedUpper

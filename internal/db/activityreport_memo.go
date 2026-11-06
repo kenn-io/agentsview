@@ -16,6 +16,7 @@ import (
 var activityMemoMaxCandidates = 200_000
 
 // A full 200K-candidate, 4,096-entry cache measured 64.3 MiB of HeapInuse.
+// Keeping counted messages adds about 11 MiB at that size.
 var activityMemoMaxEntries = 4_096
 
 type activityMemoHits [][]activity.IntervalCandidate
@@ -41,6 +42,10 @@ type activityMemoEntry struct {
 	version    string
 	upper      time.Time
 	candidates []activity.IntervalCandidate
+	// counted holds the window's counted messages. Each one except a
+	// session's last also starts a candidate, so the candidate budget
+	// bounds them too.
+	counted []activityCountedMessage
 }
 
 type activityCandidateMemo struct {
@@ -97,30 +102,9 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 			return nil
 		}
 		m := &db.activityMemo
-		m.mu.Lock()
-		generation := m.generation
-		m.mu.Unlock()
-		encoded, err := json.Marshal(ids)
+		generation, versions, err := db.activityMemoVersions(ctx, ids)
 		if err != nil {
-			return fmt.Errorf("encoding activity report session IDs: %w", err)
-		}
-		rows, err := db.getReader().QueryContext(ctx, `SELECT id, transcript_revision || '|' || created_at FROM sessions WHERE id IN (SELECT value FROM json_each(?))`, string(encoded))
-		if err != nil {
-			return fmt.Errorf("querying activity report session versions: %w", err)
-		}
-		defer rows.Close()
-		versions := make(map[string]string, len(ids))
-		for rows.Next() {
-			var id, version string
-			if err := rows.Scan(&id, &version); err != nil {
-				return fmt.Errorf("scanning activity report session version: %w", err)
-			}
-			versions[id] = version
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return fmt.Errorf("iterating activity report session versions: %w", err)
+			return err
 		}
 		lower := q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()
 		upper := q.EffectiveEnd.UnixMicro()
@@ -152,14 +136,21 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 		}
 		retained := misses[:min(len(misses), activityMemoMaxEntries)]
 		buffers := make(map[string][]activity.IntervalCandidate, len(retained))
+		counted := make(map[string][]activityCountedMessage, len(retained))
 		for _, id := range retained {
 			buffers[id] = nil
+			counted[id] = nil
 		}
 		source := func(ctx context.Context, emit func(activity.IntervalCandidate) error) error {
 			if len(misses) == 0 {
 				return nil
 			}
-			return db.activityReportCandidateSQL(misses, wide)(ctx, func(c activity.IntervalCandidate) error {
+			keepCounted := func(id string, message activityCountedMessage) {
+				if buffer, ok := counted[id]; ok {
+					counted[id] = append(buffer, message)
+				}
+			}
+			return db.activityReportCandidateSQL(misses, wide, keepCounted)(ctx, func(c activity.IntervalCandidate) error {
 				if buffer, ok := buffers[c.SessionID]; ok {
 					if buffered == activityMemoMaxCandidates {
 						// Skip storing reports that cannot fit to avoid cache churn.
@@ -210,11 +201,82 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 			entries := make([]activityMemoEntry, 0, len(retained))
 			for _, id := range retained {
 				if version, exists := versions[id]; exists {
-					entries = append(entries, activityMemoEntry{activityMemoKey{id, lower}, version, wide.EffectiveEnd, buffers[id]})
+					entries = append(entries, activityMemoEntry{activityMemoKey{id, lower}, version, wide.EffectiveEnd, buffers[id], counted[id]})
 				}
 			}
 			m.store(generation, entries...)
 		}
 		return nil
 	}
+}
+
+// activityMemoVersions returns the memo generation and the sessions' current
+// versions. Read the generation first so a reader swap during the query
+// invalidates what the caller stores or reads.
+func (db *DB) activityMemoVersions(
+	ctx context.Context, ids []string,
+) (uint64, map[string]string, error) {
+	m := &db.activityMemo
+	m.mu.Lock()
+	generation := m.generation
+	m.mu.Unlock()
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return 0, nil, fmt.Errorf("encoding activity report session IDs: %w", err)
+	}
+	rows, err := db.getReader().QueryContext(ctx, `SELECT id, transcript_revision || '|' || created_at FROM sessions WHERE id IN (SELECT value FROM json_each(?))`, string(encoded))
+	if err != nil {
+		return 0, nil, fmt.Errorf("querying activity report session versions: %w", err)
+	}
+	defer rows.Close()
+	versions := make(map[string]string, len(ids))
+	for rows.Next() {
+		var id, version string
+		if err := rows.Scan(&id, &version); err != nil {
+			return 0, nil, fmt.Errorf("scanning activity report session version: %w", err)
+		}
+		versions[id] = version
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, fmt.Errorf("iterating activity report session versions: %w", err)
+	}
+	return generation, versions, nil
+}
+
+// activityMemoCountedMessages passes add the kept counted messages of each
+// session whose memo entry matches its current version and covers q. It
+// returns the sessions whose messages must be read instead.
+func (db *DB) activityMemoCountedMessages(
+	ctx context.Context, ids []string, q activity.Query,
+	add func(string, activityCountedMessage),
+) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	generation, versions, err := db.activityMemoVersions(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	lower := q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()
+	kept := make(map[string][]activityCountedMessage, len(ids))
+	var unread []string
+	m := &db.activityMemo
+	m.mu.Lock()
+	for _, id := range ids {
+		if element := m.entries[activityMemoKey{id, lower}]; element != nil && generation == m.generation {
+			e := element.Value.(activityMemoEntry)
+			if version, exists := versions[id]; exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
+				kept[id] = e.counted
+				continue
+			}
+		}
+		unread = append(unread, id)
+	}
+	m.mu.Unlock()
+	for id, messages := range kept {
+		for _, message := range messages {
+			add(id, message)
+		}
+	}
+	return unread, ctx.Err()
 }
