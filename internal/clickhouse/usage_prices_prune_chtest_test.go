@@ -113,28 +113,55 @@ func TestPushPricesNewModelBeforeRegisteringIt(t *testing.T) {
 }
 
 // A model a stopped push left pending is adopted by the next push, even
-// one whose batches bring no usage of it.
+// one that prices only Cursor rows and whose batches bring no usage of it.
 func TestPushAdoptsModelsAnEarlierPushLeftPending(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newUsagePriceStore(t)
 	ctx := t.Context()
 	filter := db.UsageFilter{Timezone: "UTC"}
 	baseline := dailyUsageGroupRowStats(t, store, filter)
-	round := chUsagePriceModel{model: "round-test", priceModel: "round-test"}
-	require.NoError(t, syncer.registerUsagePriceModels(ctx, []chUsagePriceModel{round}, true))
-	// Readers no longer find records for the digest without the model.
-	stopped := dailyUsageGroupRowStats(t, store, filter)
-	require.Equal(t, stopped.rows, stopped.explicit)
+	before := pricedDigest(t, store.conn)
 
-	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "fresh-test",
+		InputPerMTok:  money.MustParseDollars("2"),
+		OutputPerMTok: money.MustParseDollars("4"),
+	}}))
+	const id = "ch-price-left-pending"
+	ts := "2026-01-13T05:00:00.000Z"
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: fixtureSession(id, "gamma", "left pending", ts, 1),
+		Messages: []db.Message{
+			usagePriceMessage(id, 0, ts, "fresh-test", `{"input_tokens":1000,"output_tokens":500}`),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	// Return the mirror to where a push that registered the model as pending
+	// and then stopped would leave it: the old digest current, and the new
+	// model's rows unpriced under it.
+	fresh := chUsagePriceModel{model: "fresh-test", priceModel: "fresh-test"}
+	require.NoError(t, syncer.registerUsagePriceModels(ctx, []chUsagePriceModel{fresh}, true))
+	require.NoError(t, writeMetadata(ctx, store.conn, map[string]string{usagePricedDigestKey: before}))
+	catalog, err := chLoadPricingCatalog(ctx, store.conn, nil)
+	require.NoError(t, err)
+	require.Equal(t, before, catalog.digest, "the next push must not price the whole mirror")
+	stopped := dailyUsageGroupRowStats(t, store, filter)
+	require.Greater(t, stopped.explicit, baseline.explicit, "the new model's rows are priced per request")
+
+	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 
 	pending, err := loadUsagePriceModels(ctx, store.conn, true)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
-	catalog, err := chLoadPricingCatalog(ctx, store.conn, nil)
+	catalog, err = chLoadPricingCatalog(ctx, store.conn, nil)
 	require.NoError(t, err)
-	assert.Contains(t, catalog.models, round)
+	assert.Contains(t, catalog.models, fresh)
 	assert.Equal(t, catalog.digest, pricedDigest(t, store.conn))
 	assert.Equal(t, baseline.explicit, dailyUsageGroupRowStats(t, store, filter).explicit)
 	assertDailyUsageParity(t, local, store)
