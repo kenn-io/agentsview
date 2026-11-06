@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -41,12 +43,17 @@ func (s *Store) GetActivityReport(
 type activityReportBackend struct {
 	*Store
 	lowerBound, upperBound string
+	read                   *[]string
 }
 
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
+	rows, pricing, read, err := b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
+	if b.read != nil {
+		*b.read = append(*b.read, read...)
+	}
+	return rows, pricing, err
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
@@ -68,6 +75,27 @@ func (s *Store) BuildActivityReportArtifacts(
 	lowerBound := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
+	var selection, version string
+	var revision int64
+	if !q.Partial && !s.hostedRelations {
+		var err error
+		version, revision, err = s.activityKeptVersion(ctx)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if revision > 0 {
+			selection = kept.Selection(f, q)
+			report, hit, err := s.keptActivityReport(ctx, selection, version, revision)
+			if err != nil {
+				return activity.CandidateArtifacts{}, err
+			}
+			if hit {
+				activity.ReportProgress(onProgress, report.Done)
+				return report.Artifacts, nil
+			}
+		}
+	}
+
 	sessions, ids, err := s.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC)
 	if err != nil {
@@ -77,12 +105,22 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
+	read := slices.Clone(ids)
 	backend := activityReportBackend{
+		read:       &read,
 		Store:      s,
 		lowerBound: lowerBound, upperBound: upperBound,
 	}
-	artifacts, _, err := activity.BuildReportArtifacts(
+	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating pg activity report")
+	if err == nil && selection != "" {
+		slices.Sort(read)
+		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{{
+			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
+			read: slices.Compact(read), labels: activity.ProjectLabels(sessions),
+			rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC, paddedLower: lowerBound, paddedUpper: upperBound,
+		}})
+	}
 	return artifacts, err
 }
 
@@ -302,21 +340,7 @@ func (s *Store) activityReportSessions(
 		COALESCE(s.is_automated, false) AS is_automated,
 		s.relationship_type = 'subagent' AS is_subagent
 	FROM sessions s
-	WHERE ` + where + `
-		AND (COALESCE(s.ended_at,
-				(SELECT MAX(m.timestamp) FROM messages m
-					WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
-				s.started_at, s.created_at) >= ` +
-		lower + `::timestamptz
-			OR EXISTS (
-				SELECT 1 FROM tool_result_events tre
-				WHERE tre.session_id = s.id
-					AND tre.source = 'tool_execution'
-					AND tre.status IN ('completed', 'errored')
-					AND tre.timestamp >= ` + lower + `::timestamptz
-			))
-		AND COALESCE(s.started_at, s.created_at) < ` +
-		upper + `::timestamptz`
+	WHERE ` + where + ` AND ` + activityReportSessionWindowPredicate(lower, upper)
 
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
@@ -607,20 +631,21 @@ func (s *Store) ActivityReportCandidateSource(
 // computed after selection so filtered rows do not affect pricing metadata.
 func (s *Store) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
+) ([]activity.UsageRow, *export.PricingBlock, []string, error) {
 	out := []activity.UsageRow{}
+	var read []string
 
 	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading pg pricing: %w", err)
+		return nil, nil, nil, fmt.Errorf("loading pg pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 	if len(ids) == 0 {
 		block, err := rateResolver.BuildBlock()
 		if err != nil {
-			return nil, nil, fmt.Errorf("building pricing block: %w", err)
+			return nil, nil, nil, fmt.Errorf("building pricing block: %w", err)
 		}
-		return out, &block, nil
+		return out, &block, read, nil
 	}
 
 	type ordered struct {
@@ -663,16 +688,17 @@ func (s *Store) activityReportUsage(
 		AND u.ts <= ` + upper + `::timestamptz`
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("querying activity report usage: %w", err)
+		return nil, nil, nil, fmt.Errorf("querying activity report usage: %w", err)
 	}
 	defer rows.Close()
 	var rowsAcc []ordered
 	for rows.Next() {
 		r, scanErr := scanPGDailyUsageRow(rows)
 		if scanErr != nil {
-			return nil, nil, fmt.Errorf(
+			return nil, nil, nil, fmt.Errorf(
 				"scanning activity report usage: %w", scanErr)
 		}
+		read = append(read, r.sessionID)
 		ord := int64(-1)
 		if r.messageOrdinal.Valid {
 			ord = r.messageOrdinal.Int64
@@ -695,7 +721,7 @@ func (s *Store) activityReportUsage(
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("iterating activity report usage: %w", err)
+		return nil, nil, nil, fmt.Errorf("iterating activity report usage: %w", err)
 	}
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {
@@ -720,7 +746,7 @@ func (s *Store) activityReportUsage(
 		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	out = make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
@@ -739,7 +765,7 @@ func (s *Store) activityReportUsage(
 		cost, priced, contributes, priceErr := pgActivityReportRowStatusWithWebSearchRequests(
 			costRow, webSearchRequests[i], rateResolver)
 		if priceErr != nil {
-			return nil, nil, priceErr
+			return nil, nil, nil, priceErr
 		}
 		costSource := export.CostSourceComputed
 		if costRow.cost.Valid {
@@ -759,9 +785,9 @@ func (s *Store) activityReportUsage(
 	}
 	block, err := rateResolver.BuildBlock()
 	if err != nil {
-		return nil, nil, fmt.Errorf("building pricing block: %w", err)
+		return nil, nil, nil, fmt.Errorf("building pricing block: %w", err)
 	}
-	return out, &block, nil
+	return out, &block, read, nil
 }
 
 func pgActivityReportRowStatus(
@@ -820,4 +846,19 @@ func pgActivityReportRowStatusWithWebSearchRequests(
 		pricing, r.model, pricedModel, lookup,
 		requestScoped, inTok, crTok, rdTok)
 	return cost, true, true, nil
+}
+
+func activityReportSessionWindowPredicate(lower, upper string) string {
+	return `(COALESCE(s.ended_at,
+				(SELECT MAX(m.timestamp) FROM messages m
+					WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
+				s.started_at, s.created_at) >= ` + lower + `::timestamptz
+			OR EXISTS (
+				SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = s.id
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp >= ` + lower + `::timestamptz
+			))
+		AND COALESCE(s.started_at, s.created_at) < ` + upper + `::timestamptz`
 }

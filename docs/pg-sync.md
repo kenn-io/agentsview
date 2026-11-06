@@ -22,6 +22,9 @@ writes wait. CockroachDB skips this journal.
 `pg serve` roles granted access after installation also need `SELECT` on
 `usage_session_changes`.
 
+On `pg serve`, ended Activity ranges are reused in memory until a push touches
+their sessions or range, pricing changes, or project identity changes.
+
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
 the session browser, analytics dashboard, search, and, as of 0.23.0, the Usage

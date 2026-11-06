@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -35,8 +36,10 @@ type Store struct {
 // storeRuntime is shared by the owning store and its borrowed read views.
 // Views never copy locks or start detached work with their transaction.
 type storeRuntime struct {
-	cursorMu     sync.RWMutex
-	cursorSecret []byte
+	activityKept     kept.Memo[pgActivityKept]
+	activityKeptOnce sync.Once
+	cursorMu         sync.RWMutex
+	cursorSecret     []byte
 
 	insightCapabilityMu        sync.RWMutex
 	insightGenerationAvailable bool
