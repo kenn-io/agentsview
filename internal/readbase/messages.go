@@ -39,7 +39,7 @@ func (s Sessions) GetMessagesWindow(ctx context.Context, sessionID string, w db.
 			return nil, err
 		}
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, true); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -55,22 +55,25 @@ func (s Sessions) GetAllMessages(ctx context.Context, sessionID string) ([]db.Me
 	if err != nil {
 		return nil, s.backend.ReadError(ScanAllMessages, err)
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, false); err != nil {
 		return nil, err
 	}
 	return msgs, nil
 }
 
-func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message) error {
+func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message, window bool) error {
 	if len(msgs) == 0 {
 		return nil
 	}
 	index := make(map[int]int, len(msgs))
-	sessionID := msgs[0].SessionID
+	args := []any{msgs[0].SessionID}
 	for i, msg := range msgs {
 		index[msg.Ordinal] = i
+		if window {
+			args = append(args, msg.Ordinal)
+		}
 	}
-	rows, err := s.backend.QueryContext(ctx, s.backend.ToolCallsSQL(), sessionID)
+	rows, err := s.backend.QueryContext(ctx, s.backend.ToolCallsSQL(len(args)-1), args...)
 	if err != nil {
 		return s.backend.ReadError(QueryToolCalls, err)
 	}
@@ -95,7 +98,7 @@ func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message) error 
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if err := s.attachToolResultEvents(ctx, msgs, index, sessionID); err != nil {
+	if err := s.attachToolResultEvents(ctx, msgs, index, args); err != nil {
 		return err
 	}
 	// Restore summaries omitted when one result event already carries the content.
@@ -104,9 +107,9 @@ func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message) error 
 }
 
 func (s Sessions) attachToolResultEvents(
-	ctx context.Context, msgs []db.Message, index map[int]int, sessionID string,
+	ctx context.Context, msgs []db.Message, index map[int]int, args []any,
 ) error {
-	rows, err := s.backend.QueryContext(ctx, s.backend.ToolResultEventsSQL(), sessionID)
+	rows, err := s.backend.QueryContext(ctx, s.backend.ToolResultEventsSQL(len(args)-1), args...)
 	if err != nil {
 		return s.backend.ReadError(QueryToolResultEvents, err)
 	}

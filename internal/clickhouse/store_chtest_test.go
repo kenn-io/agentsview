@@ -137,6 +137,28 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NotEmpty(t, window)
 		assert.Equal(t, 1, window[len(window)-1].Ordinal)
 
+		first, err := store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{Limit: 1, Asc: true})
+		require.NoError(t, err)
+		require.Len(t, first, 1)
+		assert.Equal(t, 0, first[0].Ordinal)
+		assert.Empty(t, first[0].ToolCalls)
+		for _, tc := range []struct {
+			ordinal int
+			counts  [2]int
+		}{{0, [2]int{0, 0}}, {1, [2]int{2, 1}}} {
+			for i, query := range []string{sessionsSQL{store}.ToolCallsSQL(1), sessionsSQL{store}.ToolResultEventsSQL(1)} {
+				rows, err := store.queryContext(ctx, query, fixtureAlphaID, tc.ordinal)
+				require.NoError(t, err)
+				count := 0
+				for rows.Next() {
+					count++
+				}
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+				assert.Equal(t, tc.counts[i], count)
+			}
+		}
+
 		counts, err := store.GetResumeModelCounts(ctx, fixtureAlphaID)
 		require.NoError(t, err)
 		assert.Equal(t, []db.ModelCount{{Model: "claude-test", Count: 1}}, counts)
