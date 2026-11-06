@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
+import { serveTranscript, transcriptMessage } from "./helpers/mock-transcript";
 
 // A fixture session whose messages are replaced with one edit, so the
 // diff strip is the only tool block on screen.
@@ -7,27 +8,8 @@ const SESSION_ID = "test-session-xlarge-5500";
 const CONTEXT =
   "func (s *Server) handleSessionTranscriptExportWithAttachmentsAndRedactionOptions(ctx context.Context, request *ExportRequest) error {";
 
-function message(ordinal: number, extra: Partial<Message>): Message {
-  return {
-    id: ordinal + 1,
-    session_id: SESSION_ID,
-    ordinal,
-    role: "assistant",
-    content: "",
-    content_length: 0,
-    timestamp: "2026-01-01T00:00:00Z",
-    has_thinking: false,
-    thinking_text: "",
-    has_tool_use: false,
-    model: "",
-    context_tokens: 0,
-    output_tokens: 0,
-    has_context_tokens: false,
-    has_output_tokens: false,
-    is_system: false,
-    ...extra,
-  };
-}
+const message = (ordinal: number, extra: Partial<Message>) =>
+  transcriptMessage(SESSION_ID, ordinal, extra);
 
 test("a long hunk header wraps inside the diff strip", async ({ page }) => {
   const messages = [
@@ -47,9 +29,7 @@ test("a long hunk header wraps inside the diff strip", async ({ page }) => {
       ],
     }),
   ];
-  await page.route(`**/api/v1/sessions/${SESSION_ID}/messages*`, (route) =>
-    route.fulfill({ json: { messages, count: messages.length } }),
-  );
+  await serveTranscript(page, SESSION_ID, messages);
   await page.addInitScript(() => localStorage.setItem("agentsview-message-layout", "default"));
   await page.setViewportSize({ width: 1000, height: 800 });
   await page.goto(`/sessions/${SESSION_ID}`);
