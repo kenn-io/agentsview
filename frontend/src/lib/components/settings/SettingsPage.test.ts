@@ -222,6 +222,44 @@ describe("SettingsPage", () => {
     unmount(component);
   });
 
+  it.each(["Reading width", "message layout"])(
+    "finds Appearance by the %s label it shows",
+    async (query) => {
+      settingsService.getApiV1Settings.mockResolvedValue({
+        agent_dirs: {},
+        chart_palette: "agentsview",
+        github_configured: false,
+        host: "127.0.0.1",
+        port: 8080,
+        read_only: false,
+        require_auth: false,
+        terminal: { mode: "auto" },
+      });
+      const component = mount(SettingsPage, { target: document.body });
+      await tick();
+      await tick();
+
+      const search = document.body.querySelector<HTMLInputElement>(
+        'input[type="search"][aria-label="Search settings"]',
+      )!;
+      search.value = query;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+
+      const nav = document.body.querySelector('nav[aria-label="Settings"]')!;
+      // With no match the nav still shows the active panel (Appearance by
+      // default), so the no-results state is what tells a miss apart.
+      expect(
+        document.body.querySelector(".settings-page")?.classList.contains("settings-no-results"),
+      ).toBe(false);
+      const found = nav.querySelectorAll("button");
+      expect(found).toHaveLength(1);
+      expect(found[0].textContent).toContain("Appearance");
+
+      unmount(component);
+    },
+  );
+
   it("filters settings by keywords and restores the selected panel", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
