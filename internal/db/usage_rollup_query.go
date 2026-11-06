@@ -204,6 +204,14 @@ func readUsageDailyRollups(
 	snapshot usageQuerySnapshot, filter UsageFilter, authoritativeOnly bool,
 ) (usageFactsResult, error) {
 	from, to := usageRollupDateBounds(snapshot)
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	where := `i.timezone_id=` + b.Add(timezoneID)
+	if from != "" {
+		where += ` AND r.local_date>=` + b.Add(from)
+	}
+	if to != "" {
+		where += ` AND r.local_date<=` + b.Add(to)
+	}
 	restriction := ""
 	if authoritativeOnly {
 		restriction = " AND i.has_authoritative=1"
@@ -219,11 +227,10 @@ func readUsageDailyRollups(
 		r.band_threshold, r.discarded_snapshot_output_tokens
 		FROM usage_daily_rollups r
 		JOIN usage_rollup_installs i ON i.id = r.rollup_install_id
-		WHERE i.timezone_id = ? AND (? = '' OR r.local_date >= ?)
-		  AND (? = '' OR r.local_date <= ?)`+restriction+`
+		WHERE `+where+restriction+`
 		ORDER BY r.local_date, i.session_id, r.reported_model,
 			r.provider_id, r.band_threshold`,
-		timezoneID, from, from, to, to)
+		b.Args()...)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
@@ -276,6 +283,15 @@ func readUsageRollupExceptions(
 	snapshot usageQuerySnapshot, filter UsageFilter,
 ) ([]usageRollupFact, error) {
 	from, to := usageRollupDateBounds(snapshot)
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	where := `i.timezone_id=` + b.Add(timezoneID)
+	if from != "" {
+		where += ` AND e.local_date>=` + b.Add(from)
+	}
+	if to != "" {
+		where += ` AND e.local_date<=` + b.Add(to)
+	}
+	where += ` AND (i.session_id != ` + b.Add(usageRollupCursorSessionID) + ` OR e.fact_index <= ` + b.Add(snapshot.CursorHighWater) + `)`
 	rows, err := conn.QueryContext(ctx, `SELECT e.cached_session_id, e.fact_index,
 		e.source_session_id, e.local_date, e.source, e.message_ordinal,
 		e.timestamp_ms, e.timestamp_ns, e.raw_timestamp, e.uses_session_start,
@@ -287,13 +303,10 @@ func readUsageRollupExceptions(
 		e.usage_dedup_key, COUNT(*) OVER ()
 		FROM usage_rollup_exceptions e
 		JOIN usage_rollup_installs i ON i.id = e.rollup_install_id
-		WHERE i.timezone_id = ? AND (? = '' OR e.local_date >= ?)
-		  AND (? = '' OR e.local_date <= ?)
-		  AND (i.session_id != ? OR e.fact_index <= ?)
+		WHERE `+where+`
 		GROUP BY e.rollup_install_id, e.cached_session_id, e.fact_index
 		ORDER BY e.cached_session_id, e.fact_index`,
-		timezoneID, from, from, to, to, usageRollupCursorSessionID,
-		snapshot.CursorHighWater)
+		b.Args()...)
 	if err != nil {
 		return nil, err
 	}

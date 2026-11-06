@@ -13,7 +13,13 @@ import (
 func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) (usageFactsResult, error) {
 	from, to := usageRollupDateBounds(*snapshot)
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	where := `s.timezone_id=` + b.Add(timezoneID) + ` AND (` + b.Add(from) + `='' OR s.local_date>=` + b.Add(from) + `) AND (` + b.Add(to) + `='' OR s.local_date<=` + b.Add(to) + `)`
+	where := `s.timezone_id=` + b.Add(timezoneID)
+	if from != "" {
+		where += ` AND s.local_date>=` + b.Add(from)
+	}
+	if to != "" {
+		where += ` AND s.local_date<=` + b.Add(to)
+	}
 	where = AppendUsagePredicates(where, BuildUsageSessionFilter(filter, b, ""), "")
 	where = AppendUsagePredicates(where, BuildUsageSourceFilter(filter, b, "s.reported_model"), "")
 	rows, err := conn.QueryContext(ctx, `SELECT s.local_date, s.project, s.agent, s.machine,
@@ -62,11 +68,20 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	}
 	args := append(b.Args(), timezoneID)
 	args = append(args, b.Args()...)
-	args = append(args, from, from, to, to, from, from, to, to)
+	b = NewQueryBuilder(SQLiteQueryDialect(), 0)
+	dates := "1=1"
+	if from != "" {
+		dates += ` AND local_date>=` + b.Add(from)
+	}
+	if to != "" {
+		dates += ` AND local_date<=` + b.Add(to)
+	}
+	args = append(args, b.Args()...)
+	args = append(args, b.Args()...)
 	rows, err = conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, (`+passing+`)
         FROM (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s WHERE s.timezone_id=? AND ((s.has_authoritative=1 AND (`+passing+`) AND s.id IN (
-        SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE (?='' OR r.local_date>=?) AND (?='' OR r.local_date<=?))) OR s.id IN (
-        SELECT e.rollup_install_id FROM usage_rollup_exceptions e WHERE (?='' OR e.local_date>=?) AND (?='' OR e.local_date<=?)))`, args...)
+        SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE `+dates+`)) OR s.id IN (
+        SELECT e.rollup_install_id FROM usage_rollup_exceptions e WHERE `+dates+`))`, args...)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
@@ -97,7 +112,13 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	result.Groups = append(result.Groups, authoritative.Groups...)
 	if !filter.SkipSessionCounts {
 		b = NewQueryBuilder(SQLiteQueryDialect(), 0)
-		where = `s.timezone_id=` + b.Add(timezoneID) + ` AND (` + b.Add(from) + `='' OR r.local_date>=` + b.Add(from) + `) AND (` + b.Add(to) + `='' OR r.local_date<=` + b.Add(to) + `)`
+		where = `s.timezone_id=` + b.Add(timezoneID)
+		if from != "" {
+			where += ` AND r.local_date>=` + b.Add(from)
+		}
+		if to != "" {
+			where += ` AND r.local_date<=` + b.Add(to)
+		}
 		where = AppendUsagePredicates(where, BuildUsageSessionFilter(filter, b, ""), "")
 		where = AppendUsagePredicates(where, BuildUsageSourceFilter(filter, b, "r.reported_model"), "")
 		rows, err = conn.QueryContext(ctx, `SELECT DISTINCT s.session_id, s.project, s.baked_agent FROM usage_daily_rollups r JOIN (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s ON s.id=r.rollup_install_id WHERE `+where, b.Args()...)
