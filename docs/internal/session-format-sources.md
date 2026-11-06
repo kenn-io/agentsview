@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-06
 ---
 
 # Session Format Source Inventory
@@ -187,7 +187,8 @@ evidence; they do not establish whether a tool helped the task.
   [#2400](https://github.com/kenn-io/agentsview/issues/2400), kept in
   `internal/parser/testdata/claude/channel_messages.jsonl`. Inbound channel
   questions are `user` entries with `isMeta: true` and `origin.kind: channel`.
-  They remain user turns; other `isMeta` entries stay hidden. Transcript text
+  They remain user turns. Peer-origin meta entries are system messages, and
+  other `isMeta` entries stay hidden. Transcript text
   retains the `<channel>` envelope, while session previews show its body.
 
 - **Dialogue projection:** Reverified 2026-10-17 against the shared block parser
@@ -315,13 +316,37 @@ fixtures retain this field; missing identities remain source-local.
   `promptSource:"system"` carrying a delivery notice. Native parsing
   classifies a prompt that starts with `<cross-session-message` as a system
   row with `source_subtype` `peer_message`, keeping the wrapper so the sender
-  stays visible; non-channel `isMeta` user records remain dropped. Task
+  stays visible. That parser version dropped non-channel `isMeta` user records. Task
   notifications in the same release are `type:"user"` records with
   `origin:{"kind":"task-notification"}` and a `<task-notification>` body,
   which the existing `task_notification` rule already covers. Checked against a
   local transcript corpus; the synthetic fixture
   `internal/parser/testdata/claude/queued_peer_messages.jsonl` mirrors these
   shapes. Data version 126 reparses existing sessions once.
+
+- **Peer user records (2026-11-06):** The Claude Code 2.1.310 transcript excerpt
+  in [#2718](https://github.com/kenn-io/agentsview/issues/2718) contains inbound
+  `type:"user"` records with `isMeta:true`, `promptSource:"system"`,
+  `turnOrigin:"peer"`, and `origin.kind:"peer"`. Their content starts with
+  `Another Claude session sent a message:` before the cross-session wrapper.
+  This is a reported artifact, not a capture made for this change. Static
+  inspection of the installed 2.1.314 producer corroborates peer-origin queue
+  entries with `isMeta:true` and preservation of `origin` in user messages.
+  Its turn-origin classifier also maps channels and other origins to `peer`,
+  so `turnOrigin` alone does not identify a cross-session message. No live
+  delivery was run. Searches for `"cross-session-message"
+  repo:anthropics/claude-code` and `"turnOrigin" repo:anthropics/claude-code`
+  returned no code hits. The public tree at
+  `90380efca7f9d73e206fac453f841b6acd664f4d` does not expose the persistence
+  implementation. The evidence class remains `no-public-source`.
+  Agentsview retains peer-origin user records as system `peer_message` rows,
+  preserving their text and excluding them from human turn counts and previews.
+  Synthetic regressions in `internal/parser/claude_peer_test.go` cover full and
+  incremental parsing, content blocks, delivery notices, and rewind identity.
+  Data version 166 reparses Claude, Cowork, Qoder, and iCodeMate sources in place.
+  The archive regression checks that unchanged sources recover the message
+  without changing session identity. Deleted sources cannot recover messages
+  omitted by the previous parser.
 
 - **Evidence:** `no-public-source`.
 

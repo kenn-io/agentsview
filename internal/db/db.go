@@ -651,7 +651,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (165: show slash commands whose arguments contain "<" as "/name args"
 // prompts. Re-parse Claude-format, Grok and iFlow sources in place; source
 // and session identities are unchanged.)
-const dataVersion = 165
+// (166: retain inbound Claude peer user records as system messages. Re-parse
+// Claude-format sources in place; source and session identities are unchanged.)
+const dataVersion = 166
 
 const archiveOnlyVersionBase = 1 << 20
 
