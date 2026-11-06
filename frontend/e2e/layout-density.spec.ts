@@ -1,34 +1,78 @@
-import { expect, test, type Page } from "@playwright/test";
-import { SessionsPage } from "./pages/sessions-page";
+import { expect, test, type Browser } from "@playwright/test";
+import type { DbMessage as Message, DbToolCall as ToolCall } from "../src/lib/api/generated/index.js";
 
-async function toolRowHeights(page: Page, layout: string): Promise<number[]> {
+// A fixture session whose messages are replaced with a run of single-call
+// turns (a tool group) and one turn with three calls (a parallel group),
+// so both kinds of row are measured on every run.
+const SESSION_ID = "test-session-xlarge-5500";
+
+function bash(command: string): ToolCall {
+  return { tool_name: "Bash", category: "Bash", input_json: JSON.stringify({ command }) };
+}
+
+function message(ordinal: number, extra: Partial<Message>): Message {
+  return {
+    id: ordinal + 1,
+    session_id: SESSION_ID,
+    ordinal,
+    role: "assistant",
+    content: "",
+    content_length: 0,
+    timestamp: "2026-01-01T00:00:00Z",
+    has_thinking: false,
+    thinking_text: "",
+    has_tool_use: false,
+    model: "",
+    context_tokens: 0,
+    output_tokens: 0,
+    has_context_tokens: false,
+    has_output_tokens: false,
+    is_system: false,
+    ...extra,
+  };
+}
+
+const messages: Message[] = [
+  message(0, { role: "user", content: "Run the checks", content_length: 14 }),
+  message(1, { has_tool_use: true, tool_calls: [bash("make lint")] }),
+  message(2, { has_tool_use: true, tool_calls: [bash("make test")] }),
+  message(3, { has_tool_use: true, tool_calls: [bash("make build")] }),
+  message(4, { content: "Now in parallel.", content_length: 16 }),
+  message(5, {
+    has_tool_use: true,
+    tool_calls: [bash("go vet ./..."), bash("npm run check"), bash("git status")],
+  }),
+];
+
+async function rowHeights(browser: Browser, layout: string) {
+  const page = await browser.newPage();
   await page.addInitScript((value) => {
     localStorage.setItem("agentsview-message-layout", value);
   }, layout);
-  const sp = new SessionsPage(page);
-  await sp.goto();
-  // Open sessions until one shows a grouped run of tool calls.
-  const count = await sp.sessionItems.count();
-  const rows = page.locator(".tool-group-body .tool-header-row, .pg-members .tool-header-row");
-  for (let index = 0; index < count; index++) {
-    await sp.selectSession(index);
-    if ((await rows.count()) > 0) break;
-  }
-  await expect(rows.first()).toBeVisible();
-  return rows.evaluateAll((elements) =>
-    elements.slice(0, 6).map((element) => element.getBoundingClientRect().height),
+  await page.route(`**/api/v1/sessions/${SESSION_ID}/messages*`, (route) =>
+    route.fulfill({ json: { messages, count: messages.length } }),
   );
+  await page.goto(`/sessions/${SESSION_ID}`);
+  const grouped = page.locator(".tool-group-body .tool-header-row:not(.pg-members *)");
+  const parallel = page.locator(".pg-members .tool-header-row");
+  await expect(grouped).toHaveCount(3);
+  await expect(parallel).toHaveCount(3);
+  const heights = (rows: typeof grouped) =>
+    rows.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+  const result = { grouped: await heights(grouped), parallel: await heights(parallel) };
+  await page.close();
+  return result;
 }
 
-test("Compact packs grouped tool rows tighter than Default", async ({ browser }) => {
-  const defaultPage = await browser.newPage();
-  const defaults = await toolRowHeights(defaultPage, "default");
-  await defaultPage.close();
+test("Compact packs grouped and parallel tool rows tighter than Default", async ({ browser }) => {
+  const defaults = await rowHeights(browser, "default");
+  const compact = await rowHeights(browser, "compact");
 
-  const compactPage = await browser.newPage();
-  const compact = await toolRowHeights(compactPage, "compact");
-  await compactPage.close();
-
-  for (const height of defaults) expect(height).toBeCloseTo(24, 0);
-  for (const height of compact) expect(height).toBeCloseTo(22, 0);
+  for (const kind of ["grouped", "parallel"] as const) {
+    expect(compact[kind]).toHaveLength(defaults[kind].length);
+    defaults[kind].forEach((height, i) => {
+      // Compact trims a pixel from each side of every row.
+      expect(height - compact[kind][i]!, `${kind} row ${i}`).toBeCloseTo(2, 1);
+    });
+  }
 });

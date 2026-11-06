@@ -267,7 +267,9 @@ test.describe("Project picker", () => {
     await page.route("**/api/v1/projects*", (route) => route.fulfill({ json: { projects } }));
     await page.goto("/sessions");
     await page.locator(".project-picker .kit-typeahead__trigger").click();
-    await expect(page.locator(".kit-typeahead__option").first()).toBeVisible();
+    // "All Projects" is there before the projects load; wait for the rest
+    // so the list is measured at its full length.
+    await expect(page.locator(".kit-typeahead__option")).toHaveCount(projects.length + 1);
   }
 
   test("the open filter field sits above the collapsed navigation and search", async ({ page }) => {
