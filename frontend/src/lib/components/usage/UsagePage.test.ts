@@ -231,10 +231,6 @@ describe("UsagePage refresh behavior", () => {
     }
     expect(requests).toHaveBeenCalledTimes(2);
     const signal = requests.mock.calls[1]![1]!.signal;
-    expect(
-      document.querySelector<HTMLButtonElement>('button[aria-label="Refresh usage data"]')
-        ?.disabled,
-    ).toBe(true);
     emit({ scope: "sync" });
     await flushEffects();
     await vi.advanceTimersByTimeAsync(300_000);

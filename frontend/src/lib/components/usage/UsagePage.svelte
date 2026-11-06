@@ -63,8 +63,7 @@
   let unsubEvents: (() => void) | undefined;
   let pendingRefresh = false;
   let pendingEvent = $state(false);
-  let visible = $state(!document.hidden);
-  let lastRefreshStartedAt = $state(0);
+  let lastRefreshStartedAt = 0;
 
   function refreshUsage(): void {
     if (
@@ -81,7 +80,6 @@
   }
 
   function onVisibilityChange(): void {
-    visible = !document.hidden;
     if (document.hidden) {
       if (usage.isQuerying) {
         pendingRefresh = true;
@@ -94,11 +92,8 @@
   }
 
   $effect(() => {
-    if (!pendingEvent || !visible || usage.isQuerying ||
-      !urlInitRan || !urlWritebackReady || sessions.machineFilterPending) return;
-    const timer = setTimeout(() => {
-      if (!document.hidden && !usage.isQuerying) refreshUsage();
-    }, Math.max(0, lastRefreshStartedAt + 60_000 - Date.now()));
+    if (!pendingEvent || usage.isQuerying) return;
+    const timer = setTimeout(refreshUsage, Math.max(0, lastRefreshStartedAt + 60_000 - Date.now()));
     return () => clearTimeout(timer);
   });
 
