@@ -180,6 +180,9 @@ type Server struct {
 	// default; enabled by the hidden serve --pprof flag.
 	pprofEnabled bool
 
+	// embeddingsRuntime coordinates live setup and access to embedding managers.
+	embeddingsRuntime EmbeddingsRuntime
+
 	// embeddingsManager, when set, backs the /api/v1/embeddings/...
 	// build lifecycle routes. Nil (the default) leaves those routes
 	// unregistered, e.g. when semantic search is not configured.

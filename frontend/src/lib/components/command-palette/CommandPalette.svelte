@@ -7,7 +7,7 @@
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
   import { SearchIcon } from "../../icons.js";
-  import { tick, onDestroy, untrack } from "svelte";
+  import { tick, onMount, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { searchStore } from "../../stores/search.svelte.js";
@@ -21,6 +21,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { stripIdPrefix } from "../../utils/resume.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
+  import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
   import SemanticSetupHelp from "./SemanticSetupHelp.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
@@ -30,6 +31,13 @@
     SearchMode,
   } from "../../stores/search.svelte.js";
 
+  import { EmbeddingsService, type VectorBuildStatus } from "../../api/generated/index.js";
+  let hintStatus = $state<VectorBuildStatus | null>(null);
+  onMount(() => {
+    const controller = new AbortController();
+    void EmbeddingsService.getApiV1EmbeddingsStatus({}, { signal: controller.signal }).then((status) => { if (!controller.signal.aborted) hintStatus = status; }).catch(() => {});
+    return () => controller.abort();
+  });
   let inputRef: HTMLInputElement | undefined = $state(undefined);
   let project = $state(sessions.filters.project);
   let selectedIndex: number = $state(0);
@@ -422,11 +430,15 @@
           </button>
         {/each}
       {/if}
+      {#if showSearchResults && !searchStore.isSearching && !searchStore.error && searchStore.mode === "fulltext"}
+        <div class="meaning-hint"><SearchByMeaningControl status={hintStatus} hint onchange={() => { hintStatus = null; searchStore.setMode("semantic"); }} /></div>
+      {/if}
     </div>
   </div>
 </div>
 
 <style>
+  .meaning-hint { padding: 8px 16px; }
   .palette-overlay {
     position: fixed;
     /* kit-ui-check-ignore: top-aligned command-palette overlay with palette-owned focus handling; kit-ui Modal's centered dialog chrome does not apply — adopting kit-ui CommandPalette wholesale is tracked as a follow-up */

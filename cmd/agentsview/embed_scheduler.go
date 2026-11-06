@@ -371,16 +371,6 @@ func resetTimer(t *time.Timer, d time.Duration) {
 	t.Reset(d)
 }
 
-// teeEmitter fans a sync completion out to the production SSE emitter and,
-// when after-sync embedding is enabled, the embed scheduler. The scheduler
-// side never blocks (embedScheduler.Notify is non-blocking), so wrapping
-// the emitter this way cannot slow down the sync pipeline.
-type teeEmitter struct {
-	primary      sync.Emitter
-	scheduler    *embedScheduler
-	runAfterSync bool
-}
-
 // notifyTeeEmitter fans a successful sync event out to another bounded
 // background consumer after preserving the primary emitter's delivery.
 type notifyTeeEmitter struct {
@@ -396,28 +386,8 @@ func (t notifyTeeEmitter) Emit(scope string) {
 // wrapEmbeddingSyncEmitter connects successful sync and resync events to both
 // embedding stores. Recall refreshes cannot depend on extraction being enabled:
 // a resync can journal removed Recall entries while copying the durable corpus.
-func wrapEmbeddingSyncEmitter(
-	primary sync.Emitter, serving vectorServing, runAfterSync bool,
-) sync.Emitter {
-	if serving.Scheduler != nil {
-		primary = teeEmitter{
-			primary: primary, scheduler: serving.Scheduler,
-			runAfterSync: runAfterSync,
-		}
-	}
-	if serving.RecallMutationNotify != nil {
-		primary = notifyTeeEmitter{
-			primary: primary, notify: serving.RecallMutationNotify,
-		}
-	}
-	return primary
-}
-
-func (t teeEmitter) Emit(scope string) {
-	t.primary.Emit(scope)
-	if t.runAfterSync {
-		t.scheduler.Notify()
-	}
+func wrapEmbeddingSyncEmitter(primary sync.Emitter, notify func(bool)) sync.Emitter {
+	return notifyTeeEmitter{primary: primary, notify: func() { notify(false); notify(true) }}
 }
 
 // searcherAdapter implements db.VectorSearcher over a vector.Index,
@@ -707,11 +677,12 @@ func translateRecallSearchError(err error) error {
 // into the daemon. All fields are zero when [vector] is disabled, so
 // callers can treat it uniformly without a separate enabled check.
 type vectorServing struct {
-	ServerOpts           []server.Option
-	Scheduler            *embedScheduler
-	RecallScheduler      *embedScheduler
-	RecallMutationNotify func()
-	Close                func() error
+	manager, recallManager *vector.Manager
+	ServerOpts             []server.Option
+	Scheduler              *embedScheduler
+	RecallScheduler        *embedScheduler
+	RecallMutationNotify   func()
+	Close                  func() error
 }
 
 // setupVectorServing acquires vectors.write.lock, opens vectors.db
@@ -852,6 +823,7 @@ func setupVectorServing(
 	}
 
 	return vectorServing{
+		manager: mgr, recallManager: recallMgr,
 		ServerOpts:           serverOpts,
 		Scheduler:            scheduler,
 		RecallScheduler:      recallScheduler,

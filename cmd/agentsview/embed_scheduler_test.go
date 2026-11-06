@@ -619,7 +619,7 @@ func TestEmbedSchedulerNotifyNeverBlocksWithoutAReader(t *testing.T) {
 	}
 }
 
-// --- teeEmitter ---
+// --- embedding sync emitter ---
 
 type recordingEmitter struct {
 	mu     sync.Mutex
@@ -638,7 +638,7 @@ func (e *recordingEmitter) count() int {
 	return len(e.scopes)
 }
 
-func TestTeeEmitterAlwaysCallsPrimaryAndGatesSchedulerOnRunAfterSync(t *testing.T) {
+func TestEmbeddingSyncEmitterAlwaysCallsPrimaryAndGatesSchedulerOnRunAfterSync(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		primary := &recordingEmitter{}
 		fake := &fakeEmbedManager{}
@@ -646,13 +646,16 @@ func TestTeeEmitterAlwaysCallsPrimaryAndGatesSchedulerOnRunAfterSync(t *testing.
 		go s.Run(t.Context())
 		defer s.Stop()
 
-		disabled := teeEmitter{primary: primary, scheduler: s, runAfterSync: false}
+		owner := &liveVectorServing{serving: vectorServing{Scheduler: s}}
+		owner.cfg.Vector.Embed.RunAfterSync = new(false)
+		disabled := wrapEmbeddingSyncEmitter(primary, owner.Notify)
 		disabled.Emit("sessions")
 		assert.Equal(t, 1, primary.count())
 		synctest.Sleep(30 * time.Millisecond)
 		assert.Equal(t, 0, fake.callCount(), "runAfterSync=false must not notify the scheduler")
 
-		enabled := teeEmitter{primary: primary, scheduler: s, runAfterSync: true}
+		owner.cfg.Vector.Embed.RunAfterSync = new(true)
+		enabled := wrapEmbeddingSyncEmitter(primary, owner.Notify)
 		enabled.Emit("sessions")
 		assert.Equal(t, 2, primary.count())
 		synctest.Sleep(30 * time.Millisecond)
@@ -677,7 +680,8 @@ func TestRunRemoteHostSyncLoop_EmitsThroughTeeNotifiesScheduler(t *testing.T) {
 	go s.Run(schedCtx)
 	defer s.Stop()
 
-	tee := teeEmitter{primary: primary, scheduler: s, runAfterSync: true}
+	owner := &liveVectorServing{serving: vectorServing{Scheduler: s}}
+	tee := wrapEmbeddingSyncEmitter(primary, owner.Notify)
 
 	syncFn := func() (int, error) {
 		return 1, nil // one session synced on this remote host
@@ -1095,7 +1099,7 @@ func TestRecallSchedulerSyncRemovesDeletedEntryWithoutExtraction(t *testing.T) {
 		return deleteErr
 	}))
 	emitter := wrapEmbeddingSyncEmitter(
-		&recordingEmitter{}, vs, cfg.Vector.Embed.RunAfterSyncEnabled(),
+		&recordingEmitter{}, (&liveVectorServing{serving: vs, cfg: cfg}).Notify,
 	)
 	emitter.Emit("sync")
 

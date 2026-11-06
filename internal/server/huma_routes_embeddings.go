@@ -10,6 +10,38 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
+// EmbeddingsRuntime owns the writable daemon's live vector setup.
+type EmbeddingsRuntime interface {
+	Manager(store string) EmbeddingsManager
+	SetupStatus(context.Context) (EmbeddingsSetupStatus, error)
+	Setup(action string) error
+}
+
+type EmbeddingsSetupStatus = vector.SetupStatus
+
+func WithEmbeddingsRuntime(runtime EmbeddingsRuntime) Option {
+	return func(s *Server) { s.embeddingsRuntime = runtime }
+}
+
+type embeddingsSetupInput struct {
+	Body struct {
+		Action string `json:"action" enum:"turn-on,use-built-in" required:"true"`
+	}
+}
+
+func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput) (*embeddingsBuildOutput, error) {
+	if s.embeddingsRuntime == nil {
+		return nil, s.embeddingsUnavailableError()
+	}
+	if err := s.embeddingsRuntime.Setup(in.Body.Action); err != nil {
+		if errors.Is(err, vector.ErrBuildRunning) {
+			return nil, embeddingsActionError(err)
+		}
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	return &embeddingsBuildOutput{Status: http.StatusAccepted, Body: embeddingsBuildResponse{Started: true}}, nil
+}
+
 // EmbeddingsManager is the subset of *vector.Manager's API the embeddings
 // build lifecycle routes need. Declaring it here (rather than depending on
 // *vector.Manager directly) lets tests substitute a fake. TryBuild is
@@ -73,6 +105,7 @@ func (s *Server) embeddingsUnavailableError() error {
 func (s *Server) registerEmbeddingsRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/embeddings")
 	configureRouteGroup(group, "Embeddings")
+	registerRoute(group, http.MethodPost, "/setup", "Set up search by meaning", s.humaEmbeddingsSetup, s.humaTimeout(), func(op *huma.Operation) { op.DefaultStatus = http.StatusAccepted })
 
 	registerRoute(group, http.MethodPost, "/build", "Start an embeddings build", s.humaEmbeddingsBuild,
 		s.humaTimeout(), func(op *huma.Operation) { op.DefaultStatus = http.StatusAccepted })
@@ -130,6 +163,9 @@ type embeddingsGenerationActionInput struct {
 }
 
 func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
+	if s.embeddingsRuntime != nil {
+		return s.embeddingsRuntime.Manager(store)
+	}
 	if store == "" || store == vector.MessageIndexSpec().Name {
 		return s.embeddingsManager
 	}
@@ -185,13 +221,27 @@ func (s *Server) humaEmbeddingsBuild(
 }
 
 func (s *Server) humaEmbeddingsStatus(
-	_ context.Context, in *embeddingsStoreInput,
+	ctx context.Context, in *embeddingsStoreInput,
 ) (*jsonOutput[vector.BuildStatus], error) {
+	var body vector.BuildStatus
+	if s.embeddingsRuntime != nil {
+		setup, err := s.embeddingsRuntime.SetupStatus(ctx)
+		if err != nil {
+			return nil, internalError("inspect embeddings setup", err)
+		}
+		body.Setup = &setup
+		if setup.Busy || !setup.Enabled || setup.Error != "" {
+			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
+		}
+	}
 	manager := s.embeddingsManagerFor(in.Store)
 	if manager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	return &jsonOutput[vector.BuildStatus]{Body: manager.Status()}, nil
+	setup := body.Setup
+	body = manager.Status()
+	body.Setup = setup
+	return &jsonOutput[vector.BuildStatus]{Body: body}, nil
 }
 
 func (s *Server) humaEmbeddingsGenerations(

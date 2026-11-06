@@ -323,6 +323,11 @@ type VectorEmbeddingsServerConfig struct {
 
 const defaultNomicModel = "nomic-embed-text"
 
+// IsNomic reports whether the recipe can keep its index on the built-in server.
+func (c VectorEmbeddingsConfig) IsNomic() bool {
+	return isNomicModel(c.Model)
+}
+
 func isNomicModel(model string) bool {
 	return model == defaultNomicModel || model == "nomic-embed-text:latest" || model == "nomic-embed-text:v1.5"
 }
@@ -2150,7 +2155,7 @@ func (c *Config) applyConfigTOML(data string) error {
 	if meta.IsDefined("vector", "embeddings", "servers") {
 		c.Vector.Embeddings.Servers = normalizedEmbeddingsServers(file.Vector.Embeddings.Servers, meta)
 	}
-	if c.Vector.Enabled && c.Vector.Embeddings.Model == "" && !meta.IsDefined("vector", "embeddings", "servers") {
+	if c.Vector.Enabled && c.Vector.Embeddings.Model == "" && (!meta.IsDefined("vector", "embeddings", "servers") || allEmbeddingsServersLocal(c.Vector.Embeddings.Servers)) {
 		c.Vector.Embeddings.Model = defaultNomicModel
 		if !meta.IsDefined("vector", "embeddings", "dimension") {
 			c.Vector.Embeddings.Dimension = 768
@@ -4075,4 +4080,82 @@ func (c *Config) SaveGithubToken(token string) error {
 		c.GithubToken = token
 		return nil
 	})
+}
+
+// SaveVectorSetup records the selected action while keeping omitted defaults omitted.
+func (c *Config) SaveVectorSetup(builtIn bool) error {
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		section, _ := existing["vector"].(map[string]any)
+		if section == nil {
+			section = make(map[string]any)
+		}
+		if err := patchVectorSetup(section, builtIn); err != nil {
+			return err
+		}
+		existing["vector"] = section
+		return c.writeConfigMap(existing)
+	})
+}
+
+func patchVectorSetup(section map[string]any, builtIn bool) error {
+	section["enabled"] = true
+	if !builtIn {
+		return nil
+	}
+	encoded, err := toml.Marshal(section)
+	if err != nil {
+		return err
+	}
+	var raw VectorConfig
+	if _, err := toml.Decode(string(encoded), &raw); err != nil {
+		return err
+	}
+	recipe := raw.Embeddings
+	name := "automatic"
+	if len(recipe.Servers) > 0 {
+		var err error
+		name, _, err = recipe.Server("")
+		if err != nil {
+			return err
+		}
+	}
+	embeddings, _ := section["embeddings"].(map[string]any)
+	if embeddings == nil {
+		embeddings = make(map[string]any)
+		section["embeddings"] = embeddings
+	}
+	servers, _ := embeddings["servers"].(map[string]any)
+	if servers == nil {
+		servers = make(map[string]any)
+		embeddings["servers"] = servers
+	}
+	if recipe.Model != "" && !recipe.IsNomic() {
+		defaults := map[string]any{"model": defaultNomicModel, "dimension": 768, "max_input_chars": 4000, "model_context_tokens": 2048, "query_prefix": "search_query: ", "document_prefix": "search_document: ", "input_suffix": "", "request_dimensions": false}
+		maps.Copy(embeddings, defaults)
+	}
+	deployment, _ := servers[name].(map[string]any)
+	if deployment == nil {
+		deployment = make(map[string]any)
+		servers[name] = deployment
+	}
+	delete(deployment, "endpoint")
+	delete(deployment, "ollama_cpu_fallback")
+	deployment["local"] = true
+	return nil
+}
+
+func allEmbeddingsServersLocal(servers map[string]VectorEmbeddingsServerConfig) bool {
+	if len(servers) == 0 {
+		return false
+	}
+	for _, server := range servers {
+		if !server.Local {
+			return false
+		}
+	}
+	return true
 }

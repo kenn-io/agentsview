@@ -23,6 +23,8 @@ vi.mock("../../api/generated/index.js", async (importOriginal) => {
     EmbeddingsService: {
       getApiV1EmbeddingsStatus: vi.fn(),
       postApiV1EmbeddingsBuild: vi.fn(),
+      postApiV1EmbeddingsSetup: vi.fn(),
+      getApiV1EmbeddingsGenerations: vi.fn(),
     },
   };
 });
@@ -37,6 +39,8 @@ import SemanticSetupHelp, { __resetResolvedBuildIds } from "./SemanticSetupHelp.
 const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsBuild: ReturnType<typeof vi.fn>;
+  postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
+  getApiV1EmbeddingsGenerations: ReturnType<typeof vi.fn>;
 };
 
 function idleStatus(overrides: Partial<VectorBuildStatus> = {}): VectorBuildStatus {
@@ -89,6 +93,8 @@ describe("SemanticSetupHelp", () => {
     __resetResolvedBuildIds();
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.postApiV1EmbeddingsBuild.mockReset();
+    embeddingsService.postApiV1EmbeddingsSetup.mockReset();
+    embeddingsService.getApiV1EmbeddingsGenerations.mockReset();
     mockCopyToClipboard.mockReset();
     mockCopyToClipboard.mockResolvedValue(true);
   });
@@ -145,6 +151,32 @@ describe("SemanticSetupHelp", () => {
     await settle();
     expect(mockCopyToClipboard).toHaveBeenCalledWith("agentsview index embeddings build");
 
+    unmount(component);
+  });
+
+  it("describes disabled Ollama before turning it on", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup: { enabled: false, action: "turn-on", provider: "ollama", busy: false, installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0, rebuild_required: false } }));
+    const { component } = mountHelp();
+    await settle();
+    expect(text()).toContain("Uses Ollama when turned on");
+    expect(text()).not.toContain("On · Ollama");
+    unmount(component);
+  });
+
+  it("warns before rebuilding another model", async () => {
+    const setup = { enabled: true, action: "use-built-in", provider: "ollama", model: "other-model", rebuild_required: true, missing_bytes: 0, installing: false, busy: false, downloaded_bytes: 0, total_bytes: 0 };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup }));
+    embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({ generations: [{ id: 1, state: "active", embedded: 123, missing: 27 }] });
+    embeddingsService.postApiV1EmbeddingsSetup.mockImplementation(async () => {
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup: { ...setup, busy: true } }));
+      return { started: true };
+    });
+    const { component } = mountHelp(); await settle();
+    expect(text()).toContain("Switching rebuilds the index");
+    expect(text()).toContain("150 documents");
+    expect(embeddingsService.postApiV1EmbeddingsSetup).not.toHaveBeenCalled();
+    const button = [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use built-in instead");
+    expect(button).toBeTruthy(); button!.click(); await settle();
     unmount(component);
   });
 

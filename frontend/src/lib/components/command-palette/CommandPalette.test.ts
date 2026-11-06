@@ -64,6 +64,7 @@ const {
   mockEmbeddingsService: {
     getApiV1EmbeddingsStatus: vi.fn(),
     postApiV1EmbeddingsBuild: vi.fn(),
+    postApiV1EmbeddingsSetup: vi.fn(),
   },
 }));
 
@@ -750,6 +751,19 @@ describe("CommandPalette", () => {
     expect(document.querySelector(".semantic-setup")).not.toBeNull();
     expect(document.querySelector(".palette-error")).toBeNull();
 
+    unmount(component);
+  });
+
+  it.each([false, true])("shows the keyword footer only while meaning search is off (%s)", async (enabled) => {
+    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, done: 0, total: 0, eta_milliseconds: 0, setup: { enabled, action: enabled ? "" : "turn-on", provider: "built-in", missing_bytes: 295000000, busy: false, installing: false } });
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    for (let i = 0; i < 10; i++) await tick();
+    expect(document.body.textContent?.includes("Search by meaning is off")).toBe(!enabled);
+    if (!enabled) expect(document.body.textContent).toContain("295 MB");
+    await enterSearchQuery("another query");
+    for (let i = 0; i < 10; i++) await tick();
+    expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);
     unmount(component);
   });
 

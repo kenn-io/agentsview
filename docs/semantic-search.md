@@ -21,7 +21,17 @@ concurrency, and the search path — see
 
 ## Enabling `[vector]`
 
-Semantic search is disabled by default. Add a `[vector]` section to
+Semantic search is disabled by default. Open **Settings → Embeddings** and choose **Turn on**, or choose it from the search palette. AgentsView asks for the required download through that button, shows download and indexing progress, and starts semantic search without a restart. Full-text search remains available during indexing.
+
+Turn on writes only `enabled = true`, preserving explicit recipe and server settings while allowing omitted defaults to follow later releases. If local files are missing from an already-enabled installation, the same button approves their download. Embeddings configured through deployment environment variables appear as status only; change those variables to manage them.
+
+Switching a named Nomic recipe changes only its selected transport. Automatic Nomic discovery switches by recording only its local server choice. Another-model switches write the built-in recipe while preserving other named servers. Omitted transport and scheduling defaults remain omitted.
+
+After saving, AgentsView reloads the current file through its startup loader. Edits made during a download take effect too; setup failures offer Retry.
+
+An existing Ollama setup offers **Use built-in instead**. Nomic recipes keep their indexed content; another model requires a rebuild, with a rough estimate shown before switching.
+
+For CLI setup, add a `[vector]` section to
 `~/.agentsview/config.toml`:
 
 ```toml
@@ -32,8 +42,7 @@ enabled = true
 Restart the daemon, then run `agentsview index embeddings build`. AgentsView
 uses a running Ollama server with Nomic or Kit's shared local server. If the
 local server needs files, the CLI asks before downloading them. Search and
-automatic builds reuse installed files; they direct you to the CLI when a
-download needs approval. Declining stops the download and build.
+automatic builds reuse installed files; approve a first download in Settings or through the CLI. Declining stops the download and build.
 
 The default recipe is `nomic-embed-text`, 768 dimensions, 4,000 input
 characters, 2,048 context tokens, `search_query: ` for queries, and
@@ -686,7 +695,7 @@ session that overlaps the range can contain an earlier or later message.
 
 Semantic and Hybrid depend on the same enabled `[vector]` configuration and
 active embeddings index described above. If `[vector]` is not configured, the
-palette shows a copyable configuration example plus the build and restart steps.
+palette shows **Turn on** with download and indexing progress. Full-text results offer the same action while semantic search is off.
 If vector search is configured but no active index exists, **Build embeddings**
 starts the build through the local daemon and reports scanning, progress,
 throughput, and completion in place. The palette follows an already running

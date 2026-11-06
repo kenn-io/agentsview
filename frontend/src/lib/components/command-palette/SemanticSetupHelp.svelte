@@ -30,6 +30,14 @@
   import { EmbeddingsService } from "../../api/generated/index.js";
   import { ApiError, isAbortError } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
+  import type { VectorBuildStatus, VectorGenerationInfo } from "../../api/generated/index.js";
+  let generations = $state<VectorGenerationInfo[]>([]);
+  async function readCoverage() {
+    try { const next = await EmbeddingsService.getApiV1EmbeddingsGenerations({}); if (!disposed) generations = next.generations; }
+    catch { /* Coverage is optional until the next panel open. */ }
+  }
+  let setupStatus = $state<VectorBuildStatus | null>(null);
 
   interface Props {
     // Called when a build finishes successfully so the caller can re-run
@@ -111,14 +119,25 @@ enabled = true`;
       disposed = true;
       if (timer !== null) clearTimeout(timer);
       if (copyTimer !== null) clearTimeout(copyTimer);
+
     };
   });
+
+  function updateSetupStatus(status: VectorBuildStatus): void {
+    const needsCoverage = !setupStatus && status.setup?.action === "use-built-in";
+    setupStatus = status;
+    if (needsCoverage) void readCoverage();
+  }
 
   async function probe(): Promise<void> {
     try {
       const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
-      if (status.running) {
+      updateSetupStatus(status);
+      if (status.setup && (status.setup.action === "turn-on" || !status.setup.enabled || status.setup.busy || status.setup.installing || status.setup.error)) {
+        phase = "unconfigured";
+        if (status.setup.busy || status.setup.installing) schedulePoll();
+      } else if (status.running) {
         applyProgress(status.phase, status.done, status.total);
         phase = "building";
         schedulePoll();
@@ -177,8 +196,7 @@ enabled = true`;
         return;
       }
     }
-    if (disposed) return;
-    schedulePoll();
+    if (!disposed) schedulePoll();
   }
 
   function schedulePoll(): void {
@@ -187,9 +205,11 @@ enabled = true`;
   }
 
   async function poll(): Promise<void> {
+    if (setupStatus?.setup && (!setupStatus.setup.enabled || setupStatus.setup.busy || setupStatus.setup.installing)) { await probe(); return; }
     try {
       const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
+      updateSetupStatus(status);
       if (status.running) {
         applyProgress(status.phase, status.done, status.total);
         schedulePoll();
@@ -220,7 +240,6 @@ enabled = true`;
     buildDone = done;
     buildTotal = total;
   }
-
   async function copy(text: string, which: "config" | "command"): Promise<void> {
     const ok = await copyToClipboard(text);
     if (!ok || disposed) return;
@@ -232,14 +251,18 @@ enabled = true`;
       copiedCommand = false;
     }, 1500);
   }
+
 </script>
 
 <div class="semantic-setup" role="alert">
+  {#if setupStatus?.setup}
+    <SearchByMeaningControl status={setupStatus} {generations} onchange={() => void probe()} />
+  {/if}
   {#if phase === "probing"}
     <div class="setup-row centered">
       <Spinner size={13} />
     </div>
-  {:else if phase === "unconfigured"}
+  {:else if phase === "unconfigured" && !setupStatus?.setup}
     <strong>{m.command_palette_semantic_setup_title()}</strong>
     <span class="setup-text">{m.command_palette_semantic_setup_config_step()}</span>
     <div class="setup-snippet">
@@ -292,6 +315,7 @@ enabled = true`;
     </div>
     <span class="setup-hint">{m.command_palette_semantic_build_hint()}</span>
   {:else if phase === "building"}
+    {#if !setupStatus?.setup}
     <div class="setup-row centered">
       <Spinner size={13} />
       <strong>{m.command_palette_semantic_building_title()}</strong>
@@ -308,7 +332,8 @@ enabled = true`;
       {/if}
     </span>
     <span class="setup-hint">{m.command_palette_semantic_build_hint()}</span>
-  {:else}
+    {/if}
+  {:else if phase === "failed"}
     <strong>{m.command_palette_semantic_failed_title()}</strong>
     {#if detail}
       <span class="setup-text">{detail}</span>

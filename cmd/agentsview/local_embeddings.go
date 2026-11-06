@@ -22,7 +22,7 @@ var (
 	errLocalApprovalRequired = errors.New("local embedding download requires approval")
 )
 
-func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsServerConfig, approve func(context.Context, int64) (bool, error)) (string, error) {
+func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsServerConfig, approve func(context.Context, int64) (bool, error), progress func(int64, int64)) (string, error) {
 	if server.Endpoint != "" {
 		return server.Endpoint, nil
 	}
@@ -38,7 +38,8 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	if approve == nil {
 		approve = func(context.Context, int64) (bool, error) { return false, errLocalApprovalRequired }
 	}
-	installation, err := installLocalEmbeddings(ctx, embedlocal.InstallOptions{DataDir: opts.DataDir, Confirm: approve})
+	installOpts := embedlocal.InstallOptions{DataDir: opts.DataDir, Confirm: approve, Progress: progress}
+	installation, err := installLocalEmbeddings(ctx, installOpts)
 	if err != nil {
 		if errors.Is(err, errLocalApprovalRequired) {
 			return "", errors.New("local embeddings: run agentsview index embeddings build to approve the first download")
@@ -56,7 +57,7 @@ func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig
 	}
 	_, err = resolveLocalEmbeddings(ctx, server, func(_ context.Context, size int64) (bool, error) {
 		return confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", (size+999999)/1000000)), nil
-	})
+	}, nil)
 	return err
 }
 
@@ -68,7 +69,7 @@ func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server confi
 		current := cached
 		mu.Unlock()
 		if current == nil {
-			endpoint, err := resolveLocalEmbeddings(ctx, server, nil)
+			endpoint, err := resolveLocalEmbeddings(ctx, server, nil, nil)
 			if err != nil {
 				return nil, err
 			}

@@ -1,0 +1,57 @@
+<script lang="ts">
+  import { SearchByMeaningHint, SearchByMeaningRow, type SearchByMeaningState } from "@kenn-io/kit-ui";
+  import { EmbeddingsService, type VectorBuildStatus, type VectorGenerationInfo } from "../../api/generated/index.js";
+  import { getLocale, m } from "../../i18n/index.js";
+
+  let { status, generations = [], hint = false, onchange = () => {} }: {
+    status: VectorBuildStatus | null;
+    generations?: VectorGenerationInfo[];
+    hint?: boolean;
+    onchange?: () => void;
+  } = $props();
+  let error = $state<string | null>(null);
+  const setup = $derived(status?.setup);
+  const activeGeneration = $derived(generations.find((g) => g.state === "active"));
+  const documents = $derived((activeGeneration?.embedded ?? 0) + (activeGeneration?.missing ?? 0));
+  // No historical throughput survives a build; use a rough local throughput estimate.
+  const ROUGH_DOCUMENTS_PER_SECOND = 40;
+  const rowState = $derived.by((): SearchByMeaningState => {
+    if (setup?.busy || setup?.installing) return { kind: "downloading", doneBytes: setup?.downloaded_bytes ?? 0, totalBytes: setup?.total_bytes ?? 0 };
+    if (status?.running) return { kind: "indexing", done: status.done, total: status.total, etaMs: status.estimate_ready ? status.eta_milliseconds : undefined };
+    if (setup?.action === "turn-on" || !setup?.enabled) return setup?.missing_bytes && setup.provider === "built-in" ? { kind: "off", downloadBytes: setup.missing_bytes } : { kind: "downloaded" };
+    if (setup.provider === "ollama") return !setup.rebuild_required ? { kind: "ollama" } : { kind: "ollama-other", itemCount: documents, rebuildMs: documents / ROUGH_DOCUMENTS_PER_SECOND * 1000 };
+    return { kind: "on" };
+  });
+  const labels = $derived({
+    name: m.meaning_name(), off: m.meaning_off(), on: m.meaning_on(), ollama: m.meaning_ollama(),
+    turningOn: m.meaning_turning_on(), turnOn: m.meaning_turn_on(), useBuiltIn: m.meaning_use_builtin(),
+    download: m.meaning_download({ size: "{size}" }), downloaded: setup?.provider === "ollama" ? m.meaning_uses_ollama() : setup?.provider === "configured" ? m.meaning_configured() : m.meaning_downloaded(),
+    keepsIndex: m.meaning_keeps_index(), rebuild: m.meaning_rebuild({ time: "{time}", countLabel: "{count}", items: "{items}" }), downloading: setup?.total_bytes ? m.meaning_downloading({ done: "{done}", total: "{total}" }) : m.meaning_turning_on(),
+    indexing: m.meaning_indexing({ done: "{done}", total: "{total}", items: "{items}" }), timeLeft: m.meaning_time_left({ time: "{time}" }), meanwhile: m.meaning_meanwhile(),
+    underMinute: m.meaning_under_minute(), aboutTime: m.meaning_about_time({ time: "{time}" }), progress: m.meaning_progress(), hint: setup?.provider === "built-in" && setup.missing_bytes > 0 ? `${m.meaning_hint()} · ${m.meaning_download({ size: new Intl.NumberFormat(getLocale(), { style: "unit", unit: "megabyte", maximumFractionDigits: 0 }).format(setup.missing_bytes / 1000000) })}` : m.meaning_hint(),
+  });
+  async function activate() {
+    const action = setup?.action;
+    if (action !== "turn-on" && action !== "use-built-in") return;
+    error = null;
+    try {
+      await EmbeddingsService.postApiV1EmbeddingsSetup({ action });
+      onchange();
+    } catch (e) {
+      error = e instanceof Error ? e.message : m.settings_embeddings_load_failed();
+    }
+  }
+</script>
+
+{#if setup}
+  {#if hint}
+    {#if setup.action === "turn-on"}
+      <SearchByMeaningHint {labels} onturnon={() => void activate()} />
+    {/if}
+  {:else}
+    <SearchByMeaningRow state={rowState} {labels} readonly={!setup.action} itemNoun={status?.running ? m.meaning_chunks({ count: status?.total ?? 0 }) : m.meaning_documents({ count: documents })} onturnon={() => void activate()} onusebuiltin={() => void activate()} />
+  {/if}
+  {#if error || setup.error}
+    <p role="alert">{error || setup.error}</p>
+  {/if}
+{/if}

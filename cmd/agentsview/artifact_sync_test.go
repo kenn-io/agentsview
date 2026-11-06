@@ -317,16 +317,11 @@ func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 	t.Cleanup(embedScheduler.Stop)
 
 	recallNotified := make(chan struct{}, 1)
-	emitter := wrapEmbeddingSyncEmitter(
-		broadcaster,
-		vectorServing{
-			Scheduler: embedScheduler,
-			RecallMutationNotify: func() {
-				recallNotified <- struct{}{}
-			},
-		},
-		true,
-	)
+	owner := &liveVectorServing{serving: vectorServing{
+		Scheduler:            embedScheduler,
+		RecallMutationNotify: func() { recallNotified <- struct{}{} },
+	}}
+	emitter := wrapEmbeddingSyncEmitter(broadcaster, owner.Notify)
 	engine := agentsync.NewEngine(t.Context(),
 		database,
 		agentsync.EngineConfig{Emitter: emitter},

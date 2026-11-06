@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Chip, type ChipTone } from "@kenn-io/kit-ui";
+  import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
   import { EmbeddingsService } from "../../api/generated/index";
@@ -9,6 +9,9 @@
     isAbortError,
   } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import { sync } from "../../stores/sync.svelte.js";
+
+  import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
 
   // Poll fast only while a build is actually running; when idle the section
   // only needs to notice an externally started build (CLI, scheduler)
@@ -41,6 +44,7 @@
   );
 
   const running = $derived(status?.running ?? false);
+  const settingUp = $derived(status?.setup?.busy || status?.setup?.installing);
   const phase = $derived(status?.phase ?? "");
   const estimateReady = $derived(status?.estimate_ready ?? false);
   const ratePerSecond = $derived(status?.rate_per_second ?? null);
@@ -61,7 +65,7 @@
   function schedule(): void {
     clearTimer();
     if (disposed || unavailableReason !== null || document.hidden) return;
-    const interval = running ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+    const interval = running || settingUp ? ACTIVE_POLL_MS : IDLE_POLL_MS;
     timer = setTimeout(() => void poll(), interval);
   }
 
@@ -86,7 +90,7 @@
       unavailableReason = null;
       loadError = null;
       updateElapsed(next);
-      if (withGenerations || (wasRunning && !next.running)) {
+      if (next.setup?.enabled !== false && !next.setup?.busy && (withGenerations || (wasRunning && !next.running))) {
         activePollsSinceGenerations = 0;
         await refreshGenerations();
       }
@@ -119,8 +123,20 @@
       const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal });
       if (disposed || !generationsRead.isCurrent(signal)) return;
       generations = res.generations ?? [];
+    } catch {
+      // Keep the current coverage until a later refresh.
     } finally {
       generationsRead.finish(signal);
+    }
+  }
+
+  async function retryBuild(): Promise<void> {
+    try {
+      await EmbeddingsService.postApiV1EmbeddingsBuild({});
+      await refresh(true);
+      schedule();
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : m.settings_embeddings_load_failed();
     }
   }
 
@@ -196,6 +212,7 @@
 </script>
 
 <div class="embeddings-settings">
+  <SearchByMeaningControl {status} {generations} onchange={() => void refresh(true).then(schedule)} />
   {#if !loaded}
     <p class="muted">{m.settings_embeddings_loading()}</p>
   {:else if unavailableReason !== null}
@@ -203,7 +220,7 @@
     <p class="muted detail">{unavailableReason}</p>
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
-  {:else if status}
+  {:else if status && status.setup?.enabled !== false && !status.setup?.busy}
     <div class="status-grid">
       {#if status.model}
         <span class="row-label">{m.settings_embeddings_model_label()}</span>
@@ -289,6 +306,9 @@
       {/if}
     {:else if status.last_error}
       <p class="msg error" role="alert">{status.last_error}</p>
+      {#if status.setup?.enabled && !sync.readOnly}
+        <Button size="sm" label={m.shared_retry()} onclick={() => void retryBuild()} />
+      {/if}
     {:else if status.last_result}
       <div class="status-grid">
         <span class="row-label">{m.settings_embeddings_last_build_label()}</span
