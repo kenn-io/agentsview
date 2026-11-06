@@ -280,16 +280,29 @@ func sessionListDefaultExclusionNotice(
 	}
 
 	hiddenChildren := 0
+	lowerBound := ""
 	// Annotation filters already select matching children. Tree expansion adds
 	// context outside those matches.
 	if len(f.Labels) == 0 && f.PR == "" && (!f.IncludeChildren || !f.IncludeOneShot && !f.IncludeAutomated) {
 		all := sessionListCountFilter(f)
 		all.IncludeChildren, all.IncludeOneShot, all.IncludeAutomated = true, true, true
+		all.Limit = db.MaxSessionLimit
 		list, err := svc.List(ctx, all)
 		if err != nil {
 			return "", fmt.Errorf("counting child session exclusions: %w", err)
 		}
-		hiddenChildren = max(0, hiddenSessionCount(list.Total, visibleTotal)-hiddenOneShot-hiddenAutomated)
+		if f.IncludeChildren {
+			hiddenChildren = max(0, hiddenSessionCount(list.Total, visibleTotal)-hiddenOneShot-hiddenAutomated)
+		} else {
+			for _, session := range list.Sessions {
+				if session.RelationshipType == "subagent" || session.RelationshipType == "fork" {
+					hiddenChildren++
+				}
+			}
+			if hiddenChildren > 0 && list.NextCursor != "" {
+				lowerBound = "at least "
+			}
+		}
 	}
 	hiddenTotal := hiddenOneShot + hiddenAutomated + hiddenChildren
 	if hiddenTotal == 0 {
@@ -311,7 +324,7 @@ func sessionListDefaultExclusionNotice(
 
 	separator := " and/or "
 	if hiddenChildren > 0 {
-		hiddenParts = append(hiddenParts, fmt.Sprintf("%d child", hiddenChildren))
+		hiddenParts = append(hiddenParts, fmt.Sprintf("%s%d child", lowerBound, hiddenChildren))
 		flagParts = nil
 		if !f.IncludeOneShot {
 			flagParts = append(flagParts, "--include-one-shot")
@@ -325,8 +338,8 @@ func sessionListDefaultExclusionNotice(
 		separator = " "
 	}
 	return fmt.Sprintf(
-		"Excluded %d %s by default: %s. Use %s to include them.",
-		hiddenTotal,
+		"Excluded %s%d %s by default: %s. Use %s to include them.",
+		lowerBound, hiddenTotal,
 		pluralSession(hiddenTotal),
 		strings.Join(hiddenParts, ", "),
 		strings.Join(flagParts, separator),

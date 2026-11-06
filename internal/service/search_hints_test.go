@@ -109,7 +109,7 @@ func TestSearchContentHintsFTSChildCount(t *testing.T) {
 	require.Empty(t, res.Matches)
 	hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
 	require.Len(t, hints, 2)
-	assert.Equal(t, "hidden_children", hints[1].Code)
+	assert.Equal(t, "excluded_children", hints[1].Code)
 	assert.Equal(t, "1 match is in child sessions, hidden by default", hints[1].Message)
 }
 
@@ -149,13 +149,13 @@ func TestSearchContentHintsCombinedExclusions(t *testing.T) {
 			hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
 			if tc.mixed {
 				require.Len(t, hints, 2)
-				assert.Equal(t, "hidden_one_shot", hints[0].Code)
+				assert.Equal(t, "excluded_one_shot", hints[0].Code)
 				assert.Equal(t, "1 match is in one-shot sessions, hidden by default", hints[0].Message)
 			} else {
 				require.Len(t, hints, 1)
 			}
 			hint := hints[len(hints)-1]
-			assert.Equal(t, "hidden_combined", hint.Code)
+			assert.Equal(t, "excluded_combined", hint.Code)
 			assert.Equal(t, "1 match is hidden by default", hint.Message)
 			wantRetry := map[string]any{"include_one_shot": true, "include_automated": true}
 			if !tc.includeChildren {
@@ -194,7 +194,7 @@ func TestSearchContentHintsPreserveSemanticCandidateWindow(t *testing.T) {
 	require.Empty(t, res.Matches)
 	hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
 	require.Len(t, hints, 1)
-	assert.Equal(t, "hidden_one_shot", hints[0].Code)
+	assert.Equal(t, "excluded_one_shot", hints[0].Code)
 	req.IncludeOneShot = true
 	retried, err := svc.SearchContent(t.Context(), req)
 	require.NoError(t, err)
@@ -243,7 +243,7 @@ func TestSearchContentHintsExpandedGate(t *testing.T) {
 			assert.Equal(t, tc.wantCalls, calls)
 			if tc.wantCalls > 1 {
 				require.Len(t, hints, 3)
-				assert.Equal(t, "hidden_one_shot", hints[0].Code)
+				assert.Equal(t, "excluded_one_shot", hints[0].Code)
 			} else {
 				assert.Empty(t, hints)
 			}
@@ -267,7 +267,7 @@ func TestSearchContentHintsContinuationOutsideParentProject(t *testing.T) {
 	require.Empty(t, res.Matches)
 	hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
 	require.Len(t, hints, 1)
-	assert.Equal(t, "hidden_one_shot", hints[0].Code)
+	assert.Equal(t, "excluded_one_shot", hints[0].Code)
 	req.IncludeOneShot = hints[0].RetryWith["include_one_shot"].(bool)
 	retried, err := svc.SearchContent(t.Context(), req)
 	require.NoError(t, err)

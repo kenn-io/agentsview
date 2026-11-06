@@ -2133,7 +2133,7 @@ func TestSearchContentHiddenHints(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, out.Matches)
 	require.Len(t, out.Hints, 1)
-	assert.Equal(t, "hidden_one_shot", out.Hints[0].Code)
+	assert.Equal(t, "excluded_one_shot", out.Hints[0].Code)
 	assert.Equal(t, map[string]any{"include_one_shot": true}, out.Hints[0].RetryWith)
 	_, retried, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "hidden marker", IncludeActive: true, IncludeOneShot: out.Hints[0].RetryWith["include_one_shot"].(bool)})
 	require.NoError(t, err)

@@ -4,6 +4,8 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestSessionListIncludeSource(t *testing.T) {
@@ -362,6 +366,86 @@ func TestSessionListReportsCombinedDefaultExclusions(t *testing.T) {
 			retried := decodeCLIJSON[cliSessionList](t, out)
 			require.Len(t, retried.Sessions, 2)
 			assert.ElementsMatch(t, []any{"parent", "child"}, []any{retried.Sessions[0]["id"], retried.Sessions[1]["id"]})
+		})
+	}
+}
+
+func TestSessionListChildMembershipWithContinuations(t *testing.T) {
+	for _, relationship := range []string{"subagent", "fork", "continuation"} {
+		t.Run(relationship, func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			seedSessionsWithOpts(t, dataDir,
+				sessionSeed{id: "parent", project: "selected"},
+				sessionSeed{id: "other-parent", project: "other"},
+				sessionSeed{id: "child", project: "selected", mut: func(s *db.Session) {
+					s.ParentSessionID = new("parent")
+					s.RelationshipType = relationship
+					if relationship == "continuation" {
+						s.Project = "other"
+					}
+				}},
+			)
+			if relationship != "continuation" {
+				seedSessionsWithOpts(t, dataDir, sessionSeed{id: "continuation", project: "selected", mut: func(s *db.Session) {
+					s.ParentSessionID = new("other-parent")
+					s.RelationshipType = "continuation"
+				}})
+			}
+			args := []string{"session", "list", "--json", "--project", "selected", "--include-one-shot", "--include-automated"}
+			root := newRootCommand()
+			var stdout, stderr bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&stderr)
+			root.SetArgs(args)
+			require.NoError(t, root.Execute())
+			flat := decodeCLIJSON[cliSessionList](t, stdout.String())
+			if relationship == "continuation" {
+				assert.Empty(t, stderr.String())
+				require.Len(t, flat.Sessions, 1)
+			} else {
+				assert.Equal(t, "Excluded 1 session by default: 1 child. Use --include-children to include them.\n", stderr.String())
+				require.Len(t, flat.Sessions, 2)
+			}
+			out, err := executeCommand(newRootCommand(), append(args, "--include-children")...)
+			require.NoError(t, err)
+			retried := decodeCLIJSON[cliSessionList](t, out)
+			require.Len(t, retried.Sessions, 2)
+			assert.ElementsMatch(t, []string{"parent", "child"}, sessionListIDs(t, out))
+		})
+	}
+}
+
+func TestSessionListChildMembershipPartialPage(t *testing.T) {
+	for _, children := range []bool{true, false} {
+		t.Run(fmt.Sprint(children), func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				q := r.URL.Query()
+				assert.Equal(t, fmt.Sprint(db.MaxSessionLimit), q.Get("limit"))
+				assert.Equal(t, "selected", q.Get("project"))
+				assert.Equal(t, "messages", q.Get("order_by"))
+				assert.Equal(t, "true", q.Get("descending"))
+				for _, flag := range []string{"include_one_shot", "include_automated", "include_children"} {
+					assert.Equal(t, "true", q.Get(flag))
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if children {
+					_, _ = w.Write([]byte(`{"sessions":[{"id":"a","relationship_type":"subagent"},{"id":"b","relationship_type":"fork"}],"total":501,"next_cursor":"next"}`))
+				} else {
+					_, _ = w.Write([]byte(`{"sessions":[{"id":"a","relationship_type":"continuation"}],"total":501,"next_cursor":"next"}`))
+				}
+			}))
+			defer srv.Close()
+			svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
+			notice, err := sessionListDefaultExclusionNotice(t.Context(), svc, service.ListFilter{Project: "selected", OrderBy: "messages", Descending: new(true), IncludeOneShot: true, IncludeAutomated: true}, 1)
+			require.NoError(t, err)
+			assert.Equal(t, 1, calls)
+			if children {
+				assert.Equal(t, "Excluded at least 2 sessions by default: at least 2 child. Use --include-children to include them.", notice)
+			} else {
+				assert.Empty(t, notice)
+			}
 		})
 	}
 }

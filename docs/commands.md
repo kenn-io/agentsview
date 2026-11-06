@@ -2030,8 +2030,8 @@ Counts use a bounded search and say `more than N` when more matches exist, or
 `at least N` for semantic and hybrid searches or when filtering or candidate
 limits prevent an exact count.
 For multi-word substring queries over messages, a hint offers `--fts` only when
-that retry finds matches. If several defaults must be relaxed together,
-`hidden_combined` gives a retry with all required include flags. Failed diagnostic
+that retry finds matches. `excluded_combined` gives a retry with the remaining
+include flags for matches beyond the individual class hints. Failed diagnostic
 searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
@@ -2057,7 +2057,8 @@ default. When that hides matching sessions on the first page, it reports the
 counts and the corresponding `--include-one-shot`, `--include-automated`, or
 `--include-children` flags on stderr, including when the list has visible results.
 Child counts include sessions hidden by several defaults; the notice lists
-every remaining include flag to use together. Stdout, including
+every remaining include flag to use together. Child counts use one bounded page;
+a positive count from a partial page says `at least N`. Stdout, including
 `--format json`, keeps its existing shape for pipelines.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from

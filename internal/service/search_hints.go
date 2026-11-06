@@ -90,7 +90,7 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 			wording = "matches are"
 		}
 		message := fmt.Sprintf("%s %s in %s sessions, hidden by default", n, wording, class)
-		if code == "hidden_combined" {
+		if code == "excluded_combined" {
 			message = fmt.Sprintf("%s %s hidden by default", n, wording)
 		}
 		hints = append(hints, ContentSearchHint{Code: code, Message: message, RetryWith: args})
@@ -107,20 +107,20 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 	if !req.IncludeOneShot {
 		retry := req
 		retry.IncludeOneShot = true
-		singlesOK = probe("hidden_one_shot", "one-shot", retry, map[string]any{"include_one_shot": true}) && singlesOK
+		singlesOK = probe("excluded_one_shot", "one-shot", retry, map[string]any{"include_one_shot": true}) && singlesOK
 	}
 	if !req.IncludeAutomated {
 		retry := req
 		retry.IncludeAutomated = true
-		singlesOK = probe("hidden_automated", "automated", retry, map[string]any{"include_automated": true}) && singlesOK
+		singlesOK = probe("excluded_automated", "automated", retry, map[string]any{"include_automated": true}) && singlesOK
 	}
 	if children {
 		retry := req
 		retry.IncludeChildren = true
-		singlesOK = probe("hidden_children", "child", retry, map[string]any{"include_children": true}) && singlesOK
+		singlesOK = probe("excluded_children", "child", retry, map[string]any{"include_children": true}) && singlesOK
 	}
 	if singlesOK && expanded != nil {
-		measure("hidden_combined", "child", expanded, args, singleSessions)
+		measure("excluded_combined", "child", expanded, args, singleSessions)
 	}
 	return hints
 }
