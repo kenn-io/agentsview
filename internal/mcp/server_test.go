@@ -62,7 +62,6 @@ func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
 	require.NotNil(t, srv)
 
 	tools := listCatalog(t, srv)
-	require.NoError(t, checkCatalogBudget(tools, fullCatalogBudget))
 	require.Len(t, tools.Tools, 20)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
@@ -80,7 +79,6 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 	})
 
 	tools := listCatalog(t, srv)
-	require.NoError(t, checkCatalogBudget(tools, memoryCatalogBudget))
 	require.Len(t, tools.Tools, 3)
 	names := make([]string, 0, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -162,19 +160,31 @@ func checkCatalogBudget(tools *mcp.ListToolsResult, budget int) error {
 	return errors.New(detail.String())
 }
 
-func TestCheckCatalogBudget_FailsOneByteOver(t *testing.T) {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
-	mcp.AddTool(srv, &mcp.Tool{Name: "catalog_fixture", Description: "x"},
-		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
-			return nil, struct{}{}, nil
+func TestNewServer_CatalogFitsBudget(t *testing.T) {
+	for _, tc := range []struct {
+		profile Profile
+		budget  int
+	}{{ProfileFull, fullCatalogBudget}, {ProfileMemory, memoryCatalogBudget}} {
+		t.Run(string(tc.profile), func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			tools := listCatalog(t, newServer(ServeOptions{
+				Service: service.NewDirectBackend(d, nil, withTestDocbank()),
+				Profile: tc.profile,
+			}))
+			require.NoError(t, checkCatalogBudget(tools, tc.budget))
 		})
-	tools := listCatalog(t, srv)
+	}
+}
+
+func TestCheckCatalogBudget_FailsOneByteOver(t *testing.T) {
+	const budget = 1_000
+	tools := &mcp.ListToolsResult{Tools: []*mcp.Tool{{Name: "catalog_fixture", Description: "x"}}}
 	raw, err := json.Marshal(tools)
 	require.NoError(t, err)
-	tools.Tools[0].Description += strings.Repeat("x", fullCatalogBudget-len(raw))
-	require.NoError(t, checkCatalogBudget(tools, fullCatalogBudget))
+	tools.Tools[0].Description += strings.Repeat("x", budget-len(raw))
+	require.NoError(t, checkCatalogBudget(tools, budget))
 	tools.Tools[0].Description += "x"
-	err = checkCatalogBudget(tools, fullCatalogBudget)
+	err = checkCatalogBudget(tools, budget)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "catalog_fixture:")
 }

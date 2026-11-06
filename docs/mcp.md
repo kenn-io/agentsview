@@ -107,8 +107,7 @@ include each session's labels, pull request links, and parent session. See
 [pull request links](/docs/session-api/#pull-request-links).
 
 With Docbank and every optional tool listed, the tool list the server sends is
-about 87 KB. `TestNewServer_RegistersTwentyReadOnlyTools` fails when it grows
-past 96 KB.
+about 87 KB. `TestNewServer_CatalogFitsBudget` fails when it grows past 96 KB.
 
 ### Focused memory profile
 
@@ -137,8 +136,7 @@ same schemas and backend selection as the full profile, over either stdio or
 StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
 complete tool list above.
 
-This profile's tool list is about 21 KB.
-`TestNewServer_MemoryProfileRegistersOnlyEvidenceTools` holds it under 24 KB.
+This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
 The native
 [AgentsView Memory package](https://github.com/kenn-io/agentsview/tree/main/plugins/agentsview-memory)
