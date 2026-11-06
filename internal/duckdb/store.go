@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -254,7 +255,7 @@ func (r duckSingleRow) Scan(dest ...any) error {
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	s.customPricing = p
 	digest := sha256.Sum256(fmt.Appendf(nil, "%#v", p))
-	s.pricingDigest = fmt.Sprintf("%x", digest)
+	s.pricingDigest = hex.EncodeToString(digest[:])
 	s.reports.Clear()
 }
 

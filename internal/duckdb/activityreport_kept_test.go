@@ -3,8 +3,8 @@
 package duckdb
 
 import (
-	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -28,7 +28,7 @@ func keptActivityMirror(t *testing.T, path, session string, output int) {
 	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages
   (id, session_id, ordinal, role, content, timestamp, model, token_usage, output_tokens)
   VALUES (2, ?, 1, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'kept-model', ?, ?)`,
-		session, `{"output_tokens":`+fmt.Sprint(output)+`}`, output)
+		session, `{"output_tokens":`+strconv.Itoa(output)+`}`, output)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET ended_at = TIMESTAMP '2026-01-01 00:01:00', message_count = 2`)
 	require.NoError(t, err)

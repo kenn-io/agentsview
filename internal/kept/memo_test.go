@@ -1,8 +1,9 @@
 package kept
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // A memo with a size keeps no more than its byte cap: the oldest written
