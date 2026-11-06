@@ -101,7 +101,6 @@ for (const width of [1280, 390]) {
       await expect(page.locator(".kit-search-by-meaning [role=progressbar]")).toBeVisible();
       phase = "index";
       await expect(page.locator(".kit-search-by-meaning")).toContainText("Indexing");
-      const name = page.locator(".kit-search-by-meaning__name");
       phase = "ready";
       if (entry === "settings") {
         await expect(
