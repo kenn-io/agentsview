@@ -62,7 +62,7 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 		t.Run(tt.filter, func(t *testing.T) {
 			pr, err := ParsePRFilter(tt.filter)
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, listSortedIDs(t, d, SessionFilter{PR: pr}))
+			assert.ElementsMatch(t, tt.want, listSortedIDs(t, d, SessionFilter{PR: pr}))
 		})
 	}
 
