@@ -2031,7 +2031,7 @@
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{doneLabel} / {totalLabel} 個區塊"
+        "countPlural=other": "{doneLabel} / {totalLabel} 個文字片段"
       }
     }
   ],
@@ -2040,7 +2040,7 @@
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{rateLabel} 區塊/秒"
+        "countPlural=other": "{rateLabel} 文字片段/秒"
       }
     }
   ],
@@ -2055,7 +2055,7 @@
   "settings_embeddings_last_build_failed": "失敗",
   "settings_embeddings_last_build_activated": "已啟用新生成",
   "settings_embeddings_last_build_documents": "已嵌入文件數",
-  "settings_embeddings_last_build_chunks": "已嵌入區塊數",
+  "settings_embeddings_last_build_chunks": "已建立索引的文字片段數",
   "settings_embeddings_generations_title": "嵌入生成",
   "settings_embeddings_generations_empty": "尚無嵌入生成。",
   "settings_embeddings_state_active": "作用中",
@@ -3091,7 +3091,7 @@
     {
       "declarations": ["input count", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
-      "match": { "countPlural=one": "區塊", "countPlural=other": "區塊" }
+      "match": { "countPlural=one": "文字片段", "countPlural=other": "文字片段" }
     }
   ]
 }

@@ -2033,7 +2033,7 @@
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{doneLabel} / {totalLabel} 청크"
+        "countPlural=other": "{doneLabel} / {totalLabel} 텍스트 구간"
       }
     }
   ],
@@ -2042,7 +2042,7 @@
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "초당 {rateLabel} 청크"
+        "countPlural=other": "초당 {rateLabel} 텍스트 구간"
       }
     }
   ],
@@ -2057,7 +2057,7 @@
   "settings_embeddings_last_build_failed": "실패",
   "settings_embeddings_last_build_activated": "새 세대가 활성화됨",
   "settings_embeddings_last_build_documents": "임베딩된 문서 수",
-  "settings_embeddings_last_build_chunks": "임베딩된 청크 수",
+  "settings_embeddings_last_build_chunks": "색인된 텍스트 구간",
   "settings_embeddings_generations_title": "임베딩 세대",
   "settings_embeddings_generations_empty": "아직 임베딩 세대가 없습니다.",
   "settings_embeddings_state_active": "활성",
@@ -3094,7 +3094,7 @@
     {
       "declarations": ["input count", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
-      "match": { "countPlural=one": "청크", "countPlural=other": "청크" }
+      "match": { "countPlural=one": "텍스트 구간", "countPlural=other": "텍스트 구간" }
     }
   ]
 }

@@ -2116,8 +2116,8 @@
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{doneLabel} / {totalLabel} fragmento",
-        "countPlural=other": "{doneLabel} / {totalLabel} fragmentos"
+        "countPlural=one": "{doneLabel} / {totalLabel} sección de texto",
+        "countPlural=other": "{doneLabel} / {totalLabel} secciones de texto"
       }
     }
   ],
@@ -2126,8 +2126,8 @@
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{rateLabel} fragmento/s",
-        "countPlural=other": "{rateLabel} fragmentos/s"
+        "countPlural=one": "{rateLabel} sección de texto/s",
+        "countPlural=other": "{rateLabel} secciones de texto/s"
       }
     }
   ],
@@ -2142,7 +2142,7 @@
   "settings_embeddings_last_build_failed": "Fallida",
   "settings_embeddings_last_build_activated": "nueva generación activada",
   "settings_embeddings_last_build_documents": "Documentos procesados",
-  "settings_embeddings_last_build_chunks": "Fragmentos procesados",
+  "settings_embeddings_last_build_chunks": "Secciones de texto indexadas",
   "settings_embeddings_generations_title": "Generaciones",
   "settings_embeddings_generations_empty": "Aún no existe ninguna generación de embeddings.",
   "settings_embeddings_state_active": "Activa",
@@ -3222,7 +3222,7 @@
     {
       "declarations": ["input count", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
-      "match": { "countPlural=one": "fragmento", "countPlural=other": "fragmentos" }
+      "match": { "countPlural=one": "sección de texto", "countPlural=other": "secciones de texto" }
     }
   ]
 }

@@ -194,8 +194,8 @@ describe("EmbeddingsSettings", () => {
     const text = () => document.body.textContent ?? "";
     expect(text()).toContain("test-embed-model");
     expect(text()).toContain("256");
-    expect(text()).toContain("Indexing 200 of 1,000 chunks");
-    expect(text()).toContain("50 chunks/s");
+    expect(text()).toContain("Indexing 200 of 1,000 text sections");
+    expect(text()).toContain("50 text sections/s");
     expect(text()).not.toContain("Embedding");
     expect(text()).not.toContain("20%");
     expect(text()).not.toContain("ETA 16s");

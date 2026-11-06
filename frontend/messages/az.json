@@ -2116,8 +2116,8 @@
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{doneLabel} / {totalLabel} hissə",
-        "countPlural=other": "{doneLabel} / {totalLabel} hissə"
+        "countPlural=one": "{doneLabel} / {totalLabel} mətn hissəsi",
+        "countPlural=other": "{doneLabel} / {totalLabel} mətn hissəsi"
       }
     }
   ],
@@ -2126,8 +2126,8 @@
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{rateLabel} hissə/san.",
-        "countPlural=other": "{rateLabel} hissə/san."
+        "countPlural=one": "{rateLabel} mətn hissəsi/san.",
+        "countPlural=other": "{rateLabel} mətn hissəsi/san."
       }
     }
   ],
@@ -2142,7 +2142,7 @@
   "settings_embeddings_last_build_failed": "Uğursuz oldu",
   "settings_embeddings_last_build_activated": "Yeni nəsil aktivləşdirildi",
   "settings_embeddings_last_build_documents": "Semantik vektorlara çevrilmiş sənədlər",
-  "settings_embeddings_last_build_chunks": "Semantik vektorlara çevrilmiş hissələr",
+  "settings_embeddings_last_build_chunks": "İndekslənmiş mətn hissələri",
   "settings_embeddings_generations_title": "Nəsillər",
   "settings_embeddings_generations_empty": "Hələ semantik vektor nəsilləri yoxdur.",
   "settings_embeddings_state_active": "Aktiv",
@@ -3200,7 +3200,7 @@
     {
       "declarations": ["input count", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
-      "match": { "countPlural=one": "hissə", "countPlural=other": "hissə" }
+      "match": { "countPlural=one": "mətn hissəsi", "countPlural=other": "mətn hissəsi" }
     }
   ]
 }

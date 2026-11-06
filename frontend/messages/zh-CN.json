@@ -2031,7 +2031,7 @@
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{doneLabel} / {totalLabel} 个块"
+        "countPlural=other": "{doneLabel} / {totalLabel} 个文本片段"
       }
     }
   ],
@@ -2040,7 +2040,7 @@
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{rateLabel} 块/秒"
+        "countPlural=other": "{rateLabel} 文本片段/秒"
       }
     }
   ],
@@ -2055,7 +2055,7 @@
   "settings_embeddings_last_build_failed": "失败",
   "settings_embeddings_last_build_activated": "已激活新代",
   "settings_embeddings_last_build_documents": "已嵌入文档数",
-  "settings_embeddings_last_build_chunks": "已嵌入块数",
+  "settings_embeddings_last_build_chunks": "已索引文本片段数",
   "settings_embeddings_generations_title": "嵌入代",
   "settings_embeddings_generations_empty": "尚无嵌入代。",
   "settings_embeddings_state_active": "活跃",
@@ -3088,7 +3088,7 @@
     {
       "declarations": ["input count", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
-      "match": { "countPlural=one": "分块", "countPlural=other": "分块" }
+      "match": { "countPlural=one": "文本片段", "countPlural=other": "文本片段" }
     }
   ]
 }

@@ -2114,8 +2114,8 @@
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{doneLabel} / {totalLabel} chunk",
-        "countPlural=other": "{doneLabel} / {totalLabel} chunks"
+        "countPlural=one": "{doneLabel} / {totalLabel} text section",
+        "countPlural=other": "{doneLabel} / {totalLabel} text sections"
       }
     }
   ],
@@ -2124,8 +2124,8 @@
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{rateLabel} chunk/s",
-        "countPlural=other": "{rateLabel} chunks/s"
+        "countPlural=one": "{rateLabel} text section/s",
+        "countPlural=other": "{rateLabel} text sections/s"
       }
     }
   ],
@@ -2140,7 +2140,7 @@
   "settings_embeddings_last_build_failed": "Failed",
   "settings_embeddings_last_build_activated": "new generation activated",
   "settings_embeddings_last_build_documents": "Documents embedded",
-  "settings_embeddings_last_build_chunks": "Chunks embedded",
+  "settings_embeddings_last_build_chunks": "Text sections indexed",
   "settings_embeddings_generations_title": "Generations",
   "settings_embeddings_generations_empty": "No embedding generations exist yet.",
   "settings_embeddings_state_active": "Active",
@@ -3198,7 +3198,7 @@
     {
       "declarations": ["input count", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
-      "match": { "countPlural=one": "chunk", "countPlural=other": "chunks" }
+      "match": { "countPlural=one": "text section", "countPlural=other": "text sections" }
     }
   ]
 }

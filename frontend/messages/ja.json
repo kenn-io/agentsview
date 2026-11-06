@@ -2101,8 +2101,8 @@
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{doneLabel} / {totalLabel} チャンク",
-        "countPlural=other": "{doneLabel} / {totalLabel} チャンク"
+        "countPlural=one": "{doneLabel} / {totalLabel} テキスト区間",
+        "countPlural=other": "{doneLabel} / {totalLabel} テキスト区間"
       }
     }
   ],
@@ -2111,8 +2111,8 @@
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{rateLabel} チャンク/秒",
-        "countPlural=other": "{rateLabel} チャンク/秒"
+        "countPlural=one": "{rateLabel} テキスト区間/秒",
+        "countPlural=other": "{rateLabel} テキスト区間/秒"
       }
     }
   ],
@@ -2127,7 +2127,7 @@
   "settings_embeddings_last_build_failed": "失敗した",
   "settings_embeddings_last_build_activated": "新しい世代を有効化しました",
   "settings_embeddings_last_build_documents": "埋め込まれたドキュメント",
-  "settings_embeddings_last_build_chunks": "埋め込まれたチャンク",
+  "settings_embeddings_last_build_chunks": "索引済みテキスト区間",
   "settings_embeddings_generations_title": "世代",
   "settings_embeddings_generations_empty": "埋め込み世代はまだ存在しません。",
   "settings_embeddings_state_active": "アクティブ",
@@ -3163,7 +3163,7 @@
     {
       "declarations": ["input count", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
-      "match": { "countPlural=one": "チャンク", "countPlural=other": "チャンク" }
+      "match": { "countPlural=one": "テキスト区間", "countPlural=other": "テキスト区間" }
     }
   ]
 }
