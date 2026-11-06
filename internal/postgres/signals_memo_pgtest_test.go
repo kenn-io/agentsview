@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestFrustrationMemo(t *testing.T) {
@@ -26,22 +25,17 @@ func TestFrustrationMemo(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			const schema = "agentsview_signals_memo_test"
 			const id = "signals-memo"
-			ctx := t.Context()
+			syncer, local, _, ctx := newSessionProvenancePushSync(t, schema)
 			url := testPGURL(t)
-			cleanNamedPGSchema(t, url, schema)
 			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
-			local := testDB(t)
-			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 1}
+			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1}
 			require.NoError(t, local.UpsertSession(ctx, session))
 			messages := []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "this is broken"}}
 			require.NoError(t, local.InsertMessages(ctx, messages))
 			require.NoError(t, local.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{
 				QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
 			}))
-			syncer, err := New(ctx, url, schema, local, "machine", true, storage.PusherOptions{})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
-			_, err = syncer.Push(ctx, false, nil)
+			_, err := syncer.Push(ctx, false, nil)
 			require.NoError(t, err)
 			if test.name == "rewrite" {
 				_, err = syncer.pg.ExecContext(ctx, `UPDATE messages SET content = 'Please explain this function.' WHERE session_id = $1`, id)

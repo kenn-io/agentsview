@@ -3671,4 +3671,50 @@ func TestPushMessagesFrustrationMemoVersion(t *testing.T) {
 	require.NoError(t, tx.Commit())
 	require.NoError(t, pg.QueryRowContext(ctx, `SELECT updated_at FROM sessions WHERE id = 'message-version'`).Scan(&after))
 	assert.True(t, after.After(before), "message repair must advance the session version")
+
+	require.NoError(t, local.ReplaceSessionPlanUsage(ctx, "message-version", fullPlanUsage()))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	// Count physical updates because NOW() is constant within a transaction.
+	_, err = pg.ExecContext(ctx, `
+		CREATE TABLE session_write_counts (session_id TEXT);
+		CREATE FUNCTION count_session_write() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			INSERT INTO session_write_counts VALUES (NEW.id);
+			RETURN NULL;
+		END; $$;
+		CREATE TRIGGER count_session_write AFTER UPDATE ON sessions
+			FOR EACH ROW EXECUTE FUNCTION count_session_write()`)
+	require.NoError(t, err)
+	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	var markerID string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT owner_marker FROM sessions WHERE id = 'message-version'`).Scan(&markerID))
+	for _, test := range []struct {
+		name    string
+		rewrite bool
+	}{
+		{"messages and plan usage", true},
+		{"plan usage only", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			_, err := pg.ExecContext(ctx, `DELETE FROM session_write_counts`)
+			require.NoError(t, err)
+			var pushed []db.Session
+			result, err := syncer.pushBatchAttempt(ctx, sessions, test.rewrite, markerID, nil, nil, &pushed, true)
+			require.NoError(t, err)
+			require.True(t, result.ok)
+			require.Equal(t, 1, result.sessions)
+			if test.rewrite {
+				assert.Equal(t, 1, result.messages)
+			} else {
+				assert.Zero(t, result.messages)
+			}
+			var writes int
+			require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_write_counts WHERE session_id = 'message-version'`).Scan(&writes))
+			assert.Equal(t, 1, writes, "each batch must publish the session version once")
+		})
+	}
 }
