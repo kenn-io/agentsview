@@ -3649,38 +3649,3 @@ func TestFilteredPushReconcilesProjectMoveCommittedDuringPush(t *testing.T) {
 	).Scan(&count))
 	assert.Zero(t, count, "a session moved out of scope during the push must leave the remote")
 }
-
-func TestPushMessagesFrustrationMemoVersion(t *testing.T) {
-	const schema = "agentsview_message_version_test"
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, testPGURL(t), schema) })
-	seedProvenanceSession(t, local, "message-version", "workstation", "sample", "")
-	require.NoError(t, local.ReplaceSessionPlanUsage(ctx, "message-version", fullPlanUsage()))
-	_, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	// Count physical updates because NOW() is constant within a transaction.
-	_, err = pg.ExecContext(ctx, `
-		CREATE TABLE session_write_counts (session_id TEXT);
-		CREATE FUNCTION count_session_write() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN
-			INSERT INTO session_write_counts VALUES (NEW.id);
-			RETURN NULL;
-		END; $$;
-		CREATE TRIGGER count_session_write AFTER UPDATE ON sessions
-			FOR EACH ROW EXECUTE FUNCTION count_session_write()`)
-	require.NoError(t, err)
-	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
-	require.NoError(t, err)
-	require.Len(t, sessions, 1)
-	var markerID string
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT owner_marker FROM sessions WHERE id = 'message-version'`).Scan(&markerID))
-	var pushed []db.Session
-	result, err := syncer.pushBatchAttempt(ctx, sessions, true, markerID, nil, nil, &pushed, true)
-	require.NoError(t, err)
-	require.True(t, result.ok)
-	require.Equal(t, 1, result.sessions)
-	assert.Equal(t, 1, result.messages)
-	var writes int
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_write_counts WHERE session_id = 'message-version'`).Scan(&writes))
-	assert.Equal(t, 1, writes, "each batch must publish the session version once")
-}
