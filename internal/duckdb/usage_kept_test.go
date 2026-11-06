@@ -14,6 +14,7 @@ import (
 	"time"
 	"weak"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -112,13 +113,13 @@ func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
-			t.Error("paused Usage read did not finish")
+			assert.Fail(t, "paused Usage read did not finish")
 		}
 	}()
 	select {
 	case <-paused:
 	case <-time.After(10 * time.Second):
-		t.Fatal("Usage read did not reach publication")
+		require.FailNow(t, "Usage read did not reach publication")
 	}
 	require.NoError(t, swapMirrorFile(next, path))
 	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
@@ -128,7 +129,7 @@ func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
-		t.Fatal("Usage read did not finish after replacement")
+		require.FailNow(t, "Usage read did not finish after replacement")
 	}
 	require.NoError(t, firstErr)
 	require.Equal(t, 500, first.Totals.OutputTokens)
