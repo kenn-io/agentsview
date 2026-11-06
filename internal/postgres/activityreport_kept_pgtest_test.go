@@ -62,10 +62,18 @@ func requirePGKeptEqual(t *testing.T, want, got activity.CandidateArtifacts) {
 func TestPGActivityReportKeptChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
+		keep    bool
 		prepare func(*testing.T, *db.DB)
 		write   func(*testing.T, *db.DB)
 		check   func(*testing.T, activity.CandidateArtifacts)
 	}{
+		{name: "next day", keep: true, write: func(t *testing.T, d *db.DB) {
+			t.Helper()
+			pgKeptSession(t, d, "next", "project-a", "2026-06-15")
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Len(t, a.Sessions, 1)
+		}},
 		{name: "late import", write: func(t *testing.T, d *db.DB) {
 			t.Helper()
 			pgKeptSession(t, d, "late", "project-a", "2026-06-14")
@@ -184,13 +192,17 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 				store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 			}
 			pgKeptPush(t, syncer, tc.name == "hard delete" || tc.name == "excluded Claude peer")
-			changed := pgKeptBuild(t, store, f, q, true)
+			changed := pgKeptBuild(t, store, f, q, !tc.keep)
 			tc.check(t, changed)
 			a, err := activity.ArtifactDigest(before)
 			require.NoError(t, err)
 			b, err := activity.ArtifactDigest(changed)
 			require.NoError(t, err)
-			assert.NotEqual(t, a, b)
+			if tc.keep {
+				assert.Equal(t, a, b)
+			} else {
+				assert.NotEqual(t, a, b)
+			}
 			store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
 			requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, true))
 			requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, false))

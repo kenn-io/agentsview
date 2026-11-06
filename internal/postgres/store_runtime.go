@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"sync"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 // storeExecutor keeps every query on either the owned pool or one read snapshot.
@@ -18,7 +20,21 @@ type storeExecutor interface {
 func (s *Store) runtimeState() *storeRuntime {
 	s.runtimeOnce.Do(func() {
 		if s.runtime == nil {
-			s.runtime = &storeRuntime{}
+			s.runtime = &storeRuntime{
+				activityKept: kept.Memo[pgActivityKept]{
+					MaxBytes: 128 << 20,
+					Size: func(e pgActivityKept) int64 {
+						size := activity.EstimatedArtifactBytes(e.report.Artifacts)
+						for _, id := range e.read {
+							size += int64(len(id)) + 16
+						}
+						for _, label := range e.labels {
+							size += int64(len(label)) + 16
+						}
+						return size
+					},
+				},
+			}
 		}
 	})
 	return s.runtime

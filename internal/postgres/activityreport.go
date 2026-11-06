@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -43,17 +44,13 @@ func (s *Store) GetActivityReport(
 type activityReportBackend struct {
 	*Store
 	lowerBound, upperBound string
-	read                   *[]string
+	read                   map[string]struct{}
 }
 
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	rows, pricing, read, err := b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
-	if b.read != nil {
-		*b.read = append(*b.read, read...)
-	}
-	return rows, pricing, err
+	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q, b.read)
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
@@ -85,7 +82,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		if revision > 0 {
 			selection = kept.Selection(f, q)
-			report, hit, err := s.keptActivityReport(ctx, selection, version, revision)
+			report, hit, err := s.keptActivityReport(ctx, selection, version)
 			if err != nil {
 				return activity.CandidateArtifacts{}, err
 			}
@@ -105,20 +102,24 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	read := slices.Clone(ids)
+	var read map[string]struct{}
+	if selection != "" {
+		read = make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			read[id] = struct{}{}
+		}
+	}
 	backend := activityReportBackend{
-		read:       &read,
+		read:       read,
 		Store:      s,
 		lowerBound: lowerBound, upperBound: upperBound,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating pg activity report")
 	if err == nil && selection != "" {
-		slices.Sort(read)
 		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
-			read: slices.Compact(read), labels: activity.ProjectLabels(sessions),
-			rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC, paddedLower: lowerBound, paddedUpper: upperBound,
+			read: slices.Sorted(maps.Keys(read)), labels: activity.ProjectLabels(sessions),
 		}})
 	}
 	return artifacts, err
@@ -631,21 +632,21 @@ func (s *Store) ActivityReportCandidateSource(
 // computed after selection so filtered rows do not affect pricing metadata.
 func (s *Store) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, []string, error) {
+	read map[string]struct{},
+) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
-	var read []string
 
 	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("loading pg pricing: %w", err)
+		return nil, nil, fmt.Errorf("loading pg pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 	if len(ids) == 0 {
 		block, err := rateResolver.BuildBlock()
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("building pricing block: %w", err)
+			return nil, nil, fmt.Errorf("building pricing block: %w", err)
 		}
-		return out, &block, read, nil
+		return out, &block, nil
 	}
 
 	type ordered struct {
@@ -688,17 +689,19 @@ func (s *Store) activityReportUsage(
 		AND u.ts <= ` + upper + `::timestamptz`
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("querying activity report usage: %w", err)
+		return nil, nil, fmt.Errorf("querying activity report usage: %w", err)
 	}
 	defer rows.Close()
 	var rowsAcc []ordered
 	for rows.Next() {
 		r, scanErr := scanPGDailyUsageRow(rows)
 		if scanErr != nil {
-			return nil, nil, nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"scanning activity report usage: %w", scanErr)
 		}
-		read = append(read, r.sessionID)
+		if read != nil {
+			read[r.sessionID] = struct{}{}
+		}
 		ord := int64(-1)
 		if r.messageOrdinal.Valid {
 			ord = r.messageOrdinal.Int64
@@ -721,7 +724,7 @@ func (s *Store) activityReportUsage(
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, nil, fmt.Errorf("iterating activity report usage: %w", err)
+		return nil, nil, fmt.Errorf("iterating activity report usage: %w", err)
 	}
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {
@@ -746,7 +749,7 @@ func (s *Store) activityReportUsage(
 		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
 	)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	out = make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
@@ -765,7 +768,7 @@ func (s *Store) activityReportUsage(
 		cost, priced, contributes, priceErr := pgActivityReportRowStatusWithWebSearchRequests(
 			costRow, webSearchRequests[i], rateResolver)
 		if priceErr != nil {
-			return nil, nil, nil, priceErr
+			return nil, nil, priceErr
 		}
 		costSource := export.CostSourceComputed
 		if costRow.cost.Valid {
@@ -785,9 +788,9 @@ func (s *Store) activityReportUsage(
 	}
 	block, err := rateResolver.BuildBlock()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("building pricing block: %w", err)
+		return nil, nil, fmt.Errorf("building pricing block: %w", err)
 	}
-	return out, &block, read, nil
+	return out, &block, nil
 }
 
 func pgActivityReportRowStatus(

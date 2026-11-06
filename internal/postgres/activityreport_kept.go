@@ -6,50 +6,31 @@ import (
 	"reflect"
 	"slices"
 
-	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 )
 
 type pgActivityKept struct {
-	report                   kept.Report
-	revision                 int64
-	read, labels             []string
-	rangeStart, rangeEnd     string
-	paddedLower, paddedUpper string
+	report       kept.Report
+	revision     int64
+	read, labels []string
 }
 
 func (s *Store) activityKeptVersion(ctx context.Context) (string, int64, error) {
-	runtime := s.runtimeState()
-	runtime.activityKeptOnce.Do(func() {
-		runtime.activityKept.Size = func(e pgActivityKept) int64 {
-			size := activity.EstimatedArtifactBytes(e.report.Artifacts)
-			for _, id := range e.read {
-				size += int64(len(id)) + 16
-			}
-			for _, label := range e.labels {
-				size += int64(len(label)) + 16
-			}
-			return size
-		}
-		runtime.activityKept.MaxBytes = 128 << 20
-	})
-	// Read the table identity with the revision so recreating the journal
+	revision, err := s.UsageChangeRevision(ctx)
+	if err != nil || revision == 0 {
+		return "", 0, err
+	}
+	// Include the table identity so recreating the journal
 	// cannot validate a report built against the previous schema.
 	var oid uint32
-	var revision int64
-	err := s.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid,
-  COALESCE((SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
-   AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value = $1)), 0)
-  FROM (SELECT count(*) FROM usage_session_changes WHERE false) journal`, fmt.Sprint(usageChangeJournalVersionPG)).Scan(&oid, &revision)
+	err = s.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid`).Scan(&oid)
 	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
 		return "", 0, nil
 	}
 	if err != nil {
 		return "", 0, fmt.Errorf("reading kept activity version: %w", err)
-	}
-	if revision == 0 {
-		return "", 0, nil
 	}
 	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
@@ -59,10 +40,10 @@ func (s *Store) activityKeptVersion(ctx context.Context) (string, int64, error) 
 	return fmt.Sprintf("%d|%s", oid, digest), revision, err
 }
 
-func (s *Store) keptActivityReport(ctx context.Context, selection, version string, revision int64) (kept.Report, bool, error) {
+func (s *Store) keptActivityReport(ctx context.Context, selection, version string) (kept.Report, bool, error) {
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
-	if !ok || revision < entries[0].revision {
+	if !ok {
 		return kept.Report{}, false, nil
 	}
 	entry := entries[0]
@@ -79,14 +60,23 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		}
 	}
 	if len(changed) > 0 {
+		rangeStart, rangeEnd := entry.report.Artifacts.Report.RangeStart, entry.report.Artifacts.Report.RangeEnd
 		var overlaps bool
 		err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (
    SELECT 1 FROM sessions s WHERE s.id = ANY($1) AND ((`+
 			activityReportSessionWindowPredicate("$2", "$3")+`)
    OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id
+    AND m.claude_message_id != '' AND m.claude_request_id != ''
     AND COALESCE(m.timestamp, s.started_at) >= $4::timestamptz
-    AND COALESCE(m.timestamp, s.started_at) <= $5::timestamptz)))`,
-			changed, entry.rangeStart, entry.rangeEnd, entry.paddedLower, entry.paddedUpper).Scan(&overlaps)
+    AND COALESCE(m.timestamp, s.started_at) <= $5::timestamptz
+    AND (m.claude_message_id, m.claude_request_id) IN (
+     SELECT m.claude_message_id, m.claude_request_id
+     FROM messages m JOIN sessions s ON s.id = m.session_id
+     WHERE m.session_id = ANY($6)
+      AND m.claude_message_id != '' AND m.claude_request_id != ''
+      AND COALESCE(m.timestamp, s.started_at) >= $4::timestamptz
+      AND COALESCE(m.timestamp, s.started_at) <= $5::timestamptz))))`,
+			changed, rangeStart, rangeEnd, db.PaddedUTCBound(rangeStart, -14), db.PaddedUTCBound(rangeEnd, 14), entry.read).Scan(&overlaps)
 		if err != nil {
 			return kept.Report{}, false, fmt.Errorf("checking kept activity changes: %w", err)
 		}

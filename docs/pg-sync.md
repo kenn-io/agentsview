@@ -24,6 +24,7 @@ writes wait. CockroachDB skips this journal.
 
 On `pg serve`, ended Activity ranges are reused in memory until a push touches
 their sessions or range, pricing changes, or project identity changes.
+Hosted PostgreSQL and archives without the journal rebuild every time.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
