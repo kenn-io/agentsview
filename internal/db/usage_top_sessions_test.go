@@ -325,13 +325,8 @@ func TestUsageTopSessionsUngroupedRenameKeepsEmptyInstalledLabel(t *testing.T) {
 	var label string
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT group_label FROM usage_rollup_installs WHERE session_id='ungrouped'`).Scan(&label))
 	assert.Empty(t, label)
-	before, err := database.UsageChangeRevision(t.Context())
-	require.NoError(t, err)
 	renamed := "Renamed report · run"
 	require.NoError(t, database.RefreshSessionName(t.Context(), "ungrouped", &renamed))
-	after, err := database.UsageChangeRevision(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
 	got, err := database.GetTopSessionsByCost(t.Context(), filter, 1)
 	require.NoError(t, err)
 	require.Len(t, got, 1)

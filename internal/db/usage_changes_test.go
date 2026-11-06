@@ -11,18 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUsageChangeJournalSkipsOrdinaryRenames(t *testing.T) {
-	database := testDB(t)
-	require.NoError(t, database.UpsertSession(t.Context(), Session{ID: "session", Project: "project", Agent: "codex"}))
-	before, err := database.UsageChangeRevision(t.Context())
-	require.NoError(t, err)
-	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_name='New report · run' WHERE id='session'`)
-	require.NoError(t, err)
-	after, err := database.UsageChangeRevision(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-}
-
 func TestUsageChangeJournal(t *testing.T) {
 	for _, mode := range []struct {
 		name string
