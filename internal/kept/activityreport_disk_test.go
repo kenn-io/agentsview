@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/kit/atomicfile"
 )
 
 // The sweep removes reports whose last open is more than 30 days old and
@@ -15,23 +17,35 @@ import (
 func TestKeptReportSweepRemovesOnlyStaleFiles(t *testing.T) {
 	d := activityReportDisk{dir: t.TempDir()}
 	now := time.Now()
-	files := map[string]time.Duration{
-		"unopened.json":                   31 * 24 * time.Hour,
-		"opened.json":                     29 * 24 * time.Hour,
-		activityReportTempPrefix + "old":  2 * time.Hour,
-		activityReportTempPrefix + "busy": time.Minute,
+	files := []struct {
+		name string
+		age  time.Duration
+		temp bool
+		gone bool
+	}{
+		{name: "unopened.json", age: 31 * 24 * time.Hour, gone: true},
+		{name: "opened.json", age: 29 * 24 * time.Hour},
+		{name: "old.json", age: 2 * time.Hour, temp: true, gone: true},
+		{name: "busy.json", age: time.Minute, temp: true},
 	}
-	for name, age := range files {
-		path := filepath.Join(d.dir, name)
+	for i := range files {
+		file := &files[i]
+		path := filepath.Join(d.dir, file.name)
+		if file.temp {
+			staged, err := atomicfile.Create(path, atomicfile.WithPrivate(), atomicfile.WithoutSync())
+			require.NoError(t, err)
+			path = staged.TempName()
+			file.name = filepath.Base(path)
+			require.NoError(t, staged.Abort())
+		}
 		require.NoError(t, os.WriteFile(path, nil, 0o600))
-		require.NoError(t, os.Chtimes(path, now.Add(-age), now.Add(-age)))
+		require.NoError(t, os.Chtimes(path, now.Add(-file.age), now.Add(-file.age)))
 	}
 	removed, err := d.sweep(now)
 	require.NoError(t, err)
 	require.Equal(t, 2, removed)
-	for name := range files {
-		gone := name == "unopened.json" || name == activityReportTempPrefix+"old"
-		_, err := os.Stat(filepath.Join(d.dir, name))
-		require.Equal(t, gone, os.IsNotExist(err), name)
+	for _, file := range files {
+		_, err := os.Stat(filepath.Join(d.dir, file.name))
+		require.Equal(t, file.gone, os.IsNotExist(err), file.name)
 	}
 }
