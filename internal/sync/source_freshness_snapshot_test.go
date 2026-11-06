@@ -46,11 +46,7 @@ func TestSourceFreshnessSnapshotPassParity(t *testing.T) {
 				case "missing digest":
 					require.NoError(t, fx.db.DeleteProviderStatHash(t.Context(), parser.AgentClaude, path))
 				case "appended":
-					f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
-					require.NoError(t, err)
-					_, err = f.WriteString("{\"type\":\"user\",\"timestamp\":\"2024-01-01T10:05:00Z\",\"message\":{\"content\":\"more\"}}\n")
-					require.NoError(t, err)
-					require.NoError(t, f.Close())
+					fx.appendClaudeMessage(t, path, "more")
 				}
 				fx.engine.Close()
 				if scenario == "unchanged" {
