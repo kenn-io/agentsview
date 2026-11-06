@@ -66,8 +66,10 @@ The latest release is
   and MCP results. `friction link` and `friction unlink` manage a link by hand.
   See [Kata](/docs/kata/#file-friction-log-patterns).
 
-- Muse Personal sessions can now appear beside your other agents and sync
-  through native raw capture, with tool results and compaction summaries.
+- Muse Personal sessions now appear beside your other agents, including tool
+  results and compaction summaries. Set `MUSE_PERSONAL_AGENTS_DIR` when they
+  live somewhere other than `~/agents/`. See
+  [Muse Personal](/docs/configuration/#muse-personal).
 
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at

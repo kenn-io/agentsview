@@ -3222,12 +3222,16 @@ func TestMusePersonalRootResolution(t *testing.T) {
 			p, ok := parser.NewProvider(parser.AgentMusePersonal,
 				parser.ProviderConfig{Roots: cfg.ResolveDirs(parser.AgentMusePersonal)})
 			require.True(t, ok)
-			decoy := filepath.Join(want, "agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "sessions", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl")
-			require.NoError(t, os.MkdirAll(filepath.Dir(decoy), 0o700))
-			require.NoError(t, os.WriteFile(decoy, []byte("{}\n"), 0o600))
+			const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+			header := `{"type":"session_header","version":1,"session_id":"` + id +
+				`","agent_id":"` + id + `","created_at":"2026-10-05T16:00:00Z"}` + "\n"
+			session := filepath.Join(want, "agent-"+id, "sessions", id+".jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(session), 0o700))
+			require.NoError(t, os.WriteFile(session, []byte(header), 0o600))
 			sources, err := p.Discover(t.Context())
 			require.NoError(t, err)
-			assert.Empty(t, sources)
+			require.Len(t, sources, 1)
+			assert.Equal(t, "muse-personal:"+id, sources[0].Key)
 		})
 	}
 }
