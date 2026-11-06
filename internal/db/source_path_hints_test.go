@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1013,9 +1014,19 @@ func listBaselineOwnership(
 }
 
 func TestBaselineActiveSessionSourcePathsSeeksAdmittedPaths(t *testing.T) {
-	for _, stats := range []string{"missing", "stale"} {
+	for _, stats := range []string{"missing", "stale", "fresh"} {
 		t.Run(stats, func(t *testing.T) {
-			d := testDB(t)
+			var d *DB
+			if stats == "fresh" {
+				path := filepath.Join(t.TempDir(), "fresh.db")
+				require.NoError(t, os.WriteFile(path, nil, 0o600))
+				var err error
+				d, err = OpenFreshIsolatedContext(t.Context(), path)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, d.Close()) })
+			} else {
+				d = testDB(t)
+			}
 			insertSessionWithSourcePath(t, d, "target", "claude", "target.jsonl")
 			if stats == "stale" {
 				_, err := d.getWriter().Exec(t.Context(), "ANALYZE sessions")
@@ -1036,7 +1047,7 @@ func TestBaselineActiveSessionSourcePathsSeeksAdmittedPaths(t *testing.T) {
 			require.NoError(t, err)
 			defer rows.Close()
 			plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
-			assert.Contains(t, plan, "idx_sessions_agent_file_path_active (agent=? AND file_path=?)", plan)
+			assert.Contains(t, plan, "idx_sessions_file_path (file_path=?)", plan)
 			require.NoError(t, d.BaselineActiveSessionSourcePaths(t.Context(), defaultMachine, sources))
 			assert.Equal(t, map[string]SessionSourcePath{"target": sources[0]}, listBaselineOwnership(t, d, defaultMachine))
 		})

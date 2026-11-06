@@ -5303,7 +5303,7 @@ func baselineActiveSessionSourcePathsQuery(filter string) string {
 			INSERT INTO local_session_source_baselines
 				(session_id, machine, agent, file_path)
 			SELECT id, machine, agent, file_path
-			FROM sessions INDEXED BY idx_sessions_agent_file_path_active
+			FROM sessions INDEXED BY idx_sessions_file_path
 			WHERE machine = ? AND ` + filter + `
 			  AND file_path IS NOT NULL AND deleted_at IS NULL
 			  AND source_missing_at IS NULL
