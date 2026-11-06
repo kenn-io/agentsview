@@ -19,8 +19,8 @@ writes. In addition to normal table access, installation requires `CREATE` on
 the schema and `TRIGGER` on the watched tables. Installation takes a
 `SHARE ROW EXCLUSIVE` lock on those tables until it commits: reads continue, and
 writes wait. CockroachDB skips this journal.
-`pg serve` roles granted access after installation also need `SELECT` on
-`usage_session_changes`.
+Activity reuse needs `SELECT` on `usage_session_changes` for `pg serve`
+roles given access later.
 
 On `pg serve`, ended Activity ranges are reused in memory until a push touches
 their sessions or range, pricing changes, or project identity changes.
