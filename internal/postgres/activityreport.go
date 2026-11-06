@@ -80,13 +80,15 @@ func (s *Store) BuildActivityReportArtifacts(
 	var selection, version string
 	var revision int64
 	if !q.Partial && !s.hostedRelations {
-		version, revision, err = s.activityKeptVersion(ctx, pricing)
+		version, err = s.activityKeptVersion(ctx, pricing)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		if revision > 0 {
+		if version != "" {
 			selection = kept.Selection(f, q)
-			report, hit, err := s.keptActivityReport(ctx, selection, version)
+			var report kept.Report
+			var hit bool
+			report, revision, hit, err = s.keptActivityReport(ctx, selection, version, f, q)
 			if err != nil {
 				return activity.CandidateArtifacts{}, err
 			}
@@ -94,11 +96,14 @@ func (s *Store) BuildActivityReportArtifacts(
 				activity.ReportProgress(onProgress, report.Done)
 				return report.Artifacts, nil
 			}
+			if revision == 0 {
+				selection = ""
+			}
 		}
 	}
 
 	sessions, ids, err := s.activityReportSessions(
-		ctx, f, rangeStartUTC, rangeEndUTC)
+		ctx, f, rangeStartUTC, rangeEndUTC, nil)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -109,9 +114,6 @@ func (s *Store) BuildActivityReportArtifacts(
 	var read map[string]struct{}
 	if selection != "" {
 		read = make(map[string]struct{}, len(ids))
-		for _, id := range ids {
-			read[id] = struct{}{}
-		}
 	}
 	backend := activityReportBackend{
 		read:       read,
@@ -122,9 +124,15 @@ func (s *Store) BuildActivityReportArtifacts(
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating pg activity report")
 	if err == nil && selection != "" {
+		candidates := slices.Clip(slices.Clone(ids))
+		slices.Sort(candidates)
+		for _, id := range candidates {
+			delete(read, id)
+		}
 		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
-			read: slices.Sorted(maps.Keys(read)), labels: activity.ProjectLabels(sessions),
+			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
+			labels: slices.Clip(slices.Clone(activity.ProjectLabels(sessions))),
 		}})
 	}
 	return artifacts, err
@@ -326,11 +334,15 @@ func pgSessionUsageRowLess(
 // keeps the session eligible when it reaches the report range.
 func (s *Store) activityReportSessions(
 	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
+	only []string,
 ) ([]activity.SessionMeta, []string, error) {
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(f, "", pb, false, "s.id", s.sessionDialect())
 	lower := pb.add(rangeStartUTC)
 	upper := pb.add(rangeEndUTC)
+	if only != nil {
+		where += " AND s.id = ANY(" + pb.add(only) + ")"
+	}
 
 	// Each Title candidate is NULLIF'd independently (not a nested
 	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
@@ -346,7 +358,18 @@ func (s *Store) activityReportSessions(
 		COALESCE(s.is_automated, false) AS is_automated,
 		s.relationship_type = 'subagent' AS is_subagent
 	FROM sessions s
-	WHERE ` + where + ` AND ` + activityReportSessionWindowPredicate(lower, upper)
+	WHERE ` + where + ` AND (COALESCE(s.ended_at,
+				(SELECT MAX(m.timestamp) FROM messages m
+					WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
+				s.started_at, s.created_at) >= ` + lower + `::timestamptz
+			OR EXISTS (
+				SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = s.id
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp >= ` + lower + `::timestamptz
+			))
+		AND COALESCE(s.started_at, s.created_at) < ` + upper + `::timestamptz`
 
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
@@ -852,19 +875,4 @@ func pgActivityReportRowStatusWithWebSearchRequests(
 		pricing, r.model, pricedModel, lookup,
 		requestScoped, inTok, crTok, rdTok)
 	return cost, true, true, nil
-}
-
-func activityReportSessionWindowPredicate(lower, upper string) string {
-	return `(COALESCE(s.ended_at,
-				(SELECT MAX(m.timestamp) FROM messages m
-					WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
-				s.started_at, s.created_at) >= ` + lower + `::timestamptz
-			OR EXISTS (
-				SELECT 1 FROM tool_result_events tre
-				WHERE tre.session_id = s.id
-					AND tre.source = 'tool_execution'
-					AND tre.status IN ('completed', 'errored')
-					AND tre.timestamp >= ` + lower + `::timestamptz
-			))
-		AND COALESCE(s.started_at, s.created_at) < ` + upper + `::timestamptz`
 }

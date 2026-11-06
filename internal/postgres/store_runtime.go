@@ -25,7 +25,10 @@ func (s *Store) runtimeState() *storeRuntime {
 					MaxBytes: 128 << 20,
 					Size: func(e pgActivityKept) int64 {
 						size := activity.EstimatedArtifactBytes(e.report.Artifacts)
-						for _, id := range e.read {
+						for _, id := range e.candidates {
+							size += int64(len(id)) + 16
+						}
+						for _, id := range e.peers {
 							size += int64(len(id)) + 16
 						}
 						for _, label := range e.labels {

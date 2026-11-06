@@ -61,11 +61,12 @@ func requirePGKeptEqual(t *testing.T, want, got activity.CandidateArtifacts) {
 
 func TestPGActivityReportKeptChanges(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		keep    bool
-		prepare func(*testing.T, *db.DB)
-		write   func(*testing.T, *db.DB)
-		check   func(*testing.T, activity.CandidateArtifacts)
+		name     string
+		timezone string
+		keep     bool
+		prepare  func(*testing.T, *db.DB)
+		write    func(*testing.T, *db.DB)
+		check    func(*testing.T, activity.CandidateArtifacts)
 	}{
 		{name: "next day", keep: true, write: func(t *testing.T, d *db.DB) {
 			t.Helper()
@@ -80,6 +81,28 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
 			t.Helper()
 			assert.Len(t, a.Sessions, 2)
+		}},
+		{name: "excluded project", keep: true, write: func(t *testing.T, d *db.DB) {
+			t.Helper()
+			pgKeptSession(t, d, "excluded", "project-b", "2026-06-14")
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Len(t, a.Sessions, 1)
+		}},
+		{name: "New York late import", timezone: "America/New_York", write: func(t *testing.T, d *db.DB) {
+			t.Helper()
+			require.NoError(t, d.UpsertSession(t.Context(), db.Session{
+				ID: "late", Project: "project-a", Machine: "test-machine", Agent: "claude",
+				CreatedAt: "2026-06-15T02:00:00Z", StartedAt: new("2026-06-15T02:00:00Z"), EndedAt: new("2026-06-15T02:01:00Z"), MessageCount: 2,
+			}))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "late", []db.Message{
+				{SessionID: "late", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-15T02:00:00Z"},
+				{SessionID: "late", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-15T02:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":500}`)},
+			}))
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Len(t, a.Sessions, 2)
+			assert.Equal(t, 1000, a.Report.Totals.OutputTokens)
 		}},
 		{name: "soft delete", write: func(t *testing.T, d *db.DB) {
 			t.Helper()
@@ -187,6 +210,22 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.Equal(t, 5, a.Report.Totals.OutputTokens)
 		}},
+		{name: "Claude peer of peer", keep: true, prepare: func(t *testing.T, d *db.DB) {
+			t.Helper()
+			pgKeptSession(t, d, "peer", "project-b", "2026-06-14")
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "past", []db.Message{{SessionID: "past", Ordinal: 0, Role: "assistant", Content: "partial", Timestamp: "2026-06-14T10:00:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":5}`), ClaudeMessageID: "message-a", ClaudeRequestID: "request-a"}}))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "peer", []db.Message{
+				{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":631}`), ClaudeMessageID: "message-a", ClaudeRequestID: "request-a"},
+				{SessionID: "peer", Ordinal: 1, Role: "assistant", Content: "other", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":900}`), ClaudeMessageID: "message-b", ClaudeRequestID: "request-b"},
+			}))
+		}, write: func(t *testing.T, d *db.DB) {
+			t.Helper()
+			pgKeptSession(t, d, "other", "project-b", "2026-06-15")
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "other", []db.Message{{SessionID: "other", Ordinal: 0, Role: "assistant", Content: "other", Timestamp: "2026-06-15T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":1000}`), ClaudeMessageID: "message-b", ClaudeRequestID: "request-b"}}))
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Equal(t, 631, a.Report.Totals.OutputTokens)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, syncer, store := newUsageJournalFixture(t)
@@ -194,7 +233,11 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			if tc.prepare != nil {
 				tc.prepare(t, d)
 			}
-			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+			tz := tc.timezone
+			if tz == "" {
+				tz = "UTC"
+			}
+			q, f := pgDayQuery(t, "2026-06-14", tz), db.AnalyticsFilter{Timezone: tz, Project: "project-a"}
 			pgKeptPush(t, syncer, false)
 			before := pgKeptBuild(t, store, f, q, true)
 			requirePGKeptEqual(t, before, pgKeptBuild(t, store, f, q, false))
@@ -216,7 +259,6 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			}
 			store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
 			requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, true))
-			requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, false))
 		})
 	}
 }
