@@ -266,6 +266,45 @@ test.describe("Recent Edits feed", () => {
     expect(await keptColumns(page)).toEqual(["project"]);
   });
 
+  test("after a refresh, clicking File's handle without dragging keeps no File width", async ({
+    page,
+  }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    const handles = page.locator(".re-list thead th").getByRole("separator");
+    await handles.first().focus();
+    for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
+    await expect.poll(() => keptColumns(page)).toEqual(["project"]);
+
+    await page.getByRole("button", { name: "Reload list" }).click();
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    const box = (await handles.nth(1).boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    expect(await keptColumns(page)).toEqual(["project"]);
+  });
+
+  test("after a reload, clicking Last edit's handle without dragging keeps no Last edit width", async ({
+    page,
+  }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    const handles = page.locator(".re-list thead th").getByRole("separator");
+    // Narrow File, so Last edit fills the room it leaves after a reload.
+    await handles.nth(1).focus();
+    for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
+    await expect.poll(() => keptColumns(page)).toEqual(["file"]);
+
+    await page.reload();
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    const box = (await handles.nth(3).boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    expect(await keptColumns(page)).toEqual(["file"]);
+  });
+
   test("a phone resize is not kept once the window is wide again", async ({ page }) => {
     await withRecentEdits(page);
     await page.setViewportSize({ width: 400, height: 800 });
