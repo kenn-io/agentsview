@@ -211,6 +211,74 @@ func TestClaudeFormatCommandArgsUpgradeReparsesInPlace(t *testing.T) {
 	}
 }
 
+func TestClaudePeerMessageUpgradeReparsesInPlace(t *testing.T) {
+	providers := []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}
+	scope := db.ScopedDataVersionProviders(165, 166)
+	assert.ElementsMatch(t, providers, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	const peerText = "Another Claude session sent a message: PING"
+	for _, provider := range providers {
+		t.Run(string(provider), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			sessionID := "c0000000-0000-4000-8000-000000000166"
+			source := filepath.Join(root, "project", sessionID+".jsonl")
+			if provider == parser.AgentCowork {
+				workspace := filepath.Join(root, "org", "workspace")
+				localID := "local_50000000-0000-4000-8000-000000000166"
+				dbtest.WriteTestFile(t, filepath.Join(workspace, localID+".json"), []byte(`{"sessionId":"`+localID+`","cliSessionId":"`+sessionID+`"}`))
+				source = filepath.Join(workspace, localID, ".claude", "projects", "project", sessionID+".jsonl")
+			}
+			body := testjsonl.NewSessionBuilder().
+				AddClaudeUserWithSessionID("2026-11-04T12:00:00Z", "hello", sessionID).
+				AddClaudeAssistant("2026-11-04T12:00:05Z", "It is DNS-validated.").
+				String() + "\n" + fmt.Sprintf(`{"type":"user","uuid":"peer","isMeta":true,"origin":{"kind":"peer"},"message":{"content":%q}}`, peerText) + "\n"
+			dbtest.WriteTestFile(t, source, []byte(body))
+			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{provider: {root}}}
+			engine := sync.NewEngine(t.Context(), database, cfg)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			engine.Close()
+			var id string
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT id FROM sessions").Scan(&id))
+			// Model the previous parser output without changing the source fingerprint.
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), "DELETE FROM messages WHERE session_id = ? AND source_uuid = ?", id, "peer"); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+				return err
+			}))
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err := db.OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			assert.False(t, database.NeedsResync(), "Claude upgrade must reparse in place")
+			engine = sync.NewEngine(t.Context(), database, cfg)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			assert.Equal(t, source, database.GetSessionFilePath(t.Context(), id))
+			messages, err := database.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, messages, 3)
+			assert.Equal(t, peerText, messages[2].Content)
+			assert.True(t, messages[2].IsSystem)
+			assert.Equal(t, "peer_message", messages[2].SourceSubtype)
+			session, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			require.NotNil(t, session.FirstMessage)
+			assert.Equal(t, "hello", *session.FirstMessage)
+			assert.Equal(t, 1, session.UserMessageCount)
+			assert.Equal(t, version, database.GetSessionDataVersion(t.Context(), id))
+			var count int
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
+			assert.Equal(t, 1, count)
+		})
+	}
+}
+
 func TestGrokUpgradePreservesParserRelationship(t *testing.T) {
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: db.ScopedDataVersionProviders(131, 132)}))

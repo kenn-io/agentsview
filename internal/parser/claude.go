@@ -1130,8 +1130,9 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 }
 
 func isHiddenClaudeMeta(line string) bool {
+	origin := gjson.Get(line, "origin.kind").Str
 	return gjson.Get(line, "isMeta").Bool() &&
-		gjson.Get(line, "origin.kind").Str != "channel"
+		origin != "channel" && origin != "peer"
 }
 
 func claudeSDKPrompt(line string) bool {
@@ -1424,7 +1425,7 @@ func extractMessagesFrom(
 		}
 
 		if e.entryType == "user" {
-			if subtype := classifyClaudeSystemMessage(text); subtype != "" {
+			if subtype := classifyClaudeUserMessage(e.line, text); subtype != "" {
 				// Preserve Role=user so analytics that compute
 				// turn-cycle/throughput on role alone (see
 				// internal/db/analytics.go) don't count these as
@@ -2670,6 +2671,7 @@ func subtreeUserTurnsContext(
 func isCountedClaudeUserTurn(ctx context.Context, entry dagEntry) bool {
 	if entry.entryType != "user" ||
 		isHiddenClaudeMeta(entry.line) ||
+		gjson.Get(entry.line, "origin.kind").Str == "peer" ||
 		gjson.Get(entry.line, "isCompactSummary").Bool() {
 		return false
 	}
@@ -2774,7 +2776,7 @@ func extractMessagesContext(
 		// stays "user" so role-keyed analytics continue to treat
 		// these as inputs, not assistant replies.
 		if e.entryType == "user" {
-			if subtype := classifyClaudeSystemMessage(text); subtype != "" {
+			if subtype := classifyClaudeUserMessage(e.line, text); subtype != "" {
 				messages = append(messages, ParsedMessage{
 					Ordinal:          ordinal,
 					Role:             RoleUser,
@@ -3333,6 +3335,13 @@ func extractCompactSummary(line string) string {
 		return strings.Join(parts, "\n")
 	}
 	return content.Str
+}
+
+func classifyClaudeUserMessage(line, content string) string {
+	if gjson.Get(line, "origin.kind").Str == "peer" {
+		return "peer_message"
+	}
+	return classifyClaudeSystemMessage(content)
 }
 
 // classifyClaudeSystemMessage inspects a user-entry content string and
