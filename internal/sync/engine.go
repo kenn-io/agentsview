@@ -660,7 +660,8 @@ type Engine struct {
 	// the provider's full-source fingerprint verifies content. The periodic
 	// archive audit sets it to catch same-stat in-place rewrites that
 	// append-trust would otherwise keep stale.
-	checkpointAudit atomic.Bool
+	checkpointAudit   atomic.Bool
+	soleArchiveWriter atomic.Bool
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
@@ -1701,6 +1702,10 @@ func (e *Engine) Machine() string {
 	}
 	return e.machine
 }
+
+// SetSoleArchiveWriter permits a pass-start snapshot while the startup worker
+// owns the archive write lock and the daemon has not opened the archive.
+func (e *Engine) SetSoleArchiveWriter(enabled bool) { e.soleArchiveWriter.Store(enabled) }
 
 // SetCheckpointAudit enables or disables the checkpoint-bypassing content
 // audit. When enabled, checkpointed sources are re-hashed with the provider's
@@ -8606,6 +8611,11 @@ func (e *Engine) syncAllLocked(
 	}
 
 	tWorkers := time.Now()
+	// Discovery deduplicates sources before their freshness checks and writes.
+	// Cross-source parent-inventory demotions run after the workers finish.
+	if e.soleArchiveWriter.Load() && scope == nil && since.IsZero() && !forceDiscoveredFiles {
+		ctx = e.withSourceFreshnessSnapshot(ctx, all)
+	}
 	results := e.startWorkers(ctx, all)
 	stats = e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
@@ -16197,16 +16207,25 @@ func (e *Engine) providerFreshDigestSourceCurrentInDB(ctx context.Context,
 	agent parser.AgentType, lookupPath string,
 ) bool {
 	rowFound := false
+	snap := sourceFreshnessSnapshotFrom(ctx)
 	for _, owned := range parser.ProviderStoredAgents(agent) {
-		if _, _, ok := e.db.GetFileInfoByAgentPath(ctx,
-			lookupPath, string(owned),
-		); !ok {
-			continue
+		var project string
+		var dataVersion int
+		var active bool
+		if state, ok := snap.State(string(owned), lookupPath); ok {
+			rowFound = true
+			project, dataVersion, active = state.Project, state.DataVersion, state.Active
+		} else {
+			if _, _, ok := e.db.GetFileInfoByAgentPath(ctx,
+				lookupPath, string(owned),
+			); !ok {
+				continue
+			}
+			rowFound = true
+			project, dataVersion, _, _, active = e.db.GetSourceRepairStateByAgentPath(ctx,
+				lookupPath, string(owned),
+			)
 		}
-		rowFound = true
-		project, dataVersion, _, _, active := e.db.GetSourceRepairStateByAgentPath(ctx,
-			lookupPath, string(owned),
-		)
 		if !active {
 			continue
 		}
@@ -16279,7 +16298,11 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		if preParseStatHash.digest == 0 {
 			return 0, false
 		}
-		stored, hasStored, hashErr := e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
+		stored, hasStored := sourceFreshnessSnapshotFrom(ctx).StatHash(string(file.Agent), lookupPath)
+		var hashErr error
+		if !hasStored {
+			stored, hasStored, hashErr = e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
+		}
 		switch {
 		case hashErr != nil:
 			// A read error must be handled before !hasStored: the DB

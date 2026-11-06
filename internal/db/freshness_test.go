@@ -1,12 +1,53 @@
 package db
 
 import (
+	"sync/atomic"
 	"testing"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+func TestFreshnessLookupsReuseReaderSQL(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	path := "/sessions/project/transcript.jsonl"
+	insertSessionWithSourcePath(t, d, "fresh", "claude", path, func(s *Session) {
+		s.FileSize = new(int64(10))
+		s.FileMtime = new(int64(100))
+	})
+	require.NoError(t, d.UpsertProviderStatHash(ctx, parser.AgentClaude, path, 42))
+	d.getReader().current().SetMaxOpenConns(1)
+	var preparations atomic.Int64
+	conn, err := d.getReader().Conn(ctx)
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*diagnosticReaderConn).RegisterAuthorizer(func(_ int, _, _, _ string) int {
+			preparations.Add(1)
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+
+	for i := range 2 {
+		hash, found, err := d.GetProviderStatHash(ctx, parser.AgentClaude, path)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.EqualValues(t, 42, hash)
+		_, _, found = d.GetFileInfoByAgentPath(ctx, path, "claude")
+		require.True(t, found)
+		_, _, _, _, found = d.GetSourceRepairStateByAgentPath(ctx, path, "claude")
+		require.True(t, found)
+		if i == 0 {
+			require.Positive(t, preparations.Load(), "the first lookups must compile SQL")
+			preparations.Store(0)
+		}
+	}
+	assert.Zero(t, preparations.Load(), "warm freshness lookups must reuse compiled SQL")
+}
 
 // TestResetAllMtimes_ZeroesMtimesAndClearsFreshness pins the forced
 // full-resync contract: ResetAllMtimes must zero file_mtime on every

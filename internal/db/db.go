@@ -1259,11 +1259,11 @@ func makeDSN(path string, readOnly bool) string {
 	params.Set("_busy_timeout", "5000")
 	params.Set("_foreign_keys", "ON")
 	params.Set("_cache_size", strconv.Itoa(sqliteCacheSizeKiB))
+	// Imports and freshness checks repeatedly execute the same SQL.
+	params.Set("_stmt_cache_size", "64")
 	if readOnly {
 		params.Set("mode", "ro")
 	} else {
-		// Imports repeatedly execute the same SQL, including project attribution.
-		params.Set("_stmt_cache_size", "64")
 		params.Set("_journal_mode", "WAL")
 		params.Set("_synchronous", "NORMAL")
 	}
