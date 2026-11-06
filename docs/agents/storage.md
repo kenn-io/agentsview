@@ -707,13 +707,13 @@ snapshot. Do not widen or narrow this live/baked boundary implicitly.
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
-change. Catalog and user-pricing changes are covered per session instead: each
-rollup install records the distinct
+change. Each rollup install records the distinct
 `(provider, reported model, canonical model)` lookups its daily rows used, and a
-read re-resolves only those against the current catalog. A price change
-therefore rebuilds just the sessions whose lookups resolve differently, while
-`updated_at`-only refreshes rebuild nothing. Do not add a write-only
-extractor-version metadata key.
+full-path read re-resolves only those against the current catalog. A catalog
+digest change sends reads through that path until a coverage pass claims the
+timezone with the new digest. The pass rebuilds only sessions whose lookups
+resolve differently; `updated_at`-only refreshes rebuild nothing. Do not add a
+write-only extractor-version metadata key.
 
 Deduplication groups are classified per group at rollup build time. A group is
 finalized into daily rows only when its resolution provably cannot vary with the
@@ -753,9 +753,14 @@ incompatible, use the same schema and query path in a process-owned temporary
 file and warn that the cache will rebuild after restart.
 
 Usage reads are exact. A cold aggregate request fills facts, builds the required
-timezone rollups, then reads them in one pinned cache transaction. Verify every
-candidate session's facts fingerprint, exact baked metadata, per-session pricing
-identity, resolved rate hashes, and Cursor high-water mark. A result is no older
+timezone rollups, then reads them in one pinned cache transaction. Without a
+trusted timezone claim, verify every candidate session's facts fingerprint,
+exact baked metadata, per-session pricing identity, resolved rate hashes, and
+Cursor high-water mark. With a trusted claim, refresh journaled sessions and
+invalidated installs, discover window sessions through date indexes, and verify
+coverage and concurrent installs in the pinned cache transaction. A timezone
+without a claim starts a coverage pass when backfill is enabled. A conflicting
+install sends the request's retries through the full path. A result is no older
 than the archive snapshot captured when the read began, and may be newer for a
 session whose facts were refilled meanwhile. A session confirmed deleted during
 fill is dropped from the request. `cached_at` is diagnostic only.
@@ -942,9 +947,15 @@ sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches are
 not indexed.
 
-Terms search uses `message_trigram_fts` in its session prefilter, which finds
-the sessions where each term occurs, under the same share rule per term. The
-exchange grouping still reads every message of those sessions.
+Terms search uses `message_trigram_fts` under the same share rule per term.
+When the index lists any term, the query starts from the messages it lists for
+the first such term. It finds each message's exchange from the nearest eligible
+user message at or before it and the next one after, checks the other terms
+against that exchange's messages, and joins bodies only for the page. When the
+index lists no term, the session prefilter finds the sessions where each term
+occurs and the query groups every message of those sessions into exchanges.
+Both queries must return the same rows;
+`TestSearchContentTermsAnchorMatchesScan` compares them.
 
 Triggers keep both tables current on message insert, delete, and edits to
 `content`, `dialogue_text`, or `thinking_text`. Bulk session deletes remove a
@@ -973,6 +984,14 @@ artifact, recall, PostgreSQL, and DuckDB refreshes. Full resync reconciliation
 must compare the same fields so incremental and resync paths agree. A no-op
 message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
+
+### PostgreSQL usage change journal
+
+PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
+and project identity writes, including changes to source archives. Installation
+requires `CREATE` on the schema and `TRIGGER` on the watched tables in addition
+to normal table access. See [PostgreSQL Sync](../pg-sync.md) for installation
+locks. CockroachDB has no journal.
 
 ### PostgreSQL usage comparisons
 

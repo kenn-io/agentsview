@@ -11,6 +11,10 @@ The latest release is
 
 **New features**
 
+- PostgreSQL archives now keep a change journal. Installing it requires
+  `CREATE` on the schema and `TRIGGER` on the watched tables. Roles without
+  these privileges keep working without the journal.
+
 - Investigate an expensive archived session with `session diagnose <id>`. The
   report combines usage, context growth, compactions, large tool results, retry
   candidates, and child links. Use `--format json` for scripts or `--pg` to read
@@ -130,6 +134,12 @@ The latest release is
   that mention each word. Searching for a word that appears in a few sessions no
   longer reads every message in the archive; in a benchmark of 100,000 messages
   it went from 192 ms to 7 ms.
+
+- Terms search (`mode=terms`) for a word the substring index lists now starts
+  from the messages that hold it, so it no longer groups every message of every
+  matching session. On a 1.7 million message test archive, a word in 11,600 of
+  30,000 sessions went from 2.5 s to 0.13 s, and the same word paired with a
+  word in every session went from 3.9 s to 0.2 s.
 
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.

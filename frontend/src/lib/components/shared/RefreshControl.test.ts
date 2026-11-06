@@ -9,6 +9,51 @@ import { LiveQuery } from "../../utils/liveQuery.svelte.js";
 // The wrapper's whole job is injecting the app's localized age formatter
 // into kit-ui's RefreshControl (whose built-in default is English).
 describe("RefreshControl", () => {
+  it("defers hidden refreshes until visible, coalesces them, and stops on teardown", async () => {
+    vi.useFakeTimers();
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const onRefresh = vi.fn();
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: { lastUpdatedAt: null, onRefresh },
+    });
+    try {
+      await tick();
+      await vi.advanceTimersByTimeAsync(120_000);
+      hidden.mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(60_000);
+      hidden.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(onRefresh).not.toHaveBeenCalled();
+
+      hidden.mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(900_000);
+      expect(onRefresh).not.toHaveBeenCalled();
+      hidden.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(onRefresh).toHaveBeenCalledTimes(1);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(onRefresh).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(onRefresh).toHaveBeenCalledTimes(2);
+
+      hidden.mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(300_000);
+    } finally {
+      await unmount(component);
+      hidden.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(600_000);
+      hidden.mockRestore();
+      vi.useRealTimers();
+      document.body.innerHTML = "";
+    }
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+  });
+
   it("localizes the never-updated label through the app formatter", async () => {
     setLocale("zh-CN");
     const component = mount(RefreshControl, {

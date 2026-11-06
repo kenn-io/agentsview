@@ -48,9 +48,9 @@ func (snapshot *usageQuerySnapshot) dropDeleted(
 	}
 	versions := snapshot.Versions[:0]
 	for _, version := range snapshot.Versions {
-		if !results[version.SessionID].Deleted {
+		if len(versions) < len(sessions) && sessions[len(versions)].ID == version.SessionID {
 			versions = append(versions, version)
-		} else {
+		} else if results[version.SessionID].Deleted {
 			delete(results, version.SessionID)
 		}
 	}

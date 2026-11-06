@@ -592,14 +592,22 @@ func searchWithTermsIndex(
 	})
 }
 
-// termsSearchPage runs the terms query, prefiltering sessions through the
-// substring index for the terms in indexed.
+// termsSearchPage runs the terms query. When the substring index lists one
+// of the terms, the query starts from the messages it lists; otherwise it
+// groups every message of the sessions that hold each term.
 func (db *DB) termsSearchPage(
 	ctx context.Context, f ContentSearchFilter, terms []string, indexed map[string]string,
 ) (ContentSearchPage, error) {
-	query, args, err := buildTermsSearchSQL(f, terms, SQLiteQueryDialect(), indexed)
-	if err != nil {
-		return ContentSearchPage{}, err
+	var query string
+	var args []any
+	if anchor, ok := termsAnchorTerm(terms, indexed); ok {
+		query, args = buildTermsAnchorSQL(f, terms, anchor, indexed[anchor])
+	} else {
+		var err error
+		query, args, err = buildTermsSearchSQL(f, terms, SQLiteQueryDialect(), indexed)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
 	}
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
