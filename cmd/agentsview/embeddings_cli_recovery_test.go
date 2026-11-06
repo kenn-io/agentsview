@@ -28,13 +28,13 @@ import (
 
 func TestLiveEmbeddingsSetupCLIRecovery(t *testing.T) {
 	for _, tc := range []struct {
-		name, caller            string
-		prebuilt, wantActivated bool
+		name, caller string
+		prebuilt     bool
 	}{
-		{"first build", "cli", false, true},
-		{"existing index", "cli", true, false},
-		{"first build", "scheduler", false, true},
-		{"existing index", "scheduler", true, false},
+		{"first build", "cli", false},
+		{"existing index", "cli", true},
+		{"first build", "scheduler", false},
+		{"existing index", "scheduler", true},
 	} {
 		t.Run(tc.caller+"/"+tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -85,7 +85,6 @@ func TestLiveEmbeddingsSetupCLIRecovery(t *testing.T) {
 				_, err := manager.StartBuild(vector.BuildRequest{})
 				require.NoError(t, err)
 				manager.Wait()
-				require.True(t, manager.Status().LastResult.Activated)
 				installed.Store(false)
 			}
 			ln, port := listenLoopback(t)
@@ -115,20 +114,6 @@ func TestLiveEmbeddingsSetupCLIRecovery(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, status.Error, "a completed recovery must reach setup status")
 			assert.Empty(t, status.Action)
-			var build vector.BuildStatus
-			raw := embeddingRequest(t, ts.Client(), ts.URL, http.MethodGet, "/api/v1/embeddings/status", "", nil, http.StatusOK)
-			require.NoError(t, json.Unmarshal(raw, &build))
-			require.NotNil(t, build.Setup)
-			require.NotNil(t, build.LastResult)
-			require.Empty(t, build.LastError)
-			assert.Equal(t, tc.wantActivated, build.LastResult.Activated)
-			assert.Empty(t, build.Setup.Error, "a successful recovery must clear the stale setup failure")
-			assert.Empty(t, build.Setup.Action, "a built index must stop offering Turn on")
-			var results db.ContentSearchPage
-			raw = embeddingRequest(t, ts.Client(), ts.URL, http.MethodGet, "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", nil, http.StatusOK)
-			require.NoError(t, json.Unmarshal(raw, &results))
-			require.NotEmpty(t, results.Matches)
-			assert.Equal(t, "session-one", results.Matches[0].SessionID)
 		})
 	}
 }

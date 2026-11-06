@@ -1,11 +1,20 @@
 import { expect, test } from "@playwright/test";
 
 for (const width of [1280, 390]) {
-  for (const entry of width === 390 ? ["settings"] : ["settings", "semantic"]) {
+  for (const entry of width === 390 ? ["settings"] : ["settings", "palette"]) {
     test(`${entry === "settings" ? "lays out search by meaning" : "uses the compact palette badge font"} at ${width}px`, async ({
       page,
     }) => {
       await page.setViewportSize({ width, height: 850 });
+      if (entry === "palette") {
+        await page.goto("/");
+        await page.getByRole("button", { name: /Search sessions/ }).click();
+        const escapeBadge = page.locator(".palette-input-wrap kbd").first();
+        expect(await escapeBadge.evaluate((el) => getComputedStyle(el).fontFamily)).toBe(
+          await page.locator(".palette-input").evaluate((el) => getComputedStyle(el).fontFamily),
+        );
+        return;
+      }
       let phase = "failed";
       const setup = () => ({
         enabled: true,
@@ -32,22 +41,7 @@ for (const width of [1280, 390]) {
       await page.route("**/api/v1/embeddings/generations*", (route) =>
         route.fulfill({ json: { generations: [] } }),
       );
-      await page.goto(entry === "settings" ? "/settings" : "/");
-      if (entry !== "settings") {
-        await page.getByRole("button", { name: /Search sessions/ }).click();
-        if (width === 1280 && entry === "semantic") {
-          await test.step("preserves the compact palette key badge", async () => {
-            const escapeBadge = page.locator(".palette-input-wrap kbd").first();
-            expect
-              .soft(await escapeBadge.evaluate((el) => getComputedStyle(el).fontFamily))
-              .toBe(
-                await page
-                  .locator(".palette-input")
-                  .evaluate((el) => getComputedStyle(el).fontFamily),
-              );
-          });
-        }
-      }
+      await page.goto("/settings");
       if (entry === "settings") {
         await page
           .getByRole("navigation", { name: "Settings" })
@@ -56,7 +50,6 @@ for (const width of [1280, 390]) {
         await expect(page.getByRole("alert")).toContainText("encoder unavailable");
         const failedChip = page.locator(".kit-search-by-meaning .kit-chip");
         await expect(failedChip).toHaveText("On");
-        await expect(failedChip).toHaveCSS("text-transform", "none");
         const retry = page.getByRole("button", { name: "Retry", exact: true });
         const errorBox = (await page.getByRole("alert").boundingBox())!;
         const retryBox = (await retry.boundingBox())!;

@@ -882,7 +882,7 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 
 func TestSearchContentSemanticGETRequiresIntentHeader(t *testing.T) {
 	te := setup(t)
-	te.db.SetVectorSearcher(fakeFailingVectorSearcher{})
+	te.db.SetVectorSearcher(fakeTransientVectorSearcher{})
 
 	w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode=semantic",
 		withOrigin("http://evil-site.com"))
@@ -892,7 +892,7 @@ func TestSearchContentSemanticGETRequiresIntentHeader(t *testing.T) {
 
 func TestSearchContentSemanticGETWithIntentHeaderReachesSearcher(t *testing.T) {
 	te := setup(t)
-	te.db.SetVectorSearcher(fakeFailingVectorSearcher{})
+	te.db.SetVectorSearcher(fakeTransientVectorSearcher{})
 
 	w := te.get(t, "/api/v1/search/content?pattern=fox&mode=semantic")
 	assertStatus(t, w, http.StatusForbidden)
@@ -911,7 +911,7 @@ func TestSearchContentSemanticModeUnavailable(t *testing.T) {
 	for _, cause := range []error{nil, fmt.Errorf("lookup: %w", db.NewSemanticUnavailableError("index is stale; rebuild it"))} {
 		for _, mode := range []string{"semantic", "hybrid"} {
 			if cause != nil {
-				te.db.SetVectorSearcher(fakeFailingVectorSearcher{err: cause})
+				te.db.SetVectorSearcher(fakeTransientVectorSearcher{err: cause})
 			}
 			w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode="+mode,
 				withHeader("X-AgentsView-Search-Intent", "semantic"))
@@ -931,11 +931,11 @@ func TestSearchContentSemanticModeUnavailable(t *testing.T) {
 	}
 }
 
-// fakeFailingVectorSearcher returns err, or a transient query-encode failure
+// fakeTransientVectorSearcher returns err, or a transient query-encode failure
 // when the embeddings endpoint is unreachable.
-type fakeFailingVectorSearcher struct{ err error }
+type fakeTransientVectorSearcher struct{ err error }
 
-func (f fakeFailingVectorSearcher) PrepareSemanticSearch(
+func (f fakeTransientVectorSearcher) PrepareSemanticSearch(
 	context.Context, string,
 ) (db.VectorSearchPage, int, error) {
 	if f.err != nil {
@@ -944,7 +944,7 @@ func (f fakeFailingVectorSearcher) PrepareSemanticSearch(
 	return nil, 0, fmt.Errorf("%w: dial tcp: connection refused", db.ErrSemanticTransient)
 }
 
-func (fakeFailingVectorSearcher) ResolveMessageUnits(
+func (fakeTransientVectorSearcher) ResolveMessageUnits(
 	_ context.Context, refs []db.MessageRef,
 ) ([]db.UnitRef, error) {
 	return make([]db.UnitRef, len(refs)), nil
@@ -956,7 +956,7 @@ func (fakeFailingVectorSearcher) ResolveMessageUnits(
 // would read as "semantic search is disabled") or a bare 500.
 func TestSearchContentSemanticQueryEncodeFailureReturns503(t *testing.T) {
 	te := setup(t)
-	te.db.SetVectorSearcher(fakeFailingVectorSearcher{})
+	te.db.SetVectorSearcher(fakeTransientVectorSearcher{})
 
 	w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode=semantic",
 		withHeader("X-AgentsView-Search-Intent", "semantic"))

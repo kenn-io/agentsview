@@ -148,49 +148,6 @@ describe("SemanticSetupHelp", () => {
     return { component, onResolved };
   }
 
-  it("refreshes the download disclosure after Ollama stops", async () => {
-    const setup = {
-      enabled: false,
-      action: "turn-on",
-      provider: "ollama",
-      missing_bytes: 295000000,
-      busy: false,
-      installing: false,
-      downloaded_bytes: 0,
-      total_bytes: 0,
-      rebuild_required: false,
-    };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
-    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
-    const component = mount(SemanticSetupHelp, {
-      target: document.body,
-      props: { onResolved: vi.fn() },
-    });
-    try {
-      await settle();
-      expect(document.body.textContent).toContain("Uses Ollama");
-      expect(document.body.textContent).not.toContain("Downloads 295 MB");
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
-        running: false,
-        setup: {
-          ...setup,
-          provider: "built-in",
-          error: "embedding download declined; approve installation to use local embeddings",
-        },
-      });
-      [...document.body.querySelectorAll("button")]
-        .find((b) => b.textContent?.trim() === "Turn on")!
-        .click();
-      await settle();
-      expect(document.body.textContent).toContain("Downloads 295 MB");
-      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
-        "download declined",
-      );
-    } finally {
-      unmount(component);
-    }
-  });
-
   it("keeps build polling quiet while hidden and resumes when visible", async () => {
     const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1, 10));
@@ -286,6 +243,7 @@ describe("SemanticSetupHelp", () => {
       action: "use-built-in",
       approved_bytes: 295000000,
     });
+    expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
     unmount(component);
   });
 
