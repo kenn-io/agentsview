@@ -527,3 +527,36 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 	<-owner.done
 	assert.True(t, approved.Load(), "Retry must approve the verified size disclosed after repair was refused")
 }
+
+func TestLiveEmbeddingsSetupInvalidEndpointKeepsDaemonRestartable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := testDataDir(t)
+	raw := "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\n[vector.embeddings.servers.local]\nendpoint = 'ftp://127.0.0.1/v1'\n"
+	path := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "turn-on", status.Action)
+	if err := owner.Setup(0); err == nil {
+		<-owner.done
+		status, err = owner.SetupStatus(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, status.Error, "embed endpoint must use http or https")
+	}
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, raw, string(saved), "refusing an invalid encoder must preserve the disabled settings")
+	restartedConfig, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	restarted, err := newLiveVectorServing(t.Context(), restartedConfig, database, nil, config.LoadReadOnly)
+	assert.NoError(t, err, "failed browser setup must leave the daemon restartable")
+	if restarted != nil {
+		require.NoError(t, restarted.Close())
+	}
+}
