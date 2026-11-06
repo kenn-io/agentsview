@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -130,7 +131,8 @@ func TestActivityReportKeptExcludesPartialAndBorrowedHandles(t *testing.T) {
 	for range 2 {
 		keptActivityBuild(t, borrowed, q, true)
 	}
-	q.Partial = true
+	q, err = activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
 	for range 2 {
 		keptActivityBuild(t, store, q, true)
 	}

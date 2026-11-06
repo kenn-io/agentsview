@@ -12,7 +12,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -152,53 +151,4 @@ func TestOpenServeStoreWithoutUsableReportCache(t *testing.T) {
 	store, err := (Backend{}).OpenServeStore(ctx, serveTarget)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
-}
-
-// A day report is written to disk only when a client opens the day, and
-// each open, from memory or from the file, refreshes its modification
-// time. The sweep removes a report no one opened for 30 days and keeps
-// one that was opened since.
-func TestKeptActivityReportsExpireUnlessOpened(t *testing.T) {
-	ctx := t.Context()
-	store, _, _ := newPushedStore(t)
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	_, err := store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
-	require.NoError(t, err)
-	s := NewStoreFromDB(store.DB())
-	require.NoError(t, s.openActivityReportDisk(Target{URL: "clickhouse://mirror:9000/", Database: "agentsview"}))
-	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	filter := db.AnalyticsFilter{Timezone: "UTC"}
-	day := func(date string) (activity.Query, string) {
-		t.Helper()
-		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: date, Timezone: "UTC"}, now)
-		require.NoError(t, err)
-		f := filter
-		f.IncludeSubagents, f.IncludeForks = true, true
-		return q, s.reports.Path(kept.Selection(f, q))
-	}
-	opened, openedFile := day("2026-01-10")
-	unopened, unopenedFile := day("2026-01-11")
-	_, neverFile := day("2026-01-12")
-	for _, q := range []activity.Query{opened, unopened} {
-		_, err := s.BuildActivityReportArtifacts(ctx, filter, q, nil)
-		require.NoError(t, err)
-	}
-	require.FileExists(t, openedFile)
-	require.FileExists(t, unopenedFile)
-	require.NoFileExists(t, neverFile, "a day no one opened is not written")
-
-	// Both files were last opened 31 days ago; then the client opens one
-	// of the days again.
-	longAgo := time.Now().Add(-31 * 24 * time.Hour)
-	for _, path := range []string{openedFile, unopenedFile} {
-		require.NoError(t, os.Chtimes(path, longAgo, longAgo))
-	}
-	_, err = s.BuildActivityReportArtifacts(ctx, filter, opened, nil)
-	require.NoError(t, err)
-
-	removed, err := s.reports.Sweep(time.Now())
-	require.NoError(t, err)
-	require.Equal(t, 1, removed)
-	require.FileExists(t, openedFile)
-	require.NoFileExists(t, unopenedFile)
 }

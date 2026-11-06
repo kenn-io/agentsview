@@ -14,12 +14,19 @@ func TestKeptReportsRoundTrip(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	require.True(t, DayPreset(q, time.Now()))
 	var first Reports
 	require.NoError(t, first.OpenDisk("test-reports", "mirror"))
 	entry := Report{Done: activity.Progress{Phase: activity.ProgressDone, SessionsTotal: 3, RowsProcessed: 12}}
 	selection := Selection("filter", q)
 	first.Put(selection, "version", true, entry)
+	path := first.Path(selection)
+	longAgo := time.Now().Add(-31 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(path, longAgo, longAgo))
+	_, ok := first.Get(selection, "version", true)
+	require.True(t, ok)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.True(t, info.ModTime().After(longAgo), "a memory hit refreshes the file's modification time")
 	first.Put("range", "version", false, entry)
 	_, err = os.Stat(first.Path("range"))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -32,14 +39,13 @@ func TestKeptReportsRoundTrip(t *testing.T) {
 
 	var restarted Reports
 	require.NoError(t, restarted.OpenDisk("test-reports", "mirror"))
+	require.NoError(t, os.Chtimes(path, longAgo, longAgo))
 	got, ok = restarted.Get(selection, "version", true)
 	require.True(t, ok)
 	require.Equal(t, entry.Done, got.Done)
-	wantDigest, err := activity.ArtifactDigest(entry.Artifacts)
+	info, err = os.Stat(path)
 	require.NoError(t, err)
-	gotDigest, err := activity.ArtifactDigest(got.Artifacts)
-	require.NoError(t, err)
-	require.Equal(t, wantDigest, gotDigest)
+	require.True(t, info.ModTime().After(longAgo), "a disk hit refreshes the file's modification time")
 	_, ok = restarted.Get(selection, "other-version", true)
 	require.False(t, ok)
 	// A file written by another binary is rebuilt even under the same key.

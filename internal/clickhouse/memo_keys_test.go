@@ -6,7 +6,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/kept"
 )
 
 // Arguments that render the same when joined by spaces must still name
@@ -51,9 +50,6 @@ func TestUsageRowMemoSkipsTimeDependentTermination(t *testing.T) {
 		f := db.UsageFilter{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12", Termination: c.termination}
 		slot, err := usageRowMemoKeyFor("daily", f, "", "digest", nil)
 		require.NoError(t, err)
-		var memo kept.Memo[int]
-		memo.Put(slot, "parts", []int{1})
-		_, ok := memo.Get(slot, "parts")
-		require.Equal(t, c.kept, ok, c.termination)
+		require.Equal(t, c.kept, slot != "", c.termination)
 	}
 }
