@@ -275,6 +275,9 @@ func (s *Sync) pushWithOptions(
 		}
 	}
 
+	if err := s.adoptPendingUsageModels(ctx); err != nil {
+		return result, err
+	}
 	if full {
 		if err := s.deleteSessionsMissingLocally(ctx, sessionIDs(inScope), &result); err != nil {
 			return result, err
@@ -842,7 +845,7 @@ func (s *Sync) pushSessionBatch(
 		s.pricer = pricer
 	}
 	for batchIDs := range idBatches(ids) {
-		if err := s.priceUsage(ctx, s.pricer, usagePriceScope{sessionIDs: batchIDs}); err != nil {
+		if err := s.priceUsageBatch(ctx, s.pricer, usagePriceScope{sessionIDs: batchIDs}); err != nil {
 			return nil, err
 		}
 	}

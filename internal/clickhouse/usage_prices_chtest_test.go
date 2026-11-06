@@ -3,6 +3,8 @@
 package clickhouse
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -734,14 +736,39 @@ func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 	}
 }
 
+// repointPriceContext moves one round-test price record to a context under a
+// new ID with the same content, as a concurrent push adding a context under
+// the reader's digest would.
+func repointPriceContext(ctx context.Context, conn *sql.DB, id string) error {
+	_, err := conn.ExecContext(ctx, `
+		INSERT INTO usage_price_contexts (pricing_digest, context_id, context_json, push_version)
+		SELECT c.pricing_digest, ?, c.context_json, toUInt64(toUnixTimestamp64Nano(now64(9)))
+		FROM usage_price_contexts c
+		WHERE c.pricing_digest = (SELECT value FROM sync_metadata WHERE key = ?)
+			AND position(c.context_json, '"round-test"') > 0
+		LIMIT 1`, id, usagePricedDigestKey)
+	if err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO usage_event_prices
+		SELECT pricing_digest, price_key, token_cost_microdollars, cache_savings_microdollars,
+			?, ?, request_scoped, band_above_input_tokens, price_error, priced,
+			toUInt64(toUnixTimestamp64Nano(now64(9)))
+		FROM usage_event_prices
+		WHERE pricing_digest = (SELECT value FROM sync_metadata WHERE key = ?)
+			AND billed_context_id IN (
+				SELECT context_id FROM usage_price_contexts
+				WHERE position(context_json, '"round-test"') > 0)`,
+		id, id, usagePricedDigestKey)
+	return err
+}
+
 func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
 	t.Parallel()
 	local, target := seedUsagePriceFixture(t)
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern: "push-test", InputPerMTok: money.MustParseDollars("1"),
-	}}))
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	// Keep reads on raw usage while the callback pushes new pricing contexts.
+	// Keep reads on raw usage, which join the records the callback changes.
 	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM STOP VIEW prepare_usage")
 	require.NoError(t, err)
 	_, err = syncer.Push(t.Context(), false, nil)
@@ -750,42 +777,34 @@ func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
 	// The driver's query log identifies the context SELECT. Its progress
 	// callback runs after the server reads those contexts and before the
 	// caller can issue the group query.
-	var readingContexts, pushed atomic.Bool
+	var readingContexts atomic.Bool
+	var attempts atomic.Int32
 	store := newTopSessionsRetryStore(t, target, &readingContexts)
-	stamp := "2026-01-13T05:00:00.000Z"
-	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session: fixtureSession("pushed-price", "gamma", "pushed first", stamp, 1),
-		Messages: []db.Message{usagePriceMessage("pushed-price", 0, stamp,
-			"push-test", `{"input_tokens":1000000}`)},
-		DataVersion: 1, ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-	pushResult := make(chan error, 1)
+	changed := make(chan error, 1)
 	ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(p *chdriver.Progress) {
-		if p.Rows == 0 || !readingContexts.Load() || !pushed.CompareAndSwap(false, true) {
+		if p.Rows == 0 || !readingContexts.CompareAndSwap(true, false) {
 			return
 		}
-		_, err := syncer.Push(t.Context(), false, nil)
-		pushResult <- err
+		if attempts.Add(1) == 1 {
+			changed <- repointPriceContext(t.Context(), syncer.conn, "changed-context")
+		}
 	}))
-	top, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{Timezone: "UTC", Model: "push-test"}, 10)
-	require.True(t, pushed.Load(), "the push must land after the context SELECT reads its rows")
-	require.NoError(t, <-pushResult)
+	filter := db.UsageFilter{Timezone: "UTC", Model: "round-test"}
+	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, <-changed)
 	require.NoError(t, err)
-	require.Len(t, top, 1)
-	assert.Equal(t, "pushed-price", top[0].SessionID)
-	assert.Equal(t, money.MustParseDollars("1"), top[0].Cost)
-	assert.Equal(t, 1_000_000, top[0].TotalTokens)
+	assert.EqualValues(t, 2, attempts.Load(), "the read retries once with the new context")
+	want, err := local.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	normalizeSQLiteTopSessions(t, want)
+	assert.Equal(t, want, top)
 }
 
 func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
 	t.Parallel()
 	local, target := seedUsagePriceFixture(t)
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern: "push-test-*", InputPerMTok: money.MustParseDollars("1"),
-	}}))
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	// Keep reads on raw usage while the callback pushes new pricing contexts.
+	// Keep reads on raw usage, which join the records the callback changes.
 	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM STOP VIEW prepare_usage")
 	require.NoError(t, err)
 	_, err = syncer.Push(t.Context(), false, nil)
@@ -794,29 +813,19 @@ func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
 	var readingContexts atomic.Bool
 	var attempts atomic.Int32
 	store := newTopSessionsRetryStore(t, target, &readingContexts)
-	pushResults := make(chan error, 3)
+	changes := make(chan error, 3)
 	ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(p *chdriver.Progress) {
 		if p.Rows == 0 || !readingContexts.CompareAndSwap(true, false) {
 			return
 		}
 		attempt := attempts.Add(1)
-		// A fourth attempt gets no push, so an excessive retry returns success
-		// and fails the exhaustion assertion instead of looping indefinitely.
+		// A fourth attempt gets no change, so an excessive retry returns
+		// success and fails the exhaustion assertion instead of looping
+		// indefinitely.
 		if attempt > 3 {
 			return
 		}
-		id := fmt.Sprintf("pushed-price-%d", attempt)
-		stamp := "2026-01-13T05:00:00.000Z"
-		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-			Session: fixtureSession(id, "gamma", "pushed first", stamp, 1),
-			Messages: []db.Message{usagePriceMessage(id, 0, stamp,
-				fmt.Sprintf("push-test-%d", attempt), `{"input_tokens":1000000}`)},
-			DataVersion: 1, ReplaceMessages: true,
-		}})
-		if err == nil {
-			_, err = syncer.Push(t.Context(), false, nil)
-		}
-		pushResults <- err
+		changes <- repointPriceContext(t.Context(), syncer.conn, fmt.Sprintf("changed-context-%d", attempt))
 	}))
 	filter := db.UsageFilter{Timezone: "UTC", Project: "gamma"}
 	top, err := store.GetTopSessionsByCost(ctx, filter, 20)
@@ -824,10 +833,10 @@ func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
 	assert.Empty(t, top)
 	require.EqualValues(t, 3, attempts.Load())
 	for range 3 {
-		require.NoError(t, <-pushResults)
+		require.NoError(t, <-changes)
 	}
 
-	// With pushes finished, the next read must return complete totals.
+	// With the changes finished, the next read must return complete totals.
 	want, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
 	require.NoError(t, err)
 	require.NotEmpty(t, want)

@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -8,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,11 +123,22 @@ const (
 )
 
 // chPricingCatalog is the mirrored catalog a request or push prices with.
-// digest identifies the catalog alone, without reader custom rates, so
-// every reader and exporter of one mirror agrees on it.
+// digest names the price records valid under the catalog. It covers only
+// how the registered models resolve, without reader custom rates, so every
+// reader and exporter of one mirror agrees on it, and a catalog change to a
+// model no usage row names leaves it, and the records, as they are.
 type chPricingCatalog struct {
 	rows   []export.EffectivePricingRow
 	digest string
+	models []chUsagePriceModel
+}
+
+// chUsagePriceModel is one model identity price records were computed
+// for: the inputs the resolver takes, as chPriceUsageInput passes them.
+type chUsagePriceModel struct {
+	providerID string
+	model      string
+	priceModel string
 }
 
 func chLoadPricingCatalog(
@@ -144,50 +157,85 @@ func chLoadPricingCatalog(
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
+	models, err := loadUsagePriceModels(ctx, conn, false)
+	if err != nil {
+		return chPricingCatalog{}, err
+	}
 	shared := append(db.MirrorPricingRows(pricing), genAI)
-	digest, err := chUsagePricingDigest(shared, document)
+	digest, err := chUsagePricingDigest(export.NewPricingResolver(shared), models)
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
 	if len(customPricing) == 0 {
-		return chPricingCatalog{rows: shared, digest: digest}, nil
+		return chPricingCatalog{rows: shared, digest: digest, models: models}, nil
 	}
 	chApplyCustomPricing(pricing, customPricing)
-	return chPricingCatalog{rows: append(db.MirrorPricingRows(pricing), genAI), digest: digest}, nil
+	return chPricingCatalog{
+		rows:   append(db.MirrorPricingRows(pricing), genAI),
+		digest: digest,
+		models: models,
+	}, nil
 }
 
-// chUsagePricingDigest changes when any rate, band, source classification,
-// GenAI document content, or provider billing policy changes. Row timestamps
-// are excluded: a catalog refresh that republishes the same rates must not
-// reprice the mirror.
-func chUsagePricingDigest(
-	rows []export.EffectivePricingRow, document *db.GenAIPricingDocument,
-) (string, error) {
-	stripped := make([]export.EffectivePricingRow, len(rows))
-	for i, row := range rows {
-		row.GenAIUpdatedAt = nil
-		row.Rates.UpdatedAt = nil
-		row.Rates.Bands = append([]export.PricingBand(nil), row.Rates.Bands...)
-		for j := range row.Rates.Bands {
-			row.Rates.Bands[j].UpdatedAt = nil
-		}
-		stripped[i] = row
-	}
-	catalog, err := export.EffectivePricingDigest(stripped)
+// loadUsagePriceModels reads the model identities the pricing digest
+// covers, or, when pending is set, the ones pushes found but have not
+// priced under a digest that covers them yet.
+func loadUsagePriceModels(
+	ctx context.Context, conn *sql.DB, pending bool,
+) ([]chUsagePriceModel, error) {
+	rows, err := conn.QueryContext(ctx,
+		`SELECT provider_id, model, price_model FROM usage_price_models WHERE pending = ?`, pending)
 	if err != nil {
-		return "", fmt.Errorf("digesting clickhouse usage pricing: %w", err)
+		return nil, fmt.Errorf("listing clickhouse usage price models: %w", err)
 	}
+	defer rows.Close()
+	var out []chUsagePriceModel
+	for rows.Next() {
+		var m chUsagePriceModel
+		if err := rows.Scan(&m.providerID, &m.model, &m.priceModel); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse usage price model: %w", err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating clickhouse usage price models: %w", err)
+	}
+	return out, nil
+}
+
+// chUsagePricingDigest changes when the record format, a provider billing
+// policy, the set of registered models, or anything one of those models can
+// resolve to at any time changes. Catalog rows no registered model resolves
+// to, and row timestamps, are excluded: the mirror's catalog merges every
+// exporter's fetches, so unrelated rows change on most pushes, and records
+// priced under them would be identical.
+func chUsagePricingDigest(
+	resolver *export.PricingResolver, models []chUsagePriceModel,
+) (string, error) {
+	sorted := slices.Clone(models)
+	slices.SortFunc(sorted, func(a, b chUsagePriceModel) int {
+		return cmp.Or(
+			cmp.Compare(a.providerID, b.providerID),
+			cmp.Compare(a.model, b.model),
+			cmp.Compare(a.priceModel, b.priceModel))
+	})
+	sorted = slices.Compact(sorted)
 	h := sha256.New()
-	h.Write([]byte("agentsview-clickhouse-usage-prices/"))
-	h.Write([]byte(strconv.Itoa(chUsagePriceFormatVersion)))
-	h.Write([]byte{0})
-	h.Write([]byte(pricingpkg.BillingPolicyVersion()))
-	h.Write([]byte{0})
-	h.Write([]byte(catalog))
-	h.Write([]byte{0})
-	if document != nil {
-		data := sha256.Sum256(document.Data)
-		h.Write(data[:])
+	writeField := func(value string) {
+		_, _ = fmt.Fprintf(h, "%d:%s", len(value), value)
+	}
+	writeField("agentsview-clickhouse-usage-prices")
+	writeField(strconv.Itoa(chUsagePriceFormatVersion))
+	writeField(pricingpkg.BillingPolicyVersion())
+	for _, m := range sorted {
+		fingerprint, err := resolver.DependencyFingerprint(m.providerID, m.model, m.priceModel)
+		if err != nil {
+			return "", fmt.Errorf("digesting clickhouse usage pricing for model %q: %w", m.model, err)
+		}
+		writeField(m.providerID)
+		writeField(m.model)
+		writeField(m.priceModel)
+		writeField(fingerprint)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -515,7 +563,7 @@ type pricingCache struct {
 // insert or merge on a pricing table changes the fingerprint, so a stale
 // snapshot is never served; a merge only costs one reload.
 func (s *Store) pricingSnapshot(ctx context.Context) (*pricingSnapshot, error) {
-	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"model_pricing", "model_pricing_bands", "genai_pricing"})
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"model_pricing", "model_pricing_bands", "genai_pricing", "usage_price_models"})
 	if err != nil {
 		return nil, err
 	}

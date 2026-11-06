@@ -145,6 +145,15 @@ The latest release is
 
 **Improvements**
 
+- ClickHouse mirrors stop growing without bound from stored usage prices. A push
+  now prices the mirror again only when the rates of a model in its usage
+  change, or when a model appears for the first time. Before, any change
+  anywhere in the shared pricing catalog repriced every usage row, and mirrors
+  pushed from several machines did so many times a day. Each push also deletes
+  stored prices that nothing has used for 24 hours. The first push after
+  upgrading clears the stored prices and prices the mirror once, so usage reads
+  are slower for the length of that push.
+
 - Substring and regex content search skip messages that cannot contain the
   search text, using a new substring index in the local archive. On a 1.7
   million message test archive, searching for rare text went from 2.1 s to 0.4
