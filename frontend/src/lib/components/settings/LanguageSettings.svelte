@@ -57,7 +57,7 @@
   }
 </script>
 
-<div class="setting-row">
+<div class="setting-row compact">
   <span class="setting-label">{m.settings_language_label()}</span>
   <Typeahead
     options={localeOptions}

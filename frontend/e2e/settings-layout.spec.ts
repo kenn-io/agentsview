@@ -117,9 +117,9 @@ test.describe("Settings layout", () => {
     const nav = page.getByRole("navigation", { name: "Settings" });
     const panel = page.locator(".settings-panel:not([hidden])");
 
-    async function openPanel(name: string) {
+    async function openPanel(name: string, heading = name) {
       await nav.locator("button", { hasText: name }).click();
-      await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
     }
     const leftOf = (selector: string) =>
       panel.locator(selector).evaluateAll((elements) =>
@@ -203,6 +203,31 @@ test.describe("Settings layout", () => {
     expect(await leftOf(".setting-row > .kit-text-input")).toEqual([column, column]);
     expect(await leftOf(".action-row .kit-button")).toEqual([column]);
     expect(new Set(await rowControlHeights())).toEqual(new Set([28]));
+
+    // Panels with a single setting do not reserve the shared label column:
+    // the control follows its label one 16px gap later, and anything under
+    // the control (GitHub's token field) starts on that same edge.
+    const compactPanels = [
+      ["GitHub", "GitHub integration", ".status-value"],
+      ["Date ranges", "Date ranges", ".kit-toggle"],
+      ["Archive content", "Archive content", ".kit-segmented"],
+      ["Language", "Language", ".kit-typeahead"],
+    ] as const;
+    for (const [name, heading, control] of compactPanels) {
+      await openPanel(name, heading);
+      const row = panel.locator(".setting-row").first();
+      const geometry = await row.evaluate((element, selector) => {
+        const label = element.querySelector(".setting-label")!.getBoundingClientRect();
+        const target = element.querySelector(selector)!.getBoundingClientRect();
+        return { labelRight: label.right, controlLeft: target.left };
+      }, control);
+      expect(geometry.controlLeft - geometry.labelRight, name).toBeGreaterThanOrEqual(15);
+      expect(geometry.controlLeft - geometry.labelRight, name).toBeLessThanOrEqual(17);
+      expect(geometry.controlLeft, name).toBeLessThan(column!);
+      if (name === "GitHub") {
+        expect(await leftOf(".token-row .kit-text-input")).toEqual([Math.round(geometry.controlLeft)]);
+      }
+    }
   });
 
   test("wraps a long translated label inside the label column", async ({ page }) => {

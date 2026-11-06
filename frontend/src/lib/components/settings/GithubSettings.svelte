@@ -30,9 +30,11 @@
   }
 </script>
 
-<div class="github-settings">
-  <div class="setting-row">
-    <span class="setting-label">{m.settings_github_status()}</span>
+<!-- One setting, so the row is compact: the label fits its text and the
+     status, token field, and messages share the control cell beside it. -->
+<div class="setting-row compact github-settings">
+  <span class="setting-label">{m.settings_github_status()}</span>
+  <div class="control-stack">
     <span class="status-value" class:configured={settings.githubConfigured}>
       {#if settings.githubConfigured}
         <CircleCheckIcon size="14" aria-hidden="true" />
@@ -41,43 +43,50 @@
       {/if}
       {settings.githubConfigured ? m.settings_github_configured() : m.settings_github_not_configured()}
     </span>
-  </div>
 
-  <div class="token-row control-offset">
-    <TextInput
-      class="setting-input"
-      size="md"
-      type="password"
-      placeholder="ghp_..."
-      bind:value={tokenInput}
-    />
-    <Button
-      tone="info"
-      surface="solid"
-      disabled={saving || settings.saving || !tokenInput.trim()}
-      onclick={handleSave}
-    >
-      {saving ? m.settings_github_saving() : m.settings_github_save_token()}
-    </Button>
-  </div>
+    <div class="token-row">
+      <TextInput
+        class="setting-input"
+        size="md"
+        type="password"
+        placeholder="ghp_..."
+        bind:value={tokenInput}
+      />
+      <Button
+        tone="info"
+        surface="solid"
+        disabled={saving || settings.saving || !tokenInput.trim()}
+        onclick={handleSave}
+      >
+        {saving ? m.settings_github_saving() : m.settings_github_save_token()}
+      </Button>
+    </div>
 
-  {#if error}
-    <p class="msg error control-offset">{error}</p>
-  {/if}
-  {#if success}
-    <p class="msg success control-offset">{success}</p>
-  {/if}
+    {#if error}
+      <p class="msg error">{error}</p>
+    {/if}
+    {#if success}
+      <p class="msg success">{success}</p>
+    {/if}
+  </div>
 </div>
 
 <style>
-  .github-settings {
+  /* The row uses the shared settings grid from SettingsPage. The label
+     sits level with the status line, not centred on the whole stack. */
+  .setting-label,
+  .control-stack {
+    align-self: baseline;
+  }
+
+  .control-stack {
     display: flex;
     flex-direction: column;
     gap: var(--space-5);
+    width: 100%;
+    min-width: 0;
   }
 
-  /* The status row uses the shared settings grid from SettingsPage; the
-     token field and its action start on the same control column. */
   .setting-label {
     font-size: 12px;
     font-weight: 500;
@@ -102,10 +111,6 @@
   .status-value.configured,
   .status-value.configured :global(svg) {
     color: var(--accent-green);
-  }
-
-  .control-offset {
-    padding-left: calc(var(--setting-label-width, 222px) + 12px);
   }
 
   /* The button moves under the field when a long translated label
@@ -135,11 +140,5 @@
 
   .msg.success {
     color: var(--accent-green, #22c55e);
-  }
-
-  @media (max-width: 640px) {
-    .control-offset {
-      padding-left: 0;
-    }
   }
 </style>

@@ -6,7 +6,7 @@
 
 <!-- The switch sits in the settings control column with its On/Off
      state, like every other settings switch. -->
-<div class="setting-row">
+<div class="setting-row compact">
   <span class="setting-label">{m.settings_date_ranges_link()}</span>
   <Toggle
     checked={yokedDates.enabled}
