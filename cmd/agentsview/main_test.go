@@ -1510,21 +1510,32 @@ func (e *scopedEmitter) Emit(scope string) {
 
 func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		em := &recordingEmitter{}
-		done, exited := make(chan struct{}), make(chan struct{})
+		em := &scopedEmitter{scopes: make(chan string, 1)}
+		syncFn := func() (int, error) { return 3, nil }
+
+		done := make(chan struct{})
+		exited := make(chan struct{})
 		interval := 10 * time.Millisecond
 		go func() {
-			runRemoteHostSyncLoop(t.Context(), "test-host", interval, func() (int, error) { return 1, nil }, em, nil, done)
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
 			close(exited)
 		}()
 		defer func() {
 			close(done)
 			<-exited
 		}()
+
+		// Wait for the loop to start its ticker before advancing fake time.
 		synctest.Wait()
 		time.Sleep(interval)
 		synctest.Wait()
-		assert.Equal(t, []string{"sessions"}, em.scopes)
+
+		select {
+		case scope := <-em.scopes:
+			assert.Equal(t, "sessions", scope)
+		default:
+			require.FailNow(t, "remote sync did not emit after its first tick")
+		}
 	})
 }
 

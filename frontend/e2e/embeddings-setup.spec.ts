@@ -2,15 +2,17 @@ import { expect, test } from "@playwright/test";
 
 for (const width of [1280, 390]) {
   for (const entry of width === 390 ? ["settings"] : ["settings", "semantic"]) {
-    test(`${entry} lays out search by meaning at ${width}px`, async ({ page }) => {
+    test(`${entry === "settings" ? "lays out search by meaning" : "uses the compact palette badge font"} at ${width}px`, async ({
+      page,
+    }) => {
       await page.setViewportSize({ width, height: 850 });
-      let phase = "off";
+      let phase = "failed";
       const setup = () => ({
-        enabled: phase !== "off",
-        action: phase.startsWith("ollama") ? "use-built-in" : phase === "off" ? "turn-on" : "",
+        enabled: true,
+        action: phase.startsWith("ollama") ? "use-built-in" : "",
         provider: phase.startsWith("ollama") ? "ollama" : "built-in",
         rebuild_required: phase === "ollama-other",
-        missing_bytes: phase === "off" || phase.startsWith("ollama") ? 295000000 : 0,
+        missing_bytes: phase.startsWith("ollama") ? 295000000 : 0,
         installing: false,
         busy: false,
         downloaded_bytes: 0,
@@ -30,20 +32,8 @@ for (const width of [1280, 390]) {
       await page.route("**/api/v1/embeddings/generations*", (route) =>
         route.fulfill({ json: { generations: [] } }),
       );
-      await page.route("**/api/v1/search?**", (route) => route.fulfill({ json: { results: [] } }));
-      await page.route("**/api/v1/search/content?**", (route) =>
-        route.fulfill({
-          status: 501,
-          json: { error: "semantic search not available", code: "semantic_setup_required" },
-        }),
-      );
       await page.goto(entry === "settings" ? "/settings" : "/");
-      if (entry === "settings") {
-        await page
-          .getByRole("navigation", { name: "Settings" })
-          .getByRole("button", { name: /^Embeddings/ })
-          .click();
-      } else {
+      if (entry !== "settings") {
         await page.getByRole("button", { name: /Search sessions/ }).click();
         if (width === 1280 && entry === "semantic") {
           await test.step("preserves the compact palette key badge", async () => {
@@ -57,13 +47,8 @@ for (const width of [1280, 390]) {
               );
           });
         }
-        if (entry === "semantic")
-          await page.getByRole("radio", { name: "Semantic", exact: true }).click();
-        await page.locator(".palette-input").fill("connections");
       }
       if (entry === "settings") {
-        phase = "failed";
-        await page.reload();
         await page
           .getByRole("navigation", { name: "Settings" })
           .getByRole("button", { name: /^Embeddings/ })

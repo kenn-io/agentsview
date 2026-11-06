@@ -89,8 +89,8 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function generatedApiError(status: number, detail: string): ApiError {
-  return new ApiError(status, detail);
+function generatedApiError(status: number, detail: string, code?: string): ApiError {
+  return new ApiError(status, detail, code);
 }
 
 async function runDebounce() {
@@ -328,32 +328,36 @@ describe("SearchStore", () => {
       501,
       "Semantic search is unavailable: run agentsview index embeddings build",
       "semantic-unavailable",
+      "semantic_setup_required",
     ],
-    [503, "Embedding provider is temporarily unavailable; retry shortly", "generic"],
-  ] as const)("preserves actionable backend detail for HTTP %i", async (status, detail, kind) => {
-    const store = createSearchStore(memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: "semantic" }));
-    searchService.getApiV1SearchContent.mockRejectedValueOnce(
-      new ApiError(status, detail, status === 501 ? "semantic_setup_required" : undefined),
-    );
+    [503, "Embedding provider is temporarily unavailable; retry shortly", "generic", undefined],
+  ] as const)(
+    "preserves actionable backend detail for HTTP %i",
+    async (status, detail, kind, code) => {
+      const store = createSearchStore(memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: "semantic" }));
+      searchService.getApiV1SearchContent.mockRejectedValueOnce(
+        generatedApiError(status, detail, code),
+      );
 
-    store.search("failure");
-    await runDebounce();
+      store.search("failure");
+      await runDebounce();
 
-    expect(store.error).toEqual({
-      detail,
-      kind,
-      code: status === 501 ? "semantic_setup_required" : undefined,
-    });
-    expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
-    expect(store.results).toEqual([]);
-    expect(store.isSearching).toBe(false);
-    searchService.getApiV1SearchContent.mockRejectedValueOnce(
-      new ApiError(status, detail, status === 501 ? "semantic_setup_required" : undefined),
-    );
-    store.retry();
-    await flushMicrotasks();
-    expect(vi.mocked(reportErrorShown).mock.calls).toEqual([["search"], ["search"]]);
-  });
+      expect(store.error).toEqual({
+        detail,
+        kind,
+        code,
+      });
+      expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("search");
+      expect(store.results).toEqual([]);
+      expect(store.isSearching).toBe(false);
+      searchService.getApiV1SearchContent.mockRejectedValueOnce(
+        generatedApiError(status, detail, code),
+      );
+      store.retry();
+      await flushMicrotasks();
+      expect(vi.mocked(reportErrorShown).mock.calls).toEqual([["search"], ["search"]]);
+    },
+  );
 
   it("keeps a full-text 501 generic: setup guidance only applies to semantic modes", async () => {
     const store = createSearchStore(memoryStorage());

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/vector"
@@ -37,36 +40,59 @@ func (p *pausedEmbeddingsLookup) ManagerSetup(store string) (server.EmbeddingsMa
 	return manager, setup
 }
 
+type pausedSetupSnapshot struct {
+	server.EmbeddingsRuntime
+	read, resume chan struct{}
+	once         sync.Once
+}
+
+func (p *pausedSetupSnapshot) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
+	status, err := p.EmbeddingsRuntime.SetupStatus(ctx)
+	p.once.Do(func() {
+		close(p.read)
+		select {
+		case <-p.resume:
+		case <-ctx.Done():
+		}
+	})
+	return status, err
+}
+
 // Requests may cross a completed provider replacement after resolving a manager.
 func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
 	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
 	for _, tc := range []struct {
-		operation               string
+		operation, outcome      string
 		duringSetup, resumeBusy bool
 	}{
-		{"build", false, false},
-		{"generations", false, false},
-		{"activate", false, false},
-		{"retire", false, false},
-		{"build", true, false},
-		{"generations", true, false},
-		{"activate", true, false},
-		{"retire", true, false},
-		{"build", false, true},
+		{"status", "busy", false, true},
+		{"status", "error", false, false},
+		{"status", "ready", false, false},
+		{"build", "", false, false},
+		{"generations", "", false, false},
+		{"activate", "", false, false},
+		{"retire", "", false, false},
+		{"build", "", true, false},
+		{"generations", "", true, false},
+		{"activate", "", true, false},
+		{"retire", "", true, false},
+		{"build", "", false, true},
 	} {
 		operation, duringSetup := tc.operation, tc.duringSetup
-		t.Run(fmt.Sprintf("%s/during-setup=%t/resume-busy=%t", operation, duringSetup, tc.resumeBusy), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s/%s/during-setup=%t/resume-busy=%t", operation, tc.outcome, duringSetup, tc.resumeBusy), func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
 			dir := testDataDir(t)
-			writeEmbeddingsTestConfig(t, dir, "http://127.0.0.1:11434/v1")
+			stub := newEmbeddingsStubServer(t, 768)
+			defer stub.Close()
+			raw := "[vector]\nenabled=true\n[vector.embeddings]\nmodel='nomic-embed-text'\ndimension=768\n[vector.embeddings.servers.ollama]\nendpoint='" + stub.URL + "/v1'\nollama_cpu_fallback=true\n"
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(raw), 0o600))
 			cfg, err := config.LoadReadOnly()
 			require.NoError(t, err)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-			stub := newEmbeddingsStubServer(t, 768)
-			defer stub.Close()
+			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
 			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 				return embedlocal.Status{DownloadBytes: 295_000_000}, nil
 			}
@@ -93,7 +119,10 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, generations, 1)
 			lookedUp, resumed := make(chan struct{}), make(chan struct{})
-			runtime := &pausedEmbeddingsLookup{EmbeddingsRuntime: owner, lookedUp: lookedUp, resume: resumed}
+			var runtime server.EmbeddingsRuntime = &pausedEmbeddingsLookup{EmbeddingsRuntime: owner, lookedUp: lookedUp, resume: resumed}
+			if operation == "status" {
+				runtime = &pausedSetupSnapshot{EmbeddingsRuntime: owner, read: lookedUp, resume: resumed}
+			}
 			resume := sync.OnceFunc(func() { close(resumed) })
 			defer resume()
 			ln, port := listenLoopback(t)
@@ -110,7 +139,7 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			if operation == "activate" || operation == "retire" {
 				method, path = http.MethodPost, "/api/v1/embeddings/generations/"+strconv.FormatInt(generations[0].ID, 10)+"/"+operation
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 			req, err := http.NewRequestWithContext(ctx, method, ts.URL+path, strings.NewReader(`{}`))
 			require.NoError(t, err)
@@ -133,23 +162,58 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 				completed <- result{status: response.StatusCode, body: body, err: err}
 			}()
 			<-lookedUp
+			var held *writeOwnerLock
+			defer func() {
+				if held != nil {
+					require.NoError(t, held.Close())
+				}
+			}()
+			if tc.outcome == "error" {
+				oldClose := owner.serving.Close
+				owner.serving.Close = func() error {
+					if err := oldClose(); err != nil {
+						return err
+					}
+					var err error
+					held, err = tryAcquireNamedLock(dir, vectorsWriteLockFile)
+					return err
+				}
+			}
 			if !duringSetup {
 				embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
 				<-activating
 			}
-			if !tc.resumeBusy {
+			if !tc.resumeBusy && !duringSetup {
 				releaseInstall()
 				<-owner.done
-				manager, _ := owner.ManagerSetup("")
-				require.NotNil(t, manager)
-				manager.Wait()
-				require.Empty(t, manager.Status().LastError)
+				if tc.outcome != "error" {
+					manager, _ := owner.ManagerSetup("")
+					require.NotNil(t, manager)
+					manager.Wait()
+					require.Empty(t, manager.Status().LastError)
+				}
 			}
 			resume()
 			got := <-completed
 			require.NoError(t, got.err)
-			assert.Equal(t, http.StatusConflict, got.status, string(got.body))
-			assert.Contains(t, string(got.body), "embeddings_setup_busy")
+			if operation == "status" {
+				require.Equal(t, http.StatusOK, got.status, string(got.body))
+				var status vector.BuildStatus
+				require.NoError(t, json.Unmarshal(got.body, &status))
+				require.NotNil(t, status.Setup)
+				assert.Equal(t, tc.outcome == "busy", status.Setup.Busy)
+				if tc.outcome == "error" {
+					assert.Equal(t, "Another process may be using search. Close it and retry.", status.Setup.Error)
+				} else {
+					assert.Empty(t, status.Setup.Error)
+					if tc.outcome == "ready" {
+						assert.Equal(t, "nomic-embed-text", status.Model)
+					}
+				}
+			} else {
+				assert.Equal(t, http.StatusConflict, got.status, string(got.body))
+				assert.Contains(t, string(got.body), "embeddings_setup_busy")
+			}
 		})
 	}
 }

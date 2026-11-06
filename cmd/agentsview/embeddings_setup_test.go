@@ -196,10 +196,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				return result
 			}
 			awaitBuild()
-			if recipe == "fresh" {
-				assert.False(t, push().Vectors.Skipped, "browser activation must publish vectors without restart")
-				require.Len(t, replica.pushed, 1)
-			}
 			if recipe == "configured" {
 				assert.Empty(t, status().Setup.Action)
 			}

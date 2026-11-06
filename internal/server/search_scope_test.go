@@ -37,7 +37,7 @@ func (f fakeHitsVectorSearcher) ResolveMessageUnits(
 // remapped to 400), matching how mode is validated.
 func TestSearchContentScopeInvalidValueRejected(t *testing.T) {
 	te := setup(t)
-	te.db.SetVectorSearcher(fakeTransientVectorSearcher{})
+	te.db.SetVectorSearcher(fakeFailingVectorSearcher{})
 
 	w := te.wrappedRequest(http.MethodGet,
 		"/api/v1/search/content?pattern=fox&mode=semantic&scope=bogus",

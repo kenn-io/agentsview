@@ -1471,7 +1471,7 @@ func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {
 	assert.ErrorContains(t, err, "if any flags in the group")
 }
 
-func TestEmbeddingsDaemonClientBuildResponse(t *testing.T) {
+func TestEmbeddingsDaemonClientBuildResponsePreservesBasePathAndOrigin(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
 		wantError  bool
