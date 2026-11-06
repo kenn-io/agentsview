@@ -63,6 +63,7 @@ func TestAccountUsageEventsKeepAgentsDatesAndReportedZero(t *testing.T) {
 func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "migration")
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
 	event := CursorUsageEvent{OccurredAt: "2026-11-04T13:00:00Z", Model: "model-a", InputTokens: 12, DedupKey: "cursor:item"}
 	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{event}))
 	_, err := d.rawWriter().ExecContext(t.Context(), "ALTER TABLE cursor_usage_events DROP COLUMN agent")
