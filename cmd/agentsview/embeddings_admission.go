@@ -10,7 +10,7 @@ import (
 // admittedManager runs builds and generation calls under the owner's mutex,
 // the one Setup checks for a running build under and closes the indexes
 // under, so a manager looked up before Setup cannot start a build once Setup
-// begins or reach an index Setup has closed; Wait and Status skip the mutex.
+// begins or reach an index Setup has closed; Status skips the mutex.
 type admittedManager struct {
 	*vector.Manager
 	owner *liveVectorServing
@@ -37,6 +37,16 @@ func (a admittedManager) admitted(call func() error) error {
 
 func (a admittedManager) StartBuild(req vector.BuildRequest) error {
 	return a.admitted(func() error { return a.Manager.StartBuild(req) })
+}
+
+// Wait runs after the build route starts a build; once that build activates an
+// index, the setup failure it recovered from is cleared so status recomputes
+// the action from the installed runtime.
+func (a admittedManager) Wait() {
+	a.Manager.Wait()
+	if result := a.Status().LastResult; result != nil && result.Activated {
+		_ = a.admitted(func() error { a.owner.setup = server.EmbeddingsSetupStatus{}; return nil })
+	}
 }
 
 func (a admittedManager) Generations(ctx context.Context) ([]vector.GenerationInfo, error) {
