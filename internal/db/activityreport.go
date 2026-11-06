@@ -6,11 +6,13 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -60,6 +62,7 @@ func (db *DB) GetActivityReport(
 type activityReportBackend struct {
 	*DB
 	lowerBound, upperBound string
+	read                   *[]string
 }
 
 func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
@@ -69,7 +72,12 @@ func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
+	rows, pricing, read, err := b.activityReportUsage(
+		ctx, ids, b.lowerBound, b.upperBound, q, b.read != nil)
+	if b.read != nil {
+		*b.read = append(*b.read, read...)
+	}
+	return rows, pricing, err
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
@@ -84,14 +92,32 @@ func (db *DB) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
+	f.IncludeSubagents = true
+	f.IncludeForks = true
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
 	defer release()
 	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
-	f.IncludeSubagents = true
-	f.IncludeForks = true
+
+	var selection, version string
+	var revision int64
+	if !q.Partial && !db.readOnly && !TerminationUsesTime(f.Termination) {
+		version, revision, err = db.activityKeptVersion(ctx)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		selection = kept.Selection(f, q)
+		report, hit, err := db.keptActivityReport(ctx, selection, version, revision, f, q)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if hit {
+			activity.ReportProgress(onProgress, report.Done)
+			return report.Artifacts, nil
+		}
+	}
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
 	lowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
@@ -105,12 +131,32 @@ func (db *DB) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
+	var read []string
+	var readSet *[]string
+	if selection != "" {
+		read = slices.Clone(ids)
+		readSet = &read
+	}
 	backend := activityReportBackend{
+		read:       readSet,
 		DB:         db,
 		lowerBound: lowerBound, upperBound: upperBound,
 	}
-	artifacts, _, err := activity.BuildReportArtifacts(
+	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating activity report")
+	if err == nil && selection != "" {
+		slices.Sort(read)
+		read = slices.Compact(read)
+		boundedRead := make([]string, len(read))
+		copy(boundedRead, read)
+		read = boundedRead
+		entry := activityKept{
+			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
+			read: read, labels: activity.ProjectLabels(sessions),
+		}
+		entry.size = activityKeptSize(entry)
+		db.activityKept.Put(selection, version, []activityKept{entry})
+	}
 	return artifacts, err
 }
 
@@ -422,8 +468,7 @@ func (db *DB) activityReportSessionsFrom(
 	f AnalyticsFilter,
 	rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
-	where, args := f.buildWhereWithDate("", false, "s.id")
-	args = append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
+	where, args := activityReportSessionSelectionWhere(f, rangeStartUTC, rangeEndUTC)
 
 	// Each Title candidate is NULLIF'd independently (not a nested
 	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
@@ -440,22 +485,7 @@ func (db *DB) activityReportSessionsFrom(
 		COALESCE(s.is_automated, 0),
 		s.relationship_type = 'subagent'
 	FROM sessions s
-	WHERE ` + where + `
-		AND (COALESCE(NULLIF(s.ended_at, ''),
-				(SELECT MAX(m.timestamp) FROM messages m
-					WHERE m.session_id = s.id AND m.timestamp != ''),
-				NULLIF(s.started_at, ''), s.created_at) >= ?
-			OR EXISTS (
-				SELECT 1 FROM tool_result_events tre
-				WHERE tre.session_id = s.id
-					AND tre.source = 'tool_execution'
-					AND tre.status IN ('completed', 'errored')
-					AND tre.timestamp IS NOT NULL
-					AND tre.timestamp != ''
-					AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
-					AND tre.timestamp >= ?
-			))
-		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?`
+	WHERE ` + where
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -490,6 +520,37 @@ func (db *DB) activityReportSessionsFrom(
 		ids = append(ids, session.SessionID)
 	}
 	return sessions, ids, nil
+}
+
+func activityReportSessionSelectionWhere(
+	f AnalyticsFilter,
+	rangeStartUTC, rangeEndUTC string,
+) (string, []any) {
+	where, args := f.buildWhereWithDate("", false, "s.id")
+	args = append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
+	return where + " AND " + activityReportSessionWindowPredicate(), args
+}
+
+func activityReportSessionWindowPredicate() string {
+	return `(
+		(
+			COALESCE(NULLIF(s.ended_at, ''),
+				(SELECT MAX(m.timestamp) FROM messages m
+					WHERE m.session_id = s.id AND m.timestamp != ''),
+				NULLIF(s.started_at, ''), s.created_at) >= ?
+			OR EXISTS (
+				SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = s.id
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp IS NOT NULL
+					AND tre.timestamp != ''
+					AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
+					AND tre.timestamp >= ?
+			)
+		)
+		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?
+	)`
 }
 
 func (db *DB) activityReportActivityFrom(
@@ -875,9 +936,10 @@ func (db *DB) ActivityReportCandidateSource(
 // parsed instants so mixed RFC3339 representations remain chronological.
 func (db *DB) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
+	collectRead bool,
+) ([]activity.UsageRow, *export.PricingBlock, []string, error) {
 	return db.activityReportUsageFrom(
-		ctx, db.getReader(), ids, lowerBound, upperBound, q,
+		ctx, db.getReader(), ids, lowerBound, upperBound, q, collectRead,
 	)
 }
 
@@ -887,17 +949,25 @@ func (db *DB) activityReportUsageFrom(
 	ids []string,
 	lowerBound, upperBound string,
 	q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
+	collectRead bool,
+) ([]activity.UsageRow, *export.PricingBlock, []string, error) {
 	candidates, _, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
 		ctx, source, ids, lowerBound, upperBound, false,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	sortActivityReportUsageCandidates(candidates)
 	baseRows := make([]activity.UsageRow, len(candidates))
+	var read []string
+	if collectRead {
+		read = make([]string, 0, len(candidates))
+	}
 	for i, candidate := range candidates {
 		row := candidate.row
+		if collectRead {
+			read = append(read, row.SessionID)
+		}
 		_, row.OutputTokens, _, _, _ = dailyUsageRowTokens(candidate.scan)
 		row.WebSearchRequests = usageRowWebSearchRequests(
 			candidate.scan.usageSource, candidate.scan.tokenJSON)
@@ -907,11 +977,12 @@ func (db *DB) activityReportUsageFrom(
 		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return materializeActivityReportUsageCandidates(
+	rows, pricing, err := materializeActivityReportUsageCandidates(
 		candidates, mask, attribution, webSearchRequests, rateResolver,
 	)
+	return rows, pricing, read, err
 }
 
 // activityReportUsageCandidate retains the scanned source fields until the
@@ -924,6 +995,22 @@ type activityReportUsageCandidate struct {
 	ts      time.Time
 	validTS bool
 	ordinal int64
+}
+
+func activityReportClaudePeerPredicate(candidateSessions string) string {
+	return `m.claude_message_id != ''
+		AND m.claude_request_id != ''
+		AND (m.claude_message_id, m.claude_request_id) IN (
+			SELECT m.claude_message_id, m.claude_request_id
+			FROM messages m
+			JOIN sessions s ON s.id = m.session_id
+			WHERE ` + usageMessageEligibility + `
+				AND m.session_id IN ` + candidateSessions + `
+				AND m.claude_message_id != ''
+				AND m.claude_request_id != ''
+				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
+				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
+		)`
 }
 
 func (db *DB) loadActivityReportUsageCandidatesFrom(
@@ -965,19 +1052,7 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 		// Exclude candidate sessions here: UNION ALL must not load them twice.
 		peerWhere := usageMessageEligibility + `
 			AND m.session_id NOT IN ` + candidateSessions + `
-			AND m.claude_message_id != ''
-			AND m.claude_request_id != ''
-			AND (m.claude_message_id, m.claude_request_id) IN (
-				SELECT m.claude_message_id, m.claude_request_id
-				FROM messages m
-				JOIN sessions s ON s.id = m.session_id
-				WHERE ` + usageMessageEligibility + `
-					AND m.session_id IN ` + candidateSessions + `
-					AND m.claude_message_id != ''
-					AND m.claude_request_id != ''
-					AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
-					AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
-			)`
+			AND ` + activityReportClaudePeerPredicate(candidateSessions)
 		rowsSQL += "\nUNION ALL\n" + fmt.Sprintf(
 			dailyUsageMessageRowsSQLTemplate, "messages", peerWhere,
 		)

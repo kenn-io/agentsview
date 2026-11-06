@@ -843,6 +843,14 @@ for existing archives. PostgreSQL push must also detect its absence before
 taking the schema-current fast path. Creating the index scans existing tool
 results and can delay that first startup; it does not require a session resync.
 
+SQLite keeps completed Activity reports in memory with a 128 MiB estimated-size
+budget. Entries use `database_id` and `usage_pricing_revision` as their
+version. The `usage_session_changes` journal invalidates an entry when a
+selected session or an in-window Claude peer changes; a changed project
+identity map also invalidates it. Partial reports, read-only archives, and
+reports filtered by active, stale, or unclean termination status bypass this
+cache.
+
 ### PostgreSQL push preparation indexes
 
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
