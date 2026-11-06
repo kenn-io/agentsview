@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	usagePriceRoundID   = "ch-price-round"
-	usagePriceTierID    = "ch-price-tier"
+	usagePriceRoundID   = "cron_price-check_20260112_030000"
+	usagePriceTierID    = "cron_price-check_20260112_031000"
 	usagePriceSnapAID   = "ch-price-snap-a"
 	usagePriceSnapBID   = "ch-price-snap-b"
 	usagePriceCopilotID = "ch-price-copilot"
@@ -163,7 +163,8 @@ func seedUsagePriceFixture(t *testing.T) (*db.DB, Target) {
 	}
 	for i := range writes {
 		if i < 2 {
-			writes[i].Session.GroupKey = "cron:price-check"
+			writes[i].Session.Agent = "hermes"
+			writes[i].Session.GroupKey = "price-check"
 		}
 		writes[i].DataVersion = 1
 		writes[i].ReplaceMessages = true
@@ -399,7 +400,7 @@ func TestDailyUsagePersistedPricesKeepRequestRounding(t *testing.T) {
 	t.Parallel()
 	store, _, _ := newUsagePriceStore(t)
 	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
-		Timezone: "UTC", Agent: "claude",
+		Timezone: "UTC", Agent: "hermes",
 	})
 	require.NoError(t, err)
 
@@ -497,7 +498,7 @@ func TestDailyUsagePricesFollowSourceUpdatesAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 	assertDailyUsageParity(t, local, store)
 	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
-		Timezone: "UTC", Agent: "claude",
+		Timezone: "UTC", Agent: "hermes",
 	})
 	require.NoError(t, err)
 	assert.Zero(t, modelCost(t, got, "round-test"))
@@ -527,7 +528,7 @@ func TestDailyUsagePricesFollowPricingRefresh(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, before.digest, after.digest)
 	assertDailyUsageParity(t, local, store)
-	filter := db.UsageFilter{Timezone: "UTC", Agent: "claude"}
+	filter := db.UsageFilter{Timezone: "UTC", Agent: "hermes"}
 	got, err := store.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	// 0.8 and 1.6 microdollars round to 1 and 2: 5*1 + 3*2.
@@ -565,7 +566,7 @@ func TestDailyUsageCustomRatesOverridePersistedPrices(t *testing.T) {
 	assertDailyUsageParity(t, local, store)
 
 	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
-		Timezone: "UTC", Agent: "claude",
+		Timezone: "UTC", Agent: "hermes",
 	})
 	require.NoError(t, err)
 	// $5/MTok input: 11 tokens over eight requests cost 55 microdollars.
@@ -638,8 +639,17 @@ func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 		{"round-test": {InputMicrodollarsPerMTok: 2_000_000, OutputMicrodollarsPerMTok: 3_000_000}},
 	} {
 		store, _, local := newUsagePriceStore(t)
+		_, err := store.DB().ExecContext(t.Context(), "SYSTEM WAIT VIEW prepare_usage")
+		require.NoError(t, err)
+		state, err := store.preparedUsageState(t.Context())
+		require.NoError(t, err)
+		require.True(t, state.ready, "prepared usage must be ready for this parity test")
 		local.SetCustomPricing(custom)
 		store.SetCustomPricing(custom)
+		catalog, err := chLoadPricingCatalog(t.Context(), store.conn, store.customPricing)
+		require.NoError(t, err)
+		require.Equal(t, catalog.digest, state.pricingDigest,
+			"the prepared usage must carry stored prices for this catalog")
 		filters := usagePriceFilters()
 		if custom == nil {
 			filters["grouped"] = db.UsageFilter{Timezone: "UTC", TopSessionsByGroup: true}
@@ -649,11 +659,11 @@ func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 				filter.TopSessionsSort = ranking.sort
 				filter.TopSessionsTokenTypes = ranking.tokenTypes
 				name := name + "/" + rankingName
-				want, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
+				want, err := local.GetTopSessionsByCost(t.Context(), filter, 5)
 				require.NoError(t, err, name)
 				require.NotEmpty(t, want, name)
 				normalizeSQLiteTopSessions(t, want)
-				got, err := store.GetTopSessionsByCost(t.Context(), filter, 20)
+				got, err := store.GetTopSessionsByCost(t.Context(), filter, 5)
 				require.NoError(t, err, name)
 				assert.Equal(t, want, got, name)
 			}
