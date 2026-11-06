@@ -1178,6 +1178,9 @@ func EnsureSchema(
 		return err
 	}
 	if !runRepair {
+		if err := ensureUsageChangeJournalPG(ctx, db); err != nil {
+			return err
+		}
 		log.Printf(
 			"pg schema: token coverage repair check completed"+
 				" in %s (repair skipped)",
@@ -1204,6 +1207,9 @@ func EnsureSchema(
 	)
 	step = time.Now()
 	if err := markTokenCoverageRepairDone(ctx, db); err != nil {
+		return err
+	}
+	if err := ensureUsageChangeJournalPG(ctx, db); err != nil {
 		return err
 	}
 	log.Printf(

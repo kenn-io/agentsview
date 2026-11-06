@@ -13,6 +13,25 @@ multi-machine setups.
 The PostgreSQL usage optimization baseline and its architecture boundary are
 recorded in `docs/internal/pg-usage-native-optimization.md`.
 
+On the current development branch, the schema owner's next push installs a usage
+change journal for future report reuse. Installation briefly blocks writes on
+the watched tables. Restricted publishers can use the installed journal; an
+owner must install it first. CockroachDB skips this journal.
+
+`BenchmarkPGConcurrentPush` measures four concurrent pushes into an empty schema,
+with 400 sessions, 8,000 messages, and 800 usage events per writer. Five
+interleaved runs of each build on PostgreSQL 18.6 produced these wall times;
+fixture creation and schema setup were outside the timer.
+
+| Build | Median | Range |
+| --- | --- | --- |
+| Base | 60.0 s | 18.1 to 101.7 s |
+| Base again, A/A control | 17.3 s | 16.1 to 54.7 s |
+| With journal | 34.2 s | 12.0 to 87.0 s |
+
+The two base medians differ by 71%, so these runs cannot isolate the journal's
+concurrent-push cost. The benchmark file runs unchanged on both builds.
+
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
 the session browser, analytics dashboard, search, and, as of 0.23.0, the Usage
