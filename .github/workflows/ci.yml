@@ -257,7 +257,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.5
 
@@ -274,6 +274,22 @@ jobs:
 
       - name: Run docs check
         run: make docs-check
+
+      - name: Check that docs pages paint with their stylesheets and fonts
+        uses: kenn-io/actions/first-paint@b523fb403607f01de5eec5f4556c7668544c70fe  # main
+        with:
+          dist: docs/site
+
+      - name: Collect the static app pages for the first-paint check
+        run: |
+          mkdir -p "$RUNNER_TEMP/app-pages"
+          cp -R desktop/ui "$RUNNER_TEMP/app-pages/desktop"
+          cp -R internal/web/fallback "$RUNNER_TEMP/app-pages/fallback"
+
+      - name: Check that static app pages paint with their stylesheets and fonts
+        uses: kenn-io/actions/first-paint@b523fb403607f01de5eec5f4556c7668544c70fe  # main
+        with:
+          dist: ${{ runner.temp }}/app-pages
 
       - name: Run shell script tests
         run: |
@@ -304,6 +320,12 @@ jobs:
             package: ./internal/duckdb
             suite: linux-duckdb
             timeout: 28
+          # The simulator compares wall times and needs the runner to itself.
+          - os: ubuntu-latest
+            name: ubuntu-latest, Simulator
+            package: ./cmd/perfsim
+            suite: linux-perfsim
+            timeout: 20
           - os: ubuntu-latest
             name: ubuntu-latest, Other packages
             testSet: other
@@ -391,7 +413,7 @@ jobs:
         if: runner.os == 'Linux' && matrix.testSet == 'other'
         shell: bash
         run: |
-          packages="$(go list -tags fts5 ./... | grep -vE '/internal/(duckdb|sync)$')"
+          packages="$(go list -tags fts5 ./... | grep -vE '/(cmd/perfsim|internal/(duckdb|sync))$')"
           go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
@@ -408,6 +430,7 @@ jobs:
           }
           $isolatedPackages = @(
             'go.kenn.io/agentsview/cmd/agentsview'
+            'go.kenn.io/agentsview/cmd/perfsim'
             'go.kenn.io/agentsview/internal/capture'
             'go.kenn.io/agentsview/internal/db'
             'go.kenn.io/agentsview/internal/duckdb'
@@ -578,6 +601,9 @@ jobs:
           - name: Capture
             suite: windows-capture
             package: ./internal/capture
+          - name: Simulator
+            suite: windows-perfsim
+            package: ./cmd/perfsim
           - name: Database, Parser
             suite: windows-db-parser
             package: ./internal/db ./internal/parser
@@ -869,6 +895,10 @@ jobs:
             suite: race-db-server
             runner: ubuntu-latest
             package: ./internal/db ./internal/server
+          - name: Simulator
+            suite: race-perfsim
+            runner: ubuntu-latest
+            package: ./cmd/perfsim
           - name: Other packages
             suite: race-other
             runner: ubuntu-latest
@@ -907,7 +937,7 @@ jobs:
         if: matrix.testSet == 'other'
         shell: bash
         run: |
-          packages="$(go list ./... | grep -vE '/(cmd/agentsview|internal/(db|server|duckdb|sync))$')"
+          packages="$(go list ./... | grep -vE '/(cmd/(agentsview|perfsim)|internal/(db|server|duckdb|sync))$')"
           go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
@@ -1193,6 +1223,39 @@ jobs:
             -o /tmp/agentsview ./cmd/agentsview
         env:
           CGO_ENABLED: "1"
+
+      # The first-paint check reads the pages the binary serves from its
+      # embedded build: the root and a client route, which takes the SPA
+      # fallback.
+      - name: Start the server for the first-paint check
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 2
+        run: |
+          AGENTSVIEW_E2E_PORT=8095 bash scripts/e2e-server.sh > "$RUNNER_TEMP/first-paint-server.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/first-paint-server.pid"
+          # workflowretry: allow Local readiness probe; the loop retries while the server starts.
+          until curl -sf http://127.0.0.1:8095/ > /dev/null; do
+            kill -0 "$!" 2> /dev/null || { cat "$RUNNER_TEMP/first-paint-server.log"; exit 1; }
+            sleep 1
+          done
+        env:
+          E2E_PREBUILT_FIXTURE: /tmp/testfixture
+          E2E_PREBUILT_SERVER: /tmp/agentsview
+
+      - name: Check that pages paint with their stylesheets and fonts
+        if: matrix.browser == 'chromium'
+        uses: kenn-io/actions/first-paint@b523fb403607f01de5eec5f4556c7668544c70fe  # main
+        with:
+          urls: |
+            http://127.0.0.1:8095/
+            http://127.0.0.1:8095/sessions/test-session-large-1500
+
+      - name: Stop the first-paint server
+        if: always() && matrix.browser == 'chromium'
+        run: |
+          if [ -f "$RUNNER_TEMP/first-paint-server.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/first-paint-server.pid")" || true
+          fi
 
       - name: Start Playwright browser server
         id: browser_server

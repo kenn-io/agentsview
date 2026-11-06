@@ -213,6 +213,48 @@ describe("MessageList follow cancellation", () => {
     document.body.innerHTML = "";
   });
 
+  it("keeps row positions matched to message heights when sort order changes", async () => {
+    ui.followLatest = false;
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2), makeMessage(3)];
+    const { instance } = realJumpScroll();
+    instance.setOptions({
+      ...instance.options,
+      measureElement: (row) => (row.querySelector(".is-user") ? 320 : 80),
+    });
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+
+    instance.measure();
+    await flushScrollUpdates();
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".virtual-row")].map((row) => row.style.transform),
+    ).toEqual(["translateY(0px)", "translateY(320px)", "translateY(400px)", "translateY(720px)"]);
+
+    ui.sortNewestFirst = true;
+    await flushScrollUpdates();
+
+    const rows = [...document.querySelectorAll<HTMLElement>(".virtual-row")];
+    expect(rows.map((row) => row.querySelector(".role-label")?.textContent)).toEqual([
+      "Assistant",
+      "User",
+      "Assistant",
+      "User",
+    ]);
+    expect(rows.map((row) => row.style.transform)).toEqual([
+      "translateY(0px)",
+      "translateY(80px)",
+      "translateY(400px)",
+      "translateY(480px)",
+    ]);
+
+    ui.sortNewestFirst = false;
+    await flushScrollUpdates();
+
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".virtual-row")].map((row) => row.style.transform),
+    ).toEqual(["translateY(0px)", "translateY(320px)", "translateY(400px)", "translateY(720px)"]);
+  });
+
   it("opens a collapsed empty row when a jump targets a message inside it", async () => {
     ui.followLatest = false;
     const empty = (ordinal: number) => ({
@@ -286,6 +328,29 @@ describe("MessageList follow cancellation", () => {
     await vi.waitFor(() => {
       expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320);
     });
+  });
+
+  it("refreshes Docbank when the same transcript is remounted", async () => {
+    const { fileReferences } = await import("../../stores/file-references.svelte.js");
+    fileReferences.enabled = true;
+    await fileReferences.track(null, null);
+    messages.loadedRevision = "revision-1";
+    docbankLookup.mockResolvedValue({
+      integration: "enabled",
+      transcript_revision: "revision-1",
+      occurrences: [],
+    });
+    onTestFinished(() => {
+      fileReferences.enabled = false;
+    });
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await vi.waitFor(() => expect(docbankLookup).toHaveBeenCalledTimes(1));
+    await unmount(component);
+    component = undefined;
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await vi.waitFor(() => expect(docbankLookup).toHaveBeenCalledTimes(2));
   });
 
   it("keeps an ordinal jump on its message through an older load past five seconds", async () => {
@@ -1285,3 +1350,9 @@ describe("MessageList follow cancellation", () => {
     expect(readProgress.get("s1")?.token).toBe("current");
   });
 });
+
+const docbankLookup = vi.hoisted(() => vi.fn());
+vi.mock("../../api/generated/sessions/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/generated/sessions/sessions.js")>()),
+  getApiV1SessionsByIdFileReferences: docbankLookup,
+}));

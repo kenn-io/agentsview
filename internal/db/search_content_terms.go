@@ -37,12 +37,7 @@ func ValidateTermsFilter(f ContentSearchFilter) error {
 				"search: terms searches messages only (got source %q)", source)
 		}
 	}
-	switch f.Scope {
-	case "", "all", "top", "subordinate":
-		return nil
-	default:
-		return searchInputErrorf("search: invalid scope %q", f.Scope)
-	}
+	return ValidateContentSearchScope(f.Scope)
 }
 
 // termsSQLFragments holds the SQL that differs between the backends that
@@ -90,9 +85,11 @@ var termsSQLByDialect = map[string]termsSQLFragments{
 // are exempt from the one-shot gate. Only sessions where each term occurs in
 // some message are grouped, which keeps the aggregation off the rest of the
 // archive; a term holds no whitespace, so it cannot span the newline that
-// joins two messages and the prefilter never drops a real match. Assistant
-// rows before a session's first user message anchor no exchange, so those
-// groups are dropped and assistant-only sessions never match.
+// joins two messages and the prefilter never drops a real match. For the
+// same reason, an exchange contains a term only when one of its messages
+// does, so bodies are built only for exchanges where each term has a hit.
+// Assistant rows before a session's first user message anchor no exchange,
+// so those groups are dropped and assistant-only sessions never match.
 //
 // Columns: session_id, project, agent, transcript_revision, location, role,
 // start_ordinal, timestamp, body, end_ordinal, relationship_type,
@@ -118,6 +115,17 @@ func BuildTermsSearchSQL(
 		where += " AND id NOT IN (" + strings.Join(phs, ",") + ")"
 	}
 
+	// SQLite binds ? placeholders by position, so the hit flags in the
+	// eligible select list take their arguments before the prefilter.
+	hitFlags := make([]string, len(terms))
+	exchangeHits := make([]string, len(terms))
+	hitTests := make([]string, len(terms))
+	for i, term := range terms {
+		hitFlags[i] = fmt.Sprintf(",\n\t\t\t\tCASE WHEN %s THEN 1 ELSE 0 END AS hit_%d",
+			b.ContainsPredicate(frag.messageText, term), i)
+		exchangeHits[i] = fmt.Sprintf(",\n\t\t\t\tMAX(hit_%d) OVER exchange AS exchange_hit_%d", i, i)
+		hitTests[i] = fmt.Sprintf("h.exchange_hit_%d = 1", i)
+	}
 	var prefilter strings.Builder
 	for _, term := range terms {
 		prefilter.WriteString(`
@@ -141,18 +149,9 @@ func BuildTermsSearchSQL(
 		WITH scoped AS (
 			SELECT id FROM sessions WHERE %s
 		), eligible AS (
-			SELECT m.session_id, s.project, s.agent, s.machine,
-				COALESCE(s.display_name, s.session_name) AS display_name,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
-				COALESCE(s.relationship_type,'') AS relationship_type,
-				COALESCE(s.parent_session_id,'') AS parent_session_id,
-				m.role, m.ordinal, %s AS ts, %s AS content, m.is_sidechain,
-				%s AS sort_ts,
-				CASE WHEN m.is_sidechain = %s OR %s
-					THEN %s ELSE %s END AS subordinate,
-				CASE WHEN m.role = 'user' THEN 1 ELSE 0 END AS user_start
+			SELECT m.session_id, m.ordinal, m.is_sidechain,
+				CASE WHEN m.role = 'user' THEN 1 ELSE 0 END AS user_start%s
 			FROM messages m
-			JOIN sessions s ON s.id = m.session_id
 			JOIN scoped sc ON sc.id = m.session_id
 			WHERE m.role IN ('user','assistant')
 			  AND m.is_system = %s AND %s%s
@@ -162,6 +161,26 @@ func BuildTermsSearchSQL(
 				ORDER BY ordinal ROWS UNBOUNDED PRECEDING
 			) AS exchange_no
 			FROM eligible
+		), hits AS (
+			SELECT session_id, ordinal, is_sidechain, exchange_no%s
+			FROM tagged
+			WHERE exchange_no > 0
+			WINDOW exchange AS (PARTITION BY session_id, is_sidechain, exchange_no)
+		), members AS (
+			SELECT h.session_id, s.project, s.agent, s.machine,
+				COALESCE(s.display_name, s.session_name) AS display_name,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				COALESCE(s.relationship_type,'') AS relationship_type,
+				COALESCE(s.parent_session_id,'') AS parent_session_id,
+				m.role, h.ordinal, %s AS ts, %s AS content, h.is_sidechain,
+				%s AS sort_ts,
+				CASE WHEN h.is_sidechain = %s OR %s
+					THEN %s ELSE %s END AS subordinate,
+				h.exchange_no
+			FROM hits h
+			JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal
+			JOIN sessions s ON s.id = h.session_id
+			WHERE %s
 		), exchanges AS (
 			SELECT session_id, project, agent, machine, display_name, transcript_revision, relationship_type,
 				parent_session_id, is_sidechain, subordinate, exchange_no,
@@ -170,7 +189,7 @@ func BuildTermsSearchSQL(
 				MIN(ts) AS ts,
 				%s AS body,
 				MAX(sort_ts) AS sort_ts
-			FROM tagged
+			FROM members
 			WHERE exchange_no > 0
 			GROUP BY session_id, project, agent, machine, display_name, transcript_revision, relationship_type,
 				parent_session_id, is_sidechain, subordinate, exchange_no
@@ -182,11 +201,13 @@ func BuildTermsSearchSQL(
 		WHERE %s
 		ORDER BY subordinate ASC, %s, session_id ASC, start_ordinal ASC
 		LIMIT %s OFFSET %s`,
-		where, frag.timestamp, frag.messageText, frag.sessionSort,
+		where, strings.Join(hitFlags, ""),
+		dialect.falseLiteral, frag.systemPrefix("m.content", "m.role"),
+		prefilter.String(), strings.Join(exchangeHits, ""),
+		frag.timestamp, frag.messageText, frag.sessionSort,
 		dialect.trueLiteral, SubordinateSessionSQL("s"),
 		dialect.trueLiteral, dialect.falseLiteral,
-		dialect.falseLiteral, frag.systemPrefix("m.content", "m.role"),
-		prefilter.String(), frag.bodyAgg,
+		strings.Join(hitTests, " AND "), frag.bodyAgg,
 		strings.Join(predicates, " AND "), frag.orderBySort,
 		b.Add(f.Limit+1), b.Add(f.Cursor))
 	return query, append(scopeArgs, b.Args()...), nil

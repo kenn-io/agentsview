@@ -861,6 +861,9 @@ Transcript display, block order, and artifact format v4 remain unchanged.
 
 One-shot, automated, and subagent sessions are excluded by default; opt back in
 with `--include-one-shot`, `--include-automated`, or `--include-children`.
+HTTP substring and regex searches also accept `scope`; an omitted scope keeps
+these exclusions. Explicit scope uses each session's own filters and exempts
+child sessions from the one-shot exclusion.
 
 | Flag                  | HTTP param             | Notes                                                                                                                                                                             |
 | --------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -868,7 +871,7 @@ with `--include-one-shot`, `--include-automated`, or `--include-children`.
 | `--fts`               | `mode=fts`             | Tokenized FTS5 search; messages-only                                                                                                                                              |
 | `--semantic`          | `mode=semantic`        | Vector search over user/assistant messages; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                         |
 | `--hybrid`            | `mode=hybrid`          | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                              |
-| `--scope`             | `scope`                | `top`, `all` (default), or `subordinate` — semantic/hybrid only; supersedes `include_children` in those modes                                                                     |
+| `--scope`             | `scope`                | `top`, `all`, or `subordinate`; CLI: semantic/hybrid only, default `all`. HTTP: substring/regex/terms/semantic/hybrid; explicit scope supersedes `include_children`                                                                     |
 | `--context`           | `context`              | int — N messages of context before/after each match (max 10)                                                                                                                      |
 | `--in`                | `in`                   | Comma-separated: `messages,thinking,tool_input,tool_result` (default all); `thinking` requires SQLite, PostgreSQL, DuckDB, or ClickHouse substring/regex                                                                                                                  |
 | `--exclude-system`    | `exclude_system`       | Drop system messages from the scan                                                                                                                                                |
@@ -962,6 +965,46 @@ Human output labels each requested ID and its exit code before its usage or
 error. The process exits 0 after completing the results, including per-session
 failures. Backend setup or output failures exit 1. The existing
 `session usage <id>` output and process exit codes remain unchanged.
+
+### `agentsview session diagnose`
+
+`agentsview session diagnose <id> --json` reports archived usage and evidence
+for investigating an expensive task. It uses the same pricing and linked
+subagent accounting and source refresh as `session usage`. Pass `--no-sync`
+to read archived usage without refreshing source transcripts. If refresh fails,
+human output warns that it is incomplete, and JSON sets
+`usage.refresh_incomplete`. Pass `--own-only` to exclude subagent usage; child
+links remain listed. Human output is the default; `--pg` and `--server` select
+the same read transports as other session commands.
+Missing sessions and read failures return exit 1.
+
+The versioned JSON includes the usage breakdown, totals of its normalized
+uncached input, cache-read, cache-write and output rows, context observations,
+compaction ordinals and inferred counts, the ten largest recorded tool-result
+lengths, and runs of
+three or more consecutive calls with identical recorded arguments. Tool and
+context evidence covers the named session only; child links are shown when
+recorded. Retry candidates use the same recorded-argument comparison as the
+`tool_retry_count` signal. Empty or placeholder arguments can form candidates;
+they do not prove that a provider retried a request. These observations can be
+incomplete: usage rows are not always requests, request counts and provider
+cache-miss reasons are unavailable, and result lengths are not billed tokens.
+Cost is reported or estimated according to the existing usage contract; no
+causal savings or invoice total is inferred. The report omits transcript content
+and tool arguments. Context, compaction, and tool evidence comes from a paged
+scan of all archived messages. Human output shows the latest ten context
+observations; JSON includes every observation. Usage is a separate read and can
+reflect a different archive revision if ingestion runs concurrently. Message
+pages share no snapshot, so a transcript rewritten during the scan can mix
+revisions; run the command again after the rewrite for a stable result.
+`schema_version` versions the output shape, not the archive snapshot.
+
+Compactions follow ingestion's detection rules. Explicit boundary markers appear
+in `compaction_ordinals`. When there are no explicit markers,
+`inferred_compaction_count` counts drops greater than 30% between successive
+reported assistant context measurements, including across message pages. Missing
+measurements are skipped. Explicit markers take precedence and leave the
+inferred count at zero.
 
 ### `agentsview session usage`
 

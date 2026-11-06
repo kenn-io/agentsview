@@ -40,7 +40,7 @@ type contentSearchInput struct {
 	Pattern            string             `query:"pattern" doc:"Pattern to search for; mutually exclusive with concepts"`
 	Concepts           []string           `query:"concepts,explode" doc:"Two to five semantic concepts that must all have evidence in one session; repeatable and mutually exclusive with pattern"`
 	Mode               contentSearchMode  `query:"mode" enum:"substring,regex,fts,terms,semantic,hybrid" doc:"Search mode"`
-	Scope              contentSearchScope `query:"scope" enum:"top,all,subordinate" doc:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"`
+	Scope              contentSearchScope `query:"scope" enum:"top,all,subordinate" doc:"Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)"`
 	SearchIntent       string             `header:"X-AgentsView-Search-Intent" doc:"Required for semantic/hybrid GET searches"`
 	In                 string             `query:"in" doc:"Comma-separated content sources"`
 	ExcludeSystem      bool               `query:"exclude_system" doc:"Exclude system messages"`

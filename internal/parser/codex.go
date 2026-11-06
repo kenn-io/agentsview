@@ -63,6 +63,10 @@ type codexSessionIndexEntry struct {
 // codexSessionBuilder accumulates state while scanning a Codex
 // JSONL session file line by line.
 type codexSessionBuilder struct {
+	sourceLine         int
+	sourceTurnID       string
+	sourceInTurn       bool
+	sourceTurnContexts []string
 	codexCursorState
 	agent       AgentType
 	incremental bool
@@ -139,7 +143,7 @@ func (g *codexForkGate) retryReason() string {
 	if g.resolvedOnce {
 		return ""
 	}
-	return "codex parent turns unresolved for " + g.parentSessionID
+	return "could not read the Codex session it was forked from (" + g.parentSessionID + ")"
 }
 
 type codexParentTurnResolver func(string) (map[string]struct{}, bool)
@@ -224,6 +228,7 @@ type codexToolCallRef struct {
 }
 
 type codexPendingEvent struct {
+	origin    CodexMessageOrigin
 	agentID   string
 	source    string
 	status    string
@@ -375,6 +380,12 @@ func (b *codexSessionBuilder) refreshPendingCallPositions() {
 func (b *codexSessionBuilder) processLine(ctx context.Context,
 	line string,
 ) (skip bool, err error) {
+	b.sourceLine++
+	if gjson.Get(line, "type").Str == codexTypeTurnContext {
+		b.sourceTurnID = strings.Clone(gjson.Get(line, "payload.turn_id").Str)
+		b.sourceTurnContexts = append(b.sourceTurnContexts, b.sourceTurnID)
+		b.sourceInTurn = true
+	}
 	tsStr := gjson.Get(line, "timestamp").Str
 	ts := parseTimestamp(tsStr)
 	if ts.IsZero() {
@@ -554,6 +565,7 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	}
 
 	msg := ParsedMessage{
+		CodexOrigin:   CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 		Role:          RoleType(role),
 		Content:       content,
 		DialogueText:  new(content),
@@ -587,6 +599,7 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	b.committedUsageTarget = nil
 	b.committedUsageBlockedByUser = true
 	b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:   CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 		Role:          RoleUser,
 		Content:       content,
 		DialogueText:  new(content),
@@ -795,6 +808,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	}
 
 	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 		Role:            RoleAssistant,
 		Content:         content,
 		DialogueText:    new(""),
@@ -849,6 +863,7 @@ func (b *codexSessionBuilder) handleImageGenerationCall(ctx context.Context,
 	// The viewer hides tool markers, so the call shows once, as its block.
 	content := formatToolHeader("Tool", generatedImageCallName)
 	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 		Role:            RoleAssistant,
 		Content:         content,
 		DialogueText:    new(""),
@@ -993,6 +1008,7 @@ func (b *codexSessionBuilder) handleSubagentNotification(ctx context.Context,
 
 	b.pendingAgentEvents[agentID] = append(
 		b.pendingAgentEvents[agentID], codexPendingEvent{
+			origin:    CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 			agentID:   agentID,
 			source:    "subagent_notification",
 			status:    statusName,
@@ -1067,6 +1083,7 @@ func (b *codexSessionBuilder) flushPendingAgentResultsContext(
 				}
 				key := agentID + "\x00" + ev.status + "\x00" + ev.text
 				b.sink.InsertOrphanMessage(key, ParsedMessage{
+					CodexOrigin:   ev.origin,
 					Ordinal:       ev.ordinal,
 					Role:          RoleUser,
 					Content:       ev.text,
@@ -1566,6 +1583,12 @@ func codexWaitAgentIDs(args gjson.Result) []string {
 
 func isCodexWaitAgentCall(name string) bool {
 	return name == "wait" || name == "wait_agent"
+}
+
+// Code-mode wait resumes an exec cell and binds no agents.
+func isCodexExecCellWait(name string, args gjson.Result) bool {
+	return name == "wait" && args.Get("cell_id").Str != "" &&
+		len(codexWaitAgentIDs(args)) == 0
 }
 
 func parseCodexSubagentNotification(
@@ -2208,6 +2231,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		},
 	}
 
+	if b.forkGate.lineagePositive {
+		sess.CodexFork = &CodexForkInfo{ParentID: b.forkGate.parentSessionID, Resolved: b.forkGate.resolvedOnce, ParentTurns: b.parentTurnIDs, TurnContexts: b.sourceTurnContexts}
+	}
 	if err := accumulateMessageTokenUsageContext(ctx, sess, msgs); err != nil {
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
@@ -3084,7 +3110,12 @@ func (b *codexSessionBuilder) codexIncrementalNeedsFullParse(
 func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Result) bool {
 	switch payload.Get("type").Str {
 	case "function_call", "custom_tool_call":
-		return isCodexWaitAgentCall(payload.Get("name").Str)
+		name := payload.Get("name").Str
+		if !isCodexWaitAgentCall(name) {
+			return false
+		}
+		args, _ := parseCodexFunctionArgs(payload)
+		return !isCodexExecCellWait(name, args)
 	case "function_call_output", "custom_tool_call_output":
 		output, raw := parseCodexFunctionOutput(payload, b.agent)
 		if isCodexSubagentFunctionOutput(output) {
@@ -3095,7 +3126,7 @@ func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Resu
 		}
 		name := b.toolCallNameForOutput(payload.Get("call_id").Str)
 		return name == "" || name == "spawn_agent" ||
-			isCodexWaitAgentCall(name)
+			(isCodexWaitAgentCall(name) && output.Get("status").IsObject())
 	default:
 		role := payload.Get("role").Str
 		if role != "user" {

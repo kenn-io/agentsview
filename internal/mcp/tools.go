@@ -735,7 +735,7 @@ type searchContentIn struct {
 	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text, thinking, and tool inputs/results. Mutually exclusive with concepts."`
 	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five semantic concepts that must all have evidence in the same session, even in different messages. Implies mode semantic, does not page, and is mutually exclusive with pattern."`
 	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
-	Scope            string   `json:"scope,omitempty" jsonschema:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)."`
+	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
 	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
 	SessionID        string   `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID."`
@@ -836,6 +836,7 @@ type searchContentExclusions struct {
 	RecentActive     bool   `json:"recent_active"`
 	OneShot          bool   `json:"one_shot"`
 	Automated        bool   `json:"automated"`
+	Children         bool   `json:"children"`
 }
 
 func validateSearchDates(from, to string) error {
@@ -868,6 +869,10 @@ func (t *toolset) searchContent(
 		return nil, searchContentOut{}, err
 	}
 	mode := normalized.Mode
+	scope := in.Scope
+	if scope == "" && db.ContentSearchModeSupportsScope(mode) {
+		scope = "all"
+	}
 	if in.Scope != "" && !db.ContentSearchModeSupportsScope(mode) {
 		return nil, searchContentOut{}, errors.New(db.ContentSearchScopeUnsupportedMsg)
 	}
@@ -900,7 +905,7 @@ func (t *toolset) searchContent(
 		Pattern:            in.Pattern,
 		Concepts:           in.Concepts,
 		Mode:               in.Mode,
-		Scope:              in.Scope,
+		Scope:              scope,
 		Project:            in.Project,
 		Agent:              in.Agent,
 		SessionID:          in.SessionID,
@@ -928,13 +933,14 @@ func (t *toolset) searchContent(
 			CurrentSessionID: currentSession,
 			RecentActive:     currentSession == "" && !in.IncludeActive,
 			OneShot:          !in.IncludeOneShot, Automated: !in.IncludeAutomated,
+			Children: scope == "top" || mode == "fts" && in.SessionID == "",
 		},
 		RevisionBound:      res.RevisionBound,
 		Coverage:           service.NormalizeMemoryCoverage(res.Coverage),
 		CandidateTruncated: res.CandidateTruncated,
 	}
 	if db.ContentSearchModeSupportsScope(mode) {
-		out.EffectiveScope = cmp.Or(in.Scope, "all")
+		out.EffectiveScope = scope
 	}
 	activity := make(map[string]string)
 	for _, m := range res.Matches {
@@ -996,4 +1002,13 @@ func (t *toolset) usageSummary(
 		return nil, nil, err
 	}
 	return nil, res, nil
+}
+
+type fileReferencesIn struct {
+	SessionID string `json:"session_id" jsonschema:"The session whose files and images to find in Docbank."`
+}
+
+func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in fileReferencesIn) (*mcp.CallToolResult, service.FileReferencesResult, error) {
+	result, err := service.FileReferences(ctx, t.svc, in.SessionID)
+	return nil, result, err
 }

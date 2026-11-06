@@ -17,7 +17,8 @@ workflows:
         - 'actions/setup-node@v7.1.0'
         - 'actions/setup-python@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
-        - 'astral-sh/setup-uv@v10.3.2'
+        - 'astral-sh/setup-uv@v10.3.3'
+        - 'kenn-io/actions@b523fb403607f01de5eec5f4556c7668544c70fe'
         - 'kenn-io/actions@main'
         - 'kenn-io/kit@v0.47.5'
         - 'msys2/setup-msys2@v2.33.0'
@@ -88,6 +89,11 @@ dependencies:
         commit: 'sha1-b7ad1dad31e06c5925ef5d2fc7ad053ef454303e'
         owner_id: 44036562
         repo_id: 192624594
+    'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1':
+        ref: 'v7.1.0'
+        commit: 'sha1-949feb2413d6458794dcd2491c4babbbce0c15c1'
+        owner_id: 44036562
+        repo_id: 189476904
     'actions/setup-node@v7.1.0':
         ref: 'v7.1.0'
         commit: 'sha1-949feb2413d6458794dcd2491c4babbbce0c15c1'
@@ -103,9 +109,9 @@ dependencies:
         commit: 'sha1-cf430e030ddbb5b0abf93d22962f4752f3646cd9'
         owner_id: 44036562
         repo_id: 192625955
-    'astral-sh/setup-uv@v10.3.2':
-        ref: 'v10.3.2'
-        commit: 'sha1-07a047e608db84b3d8c06cd9a7c7dcc9c355c18e'
+    'astral-sh/setup-uv@v10.3.3':
+        ref: 'v10.3.3'
+        commit: 'sha1-68559e99cc807c1eb7e9238fd43a15bba460eec2'
         owner_id: 115962839
         repo_id: 846733598
     'dtolnay/rust-toolchain@stable':
@@ -113,6 +119,13 @@ dependencies:
         commit: 'sha1-b725eda525362e7cf34af9a7243cac1e3f01a7ec'
         owner_id: 1940490
         repo_id: 260749683
+    'kenn-io/actions@b523fb403607f01de5eec5f4556c7668544c70fe':
+        ref: 'main'
+        commit: 'sha1-b523fb403607f01de5eec5f4556c7668544c70fe'
+        owner_id: 259885253
+        repo_id: 1427332808
+        uses:
+            - 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1'
     'kenn-io/actions@main':
         ref: 'main'
         commit: 'sha1-7ee5aec719084e1885f37b0c39a4da729f6a274f'

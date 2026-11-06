@@ -11,6 +11,12 @@ The latest release is
 
 **New features**
 
+- Investigate an expensive archived session with `session diagnose <id>`. The
+  report combines usage, context growth, compactions, large tool results, retry
+  candidates, and child links. Use `--format json` for scripts or `--pg` to read
+  a PostgreSQL archive. Transcript text and tool arguments stay out of the
+  report.
+
 - Assistants searching your history through MCP can now ask for sessions that
   covered several ideas at once, such as an auth change and its retry policy,
   even when they came up in different parts of the conversation. Pass two to
@@ -101,6 +107,9 @@ The latest release is
 
 **Improvements**
 
+- Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
+  rows show quickly on large archives.
+
 - Session sidebars on hosted PostgreSQL avoid repeatedly resolving the same
   parent links when counting roots and loading child trees, including pages
   filtered by labels or pull requests.
@@ -128,15 +137,38 @@ The latest release is
   because their file details alone could not show whether they changed, how
   many bytes were read, and how long the sync took. For a few less common
   agents, the read figures can be lower than the real reads.
+- When a sync or archive rebuild holds sessions for retry or stops early,
+  `debug.log` and the sync status now say why. Before, the log said only
+  `resync-build worker pass reported aborted`. A held session gets a
+  `sync: session needs retry:` line naming the session, its file, and the
+  reason, such as
+  `could not read the Codex session it was forked from (<session id>)` when a
+  fork's parent rollout file was deleted. Each pass then logs one summary. A
+  pass logs at most 20 sessions one by one and counts the rest. A rebuild that
+  stops names its cause, for example
+  `kept the existing archive: the rebuild found no session files, but the archive has 1 session from files`.
+  `agentsview doctor sync` includes the new lines in its log evidence.
 - Anonymous telemetry events now say which distribution built the binary, such
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
 **Bug fixes**
 
+- Roborev test-value reviews, look-ahead reviews, fix plans, rebase fixes, and
+  non-PR review summaries are now hidden as automated sessions, like other
+  roborev runs. The session list and analytics stopped counting them as your
+  conversations. Existing sessions are reclassified the next time AgentsView
+  opens the archive. Custom roborev review types still need an
+  [`[automated]` pattern](/docs/configuration/#automated-session-detection).
+- Large Usage and Activity pages no longer stall in garbage collection on big
+  archives; peak memory during large requests can be higher, and a lower
+  `GOMEMLIMIT` can reduce it by overriding the 4 GiB default.
+- The Usage page now starts loading the vs-prior comparison alongside the totals.
 - Codex code-mode `wait` calls now show their script output. The next sync
   restores missing results in previously imported sessions. Subagent waits
   keep their existing behavior.
+- On Linux, large Claude archives keep Claude and Codex on live file watches
+  instead of two-minute rescans that delay session updates.
 - Hosted PostgreSQL searches and session reads stay available while raw captures
   arrive and transcripts are published. Each hosted read uses one database
   snapshot for its content, public identities and related data.

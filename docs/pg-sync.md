@@ -87,6 +87,22 @@ agentsview replica pg push
 This one-shot command syncs all local sessions, messages, and tool calls to
 PostgreSQL. The schema is created automatically on first push.
 
+After the owner upgrades the schema, repeat pushes recheck automation only for
+new sessions, changed evidence, or different automation settings. On the first
+push from the schema-owner connection, installing automation tracking takes an
+exclusive lock on `sessions`, blocking reads and writes until the upgrade commits.
+The first tracking audit checks and stamps every session once. Different classifier
+settings cause a full recheck and restamp. Publishers
+without schema-change privileges keep using a full audit until that upgrade.
+CockroachDB keeps the full audit.
+
+The next push using the schema-owner connection installs
+`idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
+`idx_sessions_source_missing` on existing archives. Each first build scans
+`sessions` and blocks writes until installation commits.
+Restricted publishers keep pushing before owner installation; their version and
+repair checks use the existing queries until the indexes are available.
+
 To keep PostgreSQL current automatically, run the foreground watcher:
 
 ```bash

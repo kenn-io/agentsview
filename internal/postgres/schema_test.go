@@ -105,7 +105,7 @@ func (c *schemaProbeConn) Prepare(string) (driver.Stmt, error) {
 func (c *schemaProbeConn) Close() error { return nil }
 
 func (c *schemaProbeConn) Begin() (driver.Tx, error) {
-	return nil, driver.ErrSkip
+	return pricingProbeTx{}, nil
 }
 
 func (c *schemaProbeConn) ExecContext(
@@ -169,6 +169,8 @@ func (c *schemaProbeConn) QueryContext(
 		}
 	}
 	switch {
+	case strings.Contains(normalized, "select version()"):
+		return &schemaProbeRows{columns: []string{"version"}, values: [][]driver.Value{{"PostgreSQL 18"}}}, nil
 	case strings.Contains(normalized, "information_schema.tables"):
 		name := ""
 		if len(args) > 0 {
@@ -605,6 +607,9 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
+		"idx_sessions_data_version":       true,
+		"idx_sessions_parentless_workers": true,
+		"idx_sessions_source_missing":     true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 

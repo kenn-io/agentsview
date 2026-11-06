@@ -250,6 +250,7 @@ cursor_secret = "base64-encoded-secret"
 require_auth = true
 cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
+sync_interval = "5s"
 chart_palette = "agentsview"
 zoom_level = 120
 ```
@@ -271,6 +272,7 @@ zoom_level = 120
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.                                                                                                                       |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
@@ -282,6 +284,7 @@ zoom_level = 120
 | `[clickhouse]`                      | ClickHouse sync configuration — see [ClickHouse Sync](/docs/clickhouse-sync/)                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
+| `[integrations.docbank]` | Optional lookup of transcript image digests in Docbank; see [Find transcript images in Docbank](/docs/configuration/#find-transcript-images-in-docbank) |
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                        |
 | `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log)                                                                                                                                                                                                                                                                                                                                |
 | `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` — see [Kata](/docs/kata/)                                         |
@@ -2096,7 +2099,8 @@ mechanisms:
 
 1. **File watcher** — uses FSEvents on macOS and fsnotify elsewhere to detect
     file changes. An isolated edit is batched for 500ms; watcher-driven sync
-    start times remain at least five seconds apart. Common dependency and build
+    start times remain at least five seconds apart by default (see
+    [`sync_interval`](#config-file)). Common dependency and build
     folders (`node_modules`, `__pycache__`, `.git`, `vendor`, `dist`, etc.) are
     automatically skipped to reduce noise and overhead. On macOS, FSEvents
     reports a file that its producer keeps open only when the file is created
@@ -2352,20 +2356,21 @@ detail for existing sessions.
 
 ### Large Watch Trees
 
-The recursive watcher has a hard budget of 8192 directories per process. If a
-session root is larger than the remaining budget, or if registering watches hits
-the operating system's inotify or file-descriptor limit (`ENOSPC` / `EMFILE`),
-as of 0.27.0 AgentsView **degrades** that root to polling instead of aborting
-startup. The HTTP listener is now bound before any watches are registered, so
-the server still comes up cleanly.
+On Linux, the recursive watcher watches every directory until the kernel's
+`fs.inotify.max_user_watches` limit runs out. Windows and other non-macOS
+platforms keep a budget of 8,192 directories per process. The macOS FSEvents
+watcher has no per-directory budget. If a session root exceeds the remaining
+budget, or registering watches hits the operating system's inotify or
+file-descriptor limit (`ENOSPC` / `EMFILE`), AgentsView polls that root. The
+HTTP listener binds before any watches are registered, so the server still
+starts.
 
 Providers can also cap how deep a recursive root is watched when they read only
 a fixed depth. Antigravity and Antigravity CLI `brain` folders are watched one
 level deep, so the generated trees inside each `brain/<id>` do not count
 against the budget. The Antigravity IDE watcher also watches
 `brain/<id>/.system_generated/logs`, which holds the plaintext transcript.
-This cap applies to the Linux and Windows watcher. The macOS FSEvents watcher
-has no per-directory budget.
+The depth cap applies wherever the fsnotify watcher runs.
 
 Runtime folder watch failures keep healthy folders on native watches. Claude
 polling covers the affected project folder. Other providers poll the root's
@@ -2407,14 +2412,16 @@ sudo sysctl fs.inotify.max_user_watches=524288
 
 ## Memory Behavior
 
-The serve daemon bounds its own memory, so no tuning is required. It installs a
-256 MiB Go soft memory limit, and on Linux it also limits glibc to two malloc
-arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold turns
-off glibc's dynamic adjustment, which otherwise lets a long-running process stop
-trimming until as much as 64 MiB is free, so memory freed by the SQLite driver
-goes back to the operating system instead of accumulating as fragmentation.
-Setting `GOMEMLIMIT`, `MALLOC_ARENA_MAX`, or `MALLOC_TRIM_THRESHOLD_` in the
-daemon's environment overrides the corresponding default.
+The serve daemon installs a 4 GiB Go soft memory limit as a backstop so large
+requests run with normal GC pacing. Setting `GOMEMLIMIT` lower trades GC time
+for a smaller heap. On Linux, every agentsview process limits glibc to two
+malloc arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold
+turns off glibc's dynamic adjustment, which otherwise lets a long-running
+process stop trimming until as much as 64 MiB is free, so memory freed by the
+SQLite driver goes back to the operating system instead of accumulating as
+fragmentation. Setting `GOMEMLIMIT`, `MALLOC_ARENA_MAX`, or
+`MALLOC_TRIM_THRESHOLD_` in the process's environment overrides the
+corresponding default.
 
 ## Manual Sync
 
@@ -2639,3 +2646,57 @@ Disable the CLI/web UI update check with any of:
 
 The desktop app's auto-updater is controlled separately via
 `AGENTSVIEW_DESKTOP_AUTOUPDATE=0`.
+
+## Find transcript images in Docbank
+
+Configure your Docbank server to find where it holds the exact bytes of a
+transcript image. Results show current files, prior versions, and trash. Set
+`web_url` to make each match link to its exact version in the browser.
+Exact-version links require
+[docbank#1024](https://github.com/kenn-io/docbank/pull/1024).
+
+```toml
+[integrations.docbank]
+url = "https://docbank.example.com"
+web_url = "https://docbank.example.com"
+api_key_env = "DOCBANK_API_KEY"
+```
+
+Set `DOCBANK_API_KEY` in the environment of each consumer, including the
+daemon, CLI, and MCP server. Both `url` and `api_key_env` are required to enable
+lookup. Omit the section to disable it. The server refuses to start with an
+invalid section; other commands print a warning and leave lookup off. CLI
+commands that connect to a daemon use the daemon's integration configuration.
+
+MCP offers `get_session_file_references` when its backend enables Docbank
+lookup. Connections through a signed reader listener omit this tool.
+
+| Setting                            | Purpose                                           |
+| ---------------------------------- | ------------------------------------------------- |
+| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP on loopback. |
+| `integrations.docbank.web_url`     | Optional browser base URL for version links.      |
+| `integrations.docbank.api_key_env` | Environment variable containing the API key.      |
+
+Lookup covers retained tool-result images, including offloaded assets, inline
+OpenCode `file.uri` payloads such as PDF and text files, and Markdown `asset://`
+images in message text. Claude pasted images aren't covered yet. Native Codex
+attachments and files handled by tools require exact bytes in the archive;
+paths and references alone aren't covered.
+
+Only SHA-256 digests leave the machine. Docbank file names, paths, and trash
+entries come back with the results, so anyone who can read sessions on this
+server can see them.
+
+Transcript reads run independently of Docbank. Database reads and Docbank
+requests each have their own five-second budget. Each lookup resolves up to 50
+distinct digests with four requests at a time and shows up to ten matches per
+digest. Docbank lookup failures report Docbank unavailable and can be retried;
+after the first failed lookup, a request stops asking Docbank and reports its
+remaining digests unavailable. Archive read failures report session files
+unavailable. Digests beyond the cap report `limit_exceeded` without Retry.
+Images dropped by the image policy have no bytes to hash, so they report
+`bytes_not_kept` without a lookup.
+
+Results refresh when the session reopens and when its transcript changes, at
+most every 15 seconds while matches are already shown. Successful Docbank
+answers are reused for one minute. No migration or resync is required.

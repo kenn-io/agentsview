@@ -46,6 +46,7 @@ import (
 
 // VersionInfo holds build-time version metadata.
 type VersionInfo struct {
+	DocbankEnabled             bool   `json:"docbank_enabled,omitempty"`
 	Version                    string `json:"version"`
 	Commit                     string `json:"commit"`
 	BuildDate                  string `json:"build_date"`
@@ -283,12 +284,15 @@ func New(
 	// still need the local handle. Non-SQLite stores use the generic read-only
 	// backend.
 	modelGroups := service.NewModelGroups(cfg.ModelAliases)
+	backendOptions := []service.DirectBackendOption{
+		service.WithModelGroups(modelGroups), service.WithConfiguredDocbank(cfg),
+	}
 	var sessions service.SessionService
 	if local, ok := database.(*db.DB); ok {
 		local.SetArchiveContent(cfg.ArchiveContent)
-		sessions = service.NewDirectBackend(local, engine, service.WithModelGroups(modelGroups))
+		sessions = service.NewDirectBackend(local, engine, backendOptions...)
 	} else {
-		sessions = service.NewReadOnlyBackend(database, service.WithModelGroups(modelGroups))
+		sessions = service.NewReadOnlyBackend(database, backendOptions...)
 	}
 
 	s := &Server{
@@ -1050,6 +1054,13 @@ func cspMiddleware(
 	})
 }
 
+// holdFirstPaintScriptHash allows the one inline script in the SPA's
+// index.html: frontend/src/hold-first-paint.js, which the Vite build inlines
+// verbatim so the page stays hidden until its stylesheets and fonts load.
+// The fallback page for backend-only builds inlines the same bytes. It is the
+// base64 SHA-256 of that file's bytes.
+const holdFirstPaintScriptHash = "'sha256-wQLaMpgJbBRP7YmfiStbxXp4k39F0MoA0ronglioynI='"
+
 // buildCSPPolicy constructs the Content-Security-Policy string.
 //
 // The server's own origin (host:port) is pinned in the resource
@@ -1090,7 +1101,7 @@ func buildCSPPolicy(
 
 	return fmt.Sprintf(
 		"default-src %[1]s; "+
-			"script-src %[1]s; "+
+			"script-src %[1]s %[3]s; "+
 			"connect-src 'self' http: https: ws: wss:; "+
 			"img-src %[1]s data: blob:; "+
 			"style-src %[1]s 'unsafe-inline' https://fonts.googleapis.com; "+
@@ -1098,7 +1109,7 @@ func buildCSPPolicy(
 			"object-src 'none'; "+
 			"base-uri %[2]s; "+
 			"frame-ancestors 'none'",
-		resourceSrc, baseURI,
+		resourceSrc, baseURI, holdFirstPaintScriptHash,
 	)
 }
 

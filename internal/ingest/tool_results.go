@@ -140,17 +140,21 @@ func SummarizeToolResultEventsContext(
 	latestByAgent := make(map[string]agentSummary)
 	orderedAgents := make([]string, 0, len(events))
 	lastAnonymous := ""
-	allHaveAgentID := true
+	hasAnonymous := false
 	for _, event := range events {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		if strings.TrimSpace(event.Content) == "" {
+		if event.SummaryParticipates != nil {
+			if !*event.SummaryParticipates {
+				continue
+			}
+		} else if strings.TrimSpace(event.Content) == "" {
 			continue
 		}
 		agentID := strings.TrimSpace(event.AgentID)
 		if agentID == "" {
-			allHaveAgentID = false
+			hasAnonymous = true
 			lastAnonymous = event.Content
 			continue
 		}
@@ -163,7 +167,7 @@ func SummarizeToolResultEventsContext(
 	switch {
 	case len(latestByAgent) == 1:
 		summary = latestByAgent[orderedAgents[0]].content
-		if lastAnonymous != "" {
+		if hasAnonymous {
 			summary += "\n\n" + lastAnonymous
 		}
 	case len(latestByAgent) == 0:
@@ -173,7 +177,7 @@ func SummarizeToolResultEventsContext(
 		for _, agentID := range orderedAgents {
 			parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
 		}
-		if !allHaveAgentID && lastAnonymous != "" {
+		if hasAnonymous {
 			parts = append(parts, lastAnonymous)
 		}
 		summary = strings.Join(parts, "\n\n")

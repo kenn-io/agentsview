@@ -38,6 +38,19 @@ func ExtForMediaType(mediaType string) (string, bool) {
 	return ext, ok
 }
 
+// MediaTypeForExt returns an asset image's media type independently of host MIME configuration.
+func MediaTypeForExt(ext string) (string, bool) {
+	if ext == ".jpeg" {
+		ext = ".jpg"
+	}
+	for mediaType, canonical := range mediaTypeToExt {
+		if ext == canonical {
+			return mediaType, true
+		}
+	}
+	return "", false
+}
+
 // Reference returns the content-addressed asset:// reference for body.
 // mediaType must name a passive image format.
 func Reference(mediaType string, body []byte) (string, error) {

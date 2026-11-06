@@ -41,6 +41,17 @@ function isRevisionChange(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
 }
 
+// A network failure or 5xx answer may succeed on a later try.
+function isTransient(err: unknown): boolean {
+  return (
+    (err instanceof TypeError &&
+      /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed)$/.test(
+        err.message,
+      )) ||
+    (err instanceof ApiError && err.status >= 500 && err.status < 600)
+  );
+}
+
 export class MessagesStore {
   messages: Message[] = $state([]);
   loading: boolean = $state(false);
@@ -71,6 +82,7 @@ export class MessagesStore {
   // from the current load for the same session, so failures check
   // this before reporting a missing session.
   private loadGeneration: number = 0;
+  private watchGate: number | null = null;
   private loadSessionPromise: Promise<void> | null = null;
   private reloadPromise: Promise<void> | null = null;
   private reloadSessionId: string | null = null;
@@ -97,7 +109,7 @@ export class MessagesStore {
       : "";
   }
 
-  async loadSession(id: string) {
+  async loadSession(id: string, ready?: Promise<unknown>) {
     const resumesCancelledLoad = this.sessionId === id && this.cancelledSessionId === id;
     if (
       this.sessionId === id &&
@@ -106,14 +118,14 @@ export class MessagesStore {
     ) {
       return;
     }
-    const promise = this.doLoadSession(id, resumesCancelledLoad).finally(() => {
+    const promise = this.doLoadSession(id, resumesCancelledLoad, ready).finally(() => {
       if (this.loadSessionPromise === promise) this.loadSessionPromise = null;
     });
     this.loadSessionPromise = promise;
     return promise;
   }
 
-  private async doLoadSession(id: string, resumesCancelledLoad: boolean) {
+  private async doLoadSession(id: string, resumesCancelledLoad: boolean, ready?: Promise<unknown>) {
     const readMarker = readProgress.get(id);
     if (!resumesCancelledLoad) {
       this.clear();
@@ -128,6 +140,7 @@ export class MessagesStore {
     const generation = ++this.loadGeneration;
     const ac = new AbortController();
     this.abortController = ac;
+    if (ready) this.watchGate = generation;
 
     // Taken before the metadata read, so a reload that starts while it is in flight outranks this load.
     const ticket = ++this.loadTicket;
@@ -149,6 +162,11 @@ export class MessagesStore {
         console.warn("Failed to fetch session metadata:", err);
       }
 
+      if (ready) {
+        await ready;
+      }
+      if (this.watchGate === generation) this.watchGate = null;
+
       const landed =
         countHint !== null && countHint > FULL_SESSION_MESSAGE_THRESHOLD
           ? await this.loadProgressively(id, ac.signal, ticket)
@@ -168,6 +186,8 @@ export class MessagesStore {
       if (this.loadGeneration === generation) {
         sessions.markActiveSessionMissing(id, err);
       }
+      // A reload queued behind this load retries a transient failure with the reload's bounded backoff.
+      if (this.loadGeneration === generation && isTransient(err)) void this.reload();
       console.warn("Failed to load session messages:", err);
     } finally {
       if (this.sessionId === id && this.loadingOwner === owner) {
@@ -178,6 +198,7 @@ export class MessagesStore {
   }
 
   reload(): Promise<void> {
+    if (this.watchGate === this.loadGeneration) return this.loadSessionPromise ?? Promise.resolve();
     if (!this.sessionId) return Promise.resolve();
     this.reloadFailures = 0;
     if (this.loadSessionPromise) {
@@ -420,7 +441,7 @@ export class MessagesStore {
       this.loadedRevision = revision;
 
       const newest = loaded[loaded.length - 1];
-      this.messageCount = messageCountHint ?? (newest ? newest.ordinal + 1 : loaded.length);
+      this.messageCount = newest ? newest.ordinal + 1 : loaded.length;
       this.hasOlder = false;
 
       if (res.messages.length < MESSAGE_PAGE_SIZE) {
@@ -436,7 +457,8 @@ export class MessagesStore {
 
     const newest = this.messages[this.messages.length - 1];
     if (this.sessionId !== id) return false;
-    this.messageCount = messageCountHint ?? (newest ? newest.ordinal + 1 : this.messages.length);
+    const loadedCount = newest ? newest.ordinal + 1 : this.messages.length;
+    this.messageCount = complete ? loadedCount : (messageCountHint ?? loadedCount);
     this.hasOlder = false;
     this.historyComplete = complete;
     return true;
@@ -832,12 +854,7 @@ export class MessagesStore {
       }
     } catch (err) {
       if (isAbortError(err)) return;
-      const transient =
-        (err instanceof TypeError &&
-          /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed)$/.test(
-            err.message,
-          )) ||
-        (err instanceof ApiError && err.status >= 500 && err.status < 600);
+      const transient = isTransient(err);
       if (this.sessionId === id && (isRevisionChange(err) || transient)) {
         if (++this.reloadFailures < MAX_LOAD_ATTEMPTS) {
           if (transient) await new Promise((resolve) => setTimeout(resolve, 300));

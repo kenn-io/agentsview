@@ -31,7 +31,10 @@ type AnalyticsBackend interface {
 	// TopSessionsSQL returns an ordered query without LIMIT or a trailing semicolon.
 	TopSessionsSQL(f db.AnalyticsFilter, metric string, includeTime bool) (string, []any)
 	ScanTopSession(*sql.Rows) (db.TopSession, error)
-	TrendsSQL(db.AnalyticsFilter) (string, []any)
+	// TrendsSQL returns AnalyticsTrendsSQL for f, limited to the sessions
+	// sessionFilter selects. ordered asks for rows in session and ordinal
+	// order; a backend may sort anyway.
+	TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered bool) (string, []any)
 	FormatTime(any) string
 	// DuckDB binds captured IDs; ClickHouse reselects by filter to stay under its statement size cap.
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
@@ -945,21 +948,13 @@ func (s *Analytics) GetTrendsTerms(
 	sessionFilter.Model = ""
 	sessionFilter.DayOfWeek = nil
 	sessionFilter.Hour = nil
-	sessions, err := s.analyticsSessions(ctx, sessionFilter)
-	if err != nil {
-		return db.TrendsTermsResponse{}, err
-	}
-	allowedSessions := make(map[string]bool, len(sessions))
-	for _, sess := range sessions {
-		allowedSessions[sess.ID] = true
-	}
-	if len(allowedSessions) == 0 {
-		return acc.Response(), nil
-	}
 	loc := analyticsLocation(f.Timezone)
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
-	query, args := s.backend.TrendsSQL(f)
+	// A model filter credits a prompt to the next assistant reply, so the
+	// scope reducer needs rows in order. Without one, rows count on their
+	// own and need no sort.
+	query, args := s.backend.TrendsSQL(f, sessionFilter, modelFiltering)
 	rows, err := s.backend.QueryContext(ctx, query, args...)
 	if err != nil {
 		return db.TrendsTermsResponse{}, err
@@ -975,17 +970,11 @@ func (s *Analytics) GetTrendsTerms(
 		startedAt any
 		createdAt any
 	}
-	processRow := func(sessionID, content string, local time.Time) {
-		if !allowedSessions[sessionID] {
-			return
-		}
-		acc.Add(content, local)
-	}
 	emit := func(m db.ScopedMessage) {
 		if !m.HasLocalTime {
 			return
 		}
-		processRow(m.SessionID, m.Content, m.LocalTime)
+		acc.Add(m.Content, m.LocalTime)
 	}
 	reducer := db.NewScopeReducer(flt, emit)
 	for rows.Next() {
@@ -998,7 +987,7 @@ func (s *Analytics) GetTrendsTerms(
 		local, has := analyticsLocalTime(ts, loc)
 		if !modelFiltering {
 			if has && flt.MatchesDayHour(local, true) {
-				processRow(row.sessionID, row.content, local)
+				acc.Add(row.content, local)
 			}
 			continue
 		}

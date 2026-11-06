@@ -647,7 +647,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // source and session identities are unchanged.)
 // (164: restore code-mode wait output in Codex-format sessions. Re-parse
 // sources in place; source and session identities are unchanged.)
-const dataVersion = 164
+// (165: show slash commands whose arguments contain "<" as "/name args"
+// prompts. Re-parse Claude-format, Grok and iFlow sources in place; source
+// and session identities are unchanged.)
+const dataVersion = 165
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -1408,6 +1411,9 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	}
 	d.mu.Lock()
 	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
+	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, usageChangeJournalTriggerSQL)
+	}
 	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
@@ -2389,6 +2395,8 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{"sessions", "usage_generation", "ALTER TABLE sessions ADD COLUMN usage_generation TEXT;" +
+			" UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))"},
 		{
 			"sessions", "automation_audit",
 			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
@@ -2924,6 +2932,42 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	}
 }
 
+// A tail append preserves the generation. Every change to an existing usage
+// input invalidates the prefix retained by incremental usage-cache fills.
+const usageGenerationSchemaSQL = `
+CREATE TRIGGER IF NOT EXISTS messages_usage_generation_delete AFTER DELETE ON messages BEGIN
+    UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id=OLD.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_usage_generation_update
+AFTER UPDATE OF session_id, ordinal, role, timestamp, model, provider_id, token_usage, claude_message_id, claude_request_id, source_uuid ON messages
+WHEN NEW.session_id IS NOT OLD.session_id OR
+     NEW.ordinal IS NOT OLD.ordinal OR
+     NEW.role IS NOT OLD.role OR
+     NEW.timestamp IS NOT OLD.timestamp OR
+     NEW.model IS NOT OLD.model OR
+     NEW.provider_id IS NOT OLD.provider_id OR
+     NEW.token_usage IS NOT OLD.token_usage OR
+     NEW.claude_message_id IS NOT OLD.claude_message_id OR
+     NEW.claude_request_id IS NOT OLD.claude_request_id OR
+     NEW.source_uuid IS NOT OLD.source_uuid
+BEGIN
+    UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id IN (OLD.session_id, NEW.session_id);
+END;
+` + messagesUsageGenerationInsertTriggerSQL
+
+// messagesUsageGenerationInsertTriggerSQL gives a session its first generation
+// and replaces it when an insert lands at or before an existing ordinal.
+// DropBulkImportIndexes suspends it during a resync bulk load and
+// RebuildBulkImportIndexes reinstalls it.
+const messagesUsageGenerationInsertTriggerSQL = `
+CREATE TRIGGER IF NOT EXISTS messages_usage_generation_insert BEFORE INSERT ON messages
+WHEN (SELECT usage_generation FROM sessions WHERE id=NEW.session_id) IS NULL
+  OR EXISTS (SELECT 1 FROM messages WHERE session_id=NEW.session_id AND ordinal>=NEW.ordinal)
+BEGIN
+    UPDATE sessions SET usage_generation=lower(hex(randomblob(8))) WHERE id=NEW.session_id;
+END;
+`
+
 func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress OpenProgressFunc) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
@@ -2931,6 +2975,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerDropsSQL); err != nil {
+		return fmt.Errorf("dropping usage change journal triggers: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, provider_freshnessDDL); err != nil {
 		return fmt.Errorf(
 			"creating provider_freshness side-table: %w", err)
@@ -2946,8 +2993,14 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, usageGenerationSchemaSQL); err != nil {
+		return fmt.Errorf("installing usage generation triggers: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL); err != nil {
 		return fmt.Errorf("installing classification journal trigger: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerSQL); err != nil {
+		return fmt.Errorf("installing usage change journal triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing column migrations: %w", err)
@@ -3915,6 +3968,18 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		 ON messages(session_id, ordinal) WHERE is_compact_boundary = 1`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_sidechain
 		 ON messages(session_id) WHERE is_sidechain = 1`,
+		// Activity reports look back from each interval to the latest
+		// assistant turn with a model. Without this index that search steps
+		// through every earlier message when a transcript records no model.
+		`CREATE INDEX IF NOT EXISTS idx_messages_assistant_model
+		 ON messages(session_id, ordinal) WHERE role = 'assistant' AND model != ''`,
+		// Holds only messages whose timestamp is missing or unreadable, so
+		// analytics can find them without parsing every message timestamp.
+		// Covering the timestamp keeps SQLite on this index even before
+		// ANALYZE has counted its rows.
+		`CREATE INDEX IF NOT EXISTS idx_messages_unparsed_timestamp
+		 ON messages(session_id, timestamp)
+		 WHERE timestamp IS NULL OR timestamp = '' OR strftime('%Y', timestamp) IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_claude_snapshot
@@ -3943,6 +4008,17 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		}
 	}
 	if err := ensureUsageIndexesLocked(ctx, w); err != nil {
+		return err
+	}
+	// Session shape, activity, and stats count messages by role and flags.
+	// Covering those columns keeps the counts off message bodies, which are
+	// usually kilobytes. Widened here, after column migrations, since legacy
+	// archives lack source_subtype.
+	if err := ensureIndexColumnsLocked(ctx,
+		w, "idx_messages_session_role", messageSessionRoleIndexColumns,
+		`CREATE INDEX IF NOT EXISTS idx_messages_session_role
+		 ON messages(session_id, role, is_system, has_thinking, has_tool_use, source_subtype)`,
+	); err != nil {
 		return err
 	}
 	// Widened here, after column migrations, since legacy archives lack is_automated.
@@ -4019,6 +4095,10 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		return fmt.Errorf("recreating idx_insights_lookup: %w", err)
 	}
 	return nil
+}
+
+var messageSessionRoleIndexColumns = []string{
+	"session_id", "role", "is_system", "has_thinking", "has_tool_use", "source_subtype",
 }
 
 var usageSessionCoveringIndexColumns = []string{
@@ -4986,7 +5066,10 @@ func bulkImportWALAutocheckpointPages(pageSize int) int {
 }
 
 // DropBulkImportIndexes omits derived index maintenance in a disposable
-// full-resync archive and defers its automatic WAL checkpoints.
+// full-resync archive and defers its automatic WAL checkpoints. It also drops
+// the usage generation insert trigger: any row trigger makes SQLite stage each
+// multi-row message INSERT through a temporary table, and with the search
+// triggers already dropped this one carried that cost alone.
 // RebuildBulkImportIndexes and CheckpointWALTruncate must succeed before the swap.
 func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 	db.mu.Lock()
@@ -5014,6 +5097,10 @@ func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 			return fmt.Errorf("dropping bulk import index %s: %w", name, err)
 		}
 	}
+	if _, err := w.Exec(ctx,
+		`DROP TRIGGER IF EXISTS messages_usage_generation_insert`); err != nil {
+		return fmt.Errorf("dropping usage generation insert trigger: %w", err)
+	}
 	return nil
 }
 
@@ -5022,6 +5109,9 @@ func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 func (db *DB) RebuildBulkImportIndexes(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if err := restoreUsageGenerationsLocked(ctx, db.getWriter()); err != nil {
+		return err
+	}
 	if err := ensureUsageIndexesLocked(ctx, db.getWriter()); err != nil {
 		return err
 	}
@@ -5041,6 +5131,31 @@ func (db *DB) RebuildBulkImportIndexes(ctx context.Context) error {
 		}
 	}
 	return ensureAnalyticsIndexLocked(ctx, db.getWriter())
+}
+
+// restoreUsageGenerationsLocked reinstalls the usage generation insert trigger
+// and gives every session a new generation. Inserts made while the trigger was
+// dropped may have landed before an existing ordinal, so no generation from
+// that window may vouch for a cached usage prefix. The replacement has a new
+// database ID and starts with an empty usage cache, so the only prefixes this
+// discards were filled from the replacement during the load.
+func restoreUsageGenerationsLocked(ctx context.Context, w *writerHandle) error {
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting usage generation restore: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, messagesUsageGenerationInsertTriggerSQL); err != nil {
+		return fmt.Errorf("reinstalling usage generation insert trigger: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))`); err != nil {
+		return fmt.Errorf("renewing usage generations: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing usage generation restore: %w", err)
+	}
+	return nil
 }
 
 // checkFTSModuleLoads fails when messages_fts is in the schema but this

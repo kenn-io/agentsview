@@ -50,6 +50,7 @@ function fixtureMessages(): Message[] {
     has_tool_use: true,
     tool_calls: [
       {
+        call_index: 0,
         tool_name: "Bash",
         category: "Bash",
         input_json: JSON.stringify({ command: "printf safe" }),

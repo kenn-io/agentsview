@@ -338,8 +338,10 @@ class ActivityStore {
         this.report = page.report;
         this.reportGeneration++;
         this.sessionsListVersion++;
-        this.sessionsSort = "agent_minutes";
-        this.sessionsDirection = "desc";
+        // The replacement report's first page keeps the requested order but
+        // drops the bucket range, because a new generation clears it.
+        this.sessionsSort = sort;
+        this.sessionsDirection = direction;
         this.sessionsBucketRange = null;
         this.lastUpdatedAt = Date.now();
         const durationMs = performance.now() - startedAt;

@@ -19,6 +19,11 @@ import (
 // within SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999).
 const maxSQLVars = 500
 
+// analyticsDateIndexMaxWindow matches 90 days, the widest short range preset
+// in the UI (frontend/src/lib/components/shared/rangeSelection.ts).
+// Wider windows keep the scan plan to avoid fetching most rows in date-index order.
+const analyticsDateIndexMaxWindow = 90 * 24 * time.Hour
+
 var ErrUnsupportedAnalyticsSignal = errors.New(
 	"unsupported analytics signal",
 )
@@ -230,6 +235,14 @@ func (f AnalyticsFilter) messageWindowBoundsUTC() (string, string) {
 }
 
 func analyticsMessageWindowPred(col, from, to string) (string, []any) {
+	rangePred, args := analyticsMessageRangePred(col, from, to)
+	if rangePred == "" {
+		return "", nil
+	}
+	return "(" + col + " IS NULL OR " + col + " = '' OR strftime('%Y', " + col + ") IS NULL OR " + rangePred + ")", args
+}
+
+func analyticsMessageRangePred(col, from, to string) (string, []any) {
 	var preds []string
 	var args []any
 	if from != "" {
@@ -243,7 +256,7 @@ func analyticsMessageWindowPred(col, from, to string) (string, []any) {
 	if len(preds) == 0 {
 		return "", nil
 	}
-	return "(" + col + " IS NULL OR " + col + " = '' OR strftime('%Y', " + col + ") IS NULL OR (" + strings.Join(preds, " AND ") + "))", args
+	return "(" + strings.Join(preds, " AND ") + ")", args
 }
 
 var analyticsQueryObserver func(string)
@@ -260,9 +273,22 @@ func (f AnalyticsFilter) toolSessionWindowSQL(dateCol, sessionID string) (string
 	if sessionPred == "" {
 		return "", nil
 	}
-	messagePred, messageArgs := analyticsMessageWindowPred("wm.timestamp", from, to)
-	return "(" + sessionPred + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = " + sessionID + " AND " + messagePred + "))", append(args, messageArgs...)
+	// A message matches when its timestamp is in the window or cannot be
+	// read. Two EXISTS probes keep each case on its own index: the in-window
+	// probe stops at the first match, and idx_messages_unparsed_timestamp
+	// holds only the unreadable rows, so sessions outside the window no
+	// longer parse every message timestamp.
+	rangePred, rangeArgs := analyticsMessageRangePred("wm.timestamp", from, to)
+	return "(" + sessionPred +
+			" OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = " + sessionID + " AND " + rangePred + ")" +
+			" OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = " + sessionID + " AND " + unparsedMessageTimestampSQL + "))",
+		append(args, rangeArgs...)
 }
+
+// unparsedMessageTimestampSQL matches the WHERE clause of
+// idx_messages_unparsed_timestamp, which SQLite requires before it uses the
+// partial index.
+const unparsedMessageTimestampSQL = "(wm.timestamp IS NULL OR wm.timestamp = '' OR strftime('%Y', wm.timestamp) IS NULL)"
 
 func sqliteAnalyticsMinuteKey() string {
 	return "COALESCE(strftime('%Y-%m-%dT%H:%M', m.timestamp), m.timestamp, '')"
@@ -355,6 +381,12 @@ func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, se
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	var dates []string
 	if includeDate {
+		start, startErr := time.Parse(time.DateOnly, f.From)
+		end, endErr := time.Parse(time.DateOnly, f.To)
+		if startErr != nil || endErr != nil || end.Sub(start) > analyticsDateIndexMaxWindow {
+			// Wide windows keep the scan plan instead of fetching rows through the date index.
+			dateCol = "+" + dateCol
+		}
 		from, to := f.utcRange()
 		dates = append(dates, dateCol+" >= "+b.Add(from), dateCol+" <= "+b.Add(to))
 	}
@@ -2457,6 +2489,18 @@ func (db *DB) GetAnalyticsSessionShape(
 	}, nil
 }
 
+func autonomyChunkSQL(placeholders string) string {
+	return `SELECT session_id,
+		SUM(CASE WHEN role='user' AND is_system=0
+			AND COALESCE(source_subtype, '') <> 'tool_result'
+			THEN 1 ELSE 0 END),
+		SUM(CASE WHEN role='assistant'
+			AND has_tool_use=1 THEN 1 ELSE 0 END)
+		FROM messages
+		WHERE session_id IN ` + placeholders + `
+		GROUP BY session_id`
+}
+
 // queryAutonomyChunk queries autonomy stats for a chunk of
 // session IDs and accumulates results into counts.
 func (db *DB) queryAutonomyChunk(
@@ -2465,17 +2509,7 @@ func (db *DB) queryAutonomyChunk(
 	counts map[string]int,
 ) error {
 	ph, args := InPlaceholders(chunk)
-	q := `SELECT session_id,
-		SUM(CASE WHEN role='user' AND is_system=0
-			AND COALESCE(source_subtype, '') <> 'tool_result'
-			THEN 1 ELSE 0 END),
-		SUM(CASE WHEN role='assistant'
-			AND has_tool_use=1 THEN 1 ELSE 0 END)
-		FROM messages
-		WHERE session_id IN ` + ph + `
-		GROUP BY session_id`
-
-	rows, err := db.getReader().QueryContext(ctx, q, args...)
+	rows, err := db.getReader().QueryContext(ctx, autonomyChunkSQL(ph), args...)
 	if err != nil {
 		return fmt.Errorf("querying autonomy: %w", err)
 	}

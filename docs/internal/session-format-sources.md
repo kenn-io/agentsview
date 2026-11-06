@@ -648,6 +648,22 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
   an in-place reparse for Codex at data version 164.
 
+- **Code-mode waits (checked 2026-11-03 at
+  `b34808060a51e98b8cb3dcf77824703757737cda`):** The pinned
+  [wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/wait_handler.rs)
+  resumes an exec cell using a string `cell_id`. The pinned
+  [response schema](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/protocol/src/models.rs)
+  stores function-call arguments as a JSON string. The
+  [output formatter](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/output.rs)
+  emits text blocks with script status, wall time, and output. These polls stay
+  on the incremental parse path when they bind no agent IDs through `ids` or
+  `targets`. Subagent waits still require a full parse, including the empty
+  `status` object returned on timeout by the
+  [subagent wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/handlers/multi_agents/wait.rs).
+  Covered by `TestParseCodexSessionFrom_CodeModeWaitStaysIncremental` and
+  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure Code
+  share this parser. Parsed content and cursor encoding are unchanged.
+
 - **Hosted capacity (reverified 2026-11-01):** The pinned
   [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
   stores text strings in response items; the
@@ -758,6 +774,77 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexOrdinaryForkLinkSurvivesSyncAndUpgrade` cover the link and the
   upgrade, using the shape reported in
   [issue #2468](https://github.com/kenn-io/agentsview/issues/2468).
+  Rechecked the pinned fork writer and subagent snapshot path on 2026-11-05:
+  copied forks retain their inherited prefix. Synthetic fixtures reproduce
+  frozen appends and copied usage after PR #2698. Fork writes now commit
+  replay membership and message origins with the transcript. Available messages
+  keep updating when the parent is missing. Previously observed parent turns
+  filter replay; otherwise sync warns about possible inherited messages and
+  withholds unverified token usage. Parent recovery removes confirmed replay and
+  restores child usage. `TestRebuildMissingParentRemainsRetryableAcrossRestart`,
+  `TestMissingParentForkPreservesShortenedHistoryAcrossReopen`, and
+  `TestCodexForkProvenanceFailureRollsBackContent` cover delayed recovery,
+  permanently unresolved retries, real database reopen, source truncation,
+  retained tool results and usage, staged publication, and atomic rollback.
+  `TestMissingParentForkPreservesLegacySourceHistory` also retains history
+  stored under the pre-version-40 source identity.
+  Follow-up synthetic fixtures in `TestCodexForkReview*` verify content-checked
+  occurrence matching, shared TraeX record origins, idless child turns, restored
+  result events, category filtering, retained activity bounds and previews,
+  usage ownership and ordinals, and provenance after archive policy projection.
+  These shortened-source fixtures exercise AgentsView's preservation policy;
+  they do not establish that Codex rewrites a rollout in that shape.
+  `TestCodexForkRetainsSpawnLinkWithoutOutput` covers the spawn output's link
+  metadata without result events. `TestCodexForkStagedRetryKeepsPayloadsInScratch`
+  checks the staged retry's bounded payload representation, including when the
+  source shrinks below the staging threshold. Result-order and
+  summary-participation fixtures cover restored prefixes and sanitized empty
+  updates. The accounting fixtures exercise independently imported usage accepted
+  by `ApplyArtifactImportedSession`; current native Codex rollouts still provide
+  message usage rather than these archive event rows.
+  `TestCodexForkRetainsSummaryWithoutOutput` covers summary-only archived output
+  and blocked length retention with the call present or absent.
+  `TestCodexForkArchivedIdlessAfterChildBoundary` and
+  `TestCodexForkArchivedPreTurnReplayRecovery` cover saved replay boundaries and
+  the resulting transcript and preview.
+  `TestCodexForkLegacyDuplicateUsageOwnership` seeds pre-provenance rows through
+  the real parser, row preparation, and archive writer. Identical parent and
+  child occurrences retain unknown usage until source evidence identifies it;
+  complete occurrence sets, distinct timestamps, and current usage are controls.
+  `TestCodexForkMessageFreeChildBoundary` distinguishes the parser's correct
+  boundary from reconciliation, with named-parent and message-bearing controls.
+  `TestCodexForkReorderedArchivedReplay` covers child-only then replay-only
+  snapshots. `TestCodexForkMessageFreeBoundarySurvivesShortening` preserves that
+  source context through a shortened source and archive rebuild.
+  `TestCodexForkRestoredOrderKeepsUsage` exercises descending match indices in
+  unresolved and resolved writes. `TestCodexForkImportedResultOccurrences`
+  reaches nullable raw event metadata through `ApplyArtifactImportedSession`;
+  repeated blocked retries retain summary lengths, image projection preserves
+  unknown identities, and archived calls without IDs retain output. Native
+  digests remain a separate control in `TestCodexForkNativeResultIdentity`.
+  `TestCodexForkMatchedMessageKeepsSourceBoundary` covers a matching child whose
+  earlier message-free boundary disappears, followed by parent recovery.
+  `TestCodexForkMatchedContextSurvivesResolvedRefreshes` retains context-only
+  evidence through resolved refreshes before a delayed idless parent page.
+  `TestCodexForkReplayCannotClaimIdlessChild` distinguishes identical pre-turn
+  or idless parent replay and idless child messages through unresolved
+  shortened-source retries;
+  their separate 40- and 5-token fixtures recover only the child's five tokens.
+  `TestCodexForkImportedMultiAgentSummaryLength` preserves imported participant
+  evidence through blocked retries, an orphan archive copy, database reopen, a
+  partial agent update, and parent recovery, without changing raw NULL metadata.
+  Reordered, length-only, and participation-only artifact replacements clear
+  saved contributor hints atomically while preserving other fork provenance.
+  `TestCodexForkNativeResultIdentity` also verifies that archive copies retain
+  known raw metadata and deduplicate returning source events after a rebuild.
+  `TestCodexForkRebuildBeforeProvenanceSchema` covers older archives without
+  local fork provenance, orphan preservation, and delayed parent recovery.
+  `TestCodexForkIdlessResultSignalsKeepOccurrences` preserves distinct result
+  outcomes for calls without provider IDs.
+  `TestCodexForkImportedOrdinalUsageSurvivesResolvedShortening` retains a message
+  referenced by imported usage after resolved refreshes and source shortening.
+  These synthetic archive cases were rechecked on 2026-11-05 in both publication
+  paths; they do not describe additional producer fields.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
@@ -907,7 +994,8 @@ fixtures retain this field; missing identities remain source-local.
   Reverified cold and warm inventories through denied and restored directory
   access on 2026-10-09. If the original exists but an archived parent page is
   missing, copied turns from that page can still be imported and counted
-  again; turn IDs are read from files, not retained in the archive. When
+  again if those turns were never observed. Fork provenance now retains
+  previously observed parent turn IDs across source removal. When
   upgrading an archive older than data version 131, newly split pages inherit
   the thread's permanent deletion or trash state. Permanent deletions and
   trash retain their whole-thread scope, including pages whose files return at
@@ -1864,6 +1952,12 @@ Normal sync tests use the captured beta database schema and check archived
 payloads, image keep/drop behavior, unchanged PDF/text files and references, and
 an unchanged second sync. Data version 108 makes existing imports eligible to
 recover omitted file payloads. This adds retention, not a PDF previewer.
+`TestRetainedToolResultFilesProducerFixture` uses `tool_files.json` to check
+PDF/text sizes and the text digest. Service and UI tests use separate inputs.
+Reverified the retained-file decoder on 2026-10-22 against the parser's
+unchanged `file.uri` retention. Constructed service and API regressions cover
+empty base64 bodies and MIME parameters before the base64 marker, asserting
+decoded-byte digests and visible file occurrences.
 
 **V2 projection check (2026-09-08):** Cloned upstream at
 `dff8fbc149fb7492e4f07b713ac31ea70d9a541c` and checked the

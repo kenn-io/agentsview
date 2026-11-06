@@ -83,14 +83,12 @@ func PatchToolCallRowsWithContentFailures(
 			if index >= len(rows) {
 				return
 			}
-			if call.ToolUseID != "" {
-				occurrence := occurrences[call.ToolUseID]
-				occurrences[call.ToolUseID] = occurrence + 1
-				if verdict, ok := failures[db.StagedToolCallKey(call.ToolUseID, occurrence)]; ok {
-					rows[index].ContentFailure = verdict.Failure
-					rows[index].ContentFailureKnown = true
-					rows[index].ContentOutcome = signals.ToolOutcome(verdict.Outcome)
-				}
+			occurrence := occurrences[call.ToolUseID]
+			occurrences[call.ToolUseID] = occurrence + 1
+			if verdict, ok := failures[db.StagedToolCallKey(call.ToolUseID, occurrence)]; ok {
+				rows[index].ContentFailure = verdict.Failure
+				rows[index].ContentFailureKnown = true
+				rows[index].ContentOutcome = signals.ToolOutcome(verdict.Outcome)
 			}
 			index++
 		}

@@ -395,8 +395,8 @@ func TestUsageRollupCrossIdentityQueriesUseIndexes(t *testing.T) {
 			WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < ?)
 			INSERT OR IGNORE INTO usage_cached_sessions(
 				session_id, source_sync_marker, source_transcript_rev,
-				usage_event_fingerprint, install_revision)
-			SELECT 'unrelated-' || x, '', '0', '', x FROM n`, size)
+				usage_event_fingerprint, install_revision, source_usage_generation)
+			SELECT 'unrelated-' || x, '', '0', '', x, '' FROM n`, size)
 		require.NoError(t, err)
 		_, err = conn.ExecContext(t.Context(), `INSERT OR IGNORE INTO usage_facts(
 			cached_session_id, fact_index, source, uses_session_start, model,

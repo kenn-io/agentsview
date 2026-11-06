@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,8 +16,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
@@ -1453,33 +1456,21 @@ func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	assert.Equal(t, "semantic", fake.lastReq.Mode)
 }
 
-// search_content must reject scope outside semantic/hybrid/terms with the same
-// message the HTTP transport uses (the db layer silently ignores Scope for
-// lexical modes, so the guard lives in the transport), and must not reach
-// the service at all on rejection.
-func TestSearchContent_ScopeRejectedOnUnsupportedLexicalModes(t *testing.T) {
+func TestSearchContent_ScopeRejectedForFTS(t *testing.T) {
 	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-	for _, mode := range []string{"", "substring", "regex", "fts"} {
-		t.Run("mode="+mode, func(t *testing.T) {
-			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
-				Pattern: "needle", Mode: mode, Scope: "top", IncludeActive: true,
-			})
-			require.Error(t, err)
-			assert.EqualError(t, err,
-				"scope is only supported for semantic, hybrid, and terms search modes")
-		})
-	}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "needle", Mode: "fts", Scope: "top", IncludeActive: true,
+	})
+	require.EqualError(t, err, db.ContentSearchScopeUnsupportedMsg)
 	assert.Empty(t, fake.lastReq.Pattern,
 		"a rejected request must not reach the service")
 }
 
-// search_content must pass Scope through to the service untouched for
-// semantic, hybrid, and terms modes; the db layer owns scope-value validation from
-// there.
+// Scoped modes forward the requested scope; the store validates its value.
 func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
-	for _, mode := range []string{"semantic", "hybrid", "terms"} {
+	for _, mode := range []string{"semantic", "hybrid", "terms", "", "substring", "regex"} {
 		t.Run(mode, func(t *testing.T) {
 			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
@@ -1508,8 +1499,26 @@ func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "substring", out.EffectiveMode)
-	assert.Empty(t, out.EffectiveScope,
-		"substring results are not conversation units, so no scope applies")
+	assert.Equal(t, "all", out.EffectiveScope)
+	assert.Equal(t, "all", fake.lastReq.Scope)
+	assert.False(t, out.Exclusions.Children)
+	for _, tc := range []struct {
+		mode, scope, sessionID, effectiveScope string
+		children                               bool
+	}{
+		{mode: "regex", effectiveScope: "all"},
+		{mode: "substring", scope: "top", effectiveScope: "top", children: true},
+		{mode: "fts", children: true},
+		{mode: "fts", sessionID: "child"},
+	} {
+		_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+			Pattern: "retries", Mode: tc.mode, Scope: tc.scope, SessionID: tc.sessionID, IncludeActive: true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, tc.effectiveScope, fake.lastReq.Scope)
+		assert.Equal(t, tc.effectiveScope, out.EffectiveScope)
+		assert.Equal(t, tc.children, out.Exclusions.Children)
+	}
 }
 
 func TestSearchContent_RecallContractMapping(t *testing.T) {
@@ -2064,4 +2073,46 @@ func TestListSessionsRejectsUnknownMachine(t *testing.T) {
 	_, _, err := ts.listSessions(t.Context(), nil, listSessionsIn{Machine: "missing.example"})
 	var filterError *db.MachineFilterError
 	require.ErrorAs(t, err, &filterError)
+}
+
+func TestFileReferencesTool(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "s1", "proj")
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil, withTestDocbank())}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	res, err := ct.CallTool(t.Context(), callParams(ToolGetSessionFileReferences, map[string]any{"session_id": "s1"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	raw, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	var out service.FileReferencesResult
+	require.NoError(t, json.Unmarshal(raw, &out))
+	assert.Equal(t, "enabled", out.Integration)
+	assert.Empty(t, out.Occurrences)
+}
+
+func TestSearchContent_LexicalChildScope(t *testing.T) {
+	_, d := newTestToolset(t)
+	dbtest.SeedLexicalScope(t, d)
+	httpServer := httptest.NewUnstartedServer(nil)
+	srv := server.New(config.Config{
+		Host: "127.0.0.1", Port: httpServer.Listener.Addr().(*net.TCPAddr).Port,
+		DataDir: t.TempDir(), WriteTimeout: 30 * time.Second,
+	}, d, nil)
+	httpServer.Config.Handler = srv.Handler()
+	httpServer.Start()
+	t.Cleanup(httpServer.Close)
+	svc := servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	for _, mode := range []string{"", "regex"} {
+		result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{
+			"pattern": "a-child first prompt", "mode": mode, "include_active": true,
+		}))
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+		out := decodeStructured[searchContentOut](t, result)
+		require.Len(t, out.Matches, 1)
+		assert.Equal(t, "a-child", out.Matches[0].SessionID)
+	}
 }

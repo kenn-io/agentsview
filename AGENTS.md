@@ -43,12 +43,41 @@ For CI runner selection and caching, read the
 1. Commit every turn that changes tracked files. Do not make empty commits. If a
    turn is read-only or changes only ignored files, say that no commit was
    made.
-1. Keep commits focused and use clear conventional commit messages.
+1. Keep commits focused. Write commit messages and pull request titles as
+   [Commit Messages](#commit-messages) requires.
 1. Do not amend, squash, rebase, push, or pull unless the user asks.
 1. Do not add generated-with lines, attribution blocks, validation footers, or
    command transcripts to commit messages.
 1. Deliver changes through pull requests from feature branches. Never merge a
    pull request; merging is the user's decision.
+
+## Commit Messages
+
+Commit subjects must use the Conventional Commits format. Pull requests are
+squash-merged: the PR title becomes the commit subject and the PR description
+becomes the commit body, so PR titles use the same format.
+
+```text
+type(scope): summary
+```
+
+The scope is optional and names the part of the project the change touches. Use
+one of these types:
+
+- `feat`: a new capability users can see or use.
+- `fix`: a bug fix users can notice.
+- `perf`: faster or lighter behavior users can notice.
+- `refactor`, `test`, `docs`, `build`, `ci`, or `chore`: a change that leaves
+  product behavior as it was.
+
+Mark a breaking change with `!` before the colon, as in
+`feat(api)!: remove the v1 endpoints`, and describe the break in a
+`BREAKING CHANGE:` footer at the end of the commit body or PR description.
+
+This format is required. Releases and release notes are generated from these
+messages: the type decides whether a change appears in the notes and under which
+heading, and the version bump follows the largest change since the last release,
+from a breaking change to `feat` to `fix`.
 
 ## Safety
 
@@ -153,6 +182,14 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
   distinct from byte limits. Both helpers assume valid UTF-8 and do not
   sanitize malformed input.
 - Do not use emojis in code or output.
+- Tests must bind loopback (`127.0.0.1:0` or `[::1]:0`, or `httptest`, which
+  already does). A wildcard listen (`0.0.0.0`, `[::]`, bare `:0`) makes the
+  host firewall prompt for the test binary, and because `go test` relinks it
+  into a fresh temporary directory every run, the prompt returns every run.
+  A test that genuinely needs wildcard bind semantics must call
+  `internal/testutil.RequireWildcardListen(t)` first, which skips it on local
+  Windows runs unless `CI=true`. `AGENTSVIEW_TEST_WILDCARD_LISTEN=1`
+  enables these tests; `0` skips them on every platform.
 - Format Markdown with `mdformat --wrap 80` when `mdformat` and
   `mdformat-tables` are available.
 

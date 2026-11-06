@@ -46,6 +46,8 @@ const (
 	ToolListFrictionPatterns = "list_friction_patterns"
 )
 
+const ToolGetSessionFileReferences = "get_session_file_references"
+
 // Profile selects the tools advertised by an MCP server while keeping their
 // implementations and schemas shared.
 type Profile string
@@ -130,6 +132,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 	memoryOnly := opts.Profile == ProfileMemory
 
 	if !memoryOnly {
+		addFileReferencesTool(s, t, readOnly)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,
 			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +
@@ -204,7 +207,9 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"If these modes report not available, use terms when every literal term must occur within one " +
 			"user/assistant exchange, or substring/regex for exact error messages, identifiers, and code fragments. " +
 			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
-			"The default mode remains substring. Set context to include N messages of " +
+			"The default mode remains substring. Scope defaults to all, including child sessions and sidechain messages; " +
+			"top excludes them and subordinate returns only them. Child sessions bypass the one-shot exclusion. " +
+			"The response reports effective_scope and exclusions.children. Set context to include N messages of " +
 			"surrounding conversation with each match. Matches from the last 10 minutes (including the " +
 			"current conversation) are excluded unless include_active is set; current_session_id replaces " +
 			"that heuristic with one exact exclusion. One-shot and automated " +
@@ -313,6 +318,13 @@ func newServer(opts ServeOptions) *mcp.Server {
 	}
 
 	return s
+}
+
+// addFileReferencesTool advertises the Docbank lookup only when the backend has Docbank configured.
+func addFileReferencesTool(s *mcp.Server, t *toolset, readOnly *mcp.ToolAnnotations) {
+	if service.SupportsFileReferences(t.svc) {
+		mcp.AddTool(s, &mcp.Tool{Name: ToolGetSessionFileReferences, Description: "Find exact bytes of session files and images in Docbank by SHA-256. Returns current, prior, and trashed versions, or explicit unavailable evidence.", Annotations: readOnly}, t.fileReferences)
+	}
 }
 
 // newHTTPHandler builds the StreamableHTTP handler with its protections.
