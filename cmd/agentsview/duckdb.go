@@ -447,10 +447,8 @@ func openDuckDBServeStore(
 	if len(appCfg.CustomModelPricing) > 0 {
 		store.SetCustomPricing(appCfg.CustomModelPricing)
 	}
-	if duckCfg.URL == "" {
-		if err := store.OpenActivityReportDisk(ctx); err != nil {
-			log.Printf("duckdb serve: keeping activity reports in memory only: %v", err)
-		}
+	if err := store.OpenActivityReportDisk(ctx); err != nil {
+		log.Printf("duckdb serve: keeping activity reports in memory only: %v", err)
 	}
 	if appCfg.CursorSecret != "" {
 		secret, decErr := base64.StdEncoding.DecodeString(appCfg.CursorSecret)
