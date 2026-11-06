@@ -2323,7 +2323,7 @@ func (s *Store) readTopSessions(ctx context.Context, f db.UsageFilter, limit int
 		}
 	}
 
-	return result, nil
+	return slices.Clone(result), nil
 }
 
 // GetUsageSessionCounts returns distinct session counts grouped by project and agent.
