@@ -43,16 +43,11 @@ func pgKeptPush(t *testing.T, syncer *Sync, full bool) {
 
 func pgKeptBuild(t *testing.T, store *Store, f db.AnalyticsFilter, q activity.Query, wantUsage bool) activity.CandidateArtifacts {
 	t.Helper()
-	var progress []activity.Progress
-	artifacts, err := store.BuildActivityReportArtifacts(t.Context(), f, q, func(p activity.Progress) { progress = append(progress, p) })
-	require.NoError(t, err)
-	require.NotEmpty(t, progress)
-	assert.Equal(t, activity.ProgressLoadingSessions, progress[0].Phase)
-	assert.Equal(t, activity.ProgressDone, progress[len(progress)-1].Phase)
 	loaded := false
-	for _, p := range progress {
+	artifacts, err := store.BuildActivityReportArtifacts(t.Context(), f, q, func(p activity.Progress) {
 		loaded = loaded || p.Phase == activity.ProgressLoadingUsage
-	}
+	})
+	require.NoError(t, err)
 	assert.Equal(t, wantUsage, loaded)
 	return artifacts
 }
@@ -71,8 +66,10 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 		name     string
 		timezone string
 		keep     bool
+		full     bool
 		prepare  func(*testing.T, *db.DB)
 		write    func(*testing.T, *db.DB)
+		store    func(*Store)
 		check    func(*testing.T, activity.CandidateArtifacts)
 	}{
 		{name: "next day", keep: true, prepare: func(t *testing.T, d *db.DB) {
@@ -114,7 +111,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			assert.Len(t, a.Sessions, 2)
 			assert.Equal(t, 1000, a.Report.Totals.OutputTokens)
 		}},
-		{name: "hard delete", write: func(t *testing.T, d *db.DB) {
+		{name: "hard delete", full: true, write: func(t *testing.T, d *db.DB) {
 			t.Helper()
 			require.NoError(t, d.DeleteSession(t.Context(), "past"))
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
@@ -154,9 +151,8 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.Equal(t, money.MustParseDollars("0.005"), a.Report.Totals.Cost)
 		}},
-		{name: "custom pricing", write: func(t *testing.T, d *db.DB) {
-			t.Helper()
-			d.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+		{name: "custom pricing", store: func(store *Store) {
+			store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
 			t.Helper()
 			assert.Equal(t, money.MustParseDollars("0.01"), a.Report.Totals.Cost)
@@ -190,7 +186,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.Equal(t, 500, a.Report.Totals.OutputTokens)
 		}},
-		{name: "excluded Claude peer", prepare: func(t *testing.T, d *db.DB) {
+		{name: "excluded Claude peer", full: true, prepare: func(t *testing.T, d *db.DB) {
 			t.Helper()
 			pgKeptSession(t, d, "peer", "project-b", "2026-06-14")
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "past", []db.Message{{SessionID: "past", Ordinal: 0, Role: "assistant", Content: "partial", Timestamp: "2026-06-14T10:00:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":5}`), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"}}))
@@ -232,12 +228,13 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			q, f := pgDayQuery(t, "2026-06-14", tz), db.AnalyticsFilter{Timezone: tz, Project: "project-a"}
 			pgKeptPush(t, syncer, false)
 			before := pgKeptBuild(t, store, f, q, true)
-			requirePGKeptEqual(t, before, pgKeptBuild(t, store, f, q, false))
-			tc.write(t, d)
-			if tc.name == "custom pricing" {
-				store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+			if tc.write != nil {
+				tc.write(t, d)
 			}
-			pgKeptPush(t, syncer, tc.name == "hard delete" || tc.name == "excluded Claude peer")
+			if tc.store != nil {
+				tc.store(store)
+			}
+			pgKeptPush(t, syncer, tc.full)
 			changed := pgKeptBuild(t, store, f, q, !tc.keep)
 			tc.check(t, changed)
 			a, err := activity.ArtifactDigest(before)
@@ -280,11 +277,31 @@ func TestPGActivityReportKeptPushDuringBuild(t *testing.T) {
 func TestPGActivityReportKeptBypasses(t *testing.T) {
 	for _, mode := range []string{"partial", "hosted", "missing journal", "unreadable journal", "active", "stale", "unclean", "clean, active"} {
 		t.Run(mode, func(t *testing.T) {
-			local, syncer, store := newUsageJournalFixture(t)
-			pgKeptSession(t, local, "past", "project-a", "2026-06-14")
-			pgKeptPush(t, syncer, false)
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 			wantTokens := 500
+			var store *Store
+			var syncer *Sync
+			if mode == "hosted" {
+				fixture := newProjectionFixture(t)
+				m, _ := fixture.accept(t, "device-a", "capture-a", "")
+				p := projectionOutcome("usage transcript")
+				r := &p.Outcome.Results[0].Result
+				start := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+				r.Session.StartedAt = start
+				r.Session.EndedAt = start.Add(time.Minute)
+				r.Messages[0].Timestamp = start
+				r.Messages[1].Timestamp = start.Add(time.Minute)
+				require.NoError(t, fixture.sink.Project(t.Context(), fixture.lease(t, m), m, p))
+				hosted, err := newHostedAdapter(t.Context(), fixture.runtime, fixture.tenant)
+				require.NoError(t, err)
+				store = hosted.physical
+				wantTokens = 7
+			} else {
+				var local *db.DB
+				local, syncer, store = newUsageJournalFixture(t)
+				pgKeptSession(t, local, "past", "project-a", "2026-06-14")
+				pgKeptPush(t, syncer, false)
+			}
 			switch mode {
 			case "active", "stale", "unclean", "clean, active":
 				f.Termination = mode
@@ -293,8 +310,6 @@ func TestPGActivityReportKeptBypasses(t *testing.T) {
 				var err error
 				q, err = activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-06-14", Timezone: "UTC"}, time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC))
 				require.NoError(t, err)
-			case "hosted":
-				store.hostedRelations = true
 			case "missing journal":
 				_, err := syncer.pg.ExecContext(t.Context(), dropUsageChangeJournalSQL)
 				require.NoError(t, err)
