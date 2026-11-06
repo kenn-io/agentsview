@@ -85,8 +85,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		}
 		return tx.Commit()
 	}
-	if _, err = tx.ExecContext(ctx, `DROP FUNCTION IF EXISTS mark_usage_change() CASCADE;
-		DROP TABLE IF EXISTS usage_session_changes;
+	if _, err = tx.ExecContext(ctx, `DROP TABLE IF EXISTS usage_session_changes;
+		DROP FUNCTION IF EXISTS mark_usage_change() CASCADE;
+		DROP FUNCTION IF EXISTS stamp_usage_change();
 		DO $cleanup$ BEGIN
 		IF to_regclass('sync_metadata') IS NOT NULL THEN
 		    DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version');

@@ -87,3 +87,32 @@ func BenchmarkPGConcurrentPush(b *testing.B) {
 	b.ReportMetric(writers*sessions*messages, "messages/op")
 	b.ReportMetric(writers*sessions*2, "usage_events/op")
 }
+
+// This also runs unchanged on the base revision. One operation inserts 300,000
+// usage events across 1,000 sessions in a single statement.
+func BenchmarkPGUsageEventsBulkInsert(b *testing.B) {
+	const sessions, events = 1000, 300000
+	pgURL := testPGURL(b)
+	schema := pgUsageBenchmarkSchema(b)
+	cleanNamedPGSchema(b, pgURL, schema)
+	b.Cleanup(func() { cleanNamedPGSchema(b, pgURL, schema) })
+	pg, err := Open(b.Context(), pgURL, schema, true)
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, pg.Close()) })
+	require.NoError(b, EnsureSchema(b.Context(), pg, schema))
+	_, err = pg.ExecContext(b.Context(), `INSERT INTO sessions(id,machine,project,agent)
+ SELECT 'bulk-' || g, 'machine', 'project', 'codex' FROM generate_series(1, $1) g`, sessions)
+	require.NoError(b, err)
+	b.ResetTimer()
+	for range b.N {
+		b.StopTimer()
+		_, err := pg.ExecContext(b.Context(), `DELETE FROM usage_events`)
+		require.NoError(b, err)
+		b.StartTimer()
+		_, err = pg.ExecContext(b.Context(), `INSERT INTO usage_events(session_id,source,model,input_tokens,output_tokens,dedup_key)
+ SELECT 'bulk-' || (g % $1 + 1), 'provider', 'model-a', g, g, 'event-' || g FROM generate_series(1, $2) g`, sessions, events)
+		require.NoError(b, err)
+	}
+	b.StopTimer()
+	b.ReportMetric(events, "usage_events/op")
+}

@@ -13,22 +13,12 @@ multi-machine setups.
 The PostgreSQL usage optimization baseline and its architecture boundary are
 recorded in `docs/internal/pg-usage-native-optimization.md`.
 
-On the current development branch, the schema owner's next push installs a usage
-change journal for future report reuse. Creating missing triggers takes a
-`SHARE ROW EXCLUSIVE` lock on the watched tables until installation commits.
-Reads continue, and writes wait for installation. The installer grants journal
-reads to roles that already have `SELECT` on `sessions`. Restricted publishers
-can use the installed journal; an owner must install it first. CockroachDB skips
-this journal.
-
-The journal records messages, usage events, and plan usage through the push's
-`sessions.updated_at` update. Journal readers return the revision and changed
-session IDs from the same snapshot. Consumers use that returned revision as the
-starting point for their next read. A journal version in `sync_metadata` keeps
-older binaries from replacing or reading a newer journal format.
-
-`BenchmarkPGConcurrentPush` compares four concurrent pushes on base and branch.
-Fixture creation and schema setup run outside the timer.
+`pg push` and `pg serve` install a usage change journal for future report
+reuse when the role owns the tables. Installation takes a `SHARE ROW EXCLUSIVE`
+lock on the watched tables until it commits: reads continue, and writes wait.
+Roles that already have `SELECT` on `sessions` can read the journal; restricted
+publishers write through it once an owner installs it. CockroachDB skips this
+journal.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes

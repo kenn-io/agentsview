@@ -632,8 +632,7 @@ default as the `[pg]` config key, and an explicit `false` opts out.
 ## Backend Parity
 
 PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
-and project identity writes. Message and tool-result changes reach it through
-the push's `sessions.updated_at` write. CockroachDB has no journal.
+and project identity writes. CockroachDB has no journal.
 
 Automatic repository project naming belongs to the writable SQLite archive.
 `repository_project_names` retains choices derived from producer-recorded

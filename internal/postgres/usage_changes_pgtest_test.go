@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand/v2"
 	"net/url"
@@ -15,8 +16,12 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/storage"
 )
+
+const dropUsageChangeJournalSQL = `DROP TABLE usage_session_changes; DROP FUNCTION mark_usage_change() CASCADE; DROP FUNCTION stamp_usage_change();
+ DELETE FROM sync_metadata WHERE key IN ('usage_change_revision','usage_change_journal_version')`
 
 func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 	t.Helper()
@@ -63,6 +68,9 @@ func TestUsageChangeJournalPushPaths(t *testing.T) {
 		{"pricing", func(t *testing.T) {
 			require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "model-a", InputPerMTok: money.Money{Microdollars: 1000000}}}))
 		}, nil},
+		{"openrouter bookkeeping", func(t *testing.T) {
+			require.NoError(t, local.SetPricingMeta(pricing.OpenRouterModelsMetaKey, pricing.EncodeOpenRouterModels([]string{"model-a"})))
+		}, nil},
 		{"cursor usage", func(t *testing.T) {
 			require.NoError(t, local.InsertCursorUsageEvents(ctx, []db.CursorUsageEvent{{OccurredAt: "2026-10-01T09:00:00Z", Model: "model-a", InputTokens: 100, DedupKey: "cursor-a"}}))
 		}, nil},
@@ -84,6 +92,13 @@ func TestUsageChangeJournalPushPaths(t *testing.T) {
 			}
 			after, err := store.UsageChangeRevision(ctx)
 			require.NoError(t, err)
+			if tc.name == "openrouter bookkeeping" {
+				var published bool
+				require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM model_pricing WHERE model_pattern = $1)`, pricing.OpenRouterModelsMetaKey).Scan(&published))
+				require.True(t, published, "push publishes the bookkeeping row")
+				assert.Equal(t, before, after)
+				return
+			}
 			require.Greater(t, after, before)
 			through, ids, err := store.LoadUsageChanges(ctx, before)
 			require.NoError(t, err)
@@ -171,15 +186,19 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	after, err := store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
-	current, err := usageChangeJournalCurrentPG(ctx, syncer.pg)
+	installed, err := usageChangeJournalInstalledPG(ctx, syncer.pg)
 	require.NoError(t, err)
-	assert.True(t, current)
+	assert.True(t, installed)
+	var triggers int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'trg_uc_%' AND tgrelid IN (SELECT oid FROM pg_class WHERE relnamespace = current_schema()::regnamespace)`).Scan(&triggers))
+	assert.Equal(t, 3*len(usageChangeTablesPG)+1, triggers)
 	// The ordinary push fast path upgrades an existing schema too.
-	_, err = syncer.pg.ExecContext(ctx, `DROP FUNCTION mark_usage_change() CASCADE; DROP TABLE usage_session_changes; DELETE FROM sync_metadata WHERE key IN ('usage_change_revision','usage_change_journal_version')`)
+	_, err = syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
 	absent, err := store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Zero(t, absent)
+	require.True(t, pushSchemaCurrent(ctx, syncer.pg))
 	syncer.schemaDone = false
 	require.NoError(t, syncer.EnsureSchema(ctx))
 	after, err = store.UsageChangeRevision(ctx)
@@ -204,8 +223,7 @@ func TestUsageChangeJournalRestrictedRole(t *testing.T) {
  REVOKE ALL ON usage_session_changes FROM `+role)
 	require.NoError(t, err)
 	// The role already reads sessions when the owner installs the journal.
-	_, err = syncer.pg.ExecContext(ctx, `DROP FUNCTION mark_usage_change() CASCADE; DROP TABLE usage_session_changes;
- DELETE FROM sync_metadata WHERE key IN ('usage_change_revision','usage_change_journal_version')`)
+	_, err = syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
 	require.NoError(t, ensureUsageChangeJournalPG(ctx, syncer.pg))
 	roleURL, err := url.Parse(testPGURL(t))
@@ -236,7 +254,7 @@ func TestUsageChangeJournalRestrictedRole(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"restricted"}, restrictedIDs)
 	// A publisher without CREATE can continue on a schema lacking the journal.
-	_, err = syncer.pg.ExecContext(ctx, `DROP FUNCTION mark_usage_change() CASCADE; DROP TABLE usage_session_changes; DELETE FROM sync_metadata WHERE key IN ('usage_change_revision','usage_change_journal_version')`)
+	_, err = syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
 	publisher.schemaDone = false
 	require.NoError(t, publisher.EnsureSchema(ctx))
@@ -288,10 +306,7 @@ func TestUsageChangeJournalMovedRowsAndRollback(t *testing.T) {
 func TestUsageChangeJournalInstallAllowsReaders(t *testing.T) {
 	_, syncer, _ := newUsageJournalFixture(t)
 	ctx := t.Context()
-	_, err := syncer.pg.ExecContext(ctx, `DROP FUNCTION mark_usage_change() CASCADE; DROP TABLE usage_session_changes;
- DELETE FROM sync_metadata WHERE key IN ('usage_change_revision','usage_change_journal_version');
- CREATE FUNCTION mark_usage_change() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END;';
- CREATE CONSTRAINT TRIGGER trg_uc_sessions_insert AFTER INSERT ON sessions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION mark_usage_change('id')`)
+	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
 	tx, err := syncer.pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
@@ -307,7 +322,7 @@ func TestUsageChangeJournalInstallAllowsReaders(t *testing.T) {
 func TestUsageChangeJournalNewerVersion(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
-	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version','999')
+	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version','2')
  ON CONFLICT(key) DO UPDATE SET value=excluded.value;
  CREATE OR REPLACE FUNCTION mark_usage_change() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END;'`)
 	require.NoError(t, err)
@@ -386,21 +401,200 @@ func TestUsageChangeJournalRepeatedSessionChange(t *testing.T) {
 	assert.Equal(t, []string{"repeated"}, ids)
 }
 
-func TestUsageChangeJournalOlderVersion(t *testing.T) {
+// v0.46.1 replaces usage events without touching sessions when a session has
+// no new messages (push.go replaceUsageEvents with no updated_at bump).
+func TestUsageChangeJournalReleasedUsageOnlyWrite(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
-	_, err := syncer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='0' WHERE key='usage_change_journal_version';
- DROP TRIGGER trg_uc_sessions_delete ON sessions;
- INSERT INTO sessions(id,machine,project,agent) VALUES('deleted','machine','project','codex')`)
+	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('hermes','machine','project','hermes');
+ INSERT INTO usage_events(session_id,source,model,input_tokens,dedup_key) VALUES('hermes','provider','model-a',100,'event-a')`)
 	require.NoError(t, err)
-	require.NoError(t, ensureUsageChangeJournalPG(ctx, syncer.pg))
 	before, err := store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
-	require.Positive(t, before)
-	_, err = syncer.pg.ExecContext(ctx, `DELETE FROM sessions WHERE id='deleted'`)
+	tx, err := syncer.pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `DELETE FROM usage_events WHERE session_id = $1`, "hermes")
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `INSERT INTO usage_events(session_id,source,model,input_tokens,dedup_key) VALUES('hermes','provider','model-a',200,'event-a')`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
 	through, ids, err := store.LoadUsageChanges(ctx, before)
 	require.NoError(t, err)
-	assert.Equal(t, before+1, through)
-	assert.Equal(t, []string{"deleted"}, ids)
+	assert.Greater(t, through, before)
+	assert.Equal(t, []string{"hermes"}, ids)
+}
+
+func TestUsageChangeJournalWatchedTables(t *testing.T) {
+	_, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('owner','machine','project','codex'),('other','machine','project','codex');
+ INSERT INTO model_pricing(model_pattern) VALUES('parent-model');
+ INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('archive','parent','machine',now());
+ INSERT INTO source_session_project_identity_snapshots(source_archive_id,source_database_generation,source_session_id,project,machine,observed_at) VALUES('archive','generation','parent','project','machine',now());
+ INSERT INTO source_worktree_project_mappings(source_archive_id,machine,path_prefix) VALUES('archive','machine','/parent')`)
+	require.NoError(t, err)
+	type step struct {
+		query string
+		ids   []string
+	}
+	cases := []struct {
+		table string
+		steps []step
+	}{
+		{"sessions", []step{
+			{`INSERT INTO sessions(id,machine,project,agent) VALUES('row','machine','project','codex')`, []string{"row"}},
+			{`UPDATE sessions SET project='changed' WHERE id='row'`, []string{"row"}},
+			{`DELETE FROM sessions WHERE id='row'`, []string{"row"}},
+		}},
+		{"usage_events", []step{
+			{`INSERT INTO usage_events(session_id,source,model) VALUES('owner','provider','model-a')`, []string{"owner"}},
+			{`UPDATE usage_events SET session_id='other' WHERE session_id='owner'`, []string{"other", "owner"}},
+			{`DELETE FROM usage_events WHERE session_id='other'`, []string{"other"}},
+		}},
+		{"model_pricing", []step{
+			{`INSERT INTO model_pricing(model_pattern) VALUES('row-model')`, nil},
+			{`UPDATE model_pricing SET input_microdollars_per_mtok=1 WHERE model_pattern='row-model'`, nil},
+			{`DELETE FROM model_pricing WHERE model_pattern='row-model'`, nil},
+		}},
+		{"model_pricing_bands", []step{
+			{`INSERT INTO model_pricing_bands(model_pattern,above_input_tokens,input_microdollars_per_mtok,output_microdollars_per_mtok,cache_creation_microdollars_per_mtok,cache_read_microdollars_per_mtok) VALUES('parent-model',1000,0,0,0,0)`, nil},
+			{`UPDATE model_pricing_bands SET input_microdollars_per_mtok=1`, nil},
+			{`DELETE FROM model_pricing_bands`, nil},
+		}},
+		{"genai_pricing", []step{
+			{`INSERT INTO genai_pricing(singleton,version,source,data_json) VALUES(1,'v1','source','\x00')`, nil},
+			{`UPDATE genai_pricing SET version='v2'`, nil},
+			{`DELETE FROM genai_pricing`, nil},
+		}},
+		{"cursor_usage_events", []step{
+			{`INSERT INTO cursor_usage_events(occurred_at,model) VALUES(now(),'model-a')`, nil},
+			{`UPDATE cursor_usage_events SET input_tokens=1`, nil},
+			{`DELETE FROM cursor_usage_events`, nil},
+		}},
+		{"source_project_identity_observations", []step{
+			{`INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('archive','row','machine',now())`, nil},
+			{`UPDATE source_project_identity_observations SET git_branch='main' WHERE project='row'`, nil},
+			{`DELETE FROM source_project_identity_observations WHERE project='row'`, nil},
+		}},
+		{"source_project_identity_observation_scopes", []step{
+			{`INSERT INTO source_project_identity_observation_scopes(source_archive_id,project,machine,publication_scope) VALUES('archive','parent','machine','scope')`, nil},
+			{`UPDATE source_project_identity_observation_scopes SET publication_scope='changed'`, nil},
+			{`DELETE FROM source_project_identity_observation_scopes`, nil},
+		}},
+		{"source_session_project_identity_snapshots", []step{
+			{`INSERT INTO source_session_project_identity_snapshots(source_archive_id,source_database_generation,source_session_id,project,machine,observed_at) VALUES('archive','generation','row','project','machine',now())`, nil},
+			{`UPDATE source_session_project_identity_snapshots SET git_branch='main' WHERE source_session_id='row'`, nil},
+			{`DELETE FROM source_session_project_identity_snapshots WHERE source_session_id='row'`, nil},
+		}},
+		{"source_session_project_identity_snapshot_scopes", []step{
+			{`INSERT INTO source_session_project_identity_snapshot_scopes(source_archive_id,source_database_generation,source_session_id,publication_scope) VALUES('archive','generation','parent','scope')`, nil},
+			{`UPDATE source_session_project_identity_snapshot_scopes SET publication_scope='changed'`, nil},
+			{`DELETE FROM source_session_project_identity_snapshot_scopes`, nil},
+		}},
+		{"source_worktree_project_mappings", []step{
+			{`INSERT INTO source_worktree_project_mappings(source_archive_id,machine,path_prefix) VALUES('archive','machine','/row')`, nil},
+			{`UPDATE source_worktree_project_mappings SET project='changed' WHERE path_prefix='/row'`, nil},
+			{`DELETE FROM source_worktree_project_mappings WHERE path_prefix='/row'`, nil},
+		}},
+		{"source_worktree_project_mapping_scopes", []step{
+			{`INSERT INTO source_worktree_project_mapping_scopes(source_archive_id,machine,path_prefix,publication_scope) VALUES('archive','machine','/parent','scope')`, nil},
+			{`UPDATE source_worktree_project_mapping_scopes SET publication_scope='changed'`, nil},
+			{`DELETE FROM source_worktree_project_mapping_scopes`, nil},
+		}},
+	}
+	tables := make([]string, len(cases))
+	for i, tc := range cases {
+		tables[i] = tc.table
+	}
+	watched := make([]string, len(usageChangeTablesPG))
+	for i, table := range usageChangeTablesPG {
+		watched[i] = table.table
+	}
+	require.Equal(t, watched, tables, "every watched table has a case")
+	for _, tc := range cases {
+		t.Run(tc.table, func(t *testing.T) {
+			for _, step := range tc.steps {
+				before, err := store.UsageChangeRevision(ctx)
+				require.NoError(t, err)
+				_, err = syncer.pg.ExecContext(ctx, step.query)
+				require.NoError(t, err)
+				through, ids, err := store.LoadUsageChanges(ctx, before)
+				require.NoError(t, err)
+				assert.Equal(t, before+1, through, step.query)
+				assert.Equal(t, step.ids, ids, step.query)
+			}
+		})
+	}
+}
+
+func TestUsageChangeJournalReaderStraddlesPush(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	reader, err := syncer.pg.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	require.NoError(t, err)
+	defer reader.Rollback()
+	var started int64
+	require.NoError(t, reader.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'`).Scan(&started))
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "straddled", Machine: "test-machine", Project: "project-a", Agent: "codex", CreatedAt: "2026-10-01T09:00:00Z"}))
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "straddled", []db.UsageEvent{{SessionID: "straddled", Source: "provider", Model: "model-a", InputTokens: 100, DedupKey: "event-a"}}))
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, result.Errors)
+	// The reader's report predates the push it finishes after.
+	var events int
+	require.NoError(t, reader.QueryRowContext(ctx, `SELECT count(*) FROM usage_events WHERE session_id = 'straddled'`).Scan(&events))
+	assert.Zero(t, events)
+	require.NoError(t, reader.Commit())
+	through, ids, err := store.LoadUsageChanges(ctx, started)
+	require.NoError(t, err)
+	assert.Greater(t, through, started)
+	assert.Equal(t, []string{"straddled"}, ids)
+}
+
+func TestUsageChangeJournalMissingCounter(t *testing.T) {
+	_, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	_, err := syncer.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = 'usage_change_revision'`)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('uncounted','machine','project','codex')`)
+	require.NoError(t, err, "session writes continue without the counter row")
+	through, ids, err := store.LoadUsageChanges(ctx, 0)
+	require.NoError(t, err)
+	assert.Greater(t, through, int64(1000000000000000), "the counter restarts from the clock")
+	assert.Contains(t, ids, "uncounted")
+}
+
+func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
+	_, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('visible','machine','project','codex')`)
+	require.NoError(t, err)
+	revision, err := store.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	require.Positive(t, revision)
+	role := fmt.Sprintf("usage_reader_%x", rand.Uint64())
+	_, err = syncer.pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'test-password'`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanup := context.WithoutCancel(ctx)
+		_, err := syncer.pg.ExecContext(cleanup, `DROP OWNED BY `+role+`; DROP ROLE `+role)
+		require.NoError(t, err)
+	})
+	// Granted after installation, so the journal itself stays unreadable.
+	_, err = syncer.pg.ExecContext(ctx, `GRANT USAGE ON SCHEMA `+syncer.schema+` TO `+role+`; GRANT SELECT ON sessions, sync_metadata TO `+role)
+	require.NoError(t, err)
+	roleURL, err := url.Parse(testPGURL(t))
+	require.NoError(t, err)
+	roleURL.User = url.UserPassword(role, "test-password")
+	reader, err := NewStore(ctx, roleURL.String(), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	revision, err = reader.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, revision)
+	through, ids, err := reader.LoadUsageChanges(ctx, 0)
+	require.NoError(t, err)
+	assert.Zero(t, through)
+	assert.Empty(t, ids)
 }

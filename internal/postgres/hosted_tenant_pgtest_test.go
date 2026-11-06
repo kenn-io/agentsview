@@ -399,9 +399,13 @@ func TestHostedTenantAdoptsLegacyAndEnforcesRelationships(t *testing.T) {
 	_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('preserved','project','device','claude'); INSERT INTO starred_sessions(session_id) VALUES('preserved')`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureHostedTenant(t.Context(), pg, schema, "tenant-a"))
-	var journalTriggers int
-	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'trg_uc_%' AND tgrelid IN (SELECT oid FROM pg_class WHERE relnamespace = current_schema()::regnamespace)`).Scan(&journalTriggers))
-	assert.Zero(t, journalTriggers)
+	var journalObjects int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT
+ (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'trg_uc_%' AND tgrelid IN (SELECT oid FROM pg_class WHERE relnamespace = current_schema()::regnamespace))
+ + (SELECT count(*) FROM pg_proc WHERE proname IN ('mark_usage_change', 'stamp_usage_change') AND pronamespace = current_schema()::regnamespace)
+ + (SELECT count(*) FROM pg_class WHERE relname = 'usage_session_changes' AND relnamespace = current_schema()::regnamespace)
+ + (SELECT count(*) FROM sync_metadata WHERE key LIKE 'usage_change%')`).Scan(&journalObjects))
+	assert.Zero(t, journalObjects)
 	var id, tenant string
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT session_id,tenant_id FROM starred_sessions`).Scan(&id, &tenant))
 	assert.Equal(t, "preserved", id)
