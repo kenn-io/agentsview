@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"unsafe"
@@ -137,16 +139,7 @@ func (s *PlanUsageCountSummary) Bytes() int64 {
 func (s *PlanUsageCountSummary) CountsFor(aliases map[string]string) PlanUsageSessionCounts {
 	out := PlanUsageSessionCounts{PlanOnly: s.planOnly, PartlyCaptured: s.partly, PlanOnlyByModel: map[string]int{}}
 	for _, set := range s.sets {
-		seen := make(map[string]struct{}, len(set.models))
-		for _, model := range set.models {
-			if alias, ok := aliases[model]; ok {
-				model = alias
-			}
-			seen[model] = struct{}{}
-		}
-		for model := range seen {
-			out.PlanOnlyByModel[model] += set.sessions
-		}
+		countPlanUsageModels(out.PlanOnlyByModel, slices.Values(set.models), aliases, set.sessions)
 	}
 	return out
 }
@@ -159,18 +152,22 @@ func (t *PlanUsageCountTally) CountsFor(aliases map[string]string) PlanUsageSess
 		PartlyCaptured:  len(t.partly),
 	}
 	for _, models := range t.planOnly {
-		seen := make(map[string]struct{}, len(models))
-		for model := range models {
-			if alias, ok := aliases[model]; ok {
-				model = alias
-			}
-			seen[model] = struct{}{}
-		}
-		for model := range seen {
-			out.PlanOnlyByModel[model]++
-		}
+		countPlanUsageModels(out.PlanOnlyByModel, maps.Keys(models), aliases, 1)
 	}
 	return out
+}
+
+func countPlanUsageModels(counts map[string]int, models iter.Seq[string], aliases map[string]string, sessions int) {
+	seen := map[string]struct{}{}
+	for model := range models {
+		if alias, ok := aliases[model]; ok {
+			model = alias
+		}
+		seen[model] = struct{}{}
+	}
+	for model := range seen {
+		counts[model] += sessions
+	}
 }
 
 // planUsageCountSQL is the SQLite plan usage count query: plan-only rows

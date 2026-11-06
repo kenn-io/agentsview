@@ -1835,12 +1835,11 @@ func (s *Store) GetTopSessionsByCost(ctx context.Context, f db.UsageFilter, limi
 	if err != nil {
 		return nil, err
 	}
-	out = slices.Clone(out)
 	if f.TopSessionsByGroup {
 		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
 	return db.SortAndLimitTopSessions(
-		out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
+		slices.Clone(out), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
 	), nil
 }
 
