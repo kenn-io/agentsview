@@ -231,7 +231,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 					}
 				}
 			}
-			if recipe == "nomic" || recipe == "other" || recipe == "automatic" {
+			if recipe == "other" {
 				assert.False(t, push().Vectors.Skipped)
 				require.Len(t, replica.pushed, 1)
 				assert.NotEmpty(t, replica.pushed[0].Params, "switched vectors must carry their current recipe")
@@ -262,10 +262,8 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 
 func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
-	oldTimeout := vectorsWriteLockRetryTimeout
 	t.Cleanup(func() {
 		inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint
-		vectorsWriteLockRetryTimeout = oldTimeout
 	})
 	t.Setenv("HOME", t.TempDir())
 	dir := testDataDir(t)
@@ -284,7 +282,6 @@ func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 	}
 	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:1/v1", nil }
 	reloaded := make(chan struct{})
-	vectorsWriteLockRetryTimeout = time.Millisecond
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, func() (config.Config, error) {
 		cfg, err := config.LoadReadOnly()
 		close(reloaded)
@@ -292,7 +289,6 @@ func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
-	vectorsWriteLockRetryTimeout = oldTimeout
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())

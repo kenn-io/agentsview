@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +21,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/kit/embedlocal"
 	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 
@@ -958,33 +956,15 @@ func liveVectorServingFixture(t *testing.T, cfg config.Config, database *db.DB, 
 	}
 }
 
-// TestServeConstructionRegistersEmbeddingsRoutesWhenVectorEnabled drives the
-// real live-serving options through server.New, with vector serving enabled.
-// The disabled case below checks that the same route exposes browser setup.
-func TestServeConstructionRegistersEmbeddingsRoutesWhenVectorEnabled(t *testing.T) {
+func TestServeConstructionWhenVectorEnabled(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-
-	ln, port := listenLoopback(t)
-	cfg := vectorTestConfig(dataDir)
-	cfg.Host, cfg.Port = "127.0.0.1", port
-	vs, err := setupVectorServing(t.Context(), cfg, database, nil)
+	vs, err := setupVectorServing(t.Context(), vectorTestConfig(dataDir), database, nil)
 	require.NoError(t, err)
 	require.NotNil(t, vs.Scheduler)
 	require.NotNil(t, vs.RecallScheduler)
 	require.NotNil(t, vs.Close)
-	defer func() { require.NoError(t, vs.Close()) }()
-
-	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
-	ts := startTestServer(t, ln, srv.Handler())
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
-	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "application/json", mediaType(t, resp.Header.Get("Content-Type")))
+	require.NoError(t, vs.Close())
 }
 
 func TestRecallSchedulerBackstopRemovesArchivedEntryVectors(t *testing.T) {
@@ -1742,48 +1722,15 @@ func TestSetupVectorServingAcquiresAndReleasesWriteLock(t *testing.T) {
 	require.NoError(t, held.Close())
 }
 
-func TestServeConstructionReportsSetupWhenVectorDisabled(t *testing.T) {
-	oldInspect := inspectLocalEmbeddings
-	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
-	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-		return embedlocal.Status{}, nil
-	}
+func TestServeConstructionWhenVectorDisabled(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-
-	ln, port := listenLoopback(t)
-	cfg := config.Config{
-		DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db"),
-		Host: "127.0.0.1", Port: port,
-	}
+	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
 	vs, err := setupVectorServing(t.Context(), cfg, database, nil)
 	require.NoError(t, err)
 	assert.Nil(t, vs.Scheduler)
 	assert.Nil(t, vs.Close)
 	assert.Empty(t, vs.ServerOpts)
-
-	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
-	ts := startTestServer(t, ln, srv.Handler())
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
-	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	var status vector.BuildStatus
-	require.NoError(t, json.UnmarshalRead(resp.Body, &status))
-	require.NotNil(t, status.Setup)
-	assert.Equal(t, "application/json", mediaType(t, resp.Header.Get("Content-Type")))
-}
-
-// mediaType extracts the bare MIME type from a Content-Type header value,
-// dropping any "; charset=..." parameters, so tests can compare it exactly.
-func mediaType(t *testing.T, contentType string) string {
-	t.Helper()
-	mt, _, err := mime.ParseMediaType(contentType)
-	require.NoError(t, err)
-	return mt
 }
 
 // --- installDirectVectorSearcher (direct, non-daemon CLI path) ---

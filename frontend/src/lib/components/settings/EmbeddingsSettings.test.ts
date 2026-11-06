@@ -152,9 +152,6 @@ describe("EmbeddingsSettings", () => {
       });
       const component = mount(EmbeddingsSettings, { target: document.body });
       await settle();
-      if (action === "build") {
-        expect(document.body.querySelector(".status-grid .kit-chip")).toBeNull();
-      }
       [...document.body.querySelectorAll("button")]
         .find((b) => b.textContent?.trim() === (action === "build" ? "Retry" : "Turn on"))!
         .click();
@@ -203,13 +200,20 @@ describe("EmbeddingsSettings", () => {
       const text = () => document.body.textContent ?? "";
       expect(text()).toContain("test-embed-model");
       expect(text()).toContain("256");
-      expect(text().includes("Embedding")).toBe(!withSetup);
       expect(text().match(/200/g)).toHaveLength(1);
       expect(text()).toContain(withSetup ? "Indexing 200 of 1,000 chunks" : "200 / 1,000 chunks");
-      expect(text().includes("20%")).toBe(!withSetup);
       expect(text()).toContain("50 chunks/s");
-      expect(text().includes("ETA 16s")).toBe(!withSetup);
-      if (withSetup) expect(text()).toContain("left");
+      if (withSetup) {
+        expect(text()).not.toContain("Embedding");
+        expect(text()).not.toContain("20%");
+        expect(text()).not.toContain("ETA 16s");
+        expect(text()).toContain("left");
+        expect(document.body.querySelector(".status-grid .kit-chip")).toBeNull();
+      } else {
+        expect(text()).toContain("Embedding");
+        expect(text()).toContain("20%");
+        expect(text()).toContain("ETA 16s");
+      }
       expect(text()).toContain("Elapsed 5s");
 
       expect(document.body.querySelectorAll('[role="progressbar"]')).toHaveLength(1);

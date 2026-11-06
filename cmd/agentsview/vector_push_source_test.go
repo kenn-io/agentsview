@@ -285,7 +285,7 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	}
 }
 
-// Existing exports keep their snapshot when activation changes the database path.
+// Each new export follows the database path published by activation.
 func TestVectorPushSourceDatabasePathChange(t *testing.T) {
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
