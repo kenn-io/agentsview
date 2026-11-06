@@ -1206,7 +1206,6 @@ func (db *DB) requireWritable() error {
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
 	db.effectivePricing = nil
-	db.activityKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
@@ -1220,7 +1219,6 @@ func (db *DB) SetEffectivePricing(
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		db.effectivePricing[model] = rates
 	}
-	db.activityKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEmptyCatalogPricing installs in-memory rates that are used only when the
@@ -1233,7 +1231,6 @@ func (db *DB) SetEmptyCatalogPricing(
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		db.emptyCatalogPricing[model] = rates
 	}
-	db.activityKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.

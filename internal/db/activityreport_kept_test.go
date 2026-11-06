@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
@@ -372,29 +371,6 @@ func TestActivityReportKeptChanges(t *testing.T) {
 		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
 			t.Helper()
 			assert.Equal(t, money.MustParseDollars("0.005"), a.Report.Totals.Cost)
-		}},
-		{name: "effective pricing", write: func(t *testing.T, d *DB) {
-			t.Helper()
-			rate := export.ModelRates{OutputPerMTok: money.MustParseDollars("20"), Source: export.PricingRowSourceFetched}
-			d.SetEffectivePricing(map[string]export.ModelRates{"kept-model": rate})
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Equal(t, money.MustParseDollars("0.01"), a.Report.Totals.Cost)
-		}},
-		{name: "empty catalog pricing", write: func(t *testing.T, d *DB) {
-			t.Helper()
-			rate := export.ModelRates{OutputPerMTok: money.MustParseDollars("20"), Source: export.PricingRowSourceEmbedded}
-			d.SetEmptyCatalogPricing(map[string]export.ModelRates{"kept-model": rate})
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Equal(t, money.MustParseDollars("0.01"), a.Report.Totals.Cost)
-		}},
-		{name: "custom pricing", write: func(t *testing.T, d *DB) {
-			t.Helper()
-			d.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
-		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
-			t.Helper()
-			assert.Equal(t, money.MustParseDollars("0.01"), a.Report.Totals.Cost)
 		}},
 		{name: "project identity", write: func(t *testing.T, d *DB) {
 			t.Helper()
