@@ -526,7 +526,7 @@ func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]a
 			parts = append(parts, "--"+flag.Name+"="+flag.Value.String())
 		}
 	})
-	for _, name := range []string{"include-one-shot", "include-automated", "include-children", "scope", "fts"} {
+	for _, name := range []string{"include-one-shot", "include-automated", "include-children", "fts"} {
 		if value, ok := remaining[name]; ok {
 			parts = append(parts, "--"+name+"="+fmt.Sprint(value))
 		}

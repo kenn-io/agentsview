@@ -326,3 +326,31 @@ func TestResolveSinceFlag_RejectsBothSet(t *testing.T) {
 	assert.Contains(t, err.Error(),
 		"--since and --active-since are mutually exclusive")
 }
+
+func TestSessionListReportsCombinedDefaultExclusions(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "parent", project: "proj"},
+		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
+			s.ParentSessionID = new("parent")
+			s.RelationshipType = "subagent"
+			s.UserMessageCount = 1
+			s.SessionKind = "roborev"
+			s.IsAutomated = true
+		}},
+	)
+	root := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"session", "list", "--json"})
+	require.NoError(t, root.Execute())
+	assert.Equal(t, "Excluded 1 session by default: 1 hidden by more than one default. Use --include-one-shot --include-automated --include-children to include them.\n", stderr.String())
+	visible := decodeCLIJSON[cliSessionList](t, stdout.String())
+	require.Len(t, visible.Sessions, 1)
+	out, err := executeCommand(newRootCommand(), "session", "list", "--json", "--include-one-shot", "--include-automated", "--include-children")
+	require.NoError(t, err)
+	retried := decodeCLIJSON[cliSessionList](t, out)
+	require.Len(t, retried.Sessions, 2)
+	assert.ElementsMatch(t, []any{"parent", "child"}, []any{retried.Sessions[0]["id"], retried.Sessions[1]["id"]})
+}

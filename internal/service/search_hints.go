@@ -23,12 +23,21 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		return nil
 	}
 	var hints []ContentSearchHint
-	probe := func(code, class string, retry ContentSearchRequest, args map[string]any) {
-		retry.Limit = 50
+	vector := len(req.Concepts) > 0 || req.Mode == "semantic" || req.Mode == "hybrid"
+	effective := req.Limit
+	if effective <= 0 || effective > db.MaxContentSearchLimit {
+		effective = db.DefaultContentSearchLimit
+	}
+	singleSessions := make(map[string]bool)
+	singlesOK := true
+	probe := func(code, class string, retry ContentSearchRequest, args map[string]any, exclude map[string]bool) bool {
+		if !vector {
+			retry.Limit = max(req.Limit, db.DefaultContentSearchLimit)
+		}
 		retry.Context = 0
 		page, err := svc.SearchContent(ctx, retry)
 		if err != nil {
-			return
+			return false
 		}
 		count := 0
 		filtered := false
@@ -37,40 +46,62 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 				filtered = true
 				continue
 			}
+			if exclude == nil {
+				singleSessions[match.SessionID] = true
+			}
+			if exclude[match.SessionID] {
+				continue
+			}
 			count++
 		}
 		if count == 0 {
-			return
+			return true
 		}
 		n := fmt.Sprint(count)
 		wording := "matches are"
 		if count == 1 {
 			wording = "match is"
 		}
-		if filtered || page.CandidateTruncated || keepMatch != nil && !page.ActiveFilterApplied && page.NextCursor != 0 {
+		if filtered || page.CandidateTruncated || vector && len(page.Matches) >= effective || exclude != nil && page.NextCursor != 0 || keepMatch != nil && !page.ActiveFilterApplied && page.NextCursor != 0 {
 			n = "at least " + n
 		} else if page.NextCursor != 0 {
 			n = "more than " + n
 			wording = "matches are"
 		}
-		hints = append(hints, ContentSearchHint{Code: code, Message: fmt.Sprintf("%s %s in %s sessions, hidden by default", n, wording, class), RetryWith: args})
+		message := fmt.Sprintf("%s %s in %s sessions, hidden by default", n, wording, class)
+		if code == "hidden_combined" {
+			message = fmt.Sprintf("%s %s in child sessions hidden by more than one default", n, wording)
+		}
+		hints = append(hints, ContentSearchHint{Code: code, Message: message, RetryWith: args})
+		return true
 	}
 	if !req.IncludeOneShot {
 		retry := req
 		retry.IncludeOneShot = true
-		probe("hidden_one_shot", "one-shot", retry, map[string]any{"include_one_shot": true})
+		singlesOK = probe("hidden_one_shot", "one-shot", retry, map[string]any{"include_one_shot": true}, nil) && singlesOK
 	}
 	if !req.IncludeAutomated {
 		retry := req
 		retry.IncludeAutomated = true
-		probe("hidden_automated", "automated", retry, map[string]any{"include_automated": true})
+		singlesOK = probe("hidden_automated", "automated", retry, map[string]any{"include_automated": true}, nil) && singlesOK
 	}
-	lexical := req.Mode == "" || req.Mode == "substring" || req.Mode == "regex" || req.Mode == "fts"
-	if explainChildren && lexical && req.Scope == "" && !req.IncludeChildren {
+	lexical := !vector && (req.Mode == "" || req.Mode == "substring" || req.Mode == "regex" || req.Mode == "fts")
+	if explainChildren && lexical && !req.IncludeChildren {
 		retry := req
 		retry.IncludeChildren = true
 		args := map[string]any{"include_children": true}
-		probe("hidden_children", "child", retry, args)
+		singlesOK = probe("hidden_children", "child", retry, args, nil) && singlesOK
+		if singlesOK && (!req.IncludeOneShot || !req.IncludeAutomated) {
+			args = map[string]any{"include_children": true}
+			retry.IncludeOneShot, retry.IncludeAutomated = true, true
+			if !req.IncludeOneShot {
+				args["include_one_shot"] = true
+			}
+			if !req.IncludeAutomated {
+				args["include_automated"] = true
+			}
+			probe("hidden_combined", "child", retry, args, singleSessions)
+		}
 	}
 	return hints
 }

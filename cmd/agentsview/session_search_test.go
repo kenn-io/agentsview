@@ -812,14 +812,18 @@ func TestPrintContentMatchesHumanAgeToken(t *testing.T) {
 }
 
 func TestSessionSearchHiddenHints(t *testing.T) {
-	for _, class := range []string{"one-shot", "automated", "child"} {
+	for _, class := range []string{"one-shot", "automated", "child", "automated-child"} {
 		t.Run(class, func(t *testing.T) {
 			dataDir := newAgentDataDir(t)
 			seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "p"}, sessionSeed{id: "hidden", project: "p", mut: func(s *db.Session) {
 				switch class {
 				case "one-shot":
 					s.UserMessageCount = 1
-				case "automated":
+				case "automated", "automated-child":
+					if class == "automated-child" {
+						s.ParentSessionID = new("parent")
+						s.RelationshipType = "subagent"
+					}
 					s.UserMessageCount = 1
 					s.IsAutomated = true
 					msg := "You are a code reviewer. Review this change."
@@ -848,6 +852,9 @@ func TestSessionSearchHiddenHints(t *testing.T) {
 				Hints []contentSearchCLIHint `json:"hints"`
 			}](t, out)
 			require.Len(t, got.Hints, 1)
+			if class == "automated-child" {
+				assert.Equal(t, "hidden_combined", got.Hints[0].Code)
+			}
 			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-a")
 			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-b")
 			if runtime.GOOS == "windows" {
