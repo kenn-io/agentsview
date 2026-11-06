@@ -120,6 +120,11 @@ The latest release is
   s. The index adds about a fifth of the message text size to the archive, and
   the first start after upgrading waits while it is built, about a minute per 2
   GB of message text.
+- Session search sorted by relevance shows a common word's first page about
+  three times faster. It reads matches from the best-ranked down and stops once
+  it knows the page's sessions. On 172,000 messages of real source text,
+  searching for `return` went from 140 ms to 50 ms. Searches filtered by project
+  or date, and searches sorted by recency, work as before.
 
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.
