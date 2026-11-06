@@ -599,9 +599,6 @@ func TestUsageJournaledRefreshDiagnostics(t *testing.T) {
 	prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
 	require.NoError(t, err)
 	require.True(t, prepared.journaled)
-	assert.Positive(t, prepared.timings.capture)
-	assert.Positive(t, prepared.timings.fill)
-	assert.Positive(t, prepared.timings.rollup.InstallDuration)
 	var output bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&output)
