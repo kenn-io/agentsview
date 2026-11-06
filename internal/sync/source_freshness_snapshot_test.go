@@ -28,7 +28,7 @@ func TestSourceFreshnessSnapshotPassParity(t *testing.T) {
 					fixture, err = os.ReadFile(path)
 					require.NoError(t, err)
 				} else {
-					require.NoError(t, os.WriteFile(path, fixture, 0600))
+					require.NoError(t, os.WriteFile(path, fixture, 0o600))
 				}
 				fx.writeClaudeSession(t, "proj", "unchanged.jsonl", "stable")
 				require.Equal(t, 2, fx.engine.SyncAll(t.Context(), nil).Synced)
