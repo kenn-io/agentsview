@@ -327,6 +327,25 @@ test.describe("Session Vital Signs", () => {
     await expect(bashRow).not.toHaveClass(/\bactive\b/);
   });
 
+  test("a selected unmeasured category chip shows its outline", async ({ page }) => {
+    await gotoShowcase(page);
+
+    // Read has only unknown calls in the showcase, so it is a chip on the
+    // "Not measured" line rather than a Time spent row.
+    const chip = page.locator(".unmeasured-line button", { hasText: "Read" });
+    await expect(chip).toHaveCount(1);
+    const shadow = () => chip.evaluate((el) => getComputedStyle(el).boxShadow);
+    const before = await chip.boundingBox();
+    expect(await shadow()).toBe("none");
+
+    await chip.click();
+    await expect(chip).toHaveClass(/\bactive\b/);
+    await expect.poll(shadow).toContain("inset");
+    const after = await chip.boundingBox();
+    expect(after?.width).toBeCloseTo(before!.width, 1);
+    expect(after?.height).toBeCloseTo(before!.height, 1);
+  });
+
   test("clicking a slow call scrolls the conversation", async ({ page }) => {
     await gotoShowcase(page);
 
