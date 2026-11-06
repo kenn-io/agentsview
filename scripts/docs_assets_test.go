@@ -3,6 +3,7 @@ package scripts
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -342,6 +343,32 @@ func TestZensicalDocsBuildExcludesScreenshotToolchain(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		agentGuide, []byte("contributor-only instructions\n"), 0o644,
 	))
+	// Names that are excluded at the top level only must survive when
+	// they appear deeper; bsdtar and GNU tar must agree.
+	nestedFiles := map[string]string{
+		filepath.Join("guide", "README.md"):           "guide readme\n",
+		filepath.Join("guide", "internal", "page.md"): "nested internal page\n",
+		filepath.Join(
+			"assets", "generated", "screenshots", "nested", "detail.png",
+		): "nested screenshot\n",
+		// Names that stay excluded wherever they appear.
+		filepath.Join("assets", "x.sh"):        "#!/bin/sh\n",
+		filepath.Join("assets", "sub", "y.sh"): "#!/bin/sh\n",
+		// An assets directory below the top is not the excluded one.
+		filepath.Join("guide", "assets", "z.sh"):       "#!/bin/sh\necho z\n",
+		filepath.Join("guide", "tool.go"):              "package guide\n",
+		filepath.Join("assets", "tools.sh", "run.txt"): "dropped with its directory\n",
+		"embed.go":  "package docs\n",
+		"README.md": "contributor readme\n",
+	}
+	for rel, content := range nestedFiles {
+		path := filepath.Join(docsDir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+	// A symlink named *.sh under the top-level assets/ is dropped as a file
+	// is; the old GNU tar exclude dropped any member type.
+	require.NoError(t, os.Symlink("x.sh", filepath.Join(docsDir, "assets", "link.sh")))
 	writeWebsiteTierFixture(t, docsDir)
 
 	fakeZensical := filepath.Join(docsDir, ".venv", "bin", "zensical")
@@ -377,6 +404,36 @@ printf '<urlset></urlset>\n' > site/docs/sitemap.xml
 	assert.NoFileExists(t, filepath.Join(
 		docsDir, "site", "docs", "screenshots", "test-results", "trace.zip",
 	))
+
+	siteDocs := filepath.Join(docsDir, "site", "docs")
+	for _, rel := range []string{
+		filepath.Join("guide", "README.md"),
+		filepath.Join("guide", "internal", "page.md"),
+		filepath.Join("guide", "assets", "z.sh"),
+		filepath.Join("assets", "generated", "screenshots", "dashboard.png"),
+		filepath.Join(
+			"assets", "generated", "screenshots", "nested", "detail.png",
+		),
+	} {
+		want, err := os.ReadFile(filepath.Join(docsDir, rel))
+		require.NoError(t, err)
+		got, err := os.ReadFile(filepath.Join(siteDocs, rel))
+		require.NoError(t, err, rel)
+		assert.Equal(t, string(want), string(got), rel)
+	}
+	for _, rel := range []string{
+		"README.md",
+		filepath.Join("assets", "x.sh"),
+		filepath.Join("assets", "sub", "y.sh"),
+		filepath.Join("guide", "tool.go"),
+		"embed.go",
+	} {
+		assert.NoFileExists(t, filepath.Join(siteDocs, rel), rel)
+	}
+	assert.NoDirExists(t, filepath.Join(siteDocs, "assets", "tools.sh"),
+		"a directory named *.sh under assets/ is dropped with its contents")
+	_, err = os.Lstat(filepath.Join(siteDocs, "assets", "link.sh"))
+	assert.ErrorIs(t, err, fs.ErrNotExist, "the assets/ symlink named *.sh is dropped")
 }
 
 func writeWebsiteTierFixture(t *testing.T, docsDir string) {

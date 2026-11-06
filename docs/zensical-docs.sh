@@ -84,35 +84,43 @@ fi
 mv "$tmp_config_base" "$tmp_config"
 tmp_config_base=""
 
+# Name the top-level entries to copy instead of passing --exclude './name'.
+# Both tars match --exclude patterns unanchored. GNU tar drops only the
+# top-level './name' because only top-level members start with './'.
+# libarchive's bsdtar strips the leading './' from the pattern and matches it
+# at the start of any path element, so it also dropped nested paths such as
+# assets/generated/screenshots/. Picking the top-level entries here gives both
+# tars the same result.
+copy_entries=()
+while IFS= read -r -d '' entry; do
+  case "${entry#./}" in
+    .venv | .vercel | .env*.local | site | zensical-public-docs.* | \
+      .zensical-build.* | .ruff_cache | .mypy_cache | superpowers | \
+      internal | agents | overrides | scripts | website | llms.txt | \
+      screenshots | README.md | pyproject.toml | uv.lock | vercel.json | \
+      vercel-build.sh | zensical-docs.sh | zensical.toml)
+      ;;
+    *)
+      copy_entries+=("$entry")
+      ;;
+  esac
+done < <(cd "$docs_root" && find . -mindepth 1 -maxdepth 1 -print0)
+# Besides reporting an empty docs folder, this keeps bash 3.2 (macOS) from
+# failing on an empty "${copy_entries[@]}" under set -u.
+if [[ ${#copy_entries[@]} -eq 0 ]]; then
+  printf 'no docs entries to copy from %s\n' "$docs_root" >&2
+  exit 1
+fi
+
+# find also names every path below those entries, so tar archives no excluded
+# member: .go files at any depth, and anything named *.sh below the top-level
+# assets/. Extracting an excluded member and deleting it later fails on
+# Windows, where tar cannot create a symlink before its target exists.
 (
   cd "$docs_root"
-  tar \
-    --exclude './.venv' \
-    --exclude './.vercel' \
-    --exclude './.env*.local' \
-    --exclude './site' \
-    --exclude './zensical-public-docs.*' \
-    --exclude './.zensical-build.*' \
-    --exclude './.ruff_cache' \
-    --exclude './.mypy_cache' \
-    --exclude './superpowers' \
-    --exclude './internal' \
-    --exclude './agents' \
-    --exclude './overrides' \
-    --exclude './scripts' \
-    --exclude './website' \
-    --exclude './llms.txt' \
-    --exclude './screenshots' \
-    --exclude './README.md' \
-    --exclude './*.go' \
-    --exclude './pyproject.toml' \
-    --exclude './uv.lock' \
-    --exclude './vercel.json' \
-    --exclude './vercel-build.sh' \
-    --exclude './zensical-docs.sh' \
-    --exclude './zensical.toml' \
-    --exclude './assets/*.sh' \
-    -cf - .
+  find "${copy_entries[@]}" \
+    \( -name '*.go' -o -path './assets/*' -name '*.sh' \) -prune -o -print0 |
+    tar --null --no-recursion -cf - -T -
 ) | (cd "$tmp_docs" && tar -xf -)
 
 # Docs render under /docs/; the hand-written website tier owns the site root.
