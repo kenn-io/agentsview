@@ -1858,6 +1858,23 @@ func TestLoadFile_DaemonIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadFile_SyncInterval(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data map[string]any
+		want time.Duration
+	}{
+		{name: "absent uses default", data: map[string]any{}, want: 5 * time.Second},
+		{name: "configured", data: map[string]any{"sync_interval": "60s"}, want: time.Minute},
+		{name: "explicit zero is kept", data: map[string]any{"sync_interval": "0s"}, want: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadMinimalWithConfig(t, tt.data)
+			assert.Equal(t, tt.want, cfg.SyncInterval)
+		})
+	}
+}
+
 func TestLoadFile_PGConfig(t *testing.T) {
 	tests := []struct {
 		name   string

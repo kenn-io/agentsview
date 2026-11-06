@@ -45,3 +45,44 @@ test("switches message metrics by keyboard and fits narrow chart cards", async (
     expect(controlBox!.x + controlBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width);
   }
 });
+
+test("sorts the sessions table repeatedly without moving its columns", async ({ page }) => {
+  // A sort loads a different set of rows. Give the model-sorted rows a long
+  // model name, which an automatically sized table would widen its column for.
+  await page.route("**/api/v1/activity/report/*/sessions?*", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    if (new URL(route.request().url()).searchParams.get("sort") === "model") {
+      body.sessions[0].primary_model = "a-very-long-model-name-".repeat(4);
+      body.sessions[0].models = [body.sessions[0].primary_model];
+    }
+    await route.fulfill({ response, json: body });
+  });
+  // The fixture dates its sessions within the 30 days before it was built.
+  const day = (offset: number) =>
+    new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+  await page.goto(`/activity?preset=custom&from=${day(-45)}&to=${day(1)}`);
+  const table = page.locator(".sessions-table table");
+  await expect(table.locator("tbody tr").first()).toBeVisible();
+  const headers = table.locator("thead th");
+  const widths = () =>
+    headers.evaluateAll((cells) => cells.map((cell) => cell.getBoundingClientRect().width));
+  const initialWidths = await widths();
+
+  const clicks: [string, "ascending" | "descending"][] = [
+    ["Session", "ascending"],
+    ["Session", "descending"],
+    ["Model", "ascending"],
+    ["Cost", "descending"],
+    ["Cost", "ascending"],
+    ["Window", "descending"],
+    ["Agent-min", "descending"],
+  ];
+  for (const [label, direction] of clicks) {
+    const header = headers.filter({ hasText: label });
+    await header.getByRole("button").click();
+    await expect(header).toHaveAttribute("aria-sort", direction);
+    await expect(table.locator("thead th[aria-sort]")).toHaveCount(1);
+    expect(await widths()).toEqual(initialWidths);
+  }
+});

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vite-plus/test";
+import { afterEach, describe, it, expect, vi } from "vite-plus/test";
 import { highlightToHtml, HIGHLIGHT_MAX_BYTES, HIGHLIGHT_MAX_LINES } from "./syntax-highlight.js";
 
 function spans(html: string): HTMLSpanElement[] {
@@ -12,6 +12,90 @@ function spans(html: string): HTMLSpanElement[] {
 function distinctColors(html: string): Set<string> {
   return new Set(spans(html).map((s) => s.getAttribute("style") ?? ""));
 }
+
+describe("highlighting worker", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("starts no worker for code over the line limit", async () => {
+    const Worker = vi.fn();
+    vi.stubGlobal("Worker", Worker);
+    vi.resetModules();
+    const { highlightToHtml } = await import("./syntax-highlight.js");
+
+    const code = "x\n".repeat(HIGHLIGHT_MAX_LINES) + "x";
+    await expect(highlightToHtml(code, "typescript")).resolves.toBeNull();
+    expect(Worker).not.toHaveBeenCalled();
+  });
+
+  it.each(["error", "messageerror"])(
+    "highlights pending and later requests inline after %s",
+    async (event) => {
+      const worker = {
+        onerror: null as (() => void) | null,
+        onmessageerror: null as (() => void) | null,
+        terminate: vi.fn(),
+        postMessage: vi.fn(() =>
+          queueMicrotask(() => {
+            if (event === "error") worker.onerror!();
+            else worker.onmessageerror!();
+          }),
+        ),
+      };
+      const Worker = vi.fn(function () {
+        return worker;
+      });
+      vi.stubGlobal("Worker", Worker);
+      vi.resetModules();
+      const { highlightToHtml } = await import("./syntax-highlight.js");
+
+      const pending = await Promise.all([
+        highlightToHtml("const x = 1;", "typescript"),
+        highlightToHtml("const y = 2;", "typescript"),
+      ]);
+      const later = await highlightToHtml("const z = 3;", "typescript");
+      for (const html of [...pending, later]) {
+        expect(html).not.toBeNull();
+        expect(spans(html!).length).toBeGreaterThan(0);
+      }
+      expect(worker.terminate).toHaveBeenCalledOnce();
+      expect(Worker).toHaveBeenCalledOnce();
+      expect(worker.postMessage).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("matches replies to callers when the worker replies in reverse order", async () => {
+    const requests: { id: number; code: string; lang: string }[] = [];
+    const worker = {
+      onmessage: null as ((event: MessageEvent) => void) | null,
+      postMessage: vi.fn((request: { id: number; code: string; lang: string }) => {
+        requests.push(request);
+      }),
+    };
+    vi.stubGlobal(
+      "Worker",
+      vi.fn(function () {
+        return worker;
+      }),
+    );
+    vi.resetModules();
+    const { highlightToHtml } = await import("./syntax-highlight.js");
+
+    const first = highlightToHtml("first", "ts");
+    const second = highlightToHtml("second", "typescript");
+    expect(requests).toEqual([
+      { id: expect.any(Number), code: "first", lang: "typescript" },
+      { id: expect.any(Number), code: "second", lang: "typescript" },
+    ]);
+    for (const { id, code } of requests.toReversed()) {
+      worker.onmessage!(new MessageEvent("message", { data: { id, html: code } }));
+    }
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
+  });
+});
 
 describe("highlightToHtml", () => {
   describe("known languages", () => {

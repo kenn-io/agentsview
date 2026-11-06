@@ -212,8 +212,11 @@ belong to no exchange and never match. `%`, `_`, and backslashes stay literal;
 tool and system content is outside this mode. The `terms` mode currently
 requires a SQLite or PostgreSQL backend.
 
-`scope` can be `top`, `all` (default), or `subordinate` for terms, semantic, and
-hybrid searches. The semantic and hybrid modes need the opt-in
+`scope` can be `top`, `all` (default), or `subordinate` for substring, regex,
+terms, semantic, and hybrid searches. `all` includes child sessions and
+sidechain messages; `top` excludes them, and `subordinate` returns only them.
+Child sessions bypass the one-shot exclusion; top-level one-shot sessions still
+require `include_one_shot: true`. The semantic and hybrid modes need the opt-in
 [semantic search](/docs/semantic-search/) index on the local SQLite archive;
 without it they return a "not available" error. Exact `session_id`,
 `git_branch`, `project`, `agent`, `date_from`, and `date_to` filters apply
@@ -250,6 +253,10 @@ on older servers. A positive cursor without the cutoff returns a restart error
 when that exclusion applies. Restart without a cursor to obtain both fields.
 `include_active: true` or an explicit `current_session_id` allows numeric-only
 continuation. Archive edits retain the existing offset-pagination behavior.
+
+`exclusions.children` reports whether child sessions were excluded, including
+in empty results. It is true for `scope: top` and FTS searches without an exact
+`session_id`. It stays false for `scope: subordinate`, which keeps child sessions.
 
 SQLite and PostgreSQL search matches also carry `transcript_revision`, captured
 by the same storage query as the evidence. A `revision_bound` response flag says

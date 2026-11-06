@@ -420,9 +420,14 @@ func TestMigration_ThinkingTextColumn(t *testing.T) {
 	d.Close()
 
 	// Remove thinking_text via ALTER TABLE DROP COLUMN
-	// (SQLite 3.35+) to simulate a legacy schema.
+	// (SQLite 3.35+) to simulate a legacy schema. Archives that old
+	// predate the substring index, which reads the column.
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "raw open")
+	for _, stmt := range dropSubstringIndexSQL {
+		_, err = conn.ExecContext(t.Context(), stmt)
+		require.NoError(t, err, stmt)
+	}
 	_, err = conn.ExecContext(t.Context(),
 		`ALTER TABLE messages DROP COLUMN thinking_text`,
 	)

@@ -93,16 +93,57 @@ func analyticsUTCRange(
 }
 
 func pgAnalyticsMessageWindow(f db.AnalyticsFilter, col string, pb *paramBuilder) string {
-	from, to := analyticsUTCRange(f)
-	var preds []string
-	if f.From != "" {
-		preds = append(preds, col+" >= "+pb.add(from)+"::timestamptz")
+	// Bind only the bounds that are set: PostgreSQL rejects a bound
+	// parameter that the statement never uses.
+	from, to := pgAnalyticsWindowBounds(f)
+	if from != "" {
+		from = pb.add(from)
 	}
-	if f.To != "" {
-		if t, err := time.Parse(time.RFC3339, to); err == nil {
-			to = t.Add(time.Second).Format(time.RFC3339)
-		}
-		preds = append(preds, col+" < "+pb.add(to)+"::timestamptz")
+	if to != "" {
+		to = pb.add(to)
+	}
+	return pgAnalyticsWindowPred(col, from, to)
+}
+
+// pgAnalyticsMessageWindowLiteral is pgAnalyticsMessageWindow with the
+// bounds written into the SQL, so a cached generic plan cannot hide how
+// narrow the window is. The bounds are RFC 3339 timestamps that Go formats
+// from parsed dates, or fixed sentinels, so quoting them is safe.
+func pgAnalyticsMessageWindowLiteral(f db.AnalyticsFilter, col string) string {
+	from, to := pgAnalyticsWindowBounds(f)
+	if from != "" {
+		from = "'" + from + "'"
+	}
+	if to != "" {
+		to = "'" + to + "'"
+	}
+	return pgAnalyticsWindowPred(col, from, to)
+}
+
+// pgAnalyticsWindowBounds returns the padded message window as RFC 3339 UTC
+// timestamps, with an exclusive upper bound. An unset bound is empty.
+func pgAnalyticsWindowBounds(f db.AnalyticsFilter) (string, string) {
+	from, to := analyticsUTCRange(f)
+	if f.From == "" {
+		from = ""
+	}
+	if f.To == "" {
+		to = ""
+	} else if t, err := time.Parse(time.RFC3339, to); err == nil {
+		to = t.Add(time.Second).Format(time.RFC3339)
+	}
+	return from, to
+}
+
+// pgAnalyticsWindowPred keeps rows whose col is NULL or between the from and
+// to SQL expressions, skipping an empty one.
+func pgAnalyticsWindowPred(col, from, to string) string {
+	var preds []string
+	if from != "" {
+		preds = append(preds, col+" >= "+from+"::timestamptz")
+	}
+	if to != "" {
+		preds = append(preds, col+" < "+to+"::timestamptz")
 	}
 	if len(preds) == 0 {
 		return ""

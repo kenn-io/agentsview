@@ -352,8 +352,16 @@ func (s analyticsSQL) ScanTopSession(rows *sql.Rows) (db.TopSession, error) {
 	return row, nil
 }
 
-func (s analyticsSQL) TrendsSQL(f db.AnalyticsFilter) (string, []any) {
-	return readbase.AnalyticsTrendsSQL(f, duckAnalyticsMessageWindowPred, db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect())
+// TrendsSQL always sorts. Through the DuckDB driver, reading 175,000 trend
+// rows without ORDER BY took about five times as long as reading them
+// sorted.
+func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, _ bool) (string, []any) {
+	where, args := duckBuildAnalyticsWhere(
+		sessionFilter, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
+	return readbase.AnalyticsTrendsSQL(
+		f, duckAnalyticsMessageWindowPred,
+		db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect(),
+		"m.session_id IN (SELECT s.id FROM sessions s WHERE "+where+")", args, true)
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }

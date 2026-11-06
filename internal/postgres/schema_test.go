@@ -169,6 +169,8 @@ func (c *schemaProbeConn) QueryContext(
 		}
 	}
 	switch {
+	case strings.Contains(normalized, "select version()"):
+		return &schemaProbeRows{columns: []string{"version"}, values: [][]driver.Value{{"PostgreSQL 18"}}}, nil
 	case strings.Contains(normalized, "information_schema.tables"):
 		name := ""
 		if len(args) > 0 {
@@ -601,6 +603,7 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"friction_digests":                                true,
 		"friction_digest_sessions":                        true,
 		"friction_patterns":                               true,
+		"friction_issue_links":                            true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
@@ -648,6 +651,7 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"friction_digests":                                true,
 		"friction_digest_sessions":                        true,
 		"friction_patterns":                               true,
+		"friction_issue_links":                            true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,

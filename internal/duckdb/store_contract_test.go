@@ -1055,3 +1055,70 @@ func requireReadOnlyDuck(t *testing.T, err error) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, db.ErrReadOnly, "expected ErrReadOnly, got %v", err)
 }
+
+func TestDuckDBSidebarIndexPaging(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		sessions  []db.Session
+		starredID string
+		check     func(*testing.T, *Store)
+	}{
+		{
+			name: "cursor walk",
+			sessions: []db.Session{
+				{ID: "root-a", StartedAt: new("2026-01-01T00:00:00Z")},
+				{ID: "child-a", StartedAt: new("2026-01-04T00:00:00Z"), ParentSessionID: new("root-a"), RelationshipType: "subagent"},
+				{ID: "root-b", StartedAt: new("2026-01-03T00:00:00Z")},
+				{ID: "root-c", StartedAt: new("2026-01-02T00:00:00Z")},
+			},
+			check: func(t *testing.T, store *Store) {
+				t.Helper()
+				cursor := ""
+				for i, want := range [][]string{{"child-a", "root-a"}, {"root-b"}, {"root-c"}} {
+					page, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{Limit: 1, Cursor: cursor})
+					require.NoError(t, err)
+					assert.Equal(t, want, duckSidebarSessionIDs(page.Sessions))
+					assert.Equal(t, 3, page.Total)
+					assert.Equal(t, i < 2, page.NextCursor != "")
+					cursor = page.NextCursor
+				}
+			},
+		},
+		{
+			name: "starred descendant",
+			sessions: []db.Session{
+				{ID: "unstarred-newer", StartedAt: new("2026-01-20T00:00:00Z")},
+				{ID: "root", StartedAt: new("2026-01-01T00:00:00Z")},
+				{ID: "starred-child", StartedAt: new("2026-01-10T00:00:00Z"), ParentSessionID: new("root"), RelationshipType: "subagent"},
+			},
+			starredID: "starred-child",
+			check: func(t *testing.T, store *Store) {
+				t.Helper()
+				page, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{Starred: true, Limit: 1})
+				require.NoError(t, err)
+				assert.Equal(t, []string{"starred-child", "root"}, duckSidebarSessionIDs(page.Sessions))
+				assert.Equal(t, 1, page.Total)
+				assert.Empty(t, page.NextCursor)
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			local := newLocalDB(t)
+			for _, session := range tt.sessions {
+				session.Project, session.Machine, session.Agent = "sidebar", "local", "claude"
+				session.MessageCount, session.UserMessageCount = 1, 1
+				require.NoError(t, local.UpsertSession(ctx, session))
+			}
+			if tt.starredID != "" {
+				ok, err := local.StarSession(ctx, tt.starredID)
+				require.NoError(t, err)
+				require.True(t, ok)
+			}
+			syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+			pushDataReadMirror(t, ctx, syncer)
+			store := NewStoreFromDB(syncer.DB())
+			tt.check(t, store)
+		})
+	}
+}

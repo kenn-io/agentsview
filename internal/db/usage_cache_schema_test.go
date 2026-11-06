@@ -28,7 +28,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cache.temporary)
 	assert.Equal(t, filepath.Join(filepath.Dir(archivePath),
-		"usage-cache-v15-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
+		"usage-cache-v16-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
 
 	info, err := os.Stat(cache.path)
 	require.NoError(t, err)
@@ -106,8 +106,8 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 
 	result, err := cache.db.ExecContext(t.Context(), `INSERT INTO usage_cached_sessions(
 		session_id, source_sync_marker, source_transcript_rev,
-		usage_event_fingerprint, install_revision
-	) VALUES ('s1', 'm1', 'r1', 'e1', 1)`)
+		usage_event_fingerprint, install_revision, source_usage_generation
+	) VALUES ('s1', 'm1', 'r1', 'e1', 1, '')`)
 	require.NoError(t, err)
 	cachedSessionID, err := result.LastInsertId()
 	require.NoError(t, err)
@@ -593,11 +593,15 @@ func TestUsageCacheRetirementWaitsForDetachedRollup(t *testing.T) {
 	database := testDB(t)
 	seedUsageSnapshotSession(t, database, "retired-rollup", "project-a",
 		"2026-08-10T09:00:00Z", 0, 10, "model-a")
-	snapshot, fills, _ := prepareUsageRollupTest(t, database)
-	databaseID, err := database.GetDatabaseID(t.Context())
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{
+		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+	}, usageQueryKindToken)
 	require.NoError(t, err)
 	cache, releaseGeneration, err := database.usageCache.acquireGeneration(
-		t.Context(), databaseID)
+		t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	// Seed facts synchronously so only the caller and rollup hold generation leases.
+	fills, err := cache.fill.fillSessionsDetached(t.Context(), snapshot.Versions)
 	require.NoError(t, err)
 
 	started := make(chan struct{})
@@ -710,4 +714,24 @@ func seedRecognizedUsageCacheWithRetirementProtocol(
 		`INSERT INTO usage_cache_metadata(key, value) VALUES (?, ?)`,
 		usageCacheMetadataRetirementProtocol, "1")
 	require.NoError(t, err)
+}
+
+func TestUsageGenerationMigrationBackfillsProof(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	database, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	insertSession(t, database, "retained", "project")
+	require.NoError(t, database.Close())
+	legacy, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = legacy.ExecContext(t.Context(), `DROP TRIGGER messages_usage_generation_insert; DROP TRIGGER messages_usage_generation_delete;
+		DROP TRIGGER messages_usage_generation_update; ALTER TABLE sessions DROP COLUMN usage_generation`)
+	require.NoError(t, err)
+	require.NoError(t, legacy.Close())
+	database, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	var generation string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT usage_generation FROM sessions WHERE id='retained'`).Scan(&generation))
+	assert.NotEmpty(t, generation)
+	require.NoError(t, database.Close())
 }

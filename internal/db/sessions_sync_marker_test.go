@@ -653,6 +653,74 @@ func TestWaitForWriterReportsALongWait(t *testing.T) {
 	})
 }
 
+func TestRetryAcrossHandoffWaitsForRepeatedHandoffs(t *testing.T) {
+	for _, cancelWrite := range []bool{false, true} {
+		name := "reopen twice"
+		if cancelWrite {
+			name = "cancel during second wait"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				database := testDB(t)
+				insertSession(t, database, "worker", "proj")
+				require.NoError(t, database.CloseWriter())
+				ctx, cancel := context.WithCancel(t.Context())
+				done := make(chan error, 1)
+				finished := make(chan struct{})
+				attempts := 0
+				go func() {
+					defer close(finished)
+					_, err := RetryAcrossHandoff(ctx, database, func() (SessionLabels, error) {
+						attempts++
+						// A second handoff starts just as the first retry reaches the writer.
+						if attempts == 2 {
+							if err := database.CloseWriter(); err != nil {
+								return SessionLabels{}, err
+							}
+						}
+						return database.UpdateSessionLabels(ctx, "worker", []string{"queued"}, nil)
+					})
+					done <- err
+				}()
+				t.Cleanup(func() {
+					cancel()
+					<-finished
+				})
+				synctest.Wait()
+				require.NoError(t, database.ReopenWriter())
+				// Let the retry encounter the second handoff and block on its writer.
+				time.Sleep(time.Second)
+				synctest.Wait()
+				select {
+				case err := <-done:
+					require.FailNow(t, "write returned during the second handoff", "error: %v", err)
+				default:
+				}
+				if cancelWrite {
+					cancel()
+					require.ErrorIs(t, <-done, context.Canceled)
+					require.NoError(t, database.ReopenWriter())
+				} else {
+					require.NoError(t, database.ReopenWriter())
+					require.NoError(t, <-done)
+				}
+				if cancelWrite {
+					var labels int
+					require.NoError(t, database.getReader().QueryRow(t.Context(),
+						`SELECT COUNT(*) FROM session_labels WHERE session_id = 'worker'`,
+					).Scan(&labels))
+					assert.Zero(t, labels, "canceled edits must stay unwritten after reopen")
+				} else {
+					session, err := database.GetSession(t.Context(), "worker")
+					require.NoError(t, err)
+					require.NotNil(t, session)
+					assert.Equal(t, []string{"queued"}, session.Labels)
+				}
+			})
+		})
+	}
+}
+
 // A push that runs out of time while a local sync holds the writer says it gave
 // up waiting, so the reader knows the push timed out.
 func TestWaitForWriterSaysItGaveUpOnATimeout(t *testing.T) {

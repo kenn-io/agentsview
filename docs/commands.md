@@ -1,8 +1,20 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-03
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
+
+## Start from help
+
+On `main` (unreleased), `agentsview --help` includes a numbered workflow for
+syncing sources, finding sessions, reading transcripts, and checking usage.
+It explains session IDs, backend selection, output streams, exit codes, and
+environment variables. Run `agentsview source list --json` for the provider
+catalog, built-in source locations, and environment override names. It does not
+resolve configured directory arrays. Run `agentsview openapi` for the API schema.
+
+Use `agentsview session --help` for common backend and output flags. Core
+commands include examples and describe their limits.
 
 ## Recover from CLI errors
 
@@ -523,7 +535,7 @@ On startup, the server:
 1. Loads or creates `~/.agentsview/sessions.db`
 1. Runs initial sync across all discovered session directories
 1. Starts the file watcher (500ms event batching; watcher sync starts remain at
-    least five seconds apart)
+    least five seconds apart by default; see [`sync_interval`](/docs/configuration/#config-file))
 1. Starts periodic sync (every 15 minutes)
 1. Serves the Svelte SPA and REST API
 
@@ -1992,6 +2004,7 @@ agentsview session export <id>           # stream raw source file
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
+agentsview session diagnose <id> --format json  # archived usage and diagnostic evidence
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
 agentsview session usage-batch <id>...   # ordered usage results for several sessions
@@ -2013,8 +2026,9 @@ and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Semantic and hybrid results can be scoped with
 `--scope top|all|subordinate` (default `all`) to include or exclude sidechain
 and subagent content — see
-[Semantic Search](/docs/semantic-search/#scoping-results-scope). The
-human-readable table includes an `AGE` column derived from each match's
+[Semantic Search](/docs/semantic-search/#scoping-results-scope). HTTP and MCP
+also accept `scope` for substring and regex searches. CLI lexical searches use
+`--include-children` instead. The human-readable table includes an `AGE` column derived from each match's
 timestamp, so recent evidence is visible without opening the session. Matches
 without a usable timestamp show `—`.
 
@@ -2246,6 +2260,9 @@ agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--format hu
 agentsview friction digest [--date D | --from D --to D] [--format md|json | --json]
 agentsview friction findings [--date D] [--kind K] [--session ID] [--limit N] [--cursor C] [--format table|json | --json]
 agentsview friction patterns [--kind K] [--since D] [--limit N] [--cursor C] [--format table|json | --json]
+agentsview friction file <fingerprint> [--dry-run] [--format human|json | --json]
+agentsview friction link <fingerprint> <issue>
+agentsview friction unlink <fingerprint>
 ```
 
 - `friction run` without flags builds every complete local day that has no
@@ -2256,14 +2273,18 @@ agentsview friction patterns [--kind K] [--since D] [--limit N] [--cursor C] [--
 - `friction digest` prints the latest digest as Markdown unless `--date` or a
   range is given. `--format json` prints the stored summary JSON.
 - `friction findings` lists stored findings. `friction patterns` ranks
-  recurring patterns by occurrences. `--kind` accepts `correction`, `error`,
-  `workaround`, `deferral`, `pattern`, `frustration`, and `interruption`.
+  recurring patterns by occurrences and shows each pattern's Kata issue.
+  `--kind` accepts `correction`, `error`, `workaround`, `deferral`, `pattern`,
+  `frustration`, and `interruption`.
+- `friction file` files a pattern to [Kata](/docs/kata/), or links the issue
+  Kata already holds for it. `friction link` and `friction unlink` set or
+  remove a pattern's issue by hand. Only the AgentsView hub files.
 
 Read commands use the running daemon (starting one when needed), an explicit
 `--server <url>`, or `--pg` for the configured PostgreSQL hub. Provide a
 `--server` token with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`.
-`friction run` uses the daemon when one is running and otherwise writes the
-local archive directly.
+`friction run`, `friction file`, `friction link`, and `friction unlink` use the
+daemon when one is running and otherwise write the local archive directly.
 
 ______________________________________________________________________
 

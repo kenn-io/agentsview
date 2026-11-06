@@ -48,7 +48,7 @@ func TestS3CredentialsIncludeSessionToken(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
 	t.Setenv("AWS_SESSION_TOKEN", "session-token")
 
-	got, err := s3Credentials().GetWithContext(nil)
+	got, err := s3Credentials().Retrieve(t.Context())
 
 	require.NoError(t, err)
 	assert.Equal(t, "access-key", got.AccessKeyID)
@@ -62,7 +62,7 @@ func TestS3ClientRejectsNonLoopbackHTTPEndpoint(t *testing.T) {
 	t.Setenv("AWS_S3_ENDPOINT", "http://example.com:9000")
 	t.Setenv("AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT", "")
 
-	_, err := s3Client()
+	_, err := s3Client(t.Context(), "bucket")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "insecure S3 endpoint")
@@ -72,9 +72,10 @@ func TestS3ClientAllowsLoopbackHTTPEndpoint(t *testing.T) {
 	t.Setenv("AWS_ACCESS_KEY_ID", "access-key")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
 	t.Setenv("AWS_S3_ENDPOINT", "http://127.0.0.1:9000")
+	t.Setenv("AWS_REGION", "us-east-1")
 	t.Setenv("AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT", "")
 
-	_, err := s3Client()
+	_, err := s3Client(t.Context(), "bucket")
 
 	require.NoError(t, err)
 }
@@ -84,8 +85,9 @@ func TestS3ClientAllowsExplicitUnsafeHTTPEndpoint(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
 	t.Setenv("AWS_S3_ENDPOINT", "http://example.com:9000")
 	t.Setenv("AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT", "true")
+	t.Setenv("AWS_REGION", "us-east-1")
 
-	_, err := s3Client()
+	_, err := s3Client(t.Context(), "bucket")
 
 	require.NoError(t, err)
 }

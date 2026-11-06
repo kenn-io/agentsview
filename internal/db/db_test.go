@@ -6349,6 +6349,7 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	// recreate the table without is_system.
 	_, err = raw.ExecContext(t.Context(), `
 		DROP VIEW IF EXISTS message_search_content;
+		DROP VIEW IF EXISTS message_trigram_source;
 		CREATE TABLE messages_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,
@@ -9210,13 +9211,15 @@ func TestMigration_TerminationStatusColumn(t *testing.T) {
 	requireNoError(t, err, "raw open")
 
 	// SQLite supports DROP COLUMN as of 3.35; the in-tree driver is
-	// recent enough. Drop the index and the trigger that references the
+	// recent enough. Drop the index and the triggers that reference the
 	// column first since SQLite blocks dropping a column referenced by an
 	// index or a trigger.
 	_, err = conn.ExecContext(t.Context(), `DROP INDEX IF EXISTS idx_sessions_termination_status`)
 	requireNoError(t, err, "drop termination_status index")
 	_, err = conn.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue`)
 	requireNoError(t, err, "drop artifact_sessions_update_queue trigger")
+	_, err = conn.ExecContext(t.Context(), usageChangeJournalTriggerDropsSQL)
+	requireNoError(t, err, "drop usage change journal triggers")
 	_, err = conn.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN termination_status`)
 	requireNoError(t, err, "drop termination_status column")
 
@@ -9878,7 +9881,7 @@ func TestSessionGroupColumnsMigrateWithoutLosingRuns(t *testing.T) {
 	require.NoError(t, database.Close())
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN group_key`)
+	_, err = conn.ExecContext(t.Context(), usageChangeJournalTriggerDropsSQL+`DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN group_key`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	database, err = Open(t.Context(), path)

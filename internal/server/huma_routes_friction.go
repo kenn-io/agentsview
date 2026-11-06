@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +32,7 @@ func (s *Server) registerFrictionRoutes() {
 	s.get(group, "/friction/findings", "List friction findings", s.humaListFrictionFindings)
 	s.get(group, "/friction/patterns", "List friction patterns", s.humaListFrictionPatterns)
 	s.postLong(group, "/friction/run", "Run friction review", s.humaRunFrictionReview)
+	s.registerFrictionIssueRoutes(group)
 }
 
 // --- inputs ---
@@ -198,6 +197,8 @@ type frictionPatternItem struct {
 	SessionCount    int    `json:"session_count"`
 	LastSubjectID   string `json:"last_subject_id"`
 	LastOrdinal     *int   `json:"last_ordinal"`
+	// Issue is the Kata issue filed or linked for this pattern.
+	Issue *frictionIssueItem `json:"issue,omitempty"`
 }
 
 type frictionRunResponse struct {
@@ -275,24 +276,6 @@ func (s *Server) frictionRunAllowed(ctx context.Context) bool {
 	return s.frictionRequireAuth() || isLocalhostContext(ctx)
 }
 
-// frictionSessionURL mirrors the browser router: agent prefix and opaque id
-// are separate path segments (servicehttp.sessionWebURL uses the same split).
-func frictionSessionURL(base, sessionID string, ordinal *int) string {
-	if base == "" || sessionID == "" {
-		return ""
-	}
-	prefix, rest, found := strings.Cut(sessionID, ":")
-	path := url.PathEscape(prefix)
-	if found {
-		path += "/" + url.PathEscape(rest)
-	}
-	u := base + "/sessions/" + path
-	if ordinal != nil {
-		u += "?msg=" + strconv.Itoa(*ordinal)
-	}
-	return u
-}
-
 func frictionSignalItems(sigs []friction.Signal, base string) []frictionSignal {
 	out := make([]frictionSignal, 0, len(sigs))
 	for _, sig := range sigs {
@@ -307,7 +290,7 @@ func frictionSignalItems(sigs []friction.Signal, base string) []frictionSignal {
 		}
 		if item.SubjectKind == friction.SubjectSession {
 			// Diagnostic identities are not sessions; they get no link.
-			item.SessionURL = frictionSessionURL(base, sig.SubjectID, sig.Ordinal)
+			item.SessionURL = friction.SessionURL(base, sig.SubjectID, sig.Ordinal)
 		}
 		if !sig.OccurredAt.IsZero() {
 			item.OccurredAt = new(sig.OccurredAt.UTC())
@@ -398,6 +381,7 @@ func frictionPatternItems(rows []db.FrictionPattern) []frictionPatternItem {
 			FirstSeenDate: p.FirstSeenDate, LastSeenDate: p.LastSeenDate,
 			OccurrenceCount: p.OccurrenceCount, SessionCount: p.SessionCount,
 			LastSubjectID: p.LastSubjectID, LastOrdinal: p.LastOrdinal,
+			Issue: frictionIssueItemFrom(p.Issue),
 		})
 	}
 	return out
@@ -491,7 +475,7 @@ func (s *Server) humaGetFrictionDigest(
 		return nil, frictionStoreError("friction digest sessions", err)
 	}
 	if base := s.frictionPublicURL(); base != "" {
-		resp.WebURL = base + "/friction?date=" + url.QueryEscape(d.Date)
+		resp.WebURL = friction.DigestURL(base, d.Date)
 	}
 	return &jsonOutput[frictionDigestResponse]{Body: resp}, nil
 }

@@ -38,6 +38,8 @@ var (
 	ErrInvalidResponse        = errors.New("kata response shape drifted")
 	ErrIdempotencyKeyRequired = errors.New("kata idempotency key required")
 	ErrNotReady               = errors.New("kata not ready")
+	ErrInvalidIssueRef        = errors.New("kata: invalid issue ref")
+	ErrIssueInOtherProject    = errors.New("kata issue belongs to a different project")
 )
 
 // Config is the resolved connection configuration. Hub identifies the filing

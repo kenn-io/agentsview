@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -114,11 +115,14 @@ func (db *DB) GetSessionStats(
 	for _, r := range rows {
 		sessionIDs = append(sessionIDs, r.id)
 	}
+	slices.Sort(sessionIDs)
 	sessionIDsAll := make([]string, 0, len(rowsWithSubagents))
 	for _, r := range rowsWithSubagents {
 		sessionIDsAll = append(sessionIDsAll, r.id)
 	}
-	accum, err := populateVelocityAccumulator(ctx, db, sessionIDs, tz)
+	accum, err := populateVelocityAccumulator(
+		ctx, db, sessionIDs, tz,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("populating velocity accumulator: %w", err)
 	}
@@ -451,12 +455,17 @@ func (db *DB) loadSessionsInWindow(
 	// because their tokens overlap their root session. The predicate is
 	// the same one the analytics builders use, via the shared helper, so
 	// the two paths can't drift.
+	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
+	if to.Sub(from) > analyticsDateIndexMaxWindow {
+		// Keep the same wide-window scan plan as buildWhereWithDate.
+		dateCol = "+" + dateCol
+	}
 	preds := []string{
 		"message_count > 0",
 		RelationshipExclusionSQL(includeSubagents, false, ""),
 		"deleted_at IS NULL",
-		"COALESCE(NULLIF(started_at, ''), created_at) >= ?",
-		"COALESCE(NULLIF(started_at, ''), created_at) < ?",
+		dateCol + " >= ?",
+		dateCol + " < ?",
 	}
 	args := []any{
 		from.UTC().Format(time.RFC3339Nano),

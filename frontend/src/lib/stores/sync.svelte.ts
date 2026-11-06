@@ -230,6 +230,7 @@ class SyncStore {
       this.markRemoteReachable(true);
       this.versionMismatch = commitsDisagree(this.buildCommit, this.serverVersion.commit);
     } catch (error) {
+      events.settleStartup();
       if (updateBackendHealth) {
         this.markBackendFailure(error);
       }
@@ -344,17 +345,30 @@ class SyncStore {
 
   watchSession(sessionId: string, onUpdate: () => void, onTiming?: (t: SessionTiming) => void) {
     this.unwatchSession();
+    let settle!: (seen: boolean) => void;
+    const ready = new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => settle(false), 1000);
+      settle = (seen) => {
+        clearTimeout(timer);
+        resolve(seen);
+      };
+    });
     const open = () => {
       this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
       const es = this.watchEventSource;
+      es.addEventListener("error", () => {
+        if (this.watchEventSource !== es) return;
+        settle(false);
+      });
       es.addEventListener("session_ready", () => {
         if (this.watchEventSource !== es) return;
+        settle(true);
         onUpdate();
       });
     };
     if (typeof document === "undefined") {
       open();
-      return;
+      return ready;
     }
     this.watchVisibilityHandler = () => {
       if (document.hidden) {
@@ -367,6 +381,8 @@ class SyncStore {
     };
     document.addEventListener("visibilitychange", this.watchVisibilityHandler);
     if (!document.hidden) open();
+    else settle(false);
+    return ready;
   }
 
   unwatchSession() {

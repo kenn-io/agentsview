@@ -108,6 +108,106 @@ func TestActivityReportCandidateSourcePreservesRangeEdgePairs(t *testing.T) {
 		"left pruning and right successor lookup must preserve adjacency")
 }
 
+// TestActivityReportCandidateSourcePairsAndAttributesModels pins how the
+// candidate query picks each message's successor and prior model: rows
+// without a timestamp are skipped, an assistant model counts only when its
+// timestamp is strictly later than the previous timestamped row's, and
+// rows outside the range still act as neighbours.
+func TestActivityReportCandidateSourcePairsAndAttributesModels(t *testing.T) {
+	ctx := t.Context()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+
+	type row struct {
+		session string
+		ordinal int
+		role    string
+		ts      string // empty means NULL
+		model   string
+	}
+	rows := []row{
+		{"attr", 0, "user", "2026-06-13T23:00:00Z", ""},
+		// Before the range, but its model carries into the day.
+		{"attr", 1, "assistant", "2026-06-13T23:10:00Z", "model-early"},
+		{"attr", 2, "user", "", ""},
+		{"attr", 3, "user", "2026-06-14T10:00:00Z", ""},
+		{"attr", 4, "user", "", ""},
+		// Same timestamp as the previous timestamped row.
+		{"attr", 5, "assistant", "2026-06-14T10:00:00Z", "model-tied"},
+		// Earlier than the previous timestamped row.
+		{"attr", 6, "assistant", "2026-06-14T09:59:00Z", "model-backwards"},
+		{"attr", 7, "assistant", "2026-06-14T10:05:00Z", ""},
+		{"attr", 8, "user", "2026-06-14T10:06:00Z", "model-user"},
+		{"attr", 9, "assistant", "", "model-untimed"},
+		// Its previous timestamped row is ordinal 8, past the NULL at 9.
+		{"attr", 10, "assistant", "2026-06-14T10:07:00Z", "model-late"},
+		{"attr", 11, "tool", "2026-06-14T23:58:00Z", ""},
+		// After the range, but still closes ordinal 11.
+		{"attr", 12, "user", "2026-06-15T00:30:00Z", ""},
+		// The first timestamped row has no previous timestamp to beat.
+		{"first", 0, "assistant", "2026-06-14T12:00:00Z", "model-first"},
+		{"first", 1, "user", "2026-06-14T12:01:00Z", ""},
+		// Not requested.
+		{"other", 0, "user", "2026-06-14T11:00:00Z", ""},
+		{"other", 1, "assistant", "2026-06-14T11:01:00Z", "model-other"},
+	}
+	for i, r := range rows {
+		var ts any
+		if r.ts != "" {
+			ts = r.ts
+		}
+		_, err := conn.ExecContext(ctx, `
+			INSERT INTO messages (id, session_id, ordinal, role, content, timestamp, model)
+			VALUES (?, ?, ?, ?, '', CAST(? AS TIMESTAMP), ?)`,
+			i+1, r.session, r.ordinal, r.role, ts, r.model)
+		require.NoError(t, err)
+	}
+
+	at := func(value string) time.Time {
+		t.Helper()
+		parsed, err := time.Parse(time.RFC3339, value)
+		require.NoError(t, err)
+		return parsed
+	}
+	candidate := func(
+		session string, start, end int, startTS, endTS, role, model, prior string,
+	) activity.IntervalCandidate {
+		return activity.IntervalCandidate{
+			SessionID: session, StartOrdinal: start, EndOrdinal: end,
+			Start: at(startTS), End: at(endTS),
+			ClosingRole: role, ClosingModel: model, PriorModel: prior,
+		}
+	}
+	want := []activity.IntervalCandidate{
+		candidate("attr", 6, 7, "2026-06-14T09:59:00Z", "2026-06-14T10:05:00Z",
+			"assistant", "", "model-early"),
+		candidate("attr", 3, 5, "2026-06-14T10:00:00Z", "2026-06-14T10:00:00Z",
+			"assistant", "model-tied", "model-early"),
+		candidate("attr", 5, 6, "2026-06-14T10:00:00Z", "2026-06-14T09:59:00Z",
+			"assistant", "model-backwards", "model-early"),
+		candidate("attr", 7, 8, "2026-06-14T10:05:00Z", "2026-06-14T10:06:00Z",
+			"user", "model-user", "model-early"),
+		candidate("attr", 8, 10, "2026-06-14T10:06:00Z", "2026-06-14T10:07:00Z",
+			"assistant", "model-late", "model-early"),
+		candidate("attr", 10, 11, "2026-06-14T10:07:00Z", "2026-06-14T23:58:00Z",
+			"tool", "", "model-late"),
+		candidate("first", 0, 1, "2026-06-14T12:00:00Z", "2026-06-14T12:01:00Z",
+			"user", "", "unknown"),
+		candidate("attr", 11, 12, "2026-06-14T23:58:00Z", "2026-06-15T00:30:00Z",
+			"user", "", "model-late"),
+	}
+
+	var got []activity.IntervalCandidate
+	err := NewStoreFromDB(conn).ActivityReportCandidateSource(
+		[]string{"attr", "first"}, duckDayQuery(t, "2026-06-14", "UTC"),
+	)(ctx, func(c activity.IntervalCandidate) error {
+		got = append(got, c)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
 func TestDuckActivityReportIncludesToolCompletionEvents(t *testing.T) {
 	const sessionID = "tool-completion"
 	started := "2026-06-14T10:00:00Z"

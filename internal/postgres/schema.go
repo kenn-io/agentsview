@@ -709,6 +709,17 @@ CREATE TABLE IF NOT EXISTS friction_patterns (
 
 CREATE INDEX IF NOT EXISTS idx_friction_patterns_last_seen
     ON friction_patterns (last_seen_date);
+
+CREATE TABLE IF NOT EXISTS friction_issue_links (
+    fingerprint       TEXT PRIMARY KEY,
+    kata_instance_uid TEXT NOT NULL,
+    kata_project_uid  TEXT NOT NULL,
+    issue_uid         TEXT NOT NULL,
+    qualified_id      TEXT NOT NULL,
+    web_url           TEXT NOT NULL DEFAULT '',
+    source            TEXT NOT NULL,
+    linked_at         TIMESTAMPTZ NOT NULL
+);
 `
 
 func migrateMoneyColumnsPG(
@@ -1332,13 +1343,9 @@ func createContentSearchIndexesPG(ctx context.Context, pg interface {
 	return err
 }
 
-// backfillIsAutomatedPG verifies is_automated for all PG
-// sessions, correcting both false negatives (new patterns or
-// stale imported rows) and stale false positives (patterns
-// tightened since last run). The stored classifier hash records
-// which classifier wrote the current audit, but it is not a
-// complete integrity marker: rows can arrive from stale clients
-// after the hash was stamped.
+// backfillIsAutomatedPG corrects stale automation verdicts. Per-row
+// classifier stamps track freshness when available; deleting the global
+// metadata key requests a complete recheck.
 func backfillIsAutomatedPG(
 	ctx context.Context, pg *sql.DB,
 ) error {
@@ -1346,12 +1353,12 @@ func backfillIsAutomatedPG(
 	return err
 }
 
-// runSchemaDataRepairsPG runs the non-DDL correctness repairs that
+// runSchemaDataRepairsPG runs the correctness repairs that
 // EnsureSchema performs: it recomputes is_automated, backfills
 // source-curation baselines, scrubs stored project remotes, and repairs
-// token-coverage flags. These issue only row-level writes, so the
-// compatible-schema fast path can run them without the index and
-// column DDL that can block concurrent pg serve reads (issue #887).
+// token-coverage flags. The one-time automation tracking installation
+// holds an exclusive sessions lock until commit, blocking reads and writes.
+// Subsequent repairs use row-level writes.
 func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 	if err := backfillIsAutomatedPG(ctx, db); err != nil {
 		return err
@@ -1641,36 +1648,6 @@ func markProjectIdentityRemoteScrubDone(
 		return fmt.Errorf(
 			"storing project identity remote scrub metadata: %w", err,
 		)
-	}
-	return nil
-}
-
-func batchUpdateAutomatedPG(
-	ctx context.Context, pg *sql.DB,
-	ids []string, val bool,
-) error {
-	const batchSize = 500
-	for i := 0; i < len(ids); i += batchSize {
-		end := min(i+batchSize, len(ids))
-		batch := ids[i:end]
-		pb := &paramBuilder{}
-		valPh := pb.add(val)
-		phs := make([]string, len(batch))
-		for j, id := range batch {
-			phs[j] = pb.add(id)
-		}
-		_, err := pg.ExecContext(ctx,
-			"UPDATE sessions SET is_automated = "+valPh+
-				" WHERE id IN ("+
-				strings.Join(phs, ",")+
-				")",
-			pb.args...,
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"updating is_automated in PG: %w", err,
-			)
-		}
 	}
 	return nil
 }
@@ -2527,6 +2504,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "friction_digests") ||
 		!pgHasTable(ctx, db, "friction_digest_sessions") ||
 		!pgHasTable(ctx, db, "friction_patterns") ||
+		!pgHasTable(ctx, db, "friction_issue_links") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") ||
 		!pgHasTable(ctx, db, "friction_findings") {
 		return false

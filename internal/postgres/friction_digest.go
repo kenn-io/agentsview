@@ -22,11 +22,11 @@ import (
 // friction review tables. pg serve runs the friction-review job only then.
 func (s *Store) FrictionAvailable() bool { return s.runtimeState().frictionAvailable.Load() }
 
-// frictionSessionVersionColumn selects the engine's committed row version.
+// sessionVersionColumnPG selects the engine's committed row version.
 // Both values change with session updates without relying on writer versions.
-func (s *Store) frictionSessionVersionColumn(ctx context.Context) (string, error) {
+func sessionVersionColumnPG(ctx context.Context, pg hostedQuerier) (string, error) {
 	var version string
-	if err := s.pg.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
+	if err := pg.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
 		return "", fmt.Errorf("reading database engine: %w", err)
 	}
 	if strings.HasPrefix(version, "CockroachDB") {
@@ -40,13 +40,14 @@ func (s *Store) frictionSessionVersionColumn(ctx context.Context) (string, error
 // other failure is logged and also disables it, so startup never fails on
 // an optional feature (spec §20).
 func (s *Store) DetectFrictionAvailability(ctx context.Context) {
+	s.runtimeState().frictionIssueLinksWritable.Store(s.probeFrictionIssueLinkWrite(ctx))
 	for _, table := range []string{"friction_digests", "friction_digest_sessions", "friction_patterns"} {
 		if !pgHasTable(ctx, s.pg, table) {
 			s.runtimeState().frictionAvailable.Store(false)
 			return
 		}
 	}
-	column, err := s.frictionSessionVersionColumn(ctx)
+	column, err := sessionVersionColumnPG(ctx, s.pg)
 	if err == nil {
 		_, err = s.pg.ExecContext(ctx, "SELECT "+column+" FROM sessions LIMIT 0")
 	}
@@ -165,7 +166,7 @@ func (s *Store) FrictionSubjectsForDate(
 	if err != nil {
 		return nil, err
 	}
-	column, err := s.frictionSessionVersionColumn(ctx)
+	column, err := sessionVersionColumnPG(ctx, s.pg)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +273,7 @@ func (s *Store) SaveFrictionDigest(
 	ctx context.Context, d db.FrictionDigest,
 	subjects []db.FrictionDigestSubject, patterns []db.FrictionPatternUpdate,
 ) error {
-	column, err := s.frictionSessionVersionColumn(ctx)
+	column, err := sessionVersionColumnPG(ctx, s.pg)
 	if err != nil {
 		return err
 	}

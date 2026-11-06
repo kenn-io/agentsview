@@ -25,8 +25,12 @@ import (
 
 func newFrictionCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "friction",
-		Short:        "Build and read the Friction Log (heuristic session review)",
+		Use:   "friction",
+		Short: "Build and read the Friction Log (heuristic session review)",
+		Long: "Build and read heuristic session-review digests, findings, and recurring patterns. " +
+			"Stored digests summarize observed friction rather than proving an outcome; use the linked sessions to inspect evidence.",
+		Example: "  agentsview friction findings --json\n" +
+			"  agentsview friction patterns --json",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -42,6 +46,9 @@ func newFrictionCommand() *cobra.Command {
 	cmd.AddCommand(newFrictionDigestCommand())
 	cmd.AddCommand(newFrictionFindingsCommand())
 	cmd.AddCommand(newFrictionPatternsCommand())
+	cmd.AddCommand(newFrictionFileCommand())
+	cmd.AddCommand(newFrictionLinkCommand())
+	cmd.AddCommand(newFrictionUnlinkCommand())
 	return cmd
 }
 
@@ -418,11 +425,15 @@ func printFrictionPatterns(w io.Writer, page *service.FrictionPatternPage) error
 		return err
 	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "COUNT\tSESSIONS\tLAST SEEN\tKIND\tFINGERPRINT\tTITLE")
+	_, _ = fmt.Fprintln(tw, "COUNT\tSESSIONS\tLAST SEEN\tKIND\tFINGERPRINT\tISSUE\tTITLE")
 	for _, p := range page.Patterns {
-		_, _ = fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\t%s\n", p.OccurrenceCount, p.SessionCount,
+		issue := "-"
+		if p.Issue != nil {
+			issue = p.Issue.QualifiedID
+		}
+		_, _ = fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\t%s\t%s\n", p.OccurrenceCount, p.SessionCount,
 			sanitizeTerminal(p.LastSeenDate), sanitizeTerminal(p.Kind),
-			sanitizeTerminal(p.Fingerprint), sanitizeTerminal(p.Title))
+			sanitizeTerminal(p.Fingerprint), sanitizeTerminal(issue), sanitizeTerminal(p.Title))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
