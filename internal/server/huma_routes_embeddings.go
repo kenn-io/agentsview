@@ -213,11 +213,11 @@ func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
 	return s.embeddingsStores[store]
 }
 
-// embeddingsManagerAfterSetup looks a missing manager up again once setup
-// reports it is no longer busy, since setup may have installed it after the
-// route's first lookup, or a later setup may have begun and withheld it.
+// embeddingsManagerAfterSetup looks the manager up again once setup reports
+// it is no longer busy, since setup may have replaced or withheld it after
+// the route's first lookup.
 func (s *Server) embeddingsManagerAfterSetup(manager EmbeddingsManager, store string, setup *EmbeddingsSetupStatus) EmbeddingsManager {
-	if manager != nil || setup == nil {
+	if setup == nil {
 		return manager
 	}
 	return s.embeddingsManagerDuringSetup(store, setup)

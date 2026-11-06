@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json/v2"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -105,7 +106,7 @@ func TestLiveEmbeddingsSetupRejectsBuildAfterManagerLookup(t *testing.T) {
 func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
 	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
-	for _, operation := range []string{"status", "generations", "activate", "retire"} {
+	for _, operation := range []string{"status", "status-stale", "generations", "activate", "retire"} {
 		t.Run(operation, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
@@ -152,6 +153,9 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 				<-activating
 			}
 			method, path := http.MethodGet, "/api/v1/embeddings/"+operation
+			if operation == "status-stale" {
+				path = "/api/v1/embeddings/status"
+			}
 			if operation == "activate" || operation == "retire" {
 				method, path = http.MethodPost, "/api/v1/embeddings/generations/"+strconv.FormatInt(generations[0].ID, 10)+"/"+operation
 			}
@@ -191,8 +195,11 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			resume()
 			got := <-completed
 			require.NoError(t, got.err)
-			if operation == "status" {
+			if operation == "status" || operation == "status-stale" {
 				assert.Equal(t, http.StatusOK, got.status, string(got.body))
+				var status vector.BuildStatus
+				require.NoError(t, json.Unmarshal(got.body, &status))
+				assert.Equal(t, "nomic-embed-text", status.Model)
 			} else {
 				assert.Equal(t, http.StatusConflict, got.status, string(got.body))
 			}
