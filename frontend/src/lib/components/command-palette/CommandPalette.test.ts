@@ -580,6 +580,22 @@ describe("CommandPalette", () => {
     unmount(semantic);
   });
 
+  it("announces searching through a status region that is already mounted", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const status = document.querySelector('[role="status"].palette-search-status');
+    expect(status).not.toBeNull();
+    expect(status?.textContent?.trim()).toBe("");
+
+    mockSearchStore.isSearching = true;
+    await enterSearchQuery("match again");
+    // Same node, new text: live regions announce changes, not insertions.
+    expect(document.querySelector('[role="status"].palette-search-status')).toBe(status);
+    expect(status?.textContent?.trim()).toBe("Searching...");
+
+    unmount(component);
+  });
+
   it("renders loading before error, empty state, and results", async () => {
     mockSearchStore.isSearching = true;
     mockSearchStore.error = { detail: "backend detail", kind: "generic" };
@@ -588,9 +604,11 @@ describe("CommandPalette", () => {
     await enterSearchQuery();
 
     const loading = document.querySelector(".palette-loading");
-    expect(loading?.getAttribute("role")).toBe("status");
-    expect(loading?.textContent).toContain("Searching");
     expect(loading?.querySelectorAll(".skeleton-row").length).toBeGreaterThan(0);
+    const status = document.querySelector('[role="status"].palette-search-status');
+    expect(status?.textContent?.trim()).toBe("Searching...");
+    expect(status?.closest('[aria-busy="true"]')).toBeNull();
+    expect(document.querySelector(".palette-results")?.getAttribute("aria-busy")).toBe("true");
     expect(document.querySelector(".palette-error")).toBeNull();
     expect(document.querySelector(".palette-item")).toBeNull();
 

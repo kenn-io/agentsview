@@ -337,13 +337,18 @@
       {/if}
     </div>
 
-    <div class="palette-results">
+    <!-- Always mounted and outside the busy results, so screen readers
+         announce "Searching..." when the text appears. -->
+    <div class="kit-sr-only palette-search-status" role="status">
+      {showSearchResults && searchStore.isSearching ? m.command_palette_searching() : ""}
+    </div>
+
+    <div class="palette-results" aria-busy={showSearchResults && searchStore.isSearching}>
       {#if showSearchResults}
         {#if searchStore.isSearching}
           <!-- Placeholder rows shaped like results keep the palette at a
                result-list size instead of a large empty box. -->
-          <div class="palette-loading" role="status" aria-busy="true">
-            <span class="kit-sr-only">{m.command_palette_searching()}</span>
+          <div class="palette-loading" aria-hidden="true">
             {#each SKELETON_ROWS as row, i (i)}
               <div class="skeleton-row" aria-hidden="true">
                 <span class="skeleton-body">
