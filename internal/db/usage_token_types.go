@@ -85,8 +85,10 @@ func (t UsageTokenTypes) SQLTotal(input, output, cacheWrite, cacheRead string) s
 		bit    UsageTokenTypes
 		column string
 	}{
-		{UsageTokenTypeInput, input}, {UsageTokenTypeOutput, output},
-		{UsageTokenTypeCacheWrite, cacheWrite}, {UsageTokenTypeCacheRead, cacheRead},
+		{UsageTokenTypeInput, input},
+		{UsageTokenTypeOutput, output},
+		{UsageTokenTypeCacheWrite, cacheWrite},
+		{UsageTokenTypeCacheRead, cacheRead},
 	} {
 		if t.normalized()&counter.bit != 0 {
 			columns = append(columns, counter.column)

@@ -85,12 +85,12 @@ func readUsageSessionCounts(ctx context.Context, conn *sql.Conn, timezoneID int6
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 	result.SessionCounts = NewUsageSessionCounts(nil)
 	for rows.Next() {
 		var id, project, agent string
 		var count int
 		if err := rows.Scan(&id, &project, &agent, &count); err != nil {
-			_ = rows.Close()
 			return err
 		}
 		if id != "" {
@@ -102,7 +102,6 @@ func readUsageSessionCounts(ctx context.Context, conn *sql.Conn, timezoneID int6
 		result.SessionCounts.ByAgent[agent] += count
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return err
 	}
 	if err := rows.Close(); err != nil {

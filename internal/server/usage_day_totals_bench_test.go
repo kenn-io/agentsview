@@ -179,7 +179,7 @@ func TestUsageTopSessionsBudget(t *testing.T) {
 		{"zoom", "cost", "project-0", "group", 100},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			input := usageTopSessionsInput{UsageFilterInput: UsageFilterInput{From: "2026-08-04", To: "2026-08-10", Timezone: "UTC", IncludeOneShot: true, Project: tc.project}, Limit: tc.limit, Sort: tc.sort, GroupBy: tc.group}
+			input := usageTopSessionsInput{From: "2026-08-04", To: "2026-08-10", Timezone: "UTC", IncludeOneShot: true, Project: tc.project, Limit: tc.limit, Sort: tc.sort, GroupBy: tc.group}
 			_, err := s.humaUsageTopSessions(t.Context(), &input)
 			require.NoError(t, err)
 			runtime.GC()
@@ -203,7 +203,7 @@ func TestUsageTopSessionsBudget(t *testing.T) {
 				assert.Equal(t, string(base), string(raw), "base/head %s", file)
 			}
 			if dir := os.Getenv("AGENTSVIEW_USAGE_RESULTS_DIR"); dir != "" {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, file), raw, 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, file), raw, 0o600))
 			}
 			t.Logf("%s sha256=%x", tc.name, sha256.Sum256(raw))
 		})
