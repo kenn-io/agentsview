@@ -173,10 +173,12 @@ func (db *DB) HasSemantic() bool {
 	return db.getVectorSearcher() != nil
 }
 
-// SemanticReadiness reports the wired searcher's metadata-only readiness.
+// SemanticReadiness reports metadata without waiting for an index replacement.
 // Searchers predating this capability remain usable but have unknown detail.
 func (db *DB) SemanticReadiness(ctx context.Context) (SemanticReadiness, error) {
-	db.vectorMu.RLock()
+	if !db.vectorMu.TryRLock() {
+		return SemanticReadiness{State: "unknown", Reason: "index_changing"}, nil
+	}
 	defer db.vectorMu.RUnlock()
 	if provider, ok := db.vectorSearcher.(SemanticReadinessProvider); ok {
 		return provider.SemanticReadiness(ctx)

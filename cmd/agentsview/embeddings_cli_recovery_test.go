@@ -204,7 +204,7 @@ func TestDaemonBuildReportsReplacedBuild(t *testing.T) {
 			select {
 			case <-firstPoll:
 			case err := <-result:
-				t.Fatalf("CLI returned before its first poll: %v", err)
+				require.FailNow(t, "CLI returned before its first poll", "%v", err)
 			}
 			releaseFailure()
 			oldManager.Wait()

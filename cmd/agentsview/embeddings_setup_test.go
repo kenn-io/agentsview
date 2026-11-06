@@ -427,6 +427,14 @@ func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, statusResponse.StatusCode)
 	require.NoError(t, statusResponse.Body.Close())
+	keywordReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/search/content?pattern=connections&mode=fts&include_one_shot=true", nil)
+	require.NoError(t, err)
+	keywordResponse, err := statusClient.Do(keywordReq)
+	require.NoError(t, err, "keyword search must remain available while semantic search drains")
+	keywordBody, readErr := io.ReadAll(keywordResponse.Body)
+	require.NoError(t, errors.Join(readErr, keywordResponse.Body.Close()))
+	assert.Equal(t, http.StatusOK, keywordResponse.StatusCode, string(keywordBody))
+	assert.Contains(t, string(keywordBody), "session-one")
 	unblock()
 	res := <-responseCh
 	require.NoError(t, res.err)
@@ -702,4 +710,33 @@ func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
 	body = embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusBadRequest)
 	assert.Contains(t, string(body), "max_batch_tokens")
 	assert.Zero(t, installs.Load(), "invalid setup must be refused before installation")
+}
+
+func TestEmbeddingsSetupStatusKeepsActiveProviderDuringSharedInstall(t *testing.T) {
+	oldInspect := inspectLocalEmbeddings
+	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
+	for _, provider := range []string{"configured Ollama", "discovered Ollama", "built-in"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg, err := config.Default()
+			require.NoError(t, err)
+			cfg.Vector.Enabled = true
+			if provider == "configured Ollama" {
+				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"ollama": {Endpoint: "http://127.0.0.1:11434/v1"}}
+			}
+			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+				return embedlocal.Status{Installing: true, DownloadBytes: 295000000, OllamaAvailable: provider == "discovered Ollama"}, nil
+			}
+			status, err := embeddingsSetupStatus(t.Context(), server.EmbeddingsSetupStatus{}, cfg)
+			require.NoError(t, err)
+			assert.Equal(t, int64(295000000), status.MissingBytes, "switch consent must still disclose the missing built-in download")
+			if provider == "built-in" {
+				assert.Equal(t, "built-in", status.Provider)
+				assert.True(t, status.Installing)
+			} else {
+				assert.Equal(t, "ollama", status.Provider)
+				assert.False(t, status.Installing, "another app's install must not replace the active Ollama state")
+				assert.Equal(t, "use-built-in", status.Action)
+			}
+		})
+	}
 }

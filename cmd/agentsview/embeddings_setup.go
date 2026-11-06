@@ -190,7 +190,7 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 	if err != nil {
 		return status, err
 	}
-	status.MissingBytes, status.Installing = inspected.DownloadBytes, inspected.Installing
+	status.MissingBytes = inspected.DownloadBytes
 	if inspected.OllamaAvailable {
 		status.Provider = "ollama"
 		if status.Enabled && status.Action == "" {
@@ -199,6 +199,7 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 	} else if inspected.DownloadBytes > 0 && status.Action == "" && status.Provider != "ollama" {
 		status.Action = "turn-on"
 	}
+	status.Installing = inspected.Installing && status.Provider != "ollama"
 	return status, nil
 }
 
