@@ -108,16 +108,14 @@ func (db *DB) BuildActivityReportArtifacts(
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		if version != "" {
-			selection = kept.Selection(f, q)
-			report, hit, err := db.keptActivityReport(ctx, selection, version, revision, f, q)
-			if err != nil {
-				return activity.CandidateArtifacts{}, err
-			}
-			if hit {
-				activity.ReportProgress(onProgress, report.Done)
-				return report.Artifacts, nil
-			}
+		selection = kept.Selection(f, q)
+		report, hit, err := db.keptActivityReport(ctx, selection, version, revision, f, q)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if hit {
+			activity.ReportProgress(onProgress, report.Done)
+			return report.Artifacts, nil
 		}
 	}
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
