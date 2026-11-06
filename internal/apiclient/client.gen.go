@@ -2383,6 +2383,50 @@ func (o *GetAPIV1SessionsRequestOptions) GetHeader() (map[string]string, error) 
 	return nil, nil
 }
 
+// PostAPIV1SessionsIngestRequestOptions is the options needed to make a request to PostAPIV1SessionsIngest.
+type PostAPIV1SessionsIngestRequestOptions struct {
+	Body *PostAPIV1SessionsIngestBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PostAPIV1SessionsIngestRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PostAPIV1SessionsIngestRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *PostAPIV1SessionsIngestRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PostAPIV1SessionsIngestRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PostAPIV1SessionsIngestRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // PostAPIV1SessionsSyncRequestOptions is the options needed to make a request to PostAPIV1SessionsSync.
 type PostAPIV1SessionsSyncRequestOptions struct {
 	Body *PostAPIV1SessionsSyncBody
@@ -5686,6 +5730,7 @@ type ClientInterface interface {
 	GetAPIV1SessionIdsResolveWithResponse(ctx context.Context, options *GetAPIV1SessionIdsResolveRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionIdsResolveResp, error)
 	GetAPIV1SessionStatsWithResponse(ctx context.Context, options *GetAPIV1SessionStatsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionStatsResp, error)
 	GetAPIV1SessionsWithResponse(ctx context.Context, options *GetAPIV1SessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsResp, error)
+	PostAPIV1SessionsIngestWithResponse(ctx context.Context, options *PostAPIV1SessionsIngestRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1SessionsIngestResp, error)
 	PostAPIV1SessionsSyncWithResponse(ctx context.Context, options *PostAPIV1SessionsSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1SessionsSyncResp, error)
 	GetAPIV1SessionsIDWithResponse(ctx context.Context, options *GetAPIV1SessionsIDRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDResp, error)
 	GetAPIV1SessionsIDChildrenWithResponse(ctx context.Context, options *GetAPIV1SessionsIDChildrenRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDChildrenResp, error)
@@ -17101,6 +17146,98 @@ func (c *Client) GetAPIV1SessionsWithResponse(ctx context.Context, options *GetA
 	}
 }
 
+// PostAPIV1SessionsIngest Ingest one explicitly pushed normalized session
+func (c *Client) PostAPIV1SessionsIngestWithResponse(ctx context.Context, options *PostAPIV1SessionsIngestRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1SessionsIngestResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/sessions/ingest",
+		Method:      "POST",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/sessions/ingest")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PostAPIV1SessionsIngestResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PostAPIV1SessionsIngestResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1SessionsIngestResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		v := PostAPIV1SessionsIngestErrorResponse(resp.Content)
+		out.Text400 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		v := PostAPIV1SessionsIngestErrorResponseText(resp.Content)
+		out.Text401 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		v := PostAPIV1SessionsIngestErrorResponseText403(resp.Content)
+		out.Text403 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		v := PostAPIV1SessionsIngestErrorResponseText404(resp.Content)
+		out.Text404 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 405:
+		v := PostAPIV1SessionsIngestErrorResponseText405(resp.Content)
+		out.Text405 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		v := PostAPIV1SessionsIngestErrorResponseText409(resp.Content)
+		out.Text409 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 413:
+		v := PostAPIV1SessionsIngestErrorResponseText413(resp.Content)
+		out.Text413 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 415:
+		v := PostAPIV1SessionsIngestErrorResponseText415(resp.Content)
+		out.Text415 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		v := PostAPIV1SessionsIngestErrorResponseText500(resp.Content)
+		out.Text500 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		v := PostAPIV1SessionsIngestErrorResponseText501(resp.Content)
+		out.Text501 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		v := PostAPIV1SessionsIngestErrorResponseText503(resp.Content)
+		out.Text503 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
 // PostAPIV1SessionsSync Sync a session
 func (c *Client) PostAPIV1SessionsSyncWithResponse(ctx context.Context, options *PostAPIV1SessionsSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1SessionsSyncResp, error) {
 	var err error
@@ -21729,6 +21866,8 @@ type PostAPIV1RemoteSyncArchiveBody = RemotesyncArchiveRequest
 
 type PostAPIV1RemoteSyncManifestBody = RemotesyncTargetSet
 
+type PostAPIV1SessionsIngestBody = ArtifactSessionPushEnvelope
+
 type PostAPIV1SessionsSyncBody = ServiceSyncInput
 
 type PatchAPIV1SessionsIDLabelsBody = UpdateSessionLabelsInputBody
@@ -24470,6 +24609,34 @@ type GetAPIV1SessionsErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionsErrorResponseJSON504 = APIErrorResponse
 
+type PostAPIV1SessionsIngestResponse = SessionPushResponse
+
+type PostAPIV1SessionsIngestErrorResponse string
+
+func (r PostAPIV1SessionsIngestErrorResponse) Error() string {
+	return "unmapped client error"
+}
+
+type PostAPIV1SessionsIngestErrorResponseText string
+
+type PostAPIV1SessionsIngestErrorResponseText403 string
+
+type PostAPIV1SessionsIngestErrorResponseText404 string
+
+type PostAPIV1SessionsIngestErrorResponseText405 string
+
+type PostAPIV1SessionsIngestErrorResponseText409 string
+
+type PostAPIV1SessionsIngestErrorResponseText413 string
+
+type PostAPIV1SessionsIngestErrorResponseText415 string
+
+type PostAPIV1SessionsIngestErrorResponseText500 string
+
+type PostAPIV1SessionsIngestErrorResponseText501 string
+
+type PostAPIV1SessionsIngestErrorResponseText503 string
+
 type PostAPIV1SessionsSyncResponse = service.SessionDetail
 
 type PostAPIV1SessionsSyncErrorResponse = APIErrorResponse
@@ -25908,6 +26075,24 @@ type GetAPIV1SessionsResp struct {
 	JSON504      *GetAPIV1SessionsErrorResponseJSON504
 }
 
+type PostAPIV1SessionsIngestResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PostAPIV1SessionsIngestResponse
+	Text400      *PostAPIV1SessionsIngestErrorResponse
+	Text401      *PostAPIV1SessionsIngestErrorResponseText
+	Text403      *PostAPIV1SessionsIngestErrorResponseText403
+	Text404      *PostAPIV1SessionsIngestErrorResponseText404
+	Text405      *PostAPIV1SessionsIngestErrorResponseText405
+	Text409      *PostAPIV1SessionsIngestErrorResponseText409
+	Text413      *PostAPIV1SessionsIngestErrorResponseText413
+	Text415      *PostAPIV1SessionsIngestErrorResponseText415
+	Text500      *PostAPIV1SessionsIngestErrorResponseText500
+	Text501      *PostAPIV1SessionsIngestErrorResponseText501
+	Text503      *PostAPIV1SessionsIngestErrorResponseText503
+}
+
 type PostAPIV1SessionsSyncResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
@@ -26439,6 +26624,71 @@ type ArtifactExchangeRequest struct {
 
 func (a ArtifactExchangeRequest) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(a))
+}
+
+type ArtifactSessionPushEnvelope struct {
+	Manifest  map[string]any                       `json:"manifest"`
+	Segments  ArtifactSessionPushEnvelope_Segments `json:"segments" validate:"required"`
+	SessionID string                               `json:"session_id" validate:"required"`
+	V         int64                                `json:"v"`
+}
+
+func (a ArtifactSessionPushEnvelope) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(a.Segments).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Segments", err)
+		}
+	}
+	if err := typesValidator.Var(a.SessionID, "required"); err != nil {
+		errors = errors.Append("SessionID", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type ArtifactSessionPushEnvelope_Segments []ArtifactSessionPushEnvelope_Segments_Item
+
+func (a ArtifactSessionPushEnvelope_Segments) Validate() error {
+	var errors runtime.ValidationErrors
+	if len(a) > 16 {
+		errors = errors.Add("Array", fmt.Sprintf("must have at most 16 items, got %d", len(a)))
+	}
+	for i, item := range a {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type ArtifactSessionPushEnvelope_Segments_Item struct {
+	Ndjson string `json:"ndjson" validate:"required"`
+	Sha256 string `json:"sha256" validate:"required"`
+}
+
+func (a ArtifactSessionPushEnvelope_Segments_Item) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(a.Ndjson, "required"); err != nil {
+		errors = errors.Append("Ndjson", err)
+	}
+	if err := typesValidator.Var(a.Sha256, "required"); err != nil {
+		errors = errors.Append("Sha256", err)
+	}
+	if err := runtime.ValidatePattern(a.Sha256, `^[0-9a-f]{64}$`); err != nil {
+		errors = errors.Append("Sha256", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type ArtifactSyncResult struct {
@@ -29383,6 +29633,16 @@ func (s ServiceUsagePairwiseComparisonSide) Validate() error {
 		return nil
 	}
 	return errors
+}
+
+type SessionPushResponse struct {
+	Agent     string `json:"agent" validate:"required"`
+	SessionID string `json:"session_id" validate:"required"`
+	Status    string `json:"status" validate:"required"`
+}
+
+func (s SessionPushResponse) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(s))
 }
 
 type SessionToolSequence struct {

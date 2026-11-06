@@ -524,6 +524,38 @@ components:
       required:
         - target
       type: object
+    ArtifactSessionPushEnvelope:
+      additionalProperties: false
+      properties:
+        manifest:
+          additionalProperties: true
+          type: object
+        segments:
+          items:
+            additionalProperties: false
+            properties:
+              ndjson:
+                type: string
+              sha256:
+                pattern: ^[0-9a-f]{64}$
+                type: string
+            required:
+              - sha256
+              - ndjson
+            type: object
+          maxItems: 16
+          type: array
+        session_id:
+          type: string
+        v:
+          format: int64
+          type: integer
+      required:
+        - v
+        - session_id
+        - manifest
+        - segments
+      type: object
     ArtifactSyncResult:
       additionalProperties: false
       properties:
@@ -7821,6 +7853,20 @@ components:
         - dirs
         - homes_supported
         - homes
+      type: object
+    SessionPushResponse:
+      additionalProperties: false
+      properties:
+        agent:
+          type: string
+        session_id:
+          type: string
+        status:
+          type: string
+      required:
+        - session_id
+        - agent
+        - status
       type: object
     SessionToolSequence:
       additionalProperties: false
@@ -20124,6 +20170,91 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Batch delete sessions
+      tags:
+        - Sessions
+  /api/v1/sessions/ingest:
+    post:
+      operationId: post-api-v1-sessions-ingest
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactSessionPushEnvelope"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionPushResponse"
+          description: Created or identical retry
+        "400":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "401":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "403":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "404":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "405":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "409":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "413":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "415":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "500":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "501":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+        "503":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Push rejected
+      summary: Ingest one explicitly pushed normalized session
       tags:
         - Sessions
   /api/v1/sessions/sidebar-index:
