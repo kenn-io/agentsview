@@ -18,6 +18,12 @@
 
   const digest = $derived(friction.digest);
   const sections = $derived(groupSignals(digest?.signals ?? []));
+  // Kata issues by fingerprint, for the finding rows.
+  const issues = $derived(
+    Object.fromEntries(
+      (digest?.patterns ?? []).flatMap((p) => (p.issue ? [[p.fingerprint, p.issue]] : [])),
+    ),
+  );
   const flagged = $derived(
     (digest?.signals?.length ?? 0) > 0 || (digest?.p0_alerts?.length ?? 0) > 0,
   );
@@ -28,6 +34,16 @@
   // Builds also need a caller the server accepts: localhost, or any caller
   // when the server requires auth. A proxied page without auth cannot build.
   const buildAllowed = $derived(sync.serverVersion?.friction_build_allowed === true);
+  // Filing needs the same write access as Build now, and a ready Kata. The
+  // page checks Kata once per visit when it may write.
+  const canFile = $derived(buildAllowed && friction.kataReady);
+  let kataChecked = false;
+  $effect(() => {
+    if (buildAllowed && !kataChecked) {
+      kataChecked = true;
+      void friction.checkKata();
+    }
+  });
   const dateOptions = $derived(
     friction.dates.map((item) => ({ name: item.date, label: item.date })),
   );
@@ -206,13 +222,14 @@
           signals={digest.signals ?? []}
           patterns={digest.patterns ?? []}
           sessions={digest.sessions}
+          {canFile}
         />
 
         <FrictionReviewSummaryPanel date={digest.date} revision={digest.revision} />
 
         {#each sections as section (section.kind)}
           {#if section.signals.length > 0}
-            <FrictionSignalSection {section} sessions={digest.sessions} />
+            <FrictionSignalSection {section} sessions={digest.sessions} {issues} />
           {/if}
         {/each}
       {:else}
