@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 const planUsageColumns = db.SessionPlanUsageColumns
@@ -82,6 +83,18 @@ func (s *Store) GetSessionPlanUsage(
 func (s *Store) GetPlanUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.PlanUsageSessionCounts, error) {
+	tally, err := s.runtimeState().planUsage.Do(ctx, kept.UsageSlot(f, false), s.keptUsageVersion(ctx), func(ctx context.Context) (*db.PlanUsageCountSummary, error) {
+		raw := f
+		raw.ModelAliases = nil
+		return s.readPlanUsageSessionCounts(ctx, raw)
+	})
+	if err != nil {
+		return db.PlanUsageSessionCounts{}, err
+	}
+	return tally.CountsFor(f.ModelAliases), nil
+}
+
+func (s *Store) readPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (*db.PlanUsageCountSummary, error) {
 	pb := &paramBuilder{}
 	b := pgUsageBoundsForFilter(pb, f)
 
@@ -129,7 +142,7 @@ WHERE ` + eventWhere
 
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
-		return db.PlanUsageSessionCounts{}, fmt.Errorf("querying pg plan usage session counts: %w", err)
+		return nil, fmt.Errorf("querying pg plan usage session counts: %w", err)
 	}
 	defer rows.Close()
 	tally := db.NewPlanUsageCountTally(f)
@@ -138,14 +151,14 @@ WHERE ` + eventWhere
 		var kind, sessionID, model string
 		var ts sql.NullTime
 		if err := rows.Scan(&kind, &sessionID, &model, &ts); err != nil {
-			return db.PlanUsageSessionCounts{}, fmt.Errorf("scanning pg plan usage session count: %w", err)
+			return nil, fmt.Errorf("scanning pg plan usage session count: %w", err)
 		}
 		if err := tally.Add(kind, sessionID, model, usageDate(ts, loc)); err != nil {
-			return db.PlanUsageSessionCounts{}, err
+			return nil, err
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return db.PlanUsageSessionCounts{}, fmt.Errorf("iterating pg plan usage session counts: %w", err)
+		return nil, fmt.Errorf("iterating pg plan usage session counts: %w", err)
 	}
-	return tally.Counts(), nil
+	return tally.Compact(), nil
 }

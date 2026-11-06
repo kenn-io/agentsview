@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
@@ -1561,6 +1562,24 @@ func (s *Store) querySessionUsageRows(
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
+	version := s.keptUsageVersion(ctx)
+	slot := kept.UsageSlot(f, true)
+	if version == "" || slot == "" {
+		return s.readDailyUsage(ctx, f)
+	}
+	result, err := s.runtimeState().dailyUsage.Do(ctx, slot, version, func(ctx context.Context) (db.DailyUsageResult, error) {
+		full := f
+		full.SkipSessionCounts = false
+		return s.readDailyUsage(ctx, full)
+	})
+	result = result.Clone()
+	if f.SkipSessionCounts {
+		result.SessionCounts = db.UsageSessionCounts{}
+	}
+	return result, err
+}
+
+func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
 	loc := f.Location()
 
 	pricing, err := s.loadPricingMap(ctx)
@@ -2150,7 +2169,17 @@ func (s *Store) GetTopSessionsByCost(
 	if limit > 100 {
 		limit = 100
 	}
+	slot := kept.UsageSlot(f, false)
+	if slot != "" {
+		slot += fmt.Sprintf("|%d|%t|%s|%d", limit, f.TopSessionsByGroup, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	}
+	out, err := s.runtimeState().topUsage.Do(ctx, slot, s.keptUsageVersion(ctx), func(ctx context.Context) ([]db.TopSessionEntry, error) {
+		return s.readTopSessions(ctx, f, limit)
+	})
+	return slices.Clone(out), err
+}
 
+func (s *Store) readTopSessions(ctx context.Context, f db.UsageFilter, limit int) ([]db.TopSessionEntry, error) {
 	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading pg pricing: %w", err)
