@@ -938,9 +938,15 @@ sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches are
 not indexed.
 
-Terms search uses `message_trigram_fts` in its session prefilter, which finds
-the sessions where each term occurs, under the same share rule per term. The
-exchange grouping still reads every message of those sessions.
+Terms search uses `message_trigram_fts` under the same share rule per term.
+When the index lists any term, the query starts from the messages it lists for
+the first such term. It finds each message's exchange from the nearest eligible
+user message at or before it and the next one after, checks the other terms
+against that exchange's messages, and joins bodies only for the page. When the
+index lists no term, the session prefilter finds the sessions where each term
+occurs and the query groups every message of those sessions into exchanges.
+Both queries must return the same rows;
+`TestSearchContentTermsAnchorMatchesScan` compares them.
 
 Triggers keep both tables current on message insert, delete, and edits to
 `content`, `dialogue_text`, or `thinking_text`. Bulk session deletes remove a
