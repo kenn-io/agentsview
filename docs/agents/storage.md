@@ -859,6 +859,22 @@ for existing archives. PostgreSQL push must also detect its absence before
 taking the schema-current fast path. Creating the index scans existing tool
 results and can delay that first startup; it does not require a session resync.
 
+Activity pairing and message counts read every timestamped message of the
+selected sessions through `idx_messages_velocity` on `(session_id, ordinal,
+role, timestamp, content_length, model, is_system, source_subtype)`. The index
+covers both queries, so they never load message rows, which carry kilobytes of
+content, thinking, and dialogue text. On a 1.7 million message test archive the
+index takes 99 MiB, 10 MiB more than its older five-column form, and a busy
+week's pairing reads 41 MiB instead of 1.8 GiB. Writable opens widen the older
+form after column migrations and log that startup is waiting; the rebuild took
+about 6 s on that archive and needs no parser resync. Read-only opens use
+whichever form the archive has. PostgreSQL keeps the five-column index.
+
+The terminal candidates query names `idx_messages_assistant_model` with
+`INDEXED BY` for its prior-model lookup. The wider velocity index also covers
+that lookup, and SQLite can otherwise choose it and step back through every
+earlier message of a transcript that records no model.
+
 SQLite keeps completed Activity reports in memory with a 128 MiB estimated-size
 budget. Entries use `database_id` and `usage_pricing_revision` as their
 version. The `usage_session_changes` journal invalidates an entry when a

@@ -4042,6 +4042,18 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 	); err != nil {
 		return err
 	}
+	// Activity pairing and message counts read the model and the counted-message
+	// flags with every timestamp. Covering them keeps those scans off message
+	// bodies. Widened here, after column migrations, since legacy archives
+	// lack source_subtype.
+	if err := ensureIndexColumnsLocked(ctx,
+		w, "idx_messages_velocity", messageVelocityIndexColumns,
+		`CREATE INDEX IF NOT EXISTS idx_messages_velocity
+		 ON messages(session_id, ordinal, role, timestamp, content_length,
+		             model, is_system, source_subtype)`,
+	); err != nil {
+		return err
+	}
 	// Widened here, after column migrations, since legacy archives lack is_automated.
 	if err := ensureIndexColumnsLocked(ctx,
 		w, "idx_sessions_parent", []string{"parent_session_id", "is_automated"},
@@ -4120,6 +4132,11 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 
 var messageSessionRoleIndexColumns = []string{
 	"session_id", "role", "is_system", "has_thinking", "has_tool_use", "source_subtype",
+}
+
+var messageVelocityIndexColumns = []string{
+	"session_id", "ordinal", "role", "timestamp", "content_length",
+	"model", "is_system", "source_subtype",
 }
 
 var usageSessionCoveringIndexColumns = []string{

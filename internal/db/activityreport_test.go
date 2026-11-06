@@ -262,7 +262,7 @@ func TestSQLiteActivityReportCandidatesMatchGoPairingAtScanBounds(t *testing.T) 
 func TestSQLiteActivityReportMessageQueryUsesExistingSessionIndex(t *testing.T) {
 	d := testDB(t)
 	plan := queryPlanOf(t, d, activityReportMessagesSQL, `["session"]`)
-	assert.Contains(t, plan, "idx_messages_velocity")
+	assert.Contains(t, plan, "USING COVERING INDEX idx_messages_velocity")
 	assert.NotContains(t, plan, "idx_messages_activity_timestamp")
 	assert.NotContains(t, plan, "SCAN messages")
 	assert.NotContains(t, plan, "TEMP B-TREE")
