@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -26,9 +27,9 @@ type sourceFreshnessRow struct {
 	newestFileSize  sql.NullInt64
 }
 
-// LoadSourceFreshnessSnapshot reads only the requested providers and their
-// stored agents through one reader transaction.
-func (db *DB) LoadSourceFreshnessSnapshot(ctx context.Context, agents []parser.AgentType) (*SourceFreshnessSnapshot, error) {
+// LoadSourceFreshnessSnapshot reads only the requested providers, their stored
+// agents, and discovered lookup paths through one reader transaction.
+func (db *DB) LoadSourceFreshnessSnapshot(ctx context.Context, agents []parser.AgentType, paths []string) (*SourceFreshnessSnapshot, error) {
 	var providers, storedAgents []string
 	for _, agent := range agents {
 		providers = append(providers, string(agent))
@@ -38,6 +39,13 @@ func (db *DB) LoadSourceFreshnessSnapshot(ctx context.Context, agents []parser.A
 	}
 	providerIn, providerArgs := InPlaceholders(providers)
 	storedIn, storedArgs := InPlaceholders(storedAgents)
+	// A JSON list keeps large discoveries within SQLite's parameter limit.
+	encodedPaths, err := json.Marshal(paths)
+	if err != nil {
+		return nil, fmt.Errorf("encoding source freshness paths: %w", err)
+	}
+	providerArgs = append(providerArgs, string(encodedPaths))
+	storedArgs = append(storedArgs, string(encodedPaths))
 	snap := &SourceFreshnessSnapshot{
 		statHash: map[SessionSourcePath]uint64{},
 		rows:     map[SessionSourcePath]*sourceFreshnessRow{},
@@ -49,7 +57,8 @@ func (db *DB) LoadSourceFreshnessSnapshot(ctx context.Context, agents []parser.A
 	defer func() { _ = tx.Rollback() }()
 
 	hashRows, err := tx.QueryContext(ctx,
-		"SELECT agent, file_path, stat_hash FROM provider_freshness WHERE agent IN "+providerIn, providerArgs...)
+		"SELECT agent, file_path, stat_hash FROM provider_freshness WHERE agent IN "+providerIn+
+			" AND file_path IN (SELECT value FROM json_each(?))", providerArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("loading provider_freshness: %w", err)
 	}
@@ -70,8 +79,9 @@ func (db *DB) LoadSourceFreshnessSnapshot(ctx context.Context, agents []parser.A
 	sessRows, err := tx.QueryContext(ctx,
 		"SELECT agent, file_path, project, data_version,"+
 			" file_mtime, file_size, deleted_at IS NULL"+
-			" FROM sessions"+
-			" WHERE file_path IS NOT NULL AND source_missing_at IS NULL AND agent IN "+storedIn, storedArgs...)
+			" FROM sessions INDEXED BY idx_sessions_file_path"+
+			" WHERE file_path IS NOT NULL AND source_missing_at IS NULL AND agent IN "+storedIn+
+			" AND file_path IN (SELECT value FROM json_each(?))", storedArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("loading source freshness rows: %w", err)
 	}

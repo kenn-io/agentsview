@@ -8615,7 +8615,7 @@ func (e *Engine) syncAllLocked(
 	tWorkers := time.Now()
 	// Discovery deduplicates sources before their freshness checks and writes.
 	// Cross-source parent-inventory demotions run after the workers finish.
-	if e.soleArchiveWriter.Load() && scope == nil && since.IsZero() && !forceDiscoveredFiles {
+	if e.soleArchiveWriter.Load() {
 		ctx = e.withSourceFreshnessSnapshot(ctx, all)
 	}
 	results := e.startWorkers(ctx, all)

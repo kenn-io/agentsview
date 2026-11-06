@@ -17,9 +17,18 @@ func (e *Engine) withSourceFreshnessSnapshot(
 	ctx context.Context, files []parser.DiscoveredFile,
 ) context.Context {
 	agents := []parser.AgentType{}
+	paths := []string{}
 	seen := map[parser.AgentType]bool{}
 	for _, file := range files {
-		if !seen[file.Agent] && e.ProviderStatHasher(file.Agent) != nil {
+		if e.ProviderStatHasher(file.Agent) == nil {
+			continue
+		}
+		path := file.Path
+		if file.ProviderSource != nil {
+			path = providerDiscoveredPath(*file.ProviderSource)
+		}
+		paths = append(paths, e.effectiveSourcePath(path))
+		if !seen[file.Agent] {
 			seen[file.Agent] = true
 			agents = append(agents, file.Agent)
 		}
@@ -27,7 +36,7 @@ func (e *Engine) withSourceFreshnessSnapshot(
 	if len(agents) == 0 {
 		return ctx
 	}
-	snap, err := e.db.LoadSourceFreshnessSnapshot(ctx, agents)
+	snap, err := e.db.LoadSourceFreshnessSnapshot(ctx, agents, paths)
 	if err != nil {
 		log.Printf("source freshness snapshot: %v", err)
 		return ctx

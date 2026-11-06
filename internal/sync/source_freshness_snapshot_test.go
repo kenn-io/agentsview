@@ -147,3 +147,21 @@ func TestSourceFreshnessSnapshotProviderSelection(t *testing.T) {
 	require.Nil(t, sourceFreshnessSnapshotFrom(fx.engine.withSourceFreshnessSnapshot(ctx, []parser.DiscoveredFile{{Agent: parser.AgentVibe}})))
 	require.NotNil(t, sourceFreshnessSnapshotFrom(fx.engine.withSourceFreshnessSnapshot(ctx, []parser.DiscoveredFile{{Agent: parser.AgentClaude}})))
 }
+
+func TestSourceFreshnessSnapshotLookupPath(t *testing.T) {
+	fx := newEngineFixture(t)
+	t.Cleanup(fx.engine.Close)
+	path := t.TempDir() + "/source.jsonl"
+	fx.engine.pathRewriter = func(path string) string { return path + ".logical" }
+	require.NoError(t, fx.db.UpsertProviderStatHash(t.Context(), parser.AgentClaude, path+".logical", 42))
+	ctx := fx.engine.withSourceFreshnessSnapshot(t.Context(), []parser.DiscoveredFile{{
+		Agent: parser.AgentClaude,
+		Path:  path + ".discovered",
+		ProviderSource: &parser.SourceRef{
+			Provider: parser.AgentClaude, DisplayPath: path,
+		},
+	}})
+	hash, found := sourceFreshnessSnapshotFrom(ctx).StatHash("claude", path+".logical")
+	require.True(t, found)
+	require.EqualValues(t, 42, hash)
+}
