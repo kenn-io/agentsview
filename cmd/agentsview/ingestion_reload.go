@@ -273,7 +273,7 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
 	err := d.restoreCollection()
 	if err == nil {
-		stats := d.engine.SyncAll(d.ctx, nil)
+		stats := syncAllReleasingStartupMaintenance(d.ctx, d.engine, nil)
 		if !stats.ProcessingComplete() {
 			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
 		}

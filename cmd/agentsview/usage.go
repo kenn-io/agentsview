@@ -466,12 +466,15 @@ func ensureFreshData(
 	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
 		if rt := FindWritableDaemonRuntime(appCfg.DataDir, appCfg.AuthToken); rt != nil {
 			api, err := apiclient.NewHTTPClient(transportFromRuntime(rt).URL, appCfg.AuthToken, &http.Client{Timeout: 30 * time.Second})
-			if err == nil {
-				ctx, _ := apiclient.TrackArchiveFreshness(ctx, func() {
-					fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
-				})
+			if err != nil {
+				fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
+			} else {
+				ctx, stale := apiclient.TrackArchiveFreshness(ctx, nil)
 				// Wake idle ingestion through an in-memory status read.
-				_, _ = api.GetAPIV1CodexCloudStatusWithResponse(ctx)
+				response, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
+				if err != nil || response.StatusCode != http.StatusOK || stale() {
+					fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
+				}
 			}
 		}
 		return

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,9 +108,12 @@ func TestIdleDirectReadSkipsSyncWhileDaemonOwnsArchive(t *testing.T) {
 			}
 			writeReloadGeminiSession(t, root, "overnight")
 
-			ensureFreshData(t.Context(), cfg, database, false)
+			stderr := captureStderr(t, func() {
+				ensureFreshData(t.Context(), cfg, database, false)
+			})
 
 			if state == "request fails" {
+				assert.Equal(t, apiclient.ArchiveStaleWarning+"\n", stderr)
 				assert.Equal(t, int64(1), reads.Load(), "the reader attempts to wake the running daemon")
 			}
 			messages, err := database.GetAllMessages(t.Context(), "gemini:overnight")
@@ -117,6 +121,34 @@ func TestIdleDirectReadSkipsSyncWhileDaemonOwnsArchive(t *testing.T) {
 			assert.Empty(t, messages, "the daemon owns ingestion even when a wake request cannot succeed")
 		})
 	}
+}
+
+func TestIdleWakeReleasesSkippedStartupMaintenance(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	cfg := config.Config{Host: "127.0.0.1", SkipInitialSync: true, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
+		AgentDirs: cfg.AgentDirs, Machine: "test-machine", DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+	tracker := server.NewIdleTracker(0, func() {})
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, nil)
+	t.Cleanup(ingestion.Stop)
+	require.False(t, engine.StartupReconciled())
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	writeReloadGeminiSession(t, root, "overnight")
+
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	ingestion.applying.Wait()
+	require.True(t, sessionImported(t, database, "gemini:overnight"))
+	requireStartupMaintenanceReleased(t, engine)
+
+	timeout := make(chan time.Time, 1)
+	timeout <- time.Now()
+	ran, err := runDeferredStartupSyncFallback(t.Context(), cfg, engine, database, nil, tracker, timeout)
+	require.NoError(t, err)
+	assert.False(t, ran, "the later startup fallback skips a pass already completed by idle wake")
 }
 
 func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {
