@@ -3288,6 +3288,12 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := ensureSubstringIndex(ctx, w, progress); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	progress.report("Backfilling database metadata")
 	if err := db.backfillIsAutomatedLocked(ctx, w); err != nil {
 		return err
@@ -5002,7 +5008,7 @@ func (db *DB) stopWALCheckpointLoop() {
 	<-done
 }
 
-// DropFTS drops the FTS table and its triggers. This makes
+// DropFTS drops the FTS tables and their triggers. This makes
 // bulk message delete+reinsert fast by avoiding per-row FTS
 // index updates. Call RebuildFTS after to restore search.
 func (db *DB) DropFTS(ctx context.Context) error {
@@ -5021,6 +5027,7 @@ func (db *DB) DropFTS(ctx context.Context) error {
 		"DROP TRIGGER IF EXISTS messages_au",
 		"DROP TABLE IF EXISTS messages_fts",
 	}
+	stmts = append(stmts, dropSubstringIndexSQL...)
 	// One transaction, so an interrupted drop cannot leave the index without
 	// its triggers while the corpus marker still says it is current.
 	tx, err := db.getWriter().BeginTx(ctx, nil)
@@ -5041,13 +5048,16 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// RebuildFTS recreates the FTS table, triggers, and
-// repopulates the index from the messages table.
+// RebuildFTS recreates the FTS tables, triggers, and
+// repopulates the indexes from the messages table.
 func (db *DB) RebuildFTS(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
 	if err := rebuildMessageFTS(ctx, w, nil); err != nil {
+		return err
+	}
+	if err := rebuildSubstringIndex(ctx, w); err != nil {
 		return err
 	}
 	if err := ensureCJKFTS(ctx, w, true); err != nil {

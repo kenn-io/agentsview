@@ -361,6 +361,10 @@ func (db *DB) searchContentSubstring(
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
 
 	like := "%" + escapeLike(f.Pattern) + "%"
+	candidates, err := db.substringCandidates(ctx, f, f.Pattern)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
 
 	var branches []string
 	var args []any
@@ -387,10 +391,11 @@ func (db *DB) searchContentSubstring(
 				0 AS src, m.id AS row_id
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
-			WHERE %s LIKE ? ESCAPE '\' AND %s AND m.%s`,
+			WHERE %s LIKE ? ESCAPE '\'%s AND %s AND m.%s`,
 			snippetExpr("COALESCE(m.dialogue_text, m.content)"), "COALESCE(m.dialogue_text, m.content)",
-			sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
+			candidates.message.sql, sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
 		args = append(args, like)
+		args = append(args, candidates.message.args...)
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "thinking") {
@@ -403,9 +408,10 @@ func (db *DB) searchContentSubstring(
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				4 AS src, m.id AS row_id
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE (%t OR m.dialogue_text IS NOT NULL OR m.content NOT LIKE ? ESCAPE '\') AND m.thinking_text LIKE ? ESCAPE '\' AND %s AND m.%s`,
-			snippetExpr("m.thinking_text"), !hasSource(f, "messages"), sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
+			WHERE (%t OR m.dialogue_text IS NOT NULL OR m.content NOT LIKE ? ESCAPE '\') AND m.thinking_text LIKE ? ESCAPE '\'%s AND %s AND m.%s`,
+			snippetExpr("m.thinking_text"), !hasSource(f, "messages"), candidates.thinking.sql, sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
 		args = append(args, like, like)
+		args = append(args, candidates.thinking.args...)
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "tool_input") {
@@ -679,6 +685,10 @@ func (db *DB) regexCandidateRows(
 ) (*sql.Rows, error) {
 	scope, scopeArgs := sessionScopeSubquery(f)
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
+	candidates, err := db.substringCandidates(ctx, f, lit)
+	if err != nil {
+		return nil, err
+	}
 
 	var branches []string
 	var args []any
@@ -699,7 +709,8 @@ func (db *DB) regexCandidateRows(
 			SystemPrefixSQL("m.content", "m.role")
 	}
 	if hasSource(f, "messages") {
-		w := prefilterClause("COALESCE(m.dialogue_text, m.content)")
+		w := prefilterClause("COALESCE(m.dialogue_text, m.content)") + candidates.message.sql
+		args = append(args, candidates.message.args...)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
@@ -717,7 +728,8 @@ func (db *DB) regexCandidateRows(
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "thinking") {
-		w := prefilterClause("m.thinking_text")
+		w := prefilterClause("m.thinking_text") + candidates.thinking.sql
+		args = append(args, candidates.thinking.args...)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
