@@ -54,7 +54,6 @@
       .map((call) => call.category),
   ));
   let measuredRows = $derived(timing?.by_category.filter((cat) => measuredCategories.has(cat.category)) ?? []);
-  let unmeasuredRows = $derived(timing?.by_category.filter((cat) => !measuredCategories.has(cat.category)) ?? []);
   let toolTimeMeasured = $derived(timing?.tool_call_count === 0 || measuredCategories.size > 0);
   let activityKinds: { kind: ActivityKind; label: string }[] = $derived([
     { kind: "tool", label: m.session_vitals_activity_tool() },
@@ -525,7 +524,7 @@
       {/each}
     </section>
 
-    {#if timing.by_category.length > 0}
+    {#if measuredRows.length > 0}
       <section class="v-section">
         <header class="v-h">
           <span>{m.session_vitals_time_spent()}</span>
@@ -566,32 +565,6 @@
             <span class="agg-val">{formatDuration(cat.duration_ms)}</span>
           </button>
         {/each}
-        <!-- Categories without a reading: "Not measured" once as a muted
-             note, then their names as one wrapping row of neutral chips that
-             still toggle the filter. -->
-        {#if unmeasuredRows.length > 0}
-          <div class="unmeasured-line">
-            <span class="unmeasured-label">{m.session_vitals_not_measured()}</span>
-            <div class="unmeasured-chips">
-              {#each unmeasuredRows as cat (cat.category)}
-                {@const isActive = categoryFilter === cat.category}
-                <Chip
-                  size="xs"
-                  tone="neutral"
-                  uppercase={false}
-                  interactive
-                  class={[
-                    "unmeasured-cat",
-                    isActive && "active",
-                    categoryFilter !== null && !isActive && "dimmed",
-                  ].filter(Boolean).join(" ")}
-                  style={isActive ? `--ring: ${categoryToken(cat.category)};` : undefined}
-                  onclick={() => toggleCategory(cat.category)}
-                >{cat.category}</Chip>
-              {/each}
-            </div>
-          </div>
-        {/if}
       </section>
     {/if}
 
@@ -1106,37 +1079,6 @@
     display: block;
     height: 100%;
     border-radius: 1px;
-  }
-  /* Categories with no reading: a muted "Not measured" note, then the
-     category names as neutral chips that stay filter buttons. */
-  .unmeasured-line {
-    display: grid;
-    gap: 6px;
-    margin: 4px 0 0;
-  }
-  .unmeasured-label {
-    font-size: 11px;
-    line-height: 1.4;
-    color: var(--text-muted);
-  }
-  .unmeasured-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  .unmeasured-chips :global(.unmeasured-cat) {
-    font-family: var(--font-mono);
-    transition: opacity 0.18s, box-shadow 0.12s, background 0.12s;
-  }
-  /* Interactive kit-ui chips have no border, so the selected outline is
-     an inset shadow; it adds no width, so the row does not shift. */
-  .unmeasured-chips :global(.unmeasured-cat.active) {
-    background: color-mix(in srgb, var(--ring, transparent) 12%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring, transparent) 45%, transparent);
-    color: var(--text-primary);
-  }
-  .unmeasured-chips :global(.unmeasured-cat.dimmed) {
-    opacity: 0.4;
   }
   .agg-val {
     min-width: 56px;
