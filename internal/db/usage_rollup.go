@@ -363,6 +363,12 @@ func (c *usageRollupCoordinator) ensureWindow(
 // one at a time in batch order, so each install holds the write lock for one
 // batch. Once every caller has left, batches that have not started to install
 // are dropped; the next request rebuilds them.
+//
+// Batches also take their connections in batch order. A batch holds its
+// connection while it waits for the earlier batch to install, so the earliest
+// unfinished batch of every window always holds one and can finish. If a later
+// batch could take a connection first, concurrent windows could fill the pool
+// with batches that all wait on earlier batches that have none.
 func (c *usageRollupCoordinator) ensureBatches(
 	call *usageRollupCall, key string, snapshot usageQuerySnapshot,
 	fills map[string]usageFillResult, resolver *export.PricingResolver,
@@ -387,10 +393,13 @@ func (c *usageRollupCoordinator) ensureBatches(
 		snapshot.CursorHighWater = 0
 	}
 	turns := make([]chan struct{}, len(batches)+1)
+	acquired := make([]chan struct{}, len(batches)+1)
 	for i := range turns {
 		turns[i] = make(chan struct{})
+		acquired[i] = make(chan struct{})
 	}
 	close(turns[0])
+	close(acquired[0])
 	installs := make(map[string]usageRollupInstall)
 	var metrics usageRollupMetrics
 	var errs error
@@ -411,16 +420,25 @@ func (c *usageRollupCoordinator) ensureBatches(
 				return !failed && c.keepCall(call, key)
 			}
 			for i := int(next.Add(1) - 1); i < len(batches); i = int(next.Add(1) - 1) {
+				<-acquired[i]
 				if !proceed() {
+					close(acquired[i+1])
 					close(turns[i+1])
 					continue
 				}
-				canInstall := func() bool {
-					<-turns[i]
-					return proceed()
+				conn, err := c.cache.db.Conn(c.ctx)
+				close(acquired[i+1])
+				var built map[string]usageRollupInstall
+				var measured usageRollupMetrics
+				if err == nil {
+					canInstall := func() bool {
+						<-turns[i]
+						return proceed()
+					}
+					built, measured, err = c.ensureNow(
+						c.ctx, conn, batches[i], batchFills[i], builderResolver, catalogHash, canInstall)
+					err = errors.Join(err, conn.Close())
 				}
-				built, measured, err := c.ensureNow(
-					c.ctx, batches[i], batchFills[i], builderResolver, catalogHash, canInstall)
 				close(turns[i+1])
 				mu.Lock()
 				maps.Copy(installs, built)
@@ -454,17 +472,13 @@ func (c *usageRollupCoordinator) keepCall(call *usageRollupCall, key string) boo
 // it: that session's own notification fill installs new facts, which makes its
 // rollup install stale and rebuilds it on a later aggregation.
 func (c *usageRollupCoordinator) ensureNow(
-	ctx context.Context, snapshot usageQuerySnapshot,
+	ctx context.Context, conn *sql.Conn, snapshot usageQuerySnapshot,
 	fills map[string]usageFillResult, resolver *export.PricingResolver, catalogHash string,
 	canInstall func() bool,
 ) (map[string]usageRollupInstall, usageRollupMetrics, error) {
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
 	pricing := newUsagePricingIdentities(resolver)
-	conn, err := c.cache.db.Conn(ctx)
-	if err != nil {
-		return nil, usageRollupMetrics{}, err
-	}
-	defer conn.Close()
+	var err error
 	var metrics usageRollupMetrics
 	currentFills := maps.Clone(fills)
 	// A concurrent fill can replace a session's facts or add a sibling to a
