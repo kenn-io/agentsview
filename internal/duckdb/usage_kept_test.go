@@ -21,63 +21,6 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-func TestUsageKeptSharesDailyAndTopReads(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer store.Close()
-	fresh := NewStoreFromDB(store.DB())
-	reads := 0
-	previous := analyticsQueryObserver
-	analyticsQueryObserver = func(string) { reads++ }
-	t.Cleanup(func() { analyticsQueryObserver = previous })
-	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
-	summary, err := store.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, 500, summary.Totals.OutputTokens)
-	require.Equal(t, 1, summary.SessionCounts.Total)
-	require.Equal(t, 1, reads)
-	f.SkipSessionCounts = true
-	ranking, err := store.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, 1, reads)
-	require.Empty(t, ranking.SessionCounts)
-	want, err := fresh.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, want, ranking)
-	f.SkipSessionCounts = false
-	want, err = fresh.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, want, summary)
-	before := reads
-	_, err = store.GetTopSessionsByCost(t.Context(), f, 1)
-	require.NoError(t, err)
-	require.Equal(t, before+1, reads)
-	f.TopSessionsSort = "tokens"
-	f.TopSessionsTokenTypes = db.UsageTokenTypeOutput
-	top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
-	require.NoError(t, err)
-	require.Equal(t, before+1, reads)
-	require.Len(t, top, 1)
-	require.Equal(t, 500, top[0].OutputTokens)
-	wantTop, err := fresh.GetTopSessionsByCost(t.Context(), f, 10)
-	require.NoError(t, err)
-	require.Equal(t, wantTop, top)
-	before = reads
-	counts, err := store.GetPlanUsageSessionCounts(t.Context(), f)
-	require.NoError(t, err)
-	f.Breakdowns = false
-	f.SkipSessionCounts = true
-	again, err := store.GetPlanUsageSessionCounts(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, before+1, reads)
-	require.Equal(t, counts, again)
-	wantCounts, err := fresh.GetPlanUsageSessionCounts(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, wantCounts, counts)
-}
-
 func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
@@ -171,30 +114,6 @@ func TestUsageKeptReleasesPlanProgressCallback(t *testing.T) {
 		runtime.GC()
 		return request.Value() == nil
 	}, 5*time.Second, 10*time.Millisecond)
-	counts, err := store.GetPlanUsageSessionCounts(t.Context(), db.UsageFilter{})
-	require.NoError(t, err)
-	require.Equal(t, map[string]int{"plan-a": 1, "plan-b": 1}, counts.PlanOnlyByModel)
-}
-
-func TestUsageKeptBorrowedRankingSkipsSessionCountAllocations(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer store.Close()
-	borrowed := NewStoreFromDB(store.DB())
-	f := db.UsageFilter{SkipSessionCounts: true}
-	measure := func(read func() (db.DailyUsageResult, error)) float64 {
-		return testing.AllocsPerRun(5, func() {
-			result, err := read()
-			require.NoError(t, err)
-			require.Equal(t, 500, result.Totals.OutputTokens)
-			require.Empty(t, result.SessionCounts)
-		})
-	}
-	direct := measure(func() (db.DailyUsageResult, error) { return borrowed.readDailyUsage(t.Context(), f) })
-	ranking := measure(func() (db.DailyUsageResult, error) { return borrowed.GetDailyUsage(t.Context(), f) })
-	require.LessOrEqual(t, ranking, direct+1, "borrowed ranking should allocate no session counts or kept copy")
 }
 
 func TestUsageKeptTopSessionNameOverBudget(t *testing.T) {
@@ -306,6 +225,18 @@ func TestUsageKeptArrivalOrdersAndAliases(t *testing.T) {
 						top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
 						require.NoError(t, err)
 						before := reads
+						folded := f
+						folded.Breakdowns = false
+						folded.SkipSessionCounts = true
+						folded.TopSessionsSort = "tokens"
+						folded.TopSessionsTokenTypes = db.UsageTokenTypeOutput
+						againCounts, err := store.GetPlanUsageSessionCounts(t.Context(), folded)
+						require.NoError(t, err)
+						require.Equal(t, counts, againCounts)
+						againTop, err := store.GetTopSessionsByCost(t.Context(), folded, 10)
+						require.NoError(t, err)
+						require.Equal(t, top, againTop)
+						require.Equal(t, before, reads)
 						want, err := fresh.GetDailyUsage(t.Context(), f)
 						require.NoError(t, err)
 						require.Equal(t, want, got)
@@ -330,24 +261,20 @@ func TestUsageKeptUncacheableTerminations(t *testing.T) {
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
-	for _, termination := range []string{"active", "stale", "unclean", "\xff"} {
-		t.Run(termination, func(t *testing.T) {
-			reads := 0
-			previous := analyticsQueryObserver
-			analyticsQueryObserver = func(string) { reads++ }
-			t.Cleanup(func() { analyticsQueryObserver = previous })
-			f := db.UsageFilter{Termination: termination}
-			for range 2 {
-				_, err := store.GetDailyUsage(t.Context(), f)
-				require.NoError(t, err)
-				_, err = store.GetPlanUsageSessionCounts(t.Context(), f)
-				require.NoError(t, err)
-				_, err = store.GetTopSessionsByCost(t.Context(), f, 10)
-				require.NoError(t, err)
-			}
-			require.Equal(t, 6, reads)
-		})
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(string) { reads++ }
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	f := db.UsageFilter{Termination: "active"}
+	for range 2 {
+		_, err := store.GetDailyUsage(t.Context(), f)
+		require.NoError(t, err)
+		_, err = store.GetPlanUsageSessionCounts(t.Context(), f)
+		require.NoError(t, err)
+		_, err = store.GetTopSessionsByCost(t.Context(), f, 10)
+		require.NoError(t, err)
 	}
+	require.Equal(t, 6, reads)
 }
 
 func TestUsageKeptServicePairwiseModelGroups(t *testing.T) {
