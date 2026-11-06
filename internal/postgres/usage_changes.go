@@ -14,6 +14,7 @@ import (
 // set-based write. The empty session ID marks pricing and identity changes.
 const markUsageChangeFunctionBodyPG = `
 BEGIN
+    PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
     IF TG_OP = 'DELETE' THEN
         INSERT INTO usage_session_changes(session_id, revision)
         SELECT DISTINCT %[1]s, 0 FROM old_rows WHERE %[2]s
@@ -35,12 +36,19 @@ END;
 `
 
 // The deferred stamp takes the counter lock at commit and holds it through
-// commit, so revisions follow commit order. Committed rows are never pending,
-// so later queued calls in the same transaction return without a revision.
+// commit, so revisions follow commit order. A transaction-local flag lets later
+// queued calls return without scanning dead index entries from the stamp update.
+// Each mark clears it before writing, including after SET CONSTRAINTS IMMEDIATE.
+// The table OID keeps flags separate when a transaction writes several schemas.
 const stampUsageChangeFunctionBodyPG = `
 DECLARE
     stamped bigint;
+    stamp_key text := 'agentsview.uc_stamped_' || TG_RELID;
 BEGIN
+    IF current_setting(stamp_key, true) = 'on' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM set_config(stamp_key, 'on', true);
     IF NOT EXISTS (SELECT 1 FROM usage_session_changes WHERE revision = 0) THEN
         RETURN NULL;
     END IF;
@@ -64,6 +72,20 @@ var usageChangeTablesPG = []struct{ table, sessionColumn string }{
 	{"source_session_project_identity_snapshots", ""}, {"source_session_project_identity_snapshot_scopes", ""},
 	{"source_worktree_project_mappings", ""}, {"source_worktree_project_mapping_scopes", ""},
 }
+
+var dropUsageChangeJournalSQL = func() string {
+	ddl := `DROP TABLE IF EXISTS usage_session_changes;
+ DROP FUNCTION IF EXISTS stamp_usage_change();
+ DO $cleanup$ BEGIN
+ IF to_regclass('sync_metadata') IS NOT NULL THEN
+     DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version');
+ END IF;
+ END $cleanup$;`
+	for _, table := range usageChangeTablesPG {
+		ddl += "DROP FUNCTION IF EXISTS mark_usage_" + table.table + "() CASCADE;"
+	}
+	return ddl
+}()
 
 func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) error {
 	column, err := sessionVersionColumnPG(ctx, pg)

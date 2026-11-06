@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,15 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/storage"
 )
-
-var dropUsageChangeJournalSQL = func() string {
-	ddl := `DROP TABLE usage_session_changes; DROP FUNCTION stamp_usage_change();
- DELETE FROM sync_metadata WHERE key IN ('usage_change_revision','usage_change_journal_version');`
-	for _, table := range usageChangeTablesPG {
-		ddl += "DROP FUNCTION mark_usage_" + table.table + "() CASCADE;"
-	}
-	return ddl
-}()
 
 func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 	t.Helper()
@@ -41,6 +33,57 @@ func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return local, syncer, store
+}
+
+func TestUsageChangeJournalBoundedCommit(t *testing.T) {
+	for _, sessions := range []int{8000, 32000} {
+		t.Run(fmt.Sprint(sessions), func(t *testing.T) {
+			_, syncer, store := newUsageJournalFixture(t)
+			ctx := t.Context()
+			before, err := store.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			tx, err := syncer.pg.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer tx.Rollback()
+			_, err = tx.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent)
+ SELECT 'bulk-' || n, 'machine', 'project', 'codex' FROM generate_series(1,$1::int) n`, sessions)
+			require.NoError(t, err)
+			started := time.Now()
+			require.NoError(t, tx.Commit())
+			elapsed := time.Since(started)
+			t.Logf("%d-session commit: %s", sessions, elapsed)
+			assert.Less(t, elapsed, 2*time.Second, "bulk journal stamping must stay bounded")
+			through, ids, err := store.LoadUsageChanges(ctx, before)
+			require.NoError(t, err)
+			assert.Equal(t, before+1, through)
+			assert.Len(t, ids, sessions)
+		})
+	}
+}
+
+func TestUsageChangeJournalWriteAfterImmediateStamp(t *testing.T) {
+	for _, mode := range []string{"IMMEDIATE", "DEFERRED"} {
+		t.Run(mode, func(t *testing.T) {
+			_, syncer, store := newUsageJournalFixture(t)
+			ctx := t.Context()
+			before, err := store.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			tx, err := syncer.pg.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer tx.Rollback()
+			_, err = tx.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('first','machine','project','codex'); SET CONSTRAINTS ALL IMMEDIATE`)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, "SET CONSTRAINTS ALL "+mode)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('later','machine','project','codex'); UPDATE sessions SET project='changed' WHERE id='first'`)
+			require.NoError(t, err)
+			require.NoError(t, tx.Commit())
+			through, ids, err := store.LoadUsageChanges(ctx, before)
+			require.NoError(t, err)
+			assert.Greater(t, through, before+1)
+			assert.ElementsMatch(t, []string{"first", "later"}, ids)
+		})
+	}
 }
 
 // newUsageJournalRole returns a login URL for a new role holding the grants.
@@ -288,6 +331,28 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	after, err = store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Greater(t, after, before)
+}
+
+func TestUsageChangeJournalInstallTimeoutStillPushes(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+	require.NoError(t, err)
+	blocker, err := store.DB().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer blocker.Rollback()
+	require.NoError(t, lockSyncMetadataRow(ctx, blocker, "usage_change_journal_lock"))
+	syncer.pg.SetMaxOpenConns(1)
+	_, err = syncer.pg.ExecContext(ctx, `SET lock_timeout = '1s'`)
+	require.NoError(t, err)
+	syncer.schemaDone = false
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "timeout-session", Project: "project", Machine: "test-machine", Agent: "codex"}))
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, result.Errors)
+	var project string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT project FROM sessions WHERE id='timeout-session'`).Scan(&project))
+	assert.Equal(t, "project", project)
 }
 
 func TestUsageChangeJournalNewerVersion(t *testing.T) {
