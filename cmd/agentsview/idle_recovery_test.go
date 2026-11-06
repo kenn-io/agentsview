@@ -76,7 +76,7 @@ func TestIdleDirectReadWakesDaemon(t *testing.T) {
 	}
 }
 
-func TestIdleDirectReadFallsBackAfterDaemonRequestFails(t *testing.T) {
+func TestIdleDirectReadSkipsSyncAfterDaemonRequestFails(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	cfg := config.Config{DataDir: t.TempDir(), Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
@@ -103,8 +103,30 @@ func TestIdleDirectReadFallsBackAfterDaemonRequestFails(t *testing.T) {
 	assert.Equal(t, int64(1), reads.Load())
 	messages, err := database.GetAllMessages(t.Context(), "gemini:overnight")
 	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "hello from overnight", messages[0].Content)
+	assert.Empty(t, messages, "the running daemon still owns ingestion after a failed wake request")
+}
+
+func TestIdleDirectReadSkipsSyncWhileDaemonOwnsArchive(t *testing.T) {
+	for _, state := range []string{"starting", "incompatible"} {
+		t.Run(state, func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			cfg := config.Config{DataDir: runtimeTestDir(t), AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+			if state == "starting" {
+				MarkDaemonStarting(cfg.DataDir)
+				t.Cleanup(func() { UnmarkDaemonStarting(cfg.DataDir) })
+			} else {
+				writeLiveRuntime(t, cfg.DataDir, false, withRuntimeAPIVersion(0))
+			}
+			writeReloadGeminiSession(t, root, "overnight")
+
+			ensureFreshData(t.Context(), cfg, database, false)
+
+			messages, err := database.GetAllMessages(t.Context(), "gemini:overnight")
+			require.NoError(t, err)
+			assert.Empty(t, messages, "the daemon owns ingestion before a compatible runtime is available")
+		})
+	}
 }
 
 func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {

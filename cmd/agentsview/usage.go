@@ -462,19 +462,19 @@ func ensureFreshData(
 		return
 	}
 
-	// A non-probe API read wakes idle ingestion and waits for the same
-	// catch-up as other readers. Read-only daemons don't sync this archive.
-	if rt := FindWritableDaemonRuntime(appCfg.DataDir, appCfg.AuthToken); rt != nil {
-		api, err := apiclient.NewHTTPClient(transportFromRuntime(rt).URL, appCfg.AuthToken, &http.Client{Timeout: 30 * time.Second})
-		if err == nil {
-			ctx, _ := apiclient.TrackArchiveFreshness(ctx, func() {
-				fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
-			})
-			// This status reads an in-memory snapshot without querying the archive.
-			if response, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx); err == nil && response.StatusCode == http.StatusOK {
-				return
+	// A writable daemon owns ingestion even while starting or incompatible.
+	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
+		if rt := FindWritableDaemonRuntime(appCfg.DataDir, appCfg.AuthToken); rt != nil {
+			api, err := apiclient.NewHTTPClient(transportFromRuntime(rt).URL, appCfg.AuthToken, &http.Client{Timeout: 30 * time.Second})
+			if err == nil {
+				ctx, _ := apiclient.TrackArchiveFreshness(ctx, func() {
+					fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
+				})
+				// Wake idle ingestion through an in-memory status read.
+				_, _ = api.GetAPIV1CodexCloudStatusWithResponse(ctx)
 			}
 		}
+		return
 	}
 
 	engine := sync.NewEngine(ctx, database, sync.EngineConfig{

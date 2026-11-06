@@ -1262,8 +1262,9 @@ A missing daemon ID returns a retry error while
 `GET /api/v1/sync/status` reports `startup_pending`, `archive_stale`, or `sync_pending`. Once
 all three are clear, it returns exit 2. Scheduled ingestion owns retries.
 
-`sync_pending` stays true while ingestion catches up after an idle period.
-It clears when the pass ends, even if a source fails. Source failures are logged.
+Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
+after an idle period. Older local clients must upgrade to interpret it.
+The field clears when the pass ends, even if a source fails. Source failures are logged.
 Archive responses carry `X-Agentsview-Archive-Stale: true` while catch-up is
 incomplete. A required parser rebuild uses the stale header independently.
 

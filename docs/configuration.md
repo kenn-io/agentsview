@@ -2462,8 +2462,8 @@ Check sync status:
 curl http://127.0.0.1:8080/api/v1/sync/status
 ```
 
-The JSON response includes `startup_pending` and `archive_stale` alongside
-sync progress.
+The JSON response includes `startup_pending`, `archive_stale`, and, starting
+with daemon API 15, `sync_pending` alongside sync progress.
 
 ## Privacy and Telemetry
 
