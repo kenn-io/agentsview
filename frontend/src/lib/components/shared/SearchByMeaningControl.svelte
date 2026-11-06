@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, SearchByMeaningHint, SearchByMeaningRow, type SearchByMeaningState } from "@kenn-io/kit-ui";
+  import { Button, formatSize, SearchByMeaningHint, SearchByMeaningRow, type SearchByMeaningState } from "@kenn-io/kit-ui";
   import { EmbeddingsService, type VectorBuildStatus } from "../../api/generated/index.js";
   import { ApiError } from "../../api/runtime.js";
   import { getLocale, m } from "../../i18n/index.js";
@@ -20,7 +20,7 @@
   });
   // Turn on approves only the download the row or hint shows; the server declines a larger one.
   const shownBytes = $derived(setup?.provider === "built-in" ? (setup.missing_bytes ?? 0) : 0);
-  const downloadLabel = $derived(m.meaning_download({ size: new Intl.NumberFormat(getLocale(), { style: "unit", unit: "megabyte", maximumFractionDigits: 0 }).format((setup?.missing_bytes ?? 0) / 1000000) }));
+  const downloadLabel = $derived(m.meaning_download({ size: formatSize(setup?.missing_bytes ?? 0, getLocale()) }));
   const labels = $derived({
     name: m.meaning_name(), off: m.meaning_off(),
     on: m.meaning_on(),
@@ -52,7 +52,7 @@
       <SearchByMeaningHint {labels} onturnon={() => void activate()} />
     {/if}
   {:else}
-    <SearchByMeaningRow state={rowState} {labels} readonly={!setup.action || !!setup.error} itemNoun={m.meaning_chunks({ count: status?.total ?? 0 })} onturnon={() => void activate()} onusebuiltin={() => {}} />
+    <SearchByMeaningRow state={rowState} {labels} locale={getLocale()} readonly={!setup.action || !!setup.error} itemNoun={m.meaning_chunks({ count: status?.total ?? 0 })} onturnon={() => void activate()} onusebuiltin={() => {}} />
   {/if}
   {#if error || setup.error}
     <div class="setup-error">

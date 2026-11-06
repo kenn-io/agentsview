@@ -7,6 +7,7 @@ import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
 import { EmbeddingsService } from "../../api/generated/index";
 import type { VectorBuildStatus } from "../../api/generated/index";
 import { ApiError } from "../../api/runtime.js";
+import { setLocale } from "../../i18n/index.js";
 
 vi.mock("../../api/runtime.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../../api/runtime.js")>();
@@ -248,6 +249,24 @@ describe("EmbeddingsSettings", () => {
     expect(progressbar?.getAttribute("aria-valuemax")).toBe("1000");
 
     unmount(component);
+  });
+
+  it("formats indexing numbers and time in the selected language, not the browser's", async () => {
+    vi.spyOn(navigator, "language", "get").mockReturnValue("en-US");
+    vi.spyOn(navigator, "languages", "get").mockReturnValue(["en-US"]);
+    setLocale("fr");
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      runningStatus(1200, { total: 3400, estimate_ready: true, eta_milliseconds: 2 * 3_600_000 }),
+    );
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    try {
+      await settle();
+      expect(document.body.textContent).toMatch(/Indexation de 1\s200 sur 3\s400/);
+      expect(document.body.textContent).toMatch(/environ 2\sheures/);
+    } finally {
+      unmount(component);
+      setLocale("en");
+    }
   });
 
   it("shows indexing while the daemon warms its estimate", async () => {
