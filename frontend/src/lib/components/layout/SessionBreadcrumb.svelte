@@ -466,6 +466,24 @@
   );
   let mainModel = $derived(formatModelEffort(mainModelInfo));
 
+  // The stats group renders only when it has a figure, so no empty group
+  // leaves a stray separator.
+  let hasStats = $derived(
+    sessionUsageBreakdownCount > 0 ||
+      !!sessionTokenSummary ||
+      !!sessionCostLabel ||
+      !!planUsageDisplay,
+  );
+
+  // The entrypoint (for example sdk-ts) is detail, so it lives in the
+  // agent's hover text, as on the sidebar row.
+  let agentTitle = $derived.by(() => {
+    if (!session) return undefined;
+    const label = agentLabel(session.agent, session.agent_label);
+    const entrypoint = entrypointBadge(session.entrypoint);
+    return entrypoint ? `${label} · ${entrypoint}` : label;
+  });
+
   let resumeModel = $derived(
     session ? messagesStore.resumeModelFor(session.id) : "",
   );
@@ -985,6 +1003,41 @@
     };
   }
 
+  // A metadata group that wraps to start a new line would lead with its
+  // separator. CSS cannot tell where a line starts, so mark those groups
+  // after layout; the style block hides their separator without changing
+  // their size, so marking cannot reflow the row.
+  function markWrappedGroups(header: HTMLElement) {
+    if (typeof ResizeObserver === "undefined") return;
+    let frame = 0;
+    const mark = () => {
+      frame = 0;
+      let previous: DOMRect | null = null;
+      for (const group of header.querySelectorAll<HTMLElement>(".meta-group")) {
+        const rect = group.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) continue;
+        group.toggleAttribute(
+          "data-wraps",
+          previous !== null && rect.top >= previous.bottom - 1,
+        );
+        previous = rect;
+      }
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(mark);
+    };
+    const resize = new ResizeObserver(schedule);
+    resize.observe(header);
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(header, { childList: true, subtree: true, characterData: true });
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      resize.disconnect();
+      mutations.disconnect();
+    };
+  }
+
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as Node;
     // Close actions menu
@@ -1231,7 +1284,7 @@
     </div>
 {/snippet}
 
-<div class="session-breadcrumb">
+<div class="session-breadcrumb" {@attach markWrappedGroups}>
   {#if !ui.isMobileViewport && !ui.sidebarOpen}
     <div
       class="sidebar-controls"
@@ -1286,235 +1339,251 @@
     <TranscriptControls />
   {/if}
   {#if session}
+    <!-- The metadata reads in groups: who ran it (agent and model), when it
+         started, what it used, then the grade and ID chips. A middot
+         separates groups; items inside a group are spaced only. Groups with
+         nothing to show are left out, so no placeholder renders. -->
     <span class="breadcrumb-meta">
-      <span
-        class="agent-badge"
-        style:--agent-ink={agentInk(session.agent)}
-      >{agentLabel(session.agent, session.agent_label)}</span>
-      {#if entrypointBadge(session.entrypoint)}
-        <span class="agent-badge entrypoint-badge">{entrypointBadge(session.entrypoint)}</span>
-      {/if}
-      {#if session.agent === "antigravity-cli" && session.transcript_fidelity === "summary"}
-        <a
-          class="summary-badge"
-          href="https://github.com/kenn-io/agentsview#antigravity-cli-high-resolution-transcripts"
-          target="_blank"
-          rel="noopener noreferrer"
-          title={m.session_breadcrumb_summary_mode_tooltip()}
-        >{m.session_breadcrumb_summary_mode()}</a>
-      {/if}
-      {#if session.parser_malformed_lines}
+      <span class="meta-group meta-identity">
         <span
-          class="malformed-badge"
-          title={m.session_breadcrumb_malformed_lines_tooltip({
+          class="agent-badge"
+          style:--agent-ink={agentInk(session.agent)}
+          title={agentTitle}
+        >{agentLabel(session.agent, session.agent_label)}</span>
+        {#if mainModelInfo.model}
+          <span
+            class="model-badge"
+            class:model-badge--with-effort={mainModelInfo.reasoningEffort}
+            title={mainModel}
+          ><span class="model-badge__model">{mainModelInfo.model}</span>{#if mainModelInfo.reasoningEffort}{" "}<span class="model-badge__effort">{mainModelInfo.reasoningEffort}</span>{/if}</span>
+        {/if}
+        {#if session.agent === "antigravity-cli" && session.transcript_fidelity === "summary"}
+          <a
+            class="summary-badge"
+            href="https://github.com/kenn-io/agentsview#antigravity-cli-high-resolution-transcripts"
+            target="_blank"
+            rel="noopener noreferrer"
+            title={m.session_breadcrumb_summary_mode_tooltip()}
+          >{m.session_breadcrumb_summary_mode()}</a>
+        {/if}
+        {#if session.parser_malformed_lines}
+          <span
+            class="malformed-badge"
+            title={m.session_breadcrumb_malformed_lines_tooltip({
+              count: session.parser_malformed_lines,
+              countLabel: formatCount(session.parser_malformed_lines),
+            })}
+          >{m.session_breadcrumb_malformed_lines({
             count: session.parser_malformed_lines,
             countLabel: formatCount(session.parser_malformed_lines),
-          })}
-        >{m.session_breadcrumb_malformed_lines({
-          count: session.parser_malformed_lines,
-          countLabel: formatCount(session.parser_malformed_lines),
-        })}</span>
-      {/if}
-      {#if (session.agent === "antigravity" || session.agent === "antigravity-cli") && session.decode_confidence === "low"}
-        <span
-          class="decode-badge"
-          title={m.session_breadcrumb_antigravity_decode_confidence_low_tooltip()}
-        >{m.session_breadcrumb_antigravity_decode_confidence_low()}</span>
-      {/if}
+          })}</span>
+        {/if}
+        {#if (session.agent === "antigravity" || session.agent === "antigravity-cli") && session.decode_confidence === "low"}
+          <span
+            class="decode-badge"
+            title={m.session_breadcrumb_antigravity_decode_confidence_low_tooltip()}
+          >{m.session_breadcrumb_antigravity_decode_confidence_low()}</span>
+        {/if}
+      </span>
       {#if session.started_at}
-        <span class="session-time">
-          {new Date(session.started_at).toLocaleDateString(
-            undefined,
-            { month: "short", day: "numeric" },
-          )}
-          {new Date(session.started_at).toLocaleTimeString(
-            undefined,
-            { hour: "2-digit", minute: "2-digit" },
-          )}
+        <span class="meta-group meta-time">
+          <span class="session-time">
+            {new Date(session.started_at).toLocaleDateString(
+              undefined,
+              { month: "short", day: "numeric" },
+            )}
+            {new Date(session.started_at).toLocaleTimeString(
+              undefined,
+              { hour: "2-digit", minute: "2-digit" },
+            )}
+          </span>
         </span>
       {/if}
-      <button
-        class="grade-badge"
-        style:--grade-ink={gradeStyle.text}
-        onclick={() => ui.toggleSignalPanel()}
-        title={m.session_breadcrumb_session_health_and_tool_sequences()}
-        aria-expanded={ui.signalPanelOpen}
-      >
-        {getGradeLabel(session.health_grade)}
-      </button>
-      {#if !twoRowHeader}
-        {@render openGroup()}
-      {/if}
-      {#if session.id}
-        {@const rawId = sessionDisplayId(session.id)}
-        <button
-          class="session-id"
-          title={m.session_breadcrumb_copy_session_id_value({ id: rawId })}
-          onclick={() => copySessionId(rawId, session.id)}
-          aria-label={m.session_breadcrumb_copy_session_id()}
-        >
-          {copiedSessionId === session.id
-            ? m.session_breadcrumb_copied()
-            : rawId.slice(0, 8)}
-        </button>
-      {/if}
-      {#if sessionTokenSummary}
-        <span class="token-badge token-badge--desktop">
-          {sessionTokenSummary}
-        </span>
-        <span
-          class="token-badge token-badge--mobile"
-          title={sessionTokenSummary}
-        >
-          {sessionTokenSummary}
-        </span>
-      {/if}
-      {#if sessionUsageBreakdownCount > 0}
-        <details class="usage-breakdown" bind:open={usageBreakdownOpen}>
-          <summary
-            class="usage-breakdown-trigger"
-            title={m.session_breadcrumb_usage_breakdown_title()}
-          >
-            {m.session_breadcrumb_usage_breakdown_steps({
-              count: sessionUsageBreakdownCount,
-              countLabel: formatCount(sessionUsageBreakdownCount),
-            })}
-          </summary>
-          {#if usageBreakdownOpen}
-            <div class="usage-breakdown-menu" {@attach keepInsidePane}>
-              {#if usageBreakdownLoading}
-                <div class="usage-breakdown-status">
-                  {m.session_breadcrumb_usage_breakdown_loading()}
-                </div>
-              {:else if sessionUsageBreakdown.length === 0}
-                <div class="usage-breakdown-status">
-                  {m.session_breadcrumb_failed()}
-                </div>
-              {:else}
-              {#each sessionUsageBreakdown as row (row.ordinal)}
-                <div class="usage-breakdown-row" title={formatBreakdownTitle(row)}>
-                  <span class="usage-breakdown-label">
-                    {row.label}
-                  </span>
-                  <span class="usage-breakdown-model">
-                    {row.model || row.source}
-                  </span>
-                  <span class="usage-breakdown-tokens">
-                    {formatBreakdownContext(row)} ctx
-                    <span aria-hidden="true">/</span>
-                    {formatCount(Math.max(0, row.output_tokens))} out
-                  </span>
-                  {#if row.has_cost}
-                    <span class="usage-breakdown-cost">
-                      {formatCost(row.cost)}
-                    </span>
+      {#if hasStats}
+        <span class="meta-group meta-stats">
+          {#if sessionUsageBreakdownCount > 0}
+            <details class="usage-breakdown" bind:open={usageBreakdownOpen}>
+              <summary
+                class="usage-breakdown-trigger"
+                title={m.session_breadcrumb_usage_breakdown_title()}
+              >
+                {m.session_breadcrumb_usage_breakdown_steps({
+                  count: sessionUsageBreakdownCount,
+                  countLabel: formatCount(sessionUsageBreakdownCount),
+                })}
+              </summary>
+              {#if usageBreakdownOpen}
+                <div class="usage-breakdown-menu" {@attach keepInsidePane}>
+                  {#if usageBreakdownLoading}
+                    <div class="usage-breakdown-status">
+                      {m.session_breadcrumb_usage_breakdown_loading()}
+                    </div>
+                  {:else if sessionUsageBreakdown.length === 0}
+                    <div class="usage-breakdown-status">
+                      {m.session_breadcrumb_failed()}
+                    </div>
+                  {:else}
+                  {#each sessionUsageBreakdown as row (row.ordinal)}
+                    <div class="usage-breakdown-row" title={formatBreakdownTitle(row)}>
+                      <span class="usage-breakdown-label">
+                        {row.label}
+                      </span>
+                      <span class="usage-breakdown-model">
+                        {row.model || row.source}
+                      </span>
+                      <span class="usage-breakdown-tokens">
+                        {formatBreakdownContext(row)} ctx
+                        <span aria-hidden="true">/</span>
+                        {formatCount(Math.max(0, row.output_tokens))} out
+                      </span>
+                      {#if row.has_cost}
+                        <span class="usage-breakdown-cost">
+                          {formatCost(row.cost)}
+                        </span>
+                      {/if}
+                    </div>
+                  {/each}
                   {/if}
                 </div>
-              {/each}
               {/if}
-            </div>
+            </details>
           {/if}
-        </details>
-      {/if}
-      {#if sessionCostLabel}
-        <span class="cost-badge" title={sessionCostTitle}>
-          {#if sessionCostIsRollup}
-            {m.session_breadcrumb_total_cost()}: {sessionCostLabel}
-          {:else}
-            {sessionCostLabel}
+          {#if sessionTokenSummary}
+            <span class="token-badge token-badge--desktop">
+              {sessionTokenSummary}
+            </span>
+            <span
+              class="token-badge token-badge--mobile"
+              title={sessionTokenSummary}
+            >
+              {sessionTokenSummary}
+            </span>
+          {/if}
+          {#if sessionCostLabel}
+            <span class="cost-badge" title={sessionCostTitle}>
+              {#if sessionCostIsRollup}
+                {m.session_breadcrumb_total_cost()}: {sessionCostLabel}
+              {:else}
+                {sessionCostLabel}
+              {/if}
+            </span>
+          {/if}
+          {#if planUsageDisplay}
+            <details class="plan-usage" bind:open={planUsageOpen}>
+              <summary
+                class="usage-breakdown-trigger plan-usage-trigger"
+                class:plan-usage-trigger--empty={!planUsageDisplay.hasFigures}
+                title={planUsageTitle}
+              >
+                {#if planUsageWarnings.length > 0}
+                  <TriangleAlertIcon size="10" strokeWidth="2.2" aria-hidden="true" />
+                {/if}
+                {planUsageDisplay.trigger}
+                {#if planUsageSrText}
+                  <span class="kit-sr-only">, {planUsageSrText}</span>
+                {/if}
+              </summary>
+              {#if planUsageOpen}
+                {@const rootId = planUsageDisplay.countedUnder}
+                {@const showFiveHour = planUsageDisplay.groups.some((g) => g.fiveHour)}
+                <div class="usage-breakdown-menu plan-usage-menu" {@attach keepInsidePane}>
+                  {#if rootId}
+                    <a
+                      class="plan-usage-headline plan-usage-root"
+                      href={router.buildSessionHref(rootId)}
+                      onclick={(event) => {
+                        event.preventDefault();
+                        planUsageOpen = false;
+                        router.navigateToSession(rootId);
+                      }}
+                    >
+                      {countedUnderLabel}
+                    </a>
+                  {:else}
+                    <div class="plan-usage-headline">{planUsageDisplay.headline}</div>
+                  {/if}
+                  {#if planUsageDisplay.staleNote}
+                    <div class="plan-usage-stale">{planUsageDisplay.staleNote}</div>
+                  {/if}
+                  {#if planUsageDisplay.totals.length > 0}
+                    <ul class="plan-usage-totals">
+                      {#each planUsageDisplay.totals as line (line)}
+                        <li>{line}</li>
+                      {/each}
+                    </ul>
+                  {/if}
+                  {#if planUsageDisplay.groups.length > 0}
+                    <Table unsorted
+                      class="plan-usage-groups"
+                      stickyHeader={false}
+                      ariaLabel={m.plan_usage_title()}
+                    >
+                      {#snippet header()}
+                        <TableHeaderCell label={m.plan_usage_col_split()} />
+                        <TableHeaderCell label={m.plan_usage_col_weekly()} numeric />
+                        {#if showFiveHour}
+                          <TableHeaderCell label={m.plan_usage_col_five_hour()} numeric />
+                        {/if}
+                        <TableHeaderCell label={m.plan_usage_col_credits()} numeric />
+                      {/snippet}
+                      {#each planUsageDisplay.groups as group (group.key)}
+                        <tr>
+                          <td>{group.label}</td>
+                          <td class="plan-usage-num">{group.weekly}</td>
+                          {#if showFiveHour}
+                            <td class="plan-usage-num">{group.fiveHour}</td>
+                          {/if}
+                          <td class="plan-usage-num">{group.credits}</td>
+                        </tr>
+                      {/each}
+                    </Table>
+                  {/if}
+                  {#if planUsageDisplay.hasFigures}
+                    <p class="plan-usage-note">{m.plan_usage_credits_note()}</p>
+                  {/if}
+                  {#if captureCoverageLines.length > 0}
+                    <div class="plan-usage-capture">
+                      {#each captureCoverageLines as line (line)}
+                        <div>{line}</div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </details>
           {/if}
         </span>
       {/if}
-      {#if planUsageDisplay}
-        <details class="plan-usage" bind:open={planUsageOpen}>
-          <summary
-            class="usage-breakdown-trigger plan-usage-trigger"
-            class:plan-usage-trigger--empty={!planUsageDisplay.hasFigures}
-            title={planUsageTitle}
-          >
-            {#if planUsageWarnings.length > 0}
-              <TriangleAlertIcon size="10" strokeWidth="2.2" aria-hidden="true" />
-            {/if}
-            {planUsageDisplay.trigger}
-            {#if planUsageSrText}
-              <span class="kit-sr-only">, {planUsageSrText}</span>
-            {/if}
-          </summary>
-          {#if planUsageOpen}
-            {@const rootId = planUsageDisplay.countedUnder}
-            {@const showFiveHour = planUsageDisplay.groups.some((g) => g.fiveHour)}
-            <div class="usage-breakdown-menu plan-usage-menu" {@attach keepInsidePane}>
-              {#if rootId}
-                <a
-                  class="plan-usage-headline plan-usage-root"
-                  href={router.buildSessionHref(rootId)}
-                  onclick={(event) => {
-                    event.preventDefault();
-                    planUsageOpen = false;
-                    router.navigateToSession(rootId);
-                  }}
-                >
-                  {countedUnderLabel}
-                </a>
-              {:else}
-                <div class="plan-usage-headline">{planUsageDisplay.headline}</div>
-              {/if}
-              {#if planUsageDisplay.staleNote}
-                <div class="plan-usage-stale">{planUsageDisplay.staleNote}</div>
-              {/if}
-              {#if planUsageDisplay.totals.length > 0}
-                <ul class="plan-usage-totals">
-                  {#each planUsageDisplay.totals as line (line)}
-                    <li>{line}</li>
-                  {/each}
-                </ul>
-              {/if}
-              {#if planUsageDisplay.groups.length > 0}
-                <Table unsorted
-                  class="plan-usage-groups"
-                  stickyHeader={false}
-                  ariaLabel={m.plan_usage_title()}
-                >
-                  {#snippet header()}
-                    <TableHeaderCell label={m.plan_usage_col_split()} />
-                    <TableHeaderCell label={m.plan_usage_col_weekly()} numeric />
-                    {#if showFiveHour}
-                      <TableHeaderCell label={m.plan_usage_col_five_hour()} numeric />
-                    {/if}
-                    <TableHeaderCell label={m.plan_usage_col_credits()} numeric />
-                  {/snippet}
-                  {#each planUsageDisplay.groups as group (group.key)}
-                    <tr>
-                      <td>{group.label}</td>
-                      <td class="plan-usage-num">{group.weekly}</td>
-                      {#if showFiveHour}
-                        <td class="plan-usage-num">{group.fiveHour}</td>
-                      {/if}
-                      <td class="plan-usage-num">{group.credits}</td>
-                    </tr>
-                  {/each}
-                </Table>
-              {/if}
-              {#if planUsageDisplay.hasFigures}
-                <p class="plan-usage-note">{m.plan_usage_credits_note()}</p>
-              {/if}
-              {#if captureCoverageLines.length > 0}
-                <div class="plan-usage-capture">
-                  {#each captureCoverageLines as line (line)}
-                    <div>{line}</div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
+      {#if session.health_grade || session.id}
+        <span class="meta-group meta-ref">
+          {#if session.health_grade}
+            <button
+              class="grade-badge"
+              style:--grade-ink={gradeStyle.text}
+              onclick={() => ui.toggleSignalPanel()}
+              title={m.session_breadcrumb_session_health_and_tool_sequences()}
+              aria-expanded={ui.signalPanelOpen}
+            >
+              {getGradeLabel(session.health_grade)}
+            </button>
           {/if}
-        </details>
+          {#if session.id}
+            {@const rawId = sessionDisplayId(session.id)}
+            <button
+              class="session-id"
+              title={m.session_breadcrumb_copy_session_id_value({ id: rawId })}
+              onclick={() => copySessionId(rawId, session.id)}
+              aria-label={m.session_breadcrumb_copy_session_id()}
+            >
+              {copiedSessionId === session.id
+                ? m.session_breadcrumb_copied()
+                : rawId.slice(0, 8)}
+            </button>
+          {/if}
+        </span>
       {/if}
-      {#if mainModelInfo.model}
-        <span
-          class="model-badge"
-          class:model-badge--with-effort={mainModelInfo.reasoningEffort}
-          title={mainModel}
-        ><span class="model-badge__model">{mainModelInfo.model}</span>{#if mainModelInfo.reasoningEffort}{" "}<span class="model-badge__effort">{mainModelInfo.reasoningEffort}</span>{/if}</span>
+      {#if !twoRowHeader}
+        {@render openGroup()}
       {/if}
       {#if !twoRowHeader}
         {@render sessionActions()}
@@ -1618,11 +1687,58 @@
     flex-shrink: 0;
   }
 
-  /* The strip has one chip style, shared by the entrypoint, the health
-     grade, and the session ID: an 11px outlined label on no fill. Figures
-     (date, usage, cost, model) are plain muted text, so the title stays the
-     strongest element in the header. */
-  .agent-badge.entrypoint-badge,
+  /* The metadata reads in groups: identity (agent and model), start time,
+     usage figures, then the grade and ID chips. Items in a group are only
+     spaced; a muted middot separates groups. */
+  .meta-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .meta-identity {
+    flex-shrink: 1;
+  }
+
+  .meta-identity .agent-badge {
+    margin-right: 2px;
+  }
+
+  .meta-ref {
+    gap: 6px;
+  }
+
+  .meta-group + .meta-group::before {
+    content: "\00b7";
+    width: 6px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 16px;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+
+  /* A group that starts a wrapped line keeps its separator's space (so the
+     row does not reflow) but hides it and shifts back to the line start by
+     the separator and the group gap. Relative offsets leave layout and
+     fixed-position menus alone. */
+  .meta-group:global([data-wraps])::before {
+    visibility: hidden;
+  }
+
+  .meta-group + .meta-group:global([data-wraps]) {
+    position: relative;
+    left: -10px;
+  }
+
+  /* The strip has one chip style, shared by the health grade and the
+     session ID: an 11px outlined label on no fill. Figures (date, usage,
+     cost, model) are plain muted text, so the title stays the strongest
+     element in the header. */
   .grade-badge,
   .session-id {
     display: inline-flex;
@@ -1641,13 +1757,6 @@
   .grade-badge:hover,
   .session-id:hover {
     background: var(--bg-surface-hover);
-  }
-
-  /* The entrypoint qualifies the agent; keep it neutral so the agent
-     color stays the only identity color in the strip. */
-  .agent-badge.entrypoint-badge {
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
   }
 
   .summary-badge {
@@ -1845,25 +1954,6 @@
     color: var(--text-muted);
     cursor: pointer;
     transition: color 0.15s, background 0.15s;
-  }
-
-  /* Thin dividers split the strip into identity, run, and usage groups. */
-  .session-id,
-  .token-badge--desktop {
-    position: relative;
-    margin-left: 6px;
-  }
-
-  .session-id::before,
-  .token-badge--desktop::before {
-    content: "";
-    position: absolute;
-    left: -9px;
-    top: 50%;
-    width: 1px;
-    height: 12px;
-    transform: translateY(-50%);
-    background: var(--border-default);
   }
 
   .session-id:hover {
@@ -2270,7 +2360,11 @@
       gap: 2px;
     }
 
-    .session-time {
+    /* Hide whole groups whose items are all hidden at this width, so no
+       separator is left without a group. */
+    .meta-time,
+    .meta-ref:not(:has(.grade-badge)),
+    .meta-stats:not(:has(.token-badge, .cost-badge, .plan-usage)) {
       display: none;
     }
 
@@ -2336,7 +2430,13 @@
       gap: 1px;
     }
 
-    .breadcrumb-meta > .agent-badge {
+    .meta-identity > .agent-badge {
+      display: none;
+    }
+
+    /* The phone strip scrolls sideways and may start with an empty
+       identity group, so it drops the separators. */
+    .meta-group + .meta-group::before {
       display: none;
     }
 
