@@ -146,8 +146,12 @@ for (const width of [1280, 390]) {
               .soft(await disclosure.evaluate((el) => getComputedStyle(el).color))
               .toBe(await hint.evaluate((el) => getComputedStyle(el).color));
         }
-      } else
+      } else {
         await expect(page.locator(".palette-results")).toContainText("reuse database connections");
+        await page.getByRole("radio", { name: "Full text", exact: true }).click();
+        await expect(page.locator(".meaning-hint")).toBeVisible();
+        await expect(page.locator(".meaning-hint")).not.toContainText("Search by meaning is off");
+      }
     });
   }
 }

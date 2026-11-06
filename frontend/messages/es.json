@@ -174,9 +174,6 @@
   "command_palette_semantic_ready_intro": "La búsqueda semántica está configurada, pero el índice de embeddings aún no se ha construido para este archivo.",
   "command_palette_semantic_build_button": "Construir embeddings",
   "command_palette_semantic_build_hint": "La construcción se ejecuta en el servidor en segundo plano; esta búsqueda se repetirá cuando termine.",
-  "command_palette_semantic_building_title": "Construyendo el índice de embeddings...",
-  "command_palette_semantic_building_scanning": "Analizando el archivo...",
-  "command_palette_semantic_building_progress": "{percentLabel} incrustado",
   "command_palette_semantic_failed_title": "Falló la construcción de embeddings",
   "command_palette_search_timeout_title": "La búsqueda tardó demasiado",
   "command_palette_search_timeout_detail": "Inténtalo de nuevo. La primera búsqueda semántica o híbrida puede ser más lenta mientras el modelo de embeddings se prepara.",
@@ -2100,27 +2097,7 @@
   "settings_embeddings_load_failed": "No se pudo cargar el estado de los embeddings",
   "settings_embeddings_model_label": "Modelo",
   "settings_embeddings_dimension_label": "Dimensiones",
-  "settings_embeddings_status_label": "Estado",
-  "settings_embeddings_status_idle": "Inactivo",
-  "settings_embeddings_status_scanning": "Analizando",
-  "settings_embeddings_status_embedding": "Calculando embeddings",
-  "settings_embeddings_status_running": "En ejecución",
   "settings_embeddings_scanning_hint": "Analizando las sesiones en busca de cambios - la cantidad total de trabajo aún no se conoce.",
-  "settings_embeddings_progress_chunks": [
-    {
-      "declarations": [
-        "input count",
-        "input doneLabel",
-        "input totalLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{doneLabel} / {totalLabel} sección de texto",
-        "countPlural=other": "{doneLabel} / {totalLabel} secciones de texto"
-      }
-    }
-  ],
   "settings_embeddings_rate": [
     {
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
@@ -2132,14 +2109,11 @@
     }
   ],
   "settings_embeddings_elapsed": "Transcurrido {duration}",
-  "settings_embeddings_eta": "Tiempo restante {duration}",
-  "settings_embeddings_eta_estimating": "Estimando el tiempo restante...",
   "settings_embeddings_duration_hours_minutes": "{hours} h {minutes} min",
   "settings_embeddings_duration_minutes_seconds": "{minutes} min {seconds} s",
   "settings_embeddings_duration_seconds": "{seconds} s",
   "settings_embeddings_last_build_label": "Última construcción",
   "settings_embeddings_last_build_completed": "Completada",
-  "settings_embeddings_last_build_failed": "Fallida",
   "settings_embeddings_last_build_activated": "nueva generación activada",
   "settings_embeddings_last_build_documents": "Documentos procesados",
   "settings_embeddings_last_build_chunks": "Secciones de texto indexadas",
@@ -2149,7 +2123,6 @@
   "settings_embeddings_state_building": "En construcción",
   "settings_embeddings_state_retired": "Retirada",
   "settings_embeddings_coverage": "{embeddedLabel} procesados · {missingLabel} pendientes",
-  "settings_embeddings_progress_aria": "Progreso del cálculo de embeddings",
   "settings_remote_connected_version": "Conectado (v{version})",
   "settings_remote_server_returned": "El servidor devolvió {status}",
   "settings_remote_connection_failed": "Error de conexión",

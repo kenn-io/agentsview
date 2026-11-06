@@ -70,14 +70,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 					}
 				}
 				encoded.Add(int64(len(request.Input)))
-				data := make([]map[string]any, len(request.Input))
-				for i := range data {
-					values := make([]float32, dimension)
-					values[0] = 1
-					data[i] = map[string]any{"index": i, "embedding": values}
-				}
-				w.Header().Set("Content-Type", "application/json")
-				assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
+				writeEmbeddingsResponse(t, w, len(request.Input), dimension)
 			}))
 			defer stub.Close()
 			cfg, err := config.Default()
@@ -414,14 +407,7 @@ func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
 			close(queryStarted)
 			<-resume
 		}
-		data := make([]map[string]any, len(request.Input))
-		for i := range data {
-			values := make([]float32, 768)
-			values[0] = 1
-			data[i] = map[string]any{"index": i, "embedding": values}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
+		writeEmbeddingsResponse(t, w, len(request.Input), 768)
 	}))
 	defer stub.Close()
 	defer unblock()

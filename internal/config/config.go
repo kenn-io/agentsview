@@ -332,11 +332,7 @@ func defaultNomicRecipe() VectorEmbeddingsConfig {
 
 // IsNomic reports whether the recipe can keep its index on the built-in server.
 func (c VectorEmbeddingsConfig) IsNomic() bool {
-	return isNomicModel(c.Model)
-}
-
-func isNomicModel(model string) bool {
-	return model == defaultNomicModel || model == "nomic-embed-text:latest" || model == "nomic-embed-text:v1.5"
+	return c.Model == defaultNomicModel || c.Model == "nomic-embed-text:latest" || c.Model == "nomic-embed-text:v1.5"
 }
 
 // ServerNames returns the available server names, including automatic
@@ -598,7 +594,7 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 	}
 	local := c.Servers == nil
 	for _, name := range sortedServerNames(c.Servers) {
-		if c.Servers[name].Local && !isNomicModel(c.Model) {
+		if c.Servers[name].Local && !c.IsNomic() {
 			return fmt.Errorf("[vector.embeddings.servers.%s] local requires nomic-embed-text; changing models requires rebuilding the index", name)
 		}
 		local = local || c.Servers[name].Local

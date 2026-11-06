@@ -7,7 +7,7 @@
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
   import { SearchIcon } from "../../icons.js";
-  import { tick, onMount, onDestroy, untrack } from "svelte";
+  import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { searchStore } from "../../stores/search.svelte.js";
@@ -33,7 +33,9 @@
   } from "../../stores/search.svelte.js";
 
   let hintStatus = $state<VectorBuildStatus | null>(null);
-  onMount(() => {
+  $effect(() => {
+    if (searchStore.mode !== "fulltext") return;
+    hintStatus = null;
     const controller = new AbortController();
     void EmbeddingsService.getApiV1EmbeddingsStatus({}, { signal: controller.signal })
       .then((status) => {

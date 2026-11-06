@@ -70,17 +70,22 @@ func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 		}
 		assert.NoError(t, json.UnmarshalRead(r.Body, &req))
 
-		data := make([]map[string]any, len(req.Input))
-		for i := range req.Input {
-			vec := make([]float32, dimension)
-			for j := range vec {
-				vec[j] = float32(i + 1)
-			}
-			data[i] = map[string]any{"index": i, "embedding": vec}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
+		writeEmbeddingsResponse(t, w, len(req.Input), dimension)
 	}))
+}
+
+func writeEmbeddingsResponse(t *testing.T, w http.ResponseWriter, count, dimension int) {
+	t.Helper()
+	data := make([]map[string]any, count)
+	for i := range data {
+		values := make([]float32, dimension)
+		for j := range values {
+			values[j] = float32(i + 1)
+		}
+		data[i] = map[string]any{"index": i, "embedding": values}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
 }
 
 // seedEmbeddableArchive creates sessions.db at cfg's default path with one

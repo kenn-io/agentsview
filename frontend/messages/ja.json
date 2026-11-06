@@ -172,9 +172,6 @@
   "command_palette_semantic_ready_intro": "セマンティック検索は設定されていますが、このアーカイブには埋め込みインデックスが構築されていません。",
   "command_palette_semantic_build_button": "埋め込みの構築",
   "command_palette_semantic_build_hint": "ビルドはサーバー上でバックグラウンドで実行されます。この検索は終了すると再実行されます。",
-  "command_palette_semantic_building_title": "埋め込みインデックスを構築中...",
-  "command_palette_semantic_building_scanning": "アーカイブをスキャンしています...",
-  "command_palette_semantic_building_progress": "{percentLabel} が埋め込まれています",
   "command_palette_semantic_failed_title": "埋め込みのビルドに失敗しました",
   "command_palette_search_timeout_title": "検索に時間がかかりすぎました",
   "command_palette_search_timeout_detail": "もう一度やり直してください。最初のセマンティック検索またはハイブリッド検索は、埋め込みモデルがウォームアップしている間は遅くなる可能性があります。",
@@ -2085,27 +2082,7 @@
   "settings_embeddings_load_failed": "埋め込みステータスのロードに失敗しました",
   "settings_embeddings_model_label": "モデル",
   "settings_embeddings_dimension_label": "次元",
-  "settings_embeddings_status_label": "状態",
-  "settings_embeddings_status_idle": "アイドル状態",
-  "settings_embeddings_status_scanning": "走査",
-  "settings_embeddings_status_embedding": "埋め込み",
-  "settings_embeddings_status_running": "ランニング",
   "settings_embeddings_scanning_hint": "セッションの変更をスキャンしています - 総作業量はまだわかりません。",
-  "settings_embeddings_progress_chunks": [
-    {
-      "declarations": [
-        "input count",
-        "input doneLabel",
-        "input totalLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{doneLabel} / {totalLabel} テキスト区間",
-        "countPlural=other": "{doneLabel} / {totalLabel} テキスト区間"
-      }
-    }
-  ],
   "settings_embeddings_rate": [
     {
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
@@ -2117,14 +2094,11 @@
     }
   ],
   "settings_embeddings_elapsed": "経過 {duration}",
-  "settings_embeddings_eta": "到着予定時刻 {duration}",
-  "settings_embeddings_eta_estimating": "残り時間を見積もっています...",
   "settings_embeddings_duration_hours_minutes": "{hours}時 {minutes}分",
   "settings_embeddings_duration_minutes_seconds": "{minutes}分 {seconds}秒",
   "settings_embeddings_duration_seconds": "{seconds}秒",
   "settings_embeddings_last_build_label": "最終ビルド",
   "settings_embeddings_last_build_completed": "完了",
-  "settings_embeddings_last_build_failed": "失敗した",
   "settings_embeddings_last_build_activated": "新しい世代を有効化しました",
   "settings_embeddings_last_build_documents": "埋め込まれたドキュメント",
   "settings_embeddings_last_build_chunks": "索引済みテキスト区間",
@@ -2134,7 +2108,6 @@
   "settings_embeddings_state_building": "構築中",
   "settings_embeddings_state_retired": "廃止済み",
   "settings_embeddings_coverage": "{embeddedLabel} が埋め込まれています · {missingLabel} が見つかりません",
-  "settings_embeddings_progress_aria": "埋め込みの進行状況",
   "settings_remote_connected_version": "接続済み (v{version})",
   "settings_remote_server_returned": "サーバーが {status} を返しました",
   "settings_remote_connection_failed": "接続に失敗しました",
