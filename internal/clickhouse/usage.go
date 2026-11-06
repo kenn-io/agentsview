@@ -1500,6 +1500,29 @@ func chPricedUsageGroupCost(
 	return cost, money.Money{Microdollars: r.savings}, nil
 }
 
+func chUsageGroupCost(
+	r chDailyUsageGroupRow,
+	contexts map[string]chUsagePriceContext,
+	pricingDigest string,
+	pricing *export.PricingResolver,
+) (money.Money, money.Money, error) {
+	if !r.explicit {
+		return chPricedUsageGroupCost(r, contexts, pricingDigest, pricing)
+	}
+	cost, savings, _, _, err := chUsageAggregateResolvedCost(
+		r.model, r.priceModel, r.providerID, chUsagePricingTimestamp(r.pricingTS),
+		r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
+		r.billableInput, r.billableOutput, r.billableReason,
+		r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
+		r.billableWebSearch,
+		r.explicitCost,
+		r.reportedCostRows > 0,
+		db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
+		pricing,
+	)
+	return cost, savings, err
+}
+
 // chCustomPricedModels returns the (model, price_model) pairs of contexts the
 // reader's own custom rates can reach. Persisted prices come from the shared
 // catalog, so events of these pairs are priced at request time instead.
@@ -1625,22 +1648,8 @@ func (s *Store) dailyUsageForCatalog(
 		}
 		var cost, savings money.Money
 		var priceErr error
-		if r.explicit {
-			cost, savings, _, _, priceErr = chUsageAggregateResolvedCost(
-				r.model, r.priceModel, r.providerID, chUsagePricingTimestamp(r.pricingTS),
-				r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-				r.billableInput, r.billableOutput, r.billableReason,
-				r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-				r.billableWebSearch,
-				r.explicitCost,
-				r.reportedCostRows > 0,
-				db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
-				rateResolver,
-			)
-		} else {
-			cost, savings, priceErr = chPricedUsageGroupCost(
-				r, priceContexts, catalog.digest, rateResolver)
-		}
+		cost, savings, priceErr = chUsageGroupCost(
+			r, priceContexts, catalog.digest, rateResolver)
 		if priceErr != nil {
 			return priceErr
 		}
@@ -2130,21 +2139,8 @@ func (s *Store) topSessionsForCatalog(
 			}
 			var cost money.Money
 			var priceErr error
-			if r.explicit {
-				cost, _, _, _, priceErr = chUsageAggregateResolvedCost(
-					r.model, r.priceModel, r.providerID, chUsagePricingTimestamp(r.pricingTS),
-					r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-					r.billableInput, r.billableOutput, r.billableReason,
-					r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-					r.billableWebSearch,
-					r.explicitCost,
-					r.reportedCostRows > 0,
-					db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
-					rateResolver,
-				)
-			} else {
-				cost, _, priceErr = chPricedUsageGroupCost(r, priceContexts, catalog.digest, rateResolver)
-			}
+			cost, _, priceErr = chUsageGroupCost(
+				r, priceContexts, catalog.digest, rateResolver)
 			if priceErr != nil {
 				return priceErr
 			}

@@ -292,6 +292,38 @@ func modelCost(t *testing.T, result db.DailyUsageResult, model string) money.Mon
 	return total
 }
 
+func normalizeSQLiteTopSessions(t *testing.T, entries []db.TopSessionEntry) {
+	t.Helper()
+	for i := range entries {
+		if entries[i].StartedAt != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, entries[i].StartedAt)
+			require.NoError(t, err)
+			entries[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
+		}
+		if entries[i].Machine == "local" {
+			entries[i].Machine = fixtureMachine
+		}
+	}
+}
+
+func newTopSessionsRetryStore(t *testing.T, target Target, readingContexts *atomic.Bool) *Store {
+	t.Helper()
+	options, err := parseDSN(target.URL)
+	require.NoError(t, err)
+	options.Auth.Database = target.Database
+	options.Settings["final"] = 1
+	options.Debug = true
+	options.Debugf = func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		if strings.Contains(line, "sending query") {
+			readingContexts.Store(strings.Contains(line, "FROM usage_price_contexts"))
+		}
+	}
+	store := NewStoreFromDB(chdriver.OpenDB(options))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	return store
+}
+
 func TestDailyUsagePersistedPricesMatchSQLite(t *testing.T) {
 	t.Parallel()
 	store, _, local := newUsagePriceStore(t)
@@ -593,6 +625,14 @@ func TestServeStoreBackgroundPricesWithCustomRates(t *testing.T) {
 
 func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 	t.Parallel()
+	rankings := map[string]struct {
+		sort       string
+		tokenTypes db.UsageTokenTypes
+	}{
+		"cost":            {},
+		"tokens":          {sort: db.TopSessionsSortTokens},
+		"tokens selected": {sort: db.TopSessionsSortTokens, tokenTypes: db.UsageTokenTypeCacheRead},
+	}
 	for _, custom := range []map[string]config.CustomModelRate{
 		nil,
 		{"round-test": {InputMicrodollarsPerMTok: 2_000_000, OutputMicrodollarsPerMTok: 3_000_000}},
@@ -605,22 +645,18 @@ func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 			filters["grouped"] = db.UsageFilter{Timezone: "UTC", TopSessionsByGroup: true}
 		}
 		for name, filter := range filters {
-			want, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
-			require.NoError(t, err, name)
-			require.NotEmpty(t, want, name)
-			for i := range want {
-				if want[i].StartedAt != "" {
-					parsed, err := time.Parse(time.RFC3339Nano, want[i].StartedAt)
-					require.NoError(t, err)
-					want[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
-				}
-				if want[i].Machine == "local" {
-					want[i].Machine = fixtureMachine
-				}
+			for rankingName, ranking := range rankings {
+				filter.TopSessionsSort = ranking.sort
+				filter.TopSessionsTokenTypes = ranking.tokenTypes
+				name := name + "/" + rankingName
+				want, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
+				require.NoError(t, err, name)
+				require.NotEmpty(t, want, name)
+				normalizeSQLiteTopSessions(t, want)
+				got, err := store.GetTopSessionsByCost(t.Context(), filter, 20)
+				require.NoError(t, err, name)
+				assert.Equal(t, want, got, name)
 			}
-			got, err := store.GetTopSessionsByCost(t.Context(), filter, 20)
-			require.NoError(t, err, name)
-			assert.Equal(t, want, got, name)
 		}
 	}
 }
@@ -642,19 +678,7 @@ func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
 	// callback runs after the server reads those contexts and before the
 	// caller can issue the group query.
 	var readingContexts, pushed atomic.Bool
-	options, err := parseDSN(target.URL)
-	require.NoError(t, err)
-	options.Auth.Database = target.Database
-	options.Settings["final"] = 1
-	options.Debug = true
-	options.Debugf = func(format string, args ...any) {
-		line := fmt.Sprintf(format, args...)
-		if strings.Contains(line, "sending query") {
-			readingContexts.Store(strings.Contains(line, "FROM usage_price_contexts"))
-		}
-	}
-	store := NewStoreFromDB(chdriver.OpenDB(options))
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	store := newTopSessionsRetryStore(t, target, &readingContexts)
 	stamp := "2026-01-13T05:00:00.000Z"
 	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session: fixtureSession("pushed-price", "gamma", "pushed first", stamp, 1),
@@ -696,19 +720,7 @@ func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
 
 	var readingContexts atomic.Bool
 	var attempts atomic.Int32
-	options, err := parseDSN(target.URL)
-	require.NoError(t, err)
-	options.Auth.Database = target.Database
-	options.Settings["final"] = 1
-	options.Debug = true
-	options.Debugf = func(format string, args ...any) {
-		line := fmt.Sprintf(format, args...)
-		if strings.Contains(line, "sending query") {
-			readingContexts.Store(strings.Contains(line, "FROM usage_price_contexts"))
-		}
-	}
-	store := NewStoreFromDB(chdriver.OpenDB(options))
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	store := newTopSessionsRetryStore(t, target, &readingContexts)
 	pushResults := make(chan error, 3)
 	ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(p *chdriver.Progress) {
 		if p.Rows == 0 || !readingContexts.CompareAndSwap(true, false) {
@@ -746,14 +758,7 @@ func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
 	want, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
 	require.NoError(t, err)
 	require.NotEmpty(t, want)
-	for i := range want {
-		parsed, err := time.Parse(time.RFC3339Nano, want[i].StartedAt)
-		require.NoError(t, err)
-		want[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
-		if want[i].Machine == "local" {
-			want[i].Machine = fixtureMachine
-		}
-	}
+	normalizeSQLiteTopSessions(t, want)
 	top, err = store.GetTopSessionsByCost(t.Context(), filter, 20)
 	require.NoError(t, err)
 	assert.Equal(t, want, top)
