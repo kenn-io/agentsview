@@ -27,35 +27,38 @@
   import { onMount } from "svelte";
   import { Button, CopyButton, Spinner } from "@kenn-io/kit-ui";
   import { getLocale, m } from "../../i18n/index.js";
-  import { EmbeddingsService, type VectorBuildStatus, type VectorGenerationInfo } from "../../api/generated/index.js";
+  import { EmbeddingsService, type VectorBuildStatus } from "../../api/generated/index.js";
   import { ApiError, isAbortError } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
 
-  let generations = $state<VectorGenerationInfo[]>([]);
-  async function readCoverage() {
-    try {
-      const next = await EmbeddingsService.getApiV1EmbeddingsGenerations({});
-      if (!disposed) generations = next.generations;
-    } catch {
-      // Coverage is optional until the next panel open.
-    }
-  }
   let setupStatus = $state<VectorBuildStatus | null>(null);
 
   interface Props {
     // Called when a build finishes successfully so the caller can re-run
     // the search that failed.
     onResolved: () => void;
-    // Detailed search failures retain their backend-specific recovery guidance.
+    // The search's own 501 message. Most carry the generic "enable [vector]
+    // ... run 'agentsview index embeddings build'" remediation the panel replaces,
+    // but some name a specific recoverable state (stale index after an
+    // embedding-config change, vectors.db schema mismatch) that the status
+    // probe cannot distinguish — those are shown verbatim so their
+    // remediation is not hidden.
     searchDetail?: string | null;
-    searchCode?: string;
   }
 
-  let { onResolved, searchDetail = null, searchCode }: Props = $props();
+  let { onResolved, searchDetail = null }: Props = $props();
+
+  // db.ErrSemanticUnavailable's base message; search failures wrapping a
+  // more specific cause differ from it.
+  const GENERIC_SEARCH_UNAVAILABLE =
+    "semantic search not available: enable [vector] in config.toml and run " +
+    "'agentsview index embeddings build'";
 
   const specificSearchDetail = $derived(
-    searchCode === "semantic_setup_required" ? null : searchDetail,
+    searchDetail !== null && searchDetail !== GENERIC_SEARCH_UNAVAILABLE
+      ? searchDetail
+      : null,
   );
 
   // The daemon returns this exact 501 message when [vector] is disabled in
@@ -104,17 +107,11 @@ enabled = true`;
     };
   });
 
-  function updateSetupStatus(status: VectorBuildStatus): void {
-    const needsCoverage = !setupStatus && status.setup?.action === "use-built-in";
-    setupStatus = status;
-    if (needsCoverage) void readCoverage();
-  }
-
   async function probe(): Promise<void> {
     try {
       const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
-      updateSetupStatus(status);
+      setupStatus = status;
       if (!status.running && status.setup && (status.setup.action === "turn-on" || !status.setup.enabled || status.setup.busy || status.setup.installing || status.setup.error)) {
         phase = "unconfigured";
         if (status.setup.busy || status.setup.installing) schedulePoll();
@@ -187,7 +184,7 @@ enabled = true`;
     try {
       const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
-      updateSetupStatus(status);
+      setupStatus = status;
       if (status.running) {
         schedulePoll();
         return;
@@ -223,7 +220,7 @@ enabled = true`;
 
 <div class="semantic-setup" role="alert">
   {#if setupStatus?.setup}
-    <SearchByMeaningControl status={setupStatus} {generations} onchange={() => void probe()} />
+    <SearchByMeaningControl status={setupStatus} onchange={() => void probe()} />
   {/if}
   {#if phase === "probing"}
     <div class="setup-row centered">

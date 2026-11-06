@@ -23,7 +23,6 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
       getApiV1EmbeddingsStatus: vi.fn(),
       getApiV1EmbeddingsGenerations: vi.fn(),
       postApiV1EmbeddingsSetup: vi.fn(),
-      postApiV1EmbeddingsBuild: vi.fn(),
     },
   };
 });
@@ -32,7 +31,6 @@ const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   getApiV1EmbeddingsGenerations: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
-  postApiV1EmbeddingsBuild: ReturnType<typeof vi.fn>;
 };
 
 function runningStatus(
@@ -50,7 +48,6 @@ function runningStatus(
       missing_bytes: 0,
       downloaded_bytes: 0,
       total_bytes: 0,
-      rebuild_required: false,
     },
     build_id: 1,
     started_at: "2026-07-11T10:00:00Z",
@@ -81,7 +78,6 @@ describe("EmbeddingsSettings", () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockReset();
     embeddingsService.postApiV1EmbeddingsSetup.mockReset();
-    embeddingsService.postApiV1EmbeddingsBuild.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
       generations: [BUILDING_GENERATION],
     });
@@ -108,7 +104,6 @@ describe("EmbeddingsSettings", () => {
       installing: false,
       downloaded_bytes: 0,
       total_bytes: 0,
-      rebuild_required: false,
     };
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
     embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
@@ -130,7 +125,6 @@ describe("EmbeddingsSettings", () => {
         .click();
       await settle();
       expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
-        action: "turn-on",
         approved_bytes: 0,
       });
       expect(document.body.textContent).toContain("Downloads 295 MB");
@@ -142,7 +136,6 @@ describe("EmbeddingsSettings", () => {
         .click();
       await settle();
       expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
-        action: "turn-on",
         approved_bytes: 295000000,
       });
     } finally {
@@ -150,142 +143,67 @@ describe("EmbeddingsSettings", () => {
     }
   });
 
-  it.each(["turn-on", "use-built-in"])(
-    "retries the reported setup action after %s fails",
-    async (action) => {
-      const setup = {
-        enabled: true,
-        action,
-        provider: "built-in",
-        error: "Another process may be using search. Close it and retry.",
-        rebuild_required: false,
-        busy: false,
-        installing: false,
-        missing_bytes: 0,
-        downloaded_bytes: 0,
-        total_bytes: 0,
-      };
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
-      embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
-      const component = mount(EmbeddingsSettings, { target: document.body });
-      await settle();
-      expect(document.body.textContent).toContain(setup.error);
-      const button = [...document.body.querySelectorAll("button")].find(
-        (b) => b.textContent?.trim() === "Retry",
-      );
-      expect(button).toBeTruthy();
-      expect(document.body.querySelectorAll("button")).toHaveLength(1);
-      button!.click();
-      await settle();
-      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
-        action,
-        approved_bytes: 0,
-      });
-      unmount(component);
-    },
-  );
-
-  it.each(["setup", "build"])(
-    "follows a concurrent build after %s returns 409 without retaining an error",
-    async (action) => {
-      const setup = {
-        enabled: false,
-        action: action === "build" ? "" : "turn-on",
-        provider: "built-in",
-        rebuild_required: false,
-        busy: false,
-        installing: false,
-        missing_bytes: 0,
-        downloaded_bytes: 0,
-        total_bytes: 0,
-      };
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
-        running: false,
-        setup: { ...setup, enabled: action === "build" },
-        ...(action === "build" ? { last_error: "encoder unavailable" } : {}),
-      });
-      const request =
-        action === "build"
-          ? embeddingsService.postApiV1EmbeddingsBuild
-          : embeddingsService.postApiV1EmbeddingsSetup;
-      request.mockImplementation(async () => {
-        embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-          runningStatus(1, { setup: { ...setup, enabled: true, action: "" } }),
-        );
-        throw new ApiError(409, "embedding build already running");
-      });
-      const component = mount(EmbeddingsSettings, { target: document.body });
-      await settle();
-      [...document.body.querySelectorAll("button")]
-        .find((b) => b.textContent?.trim() === (action === "build" ? "Retry" : "Turn on"))!
-        .click();
-      await settle();
-      expect(document.body.textContent).toContain("Indexing");
-      expect(document.body.textContent).not.toContain("embedding build already running");
-      expect(document.body.querySelector('[role="alert"]')).toBeNull();
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-        runningStatus(2, { setup: { ...setup, enabled: true, action: "" } }),
-      );
-      await settle(2000);
-      expect(document.body.textContent).toContain("Indexing 2 of");
-      unmount(component);
-    },
-  );
-
-  it.each([501, 500])("keeps polling after a generations error with status %s", async (status) => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1));
-    embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(
-      new ApiError(status, "internal error"),
-    );
+  it("retries Turn on after setup fails", async () => {
+    const setup = {
+      enabled: true,
+      action: "turn-on",
+      provider: "built-in",
+      error: "Another process may be using search. Close it and retry.",
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     const component = mount(EmbeddingsSettings, { target: document.body });
-    try {
-      await settle();
-      if (status === 501) {
-        expect(document.body.querySelector('[role="alert"]')).toBeNull();
-        embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2));
-        await settle(60_000);
-        expect(document.body.textContent).toContain("Indexing 2 of");
-        expect(document.body.textContent).not.toContain("internal error");
-        return;
-      }
-      const error = document.body.querySelector('[role="alert"]');
-      expect(error?.textContent ?? "").toContain("internal error");
-      expect(error?.closest(".subsection")?.querySelector("h4")?.textContent ?? "").toContain(
-        "Generations",
+    await settle();
+    expect(document.body.textContent).toContain(setup.error);
+    const button = [...document.body.querySelectorAll("button")].find(
+      (b) => b.textContent?.trim() === "Retry",
+    );
+    expect(button).toBeTruthy();
+    expect(document.body.querySelectorAll("button")).toHaveLength(1);
+    button!.click();
+    await settle();
+    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ approved_bytes: 0 });
+    unmount(component);
+  });
+
+  it("follows a concurrent build after Turn on returns 409 without retaining an error", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "built-in",
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsSetup.mockImplementation(async () => {
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+        runningStatus(1, { setup: { ...setup, enabled: true, action: "" } }),
       );
-      expect(document.body.textContent).toContain("test-embed-model");
-      expect(document.body.textContent).toContain("256");
-      expect(document.body.textContent).toContain("Elapsed 5s");
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2));
-      await settle(60_000);
-      expect(document.body.textContent).toContain("Indexing 2 of");
-      expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
-        "internal error",
-      );
-      await settle(2000);
-      expect(document.body.textContent).toContain("Indexing 2 of");
-      expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
-        "internal error",
-      );
-      embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValueOnce(
-        new ApiError(500, "status read failed"),
-      );
-      await settle(2000);
-      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
-        "status read failed",
-      );
-      await settle(2000);
-      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
-        "internal error",
-      );
-      embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
-        generations: [BUILDING_GENERATION],
-      });
-      await settle(4000);
-      expect(document.body.querySelector('[role="alert"]')).toBeNull();
-    } finally {
-      unmount(component);
-    }
+      throw new ApiError(409, "embedding build already running");
+    });
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    await settle();
+    [...document.body.querySelectorAll("button")]
+      .find((b) => b.textContent?.trim() === "Turn on")!
+      .click();
+    await settle();
+    expect(document.body.textContent).toContain("Indexing");
+    expect(document.body.textContent).not.toContain("embedding build already running");
+    expect(document.body.querySelector('[role="alert"]')).toBeNull();
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      runningStatus(2, { setup: { ...setup, enabled: true, action: "" } }),
+    );
+    await settle(2000);
+    expect(document.body.textContent).toContain("Indexing 2 of");
+    unmount(component);
   });
 
   it("shows indexing progress with throughput and remaining time", async () => {
@@ -303,7 +221,6 @@ describe("EmbeddingsSettings", () => {
           missing_bytes: 0,
           downloaded_bytes: 0,
           total_bytes: 0,
-          rebuild_required: false,
         },
       }),
     );

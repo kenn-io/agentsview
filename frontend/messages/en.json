@@ -3156,12 +3156,9 @@
   "meaning_ollama": "On · Ollama",
   "meaning_turning_on": "Turning on",
   "meaning_turn_on": "Turn on",
-  "meaning_use_builtin": "Use built-in instead",
   "meaning_download": "Downloads {size} once, shared by all Kenn apps",
   "meaning_downloaded": "Already on this computer",
   "meaning_configured": "Uses your configured server",
-  "meaning_keeps_index": "Switching keeps your index",
-  "meaning_rebuild": "Switching rebuilds the index, {time} for {countLabel} {items}",
   "meaning_downloading": "Downloading {done} of {total}",
   "meaning_indexing": "Indexing {done} of {total} {items}",
   "meaning_time_left": "{time} left",
@@ -3170,13 +3167,6 @@
   "meaning_about_time": "about {time}",
   "meaning_progress": "Search by meaning setup",
   "meaning_hint": "Search by meaning is off",
-  "meaning_documents": [
-    {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=one": "document", "countPlural=other": "documents" }
-    }
-  ],
   "meaning_chunks": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

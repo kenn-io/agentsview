@@ -3180,12 +3180,9 @@
   "meaning_ollama": "Activado · Ollama",
   "meaning_turning_on": "Activando",
   "meaning_turn_on": "Activar",
-  "meaning_use_builtin": "Usar el integrado",
   "meaning_download": "Descarga {size} una vez, compartidos por todas las apps de Kenn",
   "meaning_downloaded": "Ya está en este equipo",
   "meaning_configured": "Usa el servidor configurado",
-  "meaning_keeps_index": "El cambio conserva tu índice",
-  "meaning_rebuild": "El cambio reconstruye el índice, {time} para {countLabel} {items}",
   "meaning_downloading": "Descargando {done} de {total}",
   "meaning_indexing": "Indexando {done} de {total} {items}",
   "meaning_time_left": "Quedan {time}",
@@ -3194,13 +3191,6 @@
   "meaning_about_time": "unos {time}",
   "meaning_progress": "Configurar búsqueda por significado",
   "meaning_hint": "La búsqueda por significado está desactivada",
-  "meaning_documents": [
-    {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=one": "documento", "countPlural=other": "documentos" }
-    }
-  ],
   "meaning_chunks": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

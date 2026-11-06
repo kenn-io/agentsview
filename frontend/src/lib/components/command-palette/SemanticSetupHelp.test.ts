@@ -24,7 +24,6 @@ vi.mock("../../api/generated/index.js", async (importOriginal) => {
       getApiV1EmbeddingsStatus: vi.fn(),
       postApiV1EmbeddingsBuild: vi.fn(),
       postApiV1EmbeddingsSetup: vi.fn(),
-      getApiV1EmbeddingsGenerations: vi.fn(),
     },
   };
 });
@@ -40,7 +39,6 @@ const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsBuild: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
-  getApiV1EmbeddingsGenerations: ReturnType<typeof vi.fn>;
 };
 
 function idleStatus(overrides: Partial<VectorBuildStatus> = {}): VectorBuildStatus {
@@ -55,7 +53,6 @@ function idleStatus(overrides: Partial<VectorBuildStatus> = {}): VectorBuildStat
       missing_bytes: 0,
       downloaded_bytes: 0,
       total_bytes: 0,
-      rebuild_required: false,
     },
     done: 0,
     total: 0,
@@ -80,7 +77,6 @@ function runningStatus(
       missing_bytes: 0,
       downloaded_bytes: 0,
       total_bytes: 0,
-      rebuild_required: false,
     },
     phase: "embedding",
     done,
@@ -116,7 +112,6 @@ describe("SemanticSetupHelp", () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.postApiV1EmbeddingsBuild.mockReset();
     embeddingsService.postApiV1EmbeddingsSetup.mockReset();
-    embeddingsService.getApiV1EmbeddingsGenerations.mockReset();
     mockCopyToClipboard.mockReset();
     mockCopyToClipboard.mockResolvedValue(true);
   });
@@ -136,14 +131,10 @@ describe("SemanticSetupHelp", () => {
     return document.body.textContent ?? "";
   }
 
-  function mountHelp(
-    onResolved = vi.fn(),
-    searchDetail: string | null = null,
-    searchCode?: string,
-  ) {
+  function mountHelp(onResolved = vi.fn(), searchDetail: string | null = null) {
     const component = mount(SemanticSetupHelp, {
       target: document.body,
-      props: { onResolved, searchDetail, searchCode },
+      props: { onResolved, searchDetail },
     });
     return { component, onResolved };
   }
@@ -202,48 +193,43 @@ describe("SemanticSetupHelp", () => {
     unmount(component);
   });
 
-  const ollamaSetup = {
-    enabled: true,
-    action: "use-built-in",
-    provider: "ollama",
-    rebuild_required: false,
-    missing_bytes: 295000000,
-    installing: false,
-    busy: false,
-    downloaded_bytes: 0,
-    total_bytes: 0,
-  };
-
-  it.each([
-    { label: "compatible index", rebuild: false, copy: ["Downloads 295 MB"] },
-    {
-      label: "another model",
-      rebuild: true,
-      copy: ["Downloads 295 MB", "Switching rebuilds the index", "150 documents"],
-    },
-  ])("discloses and approves the switch for $label", async ({ rebuild, copy }) => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      idleStatus({ setup: { ...ollamaSetup, rebuild_required: rebuild } }),
-    );
-    embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
-      generations: [{ id: 1, state: "active", embedded: 123, missing: 27 }],
-    });
+  it("turns on the built-in server, approving the download it shows", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "built-in",
+      missing_bytes: 295000000,
+      busy: false,
+      installing: false,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup }));
     embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     const { component } = mountHelp();
     await settle();
-    for (const expected of copy) expect(text()).toContain(expected);
-    expect(text().includes("Switching rebuilds the index")).toBe(rebuild);
-    const button = [...document.body.querySelectorAll("button")].find(
-      (b) => b.textContent?.trim() === "Use built-in instead",
-    );
-    expect(button).toBeTruthy();
-    button!.click();
+    expect(text()).toContain("Downloads 295 MB");
+    [...document.body.querySelectorAll("button")]
+      .find((b) => b.textContent?.trim() === "Turn on")!
+      .click();
     await settle();
     expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
-      action: "use-built-in",
       approved_bytes: 295000000,
     });
     expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+    unmount(component);
+  });
+
+  it("shows an Ollama setup as on, with no switch", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      idleStatus({ setup: { ...idleStatus().setup!, provider: "ollama" } }),
+    );
+    const { component } = mountHelp();
+    await settle();
+    const row = document.body.querySelector(".kit-search-by-meaning")!;
+    expect(row.textContent).toContain("On · Ollama");
+    expect(row.querySelector("button")).toBeNull();
+    expect(row.querySelector(".kit-search-by-meaning__line")).toBeNull();
     unmount(component);
   });
 
@@ -253,11 +239,7 @@ describe("SemanticSetupHelp", () => {
       "vectors.write.lock at startup; wait for it to finish, then restart the daemon";
     embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(new ApiError(501, reason));
 
-    const { component } = mountHelp(
-      vi.fn(),
-      "semantic search not available",
-      "semantic_setup_required",
-    );
+    const { component } = mountHelp();
     await settle();
 
     expect(text()).toContain("Semantic search is disabled");
@@ -354,16 +336,18 @@ describe("SemanticSetupHelp", () => {
   });
 
   it("replaces the generic search 501 message with localized ready copy", async () => {
-    const generic = "semantic search not available";
+    const generic =
+      "semantic search not available: enable [vector] in config.toml and " +
+      "run 'agentsview index embeddings build'";
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
 
-    const { component } = mountHelp(vi.fn(), generic, "semantic_setup_required");
+    const { component } = mountHelp(vi.fn(), generic);
     await settle();
 
     expect(text()).toContain(
       "Semantic search is configured, but the embeddings index hasn't been built",
     );
-    expect(text()).not.toContain(generic);
+    expect(text()).not.toContain("enable [vector] in config.toml");
 
     unmount(component);
   });

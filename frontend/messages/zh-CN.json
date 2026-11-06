@@ -3047,12 +3047,9 @@
   "meaning_ollama": "开启 · Ollama",
   "meaning_turning_on": "正在开启",
   "meaning_turn_on": "开启",
-  "meaning_use_builtin": "改用内置服务器",
   "meaning_download": "一次下载 {size}，供所有 Kenn 应用共享",
   "meaning_downloaded": "已在此计算机上",
   "meaning_configured": "使用已配置的服务器",
-  "meaning_keeps_index": "切换后保留索引",
-  "meaning_rebuild": "切换会重建索引，{countLabel} {items} 估计需要 {time}",
   "meaning_downloading": "正在下载 {done}，共 {total}",
   "meaning_indexing": "正在索引 {done}，共 {total} {items}",
   "meaning_time_left": "剩余 {time}",
@@ -3061,13 +3058,6 @@
   "meaning_about_time": "约 {time}",
   "meaning_progress": "按含义搜索设置",
   "meaning_hint": "按含义搜索已关闭",
-  "meaning_documents": [
-    {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=one": "文档", "countPlural=other": "文档" }
-    }
-  ],
   "meaning_chunks": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

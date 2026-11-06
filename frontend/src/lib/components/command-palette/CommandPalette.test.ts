@@ -42,7 +42,6 @@ const {
     isSearching: false,
     error: null as {
       detail: string | null;
-      code?: string;
       kind: "generic" | "timeout" | "semantic-unavailable";
     } | null,
     mode: "fulltext" as "fulltext" | "semantic" | "hybrid",
@@ -741,8 +740,8 @@ describe("CommandPalette", () => {
   it("renders the semantic setup panel instead of the raw error for semantic-unavailable", async () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
-      detail: "semantic search not available",
-      code: "semantic_setup_required",
+      detail:
+        "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
       kind: "semantic-unavailable",
     };
     const component = mount(CommandPalette, { target: document.body });
@@ -818,8 +817,8 @@ describe("CommandPalette", () => {
       arrangeStatus();
       mockSearchStore.mode = "semantic";
       mockSearchStore.error = {
-        detail: "semantic search not available",
-        code: "semantic_setup_required",
+        detail:
+          "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
         kind: "semantic-unavailable",
       };
       const component = mount(CommandPalette, { target: document.body });
@@ -862,8 +861,8 @@ describe("CommandPalette", () => {
     );
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
-      detail: "semantic search not available",
-      code: "semantic_setup_required",
+      detail:
+        "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
       kind: "semantic-unavailable",
     };
     mockSessions.activeSessionId = "session-1";

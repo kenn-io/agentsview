@@ -3053,12 +3053,9 @@
   "meaning_ollama": "켜짐 · Ollama",
   "meaning_turning_on": "켜는 중",
   "meaning_turn_on": "켜기",
-  "meaning_use_builtin": "내장 서버 사용",
   "meaning_download": "모든 Kenn 앱이 공유할 {size}를 한 번 다운로드합니다",
   "meaning_downloaded": "이 컴퓨터에 이미 있음",
   "meaning_configured": "설정된 서버 사용",
-  "meaning_keeps_index": "전환해도 색인은 유지됩니다",
-  "meaning_rebuild": "전환하면 색인을 다시 만듭니다. {countLabel} {items}에 {time}",
   "meaning_downloading": "{total} 중 {done} 다운로드 중",
   "meaning_indexing": "{total} {items} 중 {done} 색인 중",
   "meaning_time_left": "{time} 남음",
@@ -3067,13 +3064,6 @@
   "meaning_about_time": "약 {time}",
   "meaning_progress": "의미 검색 설정",
   "meaning_hint": "의미 검색이 꺼져 있습니다",
-  "meaning_documents": [
-    {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=one": "문서", "countPlural=other": "문서" }
-    }
-  ],
   "meaning_chunks": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

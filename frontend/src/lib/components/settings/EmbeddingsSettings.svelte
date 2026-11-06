@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
+  import { Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
   import { EmbeddingsService } from "../../api/generated/index";
@@ -9,7 +9,6 @@
     isAbortError,
   } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
-  import { sync } from "../../stores/sync.svelte.js";
 
   import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
 
@@ -26,9 +25,6 @@
   let generations = $state<VectorGenerationInfo[]>([]);
   let unavailableReason = $state<string | null>(null);
   let loadError = $state<string | null>(null);
-  // Kept apart from loadError: only a generations read settles it, so a
-  // status-only poll leaves a generations failure on screen.
-  let generationsError = $state<string | null>(null);
   let loaded: boolean = $state(false);
   let elapsedMs: number | null = $state(null);
 
@@ -79,7 +75,7 @@
       unavailableReason = null;
       loadError = null;
       updateElapsed(next);
-      if (next.setup?.enabled !== false && !next.setup?.busy && !next.setup?.error && (withGenerations || (wasRunning && !next.running))) {
+      if (next.setup?.enabled !== false && (withGenerations || (wasRunning && !next.running))) {
         activePollsSinceGenerations = 0;
         await refreshGenerations();
       }
@@ -109,38 +105,11 @@
   async function refreshGenerations(): Promise<void> {
     const signal = generationsRead.begin();
     try {
-      const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal }).catch((e) => generationsFailed(e, signal));
-      if (disposed || res === null || !generationsRead.isCurrent(signal)) return;
-      showGenerations(res.generations ?? []);
+      const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal });
+      if (disposed || !generationsRead.isCurrent(signal)) return;
+      generations = res.generations ?? [];
     } finally {
       generationsRead.finish(signal);
-    }
-  }
-
-  function showGenerations(rows: VectorGenerationInfo[]): void {
-    generations = rows;
-    generationsError = null;
-  }
-
-  // A missing manager or a running setup only delays the rows and status
-  // polling notices when either ends; any other failure is shown, since the
-  // old coverage cannot explain itself.
-  function generationsFailed(e: unknown, signal: AbortSignal): null {
-    if (disposed || isAbortError(e) || !generationsRead.isCurrent(signal)) return null;
-    if (e instanceof ApiError && (e.status === 501 || e.code === "embeddings_setup_busy")) return null;
-    generationsError = e instanceof Error && e.message ? e.message : m.settings_embeddings_load_failed();
-    return null;
-  }
-
-  async function retryBuild(): Promise<void> {
-    try {
-      await EmbeddingsService.postApiV1EmbeddingsBuild({}).catch((e) => {
-        if (!(e instanceof ApiError && e.status === 409)) throw e;
-      });
-      await refresh(true);
-      schedule();
-    } catch (e) {
-      loadError = e instanceof Error ? e.message : m.settings_embeddings_load_failed();
     }
   }
 
@@ -210,7 +179,7 @@
 </script>
 
 <div class="embeddings-settings">
-  <SearchByMeaningControl {status} {generations} onchange={() => void refresh(true).then(schedule)} />
+  <SearchByMeaningControl {status} onchange={() => void refresh(true).then(schedule)} />
   {#if !loaded}
     <p class="muted">{m.settings_embeddings_loading()}</p>
   {:else if unavailableReason !== null}
@@ -259,12 +228,7 @@
         </div>
       {/if}
     {:else if status.last_error}
-      <div class="build-error">
-        <p class="msg error" role="alert">{status.last_error}</p>
-        {#if status.setup?.enabled && !sync.readOnly}
-          <Button size="sm" label={m.shared_retry()} onclick={() => void retryBuild()} />
-        {/if}
-      </div>
+      <p class="msg error" role="alert">{status.last_error}</p>
     {:else if status.last_result}
       <div class="status-grid">
         <span class="row-label">{m.settings_embeddings_last_build_label()}</span
@@ -293,9 +257,7 @@
       <h4 class="subsection-title">
         {m.settings_embeddings_generations_title()}
       </h4>
-      {#if generationsError !== null}
-        <p class="msg error" role="alert">{generationsError}</p>
-      {:else if generations.length === 0}
+      {#if generations.length === 0}
         <p class="muted">{m.settings_embeddings_generations_empty()}</p>
       {:else}
         <ul class="generation-list">
@@ -320,12 +282,6 @@
 </div>
 
 <style>
-  .build-error {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-3);
-  }
   .embeddings-settings {
     display: flex;
     flex-direction: column;

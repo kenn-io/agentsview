@@ -3121,12 +3121,9 @@
   "meaning_ollama": "オン · Ollama",
   "meaning_turning_on": "有効化中",
   "meaning_turn_on": "有効にする",
-  "meaning_use_builtin": "内蔵サーバーを使う",
   "meaning_download": "{size} を一度ダウンロードし、すべての Kenn アプリで共有します",
   "meaning_downloaded": "このコンピューターに保存済み",
   "meaning_configured": "設定済みのサーバーを使用",
-  "meaning_keeps_index": "切り替えてもインデックスを保持します",
-  "meaning_rebuild": "切り替えるとインデックスを再構築します。{countLabel} {items} で{time}",
   "meaning_downloading": "{total} 中 {done} をダウンロード中",
   "meaning_indexing": "{total} {items} 中 {done} をインデックス中",
   "meaning_time_left": "残り {time}",
@@ -3135,13 +3132,6 @@
   "meaning_about_time": "約 {time}",
   "meaning_progress": "意味検索の設定",
   "meaning_hint": "意味検索はオフです",
-  "meaning_documents": [
-    {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=one": "文書", "countPlural=other": "文書" }
-    }
-  ],
   "meaning_chunks": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],
