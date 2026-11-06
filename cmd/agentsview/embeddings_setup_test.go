@@ -386,40 +386,37 @@ func TestLiveEmbeddingsSetupStatusDuringProbe(t *testing.T) {
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-	responseDone := make(chan *http.Response, 1)
-	errorDone := make(chan error, 1)
+	type result struct {
+		status int
+		body   []byte
+		err    error
+	}
+	responseDone := make(chan result, 1)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
+	require.NoError(t, err)
 	go func() {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
-		if err != nil {
-			errorDone <- err
-			return
-		}
 		response, err := ts.Client().Do(req)
 		if err != nil {
-			errorDone <- err
+			responseDone <- result{err: err}
 			return
 		}
-		responseDone <- response
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		responseDone <- result{status: response.StatusCode, body: body, err: err}
 	}()
 	<-probing
 	embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
 	<-activating
 	release()
-	select {
-	case err := <-errorDone:
-		require.NoError(t, err)
-	case response := <-responseDone:
-		defer response.Body.Close()
-		body, err := io.ReadAll(response.Body)
-		require.NoError(t, err)
-		require.Equal(t, http.StatusOK, response.StatusCode, string(body))
-		var status vector.BuildStatus
-		require.NoError(t, json.Unmarshal(body, &status))
-		require.NotNil(t, status.Setup)
-		assert.True(t, status.Setup.Enabled)
-	}
+	got := <-responseDone
+	require.NoError(t, got.err)
+	require.Equal(t, http.StatusOK, got.status, string(got.body))
+	var status vector.BuildStatus
+	require.NoError(t, json.Unmarshal(got.body, &status))
+	require.NotNil(t, status.Setup)
+	assert.True(t, status.Setup.Enabled)
 }
 
 func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
