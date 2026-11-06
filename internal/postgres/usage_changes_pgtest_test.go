@@ -307,6 +307,23 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	after, err := store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
+	// Both serve setup branches must install a missing journal.
+	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('repair','machine','project','codex')`)
+	require.NoError(t, err)
+	for _, repair := range []bool{false, true} {
+		_, err = syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+		require.NoError(t, err)
+		if repair {
+			_, err = syncer.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key=$1`, tokenCoverageRepairMetadataKey)
+		} else {
+			err = markTokenCoverageRepairDone(ctx, syncer.pg)
+		}
+		require.NoError(t, err)
+		require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+		after, err = store.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		assert.Positive(t, after, "serve setup installs the journal with repair=%t", repair)
+	}
 	// The ordinary push fast path upgrades an existing schema too.
 	_, err = syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
@@ -321,9 +338,21 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 func TestUsageChangeJournalNewerVersion(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
-	_, err := syncer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version'`)
+	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version','2')`)
 	require.NoError(t, err)
 	ensureUsageChangeJournalPG(ctx, syncer.pg)
+	// Optional setup swallows installation errors. Check the installer directly
+	// so a duplicate version key cannot disguise a missing version guard.
+	tx, err := syncer.pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	require.NoError(t, installUsageChangeJournalPG(ctx, tx))
+	require.NoError(t, tx.Commit())
+	var exists bool
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT to_regclass('usage_session_changes') IS NOT NULL`).Scan(&exists))
+	assert.False(t, exists, "a newer journal version must remain untouched")
 	through, ids, err := store.LoadUsageChanges(ctx, 0)
 	require.NoError(t, err)
 	assert.Zero(t, through)
