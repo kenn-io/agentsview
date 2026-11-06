@@ -208,10 +208,21 @@ describe("EmbeddingsSettings", () => {
         expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
           "internal error",
         );
+        embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValueOnce(
+          new ApiError(500, "status read failed"),
+        );
+        await settle(2000);
+        expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
+          "status read failed",
+        );
+        await settle(2000);
+        expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
+          "internal error",
+        );
         embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
           generations: [BUILDING_GENERATION],
         });
-        await settle(8000);
+        await settle(4000);
         expect(document.body.querySelector('[role="alert"]')).toBeNull();
       }
     } finally {
