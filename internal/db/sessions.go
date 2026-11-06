@@ -1974,12 +1974,18 @@ func (db *DB) GetChildSessions(
 // make the row its own parent and drop it from the hierarchy roots. The
 // same guard is applied wherever spawn edges are enumerated (the driver
 // sets below, clearDanglingSubagentParentQuery, SubagentChildSessionIDs).
+// Push references remain transcript metadata and never grant hierarchy writes.
+const activeSubagentSpawnerSQL = `NOT EXISTS (
+	SELECT 1 FROM session_push_receipts spr WHERE spr.session_id = tc.session_id
+)`
+
 const subagentSpawnerExpr = `
 		SELECT tc.session_id
 		FROM tool_calls tc
 		LEFT JOIN sessions ps ON ps.id = tc.session_id
 		WHERE tc.subagent_session_id = s.id
 		AND tc.session_id IS NOT s.id
+		AND ` + activeSubagentSpawnerSQL + `
 		ORDER BY
 			(strftime('%Y-%m-%dT%H:%M:%fZ', ps.started_at) IS NULL),
 			strftime('%Y-%m-%dT%H:%M:%fZ', ps.started_at),
@@ -2024,7 +2030,9 @@ const linkSubagentSessionsQuery = `
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.subagent_session_id IS NOT NULL
 		AND tc.session_id IS NOT tc.subagent_session_id
+		AND ` + activeSubagentSpawnerSQL + `
 	)
+	AND NOT EXISTS (SELECT 1 FROM session_push_receipts spr WHERE spr.session_id = s.id)
 	AND (
 		relationship_type != 'subagent'
 		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
@@ -2185,11 +2193,14 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 		WHERE tc.session_id IN ` + ph + `
 		AND tc.subagent_session_id IS NOT NULL
 		AND tc.session_id IS NOT tc.subagent_session_id
+		AND ` + activeSubagentSpawnerSQL + `
 		UNION
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.subagent_session_id IN ` + ph + `
 		AND tc.session_id IS NOT tc.subagent_session_id
+		AND ` + activeSubagentSpawnerSQL + `
 	)
+	AND NOT EXISTS (SELECT 1 FROM session_push_receipts spr WHERE spr.session_id = s.id)
 	AND (
 		relationship_type != 'subagent'
 		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
@@ -2215,11 +2226,13 @@ func clearDanglingSubagentParentQuery(ph string) string {
 	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN ` + ph + `
+	AND NOT EXISTS (SELECT 1 FROM session_push_receipts spr WHERE spr.session_id = s.id)
 	AND s.relationship_type = 'subagent'
 	AND s.parent_session_id IS NOT NULL
 	AND NOT EXISTS (
 		SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id
 		AND tc.session_id IS NOT tc.subagent_session_id
+		AND ` + activeSubagentSpawnerSQL + `
 	)
 	AND NOT EXISTS (
 		SELECT 1 FROM sessions p WHERE p.id = s.parent_session_id
@@ -2607,7 +2620,10 @@ func (db *DB) SubagentChildSessionIDs(ctx context.Context, ids []string) ([]stri
 			FROM tool_calls tc
 			WHERE tc.session_id IN `+ph+`
 			AND tc.subagent_session_id IS NOT NULL
-			AND tc.session_id IS NOT tc.subagent_session_id`, args...)
+			AND tc.session_id IS NOT tc.subagent_session_id
+			AND `+activeSubagentSpawnerSQL+`
+			AND NOT EXISTS (SELECT 1 FROM session_push_receipts spr
+				WHERE spr.session_id = tc.subagent_session_id)`, args...)
 		if err != nil {
 			return fmt.Errorf(
 				"listing subagent children of %d sessions: %w",

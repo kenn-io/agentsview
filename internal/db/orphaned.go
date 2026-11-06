@@ -442,6 +442,7 @@ func copiedSessionIDs(ctx context.Context, queryer interface {
 // floors across the temp-database resync swap. Transient bookkeeping such as
 // last_sync_* timestamps is deliberately left behind so the rebuilt DB reports
 // its own sync times.
+// Immutable session push receipts survive independently of retained sessions.
 func (d *DB) CopySyncStateFrom(ctx context.Context, sourcePath string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()

@@ -106,6 +106,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     sync_marker TEXT
 );
 
+-- First accepted push snapshots remain reserved even after permanent deletion.
+-- No session foreign key: receipts also copy before sessions during a rebuild.
+CREATE TABLE IF NOT EXISTS session_push_receipts (
+    session_id    TEXT PRIMARY KEY,
+    source_origin TEXT NOT NULL,
+    payload_hash  TEXT NOT NULL
+);
+
 -- provider_freshness stores per-component stat digests that providers
 -- with multi-file on-disk layouts (currently Codebuff and Freebuff)
 -- compute for the engine's stat-only freshness pre-check. The

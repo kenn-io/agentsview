@@ -1003,6 +1003,7 @@ type Config struct {
 	Terminal             TerminalConfig              `json:"terminal,omitempty" toml:"terminal"`
 	AuthToken            string                      `json:"auth_token,omitempty" toml:"auth_token"`
 	RequireAuth          bool                        `json:"require_auth" toml:"require_auth"`
+	AcceptSessionPush    bool                        `json:"-" toml:"accept_session_push"`
 	NoBrowser            bool                        `json:"no_browser" toml:"no_browser"`
 	DisableUpdateCheck   bool                        `json:"disable_update_check" toml:"disable_update_check"`
 	NoSync               bool                        `json:"-" toml:"-"`
@@ -1848,6 +1849,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Terminal                       TerminalConfig         `toml:"terminal"`
 		AuthToken                      string                 `toml:"auth_token"`
 		RequireAuth                    bool                   `toml:"require_auth"`
+		AcceptSessionPush              bool                   `toml:"accept_session_push"`
 		RemoteAccess                   bool                   `toml:"remote_access"`
 		DisableUpdateCheck             bool                   `toml:"disable_update_check"`
 		ArchiveContent                 string                 `toml:"archive_content"`
@@ -1998,6 +2000,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.AuthToken = file.AuthToken
 	}
 	c.RequireAuth = file.RequireAuth || file.RemoteAccess
+	c.AcceptSessionPush = file.AcceptSessionPush
 	c.DisableUpdateCheck = file.DisableUpdateCheck
 	if meta.IsDefined("archive_content") {
 		policy, err := ParseArchiveContent(file.ArchiveContent)

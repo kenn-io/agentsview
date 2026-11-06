@@ -87,6 +87,11 @@ func (c *Config) applyDeploymentEnv() error {
 	if err := c.ApplyDeploymentAuth(); err != nil {
 		return err
 	}
+	if v, set, err := lookupEnvBool("AGENTSVIEW_ACCEPT_SESSION_PUSH"); err != nil {
+		return err
+	} else if set {
+		c.AcceptSessionPush = v
+	}
 	if v, set, err := lookupEnvBool("AGENTSVIEW_NO_BROWSER"); err != nil {
 		return err
 	} else if set {

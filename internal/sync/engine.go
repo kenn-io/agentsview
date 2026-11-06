@@ -423,7 +423,8 @@ func (metrics *reconciliationRuntimeMetrics) snapshot(
 
 func isIntentionalSessionSkip(err error) bool {
 	return errors.Is(err, db.ErrSessionExcluded) ||
-		errors.Is(err, db.ErrSessionTrashed)
+		errors.Is(err, db.ErrSessionTrashed) ||
+		errors.Is(err, db.ErrSessionPushConflict)
 }
 
 // Emitter is notified after a sync pass writes data. Implementations
@@ -3031,7 +3032,13 @@ func resyncSwapAbortReason(
 	deferredOnly := stats.Synced == 0 && stats.Failed == stats.preservedRetryFailures &&
 		stats.filesOK > 0 && stats.TotalSessions == stats.filesOK &&
 		len(stats.deferredPreservedIDs) > 0 &&
-		len(stats.deferredPreservedIDs)+stats.cwdFilteredFiles+stats.parserExcludedFiles == stats.filesOK
+		len(stats.deferredPreservedIDs)+stats.cwdFilteredFiles+stats.parserExcludedFiles+stats.sessionPushReservedFiles == stats.filesOK
+	// A known ownership reservation writes no source rows. The archived push
+	// is restored later; every discovered file must still have a known outcome.
+	pushReservedOnly := stats.Synced == 0 && stats.Failed == 0 &&
+		stats.TotalSessions > 0 && stats.sessionPushReservedFiles > 0 &&
+		stats.filesOK == stats.TotalSessions &&
+		stats.filesOK == stats.sessionPushReservedFiles+stats.parserExcludedFiles+stats.cwdFilteredFiles
 	excludedOnly := stats.Synced == 0 &&
 		stats.TotalSessions > 0 &&
 		stats.Failed == 0 &&
@@ -3065,7 +3072,8 @@ func resyncSwapAbortReason(
 		!preservedOnly &&
 		!deferredOnly &&
 		!excludedOnly &&
-		!cwdFilteredOnly:
+		!cwdFilteredOnly &&
+		!pushReservedOnly:
 		reason := fmt.Sprintf(
 			"the rebuild found %s but saved none (%d could not be read, %d wait for a retry)",
 			countNoun(stats.TotalSessions, "session", "sessions"), stats.Failed, stats.Deferred,
@@ -7504,6 +7512,7 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	dst.nonContainerDiscovered += src.nonContainerDiscovered
 	dst.messagesIndexed += src.messagesIndexed
 	dst.parserExcludedFiles += src.parserExcludedFiles
+	dst.sessionPushReservedFiles += src.sessionPushReservedFiles
 	dst.parserExcludedIDs = append(dst.parserExcludedIDs, src.parserExcludedIDs...)
 	dst.Tombstoned += src.Tombstoned
 	dst.sourceMissingArchiveMembers = append(
@@ -11186,8 +11195,16 @@ func (e *Engine) collectAndBatchWithOptions(
 			completionCtx = context.WithoutCancel(ctx)
 		}
 		if err := e.validateSourceSessionOwnership(completionCtx, r.processResult); err != nil {
-			log.Printf("validate source session ownership: %v", err)
-			stats.RecordFailed()
+			if errors.Is(err, db.ErrSessionPushConflict) {
+				stats.RecordSkip()
+				stats.filesOK++
+				stats.sessionPushReservedFiles++
+				progress.SessionsDone++
+				e.reportProgress(onProgress, progress)
+			} else {
+				log.Printf("validate source session ownership: %v", err)
+				stats.RecordFailed()
+			}
 			e.noteSQLiteContainerResult(r.containerResultPath(), false)
 			r.releaseAll()
 			continue

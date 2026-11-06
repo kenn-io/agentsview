@@ -232,6 +232,7 @@ type Server struct {
 	telemetryCapture http.Handler
 
 	artifactExchangeRunner ArtifactExchangeRunner
+	sessionPushMu          gosync.Mutex
 	rawSyncTenant          string
 	frictionRunner         *review.Runner
 	// kata is the optional Kata spoke connection; never nil after New.

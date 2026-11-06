@@ -80,23 +80,39 @@ const artifactUsageRawBytesSQL = `
 // read transaction so concurrent writes cannot invalidate the bounds.
 func (db *DB) LoadArtifactExportData(
 	ctx context.Context, sessionID string, limits ArtifactExportLoadLimits,
-) (_ ArtifactExportData, retErr error) {
+) (ArtifactExportData, error) {
+	_, data, err := db.loadArtifactExportData(ctx, sessionID, limits, false)
+	return data, err
+}
+
+// LoadSessionPushData loads exact live session metadata and its bounded graph
+// from one read snapshot. A missing or trashed ID returns a nil session.
+func (db *DB) LoadSessionPushData(
+	ctx context.Context, sessionID string, limits ArtifactExportLoadLimits,
+) (*Session, ArtifactExportData, error) {
+	return db.loadArtifactExportData(ctx, sessionID, limits, true)
+}
+
+func (db *DB) loadArtifactExportData(
+	ctx context.Context, sessionID string, limits ArtifactExportLoadLimits,
+	includeSession bool,
+) (_ *Session, _ ArtifactExportData, retErr error) {
 	if sessionID == "" {
-		return ArtifactExportData{}, errors.New("artifact export session id is required")
+		return nil, ArtifactExportData{}, errors.New("artifact export session id is required")
 	}
 	if err := validateArtifactExportLoadLimits(limits); err != nil {
-		return ArtifactExportData{}, err
+		return nil, ArtifactExportData{}, err
 	}
 	db.connMu.RLock()
 	reader := db.reader.Load()
 	if reader == nil {
 		db.connMu.RUnlock()
-		return ArtifactExportData{}, errors.New("database is closed")
+		return nil, ArtifactExportData{}, errors.New("database is closed")
 	}
 	tx, err := reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	db.connMu.RUnlock()
 	if err != nil {
-		return ArtifactExportData{}, fmt.Errorf("beginning artifact export snapshot: %w", err)
+		return nil, ArtifactExportData{}, fmt.Errorf("beginning artifact export snapshot: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -105,8 +121,26 @@ func (db *DB) LoadArtifactExportData(
 		}
 	}()
 
+	var session *Session
+	if includeSession {
+		// Match artifact metadata: keep names uncoalesced and omit parents
+		// applied only by the local launcher. Read through this transaction.
+		launcherApplied := `COALESCE(parser_parent_session_id, '') = ''
+			AND NOT ` + spawnEdgeExistsSQL("sessions") + `
+			AND EXISTS (SELECT 1 FROM session_external_parents ep
+				WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)`
+		parent := `CASE WHEN ` + launcherApplied + ` THEN NULL ELSE parent_session_id END`
+		relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + parserRelationshipSQL + ` ELSE relationship_type END`
+		cols := sessionFullColsBeforeParent + parent + `, parser_parent_session_id, ` + relationship + sessionFullColsAfterRelationship
+		session, err = scanSessionFullRow(tx.QueryRowContext(ctx,
+			"SELECT "+cols+" FROM sessions WHERE id = ? AND deleted_at IS NULL", sessionID), sessionID)
+		if err != nil || session == nil {
+			return nil, ArtifactExportData{}, err
+		}
+	}
+
 	if err := preflightArtifactExportTx(ctx, tx, sessionID, limits); err != nil {
-		return ArtifactExportData{}, err
+		return nil, ArtifactExportData{}, err
 	}
 	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`
 		SELECT %s FROM messages
@@ -114,44 +148,44 @@ func (db *DB) LoadArtifactExportData(
 		ORDER BY ordinal ASC
 		LIMIT ?`, selectTranscriptMessageCols), sessionID, limits.Messages+1)
 	if err != nil {
-		return ArtifactExportData{}, fmt.Errorf("loading artifact export messages: %w", err)
+		return nil, ArtifactExportData{}, fmt.Errorf("loading artifact export messages: %w", err)
 	}
 	defer rows.Close()
 	messages, scanErr := scanMessages(rows)
 	closeErr := rows.Close()
 	if scanErr != nil || closeErr != nil {
-		return ArtifactExportData{}, errors.Join(scanErr, closeErr)
+		return nil, ArtifactExportData{}, errors.Join(scanErr, closeErr)
 	}
 	if len(messages) > limits.Messages {
-		return ArtifactExportData{}, artifactExportLimitf(
+		return nil, ArtifactExportData{}, artifactExportLimitf(
 			"session %s message count exceeds %d", sessionID, limits.Messages,
 		)
 	}
 	if err := attachArtifactNestedCollectionsTx(
 		ctx, tx, sessionID, messages, limits,
 	); err != nil {
-		return ArtifactExportData{}, err
+		return nil, ArtifactExportData{}, err
 	}
 	usage, err := usageEventsWithQuerier(
 		ctx, tx, sessionID, limits.UsageEvents+1,
 	)
 	if err != nil {
-		return ArtifactExportData{}, err
+		return nil, ArtifactExportData{}, err
 	}
 	if len(usage) > limits.UsageEvents {
-		return ArtifactExportData{}, artifactExportLimitf(
+		return nil, ArtifactExportData{}, artifactExportLimitf(
 			"session %s usage count exceeds %d", sessionID, limits.UsageEvents,
 		)
 	}
 	planUsage, err := sessionPlanUsageWithQuerier(ctx, tx, sessionID)
 	if err != nil {
-		return ArtifactExportData{}, err
+		return nil, ArtifactExportData{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return ArtifactExportData{}, fmt.Errorf("committing artifact export snapshot: %w", err)
+		return nil, ArtifactExportData{}, fmt.Errorf("committing artifact export snapshot: %w", err)
 	}
 	committed = true
-	return ArtifactExportData{
+	return session, ArtifactExportData{
 		Messages: messages, UsageEvents: usage, PlanUsage: planUsage,
 	}, nil
 }

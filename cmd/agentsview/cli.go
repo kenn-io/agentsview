@@ -119,6 +119,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newChromeCommand())
 	root.AddCommand(newChromeHostCommand())
 	root.AddCommand(newExportCommand())
+	root.AddCommand(newPushSessionCommand())
 	root.AddCommand(newProjectsCommand())
 	root.AddCommand(newHealthCommand())
 	root.AddCommand(newUsageCommand())

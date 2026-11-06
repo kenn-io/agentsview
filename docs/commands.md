@@ -1,8 +1,29 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-06
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
+
+## agentsview push
+
+Push exactly one stored session to an opted-in writable SQLite receiver:
+
+```bash
+agentsview push codex:example --agent codex \
+  --to https://agents.example.com --token-env TEAM_TOKEN --json
+```
+
+Use the exact archive ID; `--agent` verifies it without ID resolution. The
+sender reads its local archive only and never syncs source files or follows
+session references. Select the archive with `AGENTSVIEW_DATA_DIR`. Supply the
+token through `--token-env` (default `AGENTSVIEW_PUSH_TOKEN`) or `--token-file`.
+Success reports `session_id`, `agent`, and `status` (`created` or `unchanged`).
+Use `--json` or `--format json` for this confirmation. Failures return nonzero
+without success output.
+
+The first accepted snapshot is immutable: a changed snapshot or an existing
+unowned ID conflicts. HTTPS is required except for loopback receivers. See
+[receiver setup and transfer limits](/docs/remote-access/#push-one-archived-session).
 
 ## Start from help
 

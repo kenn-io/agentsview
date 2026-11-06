@@ -23,6 +23,12 @@ type artifactPublicationStreamer interface {
 	StreamArtifactPublications(context.Context, string, func(db.ArtifactPublication) error) (int64, error)
 }
 
+// artifactCreator also lets an explicit single-session transfer capture only
+// its immutable dependencies, without running publication or checkpoint work.
+type artifactCreator interface {
+	Create(context.Context, Ref, Identity, string, io.Reader) (CreateResult, error)
+}
+
 type artifactExportStore interface {
 	artifactPublicationStreamer
 	ListOwnedSessionIDsForExport(context.Context) ([]string, error)
@@ -507,7 +513,7 @@ func selectArtifactExportSessionIDs(
 
 func exportLoadedSessionToStore(
 	ctx context.Context,
-	store ArtifactStore,
+	store artifactCreator,
 	origin string,
 	sess *db.Session,
 	messages []db.Message,
@@ -627,7 +633,7 @@ func exportClaimedSessionToStore(
 
 func exportMessageSegmentsToStore(
 	ctx context.Context,
-	store ArtifactStore,
+	store artifactCreator,
 	origin string,
 	sessionID string,
 	messages []db.Message,

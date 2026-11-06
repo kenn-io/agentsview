@@ -10,6 +10,9 @@ import (
 // Check before any session update; a row without provenance belongs to another
 // ingestion route even if its namespaced ID happens to match.
 func (d *DB) checkArchiveSessionProvenanceTx(ctx context.Context, tx *sql.Tx, write SessionBatchWrite) error {
+	if err := checkSessionPushReservationTx(ctx, tx, write.Session.ID); err != nil {
+		return err
+	}
 	p := write.ArchiveProvenance
 	if owners := d.archiveRebuildProvenance.Load(); owners != nil {
 		if stored, ok := (*owners)[write.Session.ID]; ok {

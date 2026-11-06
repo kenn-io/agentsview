@@ -161,6 +161,7 @@ func mergeSyncStats(dst *SyncStats, src SyncStats) {
 	dst.nonContainerDiscovered += src.nonContainerDiscovered
 	dst.messagesIndexed += src.messagesIndexed
 	dst.parserExcludedFiles += src.parserExcludedFiles
+	dst.sessionPushReservedFiles += src.sessionPushReservedFiles
 	dst.parserExcludedIDs = append(dst.parserExcludedIDs, src.parserExcludedIDs...)
 	dst.sourceMissingArchiveMembers = append(
 		dst.sourceMissingArchiveMembers, src.sourceMissingArchiveMembers...,
