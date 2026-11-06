@@ -1126,11 +1126,13 @@
   }
   .unmeasured-chips :global(.unmeasured-cat) {
     font-family: var(--font-mono);
-    transition: opacity 0.18s, border-color 0.12s, background 0.12s;
+    transition: opacity 0.18s, box-shadow 0.12s, background 0.12s;
   }
+  /* Interactive kit-ui chips have no border, so the selected outline is
+     an inset shadow; it adds no width, so the row does not shift. */
   .unmeasured-chips :global(.unmeasured-cat.active) {
     background: color-mix(in srgb, var(--ring, transparent) 12%, transparent);
-    border-color: color-mix(in srgb, var(--ring, transparent) 45%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring, transparent) 45%, transparent);
     color: var(--text-primary);
   }
   .unmeasured-chips :global(.unmeasured-cat.dimmed) {
