@@ -35,7 +35,7 @@ type Store struct {
 // storeRuntime is shared by the owning store and its borrowed read views.
 // Views never copy locks or start detached work with their transaction.
 type storeRuntime struct {
-	frustrationMarkers readbase.FrustrationMarkerMemo[int64]
+	frustrationMarkers readbase.FrustrationMarkerMemo[string]
 
 	cursorMu     sync.RWMutex
 	cursorSecret []byte

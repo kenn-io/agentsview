@@ -2587,11 +2587,15 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	all, versions, err := s.signalRows(ctx, f)
+	versionColumn, err := sessionVersionColumnPG(ctx, s.pg)
 	if err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
-	if err := s.populateFrustrationMarkers(ctx, all, versions); err != nil {
+	all, versions, err := s.signalRows(ctx, f, versionColumn)
+	if err != nil {
+		return db.SignalsAnalyticsResponse{}, err
+	}
+	if err := s.populateFrustrationMarkers(ctx, all, versions, versionColumn); err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
 
@@ -2619,11 +2623,15 @@ func (s *Store) GetAnalyticsSignalSessions(
 	if limit <= 0 || limit > 20 {
 		limit = 10
 	}
-	rows, versions, err := s.signalRows(ctx, f)
+	versionColumn, err := sessionVersionColumnPG(ctx, s.pg)
 	if err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
-	if err := s.populateFrustrationMarkers(ctx, rows, versions); err != nil {
+	rows, versions, err := s.signalRows(ctx, f, versionColumn)
+	if err != nil {
+		return db.SignalSessionsResponse{}, err
+	}
+	if err := s.populateFrustrationMarkers(ctx, rows, versions, versionColumn); err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
 	candidates := db.SignalCandidates(rows, signal, limit)
@@ -2637,13 +2645,11 @@ func (s *Store) GetAnalyticsSignalSessions(
 	}, nil
 }
 
-// pgSignalVersion matches time.Time.UnixMicro for PostgreSQL's microsecond timestamps.
-const pgSignalVersion = `(EXTRACT(EPOCH FROM updated_at) * 1000000)::bigint`
-
 func (s *Store) signalRows(
 	ctx context.Context,
 	f db.AnalyticsFilter,
-) ([]db.SignalRow, map[string]int64, error) {
+	versionColumn string,
+) ([]db.SignalRow, map[string]string, error) {
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhere(f, pgDateCol, pb, s.sessionDialect())
@@ -2667,7 +2673,7 @@ func (s *Store) signalRows(
 		short_prompt_count, unstructured_start,
 		missing_success_criteria_count,
 		missing_verification_count, duplicate_prompt_count,
-		no_code_context_count, runaway_tool_loop_count, ` + pgSignalVersion + `
+		no_code_context_count, runaway_tool_loop_count, ` + versionColumn + `::text
 		FROM sessions WHERE ` + where
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
@@ -2677,7 +2683,7 @@ func (s *Store) signalRows(
 	}
 	defer rows.Close()
 	var all []db.SignalRow
-	versions := make(map[string]int64)
+	versions := make(map[string]string)
 	for rows.Next() {
 		r, version, err := scanPGSignalRow(rows, loc)
 		if err != nil {
@@ -2703,11 +2709,11 @@ func (s *Store) signalRows(
 func scanPGSignalRow(
 	rows interface{ Scan(dest ...any) error },
 	loc *time.Location,
-) (db.SignalRow, int64, error) {
+) (db.SignalRow, string, error) {
 	var (
 		r       db.SignalRow
 		ts      *time.Time
-		version int64
+		version string
 	)
 	if err := rows.Scan(
 		&r.ID, &r.Agent, &r.Project,
@@ -2725,7 +2731,7 @@ func scanPGSignalRow(
 		&r.DuplicatePromptCount,
 		&r.NoCodeContextCount, &r.RunawayToolLoopCount, &version,
 	); err != nil {
-		return db.SignalRow{}, 0, fmt.Errorf(
+		return db.SignalRow{}, "", fmt.Errorf(
 			"scanning signal row: %w", err,
 		)
 	}
@@ -2827,7 +2833,8 @@ func (s *Store) signalMessages(
 func (s *Store) populateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
-	versions map[string]int64,
+	versions map[string]string,
+	versionColumn string,
 ) error {
 	if rows == nil {
 		return nil
@@ -2843,7 +2850,7 @@ func (s *Store) populateFrustrationMarkers(
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
-	scannedVersions := make(map[string]int64, len(ids))
+	scannedVersions := make(map[string]string, len(ids))
 	err := pgQueryChunked(ids, func(chunk []string) error {
 		pb := &paramBuilder{}
 		placeholders := make([]string, 0, len(chunk))
@@ -2853,11 +2860,11 @@ func (s *Store) populateFrustrationMarkers(
 		in := "(" + strings.Join(placeholders, ",") + ")"
 		// Read each version once and keep the prompt scan on messages, with
 		// both branches sharing one statement's snapshot.
-		q := `SELECT id, ` + pgSignalVersion + `, ''::text, false
+		q := `SELECT id, ` + versionColumn + `::text, ''::text, false
 			FROM sessions
 			WHERE id IN ` + in + `
 			UNION ALL
-			SELECT session_id, NULL::bigint, content, is_system
+			SELECT session_id, NULL::text, content, is_system
 			FROM messages
 			WHERE role = 'user'
 			  AND COALESCE(source_subtype, '') <> 'tool_result'
@@ -2871,7 +2878,7 @@ func (s *Store) populateFrustrationMarkers(
 		defer msgRows.Close()
 		for msgRows.Next() {
 			var sessionID, content string
-			var version *int64
+			var version *string
 			var isSystem bool
 			if err := msgRows.Scan(
 				&sessionID, &version, &content, &isSystem,

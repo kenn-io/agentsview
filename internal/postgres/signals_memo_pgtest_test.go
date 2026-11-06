@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,7 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestSignalVersionMicroseconds(t *testing.T) {
+func TestFrustrationMemoCommittedVersionsWithEqualTimestamps(t *testing.T) {
 	const schema = "agentsview_signals_version_test"
 	const id = "signals-version"
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
@@ -24,29 +23,41 @@ func TestSignalVersionMicroseconds(t *testing.T) {
 	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
 		SessionID: id, Ordinal: 0, Role: "user", Content: "this is broken",
 	}}))
+	require.NoError(t, local.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{
+		QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+	}))
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	store, err := NewStore(ctx, url, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
-	for _, test := range []struct {
-		name      string
-		timestamp string
-		want      int64
-	}{
-		{"before-epoch", "1969-12-31T23:59:59.999999Z", -1},
-		{"fractional", "2023-11-14T17:13:20.123456-05:00", 1700000000123456},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := pg.ExecContext(ctx, `UPDATE sessions SET updated_at = $1::timestamptz WHERE id = $2`, test.timestamp, id)
-			require.NoError(t, err)
-			rows, versions, err := store.signalRows(ctx, db.AnalyticsFilter{})
-			require.NoError(t, err)
-			require.Len(t, rows, 1)
-			assert.Equal(t, test.want, versions[id])
-		})
-	}
+	// Distinct committed writes can share a transaction-start timestamp.
+	const timestamp = "2026-01-01T00:00:00.123456Z"
+	_, err = pg.ExecContext(ctx, `UPDATE sessions SET display_name = 'Renamed', updated_at = $1::timestamptz WHERE id = $2`, timestamp, id)
+	require.NoError(t, err)
+	initial, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, initial.QualityHealth.Totals.FrustrationMarkerCount)
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `UPDATE messages SET content = 'Please explain this function.' WHERE session_id = $1`, id)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at = $1::timestamptz WHERE id = $2`, timestamp, id)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	warm, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	fresh, err := NewStore(ctx, url, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	scanned, err := fresh.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Zero(t, scanned.QualityHealth.Totals.FrustrationMarkerCount)
+	assert.Equal(t, scanned.QualityHealth.Totals.FrustrationMarkerCount, warm.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
@@ -76,7 +87,9 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 			store, err := NewStore(ctx, url, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			rows, versions, err := store.signalRows(ctx, db.AnalyticsFilter{})
+			versionColumn, err := sessionVersionColumnPG(ctx, pg)
+			require.NoError(t, err)
+			rows, versions, err := store.signalRows(ctx, db.AnalyticsFilter{}, versionColumn)
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
 			require.Contains(t, versions, id)
@@ -94,19 +107,19 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 				_, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, id)
 			}
 			require.NoError(t, err)
-			var updatedAt time.Time
+			var publishedVersion string
 			if test.name != "remove-session" {
-				require.NoError(t, tx.QueryRowContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = $1 RETURNING updated_at`, id).Scan(&updatedAt))
+				require.NoError(t, tx.QueryRowContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = $1 RETURNING `+versionColumn+`::text`, id).Scan(&publishedVersion))
 			}
 			require.NoError(t, tx.Commit())
 
-			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions))
+			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, versionColumn))
 			assert.Equal(t, test.want, rows[0].FrustrationMarkerCount)
 			memo := &store.runtimeState().frustrationMarkers
 			_, hit := memo.Lookup(id, versions[id])
 			assert.False(t, hit, "the prompt scan must not cache published content under the selected old version")
 			if test.name != "remove-session" {
-				count, hit := memo.Lookup(id, updatedAt.UnixMicro())
+				count, hit := memo.Lookup(id, publishedVersion)
 				assert.True(t, hit, "the prompt scan must cache the version it read, including sessions without prompts")
 				assert.Equal(t, test.want, count)
 			}
@@ -145,7 +158,9 @@ func TestFrustrationMemo(t *testing.T) {
 			initial, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 			require.NoError(t, err)
 			require.Equal(t, 1, initial.QualityHealth.Totals.FrustrationMarkerCount)
-			_, versions, err := store.signalRows(ctx, db.AnalyticsFilter{})
+			versionColumn, err := sessionVersionColumnPG(ctx, store.pg)
+			require.NoError(t, err)
+			_, versions, err := store.signalRows(ctx, db.AnalyticsFilter{}, versionColumn)
 			require.NoError(t, err)
 			require.Contains(t, versions, id)
 			switch test.name {
