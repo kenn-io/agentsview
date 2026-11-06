@@ -200,6 +200,58 @@ func TestUsageKeptPushBetweenReads(t *testing.T) {
 	}
 }
 
+func TestUsageKeptSchemaRebuild(t *testing.T) {
+	local, syncer, store, counter := keptUsageFixture(t)
+	ctx := t.Context()
+	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
+	read := func(s *Store) []any {
+		daily, err := s.GetDailyUsage(ctx, f)
+		require.NoError(t, err)
+		counts, err := s.GetPlanUsageSessionCounts(ctx, f)
+		require.NoError(t, err)
+		top, err := s.GetTopSessionsByCost(ctx, f, 10)
+		require.NoError(t, err)
+		return []any{daily, counts, top}
+	}
+	before := read(store)
+	require.Equal(t, 1000, before[0].(db.DailyUsageResult).Totals.OutputTokens)
+	require.Equal(t, 1, before[1].(db.PlanUsageSessionCounts).PlanOnly)
+	require.Len(t, before[2], 2)
+	queries := maps.Clone(counter.queries)
+	require.Equal(t, before, read(store))
+	require.Equal(t, queries, counter.queries)
+	revision, err := store.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, local.DeleteSession(ctx, "paid-b"))
+	require.NoError(t, local.DeleteSession(ctx, "plan"))
+	require.NoError(t, local.RenameSession(ctx, "paid-a", new("Rebuilt session")))
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "paid-a", []db.UsageEvent{{SessionID: "paid-a", Source: "provider", Model: "paid-a", OutputTokens: 900, DedupKey: "rebuilt", OccurredAt: "2026-01-01T09:00:00Z"}}))
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "paid-a", OutputPerMTok: money.MustParseDollars("20")}}))
+	_, err = syncer.pg.ExecContext(ctx, `DROP SCHEMA `+syncer.schema+` CASCADE`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+	pushed, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	afterRevision, err := store.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	require.NotEqual(t, revision, afterRevision)
+
+	fresh, err := NewStore(ctx, testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	want := read(fresh)
+	require.Equal(t, 900, want[0].(db.DailyUsageResult).Totals.OutputTokens)
+	require.Zero(t, want[1].(db.PlanUsageSessionCounts).PlanOnly)
+	require.Len(t, want[2], 1)
+	got := read(store)
+	for i, name := range []string{"daily usage", "plan counts", "top sessions"} {
+		assert.NotEqual(t, before[i], got[i], name)
+		assert.Equal(t, want[i], got[i], name)
+	}
+}
+
 func TestUsageKeptServicePairwiseSharesSummary(t *testing.T) {
 	_, _, store, counter := keptUsageFixture(t)
 	groups := service.NewModelGroups(map[string]string{"paid-a": "group-a", "paid-b": "group-b", "plan": "plan-group"})
