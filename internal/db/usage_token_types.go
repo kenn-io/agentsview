@@ -77,3 +77,20 @@ func (t UsageTokenTypes) Total(
 	}
 	return total
 }
+
+// SQLTotal sums the selected counters using the same selection as Total.
+func (t UsageTokenTypes) SQLTotal(input, output, cacheWrite, cacheRead string) string {
+	columns := []string{"0"}
+	for _, counter := range []struct {
+		bit    UsageTokenTypes
+		column string
+	}{
+		{UsageTokenTypeInput, input}, {UsageTokenTypeOutput, output},
+		{UsageTokenTypeCacheWrite, cacheWrite}, {UsageTokenTypeCacheRead, cacheRead},
+	} {
+		if t.normalized()&counter.bit != 0 {
+			columns = append(columns, counter.column)
+		}
+	}
+	return strings.Join(columns, "+")
+}

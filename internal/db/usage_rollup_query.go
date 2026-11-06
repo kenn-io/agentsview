@@ -91,7 +91,7 @@ func (cache *usageCache) usageRollupQuery(
 	if prepared.journaled && prepared.kind == usageQueryKindDayTotals {
 		result, err = readUsageDayTotals(ctx, conn, timezoneID, &snapshot, filter)
 	} else if prepared.journaled && prepared.kind == usageQueryKindTopSessions {
-		result, err = readUsageTopSessions(ctx, conn, timezoneID, &snapshot, filter, topSessionsLimit)
+		result, err = readUsageTopSessionOwners(ctx, conn, timezoneID, &snapshot, filter)
 	} else {
 		result, err = readUsageDailyRollups(ctx, conn, timezoneID, snapshot, filter, "")
 	}
@@ -115,6 +115,12 @@ func (cache *usageCache) usageRollupQuery(
 			result.MatchingSessions[group.SessionID] = UsageSessionInfo{
 				Project: group.Project, Agent: group.Agent,
 			}
+		}
+	}
+	if prepared.journaled && prepared.kind == usageQueryKindTopSessions {
+		result.TopSessions, err = readUsageTopSessions(ctx, conn, timezoneID, snapshot, result, filter, topSessionsLimit)
+		if err != nil {
+			return usageFactsResult{}, err
 		}
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {

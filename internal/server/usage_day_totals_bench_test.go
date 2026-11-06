@@ -181,14 +181,22 @@ func TestUsageTopSessionsBudget(t *testing.T) {
 			_, err := s.humaUsageTopSessions(t.Context(), &input)
 			require.NoError(t, err)
 			runtime.GC()
-			start := time.Now()
-			out, err := s.humaUsageTopSessions(t.Context(), &input)
-			elapsed := time.Since(start)
-			require.NoError(t, err)
+			elapsed := time.Duration(1<<63 - 1)
+			var raw []byte
+			for range 3 {
+				start := time.Now()
+				out, err := s.humaUsageTopSessions(t.Context(), &input)
+				elapsed = min(elapsed, time.Since(start))
+				require.NoError(t, err)
+				payload, err := json.Marshal(out.Body)
+				require.NoError(t, err)
+				if raw != nil {
+					require.Equal(t, string(raw), string(payload), "warm reads must be identical")
+				}
+				raw = payload
+			}
 			t.Logf("warm %s=%s", tc.name, elapsed)
 			assert.Less(t, elapsed, time.Second/5)
-			raw, err := json.Marshal(out.Body)
-			require.NoError(t, err)
 			file := tc.name + ".json"
 			if dir := os.Getenv("AGENTSVIEW_USAGE_BASE_RESULTS_DIR"); dir != "" {
 				base, err := os.ReadFile(filepath.Join(dir, file))

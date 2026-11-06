@@ -154,36 +154,142 @@ func CheckUsageTopSessionsBoundedGroupMembers(t *testing.T, database *DB, filter
 	}
 	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='claude' WHERE id='journal-00010'`)
 	require.NoError(t, err)
+	seedJournaledUsage(t, database, "individual")
 	filter.TopSessionsByGroup = true
 	warmJournaledUsage(t, database, filter)
 	_, facts, _, err := database.queryUsageRollups(t.Context(), filter, usageQueryKindTopSessions, false, 1)
 	require.NoError(t, err)
 	require.NotNil(t, facts.TopSessions)
-	var loaded []string
-	for _, entry := range facts.TopSessions.Entries {
-		loaded = append(loaded, entry.SessionID)
-	}
-	// Replacing representative selection with all members loads 400 rows.
-	assert.Equal(t, []string{"journal-00000", "journal-00003", "journal-00010"}, loaded)
+	assert.Len(t, facts.TopSessions.Entries, 2, "one group and its remainder")
 	got, err := database.GetTopSessionsByCost(t.Context(), filter, 1)
 	require.NoError(t, err)
-	require.Len(t, got, 1)
+	require.Len(t, got, 2)
 	assert.Empty(t, got[0].SessionID)
 	assert.Equal(t, "codex", got[0].Agent)
 	assert.Equal(t, "2026-08-09T12:00:00Z", got[0].StartedAt)
 	assert.Equal(t, "Latest report", got[0].GroupLabel)
 	assert.Equal(t, "Latest report", got[0].DisplayName)
-	assert.Equal(t, 120000, got[0].InputTokens)
-	assert.Equal(t, 24000, got[0].OutputTokens)
-	assert.Equal(t, 144000, got[0].TotalTokens)
-	assert.Equal(t, int64(168000), got[0].Cost.Microdollars)
+	assert.Equal(t, 360000, got[0].InputTokens)
+	assert.Equal(t, 72000, got[0].OutputTokens)
+	assert.Equal(t, 432000, got[0].TotalTokens)
+	assert.Equal(t, int64(504000), got[0].Cost.Microdollars)
+
+	assert.Equal(t, 100, got[1].InputTokens)
+	assert.Equal(t, 20, got[1].OutputTokens)
+	assert.Equal(t, int64(140), got[1].Cost.Microdollars)
+	assert.Empty(t, got[1].SessionID)
 
 	// A name-only edit must refresh the cached label and select its successor.
 	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_name='daily · run' WHERE id='journal-00003'`)
 	require.NoError(t, err)
 	got, err = database.GetTopSessionsByCost(t.Context(), filter, 1)
 	require.NoError(t, err)
-	require.Len(t, got, 1)
+	require.Len(t, got, 2)
 	assert.Equal(t, "Tied report", got[0].GroupLabel)
-	assert.Equal(t, int64(168000), got[0].Cost.Microdollars)
+	assert.Equal(t, int64(504000), got[0].Cost.Microdollars)
+}
+
+func TestUsageTopSessionsPurgedBeforeHydration(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "purged")
+	filter := UsageFilter{Timezone: "UTC"}
+	warmJournaledUsage(t, database, filter)
+	_, facts, _, err := database.queryUsageRollups(t.Context(), filter, usageQueryKindTopSessions, false, 1)
+	require.NoError(t, err)
+	require.NoError(t, database.DeleteSession(t.Context(), "purged"))
+	got, err := database.finishUsageTopSessions(t.Context(), facts)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "purged", got[0].DisplayName)
+	assert.Equal(t, 120, got[0].TotalTokens)
+}
+
+func TestUsageTopSessionsOwnerCrossesCut(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 10_000_000}}}))
+	for _, id := range []string{"owner", "ordinary"} {
+		seedJournaledUsage(t, database, id)
+	}
+	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='claude' WHERE id='owner'`)
+	require.NoError(t, err)
+	insertSession(t, database, "duplicate", "project", func(s *Session) { s.Agent = "claude"; s.StartedAt = new("2026-08-10T23:32:00Z") })
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{
+		{SessionID: "owner", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":500000}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"},
+		{SessionID: "duplicate", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T23:32:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":500000}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"},
+		{SessionID: "owner", Ordinal: 2, Role: "assistant", Timestamp: "2026-08-10T23:32:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":599900}`)},
+		{SessionID: "ordinary", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:32:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":999900}`)},
+	}))
+	filter := UsageFilter{Timezone: "UTC"}
+	warmJournaledUsage(t, database, filter)
+	for _, sort := range []string{"cost", "tokens"} {
+		filter.TopSessionsSort = sort
+		got, err := database.GetTopSessionsByCost(t.Context(), filter, 1)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, "owner", got[0].SessionID)
+		assert.Equal(t, int64(11000000), got[0].Cost.Microdollars)
+		assert.Equal(t, 1100000, got[0].InputTokens)
+	}
+}
+
+func TestUsageTopSessionsZeroCostTies(t *testing.T) {
+	database := testDB(t)
+	for _, id := range []string{"z", "a", "m"} {
+		seedJournaledUsage(t, database, id)
+	}
+	filter := UsageFilter{Timezone: "UTC"}
+	warmJournaledUsage(t, database, filter)
+	for _, sort := range []string{"cost", "tokens"} {
+		filter.TopSessionsSort = sort
+		got, err := database.GetTopSessionsByCost(t.Context(), filter, 2)
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		assert.Equal(t, "a", got[0].SessionID)
+		assert.Equal(t, "m", got[1].SessionID)
+		assert.Zero(t, got[0].Cost.Microdollars)
+	}
+}
+
+// CheckUsageSessionCountsJournaled checks the count path without archive names.
+func CheckUsageSessionCountsJournaled(t *testing.T, database *DB) {
+	t.Helper()
+	filter := UsageFilter{From: "2026-08-03", To: "2026-08-10", Timezone: "UTC"}
+	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET display_name='Count owner '||id`)
+	require.NoError(t, err)
+	warmJournaledUsage(t, database, filter)
+	// Observe foreground reads without a coverage pass loading names in parallel.
+	database.usageBackfillMu.Lock()
+	database.usageBackfillEnabled = false
+	database.usageBackfillMu.Unlock()
+	database.rawReader().SetMaxOpenConns(1)
+	conn, err := database.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	var loaded int
+	require.NoError(t, conn.Raw(func(driverConn any) error {
+		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other any) any {
+			if name, ok := value.(string); ok && strings.HasPrefix(name, "Count owner ") {
+				loaded++
+			}
+			if value == other {
+				return nil
+			}
+			return value
+		}, false)
+	}))
+	require.NoError(t, conn.Close())
+	for _, tc := range usageDayTotalsFilterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			f := filter
+			tc.change(&f)
+			want, err := database.getUsageSessionCountsLegacy(t.Context(), f)
+			require.NoError(t, err)
+			loaded = 0
+			got, err := database.GetUsageSessionCounts(t.Context(), f)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+			if f.ActiveSince == "" && f.Termination == "" {
+				assert.Zero(t, loaded)
+			}
+		})
+	}
 }

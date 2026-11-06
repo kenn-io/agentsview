@@ -2676,20 +2676,6 @@ type TopSessionEntry struct {
 
 // GroupTopSessions merges grouped runs and preserves individual sessions.
 func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, tokenTypes UsageTokenTypes) ([]TopSessionEntry, error) {
-	out, err := mergeTopSessions(entries)
-	if err != nil {
-		return nil, err
-	}
-	var total TopSessionEntry
-	for _, entry := range out {
-		if err := addTopSessionTotals(&total, entry); err != nil {
-			return nil, err
-		}
-	}
-	return limitGroupedTopSessions(out, limit, sortBy, tokenTypes, total, len(out))
-}
-
-func mergeTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 	type key struct{ project, machine, group string }
 	type group struct {
 		TopSessionEntry
@@ -2721,10 +2707,7 @@ func mergeTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 			row.StartedAt = entry.StartedAt
 			row.started, row.sessionID = started, entry.SessionID
 		}
-		label := entry.GroupLabel
-		if label == "" {
-			label = parser.HermesCronJobName(entry.GroupKey, entry.SessionName)
-		}
+		label := parser.HermesCronJobName(entry.GroupKey, entry.SessionName)
 		if label != "" && (row.GroupLabel == "" || started.After(row.labelStarted) || started.Equal(row.labelStarted) && entry.SessionID > row.labelSessionID) {
 			row.GroupLabel = label
 			row.labelStarted, row.labelSessionID = started, entry.SessionID
@@ -2737,26 +2720,17 @@ func mergeTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 		}
 		out = append(out, row.TopSessionEntry)
 	}
-	return out, nil
-}
-
-func limitGroupedTopSessions(out []TopSessionEntry, limit int, sortBy string, tokenTypes UsageTokenTypes, total TopSessionEntry, units int) ([]TopSessionEntry, error) {
 	sortTopSessions(out, sortBy, tokenTypes)
 	limit = min(len(out), normalizeTopSessionsLimit(limit))
 	ranked := out[:limit]
-	if units > limit {
-		for _, entry := range ranked {
-			entry.InputTokens = -entry.InputTokens
-			entry.OutputTokens = -entry.OutputTokens
-			entry.CacheCreationTokens = -entry.CacheCreationTokens
-			entry.CacheReadTokens = -entry.CacheReadTokens
-			entry.TotalTokens = -entry.TotalTokens
-			entry.Cost.Microdollars = -entry.Cost.Microdollars
-			if err := addTopSessionTotals(&total, entry); err != nil {
+	if len(ranked) < len(out) {
+		var remainder TopSessionEntry
+		for _, row := range out[len(ranked):] {
+			if err := addTopSessionTotals(&remainder, row); err != nil {
 				return nil, err
 			}
 		}
-		ranked = append(ranked, total)
+		ranked = append(ranked, remainder)
 	}
 	return ranked, nil
 }

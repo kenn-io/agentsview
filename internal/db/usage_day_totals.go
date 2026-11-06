@@ -65,39 +65,50 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	result.Groups = append(result.Groups, authoritative.Groups...)
 	result.MatchingSessions = authoritative.MatchingSessions
 	if !filter.SkipSessionCounts {
-		b = NewQueryBuilder(SQLiteQueryDialect(), 0)
-		where, owner := usageOrdinaryWindowWhere(b, timezoneID, *snapshot, filter)
-		rows, err = conn.QueryContext(ctx, `SELECT CASE WHEN (`+owner+`) THEN s.session_id ELSE '' END AS owner_id, s.project, s.baked_agent, COUNT(DISTINCT s.session_id)
-            FROM usage_daily_rollups r
-            JOIN (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s ON s.id=r.rollup_install_id
-            WHERE `+where+`
-            GROUP BY owner_id, s.project, s.baked_agent`, b.Args()...)
-		if err != nil {
-			return usageFactsResult{}, err
-		}
-		result.SessionCounts = NewUsageSessionCounts(nil)
-		for rows.Next() {
-			var id, project, agent string
-			var count int
-			if err := rows.Scan(&id, &project, &agent, &count); err != nil {
-					return usageFactsResult{}, err
-			}
-			if id != "" {
-				result.MatchingSessions[id] = UsageSessionInfo{Project: project, Agent: agent}
-				continue
-			}
-			result.SessionCounts.Total += count
-			result.SessionCounts.ByProject[project] += count
-			result.SessionCounts.ByAgent[agent] += count
-		}
-		if err := rows.Err(); err != nil {
-			return usageFactsResult{}, err
-		}
-		if err := rows.Close(); err != nil {
+		if err := readUsageSessionCounts(ctx, conn, timezoneID, *snapshot, filter, &result); err != nil {
 			return usageFactsResult{}, err
 		}
 	}
 	return result, nil
+}
+
+// readUsageSessionCounts counts ordinary sessions and retains owner identities
+// for distinct counting after the exception fold.
+func readUsageSessionCounts(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot usageQuerySnapshot, filter UsageFilter, result *usageFactsResult) error {
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	where, owner := usageOrdinaryWindowWhere(b, timezoneID, snapshot, filter)
+	rows, err := conn.QueryContext(ctx, `SELECT CASE WHEN (`+owner+`) THEN s.session_id ELSE '' END AS owner_id, s.project, s.baked_agent, COUNT(DISTINCT s.session_id)
+            FROM usage_daily_rollups r
+            JOIN (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s ON s.id=r.rollup_install_id
+            WHERE `+where+`
+            GROUP BY owner_id, s.project, s.baked_agent`, b.Args()...)
+	if err != nil {
+		return err
+	}
+	result.SessionCounts = NewUsageSessionCounts(nil)
+	for rows.Next() {
+		var id, project, agent string
+		var count int
+		if err := rows.Scan(&id, &project, &agent, &count); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if id != "" {
+			result.MatchingSessions[id] = UsageSessionInfo{Project: project, Agent: agent}
+			continue
+		}
+		result.SessionCounts.Total += count
+		result.SessionCounts.ByProject[project] += count
+		result.SessionCounts.ByAgent[agent] += count
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) error {

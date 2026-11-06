@@ -162,7 +162,7 @@ func (cache *usageCache) captureUsageZoneWindow(ctx context.Context, identity us
 		return zone, nil, nil, err
 	}
 	var window []string
-	if kind != usageQueryKindDayTotals && kind != usageQueryKindTopSessions {
+	if !kind.readsJournaledTotals() {
 		window, err = usageRollupWindowSessions(ctx, tx, zone.id, filter)
 		if err != nil {
 			return zone, nil, nil, err
@@ -349,7 +349,7 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 			_ = rows.Close()
 			return 0, err
 		}
-		if (prepared.kind == usageQueryKindDayTotals || prepared.kind == usageQueryKindTopSessions) && (revision != snapshot.ChangeRevision || pricing != catalog) {
+		if prepared.kind.readsJournaledTotals() && (revision != snapshot.ChangeRevision || pricing != catalog) {
 			_ = rows.Close()
 			return 0, errUsageCacheSourceChanged
 		}

@@ -18,6 +18,10 @@ func TestUsageTopSessionsMatchLegacy(t *testing.T) {
 }
 
 func TestUsageTopSessionsBoundedGroupMembers(t *testing.T) {
-	database, filter, _ := usagefixture.SeedJournal(t, 1000, 1)
+	database, filter, _ := usagefixture.SeedJournal(t, 3000, 1)
 	db.CheckUsageTopSessionsBoundedGroupMembers(t, database, filter)
+}
+
+func TestUsageSessionCountsJournaled(t *testing.T) {
+	db.CheckUsageSessionCountsJournaled(t, usagefixture.SeedPage(t, 32))
 }

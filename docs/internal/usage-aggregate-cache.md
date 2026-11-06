@@ -51,13 +51,14 @@ After a completed timezone coverage pass, daily reads apply session and model
 filters to day totals in SQL. They load install metadata only for authoritative
 sessions and exception owners. SQL counts ordinary sessions by project and
 agent; surviving exception owners add their distinct counts. Warm Top sessions
-reads rank session or group units in SQL. Grouped candidates load at most three
-representatives per group for the agent, latest start, and latest usable cron
-label. After merging owners and applying the final limit, individual sessions
-load names only for returned rows. Grouped rows use cached labels. Owners keep
-their per-session fold, and grouped reads retain the trailing remainder row.
-Warm preparations skip window-session discovery. Each archive snapshot loads its
-pricing catalog and computes its digest.
+reads fold exception owners first, then rank their contributions together with
+ordinary session rows in one SQL query. Grouped reads select at most three
+representatives per returned group for the agent, latest start, and latest
+usable cron label. SQL computes the trailing remainder from the same units.
+Individual sessions load archive names only for returned rows; grouped rows use
+cached labels. Daily reads and billed-session counts share the distinct count
+reader. Warm preparations skip window-session discovery. Each archive snapshot
+loads its pricing catalog and computes its digest.
 
 ### Dedup exceptions
 

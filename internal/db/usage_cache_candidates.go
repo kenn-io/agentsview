@@ -23,6 +23,10 @@ const (
 	usageQueryKindTopSessions
 )
 
+func (kind usageQueryKind) readsJournaledTotals() bool {
+	return kind == usageQueryKindDayTotals || kind == usageQueryKindTopSessions
+}
+
 type usageSourceVersion struct {
 	UsageGeneration       string
 	MessageOrdinal        sql.NullInt64

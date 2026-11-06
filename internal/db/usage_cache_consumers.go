@@ -319,7 +319,7 @@ func (db *DB) GetTopSessionsByCost(
 		return nil, err
 	}
 	if facts.TopSessions != nil {
-		return db.finishUsageTopSessions(ctx, facts, filter, limit)
+		return db.finishUsageTopSessions(ctx, facts)
 	}
 	result, err := foldUsageTopSessions(snapshot.Sessions, facts.Groups, filter)
 	if err != nil {
@@ -399,15 +399,29 @@ func foldUsageTopSessions(sessions []usageQuerySession, groups []usageFactsGroup
 }
 
 // GetUsageSessionCounts returns distinct billed survivor owners by metadata.
-func (db *DB) GetUsageSessionCounts(
-	ctx context.Context, filter UsageFilter,
-) (UsageSessionCounts, error) {
-	_, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindToken, false, 0)
+func (db *DB) GetUsageSessionCounts(ctx context.Context, filter UsageFilter) (UsageSessionCounts, error) {
+	kind := usageQueryKindToken
+	if filter.ActiveSince == "" && filter.Termination == "" {
+		kind = usageQueryKindDayTotals
+	}
+	filter.SkipSessionCounts = false
+	_, facts, _, err := db.queryUsageRollups(ctx, filter, kind, false, 0)
 	if err != nil {
 		return UsageSessionCounts{}, err
 	}
-	return NewUsageSessionCounts(facts.MatchingSessions), nil
+	return usageSessionCounts(facts), nil
+}
+
+func usageSessionCounts(facts usageFactsResult) UsageSessionCounts {
+	counts := NewUsageSessionCounts(facts.MatchingSessions)
+	counts.Total += facts.SessionCounts.Total
+	for key, count := range facts.SessionCounts.ByProject {
+		counts.ByProject[key] += count
+	}
+	for key, count := range facts.SessionCounts.ByAgent {
+		counts.ByAgent[key] += count
+	}
+	return counts
 }
 
 // GetUsageMatchingSessionCount counts sessions with eligible usage activity.
