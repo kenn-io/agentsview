@@ -535,6 +535,8 @@ func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]a
 	for i, part := range parts {
 		if platform == "windows" {
 			parts[i] = shellquote.PowerShell(part)
+		} else if i == len(parts)-1 && strings.HasPrefix(part, "~") {
+			parts[i] = shellquote.POSIXLiteral(part)
 		} else {
 			parts[i] = shellquote.POSIX(part)
 		}
