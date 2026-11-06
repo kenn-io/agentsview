@@ -56,7 +56,10 @@ const (
 	// they change a used lookup's result.
 	// Version 16 retains proven message prefixes for incremental token fills.
 	// Version 17 tracks journal coverage and the archive revision of rollup builds.
-	usageCacheFormatVersion             = 17
+	// Version 18 adds stored per-day totals. Main builds already wrote version
+	// 17 caches without them, so keeping 17 would fail their schema check and
+	// leave those archives on a temporary cache after every restart.
+	usageCacheFormatVersion             = 18
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
