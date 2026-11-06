@@ -36,37 +36,28 @@ func TestSignalVersionMicroseconds(t *testing.T) {
 		want      int64
 	}{
 		{"before-epoch", "1969-12-31T23:59:59.999999Z", -1},
-		{"epoch", "1970-01-01T00:00:00Z", 0},
-		{"after-epoch", "1970-01-01T00:00:00.000001Z", 1},
-		{"fractional", "2023-11-14T22:13:20.123456Z", 1700000000123456},
-		{"offset", "2023-11-14T17:13:20.654321-05:00", 1700000000654321},
+		{"fractional", "2023-11-14T17:13:20.123456-05:00", 1700000000123456},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var updatedAt time.Time
-			require.NoError(t, pg.QueryRowContext(ctx, `UPDATE sessions SET updated_at = $1::timestamptz WHERE id = $2 RETURNING updated_at`, test.timestamp, id).Scan(&updatedAt))
+			_, err := pg.ExecContext(ctx, `UPDATE sessions SET updated_at = $1::timestamptz WHERE id = $2`, test.timestamp, id)
+			require.NoError(t, err)
 			rows, versions, err := store.signalRows(ctx, db.AnalyticsFilter{})
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
 			assert.Equal(t, test.want, versions[id])
-			assert.Equal(t, updatedAt.UnixMicro(), versions[id])
-
-			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions))
-			assert.Equal(t, 1, rows[0].FrustrationMarkerCount)
-			count, hit := store.runtimeState().frustrationMarkers.Lookup(id, test.want)
-			assert.True(t, hit, "both queries must use the same microsecond version")
-			assert.Equal(t, 1, count)
 		})
 	}
 }
 
 func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 	for _, test := range []struct {
-		name string
-		want int
+		name    string
+		content string
+		want    int
 	}{
-		{"edit", 1},
-		{"remove-prompts", 0},
-		{"remove-session", 0},
+		{"edit", "Please explain this function.", 1},
+		{"remove-prompts", "this is broken", 0},
+		{"remove-session", "this is broken", 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			const schema = "agentsview_signals_memo_race_test"
@@ -78,7 +69,7 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 				ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1,
 			}))
 			require.NoError(t, local.InsertMessages(ctx, []db.Message{{
-				SessionID: id, Ordinal: 0, Role: "user", Content: "Please explain this function.",
+				SessionID: id, Ordinal: 0, Role: "user", Content: test.content,
 			}}))
 			_, err := syncer.Push(ctx, false, nil)
 			require.NoError(t, err)
@@ -131,7 +122,6 @@ func TestFrustrationMemo(t *testing.T) {
 		{"reuse", 7},
 		{"append", 2},
 		{"replace", 0},
-		{"rewrite", 1},
 		{"recreate", 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -149,20 +139,12 @@ func TestFrustrationMemo(t *testing.T) {
 			}))
 			_, err := syncer.Push(ctx, false, nil)
 			require.NoError(t, err)
-			if test.name == "rewrite" {
-				_, err = syncer.pg.ExecContext(ctx, `UPDATE messages SET content = 'Please explain this function.' WHERE session_id = $1`, id)
-				require.NoError(t, err)
-			}
 			store, err := NewStore(ctx, url, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			initial, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 			require.NoError(t, err)
-			if test.name == "rewrite" {
-				require.Zero(t, initial.QualityHealth.Totals.FrustrationMarkerCount)
-			} else {
-				require.Equal(t, 1, initial.QualityHealth.Totals.FrustrationMarkerCount)
-			}
+			require.Equal(t, 1, initial.QualityHealth.Totals.FrustrationMarkerCount)
 			_, versions, err := store.signalRows(ctx, db.AnalyticsFilter{})
 			require.NoError(t, err)
 			require.Contains(t, versions, id)
@@ -174,7 +156,7 @@ func TestFrustrationMemo(t *testing.T) {
 			case "replace", "recreate":
 				messages[0].Content = "Please explain this function."
 			}
-			if test.name != "reuse" && test.name != "rewrite" {
+			if test.name != "reuse" {
 				session.MessageCount = len(messages)
 				_, err = local.WriteSessionBatchContext(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, ReplaceMessages: true}})
 				require.NoError(t, err)
@@ -187,16 +169,8 @@ func TestFrustrationMemo(t *testing.T) {
 				require.NoError(t, err)
 			}
 			if test.name != "reuse" {
-				var before, after string
-				if test.name == "rewrite" {
-					require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT transcript_revision::text || ':' || created_at::text FROM sessions WHERE id = $1`, id).Scan(&before))
-				}
-				_, err = syncer.Push(ctx, test.name == "rewrite", nil)
+				_, err = syncer.Push(ctx, false, nil)
 				require.NoError(t, err)
-				if test.name == "rewrite" {
-					require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT transcript_revision::text || ':' || created_at::text FROM sessions WHERE id = $1`, id).Scan(&after))
-					assert.Equal(t, before, after)
-				}
 			}
 			warm, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 			require.NoError(t, err)

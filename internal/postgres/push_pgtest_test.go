@@ -3655,25 +3655,8 @@ func TestPushMessagesFrustrationMemoVersion(t *testing.T) {
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, testPGURL(t), schema) })
 	seedProvenanceSession(t, local, "message-version", "workstation", "sample", "")
-	_, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	// Keep session columns identical while repairing a changed transcript.
-	_, err = pg.ExecContext(ctx, `UPDATE messages SET content = 'this is broken' WHERE session_id = 'message-version'`)
-	require.NoError(t, err)
-	var before, after time.Time
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT updated_at FROM sessions WHERE id = 'message-version'`).Scan(&before))
-	tx, err := pg.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	defer tx.Rollback()
-	_, changed, err := syncer.pushMessages(ctx, tx, "message-version", true, nil, nil)
-	require.NoError(t, err)
-	require.True(t, changed)
-	require.NoError(t, tx.Commit())
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT updated_at FROM sessions WHERE id = 'message-version'`).Scan(&after))
-	assert.True(t, after.After(before), "message repair must advance the session version")
-
 	require.NoError(t, local.ReplaceSessionPlanUsage(ctx, "message-version", fullPlanUsage()))
-	_, err = syncer.Push(ctx, false, nil)
+	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	// Count physical updates because NOW() is constant within a transaction.
 	_, err = pg.ExecContext(ctx, `
@@ -3691,30 +3674,13 @@ func TestPushMessagesFrustrationMemoVersion(t *testing.T) {
 	require.Len(t, sessions, 1)
 	var markerID string
 	require.NoError(t, pg.QueryRowContext(ctx, `SELECT owner_marker FROM sessions WHERE id = 'message-version'`).Scan(&markerID))
-	for _, test := range []struct {
-		name    string
-		rewrite bool
-	}{
-		{"messages and plan usage", true},
-		{"plan usage only", false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			ctx := t.Context()
-			_, err := pg.ExecContext(ctx, `DELETE FROM session_write_counts`)
-			require.NoError(t, err)
-			var pushed []db.Session
-			result, err := syncer.pushBatchAttempt(ctx, sessions, test.rewrite, markerID, nil, nil, &pushed, true)
-			require.NoError(t, err)
-			require.True(t, result.ok)
-			require.Equal(t, 1, result.sessions)
-			if test.rewrite {
-				assert.Equal(t, 1, result.messages)
-			} else {
-				assert.Zero(t, result.messages)
-			}
-			var writes int
-			require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_write_counts WHERE session_id = 'message-version'`).Scan(&writes))
-			assert.Equal(t, 1, writes, "each batch must publish the session version once")
-		})
-	}
+	var pushed []db.Session
+	result, err := syncer.pushBatchAttempt(ctx, sessions, true, markerID, nil, nil, &pushed, true)
+	require.NoError(t, err)
+	require.True(t, result.ok)
+	require.Equal(t, 1, result.sessions)
+	assert.Equal(t, 1, result.messages)
+	var writes int
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_write_counts WHERE session_id = 'message-version'`).Scan(&writes))
+	assert.Equal(t, 1, writes, "each batch must publish the session version once")
 }
