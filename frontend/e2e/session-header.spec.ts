@@ -66,6 +66,46 @@ test("the usage breakdown stays inside a narrow transcript pane", async ({ page 
   expect(placed.y).toBeGreaterThanOrEqual(anchor.y + anchor.height);
 });
 
+test("a metadata group that wraps does not start its line with a separator", async ({ page }) => {
+  await withUsageSteps(page);
+  await page.setViewportSize({ width: 1000, height: 900 });
+  const sp = new SessionsPage(page);
+  await sp.goto();
+  await sp.selectFirstSession();
+  // The analysis panel narrows the pane so the metadata row wraps.
+  const analysis = page.getByRole("button", { name: "Show session analysis" });
+  if (await analysis.isVisible()) await analysis.click();
+  await expect(page.locator(".usage-breakdown-trigger").first()).toBeVisible();
+
+  await expect(async () => {
+    const groups = await page.locator(".session-breadcrumb .meta-group").evaluateAll((els) => {
+      let previous: DOMRect | null = null;
+      return els.flatMap((el, index) => {
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return [];
+        const startsLine = previous !== null && rect.top >= previous.bottom - 1;
+        previous = rect;
+        return [
+          {
+            index,
+            startsLine,
+            separator: getComputedStyle(el, "::before").content,
+            separatorVisibility: getComputedStyle(el, "::before").visibility,
+          },
+        ];
+      });
+    });
+    const wrapped = groups.filter((group) => group.startsLine);
+    expect(wrapped.length).toBeGreaterThan(0);
+    for (const group of wrapped) expect(group.separatorVisibility).toBe("hidden");
+    // Groups that continue a line keep their middot.
+    for (const group of groups.filter((g) => g.index > 0 && !g.startsLine)) {
+      expect(group.separator).toBe('"\u00b7"');
+      expect(group.separatorVisibility).toBe("visible");
+    }
+  }).toPass();
+});
+
 async function expectMenuInsidePane(page: Page) {
   const menu = page.locator(".usage-breakdown-menu");
   await expect(menu.locator(".usage-breakdown-row").first()).toBeVisible();

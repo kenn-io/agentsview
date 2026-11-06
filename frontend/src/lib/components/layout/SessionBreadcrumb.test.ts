@@ -1017,7 +1017,7 @@ describe("SessionBreadcrumb", () => {
       stubWidth(1280);
       mount(SessionBreadcrumb, {
         target: document.body,
-        props: { session: makeSession("claude"), onBack: () => {} },
+        props: { session: makeSession("claude", { health_grade: "B" }), onBack: () => {} },
       });
       await tick();
       expect(tabOrder()).toEqual(["view", "actions", "grade", "id"]);
@@ -1027,7 +1027,7 @@ describe("SessionBreadcrumb", () => {
       stubWidth(900);
       mount(SessionBreadcrumb, {
         target: document.body,
-        props: { session: makeSession("claude"), onBack: () => {} },
+        props: { session: makeSession("claude", { health_grade: "B" }), onBack: () => {} },
       });
       await tick();
       expect(tabOrder()).toEqual(["actions", "view", "grade", "id"]);
@@ -1038,7 +1038,7 @@ describe("SessionBreadcrumb", () => {
       ui.isMobileViewport = true;
       mount(SessionBreadcrumb, {
         target: document.body,
-        props: { session: makeSession("claude"), onBack: () => {} },
+        props: { session: makeSession("claude", { health_grade: "B" }), onBack: () => {} },
       });
       await tick();
       expect(tabOrder()).toEqual(["grade", "id", "actions"]);
@@ -1167,13 +1167,16 @@ describe("SessionBreadcrumb", () => {
 
     await tick();
     const badges = Array.from(document.querySelectorAll(".agent-badge"));
+    expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent?.trim()).toBe("triage");
-    expect(document.querySelector(".entrypoint-badge")?.textContent?.trim()).toBe("sdk-cli");
+    // The entrypoint is detail: it is in the agent's hover text, not a chip.
+    expect(badges[0]?.getAttribute("title")).toBe("triage · sdk-cli");
+    expect(document.querySelector(".breadcrumb-meta")?.textContent).not.toContain("sdk-cli");
 
     unmount(component);
   });
 
-  it("suppresses the default cli entrypoint badge", async () => {
+  it("leaves the default cli entrypoint out of the agent hover text", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,
       props: {
@@ -1183,7 +1186,8 @@ describe("SessionBreadcrumb", () => {
     });
 
     await tick();
-    expect(document.querySelector(".entrypoint-badge")).toBeNull();
+    const badge = document.querySelector(".agent-badge");
+    expect(badge?.getAttribute("title")).toBe(badge?.textContent?.trim());
 
     unmount(component);
   });
@@ -1980,7 +1984,7 @@ describe("SessionBreadcrumb", () => {
       unmount(component);
     });
 
-    it("renders the cost badge between the token badges and the model badge", async () => {
+    it("groups the metadata as identity, time, usage, then the chips", async () => {
       sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
         makeUsage({ has_cost: true, cost: testMoney(4.12) }),
       );
@@ -1991,6 +1995,7 @@ describe("SessionBreadcrumb", () => {
         target: document.body,
         props: {
           session: makeSession("claude", {
+            health_grade: "D",
             peak_context_tokens: 2400,
             total_output_tokens: 180,
             has_peak_context_tokens: true,
@@ -2004,22 +2009,40 @@ describe("SessionBreadcrumb", () => {
         expect(document.querySelector(".cost-badge")).toBeTruthy();
       });
 
-      const meta = document.querySelector(".breadcrumb-meta");
-      expect(meta).toBeTruthy();
-      const children = Array.from(meta!.children);
-      const desktopTokenIdx = children.findIndex((el) =>
-        el.classList.contains("token-badge--desktop"),
+      const groups = Array.from(document.querySelectorAll(".breadcrumb-meta > .meta-group"));
+      const contents = groups.map((group) =>
+        Array.from(group.children).map((el) => el.classList[0]),
       );
-      const mobileTokenIdx = children.findIndex((el) =>
-        el.classList.contains("token-badge--mobile"),
-      );
-      const costIdx = children.findIndex((el) => el.classList.contains("cost-badge"));
-      const modelIdx = children.findIndex((el) => el.classList.contains("model-badge"));
+      expect(contents).toEqual([
+        ["agent-badge", "model-badge"],
+        ["session-time"],
+        ["token-badge", "token-badge", "cost-badge"],
+        ["grade-badge", "session-id"],
+      ]);
+      expect(groups[2]!.querySelector(".token-badge--desktop")).not.toBeNull();
+      expect(groups[3]!.querySelector(".grade-badge")?.textContent?.trim()).toBe("D");
 
-      expect(desktopTokenIdx).toBeGreaterThanOrEqual(0);
-      expect(mobileTokenIdx).toBeGreaterThan(desktopTokenIdx);
-      expect(costIdx).toBeGreaterThan(mobileTokenIdx);
-      expect(modelIdx).toBeGreaterThan(costIdx);
+      unmount(component);
+    });
+
+    it("leaves out the grade chip and empty groups when fields are missing", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", { health_grade: undefined }),
+          onBack: () => {},
+        },
+      });
+      await tick();
+
+      const groups = Array.from(document.querySelectorAll(".breadcrumb-meta > .meta-group"));
+      expect(groups.map((group) => group.classList[1])).toEqual([
+        "meta-identity",
+        "meta-time",
+        "meta-ref",
+      ]);
+      expect(document.querySelector(".grade-badge")).toBeNull();
+      expect(document.querySelector(".breadcrumb-meta")?.textContent).not.toContain("--");
 
       unmount(component);
     });
