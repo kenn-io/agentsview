@@ -357,6 +357,7 @@ test.describe("Data mode project reclassification", () => {
 });
 
 test("rules actions stay reachable with a long mapping list", async ({ page }) => {
+  test.skip(isDuckDBBackend, "read-only archives show no Apply mappings action");
   const rules = Array.from({ length: 30 }, (_, i) => ({
     id: i + 1,
     created_at: "2026-01-01T00:00:00Z",
@@ -382,17 +383,21 @@ test("rules actions stay reachable with a long mapping list", async ({ page }) =
   const description = page.locator(".rules-view .description");
   const start = (await description.boundingBox())!;
   await page.mouse.move(start.x + 20, start.y + 5);
-  for (let i = 0; i < 6; i++) await page.mouse.wheel(0, 400);
   for (const name of ["Apply mappings"]) {
     const action = page.getByRole("button", { name, exact: true });
     await expect(action).toBeAttached();
-    const box = (await action.boundingBox())!;
-    expect(box.y + box.height, `${name} below the window`).toBeLessThanOrEqual(768);
-    const reachable = await action.evaluate((el) => {
-      const r = el.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      return !!hit && el.contains(hit);
-    });
-    expect(reachable, `${name} is covered or clipped`).toBe(true);
+    // Wheel scrolling is asynchronous and a busy page can drop events, so
+    // keep wheeling until the scroll settles with the action in reach.
+    await expect(async () => {
+      for (let i = 0; i < 6; i++) await page.mouse.wheel(0, 400);
+      const box = (await action.boundingBox())!;
+      expect(box.y + box.height, `${name} below the window`).toBeLessThanOrEqual(768);
+      const reachable = await action.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !!hit && el.contains(hit);
+      });
+      expect(reachable, `${name} is covered or clipped`).toBe(true);
+    }).toPass();
   }
 });

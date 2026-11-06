@@ -104,7 +104,9 @@ for (const [mode, highContrast] of THEMES) {
       expect(sawSelected).toBe(true);
     });
 
-    test("settings placeholders stay readable", async ({ page }) => {
+    test("settings placeholders stay readable", async ({ page, browserName }) => {
+      // The placeholder colour is read over CDP, which only Chromium has.
+      test.skip(browserName !== "chromium", "placeholder colour is read over CDP");
       await page.goto("/settings");
       await page.locator(".kit-settings__nav").getByText("Session providers").first().click();
       const inputs = page.locator(".kit-settings__panel input.kit-text-input__control[placeholder]:enabled");
