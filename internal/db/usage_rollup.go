@@ -694,6 +694,14 @@ func installUsageRollupBuilds(
 	if err != nil {
 		return err
 	}
+	// Preparing each row also recompiles its day-totals trigger. Reuse the
+	// statement for this install transaction's batch.
+	dailyInsert, err := conn.PrepareContext(ctx, `INSERT INTO usage_daily_rollups VALUES(
+		?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer dailyInsert.Close()
 	dates := make(map[string]bool)
 	for _, build := range builds {
 		var installID int64
@@ -755,7 +763,7 @@ func installUsageRollupBuilds(
 		if err != nil {
 			return err
 		}
-		if err := installUsageRollupRows(ctx, conn, installID, build, dates); err != nil {
+		if err := installUsageRollupRows(ctx, conn, dailyInsert, installID, build, dates); err != nil {
 			return err
 		}
 		if _, err := conn.ExecContext(ctx, `DELETE FROM usage_rollup_invalidations WHERE timezone_id=? AND session_id=?`, timezoneID, build.SessionID); err != nil {
@@ -779,7 +787,7 @@ func installUsageRollupBuilds(
 }
 
 func installUsageRollupRows(
-	ctx context.Context, conn *sql.Conn, installID int64,
+	ctx context.Context, conn *sql.Conn, dailyInsert *sql.Stmt, installID int64,
 	build usageRollupBuild, dates map[string]bool,
 ) error {
 	for _, row := range build.Daily {
@@ -787,8 +795,7 @@ func installUsageRollupRows(
 		if row.BandThreshold != nil {
 			band = *row.BandThreshold
 		}
-		_, err := conn.ExecContext(ctx, `INSERT INTO usage_daily_rollups VALUES(
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		_, err := dailyInsert.ExecContext(ctx,
 			installID, row.LocalDate, row.ReportedModel, row.ProviderID,
 			row.PricedModel, row.MatchedPattern, boolInt(row.RateOK), row.RateHash,
 			row.PricingTimestamp, band,
