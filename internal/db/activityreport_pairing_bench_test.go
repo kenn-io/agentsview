@@ -68,24 +68,6 @@ func BenchmarkSQLiteActivityReportPairTranscripts(b *testing.B) {
 	}
 }
 
-// BenchmarkSQLiteActivityReportMessageCounts counts a month's user and
-// assistant messages per bucket after its pairs were read, as every report
-// does once pairing finishes.
-func BenchmarkSQLiteActivityReportMessageCounts(b *testing.B) {
-	d, ids, q := seedActivityTranscriptBenchmark(b)
-	artifacts, err := d.BuildActivityReportArtifacts(b.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
-	require.NoError(b, err)
-	total := 0
-	for _, bucket := range artifacts.Report.Buckets {
-		total += bucket.UserMessages + bucket.AssistantMessages
-	}
-	require.Equal(b, len(ids)*50, total)
-	b.ReportAllocs()
-	for b.Loop() {
-		require.NoError(b, d.activityReportMessageCounts(b.Context(), ids, q, &artifacts))
-	}
-}
-
 // BenchmarkSQLiteActivityReportFirstOpen builds a month's report with an
 // empty pairing memo, as the first Activity open after a start does.
 func BenchmarkSQLiteActivityReportFirstOpen(b *testing.B) {

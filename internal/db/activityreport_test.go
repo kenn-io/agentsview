@@ -5,6 +5,10 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"math/rand/v2"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -880,8 +884,8 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 	require.Len(t, candidates, 2,
 		"the working set contains the candidate and its Claude peer only")
 	assert.ElementsMatch(t, []string{"candidate", "snapshot-peer"}, []string{
-		candidates[0].row.SessionID,
-		candidates[1].row.SessionID,
+		candidates[0].scan.sessionID,
+		candidates[1].scan.sessionID,
 	})
 
 	// Returning only matching rows is insufficient: scanning unrelated usage
@@ -948,6 +952,64 @@ func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshotAcrossSessions(
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 1)
 	assert.Equal(t, money.Money{Microdollars: 631}, rowSet.Rows[0].Cost)
+}
+
+// The usage sort moves each candidate once instead of many times. Its order
+// must match a stable sort on the same keys, including ties, equivalent
+// instants written differently, and unparseable timestamps.
+func TestSortActivityReportUsageCandidatesMatchesStableSort(t *testing.T) {
+	stamps := []string{
+		"2026-06-16T10:00:00Z", "2026-06-16T05:00:00-05:00",
+		"2026-06-16T10:00:00.5Z", "2026-06-16T09:59:59Z", "", "bad",
+	}
+	rng := rand.New(rand.NewPCG(1, 2))
+	candidates := make([]activityReportUsageCandidate, 500)
+	for i := range candidates {
+		ts := stamps[rng.IntN(len(stamps))]
+		parsed, err := parseTimestamp(ts)
+		candidates[i] = activityReportUsageCandidate{
+			scan: dailyUsageScanRow{
+				sessionID:   []string{"a", "b", "c"}[rng.IntN(3)],
+				ts:          ts,
+				usageSource: []string{"message", "event"}[rng.IntN(2)],
+				// providerID is not a sort key; it identifies each candidate.
+				providerID: strconv.Itoa(i),
+			},
+			ts: parsed, validTS: err == nil, ordinal: int64(rng.IntN(3)),
+		}
+	}
+	want := slices.Clone(candidates)
+	sort.SliceStable(want, func(i, j int) bool {
+		a, b := want[i], want[j]
+		if a.validTS && b.validTS {
+			if !a.ts.Equal(b.ts) {
+				return a.ts.Before(b.ts)
+			}
+		} else {
+			if a.validTS != b.validTS {
+				return a.validTS
+			}
+			if a.scan.ts != b.scan.ts {
+				return a.scan.ts < b.scan.ts
+			}
+		}
+		if a.scan.sessionID != b.scan.sessionID {
+			return a.scan.sessionID < b.scan.sessionID
+		}
+		if a.ordinal != b.ordinal {
+			return a.ordinal < b.ordinal
+		}
+		return compareDailyUsageSemantic(a.scan, b.scan) < 0
+	})
+	sortActivityReportUsageCandidates(candidates)
+	providers := func(cs []activityReportUsageCandidate) []string {
+		out := make([]string, len(cs))
+		for i, c := range cs {
+			out[i] = c.scan.providerID
+		}
+		return out
+	}
+	assert.Equal(t, providers(want), providers(candidates))
 }
 
 func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {

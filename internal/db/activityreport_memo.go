@@ -97,6 +97,14 @@ func (m *activityCandidateMemo) store(generation uint64, entries ...activityMemo
 
 // activityReportCandidateSource reuses pairing for unchanged session windows.
 func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
+	return db.activityReportCountingCandidateSource(ids, q, nil)
+}
+
+// activityReportCountingCandidateSource also passes onCounted, when set, every
+// counted message of every session, from the memo or from the pairing scan.
+func (db *DB) activityReportCountingCandidateSource(
+	ids []string, q activity.Query, onCounted func(string, activityCountedMessage),
+) activity.CandidateSource {
 	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
 		if len(ids) == 0 {
 			return nil
@@ -111,12 +119,16 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 		var hits activityMemoHits
 		var misses []string
 		buffered := 0
+		keptCounted := map[string][]activityCountedMessage{}
 		m.mu.Lock()
 		for _, id := range ids {
 			element := m.entries[activityMemoKey{id, lower}]
 			if element != nil && generation == m.generation {
 				e := element.Value.(activityMemoEntry)
 				if version, exists := versions[id]; exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
+					if onCounted != nil {
+						keptCounted[id] = e.counted
+					}
 					n := sort.Search(len(e.candidates), func(i int) bool { return e.candidates[i].Start.UnixMicro() >= upper })
 					if n > 0 {
 						hits = append(hits, e.candidates[:n])
@@ -129,6 +141,11 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 			misses = append(misses, id)
 		}
 		m.mu.Unlock()
+		for id, messages := range keptCounted {
+			for _, message := range messages {
+				onCounted(id, message)
+			}
+		}
 		heap.Init(&hits)
 		wide := q
 		if wide.RangeEnd.After(wide.EffectiveEnd) {
@@ -146,6 +163,9 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 				return nil
 			}
 			keepCounted := func(id string, message activityCountedMessage) {
+				if onCounted != nil {
+					onCounted(id, message)
+				}
 				if buffer, ok := counted[id]; ok {
 					counted[id] = append(buffer, message)
 				}
@@ -243,42 +263,4 @@ func (db *DB) activityMemoVersions(
 		return 0, nil, fmt.Errorf("iterating activity report session versions: %w", err)
 	}
 	return generation, versions, nil
-}
-
-// activityMemoCountedMessages passes add the kept counted messages of each
-// session whose memo entry matches its current version and covers q. It
-// returns the sessions whose messages must be read instead.
-func (db *DB) activityMemoCountedMessages(
-	ctx context.Context, ids []string, q activity.Query,
-	add func(string, activityCountedMessage),
-) ([]string, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	generation, versions, err := db.activityMemoVersions(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	lower := q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()
-	kept := make(map[string][]activityCountedMessage, len(ids))
-	var unread []string
-	m := &db.activityMemo
-	m.mu.Lock()
-	for _, id := range ids {
-		if element := m.entries[activityMemoKey{id, lower}]; element != nil && generation == m.generation {
-			e := element.Value.(activityMemoEntry)
-			if version, exists := versions[id]; exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
-				kept[id] = e.counted
-				continue
-			}
-		}
-		unread = append(unread, id)
-	}
-	m.mu.Unlock()
-	for id, messages := range kept {
-		for _, message := range messages {
-			add(id, message)
-		}
-	}
-	return unread, ctx.Err()
 }
