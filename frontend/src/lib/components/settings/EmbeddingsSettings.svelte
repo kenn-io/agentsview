@@ -75,7 +75,7 @@
       unavailableReason = null;
       loadError = null;
       updateElapsed(next);
-      if (next.setup?.enabled !== false && (withGenerations || (wasRunning && !next.running))) {
+      if (next.setup?.enabled !== false && next.setup?.action !== "turn-on" && (withGenerations || (wasRunning && !next.running))) {
         activePollsSinceGenerations = 0;
         await refreshGenerations();
       }

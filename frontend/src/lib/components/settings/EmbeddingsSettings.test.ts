@@ -156,10 +156,16 @@ describe("EmbeddingsSettings", () => {
       total_bytes: 0,
     };
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(
+      new ApiError(501, "semantic search is disabled"),
+    );
     embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
     expect(document.body.textContent).toContain(setup.error);
+    const calls = embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
+    await settle(60_000);
+    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBeGreaterThan(calls);
     const button = [...document.body.querySelectorAll("button")].find(
       (b) => b.textContent?.trim() === "Retry",
     );
