@@ -110,16 +110,29 @@
     return Math.max(160, tableWidth - 2 - others);
   }
 
+  // Widths the table last reported, by column, for the table as built
+  // now. A rebuild for a new window width starts over.
+  let reported = new Map<string, number>();
+  $effect(() => {
+    void tableWidth;
+    reported = new Map();
+  });
+
   // A drag, key press, or double-click on a header's resize handle names
-  // the column a following width change belongs to. The handle's
-  // aria-valuenow is the column's width in the table's own pixels, the
-  // unit the table reports widths in.
+  // the column a following width change belongs to, with its width then.
+  // That width comes from the table's last report when there is one: the
+  // shown width of the last column also includes the room it fills when
+  // the others add up to less than the list. Before any report the
+  // handle's aria-valuenow serves, in the same table pixels, since the
+  // starting widths fill the list exactly.
   function noteResize(event: Event) {
     const handle = (event.target as Element | null)?.closest?.(".kit-th__resize");
     const cell = handle?.closest("th");
     const column = cell ? columns[cell.cellIndex] : undefined;
-    const width = Number(handle?.querySelector("[aria-valuenow]")?.getAttribute("aria-valuenow"));
-    touched = column && Number.isFinite(width) ? { column, width } : undefined;
+    const width =
+      (column !== undefined ? reported.get(column) : undefined) ??
+      Number(handle?.querySelector("[aria-valuenow]")?.getAttribute("aria-valuenow"));
+    touched = column && Number.isFinite(width) ? { column, width: Math.round(width) } : undefined;
   }
 
   // Called after a resize or fit. Earlier resized columns are already
@@ -127,6 +140,7 @@
   function keepWidths(widths: number[]) {
     const change = touched;
     touched = undefined;
+    reported = new Map(columns.map((column, i) => [column, widths[i] ?? 0]));
     // Phone widths fit the phone; they are not kept for wider windows.
     if (stacked.current || !change) return;
     const width = widths[columns.indexOf(change.column)];
