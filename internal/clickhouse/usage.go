@@ -2309,7 +2309,7 @@ func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string) ([]
 		queries[i] = fmt.Sprintf("assumeNotNull((SELECT toString(tuple(count(), sumWithOverflow(%s))) FROM %s))",
 			chUsageRowHashSQL(columns), table)
 	}
-	var identities []string
+	identities := make([]string, len(tables))
 	if err := s.queryRowContext(ctx, "SELECT ["+strings.Join(queries, ",")+"]").Scan(&identities); err != nil {
 		return nil, fmt.Errorf("reading clickhouse usage row identities: %w", err)
 	}
