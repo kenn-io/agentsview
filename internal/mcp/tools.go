@@ -976,9 +976,7 @@ func (t *toolset) searchContent(
 		nc := res.NextCursor
 		out.NextCursor = &nc
 	}
-	if out.ExcludedActive == 0 {
-		out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
-	}
+	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
 	return nil, out, nil
 }
 

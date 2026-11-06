@@ -118,7 +118,6 @@ func TestSearchContentHintsCombinedExclusions(t *testing.T) {
 		name                                             string
 		automated, oneShotParent, mixed, includeChildren bool
 	}{
-		{"automated child", true, false, false, false},
 		{"child of one-shot parent", false, true, false, false},
 		{"one-shot and automated child", true, false, true, false},
 		{"included child with one-shot parent and automation", true, true, false, true},

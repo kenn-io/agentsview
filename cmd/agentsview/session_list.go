@@ -309,11 +309,9 @@ func sessionListDefaultExclusionNotice(
 		flagParts = append(flagParts, "--include-automated")
 	}
 
-	if hiddenChildren > 0 {
-		hiddenParts = append(hiddenParts, fmt.Sprintf("%d child", hiddenChildren))
-	}
 	separator := " and/or "
 	if hiddenChildren > 0 {
+		hiddenParts = append(hiddenParts, fmt.Sprintf("%d child", hiddenChildren))
 		flagParts = nil
 		if !f.IncludeOneShot {
 			flagParts = append(flagParts, "--include-one-shot")

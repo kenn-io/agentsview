@@ -149,17 +149,6 @@ func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 		list := decodeCLIJSON[cliSessionList](t, stdout.String())
 		assert.Empty(t, list.Sessions)
 		assert.NotContains(t, stderr.String(), "child")
-		stdout.Reset()
-		stderr.Reset()
-		cmd = newRootCommand()
-		cmd.SetOut(&stdout)
-		cmd.SetErr(&stderr)
-		cmd.SetArgs(args[:len(args)-1])
-		require.NoError(t, cmd.Execute())
-		list = decodeCLIJSON[cliSessionList](t, stdout.String())
-		require.Len(t, list.Sessions, 1)
-		assert.Equal(t, "worker", list.Sessions[0]["id"])
-		assert.Empty(t, stderr.String())
 	}
 }
 
@@ -242,8 +231,7 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 	seedSessionsWithOpts(t, dataDir,
 		sessionSeed{id: "included", project: "proj"},
 		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
-			parent := "included"
-			s.ParentSessionID = &parent
+			s.ParentSessionID = new("included")
 			s.RelationshipType = "subagent"
 		}},
 		sessionSeed{

@@ -40,23 +40,14 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		all.IncludeChildren = true
 		args["include_children"] = true
 	}
-	search := func(retry ContentSearchRequest) (*ContentSearchResult, error) {
-		if !vector {
-			retry.Limit = max(req.Limit, db.DefaultContentSearchLimit)
-		}
-		retry.Context = 0
-		return svc.SearchContent(ctx, retry)
-	}
 	var expanded *ContentSearchResult
 	if len(args) > 1 {
-		var err error
 		all.Context = 0
-		expanded, err = svc.SearchContent(ctx, all)
-		if err != nil {
-			expanded = nil
-		}
-		if err == nil && len(expanded.Matches) == 0 && expanded.NextCursor == 0 && !expanded.CandidateTruncated {
-			return nil
+		if page, err := svc.SearchContent(ctx, all); err == nil {
+			if len(page.Matches) == 0 && page.NextCursor == 0 && !page.CandidateTruncated {
+				return nil
+			}
+			expanded = page
 		}
 	}
 	singleSessions := make(map[string]bool)
@@ -98,7 +89,11 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		hints = append(hints, ContentSearchHint{Code: code, Message: message, RetryWith: args})
 	}
 	probe := func(code, class string, retry ContentSearchRequest, args map[string]any) bool {
-		page, err := search(retry)
+		if !vector {
+			retry.Limit = max(req.Limit, db.DefaultContentSearchLimit)
+		}
+		retry.Context = 0
+		page, err := svc.SearchContent(ctx, retry)
 		if err != nil {
 			return false
 		}

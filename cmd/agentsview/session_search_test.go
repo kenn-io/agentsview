@@ -816,23 +816,14 @@ func TestSessionSearchHiddenHints(t *testing.T) {
 		t.Run(class, func(t *testing.T) {
 			dataDir := newAgentDataDir(t)
 			seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "p"}, sessionSeed{id: "hidden", project: "p", mut: func(s *db.Session) {
-				switch class {
-				case "one-shot":
-					s.UserMessageCount = 1
-				case "automated", "automated-child":
-					if class == "automated-child" {
-						s.ParentSessionID = new("parent")
-						s.RelationshipType = "subagent"
-					}
-					s.UserMessageCount = 1
-					s.IsAutomated = true
-					msg := "You are a code reviewer. Review this change."
-					s.FirstMessage = &msg
-				default:
-					parent := "parent"
-					s.ParentSessionID = &parent
+				if class == "child" || class == "automated-child" {
+					s.ParentSessionID = new("parent")
 					s.RelationshipType = "subagent"
-					s.UserMessageCount = 1
+				}
+				s.UserMessageCount = 1
+				if strings.Contains(class, "automated") {
+					s.IsAutomated = true
+					s.FirstMessage = new("You are a code reviewer. Review this change.")
 				}
 			}})
 			seedSearchMessage(t, dataDir, "hidden", "needle with 'quotes' and $symbols")
