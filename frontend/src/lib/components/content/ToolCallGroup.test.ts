@@ -113,7 +113,6 @@ describe("ToolCallGroup", () => {
       else if (label === "unknown") expect(actual).toBeUndefined();
       else expect(actual).toBe(label);
       expect(document.querySelector(".group-label")?.textContent).toContain("1 tool call");
-
       unmount(component);
     },
   );
