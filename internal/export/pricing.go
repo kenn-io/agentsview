@@ -195,6 +195,13 @@ func NewPricingResolverWithDigest(rows []EffectivePricingRow, digest string) *Pr
 	return resolver
 }
 
+// Copy returns a resolver over the same rows and digest with empty lookup
+// caches. A resolver caches lookups without locking, so each goroutine that
+// resolves prices needs its own copy.
+func (r *PricingResolver) Copy() *PricingResolver {
+	return NewPricingResolverWithDigest(r.rows, r.digest)
+}
+
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
 	copied := make([]EffectivePricingRow, len(rows))
 	byModel := make(map[string]ModelRates, len(rows))

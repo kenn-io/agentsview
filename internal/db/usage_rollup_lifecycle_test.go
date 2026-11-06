@@ -372,6 +372,36 @@ func TestUsageRollupSameZoneBuildsRunOneAtATime(t *testing.T) {
 	}
 }
 
+func TestUsageRollupBuildsBatchesInParallel(t *testing.T) {
+	database := testDB(t)
+	seedUsageBatchSessions(t, database, usageFillInstallBatchSize+1,
+		time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
+	snapshot, fills, cache := prepareUsageRollupTest(t, database)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	both := make(chan struct{})
+	var attempts atomic.Int32
+	cache.rollup.observer.beforeAttempt = func(map[string]usageFillResult) {
+		// Each batch waits here until the other batch has started building.
+		if attempts.Add(1) == 2 {
+			close(both)
+		}
+		select {
+		case <-both:
+		case <-ctx.Done():
+		}
+	}
+	var sizes []int
+	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+		sizes = append(sizes, len(builds))
+	}
+	installs, _, err := cache.rollup.Ensure(ctx, snapshot, fills,
+		export.NewPricingResolver(snapshot.PricingRows))
+	require.NoError(t, err, "the second batch must build while the first one builds")
+	assert.Len(t, installs, usageFillInstallBatchSize+1)
+	assert.Equal(t, []int{usageFillInstallBatchSize, 1}, sizes, "batches install in order")
+}
+
 func TestUsageRollupInstallsInBoundedBatches(t *testing.T) {
 	for _, cancelFirst := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cancel_first=%t", cancelFirst), func(t *testing.T) {

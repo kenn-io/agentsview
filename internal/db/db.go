@@ -23,6 +23,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -877,6 +878,7 @@ type DB struct {
 	reads                readRegistry
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
+	activityKept         kept.Memo[activityKept]
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
@@ -1998,6 +2000,8 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 }
 
 var readOnlyRequiredTables = []string{
+	"commit_trailers",
+	"commit_links",
 	"sessions",
 	"messages",
 	"stats",
@@ -3311,6 +3315,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	if err := db.backfillToolCallFieldsLocked(ctx, w); err != nil {
+		return err
+	}
+	if err := db.backfillCommitLinksLocked(ctx, w); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -4844,7 +4851,10 @@ func openAndInit(
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
 
-	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
+	db := &DB{
+		path: path, usageCache: newUsageCacheManager(path),
+		activityKept: newActivityKeptMemo(),
+	}
 	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
@@ -5672,6 +5682,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
+	db.activityKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.Swap(func() { oldReader = db.reader.Swap(reader) })
 	})

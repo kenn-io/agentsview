@@ -548,14 +548,18 @@ func (c *usageFillCoordinator) extractSessions(
 		return nil, nil, err
 	}
 	defer func() { _ = spoolTx.Rollback() }()
+	insertSession, err := spoolTx.PrepareContext(ctx,
+		`INSERT INTO sessions(session_id, install_revision) VALUES (?, ?)`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer insertSession.Close()
 	for id := range extracted {
 		var revision any
 		if expectation := expected[id]; expectation.Exists {
 			revision = expectation.InstallRevision
 		}
-		if _, err := spoolTx.ExecContext(ctx,
-			`INSERT INTO sessions(session_id, install_revision) VALUES (?, ?)`,
-			id, revision); err != nil {
+		if _, err := insertSession.ExecContext(ctx, id, revision); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -578,9 +582,14 @@ func (c *usageFillCoordinator) extractSessions(
 	if err := spoolWriter.Flush(); err != nil {
 		return nil, nil, err
 	}
+	updateCounts, err := spoolTx.PrepareContext(ctx,
+		`UPDATE sessions SET message_count = ?, activity_count = ?, event_count = ? WHERE session_id = ?`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer updateCounts.Close()
 	for id := range extracted {
-		if _, err := spoolTx.ExecContext(ctx,
-			`UPDATE sessions SET message_count = ?, activity_count = ?, event_count = ? WHERE session_id = ?`,
+		if _, err := updateCounts.ExecContext(ctx,
 			messageIndexes[id], activityIndexes[id], eventIndexes[id], id,
 		); err != nil {
 			return nil, nil, err
@@ -606,6 +615,18 @@ func (c *usageFillCoordinator) extractUsageAppends(
 	versions map[string]usageSourceVersion, expected map[string]usageFillInstallExpectation,
 	indexes map[string]int,
 ) error {
+	cachedTail, err := comparison.PrepareContext(ctx, `SELECT cached.source_message_ordinal,
+			COALESCE(tail.fact_index+1, 0), COALESCE(tail.raw_timestamp, '')
+			FROM comparison.usage_cached_sessions cached
+			LEFT JOIN comparison.usage_facts tail ON tail.cached_session_id=cached.id
+			 AND tail.fact_index=(SELECT MAX(fact_index) FROM comparison.usage_facts WHERE cached_session_id=cached.id)
+			WHERE cached.session_id=? AND cached.install_revision=? AND cached.source_usage_generation=?
+			 AND cached.usage_event_fingerprint=''
+			 AND (tail.fact_index IS NULL OR (tail.source='message' AND tail.token_eligible=1))`)
+	if err != nil {
+		return err
+	}
+	defer cachedTail.Close()
 	for id, version := range versions {
 		if version.UsageGeneration == "" || version.UsageEventFingerprint != "" {
 			continue
@@ -613,14 +634,7 @@ func (c *usageFillCoordinator) extractUsageAppends(
 		var ordinal sql.NullInt64
 		var count int
 		var tail string
-		err := comparison.QueryRowContext(ctx, `SELECT cached.source_message_ordinal,
-			COALESCE(tail.fact_index+1, 0), COALESCE(tail.raw_timestamp, '')
-			FROM comparison.usage_cached_sessions cached
-			LEFT JOIN comparison.usage_facts tail ON tail.cached_session_id=cached.id
-			 AND tail.fact_index=(SELECT MAX(fact_index) FROM comparison.usage_facts WHERE cached_session_id=cached.id)
-			WHERE cached.session_id=? AND cached.install_revision=? AND cached.source_usage_generation=?
-			 AND cached.usage_event_fingerprint=''
-			 AND (tail.fact_index IS NULL OR (tail.source='message' AND tail.token_eligible=1))`,
+		err := cachedTail.QueryRowContext(ctx,
 			id, expected[id].InstallRevision, version.UsageGeneration).Scan(&ordinal, &count, &tail)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
@@ -1081,6 +1095,17 @@ func (c *usageFillCoordinator) invalidateChangedIdentitySharers(
 	stable []usageSourceVersion, affected []string,
 ) ([]string, error) {
 	if len(affected) == 0 {
+		return nil, nil
+	}
+	// A cold cache has no rollup installs to invalidate. The caller holds the
+	// cache write lock, and every later install rechecks dedup identities under
+	// that lock, so skipping the identity diff here cannot leave one stale.
+	var hasInstalls bool
+	if err := conn.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM usage_rollup_installs)`).Scan(&hasInstalls); err != nil {
+		return nil, fmt.Errorf("checking usage rollup installs: %w", err)
+	}
+	if !hasInstalls {
 		return nil, nil
 	}
 	stableIDs := make([]string, 0, len(stable))

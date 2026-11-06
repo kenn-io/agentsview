@@ -172,7 +172,7 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	if err != nil {
 		return preparedUsageState{}, fmt.Errorf("reading prepared usage stamp: %w", err)
 	}
-	fingerprint, stable, err := s.usageRowsVersion(ctx, []string{"sessions", "usage_session_snapshots", "usage_event_prices"})
+	fingerprint, stable, err := s.usageRowsVersion(ctx, []string{"sessions", "usage_session_snapshots", chUsagePriceTable}, stored.pricingDigest)
 	if err != nil {
 		return preparedUsageState{}, err
 	}

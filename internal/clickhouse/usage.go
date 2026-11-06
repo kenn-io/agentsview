@@ -1,7 +1,6 @@
 package clickhouse
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -13,7 +12,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -132,18 +130,6 @@ func appendChUsageSessionFilterClauses(
 	preds := db.BuildUsageSessionFilter(f, b, sessionID)
 	where = db.AppendUsagePredicates(where, preds, "\t\t\t")
 	return where, append(args, b.Args()...)
-}
-
-// chTerminationUsesTime reports whether a termination filter compares
-// session times with the current time.
-func chTerminationUsesTime(status string) bool {
-	for part := range strings.SplitSeq(status, ",") {
-		switch strings.TrimSpace(part) {
-		case "active", "stale", "unclean":
-			return true
-		}
-	}
-	return false
 }
 
 const chDailyCursorUsageRowsSQLTemplate = `
@@ -1311,7 +1297,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 		if err != nil {
 			return err
 		}
-		if rows, ok := s.dailyUsageRows.get(memoSlot, memoVersion); ok {
+		if rows, ok := s.dailyUsageRows.Get(memoSlot, memoVersion); ok {
 			for _, r := range rows {
 				if err := visit(r); err != nil {
 					return err
@@ -1346,13 +1332,14 @@ func (s *Store) forEachDailyUsageGroupRow(
 	}
 	pricedSQL, pricedArgs := chUsagePricedCTE(source, pricingDigest)
 	metadataSelect := ""
+	// Visit rows in time order so the last Copilot-reported total is the session cost.
 	order := `ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC, group_machine ASC,
-			model ASC, row_price_model ASC, row_ts ASC, COALESCE(row_message_ordinal, -1) ASC,
-			row_source ASC, row_usage_dedup_key ASC`
+			row_ts ASC, COALESCE(row_message_ordinal, -1) ASC, row_source ASC,
+			row_usage_dedup_key ASC, model ASC, row_price_model ASC`
 	if top {
 		metadataSelect = ", any(display_name), any(started_at), any(group_key), any(session_name), any(machine)"
-		order = `ORDER BY session_id ASC, model ASC, row_price_model ASC, row_ts ASC,
-			COALESCE(row_message_ordinal, -1) ASC, row_source ASC, row_usage_dedup_key ASC`
+		order = `ORDER BY session_id ASC, row_ts ASC, COALESCE(row_message_ordinal, -1) ASC,
+			row_source ASC, row_usage_dedup_key ASC, model ASC, row_price_model ASC`
 	}
 	query := cte + pricedSQL + `,
 		usage_classified AS (
@@ -1456,7 +1443,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 		return fmt.Errorf("iterating clickhouse daily usage aggregates: %w", err)
 	}
 	if !top {
-		s.dailyUsageRows.put(memoSlot, memoVersion, memo)
+		s.dailyUsageRows.Put(memoSlot, memoVersion, memo)
 	}
 	return nil
 }
@@ -1940,7 +1927,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	if err != nil {
 		return err
 	}
-	if rows, ok := s.sessionAggregateRows.get(memoSlot, memoVersion); ok {
+	if rows, ok := s.sessionAggregateRows.Get(memoSlot, memoVersion); ok {
 		for _, r := range rows {
 			if err := visit(r); err != nil {
 				return err
@@ -1960,8 +1947,9 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			cache_create_1h_norm AS cache_creation_1h_tokens,
 			cache_read_norm AS cache_read_tokens,` + chUsageBillableSelect + `
 		FROM usage_localized
-		ORDER BY session_id ASC, model ASC, price_model ASC, ts ASC,
-			COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC`
+		-- Visit rows in time order so the last Copilot-reported total is the session cost.
+		ORDER BY session_id ASC, ts ASC, COALESCE(message_ordinal, -1) ASC,
+			source ASC, usage_dedup_key ASC, model ASC, price_model ASC`
 	readCtx, err := withUsageDeltaTables(ctx, state)
 	if err != nil {
 		return err
@@ -2000,7 +1988,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating clickhouse session usage aggregates: %w", err)
 	}
-	s.sessionAggregateRows.put(memoSlot, memoVersion, memo)
+	s.sessionAggregateRows.Put(memoSlot, memoVersion, memo)
 	return nil
 }
 
@@ -2088,7 +2076,7 @@ func (s *Store) GetTopSessionsByCost(
 	if err != nil {
 		return nil, err
 	}
-	if kept, ok := s.topSessionTotals.get(memoSlot, memoVersion); ok {
+	if kept, ok := s.topSessionTotals.Get(memoSlot, memoVersion); ok {
 		if f.TopSessionsByGroup {
 			return db.GroupTopSessions(kept, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 		}
@@ -2102,7 +2090,7 @@ func (s *Store) GetTopSessionsByCost(
 	if err != nil {
 		return nil, err
 	}
-	s.topSessionTotals.put(memoSlot, memoVersion, out)
+	s.topSessionTotals.Put(memoSlot, memoVersion, out)
 	if f.TopSessionsByGroup {
 		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
@@ -2192,7 +2180,7 @@ func (s *Store) GetUsageSessionCounts(
 	if err != nil {
 		return db.UsageSessionCounts{}, err
 	}
-	counted, ok := s.usageSessionRows.get(memoSlot, memoVersion)
+	counted, ok := s.usageSessionRows.Get(memoSlot, memoVersion)
 	if !ok {
 		source := usageCTEFor(state, f, "")
 		readCtx, err := withUsageDeltaTables(ctx, state)
@@ -2221,7 +2209,7 @@ func (s *Store) GetUsageSessionCounts(
 			return db.UsageSessionCounts{}, fmt.Errorf(
 				"iterating clickhouse usage session counts: %w", err)
 		}
-		s.usageSessionRows.put(memoSlot, memoVersion, counted)
+		s.usageSessionRows.Put(memoSlot, memoVersion, counted)
 	}
 	seen := make(map[string]db.UsageSessionInfo, len(counted))
 	for _, r := range counted {
@@ -2247,7 +2235,7 @@ func (s *Store) usageRowMemoKey(
 	if sessionID != "" {
 		version, err = s.partsFingerprint(ctx)
 	} else {
-		version, err = s.usageReadFingerprint(ctx, state)
+		version, err = s.usageReadFingerprint(ctx, state, pricingDigest)
 	}
 	if err != nil {
 		return "", "", err
@@ -2272,12 +2260,13 @@ var chRawHostUsageTables = []string{"usage_messages", "usage_events"}
 
 // usageReadFingerprint identifies the rows a usage read sees. Fully prepared
 // reads keep their version across merges. Raw and mixed reads name parts.
-func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState) (string, error) {
+// pricingDigest names the price records the read joins; see usageRowsVersion.
+func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState, pricingDigest string) (string, error) {
 	if !state.ready {
 		return s.partsFingerprint(ctx)
 	}
 	if len(state.raw) == 0 {
-		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables)
+		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables, pricingDigest)
 		if err != nil || !ok {
 			return "", err
 		}
@@ -2296,9 +2285,27 @@ type usageTableVersion struct {
 	parts, identity string
 }
 
+// chUsagePriceTable keeps the price records of every pricing digest the
+// mirror was ever priced under, and a push never removes a digest's records,
+// so the table grows by a full set of records with each catalog change. A
+// read joins only the records of one digest.
+const chUsagePriceTable = "usage_event_prices"
+
+// usageVersionKey names the rows of a table a read can see: the whole table,
+// or for chUsagePriceTable only the records of pricingDigest.
+func usageVersionKey(table, pricingDigest string) string {
+	if table == chUsagePriceTable {
+		return table + "@" + pricingDigest
+	}
+	return table
+}
+
 // usageRowsVersion probes only tables whose parts changed. If parts move
-// during the probe or the probe fails, the read is served uncached.
-func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, bool, error) {
+// during the probe or the probe fails, the read is served uncached. The
+// version names only pricingDigest's price records: hashing every digest's
+// records read the whole table, which took two minutes on a mirror holding
+// hundreds of digests.
+func (s *Store) usageRowsVersion(ctx context.Context, tables []string, pricingDigest string) (string, bool, error) {
 	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	if !ok {
 		var err error
@@ -2312,13 +2319,13 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 	defer s.usageVersions.Unlock()
 	var changed []string
 	for _, table := range tables {
-		kept, exists := s.usageVersions.tables[table]
+		kept, exists := s.usageVersions.tables[usageVersionKey(table, pricingDigest)]
 		if !exists || kept.parts != snapshot[table] {
 			changed = append(changed, table)
 		}
 	}
 	if len(changed) > 0 {
-		identities, err := s.readUsageRowIdentities(ctx, changed)
+		identities, err := s.readUsageRowIdentities(ctx, changed, pricingDigest)
 		if err != nil {
 			s.logUsageReadiness(fmt.Sprintf("row identity probe failed, serving uncached: %v", err))
 			return "", false, nil
@@ -2334,11 +2341,11 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 			}
 		}
 		for i, table := range changed {
-			s.usageVersions.tables[table] = usageTableVersion{snapshot[table], identities[i]}
+			s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{snapshot[table], identities[i]}
 		}
 	}
 	return tableValuesFingerprint(tables, func(table string) string {
-		return s.usageVersions.tables[table].identity
+		return s.usageVersions.tables[usageVersionKey(table, pricingDigest)].identity
 	}), true, nil
 }
 
@@ -2346,20 +2353,27 @@ func chUsageRowHashSQL(columns string) string {
 	return "reinterpretAsUInt128(sipHash128Reference(tuple(" + columns + ")))"
 }
 
-// readUsageRowIdentities returns one identity per table, in order.
-func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string) ([]string, error) {
+// readUsageRowIdentities returns one identity per table, in order. The
+// price table's identity covers only pricingDigest's records, which the
+// table's sort key reads without touching the other digests.
+func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string, pricingDigest string) ([]string, error) {
 	queries := make([]string, len(tables))
+	var args []any
 	for i, table := range tables {
-		columns := "*"
-		if table == "usage_session_snapshots" {
+		columns, where := "*", ""
+		switch table {
+		case "usage_session_snapshots":
 			// Revision identifies the usage arrays without hashing them; push_version identifies publication.
 			columns = "id, revision, push_version"
+		case chUsagePriceTable:
+			where = " WHERE pricing_digest = ?"
+			args = append(args, pricingDigest)
 		}
-		queries[i] = fmt.Sprintf("assumeNotNull((SELECT toString(tuple(count(), sumWithOverflow(%s))) FROM %s))",
-			chUsageRowHashSQL(columns), table)
+		queries[i] = fmt.Sprintf("assumeNotNull((SELECT toString(tuple(count(), sumWithOverflow(%s))) FROM %s%s))",
+			chUsageRowHashSQL(columns), table, where)
 	}
 	identities := make([]string, len(tables))
-	if err := s.queryRowContext(ctx, "SELECT ["+strings.Join(queries, ",")+"]").Scan(&identities); err != nil {
+	if err := s.queryRowContext(ctx, "SELECT ["+strings.Join(queries, ",")+"]", args...).Scan(&identities); err != nil {
 		return nil, fmt.Errorf("reading clickhouse usage row identities: %w", err)
 	}
 	return identities, nil
@@ -2374,7 +2388,7 @@ func usageRowMemoKeyFor(
 	kind string, f db.UsageFilter, sessionID, pricingDigest string,
 	customModels [][2]string,
 ) (string, error) {
-	if chTerminationUsesTime(f.Termination) {
+	if db.TerminationUsesTime(f.Termination) {
 		return "", nil
 	}
 	filter, err := json.Marshal(f)
@@ -2452,99 +2466,6 @@ func (s *Store) withPartsSnapshot(ctx context.Context) (context.Context, error) 
 		return nil, err
 	}
 	return context.WithValue(ctx, partsSnapshotKey{}, snapshot), nil
-}
-
-// usageRowMemo keeps the rows of recent usage reads. A slot names the read
-// and holds only the rows of its latest version, which names the rows the
-// read sees. A push replaces a slot's rows instead of adding a
-// second copy beside them, and a stale version is never returned. The
-// empty slot keeps nothing. The oldest written slots go first when the
-// memo is over its slot or byte limit.
-type usageRowMemo[T any] struct {
-	mu      sync.Mutex
-	entries map[string]usageRowMemoEntry[T]
-	order   []string
-	// limit caps the slots; zero means usageRowMemoLimit.
-	limit int
-	// size estimates a row's bytes. With it, maxBytes caps the bytes kept,
-	// zero meaning usageRowMemoBytes, and rows over that cap are not kept.
-	// Without it only the slots are capped.
-	size     func(T) int64
-	maxBytes int64
-	bytes    int64
-}
-
-type usageRowMemoEntry[T any] struct {
-	version string
-	rows    []T
-	bytes   int64
-}
-
-const (
-	usageRowMemoLimit = 64
-	usageRowMemoBytes = 64 << 20
-)
-
-func (m *usageRowMemo[T]) get(slot, version string) ([]T, bool) {
-	if slot == "" {
-		return nil, false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	entry, ok := m.entries[slot]
-	if !ok || entry.version != version {
-		return nil, false
-	}
-	return entry.rows, true
-}
-
-func (m *usageRowMemo[T]) put(slot, version string, rows []T) {
-	if slot == "" {
-		return
-	}
-	var size int64
-	if m.size != nil {
-		for _, row := range rows {
-			size += m.size(row)
-		}
-	}
-	maxBytes := cmp.Or(m.maxBytes, usageRowMemoBytes)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.removeLocked(slot)
-	if m.size != nil && size > maxBytes {
-		return
-	}
-	if m.entries == nil {
-		m.entries = map[string]usageRowMemoEntry[T]{}
-	}
-	m.entries[slot] = usageRowMemoEntry[T]{version: version, rows: rows, bytes: size}
-	m.order = append(m.order, slot)
-	m.bytes += size
-	for len(m.order) > cmp.Or(m.limit, usageRowMemoLimit) || m.bytes > maxBytes {
-		m.removeLocked(m.order[0])
-	}
-}
-
-// deleteSlots removes the slots drop reports.
-func (m *usageRowMemo[T]) deleteSlots(drop func(slot string) bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, slot := range slices.Clone(m.order) {
-		if drop(slot) {
-			m.removeLocked(slot)
-		}
-	}
-}
-
-func (m *usageRowMemo[T]) removeLocked(slot string) {
-	entry, ok := m.entries[slot]
-	if !ok {
-		return
-	}
-	delete(m.entries, slot)
-	m.order = slices.DeleteFunc(m.order, func(s string) bool { return s == slot })
-	m.bytes -= entry.bytes
 }
 
 func appendChUsageMatchingActivityClauses(

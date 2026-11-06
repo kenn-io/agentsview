@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -118,6 +119,8 @@ func TestPGActivityReportSecondRead(t *testing.T) {
 	require.Len(t, pooled.Sessions, 2)
 	assert.Equal(t, 2, pooled.Report.Peak.Agents)
 
+	// Force the transaction view to build rather than reuse the pooled report.
+	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
 	tx, err := store.DB().BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, tx.Rollback()) }()
@@ -625,7 +628,11 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	q := pgDayQuery(t, "2026-06-16", "UTC")
 	lower := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upper := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q)
+	pricing, err := store.loadPricingMap(ctx)
+	require.NoError(t, err)
+	digest, err := export.EffectivePricingDigest(pricing)
+	require.NoError(t, err)
+	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil, pricing, digest)
 	require.NoError(t, err)
 
 	// The shared dedup identity leaves one survivor.

@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -173,7 +174,7 @@ func TestKeptActivityReportsExpireUnlessOpened(t *testing.T) {
 		require.NoError(t, err)
 		f := filter
 		f.IncludeSubagents, f.IncludeForks = true, true
-		return q, s.reportDisk.path(activityReportSelection(f, q))
+		return q, s.reports.Path(kept.Selection(f, q))
 	}
 	opened, openedFile := day("2026-01-10")
 	unopened, unopenedFile := day("2026-01-11")
@@ -195,7 +196,7 @@ func TestKeptActivityReportsExpireUnlessOpened(t *testing.T) {
 	_, err = s.BuildActivityReportArtifacts(ctx, filter, opened, nil)
 	require.NoError(t, err)
 
-	removed, err := s.reportDisk.sweep(time.Now())
+	removed, err := s.reports.Sweep(time.Now())
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
 	require.FileExists(t, openedFile)

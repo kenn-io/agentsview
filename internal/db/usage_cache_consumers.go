@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -178,13 +179,22 @@ func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot,
 		fills = make(map[string]usageFillResult, len(snapshot.Versions))
 		var wait sync.WaitGroup
 		var mu sync.Mutex
-		for chunk := range slices.Chunk(snapshot.Versions, (len(snapshot.Versions)+shards-1)/shards) {
+		// Units smaller than a shard let one worker install its facts while
+		// the others extract theirs.
+		units := slices.Collect(slices.Chunk(snapshot.Versions, usageFillShardMinSessions))
+		var next atomic.Int64
+		for range shards {
 			wait.Go(func() {
-				results, fillErr := cache.fill.Ensure(ctx, chunk, 0)
-				mu.Lock()
-				defer mu.Unlock()
-				maps.Copy(fills, results)
-				err = errors.Join(err, fillErr)
+				for unit := next.Add(1) - 1; unit < int64(len(units)); unit = next.Add(1) - 1 {
+					results, fillErr := cache.fill.Ensure(ctx, units[unit], 0)
+					mu.Lock()
+					maps.Copy(fills, results)
+					err = errors.Join(err, fillErr)
+					mu.Unlock()
+					if fillErr != nil {
+						return
+					}
+				}
 			})
 		}
 		wait.Wait()

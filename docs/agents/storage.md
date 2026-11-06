@@ -833,9 +833,13 @@ SQLite keeps paired candidates in memory per session and range start, with
 separate limits of 200,000 candidates and 4,096 entries. A full cache measured
 64.3 MiB of resident Go heap on Windows amd64, using the post-GC
 `runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
-with 36-byte session IDs, 24-byte models, and append-grown slices. Empty
-sessions use only the entry budget. A week report then a month report keep
-separate entries for their range starts. Entries run to
+with 36-byte session IDs, 24-byte models, and append-grown slices. Each entry
+also keeps the window's counted user and assistant messages; message counts read
+storage only for sessions without a matching entry. Every counted message except
+a session's last starts a candidate, so the candidate budget bounds them too.
+They add about 57 bytes each: on Linux amd64 a full cache grew from 48.3 MiB to
+59.3 MiB. Empty sessions use only the entry budget. A week report then a month
+report keep separate entries for their range starts. Entries run to
 `max(EffectiveEnd, RangeEnd)` and remain valid while the transcript revision and
 session creation time match. Reader swaps clear the entries and reject stores
 from earlier generations. Reports exceeding the entry limit reuse retained hits
@@ -854,6 +858,14 @@ The next writable SQLite open or PostgreSQL schema setup builds the index once
 for existing archives. PostgreSQL push must also detect its absence before
 taking the schema-current fast path. Creating the index scans existing tool
 results and can delay that first startup; it does not require a session resync.
+
+SQLite keeps completed Activity reports in memory with a 128 MiB estimated-size
+budget. Entries use `database_id` and `usage_pricing_revision` as their
+version. The `usage_session_changes` journal invalidates an entry when a
+selected session or an in-window Claude peer changes; a changed project
+identity map also invalidates it. Partial reports, read-only archives, and
+reports filtered by active, stale, or unclean termination status bypass this
+cache.
 
 ### PostgreSQL push preparation indexes
 
@@ -954,9 +966,15 @@ sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches are
 not indexed.
 
-Terms search uses `message_trigram_fts` in its session prefilter, which finds
-the sessions where each term occurs, under the same share rule per term. The
-exchange grouping still reads every message of those sessions.
+Terms search uses `message_trigram_fts` under the same share rule per term.
+When the index lists any term, the query starts from the messages it lists for
+the first such term. It finds each message's exchange from the nearest eligible
+user message at or before it and the next one after, checks the other terms
+against that exchange's messages, and joins bodies only for the page. When the
+index lists no term, the session prefilter finds the sessions where each term
+occurs and the query groups every message of those sessions into exchanges.
+Both queries must return the same rows;
+`TestSearchContentTermsAnchorMatchesScan` compares them.
 
 Triggers keep both tables current on message insert, delete, and edits to
 `content`, `dialogue_text`, or `thinking_text`. Bulk session deletes remove a

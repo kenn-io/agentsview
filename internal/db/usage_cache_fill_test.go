@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -1016,19 +1019,22 @@ func TestUsagePageFillShardsLargeWindow(t *testing.T) {
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	var batches [][]usageSourceVersion
+	extracted := make(map[string]usageSourceVersion)
+	var started int
 	barrier := make(chan struct{})
 	var mu sync.Mutex
 	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
 		mu.Lock()
-		// Capture only the first wave; lost-install retries can extract again.
-		if len(batches) < 2 {
-			batches = append(batches, versions)
-			if len(batches) == 2 {
-				close(barrier)
-			}
+		// Lost-install retries can extract a session again.
+		for _, version := range versions {
+			extracted[version.SessionID] = version
+		}
+		started++
+		if started == 2 {
+			close(barrier)
 		}
 		mu.Unlock()
+		// The first extraction waits for a second one to start.
 		select {
 		case <-barrier:
 		case <-ctx.Done():
@@ -1037,8 +1043,7 @@ func TestUsagePageFillShardsLargeWindow(t *testing.T) {
 	installs, _, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, func(string) {})
 	require.NoError(t, err)
 	assert.Len(t, installs, sessions)
-	require.Len(t, batches, 2)
-	assert.ElementsMatch(t, snapshot.Versions, append(batches[0], batches[1]...))
+	assert.ElementsMatch(t, snapshot.Versions, slices.Collect(maps.Values(extracted)))
 }
 
 func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
@@ -1838,4 +1843,44 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A cold cache has no rollup installs, so a fill skips the dedup sharer
+// diff. A rollup build that read its facts before that fill committed must
+// still see the new sharer when it installs, and rebuild.
+func TestUsageColdFillSharerReachesInFlightRollup(t *testing.T) {
+	database, cache := usageSpoolExtractionFixture(t, 2)
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Sessions, 1)
+	fills, err := cache.fill.Ensure(t.Context(), snapshot.Versions, 0)
+	require.NoError(t, err)
+	require.Zero(t, usageCacheCount(t, cache, "usage_rollup_installs"))
+
+	var installs int
+	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
+		installs++
+		if installs > 1 {
+			return
+		}
+		insertSession(t, database, "resumed", "project")
+		insertMessages(t, database, Message{
+			SessionID: "resumed", Ordinal: 0, Role: "assistant", Model: "model",
+			Timestamp: "2026-08-10T09:00:00Z", SourceUUID: "message-0",
+			TokenUsage: json.RawMessage(`{"input_tokens":10}`),
+		})
+		_, fillErr := cache.fill.fillSessionsDetached(t.Context(),
+			[]usageSourceVersion{{SessionID: "resumed"}})
+		require.NoError(t, fillErr)
+		require.Zero(t, usageCacheCount(t, cache, "usage_rollup_installs"),
+			"the sharer fill must run while the cache has no installs")
+	}
+	_, _, err = cache.rollup.Ensure(t.Context(), snapshot, fills,
+		export.NewPricingResolver(snapshot.PricingRows))
+	require.NoError(t, err)
+	assert.Greater(t, installs, 1, "the first install must reject the stale build")
+	cache.rollup.observer.beforeInstall = nil
+	assert.Equal(t, getDailyUsageLegacyForRollupTest(t, database, filter),
+		getDailyUsageRollupForTest(t, database, filter))
 }

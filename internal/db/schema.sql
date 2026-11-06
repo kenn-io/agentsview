@@ -1729,6 +1729,42 @@ CREATE TABLE IF NOT EXISTS archive_session_provenance (
 CREATE INDEX IF NOT EXISTS idx_archive_session_source
     ON archive_session_provenance(archive_id,device_id,root_id,source_key);
 
+-- Transcript evidence survives permanent session deletion.
+CREATE TABLE IF NOT EXISTS commit_links (
+    session_id TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    message_ordinal INTEGER NOT NULL,
+    call_index INTEGER NOT NULL,
+    tool_use_id TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    project TEXT NOT NULL,
+    PRIMARY KEY (session_id, sha)
+);
+CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha);
+
+-- Capture moves since the last transcript write before losing the session row.
+CREATE TRIGGER IF NOT EXISTS trg_commit_links_deletion_project
+BEFORE DELETE ON sessions
+BEGIN
+    UPDATE commit_links SET project=OLD.project WHERE session_id=OLD.id;
+END;
+
+-- Git trailer evidence survives transcript rewrites and checkout removal.
+CREATE TABLE IF NOT EXISTS commit_trailers (
+    session_id TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (session_id, sha)
+);
+CREATE INDEX IF NOT EXISTS idx_commit_trailers_sha ON commit_trailers(sha);
+
 -- Local replay evidence commits with fork messages and survives archive rebuilds.
 CREATE TABLE IF NOT EXISTS codex_fork_state (
  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,

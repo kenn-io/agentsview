@@ -620,8 +620,9 @@ type Engine struct {
 	scanProtectedPaths  bool
 	homeDir             string
 	goos                string
-	subagentLinkPending bool         // protected by syncMu; retains failed global linking
-	syncMu              gosync.Mutex // serializes all sync operations
+	subagentLinkPending bool                 // protected by syncMu; retains failed global linking
+	trailerScanAttempts map[string]time.Time // protected by syncMu; includes failed scans
+	syncMu              gosync.Mutex         // serializes all sync operations
 	mu                  gosync.RWMutex
 	lastSync            time.Time
 	lastSyncStats       SyncStats
@@ -3546,6 +3547,12 @@ func (e *Engine) resyncBuildLocked(
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
+	if err := newDB.CopyCommitTrailersFrom(ctx, origPath); err != nil {
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		return SyncStats{Aborted: true}, err
+	}
 	trashedCopied := 0
 	var copiedSessionIDs []string
 	if ids, err := newDB.CopyTrashedDataFrom(ctx, origPath); err != nil {
@@ -4059,6 +4066,11 @@ func (e *Engine) resyncBuildLocked(
 	}
 	stats.RecordCwdUpdated(deferredCwdUpdated)
 	e.deferredSourceCwd = nil
+
+	// Scan once every session and its cwd have been restored.
+	e.db = newDB
+	pendingLinksUpdated += e.reconcileCommitTrailersLocked(ctx)
+	e.db = origDB
 
 	// Re-link subagent sessions after orphan copy so copied
 	// tool_calls.subagent_session_id references are resolved.
@@ -8795,6 +8807,9 @@ func (e *Engine) syncAllLocked(
 		MessagesIndexed: stats.messagesIndexed,
 	})
 
+	if since.IsZero() && scope == nil && e.archiveRebuildIndex == nil {
+		stats.RecordLinksUpdated(e.reconcileCommitTrailersLocked(ctx))
+	}
 	// Store the anomaly-folded stats so LastSyncStats (UI) matches the
 	// value returned to the CLI summary. The deferred applyTo only reads
 	// the accumulator, so folding a separate copy here does not
@@ -19930,6 +19945,19 @@ func (e *Engine) projectIdentityObservationForWrite(
 	return export.WithRecordedGitRemote(obs, pw.sess.GitRemote), true
 }
 
+// mayDiscoverLocalProject reports whether path may be probed on the local
+// filesystem. Only sessions recorded on this machine qualify: another
+// machine's cwd (e.g. /home/... from a synced Linux host) is meaningless
+// here, and on macOS merely stat'ing such paths wakes the /home automounter —
+// with tens of thousands of remote sessions and a one-minute cache TTL that
+// becomes a sustained automountd/opendirectoryd CPU storm.
+// mayProbeLocalPath also guards export.NormalizeRootPath, which resolves
+// symlinks and would reach into a protected location on its own.
+func (e *Engine) mayDiscoverLocalProject(machine, path string) bool {
+	return !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
+		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(path)
+}
+
 func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentityCacheEntry {
 	e.projectIdentityMu.Lock()
 	defer e.projectIdentityMu.Unlock()
@@ -19943,16 +19971,7 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 		return cached
 	}
 	identity := projectIdentityCacheEntry{rootPath: rootPath}
-	// Only probe the local filesystem for sessions recorded on this
-	// machine: another machine's cwd (e.g. /home/... from a synced Linux
-	// host) is meaningless here, and on macOS merely stat'ing such paths
-	// wakes the /home automounter — with tens of thousands of remote
-	// sessions and a one-minute cache TTL that becomes a sustained
-	// automountd/opendirectoryd CPU storm.
-	// mayProbeLocalPath also guards export.NormalizeRootPath below, which
-	// resolves symlinks and would reach into a protected location on its own.
-	if !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
-		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(rootPath) {
+	if e.mayDiscoverLocalProject(machine, rootPath) {
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
 		}

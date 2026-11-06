@@ -624,6 +624,69 @@ func TestServeStoreBackgroundPricesWithCustomRates(t *testing.T) {
 	assertDailyUsageParity(t, local, serve)
 }
 
+func TestCopilotCostFollowsLatestEvent(t *testing.T) {
+	t.Parallel()
+	local, target := seedFixture(t)
+	firstCost := money.MustParseDollars("0.30")
+	latestCost := money.MustParseDollars("0.50")
+	session := fixtureSession(
+		"copilot-order", "gamma", "copilot order", "2026-01-12T05:00:00.000Z", 0,
+	)
+	session.Agent = "copilot"
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session: session,
+		UsageEvents: []db.UsageEvent{
+			{
+				Source: "shutdown", Model: "zzz-model", InputTokens: 5,
+				Cost: &firstCost, CostStatus: "exact",
+				CostSource: db.CopilotReportedCostSource,
+				OccurredAt: "2026-01-12T05:01:00.000Z", DedupKey: "copilot-order-first",
+			},
+			{
+				Source: "shutdown", Model: "aaa-model", InputTokens: 5,
+				Cost: &latestCost, CostStatus: "exact",
+				CostSource: db.CopilotReportedCostSource,
+				OccurredAt: "2026-01-12T05:02:00.000Z", DedupKey: "copilot-order-latest",
+			},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.DB().ExecContext(t.Context(), "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+
+	filter := db.UsageFilter{Timezone: "UTC", Agent: "copilot"}
+	costOf := func(entries []db.TopSessionEntry) money.Money {
+		for _, e := range entries {
+			if e.SessionID == session.ID {
+				return e.Cost
+			}
+		}
+		t.Fatalf("session %s missing", session.ID)
+		return money.Money{}
+	}
+	got, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	assert.Equal(t, latestCost, costOf(got), "clickhouse top")
+
+	lsu, err := local.GetSessionUsage(t.Context(), session.ID, false)
+	require.NoError(t, err)
+	csu, err := store.GetSessionUsage(t.Context(), session.ID, false)
+	require.NoError(t, err)
+	assert.Equal(t, lsu.Cost, csu.Cost, "session usage matches sqlite")
+	ld, err := local.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	cd, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, ld.Totals.TotalCost, cd.Totals.TotalCost, "daily usage matches sqlite")
+}
+
 func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 	t.Parallel()
 	rankings := map[string]struct {

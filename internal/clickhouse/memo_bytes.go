@@ -3,17 +3,12 @@ package clickhouse
 import (
 	"unsafe"
 
-	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
-// Byte caps of the memos whose entries can be large. The two report memos
-// together hold as much as the server's own 256 MiB report cache; a range
-// in progress keeps every session's usage rows, so a year of a large mirror
-// still fits.
+// Byte caps of the memos whose entries can be large.
 const (
-	activityReportMemoBytes = 128 << 20
 	activityUsageRangeBytes = 256 << 20
 	activityUsageRowsBytes  = 128 << 20
 	dailyUsageRowsBytes     = 128 << 20
@@ -98,8 +93,4 @@ func usageRangeBytes(r activityUsageRange) int64 {
 		n += int64(len(session)+len(revision)) + 32
 	}
 	return n
-}
-
-func reportEntryBytes(e activityReportEntry) int64 {
-	return activity.EstimatedArtifactBytes(e.artifacts)
 }
