@@ -105,7 +105,7 @@ func (v *liveVectorServing) Notify(recall bool) {
 func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.serving.manager == nil {
+	if v.serving.manager == nil || v.setup.Busy {
 		return nil
 	}
 	if store == "" || store == vector.MessageIndexSpec().Name {

@@ -695,7 +695,7 @@ func pollDaemonBuildStatus(
 ) error {
 	var progress buildProgressPrinter
 	for {
-		status, err := client.status(ctx)
+		status, err := daemonBuildStatus(ctx, client)
 		if err != nil {
 			return err
 		}
@@ -709,6 +709,19 @@ func pollDaemonBuildStatus(
 		case <-time.After(embeddingsPollInterval):
 		}
 	}
+}
+
+// daemonBuildStatus reads the daemon's build status, failing while setup
+// owns the index: setup reports Running == false, which would otherwise end
+// the poll as a success with the requested build never run.
+func daemonBuildStatus(
+	ctx context.Context, client embeddingsDaemonClient,
+) (vector.BuildStatus, error) {
+	status, err := client.status(ctx)
+	if err == nil && status.Setup != nil && status.Setup.Busy {
+		err = errors.New("search by meaning is being set up; run the build again when it finishes")
+	}
+	return status, err
 }
 
 // finalizeBuildStatus reports a stopped build's outcome. LastResult prints

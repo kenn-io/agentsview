@@ -106,6 +106,18 @@ func (s *Server) embeddingsUnavailableError() error {
 	return apiError(http.StatusNotImplemented, msg)
 }
 
+// embeddingsBuildUnavailableError refuses a build with 409 while setup is
+// replacing the managers, so the caller retries once setup finishes instead
+// of reading the 501 as a missing provider.
+func (s *Server) embeddingsBuildUnavailableError(ctx context.Context) error {
+	if s.embeddingsRuntime != nil {
+		if setup, err := s.embeddingsRuntime.SetupStatus(ctx); err == nil && setup.Busy {
+			return embeddingsActionError(vector.ErrBuildRunning)
+		}
+	}
+	return s.embeddingsUnavailableError()
+}
+
 func (s *Server) registerEmbeddingsRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/embeddings")
 	configureRouteGroup(group, "Embeddings")
@@ -177,11 +189,11 @@ func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
 }
 
 func (s *Server) humaEmbeddingsBuild(
-	_ context.Context, in *embeddingsBuildInput,
+	ctx context.Context, in *embeddingsBuildInput,
 ) (*embeddingsBuildOutput, error) {
 	manager := s.embeddingsManagerFor(in.Body.Store)
 	if manager == nil {
-		return nil, s.embeddingsUnavailableError()
+		return nil, s.embeddingsBuildUnavailableError(ctx)
 	}
 	includeAutomated := s.embeddingsIncludeAutomatedDefault
 	if s.embeddingsRuntime != nil {
