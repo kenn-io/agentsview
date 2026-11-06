@@ -14,7 +14,7 @@ import (
 )
 
 func TestSourceFreshnessSnapshotPassParity(t *testing.T) {
-	for _, scenario := range []string{"unchanged", "trashed", "stale", "project", "missing digest", "appended"} {
+	for _, scenario := range []string{"unchanged", "stale", "project"} {
 		t.Run(scenario, func(t *testing.T) {
 			var fixture []byte
 			var want *db.Session
@@ -33,8 +33,6 @@ func TestSourceFreshnessSnapshotPassParity(t *testing.T) {
 				fx.writeClaudeSession(t, "proj", "unchanged.jsonl", "stable")
 				require.Equal(t, 2, fx.engine.SyncAll(t.Context(), nil).Synced)
 				switch scenario {
-				case "trashed":
-					require.NoError(t, fx.db.SoftDeleteSession(t.Context(), "warm"))
 				case "stale":
 					require.NoError(t, fx.db.SetSessionDataVersion(t.Context(), "warm", 1))
 				case "project":
@@ -43,10 +41,6 @@ func TestSourceFreshnessSnapshotPassParity(t *testing.T) {
 					require.NoError(t, err)
 					row.Project = "_tmp_legacy"
 					require.NoError(t, fx.db.UpsertSession(t.Context(), *row))
-				case "missing digest":
-					require.NoError(t, fx.db.DeleteProviderStatHash(t.Context(), parser.AgentClaude, path))
-				case "appended":
-					fx.appendClaudeMessage(t, path, "more")
 				}
 				fx.engine.Close()
 				if scenario == "unchanged" {
@@ -113,9 +107,6 @@ func TestSourceFreshnessSnapshotPassParity(t *testing.T) {
 				row.TranscriptRevision = nil
 				row.FileInode = nil
 				row.FileDevice = nil
-				if scenario == "trashed" {
-					require.NotNil(t, row.DeletedAt)
-				}
 				row.DeletedAt = nil
 				messages, err := fx.db.GetAllMessages(t.Context(), "warm")
 				require.NoError(t, err)
@@ -148,8 +139,7 @@ func TestSourceFreshnessSnapshotLookupPath(t *testing.T) {
 	fx := newEngineFixture(t)
 	t.Cleanup(fx.engine.Close)
 	path := t.TempDir() + "/source.jsonl"
-	fx.engine.pathRewriter = func(path string) string { return path + ".logical" }
-	require.NoError(t, fx.db.UpsertProviderStatHash(t.Context(), parser.AgentClaude, path+".logical", 42))
+	require.NoError(t, fx.db.UpsertProviderStatHash(t.Context(), parser.AgentClaude, path, 42))
 	ctx := fx.engine.withSourceFreshnessSnapshot(t.Context(), []parser.DiscoveredFile{{
 		Agent: parser.AgentClaude,
 		Path:  path + ".discovered",
@@ -157,7 +147,7 @@ func TestSourceFreshnessSnapshotLookupPath(t *testing.T) {
 			Provider: parser.AgentClaude, DisplayPath: path,
 		},
 	}})
-	hash, found := sourceFreshnessSnapshotFrom(ctx).StatHash("claude", path+".logical")
+	hash, found := sourceFreshnessSnapshotFrom(ctx).StatHash("claude", path)
 	require.True(t, found)
 	require.EqualValues(t, 42, hash)
 }

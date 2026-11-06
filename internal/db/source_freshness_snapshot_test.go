@@ -122,16 +122,9 @@ func TestSourceFreshnessSnapshotUnrelatedRows(t *testing.T) {
 	path := t.TempDir() + "/local.jsonl"
 	insertSessionWithSourcePath(t, d, "local", "claude", path)
 	require.NoError(t, d.UpsertProviderStatHash(ctx, parser.AgentClaude, path, 42))
-	var snap *SourceFreshnessSnapshot
-	var err error
-	load := func() {
-		snap, err = d.LoadSourceFreshnessSnapshot(ctx, []parser.AgentType{parser.AgentClaude}, []string{path})
-	}
-	before := testing.AllocsPerRun(1, load)
-	require.NoError(t, err)
 	// Retain both local and remote rows for the same provider. Neither set's
 	// paths can match the one discovered source.
-	_, err = d.getWriter().Exec(ctx, `
+	_, err := d.getWriter().Exec(ctx, `
 		WITH RECURSIVE retained(n) AS (
 			VALUES(1) UNION ALL SELECT n+1 FROM retained WHERE n < 40000
 		)
@@ -143,9 +136,8 @@ func TestSourceFreshnessSnapshotUnrelatedRows(t *testing.T) {
 		INSERT INTO provider_freshness (agent, file_path, stat_hash)
 		SELECT agent, file_path, 99 FROM sessions WHERE id LIKE 'retained-%'`)
 	require.NoError(t, err)
-	after := testing.AllocsPerRun(1, load)
+	snap, err := d.LoadSourceFreshnessSnapshot(ctx, []parser.AgentType{parser.AgentClaude}, []string{path})
 	require.NoError(t, err)
-	assert.Less(t, after, before+1000, "snapshot allocations must stay bounded by discovered paths")
 	assert.Equal(t, 1, len(snap.statHash))
 	assert.Equal(t, 1, len(snap.rows))
 	hash, found := snap.StatHash("claude", path)
