@@ -186,7 +186,7 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 			status.Provider = "ollama"
 		}
 		if status.Enabled && status.Provider == "ollama" && status.Action == "" {
-			status.Action = "use-built-in"
+			offerBuiltIn(&status, &cfg)
 		}
 		if status.Provider != "ollama" {
 			return status, nil
@@ -200,12 +200,22 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 	if inspected.OllamaAvailable {
 		status.Provider = "ollama"
 		if status.Enabled && status.Action == "" {
-			status.Action = "use-built-in"
+			offerBuiltIn(&status, &cfg)
 		}
-	} else if inspected.DownloadBytes > 0 && status.Action == "" {
+	} else if inspected.DownloadBytes > 0 && status.Action == "" && status.Provider != "ollama" {
 		status.Action = "turn-on"
 	}
 	return status, nil
+}
+
+// offerBuiltIn offers the switch to the built-in model unless the saved config
+// already rejects it, as when a sibling server's max_batch_tokens is below the
+// built-in context; status then shows that reason in place of the action.
+func offerBuiltIn(status *server.EmbeddingsSetupStatus, cfg *config.Config) {
+	status.Action = "use-built-in"
+	if _, err := cfg.VectorSetupServer(true); errors.Is(err, config.ErrInvalidVectorSetup) {
+		status.Action, status.Error = "", err.Error()
+	}
 }
 
 // buildRunning reports whether either index is building; callers hold v.mu.
@@ -233,12 +243,12 @@ func (v *liveVectorServing) Setup(action string) error {
 	if v.setup.Busy || v.buildRunning() {
 		return vector.ErrBuildRunning
 	}
-	if action != status.Action {
-		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
-	}
 	deployment, err := v.cfg.VectorSetupServer(action == "use-built-in")
 	if err != nil {
 		return setupRequestError(err)
+	}
+	if action != status.Action {
+		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
 	}
 	release, ok := v.idle.BeginWork()
 	if !ok {
