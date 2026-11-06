@@ -907,34 +907,18 @@ func TestSessionSearchFTSHints(t *testing.T) {
 	}
 }
 
-func TestSessionSearchFailedFTSHint(t *testing.T) {
+func TestSessionSearchHintPreservesServer(t *testing.T) {
 	newAgentDataDir(t)
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0600))
 	ftsCalls := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
 		if r.URL.Query().Get("mode") == "fts" {
 			ftsCalls++
 			http.Error(w, "FTS unavailable", http.StatusBadRequest)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"matches":[]}`))
-	}))
-	defer ts.Close()
-	out, err := executeCommand(newRootCommand(), "session", "search", "decode error", "--server", ts.URL, "--json")
-	require.NoError(t, err)
-	assert.Equal(t, 1, ftsCalls)
-	got := decodeCLIJSON[struct {
-		Hints []contentSearchCLIHint `json:"hints"`
-	}](t, out)
-	assert.Empty(t, got.Hints)
-}
-
-func TestSessionSearchHintPreservesServer(t *testing.T) {
-	newAgentDataDir(t)
-	tokenFile := filepath.Join(t.TempDir(), "token")
-	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0600))
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("include_one_shot") == "true" {
 			_, _ = w.Write([]byte(`{"matches":[{"session_id":"hidden"}]}`))
@@ -943,8 +927,9 @@ func TestSessionSearchHintPreservesServer(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "needle", "--json")
+	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "decode error", "--json")
 	require.NoError(t, err)
+	assert.Equal(t, 1, ftsCalls)
 	got := decodeCLIJSON[struct {
 		Hints []contentSearchCLIHint `json:"hints"`
 	}](t, out)

@@ -335,8 +335,7 @@ func TestSessionListReportsCombinedDefaultExclusions(t *testing.T) {
 			s.ParentSessionID = new("parent")
 			s.RelationshipType = "subagent"
 			s.UserMessageCount = 1
-			s.SessionKind = "roborev"
-			s.IsAutomated = true
+			s.FirstMessage = new("You are a code reviewer. Review this change.")
 		}},
 	)
 	root := newRootCommand()

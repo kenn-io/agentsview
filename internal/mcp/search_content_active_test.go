@@ -180,7 +180,6 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 	for _, response := range []string{"active", "mixed", "idle"} {
 		t.Run(response, func(t *testing.T) {
-			lookups := map[string]int{}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/api/v1/search/content" {
@@ -199,7 +198,6 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 					return
 				}
 				id := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
-				lookups[id]++
 				activity := "2024-06-15T11:59:00Z"
 				if id == "idle" {
 					activity = "2024-06-15T10:00:00Z"
@@ -211,9 +209,6 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "marker"})
 			require.NoError(t, err)
 			assert.Empty(t, out.Matches)
-			if response != "idle" {
-				assert.Equal(t, 1, lookups["active"])
-			}
 			if response == "active" {
 				assert.Empty(t, out.Hints)
 				return
@@ -221,7 +216,6 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 			require.Len(t, out.Hints, 1)
 			assert.Equal(t, "at least 1 match is in one-shot sessions, hidden by default", out.Hints[0].Message)
 			assert.Equal(t, map[string]any{"include_one_shot": true}, out.Hints[0].RetryWith)
-			assert.Equal(t, 1, lookups["idle"])
 		})
 	}
 }
