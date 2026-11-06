@@ -4090,38 +4090,60 @@ func (c *Config) SaveGithubToken(token string) error {
 	})
 }
 
+// VectorSetupServer returns the default embeddings server SaveVectorSetup
+// would save now, or the reason it would refuse, so callers can check before slow work.
+func (c *Config) VectorSetupServer(builtIn bool) (VectorEmbeddingsServerConfig, error) {
+	var server VectorEmbeddingsServerConfig
+	err := c.withConfigLock(func() error {
+		_, candidate, err := c.vectorSetupCandidate(builtIn)
+		if err == nil {
+			_, server, err = candidate.Vector.Embeddings.Server("")
+		}
+		return err
+	})
+	return server, err
+}
+
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.
 func (c *Config) SaveVectorSetup(builtIn bool) error {
 	return c.withConfigLock(func() error {
-		existing, err := c.readConfigMap()
+		existing, _, err := c.vectorSetupCandidate(builtIn)
 		if err != nil {
-			return err
-		}
-		section, _ := existing["vector"].(map[string]any)
-		if section == nil {
-			section = make(map[string]any)
-		}
-		if err := patchVectorSetup(section, builtIn); err != nil {
-			return err
-		}
-		existing["vector"] = section
-		encoded, err := toml.Marshal(existing)
-		if err != nil {
-			return err
-		}
-		candidate, err := Default()
-		if err != nil {
-			return err
-		}
-		candidate.DataDir = c.DataDir
-		if err := candidate.applyConfigTOML(string(encoded)); err != nil {
-			return err
-		}
-		if err := candidate.Vector.Validate(); err != nil {
 			return err
 		}
 		return c.writeConfigMap(existing)
 	})
+}
+
+func (c *Config) vectorSetupCandidate(builtIn bool) (map[string]any, Config, error) {
+	existing, err := c.readConfigMap()
+	if err != nil {
+		return nil, Config{}, err
+	}
+	section, _ := existing["vector"].(map[string]any)
+	if section == nil {
+		section = make(map[string]any)
+	}
+	if err := patchVectorSetup(section, builtIn); err != nil {
+		return nil, Config{}, err
+	}
+	existing["vector"] = section
+	encoded, err := toml.Marshal(existing)
+	if err != nil {
+		return nil, Config{}, err
+	}
+	candidate, err := Default()
+	if err != nil {
+		return nil, Config{}, err
+	}
+	candidate.DataDir = c.DataDir
+	if err := candidate.applyConfigTOML(string(encoded)); err != nil {
+		return nil, Config{}, err
+	}
+	if err := candidate.Vector.Validate(); err != nil {
+		return nil, Config{}, err
+	}
+	return existing, candidate, nil
 }
 
 func patchVectorSetup(section map[string]any, builtIn bool) error {

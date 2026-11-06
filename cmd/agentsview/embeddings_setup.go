@@ -138,9 +138,7 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
 	v.mu.Lock()
-	status, cfg := v.setup, v.cfg
-	running := (v.serving.manager != nil && v.serving.manager.Status().Running) ||
-		(v.serving.recallManager != nil && v.serving.recallManager.Status().Running)
+	status, cfg, running := v.setup, v.cfg, v.buildRunning()
 	v.mu.Unlock()
 	if status.Busy || running {
 		status.Enabled = cfg.Vector.Enabled
@@ -193,6 +191,12 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 	return status, nil
 }
 
+// buildRunning reports whether either index is building; callers hold v.mu.
+func (v *liveVectorServing) buildRunning() bool {
+	return (v.serving.manager != nil && v.serving.manager.Status().Running) ||
+		(v.serving.recallManager != nil && v.serving.recallManager.Status().Running)
+}
+
 func (v *liveVectorServing) Setup(action string) error {
 	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
@@ -200,15 +204,15 @@ func (v *liveVectorServing) Setup(action string) error {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.setup.Busy {
-		return vector.ErrBuildRunning
-	}
-	if (v.serving.manager != nil && v.serving.manager.Status().Running) ||
-		(v.serving.recallManager != nil && v.serving.recallManager.Status().Running) {
+	if v.setup.Busy || v.buildRunning() {
 		return vector.ErrBuildRunning
 	}
 	if action != status.Action {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
+	}
+	deployment, err := v.cfg.VectorSetupServer(action == "use-built-in")
+	if err != nil {
+		return fmt.Errorf("%w: %w", vector.ErrInvalidBuildRequest, err)
 	}
 	release, ok := v.idle.BeginWork()
 	if !ok {
@@ -218,7 +222,7 @@ func (v *liveVectorServing) Setup(action string) error {
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(action)
+		err := v.activate(action, deployment)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -256,16 +260,9 @@ func (v *liveVectorServing) closeServing(cfg config.Config) error {
 	return nil
 }
 
-func (v *liveVectorServing) activate(action string) error {
+func (v *liveVectorServing) activate(action string, deployment config.VectorEmbeddingsServerConfig) error {
 	cfg := v.cfg
-	_, deployment, err := cfg.Vector.Embeddings.Server("")
-	if err != nil && cfg.Vector.Embeddings.Model != "" {
-		return err
-	}
-	if action == "use-built-in" {
-		deployment.Endpoint, deployment.Local, deployment.OllamaCPUFallback = "", true, false
-	}
-	_, err = resolveLocalEmbeddings(v.ctx, deployment,
+	_, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(context.Context, int64) (bool, error) { return true, nil },
 		func(done, total int64) {
 			v.mu.Lock()
