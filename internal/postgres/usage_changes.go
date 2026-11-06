@@ -23,8 +23,8 @@ BEGIN
     ELSIF TG_OP = 'UPDATE' THEN
         INSERT INTO usage_session_changes(session_id, revision)
         SELECT DISTINCT %[1]s, 0 FROM (
-            (SELECT * FROM old_rows EXCEPT SELECT * FROM new_rows)
-            UNION ALL (SELECT * FROM new_rows EXCEPT SELECT * FROM old_rows)
+            (SELECT %[3]s FROM old_rows row_data EXCEPT SELECT %[3]s FROM new_rows row_data)
+            UNION ALL (SELECT %[3]s FROM new_rows row_data EXCEPT SELECT %[3]s FROM old_rows row_data)
         ) changed WHERE %[2]s
         ON CONFLICT(session_id) DO UPDATE SET revision = 0;
     ELSE
@@ -152,6 +152,12 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 `)
 	for _, table := range usageChangeTablesPG {
 		sessionKey, filter := "''", "true"
+		columns := "*"
+		if table.table == "sessions" {
+			// Audit stamps don't change report inputs. Compare every other
+			// column, including columns added after journal installation.
+			columns = "id, to_jsonb(row_data) - 'automation_audit_hash'"
+		}
 		if table.sessionColumn != "" {
 			sessionKey, err = quoteIdentifier(table.sessionColumn)
 			if err != nil {
@@ -165,7 +171,7 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 		fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;
  REVOKE ALL ON FUNCTION %s() FROM PUBLIC;
-`, function, quoted, fmt.Sprintf(markUsageChangeFunctionBodyPG, sessionKey, filter), function)
+`, function, quoted, fmt.Sprintf(markUsageChangeFunctionBodyPG, sessionKey, filter, columns), function)
 		for _, trigger := range []struct{ event, referencing string }{
 			{"INSERT", "NEW TABLE AS new_rows"},
 			{"UPDATE", "OLD TABLE AS old_rows NEW TABLE AS new_rows"},

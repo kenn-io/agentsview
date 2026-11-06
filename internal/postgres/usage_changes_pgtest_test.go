@@ -216,6 +216,21 @@ func TestUsageChangeJournalPushPaths(t *testing.T) {
 		full   bool
 	}{
 		{"new session", func(t *testing.T) { require.NoError(t, local.UpsertSession(ctx, session)) }, []string{session.ID}, false},
+		{"fresh publisher unchanged sessions", func(t *testing.T) {
+			var hashBefore string
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT coalesce(automation_audit_hash, '') FROM sessions WHERE id = $1`, session.ID).Scan(&hashBefore))
+			require.Empty(t, hashBefore, "published session awaits automation audit")
+			fresh, err := New(ctx, testPGURL(t), syncer.schema, local, "test-machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+			result, err := fresh.Push(ctx, false, nil)
+			require.NoError(t, err)
+			require.Empty(t, result.Errors)
+			assert.Zero(t, result.SessionsPushed)
+			var hashAfter string
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT coalesce(automation_audit_hash, '') FROM sessions WHERE id = $1`, session.ID).Scan(&hashAfter))
+			assert.NotEmpty(t, hashAfter, "fresh publisher stamps the automation audit")
+		}, nil, false},
 		{"message append", func(t *testing.T) {
 			require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "Explain this query"}}))
 		}, []string{session.ID}, false},
@@ -254,6 +269,13 @@ func TestUsageChangeJournalPushPaths(t *testing.T) {
 			push(t, tc.full)
 			after, err := store.UsageChangeRevision(ctx)
 			require.NoError(t, err)
+			if tc.name == "fresh publisher unchanged sessions" {
+				assert.Equal(t, before, after, "audit bookkeeping must preserve the revision")
+				_, ids, err := store.LoadUsageChanges(ctx, before)
+				require.NoError(t, err)
+				assert.Empty(t, ids, "audit bookkeeping must leave sessions out of the journal")
+				return
+			}
 			if tc.name == "openrouter bookkeeping" {
 				var published bool
 				require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM model_pricing WHERE model_pattern = $1)`, pricing.OpenRouterModelsMetaKey).Scan(&published))
