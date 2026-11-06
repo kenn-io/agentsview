@@ -1191,7 +1191,7 @@ func (b *httpBackend) SessionUsage(
 	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
-		return nil, err
+		return nil, b.remoteError(err)
 	}
 	q := &apiclient.GetAPIV1SessionsIDUsageQuery{Breakdown: new(true)}
 	if !req.OwnOnly {
@@ -1202,18 +1202,18 @@ func (b *httpBackend) SessionUsage(
 		Query:      q,
 	})
 	if response == nil {
-		return nil, err
+		return nil, b.remoteError(err)
 	}
-	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	err = b.responseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotFound) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, b.remoteError(err)
 	}
 	wire := response.JSON200
 	if wire == nil {
-		return nil, errors.New("session usage: empty response")
+		return nil, b.remoteError(errors.New("session usage: empty response"))
 	}
 	out := &service.SessionUsageReport{
 		SessionID: wire.SessionID, Agent: wire.Agent, Project: wire.Project,

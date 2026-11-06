@@ -84,7 +84,7 @@ func (s *Store) lookupHubVectors(ctx context.Context, req vector.HubLookupReques
 	if err != nil {
 		return reply, err
 	}
-	tx, err := s.pg.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	tx, err := s.beginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return reply, err
 	}

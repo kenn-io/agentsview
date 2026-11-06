@@ -186,7 +186,7 @@ func TestReplicaWatchPullsRemoteHostsAndJoinsWorkers(t *testing.T) {
 			select {
 			case <-finished:
 				assert.Fail(t, "watch returned before the canceled worker was released")
-			//nolint:kennlint // This timer proves shutdown cannot finish while the canceled worker is held.
+			//nolint:kennlint // deadlinetest: this timer proves shutdown cannot finish while the canceled worker is held.
 			case <-time.After(100 * time.Millisecond):
 			}
 			releaseWorker()
