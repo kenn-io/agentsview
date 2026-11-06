@@ -113,6 +113,37 @@ test("the usage breakdown follows the pane when the sidebar opens", async ({ pag
   await expectMenuInsidePane(page);
 });
 
+test("the usage breakdown follows a pane wider than the reading column when the sidebar opens", async ({ page }) => {
+  // At this width the pane is wider than the reading column with the
+  // sidebar shown or hidden, so opening the sidebar changes only the
+  // pane's centring padding, never its content box. The menu starts
+  // right-aligned to its trigger and must end up clamped to the pane.
+  await withUsageSteps(page);
+  await page.setViewportSize({ width: 1300, height: 900 });
+  const sp = new SessionsPage(page);
+  await sp.goto();
+  await sp.selectFirstSession();
+  const sidebar = page.locator("#session-sidebar");
+  await page.keyboard.press("b");
+  await expect(sidebar).toBeHidden();
+  const contentWidth = () =>
+    page.locator(".session-breadcrumb").evaluate((el) => {
+      const s = getComputedStyle(el);
+      return el.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+    });
+  const contentBefore = await contentWidth();
+
+  const trigger = page.locator(".usage-breakdown-trigger").first();
+  await trigger.click();
+  await expectMenuInsidePane(page);
+  await trigger.focus();
+  await page.keyboard.press("b");
+  await expect(sidebar).toBeVisible();
+  await expect(page.locator(".usage-breakdown-menu")).toBeVisible();
+  expect(await contentWidth()).toBeCloseTo(contentBefore, 0);
+  await expectMenuInsidePane(page);
+});
+
 test("transcript controls fit a very narrow transcript pane", async ({ page }) => {
   // Just above the phone layout, the sidebar and analysis panel at their
   // minimum widths leave the transcript about 260px.
