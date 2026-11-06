@@ -222,9 +222,11 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	}
 	oldConn := s.duck
 	oldAlias := s.aliasPath
-	s.duck = conn
-	s.aliasPath = alias
-	s.fileInfo = info
+	s.frustrationMemo.Swap(func() {
+		s.duck = conn
+		s.aliasPath = alias
+		s.fileInfo = info
+	})
 	s.retiring.Add(1)
 	s.handleMu.Unlock()
 

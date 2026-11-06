@@ -13,6 +13,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
+	"go.kenn.io/agentsview/internal/readbase/readbasetest"
 )
 
 func TestReadStatusHonorsProjectFilters(t *testing.T) {
@@ -136,6 +138,20 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, window)
 		assert.Equal(t, 1, window[len(window)-1].Ordinal)
+
+		recorder := &readbasetest.RecordingSessions{SessionsBackend: sessionsSQL{store}, T: t}
+		reader := readbase.NewSessions(recorder)
+		for _, tc := range []struct {
+			ordinal      int
+			toolOrdinals [][]int
+		}{{0, [][]int{{}, {}}}, {1, [][]int{{1, 1}, {1}}}} {
+			recorder.ToolOrdinals = nil
+			window, err := reader.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{From: &tc.ordinal, Limit: 1, Asc: true})
+			require.NoError(t, err)
+			require.Len(t, window, 1)
+			assert.Equal(t, tc.ordinal, window[0].Ordinal)
+			assert.Equal(t, tc.toolOrdinals, recorder.ToolOrdinals)
+		}
 
 		counts, err := store.GetResumeModelCounts(ctx, fixtureAlphaID)
 		require.NoError(t, err)

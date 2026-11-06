@@ -5303,12 +5303,21 @@ func baselineActiveSessionSourcePathsTx(
 			continue
 		}
 		execArgs := append([]any{machine}, args...)
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, baselineActiveSessionSourcePathsQuery(filter), execArgs...); err != nil {
+			return fmt.Errorf("baselining active session source paths: %w", err)
+		}
+	}
+	return nil
+}
+
+func baselineActiveSessionSourcePathsQuery(filter string) string {
+	// Seek the admitted paths instead of scanning every session on the machine.
+	return `
 			INSERT INTO local_session_source_baselines
 				(session_id, machine, agent, file_path)
 			SELECT id, machine, agent, file_path
-			FROM sessions
-			WHERE machine = ? AND `+filter+`
+			FROM sessions INDEXED BY idx_sessions_file_path
+			WHERE machine = ? AND ` + filter + `
 			  AND file_path IS NOT NULL AND deleted_at IS NULL
 			  AND source_missing_at IS NULL
 			ON CONFLICT(session_id) DO UPDATE SET
@@ -5317,13 +5326,7 @@ func baselineActiveSessionSourcePathsTx(
 				file_path = excluded.file_path
 			WHERE local_session_source_baselines.machine IS NOT excluded.machine
 			   OR local_session_source_baselines.agent IS NOT excluded.agent
-			   OR local_session_source_baselines.file_path IS NOT excluded.file_path`,
-			execArgs...,
-		); err != nil {
-			return fmt.Errorf("baselining active session source paths: %w", err)
-		}
-	}
-	return nil
+			   OR local_session_source_baselines.file_path IS NOT excluded.file_path`
 }
 
 // MarkSessionSourceMissing records unavailable source material only while the

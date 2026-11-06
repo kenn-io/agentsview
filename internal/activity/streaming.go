@@ -238,20 +238,20 @@ func BuildCandidateArtifactsFromSource(
 	usage []UsageRow,
 ) (CandidateArtifacts, error) {
 	return buildCandidateArtifactsFromSource(
-		ctx, p, sessions, source, usage, false, nil,
+		ctx, p, sessions, source, func() ([]UsageRow, error) { return usage, nil }, false, nil,
 	)
 }
 
 // BuildCandidateArtifactsFromSourceWithSurvivorUsage is the store-facing
 // variant for usage rows that have already passed the shared survivor
-// selection. It prevents a second deduplication pass while keeping slice-backed
-// callers compatible with the raw-usage API above.
+// selection. It loads usage after the candidate stream ends and skips a second
+// deduplication pass.
 func BuildCandidateArtifactsFromSourceWithSurvivorUsage(
 	ctx context.Context,
 	p Params,
 	sessions []SessionMeta,
 	source CandidateSource,
-	usage []UsageRow,
+	usage func() ([]UsageRow, error),
 ) (CandidateArtifacts, error) {
 	return buildCandidateArtifactsFromSource(
 		ctx, p, sessions, source, usage, true, nil,
@@ -263,7 +263,7 @@ func buildCandidateArtifactsFromSource(
 	p Params,
 	sessions []SessionMeta,
 	source CandidateSource,
-	usage []UsageRow,
+	loadUsage func() ([]UsageRow, error),
 	usageIsSurvivorSet bool,
 	joint *jointActivityAccumulator,
 ) (CandidateArtifacts, error) {
@@ -327,6 +327,10 @@ func buildCandidateArtifactsFromSource(
 		return CandidateArtifacts{}, err
 	}
 	state.advance(p.EffectiveEnd)
+	usage, err := loadUsage()
+	if err != nil {
+		return CandidateArtifacts{}, err
+	}
 	report.Totals.ActiveMinutes = state.active.Minutes()
 	report.Totals.IdleMinutes = p.EffectiveEnd.Sub(p.RangeStart).Minutes() -
 		report.Totals.ActiveMinutes

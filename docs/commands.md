@@ -643,6 +643,9 @@ external request or daemon-owned job is active. Periodic sync and file-watcher
 work prevent exit while they run, but do not keep the daemon alive forever by
 themselves.
 
+`sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
+pause.
+
 #### CLI daemon behavior
 
 Ordinary session commands, including `session list`, `session get`, and
@@ -2052,8 +2055,9 @@ and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Semantic and hybrid results can be scoped with
 `--scope top|all|subordinate` (default `all`) to include or exclude sidechain
 and subagent content — see
-[Semantic Search](/docs/semantic-search/#scoping-results-scope). The
-human-readable table includes an `AGE` column derived from each match's
+[Semantic Search](/docs/semantic-search/#scoping-results-scope). HTTP and MCP
+also accept `scope` for substring and regex searches. CLI lexical searches use
+`--include-children` instead. The human-readable table includes an `AGE` column derived from each match's
 timestamp, so recent evidence is visible without opening the session. Matches
 without a usable timestamp show `—`.
 
@@ -2285,6 +2289,9 @@ agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--format hu
 agentsview friction digest [--date D | --from D --to D] [--format md|json | --json]
 agentsview friction findings [--date D] [--kind K] [--session ID] [--limit N] [--cursor C] [--format table|json | --json]
 agentsview friction patterns [--kind K] [--since D] [--limit N] [--cursor C] [--format table|json | --json]
+agentsview friction file <fingerprint> [--dry-run] [--format human|json | --json]
+agentsview friction link <fingerprint> <issue>
+agentsview friction unlink <fingerprint>
 ```
 
 - `friction run` without flags builds every complete local day that has no
@@ -2295,14 +2302,18 @@ agentsview friction patterns [--kind K] [--since D] [--limit N] [--cursor C] [--
 - `friction digest` prints the latest digest as Markdown unless `--date` or a
   range is given. `--format json` prints the stored summary JSON.
 - `friction findings` lists stored findings. `friction patterns` ranks
-  recurring patterns by occurrences. `--kind` accepts `correction`, `error`,
-  `workaround`, `deferral`, `pattern`, `frustration`, and `interruption`.
+  recurring patterns by occurrences and shows each pattern's Kata issue.
+  `--kind` accepts `correction`, `error`, `workaround`, `deferral`, `pattern`,
+  `frustration`, and `interruption`.
+- `friction file` files a pattern to [Kata](/docs/kata/), or links the issue
+  Kata already holds for it. `friction link` and `friction unlink` set or
+  remove a pattern's issue by hand. Only the AgentsView hub files.
 
 Read commands use the running daemon (starting one when needed), an explicit
 `--server <url>`, or `--pg` for the configured PostgreSQL hub. Provide a
 `--server` token with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`.
-`friction run` uses the daemon when one is running and otherwise writes the
-local archive directly.
+`friction run`, `friction file`, `friction link`, and `friction unlink` use the
+daemon when one is running and otherwise write the local archive directly.
 
 ______________________________________________________________________
 

@@ -18,6 +18,14 @@ reader connections so quick reads always get one. Each holder uses one reader
 connection at a time. Validate input before acquiring a permit. Release it
 before waiting for another bulk reader or doing host git/GitHub lookups.
 
+The archive writer caches up to 64 prepared SQL statements per connection to
+avoid compiling repeated import and project-attribution queries. The cache stays
+in memory and closes with its connection. Reader connections do not use it.
+
+The startup worker snapshots freshness for digest-capable providers while it
+holds the archive write lock, before the daemon opens the archive; later passes
+query live state.
+
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned
 sessions from the old database, and swap the files atomically. Preserve sessions
@@ -66,42 +74,41 @@ The swap installs only the main file, so a failed checkpoint or close aborts it.
 Codex forks keep accepting available messages when their replay parent is
 unavailable. Each full fork write records parent turn membership and per-message
 source origins in `codex_fork_state`, in the same transaction as the transcript
-and usage. Rebuilds copy this provenance with retained orphan sessions. Forks use
-full parses so optional parser checkpoints cannot leave provenance behind.
+and usage. Rebuilds copy this provenance with retained orphan sessions. Forks
+use full parses so optional parser checkpoints cannot leave provenance behind.
 
 A fork whose parent was read previously uses that saved evidence to remove the
 inherited prefix and keep child usage accurate. Without that evidence, the
 fallback transcript stays visible and may include copied parent messages. Sync
 warns about this uncertainty and withholds unverified token usage. The original
-token metadata stays in local provenance for later reconciliation. Saved messages
-and tool results absent from a shortened source remain archived. Retained
-historical usage events also survive.
+token metadata stays in local provenance for later reconciliation. Saved
+messages and tool results absent from a shortened source remain archived.
+Retained historical usage events also survive.
 
 Reconciliation matches storage-normalized message content and consumes each
 occurrence once, including when a TraeX record emits several messages. Restored
 tool results obey the current category and archive-content policies. Retained
 messages keep their activity bounds and supply the child preview; retained usage
 events follow the final child identity and message ordinals. Restored metadata
-continues to survive full parses until it returns in the source itself.
-Codex forks with archived tool calls use staging even when the source shrinks
-below the size threshold. They load message and call metadata separately, then
-reconcile and spool result bodies one archived message at a time. Restored source
-events keep their order around shared events. Raw summary participation remains distinct
-from sanitized text, so a cleared result cannot revive older output. Spawn links
-also survive when their output records disappear.
+continues to survive full parses until it returns in the source itself. Codex
+forks with archived tool calls use staging even when the source shrinks below
+the size threshold. They load message and call metadata separately, then
+reconcile and spool result bodies one archived message at a time. Restored
+source events keep their order around shared events. Raw summary participation
+remains distinct from sanitized text, so a cleared result cannot revive older
+output. Spawn links also survive when their output records disappear.
 Summary-only saved results keep their text and lengths when the source still
 contains the call but omits its output. Blocked results retain their permitted
 length metadata across repeated staged writes, including imported events whose
 raw summary participation is unknown. Local provenance records imported events
 observed contributing readable text, so an update from one agent retains other
 agents' length contributions. Each hint includes its archived event position,
-agent, source, status, timestamp, and length. Artifact message replacements clear
-these hints in the same transaction, since even unchanged event metadata cannot
-prove that replacement content contributes. Other fork provenance survives.
-Raw nullable metadata stays unchanged.
-Blank unknown content establishes no participation. Archived calls without provider
-IDs use occurrence keys to publish their staged summaries, events, findings, and
-failure signals.
+agent, source, status, timestamp, and length. Artifact message replacements
+clear these hints in the same transaction, since even unchanged event metadata
+cannot prove that replacement content contributes. Other fork provenance
+survives. Raw nullable metadata stays unchanged. Blank unknown content
+establishes no participation. Archived calls without provider IDs use occurrence
+keys to publish their staged summaries, events, findings, and failure signals.
 Archive copies retain existing raw result digests and participation flags;
 absent fields remain unknown. Returning native output can therefore match its
 saved event after a preservation rebuild.
@@ -115,46 +122,46 @@ matches before legacy rows. A matching shortened snapshot keeps the saved
 context when it contains every incoming turn in order; changed contexts use the
 current source. Retained context evidence keeps history preservation enabled
 across resolved refreshes until the source supplies it again. One reconciliation
-shares context-containment results for common prefixes.
-Content matches also preserve whether a record appeared before or inside a turn.
-A missing turn ID alone cannot identify pre-turn replay as an idless child.
-Saved prefixes claim matching content before less specific occurrence matches,
-so identical idless parent and child messages keep their separate usage.
-A returning longer prefix must keep the nearest named turn to claim saved
-usage. A different boundary keeps the occurrences separate until ownership can
-be established; identical content and timestamps alone cannot transfer usage.
-When fewer identical legacy occurrences return, their ownership remains unknown:
-keep those rows and their uncounted usage separately instead of assigning parent
-usage to a child. Repeating the same source does not add more occurrences.
+shares context-containment results for common prefixes. Content matches also
+preserve whether a record appeared before or inside a turn. A missing turn ID
+alone cannot identify pre-turn replay as an idless child. Saved prefixes claim
+matching content before less specific occurrence matches, so identical idless
+parent and child messages keep their separate usage. A returning longer prefix
+must keep the nearest named turn to claim saved usage. A different boundary
+keeps the occurrences separate until ownership can be established; identical
+content and timestamps alone cannot transfer usage. When fewer identical legacy
+occurrences return, their ownership remains unknown: keep those rows and their
+uncounted usage separately instead of assigning parent usage to a child.
+Repeating the same source does not add more occurrences.
 
 Independently imported usage events survive resolved refreshes and rebuilds.
 Their non-summary usage adds to message totals, and context uses the highest
 measurement from either source. Retained history keeps chronological activity
-bounds even when its only remaining rows are usage events.
-Ordinal-only usage reconciliation reads message metadata without result bodies.
-Matched usage references do not require archived result payloads. If a source
-omits a referenced message, retain that message and load its results one message
-at a time. Restored usage also follows source entries emitted before their
-archived counterpart is reconciled.
+bounds even when its only remaining rows are usage events. Ordinal-only usage
+reconciliation reads message metadata without result bodies. Matched usage
+references do not require archived result payloads. If a source omits a
+referenced message, retain that message and load its results one message at a
+time. Restored usage also follows source entries emitted before their archived
+counterpart is reconciled.
 
 Archived result events without recorded raw digests remain separate occurrences.
 Sanitized or blocked display text cannot establish provider identity, including
 during image projection. Returning source events with real digests still
-deduplicate across retries; unknown
-historical occurrences remain alongside them when their identity cannot be
-proved.
+deduplicate across retries; unknown historical occurrences remain alongside them
+when their identity cannot be proved.
 
-If the parent never appears, available messages continue updating across retries,
-restarts, and rebuilds. Usage for unverified messages remains unavailable. If the
-parent later appears, reconciliation removes only confirmed inherited turns and
-restores child usage, including retained child messages absent from the current
-source. Rows without source evidence stay preserved, with unverifiable usage withheld
-until returning source records establish its ownership. The stale parser version
-continues to request a parent lookup until the source can be parsed with its
-parent. A successful rebuild still installs while those retries remain queued.
+If the parent never appears, available messages continue updating across
+retries, restarts, and rebuilds. Usage for unverified messages remains
+unavailable. If the parent later appears, reconciliation removes only confirmed
+inherited turns and restores child usage, including retained child messages
+absent from the current source. Rows without source evidence stay preserved,
+with unverifiable usage withheld until returning source records establish its
+ownership. The stale parser version continues to request a parent lookup until
+the source can be parsed with its parent. A successful rebuild still installs
+while those retries remain queued.
 
-When an Antigravity CLI source yields a retryable low-fidelity transcript,
-sync and rebuild preserve any saved history and leave it stale for retry. A new
+When an Antigravity CLI source yields a retryable low-fidelity transcript, sync
+and rebuild preserve any saved history and leave it stale for retry. A new
 session can use the fallback, but later fallback changes are held until a
 high-fidelity parse succeeds. A rebuild still installs, even when these
 preserved sessions are its only work. The sync still reports them as failures,
@@ -700,13 +707,13 @@ snapshot. Do not widen or narrow this live/baked boundary implicitly.
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
-change. Catalog and user-pricing changes are covered per session instead: each
-rollup install records the distinct
+change. Each rollup install records the distinct
 `(provider, reported model, canonical model)` lookups its daily rows used, and a
-read re-resolves only those against the current catalog. A price change
-therefore rebuilds just the sessions whose lookups resolve differently, while
-`updated_at`-only refreshes rebuild nothing. Do not add a write-only
-extractor-version metadata key.
+full-path read re-resolves only those against the current catalog. A catalog
+digest change sends reads through that path until a coverage pass claims the
+timezone with the new digest. The pass rebuilds only sessions whose lookups
+resolve differently; `updated_at`-only refreshes rebuild nothing. Do not add a
+write-only extractor-version metadata key.
 
 Deduplication groups are classified per group at rollup build time. A group is
 finalized into daily rows only when its resolution provably cannot vary with the
@@ -746,9 +753,14 @@ incompatible, use the same schema and query path in a process-owned temporary
 file and warn that the cache will rebuild after restart.
 
 Usage reads are exact. A cold aggregate request fills facts, builds the required
-timezone rollups, then reads them in one pinned cache transaction. Verify every
-candidate session's facts fingerprint, exact baked metadata, per-session pricing
-identity, resolved rate hashes, and Cursor high-water mark. A result is no older
+timezone rollups, then reads them in one pinned cache transaction. Without a
+trusted timezone claim, verify every candidate session's facts fingerprint,
+exact baked metadata, per-session pricing identity, resolved rate hashes, and
+Cursor high-water mark. With a trusted claim, refresh journaled sessions and
+invalidated installs, discover window sessions through date indexes, and verify
+coverage and concurrent installs in the pinned cache transaction. A timezone
+without a claim starts a coverage pass when backfill is enabled. A conflicting
+install sends the request's retries through the full path. A result is no older
 than the archive snapshot captured when the read began, and may be newer for a
 session whose facts were refilled meanwhile. A session confirmed deleted during
 fill is dropped from the request. `cached_at` is diagnostic only.
@@ -840,10 +852,10 @@ results and can delay that first startup; it does not require a session resync.
 
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
 `idx_sessions_source_missing` bound the parser-version check and empty repair
-queries. Owner preparation installs missing indexes automatically.
-Each first build scans `sessions` and blocks writes until installation commits.
-Restricted publishers keep writing before owner installation, using the
-existing queries until the indexes are available.
+queries. Owner preparation installs missing indexes automatically. Each first
+build scans `sessions` and blocks writes until installation commits. Restricted
+publishers keep writing before owner installation, using the existing queries
+until the indexes are available.
 
 ### Usage archive indexes
 
@@ -914,6 +926,54 @@ resync defers this index during import and rebuilds it before the replacement
 archive is installed. Read-only opens do not create indexes or collect
 statistics.
 
+### Substring search index
+
+Substring and regex content search narrow their message and thinking branches
+with two FTS5 tables that use the built-in `trigram` tokenizer:
+`message_trigram_fts` over `COALESCE(dialogue_text, content)` and
+`thinking_trigram_fts` over `thinking_text`. Both read from the
+`message_trigram_source` view and store `detail='none'` and `columnsize=0`, so
+they hold only message IDs per three-character sequence, about a fifth of the
+indexed text. Each field gets its own table because a `detail='none'` table
+cannot filter by column; `detail='column'` measured nearly three times larger.
+
+The index only narrows candidates. A search intersects the listed IDs for the
+pattern's sequences, up to 32 of them, and the existing `LIKE` still decides
+every row. The tokenizer folds case for every script while `LIKE` folds only
+ASCII, so the index returns a superset and results stay identical to a scan.
+Patterns shorter than three characters, single-session searches, and branches
+where the index lists more than a quarter of the messages in the scope's
+sessions keep the scan. A capped count of the listed IDs makes that choice; it
+stops as soon as the share is passed. Tool input and tool result branches are
+not indexed.
+
+Terms search uses `message_trigram_fts` under the same share rule per term.
+When the index lists any term, the query starts from the messages it lists for
+the first such term. It finds each message's exchange from the nearest eligible
+user message at or before it and the next one after, checks the other terms
+against that exchange's messages, and joins bodies only for the page. When the
+index lists no term, the session prefilter finds the sessions where each term
+occurs and the query groups every message of those sessions into exchanges.
+Both queries must return the same rows;
+`TestSearchContentTermsAnchorMatchesScan` compares them.
+
+Triggers keep both tables current on message insert, delete, and edits to
+`content`, `dialogue_text`, or `thinking_text`. Bulk session deletes remove a
+session's entries in one statement each and suspend `messages_trigram_ad`, as
+they do for the other FTS indexes. `DropFTS` and `RebuildFTS` drop and rebuild
+the index with the other FTS tables during a full resync, and searches scan
+while it is absent. Claude.ai and ChatGPT imports drop it on the live archive,
+so a search that chose index filters before the drop gets a missing-table
+error; it reruns once and scans.
+
+The first writable open after column migrations builds the index once for an
+existing archive, before HTTP readiness, and logs that startup is waiting for
+the message scan. Tokenizing costs about 2.7 times the porter FTS index, near 30
+MB of message text per second. Read-only opens use the index when present and
+scan otherwise. Hand-built legacy schemas in tests must drop
+`message_trigram_source` and the index before rebuilding or narrowing
+`messages`, because the view and triggers name its columns.
+
 ### Transcript usage identity
 
 Token usage, Claude message/request identities, and source UUID participate in
@@ -924,6 +984,14 @@ artifact, recall, PostgreSQL, and DuckDB refreshes. Full resync reconciliation
 must compare the same fields so incremental and resync paths agree. A no-op
 message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
+
+### PostgreSQL usage change journal
+
+PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
+and project identity writes, including changes to source archives. Installation
+requires `CREATE` on the schema and `TRIGGER` on the watched tables in addition
+to normal table access. See [PostgreSQL Sync](../pg-sync.md) for installation
+locks. CockroachDB has no journal.
 
 ### PostgreSQL usage comparisons
 

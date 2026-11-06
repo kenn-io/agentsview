@@ -531,6 +531,37 @@ func TestSearchContentTermsRequiresOneExchange(t *testing.T) {
 		"terms in different exchanges of one session must not match")
 }
 
+func TestSearchContentTermsKeepsWholeExchangeAroundOneHit(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "terms-one-hit", "proj", func(s *Session) {
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "terms-one-hit", []Message{
+		{SessionID: "terms-one-hit", Ordinal: 0, Role: "user", Content: "unrelated opener"},
+		{SessionID: "terms-one-hit", Ordinal: 1, Role: "assistant", Content: "unrelated reply"},
+		{SessionID: "terms-one-hit", Ordinal: 2, Role: "user", Content: "first question"},
+		{SessionID: "terms-one-hit", Ordinal: 3, Role: "assistant", Content: "the deploy step"},
+		{SessionID: "terms-one-hit", Ordinal: 4, Role: "assistant", Content: "closing remark"},
+	}))
+
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "deploy", Mode: "terms", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, 2, got.Matches[0].Ordinal)
+	assert.Equal(t, [2]int{2, 4}, got.Matches[0].OrdinalRange,
+		"the match covers every message of its exchange, not only the hit")
+
+	split, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "question remark", Mode: "terms", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, split.Matches, 1,
+		"terms in different messages of one exchange still match")
+	assert.Equal(t, [2]int{2, 4}, split.Matches[0].OrdinalRange)
+}
+
 func TestSearchContentTermsIgnoresAssistantPrelude(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "terms-prelude", "proj", func(s *Session) {
@@ -1305,7 +1336,9 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 		(session_id, tool_call_message_ordinal, tool_use_id, source, status,
 		 content, content_length, timestamp, event_index)
 		VALUES ('evorph', 7, 'tux', 'stdout', 'success',
-		 'ORPHHIT event content', 21, '2026-05-20T12:00:00Z', 0)`)
+		 'ORPHHIT event content', 21, '2026-05-20T12:00:00Z', 0),
+		 ('boss', 7, 'top-orphan', 'stdout', 'success',
+		 'TOPORPH', 7, '2026-05-20T12:00:00Z', 0)`)
 	require.NoError(t, err, "insert orphan event")
 
 	seedUnitSession(t, d, "evrun", nil, []Message{
@@ -1337,6 +1370,21 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 	assert.True(t, m.Subordinate, "session lineage still applies")
 	assert.Equal(t, "subagent", m.Relationship, "Relationship from sessions join")
 	assert.Equal(t, "boss", m.ParentSessionID, "ParentSessionID from sessions join")
+
+	for _, mode := range []string{"substring", "regex"} {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+			Pattern: "ORPHHIT", Mode: mode, Scope: "subordinate", Sources: []string{"tool_result"}, Limit: 1,
+		})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "evorph", page.Matches[0].SessionID)
+		page, err = d.SearchContent(t.Context(), ContentSearchFilter{
+			Pattern: "TOPORPH", Mode: mode, Scope: "top", Sources: []string{"tool_result"}, Limit: 1,
+		})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "boss", page.Matches[0].SessionID)
+	}
 
 	ev, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "EVHIT", Mode: "substring",

@@ -509,18 +509,43 @@ func (db *DB) reportingUsageSessionsFrom(
 	tx *sql.Tx,
 	lowerBound, upperBound string,
 ) ([]activity.SessionMeta, []string, error) {
-	usageRows := dailyUsageRowsSQLWithWhere(
-		usageMessageEligibility,
-		usageEventEligibility,
-	)
+	// A usage row is in range when its own timestamp is, or, when it has
+	// none, its session's start is. One branch per case lets the timestamp
+	// indexes seek the range instead of reading every usage row.
 	rows, err := tx.QueryContext(ctx, `
-		WITH usage_candidates AS (`+usageRows+`),
-		usage_session_ids AS (
-			SELECT DISTINCT session_id
-			FROM usage_candidates
-			WHERE session_id != ''
-				AND ts >= ?
-				AND ts <= ?
+		WITH usage_session_ids AS (
+			SELECT m.session_id
+			FROM messages m INDEXED BY idx_messages_usage_timestamp
+			JOIN sessions s ON s.id = m.session_id
+			WHERE`+usageMessageEligibility+`
+				AND m.timestamp >= ?1 AND m.timestamp <= ?2
+			UNION
+			SELECT m.session_id
+			FROM messages m INDEXED BY idx_messages_usage_timestamp
+			JOIN sessions s ON s.id = m.session_id
+			WHERE`+usageMessageEligibility+`
+				AND m.timestamp IS NULL
+				AND s.started_at >= ?1 AND s.started_at <= ?2
+			UNION
+			SELECT m.session_id
+			FROM messages m INDEXED BY idx_messages_usage_timestamp
+			JOIN sessions s ON s.id = m.session_id
+			WHERE`+usageMessageEligibility+`
+				AND m.timestamp = ''
+				AND s.started_at >= ?1 AND s.started_at <= ?2
+			UNION
+			SELECT ue.session_id
+			FROM usage_events ue
+			JOIN sessions s ON s.id = ue.session_id
+			WHERE`+usageEventEligibility+`
+				AND ue.occurred_at >= ?1 AND ue.occurred_at <= ?2
+			UNION
+			SELECT ue.session_id
+			FROM usage_events ue
+			JOIN sessions s ON s.id = ue.session_id
+			WHERE`+usageEventEligibility+`
+				AND ue.occurred_at IS NULL
+				AND s.started_at >= ?1 AND s.started_at <= ?2
 		)
 		SELECT
 			s.id,
@@ -534,7 +559,7 @@ func (db *DB) reportingUsageSessionsFrom(
 			COALESCE(s.is_automated, 0),
 			s.relationship_type = 'subagent'
 		FROM sessions s
-		JOIN usage_session_ids u ON u.session_id = s.id
+		WHERE s.id != '' AND s.id IN usage_session_ids
 		ORDER BY s.id`,
 		lowerBound, upperBound,
 	)

@@ -74,11 +74,11 @@ func trackLiveActivitySync(
 func startLiveActivityRun(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	poller *agentsync.LiveActivityPoller,
+	run func(context.Context),
 ) func() {
 	var workers sync.WaitGroup
 	workers.Go(func() {
-		poller.Run(ctx)
+		run(ctx)
 	})
 	var once sync.Once
 	return func() {
@@ -97,20 +97,22 @@ func startLiveActivityPoller(
 	idleTracker *server.IdleTracker,
 ) func() {
 	runCtx, cancel := context.WithCancel(ctx)
-	targets, err := collectLiveActivityTargets(runCtx, cfg)
-	if err != nil {
-		log.Printf("live activity target discovery: %v", err)
-	}
-	poller := agentsync.NewLiveActivityPoller(
-		targets,
-		agentsync.DBLiveActivityLookup(database),
-		trackLiveActivitySync(idleTracker, engine.SyncPathsContext),
-		log.Printf,
-	)
-	poller.SetRecentLookup(
-		agentsync.DBRecentSessionLookup(
-			database, cfg.InstallationID, cfg.SourceMachines,
-		),
-	)
-	return startLiveActivityRun(runCtx, cancel, poller)
+	return startLiveActivityRun(runCtx, cancel, func(ctx context.Context) {
+		targets, err := collectLiveActivityTargets(ctx, cfg)
+		if err != nil {
+			log.Printf("live activity target discovery: %v", err)
+		}
+		poller := agentsync.NewLiveActivityPoller(
+			targets,
+			agentsync.DBLiveActivityLookup(database),
+			trackLiveActivitySync(idleTracker, engine.SyncPathsContext),
+			log.Printf,
+		)
+		poller.SetRecentLookup(
+			agentsync.DBRecentSessionLookup(
+				database, cfg.InstallationID, cfg.SourceMachines,
+			),
+		)
+		poller.Run(ctx)
+	})
 }

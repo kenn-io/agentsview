@@ -877,7 +877,7 @@ type DB struct {
 	reads                readRegistry
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
-	frustrationMemo      frustrationMarkerMemo
+	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
 	usageBackfillDone    chan struct{}
@@ -1262,6 +1262,8 @@ func makeDSN(path string, readOnly bool) string {
 	if readOnly {
 		params.Set("mode", "ro")
 	} else {
+		// Imports repeatedly execute the same SQL, including project attribution.
+		params.Set("_stmt_cache_size", "64")
 		params.Set("_journal_mode", "WAL")
 		params.Set("_synchronous", "NORMAL")
 	}
@@ -1278,17 +1280,24 @@ func configureReaderPool(reader *sql.DB) {
 	reader.SetConnMaxIdleTime(readerConnMaxIdleTime)
 }
 
-func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func (db *DB) tryAcquireBulkRead() (func(), bool) {
 	db.bulkReads.once.Do(func() {
 		db.bulkReads.slots = make(chan struct{}, bulkReadSlots)
 	})
 	select {
 	case db.bulkReads.slots <- struct{}{}:
-		return func() { <-db.bulkReads.slots }, nil
+		return func() { <-db.bulkReads.slots }, true
 	default:
+		return nil, false
+	}
+}
+
+func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if release, ok := db.tryAcquireBulkRead(); ok {
+		return release, nil
 	}
 	started := time.Now()
 	defer func() {
@@ -2018,6 +2027,7 @@ var readOnlyRequiredTables = []string{
 	"friction_digests",
 	"friction_digest_sessions",
 	"friction_patterns",
+	"friction_issue_links",
 	"recall_entries",
 	"recall_evidence",
 	"recall_query_events",
@@ -3289,6 +3299,12 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := ensureSubstringIndex(ctx, w, progress); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	progress.report("Backfilling database metadata")
 	if err := db.backfillIsAutomatedLocked(ctx, w); err != nil {
 		return err
@@ -3971,6 +3987,18 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		 ON messages(session_id, ordinal) WHERE is_compact_boundary = 1`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_sidechain
 		 ON messages(session_id) WHERE is_sidechain = 1`,
+		// Activity reports look back from each interval to the latest
+		// assistant turn with a model. Without this index that search steps
+		// through every earlier message when a transcript records no model.
+		`CREATE INDEX IF NOT EXISTS idx_messages_assistant_model
+		 ON messages(session_id, ordinal) WHERE role = 'assistant' AND model != ''`,
+		// Holds only messages whose timestamp is missing or unreadable, so
+		// analytics can find them without parsing every message timestamp.
+		// Covering the timestamp keeps SQLite on this index even before
+		// ANALYZE has counted its rows.
+		`CREATE INDEX IF NOT EXISTS idx_messages_unparsed_timestamp
+		 ON messages(session_id, timestamp)
+		 WHERE timestamp IS NULL OR timestamp = '' OR strftime('%Y', timestamp) IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_claude_snapshot
@@ -3999,6 +4027,17 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		}
 	}
 	if err := ensureUsageIndexesLocked(ctx, w); err != nil {
+		return err
+	}
+	// Session shape, activity, and stats count messages by role and flags.
+	// Covering those columns keeps the counts off message bodies, which are
+	// usually kilobytes. Widened here, after column migrations, since legacy
+	// archives lack source_subtype.
+	if err := ensureIndexColumnsLocked(ctx,
+		w, "idx_messages_session_role", messageSessionRoleIndexColumns,
+		`CREATE INDEX IF NOT EXISTS idx_messages_session_role
+		 ON messages(session_id, role, is_system, has_thinking, has_tool_use, source_subtype)`,
+	); err != nil {
 		return err
 	}
 	// Widened here, after column migrations, since legacy archives lack is_automated.
@@ -4075,6 +4114,10 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		return fmt.Errorf("recreating idx_insights_lookup: %w", err)
 	}
 	return nil
+}
+
+var messageSessionRoleIndexColumns = []string{
+	"session_id", "role", "is_system", "has_thinking", "has_tool_use", "source_subtype",
 }
 
 var usageSessionCoveringIndexColumns = []string{
@@ -4979,7 +5022,7 @@ func (db *DB) stopWALCheckpointLoop() {
 	<-done
 }
 
-// DropFTS drops the FTS table and its triggers. This makes
+// DropFTS drops the FTS tables and their triggers. This makes
 // bulk message delete+reinsert fast by avoiding per-row FTS
 // index updates. Call RebuildFTS after to restore search.
 func (db *DB) DropFTS(ctx context.Context) error {
@@ -4998,6 +5041,7 @@ func (db *DB) DropFTS(ctx context.Context) error {
 		"DROP TRIGGER IF EXISTS messages_au",
 		"DROP TABLE IF EXISTS messages_fts",
 	}
+	stmts = append(stmts, dropSubstringIndexSQL...)
 	// One transaction, so an interrupted drop cannot leave the index without
 	// its triggers while the corpus marker still says it is current.
 	tx, err := db.getWriter().BeginTx(ctx, nil)
@@ -5018,13 +5062,16 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// RebuildFTS recreates the FTS table, triggers, and
-// repopulates the index from the messages table.
+// RebuildFTS recreates the FTS tables, triggers, and
+// repopulates the indexes from the messages table.
 func (db *DB) RebuildFTS(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
 	if err := rebuildMessageFTS(ctx, w, nil); err != nil {
+		return err
+	}
+	if err := rebuildSubstringIndex(ctx, w); err != nil {
 		return err
 	}
 	if err := ensureCJKFTS(ctx, w, true); err != nil {
@@ -5631,7 +5678,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
 	db.activityMemo.swap(func() {
-		db.frustrationMemo.swap(func() { oldReader = db.reader.Swap(reader) })
+		db.frustrationMemo.Swap(func() { oldReader = db.reader.Swap(reader) })
 	})
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a

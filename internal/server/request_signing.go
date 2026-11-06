@@ -110,7 +110,7 @@ func (s *Server) RestrictedHandler(ctx context.Context, policyFile string) (http
 	})
 	// Requests are logged only after signature verification, so unsigned
 	// traffic from the public terminator cannot write log lines.
-	return s.idle.Wrap(verifier.Wrap(dispatch, authenticate, authorize)), replay.Close, nil
+	return s.idle.Wrap(verifier.Wrap(dispatch, authenticate, authorize), s.basePath), replay.Close, nil
 }
 
 func externalSigningPrefix(base string) string {

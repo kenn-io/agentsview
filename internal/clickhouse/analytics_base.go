@@ -355,8 +355,12 @@ func (s analyticsSQL) ScanTopSession(rows *sql.Rows) (db.TopSession, error) {
 	return row, nil
 }
 
-func (s analyticsSQL) TrendsSQL(f db.AnalyticsFilter) (string, []any) {
-	return readbase.AnalyticsTrendsSQL(f, chAnalyticsMessageWindowPred, db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect())
+func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered bool) (string, []any) {
+	sessionPred, args := chAnalyticsSessionSet(sessionFilter).in("m.session_id")
+	return readbase.AnalyticsTrendsSQL(
+		f, chAnalyticsMessageWindowPred,
+		db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect(),
+		sessionPred, args, ordered)
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
