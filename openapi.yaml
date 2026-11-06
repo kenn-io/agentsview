@@ -4815,6 +4815,11 @@ components:
             - turn-on
             - use-built-in
           type: string
+        approved_bytes:
+          description: Download size the user saw; a larger download is declined
+          format: int64
+          minimum: 0
+          type: integer
       required:
         - action
       type: object

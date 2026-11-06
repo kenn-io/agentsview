@@ -215,6 +215,7 @@ describe("SemanticSetupHelp", () => {
     await settle();
     expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
       action: "use-built-in",
+      approved_bytes: 295000000,
     });
     unmount(component);
   });

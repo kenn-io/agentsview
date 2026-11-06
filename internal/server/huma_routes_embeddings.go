@@ -19,7 +19,8 @@ type EmbeddingsRuntime interface {
 	ManagerSetup(store string) (EmbeddingsManager, EmbeddingsSetupStatus)
 	IncludeAutomated() bool
 	SetupStatus(context.Context) (EmbeddingsSetupStatus, error)
-	Setup(action string) error
+	// Setup approves at most approvedBytes of download, the size the user saw.
+	Setup(action string, approvedBytes int64) error
 }
 
 type EmbeddingsSetupStatus = vector.SetupStatus
@@ -30,7 +31,8 @@ func WithEmbeddingsRuntime(runtime EmbeddingsRuntime) Option {
 
 type embeddingsSetupInput struct {
 	Body struct {
-		Action string `json:"action" enum:"turn-on,use-built-in" required:"true"`
+		Action        string `json:"action" enum:"turn-on,use-built-in" required:"true"`
+		ApprovedBytes int64  `json:"approved_bytes,omitempty" minimum:"0" doc:"Download size the user saw; a larger download is declined"`
 	}
 }
 
@@ -38,7 +40,7 @@ func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput
 	if s.embeddingsRuntime == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	if err := s.embeddingsRuntime.Setup(in.Body.Action); err != nil {
+	if err := s.embeddingsRuntime.Setup(in.Body.Action, in.Body.ApprovedBytes); err != nil {
 		if errors.Is(err, vector.ErrBuildRunning) {
 			return nil, embeddingsActionError(err)
 		}

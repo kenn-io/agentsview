@@ -23,6 +23,8 @@
     if (setup.provider === "ollama") return !setup.rebuild_required ? { kind: "ollama" } : { kind: "ollama-other", itemCount: documents, rebuildMs: documents / ROUGH_DOCUMENTS_PER_SECOND * 1000 };
     return { kind: "on" };
   });
+  // Turn on approves only the download the row or hint shows; the server declines a larger one.
+  const shownBytes = $derived(setup?.action === "use-built-in" || setup?.provider === "built-in" ? (setup?.missing_bytes ?? 0) : 0);
   const downloadLabel = $derived(m.meaning_download({ size: new Intl.NumberFormat(getLocale(), { style: "unit", unit: "megabyte", maximumFractionDigits: 0 }).format((setup?.missing_bytes ?? 0) / 1000000) }));
   const labels = $derived({
     name: m.meaning_name(), off: m.meaning_off(),
@@ -39,7 +41,7 @@
     if (action !== "turn-on" && action !== "use-built-in") return;
     error = null;
     try {
-      await EmbeddingsService.postApiV1EmbeddingsSetup({ action }).catch((e) => {
+      await EmbeddingsService.postApiV1EmbeddingsSetup({ action, approved_bytes: shownBytes }).catch((e) => {
         if (!(e instanceof ApiError && e.status === 409)) throw e;
       });
       onchange();

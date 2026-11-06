@@ -233,7 +233,7 @@ func setupRequestError(err error) error {
 	return err
 }
 
-func (v *liveVectorServing) Setup(action string) error {
+func (v *liveVectorServing) Setup(action string, approvedBytes int64) error {
 	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
 		return err
@@ -258,7 +258,7 @@ func (v *liveVectorServing) Setup(action string) error {
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(action, deployment)
+		err := v.activate(action, deployment, approvedBytes)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -297,10 +297,10 @@ func (v *liveVectorServing) closeServing(cfg config.Config) error {
 	return nil
 }
 
-func (v *liveVectorServing) activate(action string, deployment config.VectorEmbeddingsServerConfig) error {
+func (v *liveVectorServing) activate(action string, deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
 	cfg := v.cfg
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
-		func(context.Context, int64) (bool, error) { return true, nil },
+		func(_ context.Context, size int64) (bool, error) { return size <= approvedBytes, nil },
 		func(done, total int64) {
 			v.mu.Lock()
 			v.setup.DownloadedBytes, v.setup.TotalBytes = done, total

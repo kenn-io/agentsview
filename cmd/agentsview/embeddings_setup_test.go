@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -169,7 +170,12 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			case "other":
 				assert.True(t, initial.Setup.RebuildRequired)
 			}
-			request("POST", "/api/v1/embeddings/setup", `{"action":"turn-on"}`, 202)
+			// The row discloses a download only for the built-in provider.
+			var shown int64
+			if initial.Setup.Provider == "built-in" {
+				shown = initial.Setup.MissingBytes
+			}
+			request("POST", "/api/v1/embeddings/setup", fmt.Sprintf(`{"action":"turn-on","approved_bytes":%d}`, shown), 202)
 			if recipe == "fresh" {
 				<-building
 				<-owner.done
@@ -211,7 +217,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				assert.EqualValues(t, 1, generations[0].Embedded)
 				assert.EqualValues(t, 295_000_000, status().Setup.MissingBytes)
 				beforeSwitch := encoded.Load()
-				request("POST", "/api/v1/embeddings/setup", `{"action":"use-built-in"}`, 202)
+				request("POST", "/api/v1/embeddings/setup", `{"action":"use-built-in","approved_bytes":295000000}`, 202)
 				awaitBuild()
 				generations, err = owner.serving.manager.Generations(t.Context())
 				require.NoError(t, err)
@@ -467,7 +473,7 @@ func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
 		responseCh <- result
 	}()
 	<-queryStarted
-	require.NoError(t, owner.Setup("use-built-in"))
+	require.NoError(t, owner.Setup("use-built-in", 0))
 	<-reloaded
 	assert.Never(t, closed.Load, 100*time.Millisecond, time.Millisecond, "active search must finish before old index closes")
 	statusClient := &http.Client{Timeout: time.Second}
@@ -576,14 +582,14 @@ func TestLiveEmbeddingsSetupFailureRetry(t *testing.T) {
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
-	require.NoError(t, owner.Setup("turn-on"))
+	require.NoError(t, owner.Setup("turn-on", 0))
 	<-owner.done
 	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "download interrupted", status.Error)
-	require.NoError(t, owner.Setup("turn-on"))
+	require.NoError(t, owner.Setup("turn-on", 0))
 	<-started
-	require.ErrorIs(t, owner.Setup("turn-on"), vector.ErrBuildRunning)
+	require.ErrorIs(t, owner.Setup("turn-on", 0), vector.ErrBuildRunning)
 	assert.EqualValues(t, 2, calls.Load())
 	status, err = owner.SetupStatus(t.Context())
 	require.NoError(t, err)
@@ -675,7 +681,7 @@ func TestLiveEmbeddingsSetupRequiresConsentAfterOllamaStops(t *testing.T) {
 			return embedlocal.Installation{}, err
 		}
 		if consent {
-			return embedlocal.Installation{}, errors.New("unexpected download started")
+			return embedlocal.Installation{}, errors.New("test stops before download")
 		}
 		return embedlocal.Installation{}, errors.New("download was not approved")
 	}
@@ -704,6 +710,13 @@ func TestLiveEmbeddingsSetupRequiresConsentAfterOllamaStops(t *testing.T) {
 	assert.EqualValues(t, 295_000_000, recovery.Setup.MissingBytes)
 	assert.Equal(t, "turn-on", recovery.Setup.Action)
 	assert.Contains(t, recovery.Setup.Error, "download")
+	retry := func(approvedBytes int64) bool {
+		embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(fmt.Sprintf(`{"action":"turn-on","approved_bytes":%d}`, approvedBytes)), http.StatusAccepted)
+		<-owner.done
+		return approved.Load()
+	}
+	assert.False(t, retry(100_000_000), "Retry must not approve a download larger than the size shown")
+	assert.True(t, retry(recovery.Setup.MissingBytes), "Retry approves the refreshed size the row shows")
 }
 
 func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {

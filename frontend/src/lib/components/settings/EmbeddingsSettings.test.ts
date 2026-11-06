@@ -124,7 +124,7 @@ describe("EmbeddingsSettings", () => {
       expect(document.body.querySelectorAll("button")).toHaveLength(1);
       button!.click();
       await settle();
-      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ action });
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ action, approved_bytes: 0 });
       unmount(component);
     },
   );

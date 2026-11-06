@@ -5,4 +5,9 @@ import type { EmbeddingsSetupInputBodyAction } from "./embeddingsSetupInputBodyA
 
 export interface EmbeddingsSetupInputBody {
   action: EmbeddingsSetupInputBodyAction;
+  /**
+   * Download size the user saw; a larger download is declined
+   * @minimum 0
+   */
+  approved_bytes?: number;
 }
