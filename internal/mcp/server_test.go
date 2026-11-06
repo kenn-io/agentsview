@@ -61,17 +61,13 @@ func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
 	})
 	require.NotNil(t, srv)
 
-	st, ct := newInMemoryPair(t, srv)
-	tools, err := ct.ListTools(t.Context(), nil)
-	require.NoError(t, err)
+	tools := listCatalog(t, srv)
 	require.Len(t, tools.Tools, 20)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
 			"tool %s should be annotated read-only", tl.Name)
 	}
-	require.NoError(t, ct.Close())
-	require.NoError(t, st.Wait())
 }
 
 func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
@@ -129,7 +125,8 @@ func TestServer_GetMemoryStatus(t *testing.T) {
 	assert.Equal(t, service.MemoryPartial, status.Status)
 }
 
-// Base catalog bytes plus 10%, rounded up to the next 1,000; increases need review.
+// Measured catalogs: full 86,462 bytes, memory 21,219 bytes.
+// Budgets allow 10%, rounded up to 1,000 bytes; increases need review and matching docs/mcp.md updates.
 const (
 	fullCatalogBudget   = 96_000
 	memoryCatalogBudget = 24_000

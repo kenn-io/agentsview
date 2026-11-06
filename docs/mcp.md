@@ -100,14 +100,14 @@ and `format` (`markdown` or `summary`). `list_friction_patterns` accepts `kind`,
 `since`, and `limit` (default 20, max 100). Both report
 [Friction Log](/docs/configuration/#friction-log) heuristics, not ground truth.
 
-With Docbank and every optional tool listed, the tool list the server sends is
-about 87 KB. A test fails when it grows past 96 KB.
-
 `list_sessions` accepts `labels` (every listed label must match) and `pr`
 (`owner/repo`, `owner/repo#123`, or `github.com::owner/repo#123`). Its rows
 include each session's labels, pull request links, and parent session. See
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
+
+With Docbank and every optional tool listed, the tool list the server sends is
+about 87 KB. `TestNewServer_CatalogFitsBudget` fails when it grows past 96 KB.
 
 ### Focused memory profile
 
