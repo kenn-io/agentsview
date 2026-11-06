@@ -9,6 +9,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -70,6 +71,18 @@ func (s *Store) BuildActivityReportArtifacts(
 	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true
+	// Take the key before the first read. A build spanning a handle swap
+	// stays under the old stamp, which later requests cannot reach.
+	var selection, key string
+	onDisk := !q.Partial && kept.DayPreset(q, time.Now())
+	if stamp := s.mirrorStamp(); !q.Partial && stamp != "" {
+		selection = kept.Selection(f, q)
+		key = stamp + "|" + s.pricingDigest
+		if report, ok := s.reports.Get(selection, key, onDisk); ok {
+			activity.ReportProgress(onProgress, report.Done)
+			return report.Artifacts, nil
+		}
+	}
 	rangeStartUTC, rangeEndUTC := db.ActivityReportInstantBoundsUTC(q)
 	lowerBound := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
@@ -88,8 +101,11 @@ func (s *Store) BuildActivityReportArtifacts(
 		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC,
 		lowerBound: lowerBound, upperBound: upperBound,
 	}
-	artifacts, _, err := activity.BuildReportArtifacts(
+	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating duckdb activity report")
+	if err == nil && key != "" {
+		s.reports.Put(selection, key, onDisk, kept.Report{Artifacts: artifacts, Done: done})
+	}
 	return artifacts, err
 }
 

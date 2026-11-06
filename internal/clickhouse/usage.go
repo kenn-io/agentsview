@@ -1,7 +1,6 @@
 package clickhouse
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -13,7 +12,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -1308,7 +1306,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if err != nil {
 		return err
 	}
-	if rows, ok := s.dailyUsageRows.get(memoSlot, memoVersion); ok {
+	if rows, ok := s.dailyUsageRows.Get(memoSlot, memoVersion); ok {
 		for _, r := range rows {
 			if err := visit(r); err != nil {
 				return err
@@ -1429,7 +1427,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating clickhouse daily usage aggregates: %w", err)
 	}
-	s.dailyUsageRows.put(memoSlot, memoVersion, memo)
+	s.dailyUsageRows.Put(memoSlot, memoVersion, memo)
 	return nil
 }
 
@@ -1899,7 +1897,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			return err
 		}
 	}
-	if rows, ok := s.sessionAggregateRows.get(memoSlot, memoVersion); ok {
+	if rows, ok := s.sessionAggregateRows.Get(memoSlot, memoVersion); ok {
 		for _, r := range rows {
 			if err := visit(r); err != nil {
 				return err
@@ -1961,7 +1959,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating clickhouse session usage aggregates: %w", err)
 	}
-	s.sessionAggregateRows.put(memoSlot, memoVersion, memo)
+	s.sessionAggregateRows.Put(memoSlot, memoVersion, memo)
 	return nil
 }
 
@@ -2049,7 +2047,7 @@ func (s *Store) GetTopSessionsByCost(
 	if err != nil {
 		return nil, err
 	}
-	if kept, ok := s.topSessionTotals.get(memoSlot, memoVersion); ok {
+	if kept, ok := s.topSessionTotals.Get(memoSlot, memoVersion); ok {
 		if f.TopSessionsByGroup {
 			return db.GroupTopSessions(kept, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 		}
@@ -2118,7 +2116,7 @@ func (s *Store) GetTopSessionsByCost(
 		}
 		out = append(out, a.row)
 	}
-	s.topSessionTotals.put(memoSlot, memoVersion, out)
+	s.topSessionTotals.Put(memoSlot, memoVersion, out)
 	if f.TopSessionsByGroup {
 		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
@@ -2144,7 +2142,7 @@ func (s *Store) GetUsageSessionCounts(
 	if err != nil {
 		return db.UsageSessionCounts{}, err
 	}
-	counted, ok := s.usageSessionRows.get(memoSlot, memoVersion)
+	counted, ok := s.usageSessionRows.Get(memoSlot, memoVersion)
 	if !ok {
 		source := usageCTEFor(state, f, "")
 		readCtx, err := withUsageDeltaTables(ctx, state)
@@ -2173,7 +2171,7 @@ func (s *Store) GetUsageSessionCounts(
 			return db.UsageSessionCounts{}, fmt.Errorf(
 				"iterating clickhouse usage session counts: %w", err)
 		}
-		s.usageSessionRows.put(memoSlot, memoVersion, counted)
+		s.usageSessionRows.Put(memoSlot, memoVersion, counted)
 	}
 	seen := make(map[string]db.UsageSessionInfo, len(counted))
 	for _, r := range counted {
@@ -2323,99 +2321,6 @@ func (s *Store) withPartsSnapshot(ctx context.Context) (context.Context, error) 
 		return nil, err
 	}
 	return context.WithValue(ctx, partsSnapshotKey{}, snapshot), nil
-}
-
-// usageRowMemo keeps the rows of recent usage reads. A slot names the read
-// and holds only the rows of its latest version, which names the parts the
-// rows were read from. A push replaces a slot's rows instead of adding a
-// second copy beside them, and a stale version is never returned. The
-// empty slot keeps nothing. The oldest written slots go first when the
-// memo is over its slot or byte limit.
-type usageRowMemo[T any] struct {
-	mu      sync.Mutex
-	entries map[string]usageRowMemoEntry[T]
-	order   []string
-	// limit caps the slots; zero means usageRowMemoLimit.
-	limit int
-	// size estimates a row's bytes. With it, maxBytes caps the bytes kept,
-	// zero meaning usageRowMemoBytes, and rows over that cap are not kept.
-	// Without it only the slots are capped.
-	size     func(T) int64
-	maxBytes int64
-	bytes    int64
-}
-
-type usageRowMemoEntry[T any] struct {
-	version string
-	rows    []T
-	bytes   int64
-}
-
-const (
-	usageRowMemoLimit = 64
-	usageRowMemoBytes = 64 << 20
-)
-
-func (m *usageRowMemo[T]) get(slot, version string) ([]T, bool) {
-	if slot == "" {
-		return nil, false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	entry, ok := m.entries[slot]
-	if !ok || entry.version != version {
-		return nil, false
-	}
-	return entry.rows, true
-}
-
-func (m *usageRowMemo[T]) put(slot, version string, rows []T) {
-	if slot == "" {
-		return
-	}
-	var size int64
-	if m.size != nil {
-		for _, row := range rows {
-			size += m.size(row)
-		}
-	}
-	maxBytes := cmp.Or(m.maxBytes, usageRowMemoBytes)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.removeLocked(slot)
-	if m.size != nil && size > maxBytes {
-		return
-	}
-	if m.entries == nil {
-		m.entries = map[string]usageRowMemoEntry[T]{}
-	}
-	m.entries[slot] = usageRowMemoEntry[T]{version: version, rows: rows, bytes: size}
-	m.order = append(m.order, slot)
-	m.bytes += size
-	for len(m.order) > cmp.Or(m.limit, usageRowMemoLimit) || m.bytes > maxBytes {
-		m.removeLocked(m.order[0])
-	}
-}
-
-// deleteSlots removes the slots drop reports.
-func (m *usageRowMemo[T]) deleteSlots(drop func(slot string) bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, slot := range slices.Clone(m.order) {
-		if drop(slot) {
-			m.removeLocked(slot)
-		}
-	}
-}
-
-func (m *usageRowMemo[T]) removeLocked(slot string) {
-	entry, ok := m.entries[slot]
-	if !ok {
-		return
-	}
-	delete(m.entries, slot)
-	m.order = slices.DeleteFunc(m.order, func(s string) bool { return s == slot })
-	m.bytes -= entry.bytes
 }
 
 func appendChUsageMatchingActivityClauses(

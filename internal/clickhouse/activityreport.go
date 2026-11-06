@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/readbase"
 )
@@ -101,18 +102,15 @@ func (s *Store) BuildActivityReportArtifacts(
 	// Only the reports of ended days a client opens are kept on disk. Every
 	// open refreshes the file's modification time, and a sweep removes the
 	// files no client opened for activityReportUnopened.
-	onDisk := !q.Partial && activityDayPreset(q, time.Now())
+	onDisk := !q.Partial && kept.DayPreset(q, time.Now())
 	if !q.Partial {
-		selection = activityReportSelection(f, q)
+		selection = kept.Selection(f, q)
 		if fingerprint, err = s.partsFingerprint(ctx); err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		if kept, key, ok := s.checkedActivityReport(selection, fingerprint, onDisk); ok {
-			if onDisk {
-				s.touchActivityReport(selection, key, kept)
-			}
-			activity.ReportProgress(onProgress, kept.done)
-			return kept.artifacts, nil
+		if kept, _, ok := s.checkedActivityReport(selection, fingerprint, onDisk); ok {
+			activity.ReportProgress(onProgress, kept.Done)
+			return kept.Artifacts, nil
 		}
 	}
 
@@ -129,22 +127,10 @@ func (s *Store) BuildActivityReportArtifacts(
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		if kept, ok := s.reportMemo(onDisk).get(selection, memoKey); ok {
+		if report, ok := s.reports.Get(selection, memoKey, onDisk); ok {
 			s.markActivityReportChecked(selection, fingerprint, memoKey)
-			if onDisk {
-				s.touchActivityReport(selection, memoKey, kept[0])
-			}
-			activity.ReportProgress(onProgress, kept[0].done)
-			return kept[0].artifacts, nil
-		}
-		if onDisk {
-			if kept, ok := s.loadActivityReport(selection, memoKey); ok {
-				s.reportMemo(onDisk).put(selection, memoKey, []activityReportEntry{kept})
-				s.markActivityReportChecked(selection, fingerprint, memoKey)
-				s.touchActivityReport(selection, memoKey, kept)
-				activity.ReportProgress(onProgress, kept.done)
-				return kept.artifacts, nil
-			}
+			activity.ReportProgress(onProgress, report.Done)
+			return report.Artifacts, nil
 		}
 	}
 	// A kept report answers its range until a push changes the listing's
@@ -185,48 +171,31 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 
 	if memoKey != "" {
-		entry := activityReportEntry{artifacts: artifacts, done: done}
-		s.reportMemo(onDisk).put(selection, memoKey, []activityReportEntry{entry})
+		s.reports.Put(selection, memoKey, onDisk, kept.Report{Artifacts: artifacts, Done: done})
 		s.markActivityReportChecked(selection, fingerprint, memoKey)
-		if onDisk {
-			s.saveActivityReport(selection, memoKey, entry)
-		}
 	}
 	return artifacts, nil
-}
-
-// activityDiskReportMemoLimit caps the reports kept in memory beside
-// their files on disk.
-const activityDiskReportMemoLimit = 8
-
-// reportMemo is the memo for a report of a range kept on disk, or of one
-// kept only in memory.
-func (s *Store) reportMemo(onDisk bool) *usageRowMemo[activityReportEntry] {
-	if onDisk && s.reportDisk.dir != "" {
-		return &s.diskReports
-	}
-	return &s.activityReports
 }
 
 // markActivityReportChecked records the key an ended range's kept report
 // was kept under; its memo version is the parts it was last checked against.
 func (s *Store) markActivityReportChecked(selection, fingerprint, key string) {
-	s.activityChecks.put(selection, fingerprint, []string{key})
+	s.activityChecks.Put(selection, fingerprint, []string{key})
 }
 
 // checkedActivityReport returns the kept report for a selection checked
 // against exactly these parts. The parts name every row the report reads,
 // so the report's key cannot have changed.
-func (s *Store) checkedActivityReport(selection, fingerprint string, onDisk bool) (activityReportEntry, string, bool) {
-	check, ok := s.activityChecks.get(selection, fingerprint)
+func (s *Store) checkedActivityReport(selection, fingerprint string, onDisk bool) (kept.Report, string, bool) {
+	check, ok := s.activityChecks.Get(selection, fingerprint)
 	if !ok {
-		return activityReportEntry{}, "", false
+		return kept.Report{}, "", false
 	}
-	kept, ok := s.reportMemo(onDisk).get(selection, check[0])
+	report, ok := s.reports.Get(selection, check[0], onDisk)
 	if !ok {
-		return activityReportEntry{}, "", false
+		return kept.Report{}, "", false
 	}
-	return kept[0], check[0], true
+	return report, check[0], true
 }
 
 // endedActivityReportKey identifies everything the report of an ended
@@ -327,13 +296,6 @@ func chDeltaRowTime(value any) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// activityReportEntry is a kept report of a range that has ended and the
-// final progress its build reported. Callers only read the artifacts.
-type activityReportEntry struct {
-	artifacts activity.CandidateArtifacts
-	done      activity.Progress
-}
-
 // countMessages adds the user and assistant message counts to artifacts.
 // The pairing inputs hold every message of the candidate sessions, so the
 // counts need no read of their own.
@@ -386,7 +348,7 @@ func (s *Store) activityReportSessions(
 		return nil, nil, nil, err
 	}
 	memoKey := fmt.Sprintf("%s|%#v", where, args)
-	if cached, ok := s.activitySessionListings.get(memoKey, fingerprint); ok && len(cached) == 1 {
+	if cached, ok := s.activitySessionListings.Get(memoKey, fingerprint); ok && len(cached) == 1 {
 		listing := cached[0]
 		return slices.Clone(listing.sessions), slices.Clone(listing.ids), maps.Clone(listing.versions), nil
 	}
@@ -437,7 +399,7 @@ func (s *Store) activityReportSessions(
 			"iterating clickhouse activity report sessions: %w", err)
 	}
 	if keep {
-		s.activitySessionListings.put(memoKey, fingerprint, []activitySessionListing{{
+		s.activitySessionListings.Put(memoKey, fingerprint, []activitySessionListing{{
 			sessions: slices.Clone(sessions), ids: slices.Clone(ids), versions: maps.Clone(versions),
 		}})
 	}
@@ -458,16 +420,6 @@ func clickActivityReportCandidateWhere(
 				WHERE last_terminal_at >= ` + chTimestampSQL + `))
 		AND COALESCE(s.started_at, s.created_at) < ` + chTimestampSQL
 	return where, append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
-}
-
-// activityReportSelection names an ended range's report by everything the
-// request chose: the filter as the build applies it, and the range.
-func activityReportSelection(f db.AnalyticsFilter, q activity.Query) string {
-	f.IncludeSubagents = true
-	f.IncludeForks = true
-	return fmt.Sprintf("%#v|%s|%s|%s|%s|%#v|%v", f, q.Timezone,
-		q.RangeStart.UTC().Format(time.RFC3339Nano), q.RangeEnd.UTC().Format(time.RFC3339Nano),
-		q.EffectiveEnd.UTC().Format(time.RFC3339Nano), q.Bucket, q.GapCapSeconds)
 }
 
 // chActivityCandidateDigestSQL selects the digest that identifies a set of
@@ -743,7 +695,7 @@ func (s *Store) activityReportUsage(
 			memoSlot = fmt.Sprintf("%s|%s|%s", lowerBound, upperBound, chSessionIDsDigest(ids))
 			memoVersion = fingerprint
 		}
-		if kept, ok := s.activityUsageRows.get(memoSlot, memoVersion); ok {
+		if kept, ok := s.activityUsageRows.Get(memoSlot, memoVersion); ok {
 			ordered, count = kept[0].all(), kept[0].count
 		} else {
 			query, args := clickActivityReportUsageQuery(candidates, lowerBound, upperBound)
@@ -764,7 +716,7 @@ func (s *Store) activityReportUsage(
 			// one; both only read the scanned rows.
 			if memoSlot != "" {
 				s.keeping.Go(func() {
-					s.activityUsageRows.put(memoSlot, memoVersion, []*activityUsageKept{keepActivityUsage(rowsAcc, order)})
+					s.activityUsageRows.Put(memoSlot, memoVersion, []*activityUsageKept{keepActivityUsage(rowsAcc, order)})
 				})
 			}
 			ordered = func(yield func(*clickActivityReportUsageRow) bool) {
@@ -934,7 +886,7 @@ func (s *Store) activityUsageRange(
 	ctx context.Context, state preparedUsageState, lowerBound, upperBound string,
 ) (*activityUsageKept, error) {
 	slot := lowerBound + "|" + upperBound
-	kept, ok := s.activityUsageRanges.get(slot, "")
+	kept, ok := s.activityUsageRanges.Get(slot, "")
 	incremental := ok && len(kept) > 0
 	var prev activityUsageRange
 	var changed []string
@@ -979,12 +931,12 @@ func (s *Store) activityUsageRange(
 	// Only ranges in progress read this memo, so a range that has ended is
 	// never read again.
 	now := time.Now()
-	s.activityUsageRanges.deleteSlots(func(slot string) bool {
+	s.activityUsageRanges.DeleteSlots(func(slot string) bool {
 		_, upper, _ := strings.Cut(slot, "|")
 		end, err := time.Parse(time.RFC3339Nano, upper)
 		return err == nil && end.Before(now)
 	})
-	s.activityUsageRanges.put(slot, "", []activityUsageRange{{revisions: state.revisions, rows: rows}})
+	s.activityUsageRanges.Put(slot, "", []activityUsageRange{{revisions: state.revisions, rows: rows}})
 	return rows, nil
 }
 

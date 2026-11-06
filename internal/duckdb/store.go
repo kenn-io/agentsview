@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -38,12 +39,15 @@ func (s *Store) MemoryBackendName() string { return "duckdb" }
 // directly on path.
 type Store struct {
 	readbase.MirrorStubs
-	path      string
-	handleMu  sync.RWMutex
-	duck      *sql.DB
-	fileInfo  os.FileInfo
-	aliasPath string
-	closed    bool
+	path          string
+	handleMu      sync.RWMutex
+	duck          *sql.DB
+	fileInfo      os.FileInfo
+	walStamp      string
+	reports       kept.Reports
+	pricingDigest string
+	aliasPath     string
+	closed        bool
 	// retiring tracks in-flight mirror-replacement checks, registered in
 	// beginReplacementCheck before a check opens anything and spanning
 	// swapHandle's tail cleanup (closing the replaced handle and removing
@@ -80,11 +84,37 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
 	}
 	PrimeFileIdentity(info)
+	walStamp, err := mirrorWALStamp(path)
+	if err != nil {
+		return nil, err
+	}
 	conn, err := OpenReadOnly(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{path: path, duck: conn, fileInfo: info}, nil
+	return &Store{path: path, duck: conn, fileInfo: info, walStamp: walStamp}, nil
+}
+
+// mirrorStamp names the immutable handle's main file and opening WAL state.
+func (s *Store) mirrorStamp() string {
+	s.handleMu.RLock()
+	defer s.handleMu.RUnlock()
+	if s.path == "" {
+		return ""
+	}
+	return fmt.Sprintf("%d|%d|%s", s.fileInfo.Size(), s.fileInfo.ModTime().UnixNano(), s.walStamp)
+}
+
+// Capture before opening: DuckDB may replay a leftover WAL on open.
+func mirrorWALStamp(path string) (string, error) {
+	info, err := os.Stat(path + ".wal")
+	if os.IsNotExist(err) {
+		return "nowal", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("statting duckdb mirror WAL: %w", err)
+	}
+	return fmt.Sprintf("%d|%d", info.Size(), info.ModTime().UnixNano()), nil
 }
 
 // NewStoreFromDB wraps an existing DuckDB connection.
@@ -120,6 +150,7 @@ func (s *Store) Close() error {
 	alias := s.aliasPath
 	s.handleMu.Unlock()
 
+	s.reports.Close()
 	err := conn.Close()
 	removeMirrorAlias(alias)
 	s.retiring.Wait()
@@ -222,6 +253,9 @@ func (r duckSingleRow) Scan(dest ...any) error {
 
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	s.customPricing = p
+	digest := sha256.Sum256(fmt.Appendf(nil, "%#v", p))
+	s.pricingDigest = fmt.Sprintf("%x", digest)
+	s.reports.Clear()
 }
 
 func (s *Store) SetCursorSecret(secret []byte) {

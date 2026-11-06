@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 	"golang.org/x/sync/singleflight"
 )
@@ -57,26 +58,24 @@ type Store struct {
 	// deltaCache keeps the prepared rows of changed snapshots.
 	deltaCache usageDeltaCache
 	// The usage row memos keep recent range reads per parts and filter.
-	dailyUsageRows       usageRowMemo[chDailyUsageGroupRow]
-	sessionAggregateRows usageRowMemo[chUsageAggregateRow]
-	usageSessionRows     usageRowMemo[chUsageSessionRow]
+	dailyUsageRows       kept.Memo[chDailyUsageGroupRow]
+	sessionAggregateRows kept.Memo[chUsageAggregateRow]
+	usageSessionRows     kept.Memo[chUsageSessionRow]
 	// topSessionTotals keeps each session's totals per top-sessions read.
-	topSessionTotals usageRowMemo[db.TopSessionEntry]
+	topSessionTotals kept.Memo[db.TopSessionEntry]
 	// analyticsSessionRows keeps recent analytics session listings.
-	analyticsSessionRows usageRowMemo[readbase.AnalyticsSession]
+	analyticsSessionRows kept.Memo[readbase.AnalyticsSession]
 	// analyticsListings shares one listing read among concurrent requests.
 	analyticsListings singleflight.Group
-	// background runs the kept reports' sweep until Close.
-	background storeBackground
 	// activitySessions keeps activity pairing inputs per session version.
 	activitySessions activitySessionMemo
 	// activityInputQueries counts pairing input reads that reached ClickHouse.
 	activityInputQueries atomic.Int64
 	// activityUsageRows keeps activity usage reads per source, set, and range.
-	activityUsageRows usageRowMemo[*activityUsageKept]
+	activityUsageRows kept.Memo[*activityUsageKept]
 	// activityUsageRanges keeps every session's prepared usage rows per
 	// range in progress; see activityUsageRange.
-	activityUsageRanges usageRowMemo[activityUsageRange]
+	activityUsageRanges kept.Memo[activityUsageRange]
 	// readinessLog holds the last prepared usage readiness logged.
 	readinessLog struct {
 		sync.Mutex
@@ -86,20 +85,11 @@ type Store struct {
 	// activityReportUsage. Close waits for them.
 	keeping sync.WaitGroup
 	// activitySessionListings keeps candidate listings per parts and predicate.
-	activitySessionListings usageRowMemo[activitySessionListing]
-	projectIdentityMaps     usageRowMemo[map[string]export.ProjectMapEntry]
-	// activityReports keeps the reports of ended ranges per the rows they read.
-	activityReports usageRowMemo[activityReportEntry]
-	// diskReports keeps the few latest reports that are also on disk. A
-	// load from disk costs about what a memory hit does, so the rest are
-	// read back from there.
-	diskReports usageRowMemo[activityReportEntry]
-	// activityChecks records per selection the parts its kept report was
-	// last checked against.
-	activityChecks usageRowMemo[string]
-	// reportDisk keeps ended ranges' reports on disk; see
-	// openActivityReportDisk. Empty, reports are kept in memory only.
-	reportDisk           activityReportDisk
+	activitySessionListings kept.Memo[activitySessionListing]
+	projectIdentityMaps     kept.Memo[map[string]export.ProjectMapEntry]
+	reports                 kept.Reports
+	// activityChecks records the parts each report was last checked against.
+	activityChecks       kept.Memo[string]
 	activityUsageQueries atomic.Int64
 	// activityUsageRowsRead counts the activity usage rows scanned.
 	activityUsageRowsRead  atomic.Int64
@@ -139,18 +129,15 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 // connection's compatibility checks.
 func NewStoreFromDB(conn *sql.DB) *Store {
 	s := &Store{conn: conn}
-	s.dailyUsageRows.size, s.dailyUsageRows.maxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
-	s.sessionAggregateRows.size = aggregateRowBytes
-	s.usageSessionRows.size = usageSessionRowBytes
-	s.topSessionTotals.size = topSessionBytes
-	s.analyticsSessionRows.size = analyticsSessionBytes
-	s.activityUsageRows.size, s.activityUsageRows.maxBytes = keptUsageBytes, activityUsageRowsBytes
-	s.activityUsageRanges.size, s.activityUsageRanges.maxBytes = usageRangeBytes, activityUsageRangeBytes
-	s.activityUsageRanges.limit = activityUsageRangeLimit
-	s.activitySessionListings.size = sessionListingBytes
-	s.activityReports.size, s.activityReports.maxBytes = reportEntryBytes, activityReportMemoBytes
-	s.diskReports.size, s.diskReports.maxBytes = reportEntryBytes, activityReportMemoBytes
-	s.diskReports.limit = activityDiskReportMemoLimit
+	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
+	s.sessionAggregateRows.Size = aggregateRowBytes
+	s.usageSessionRows.Size = usageSessionRowBytes
+	s.topSessionTotals.Size = topSessionBytes
+	s.analyticsSessionRows.Size = analyticsSessionBytes
+	s.activityUsageRows.Size, s.activityUsageRows.MaxBytes = keptUsageBytes, activityUsageRowsBytes
+	s.activityUsageRanges.Size, s.activityUsageRanges.MaxBytes = usageRangeBytes, activityUsageRangeBytes
+	s.activityUsageRanges.Limit = activityUsageRangeLimit
+	s.activitySessionListings.Size = sessionListingBytes
 	return s
 }
 
