@@ -1345,12 +1345,12 @@ func (s *Store) forEachDailyUsageGroupRow(
 		customPred = "(model, price_model) IN (" + strings.Join(tuples, ", ") + ")"
 	}
 	pricedSQL, pricedArgs := chUsagePricedCTE(source, pricingDigest)
-	metadataSelect := "'', NULL, '', '', ''"
+	metadataSelect := ""
 	order := `ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC, group_machine ASC,
 			model ASC, row_price_model ASC, row_ts ASC, COALESCE(row_message_ordinal, -1) ASC,
 			row_source ASC, row_usage_dedup_key ASC`
 	if top {
-		metadataSelect = "any(display_name), any(started_at), any(group_key), any(session_name), any(machine)"
+		metadataSelect = ", any(display_name), any(started_at), any(group_key), any(session_name), any(machine)"
 		order = `ORDER BY session_id ASC, model ASC, row_price_model ASC, row_ts ASC,
 			COALESCE(row_message_ordinal, -1) ASC, row_source ASC, row_usage_dedup_key ASC`
 	}
@@ -1395,8 +1395,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 			any(billable_reasoning_tokens), any(billable_cache_creation_tokens),
 			any(billable_cache_creation_1h_tokens), any(billable_cache_read_tokens),
 			toInt64(any(reported_cost_rows)),
-			any(authoritative_cost), toInt64(any(authoritative_cost_rows)),
-			` + metadataSelect + `
+			any(authoritative_cost), toInt64(any(authoritative_cost_rows))` + metadataSelect + `
 		FROM usage_classified
 		GROUP BY session_id, local_date, project, agent, group_machine, model, provider_id,
 			explicit_key, group_kind, group_context, group_band
@@ -1417,7 +1416,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 		var r chDailyUsageGroupRow
 		var explicitKey, metadataMachine string
 		var ts, pricingTS, startedAt any
-		if err := rows.Scan(
+		targets := []any{
 			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
 			&r.providerID,
 			&explicitKey, &r.kind, &r.contextID, &r.bandAbove, &r.events,
@@ -1432,15 +1431,18 @@ func (s *Store) forEachDailyUsageGroupRow(
 			&r.billableCacheCr, &r.billableCacheCr1h, &r.billableCacheRd,
 			&r.reportedCostRows,
 			&r.authoritativeCost, &r.authoritativeCostRows,
-			&r.displayName, &startedAt, &r.groupKey, &r.sessionName, &metadataMachine,
-		); err != nil {
+		}
+		if top {
+			targets = append(targets, &r.displayName, &startedAt, &r.groupKey, &r.sessionName, &metadataMachine)
+		}
+		if err := rows.Scan(targets...); err != nil {
 			return fmt.Errorf("scanning clickhouse daily usage aggregate: %w", err)
 		}
 		r.explicit = explicitKey != ""
 		if top {
 			r.machine = metadataMachine
+			r.startedAt = formatDBTime(startedAt)
 		}
-		r.startedAt = formatDBTime(startedAt)
 		r.ts = formatDBTime(ts)
 		r.pricingTS = formatDBTime(pricingTS)
 		if !top {
@@ -1555,8 +1557,6 @@ func retryUsagePriceContexts[T any](load func() (T, error)) (T, error) {
 	}
 }
 
-// Each attempt owns its accumulator and resolver. If a push adds a context
-// during the query, retry with fresh contexts instead of retaining raw rows.
 func (s *Store) usagePricingForCatalog(
 	ctx context.Context, snapshot *pricingSnapshot,
 ) (*export.PricingResolver, map[string]chUsagePriceContext, [][2]string, error) {
@@ -1573,6 +1573,8 @@ func (s *Store) usagePricingForCatalog(
 	return resolver, contexts, customModels, nil
 }
 
+// Each attempt owns its accumulator and resolver. If a push adds a context
+// during the query, retry with fresh contexts instead of retaining raw rows.
 func (s *Store) dailyUsageForCatalog(
 	ctx context.Context, f db.UsageFilter, snapshot *pricingSnapshot,
 ) (db.DailyUsageResult, error) {

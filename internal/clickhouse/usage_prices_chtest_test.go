@@ -685,3 +685,15 @@ func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("1"), top[0].Cost)
 	assert.Equal(t, 1_000_000, top[0].TotalTokens)
 }
+
+func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newUsagePriceStore(t)
+	_, err := store.conn.ExecContext(t.Context(), "TRUNCATE TABLE usage_price_contexts")
+	require.NoError(t, err)
+
+	top, err := store.GetTopSessionsByCost(t.Context(), db.UsageFilter{Timezone: "UTC"}, 10)
+	require.ErrorIs(t, err, errUsagePriceContextChanged)
+	assert.Empty(t, top)
+	assert.Empty(t, store.topSessionTotals.entries)
+}
