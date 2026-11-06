@@ -168,33 +168,49 @@ describe("EmbeddingsSettings", () => {
     },
   );
 
-  it("keeps following setup when generations becomes unavailable after status", async () => {
-    const setup = {
-      enabled: true,
-      action: "",
-      provider: "built-in",
-      busy: false,
-      installing: false,
-      missing_bytes: 0,
-      downloaded_bytes: 0,
-      total_bytes: 0,
-      rebuild_required: false,
-    };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
-    embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValueOnce(
-      new ApiError(501, "embeddings manager not available"),
-    );
-    const component = mount(EmbeddingsSettings, { target: document.body });
-    try {
-      await settle();
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2, { setup }));
-      await settle(60_000);
-      expect(document.body.textContent).toContain("Indexing 2 of");
-      expect(document.body.textContent).not.toContain("embeddings manager not available");
-    } finally {
-      unmount(component);
-    }
-  });
+  it.each([501, 500])(
+    "keeps polling after a generations error with status %i",
+    async (code) => {
+      const setup = {
+        enabled: true,
+        action: "",
+        provider: "built-in",
+        busy: false,
+        installing: false,
+        missing_bytes: 0,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        rebuild_required: false,
+      };
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+      const error = new ApiError(
+        code,
+        code === 501 ? "embeddings manager not available" : "internal error",
+      );
+      if (code === 501)
+        embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValueOnce(error);
+      else embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(error);
+      const component = mount(EmbeddingsSettings, { target: document.body });
+      try {
+        await settle();
+        if (code === 500)
+          expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
+            "internal error",
+          );
+        embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2, { setup }));
+        await settle(60_000);
+        expect(document.body.textContent).toContain("Indexing 2 of");
+        if (code === 501)
+          expect(document.body.textContent).not.toContain("embeddings manager not available");
+        else
+          expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
+            "internal error",
+          );
+      } finally {
+        unmount(component);
+      }
+    },
+  );
 
   it("shows indexing progress with throughput and remaining time", async () => {
     for (const withSetup of [true, false]) {
