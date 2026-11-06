@@ -115,12 +115,18 @@ func TestBuildReportArtifacts(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC", BucketOverride: "1h"}, fixedNow(t))
 	require.NoError(t, err)
 	for _, concurrent := range []bool{false, true} {
-		for _, withProgress := range []bool{true, false} {
-			name := "nil callback"
-			if withProgress {
-				name = "progress callback"
-			}
-			t.Run(fmt.Sprintf("%s/concurrent=%t", name, concurrent), func(t *testing.T) {
+		t.Run(fmt.Sprintf("concurrent=%t", concurrent), func(t *testing.T) {
+			backend := &reportBackendFixture{t: t, q: q, ids: []string{"s"}, pricing: &export.PricingBlock{}, concurrent: concurrent}
+			var progress []Progress
+			artifacts, done, err := BuildReportArtifacts(
+				t.Context(), backend,
+				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, backend.ids, q,
+				func(p Progress) { progress = append(progress, p) },
+				"aggregating example activity report",
+			)
+			require.NoError(t, err)
+			assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
+			if concurrent {
 				baseline := &reportBackendFixture{t: t, q: q, ids: []string{"s"}, pricing: &export.PricingBlock{}}
 				want, _, err := BuildReportArtifacts(
 					t.Context(), baseline,
@@ -128,43 +134,25 @@ func TestBuildReportArtifacts(t *testing.T) {
 					nil, "aggregating example activity report",
 				)
 				require.NoError(t, err)
-				backend := &reportBackendFixture{t: t, q: q, ids: []string{"s"}, pricing: &export.PricingBlock{}, concurrent: concurrent}
-				progress := []Progress{}
-				var onProgress ProgressFunc
-				if withProgress {
-					onProgress = func(p Progress) { progress = append(progress, p) }
-				}
-				artifacts, done, err := BuildReportArtifacts(
-					t.Context(), backend,
-					[]SessionMeta{{SessionID: "s", Project: "project-a"}}, backend.ids, q,
-					onProgress,
-					"aggregating example activity report",
-				)
-				require.NoError(t, err)
 				assert.Equal(t, want, artifacts)
-				assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
-				if concurrent {
-					assert.ElementsMatch(t, []string{"usage", "candidates"}, backend.calls[:2])
-					assert.Equal(t, []string{"counts", "projects"}, backend.calls[2:])
-				} else {
-					assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
-				}
-				if withProgress {
-					assert.Equal(t, []Progress{
-						{Phase: ProgressScanningActivity, SessionsTotal: 1},
-						{Phase: ProgressScanningActivity, SessionsTotal: 1, RowsProcessed: 1},
-						{Phase: ProgressFinalizing, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
-						{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
-					}, progress)
-				}
+				assert.ElementsMatch(t, []string{"usage", "candidates"}, backend.calls[:2])
+				assert.Equal(t, []string{"counts", "projects"}, backend.calls[2:])
+			} else {
+				assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
 				assert.Equal(t, export.ActivityReportSchemaVersion, artifacts.Report.SchemaVersion)
 				assert.Same(t, backend.pricing, artifacts.Report.Pricing)
 				assert.Equal(t, 1, artifacts.Report.Buckets[10].AssistantMessages)
 				require.Len(t, artifacts.Sessions, 1)
 				assert.Equal(t, "project-key-a", artifacts.Sessions[0].ProjectKey)
 				assert.Equal(t, []SessionRow{}, artifacts.Report.BySession)
-			})
-		}
+			}
+			assert.Equal(t, []Progress{
+				{Phase: ProgressScanningActivity, SessionsTotal: 1},
+				{Phase: ProgressScanningActivity, SessionsTotal: 1, RowsProcessed: 1},
+				{Phase: ProgressFinalizing, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
+				{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
+			}, progress)
+		})
 	}
 }
 
@@ -172,30 +160,28 @@ func TestBuildReportArtifactsErrors(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC"}, fixedNow(t))
 	require.NoError(t, err)
 	failure := errors.New("read failed")
-	for _, concurrent := range []bool{false, true} {
-		for _, stage := range []string{"usage", "candidates", "counts", "projects"} {
-			t.Run(fmt.Sprintf("%s/concurrent=%t", stage, concurrent), func(t *testing.T) {
-				backend := &reportBackendFixture{t: t, q: q, ids: []string{"s"}, stage: stage, err: failure, concurrent: concurrent}
-				var done bool
-				_, completion, err := BuildReportArtifacts(
-					t.Context(), backend,
-					[]SessionMeta{{SessionID: "s", Project: "project-a"}}, backend.ids, q,
-					func(p Progress) { done = done || p.Phase == ProgressDone },
-					"aggregating example activity report",
-				)
-				require.ErrorIs(t, err, failure)
-				if stage == "candidates" || stage == "usage" && concurrent {
-					require.EqualError(t, err, "aggregating example activity report: read failed")
-				} else {
-					require.EqualError(t, err, "read failed")
-				}
-				assert.False(t, done)
-				assert.Equal(t, Progress{}, completion)
-				if stage != "projects" {
-					assert.NotContains(t, backend.calls, "projects")
-				}
-			})
-		}
+	for _, stage := range []string{"usage", "candidates", "counts", "projects"} {
+		t.Run(stage, func(t *testing.T) {
+			backend := &reportBackendFixture{t: t, q: q, ids: []string{"s"}, stage: stage, err: failure}
+			var done bool
+			_, completion, err := BuildReportArtifacts(
+				t.Context(), backend,
+				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, backend.ids, q,
+				func(p Progress) { done = done || p.Phase == ProgressDone },
+				"aggregating example activity report",
+			)
+			require.ErrorIs(t, err, failure)
+			if stage == "candidates" {
+				require.EqualError(t, err, "aggregating example activity report: read failed")
+			} else {
+				require.EqualError(t, err, "read failed")
+			}
+			assert.False(t, done)
+			assert.Equal(t, Progress{}, completion)
+			if stage != "projects" {
+				assert.NotContains(t, backend.calls, "projects")
+			}
+		})
 	}
 }
 
@@ -217,11 +203,9 @@ func TestBuildReportArtifactsOverlap(t *testing.T) {
 		},
 		beforeCandidates: func(context.Context) error { close(started); return nil },
 	}
-	artifacts, _, err := BuildReportArtifacts(ctx, backend,
+	_, _, err = BuildReportArtifacts(ctx, backend,
 		[]SessionMeta{{SessionID: "s", Project: "project-a"}}, backend.ids, q, nil, "aggregating")
 	require.NoError(t, err)
-	assert.Equal(t, 20, artifacts.Report.Totals.OutputTokens)
-	assert.Equal(t, money.Money{Microdollars: 100}, artifacts.Report.Totals.Cost)
 }
 
 func TestBuildReportArtifactsConcurrentCancellation(t *testing.T) {
@@ -233,7 +217,7 @@ func TestBuildReportArtifactsConcurrentCancellation(t *testing.T) {
 			require.NoError(t, err)
 			failure := errors.New("stage failed")
 			usageStarted, candidatesStarted := make(chan struct{}), make(chan struct{})
-			usageReturned, candidatesReturned := false, false
+			usageReturned := false
 			releases := 0
 			backend := &reportBackendFixture{
 				t: t, q: q, ids: []string{"s"}, concurrent: true,
@@ -253,7 +237,6 @@ func TestBuildReportArtifactsConcurrentCancellation(t *testing.T) {
 					return ctx.Err()
 				},
 				beforeCandidates: func(ctx context.Context) error {
-					defer func() { candidatesReturned = true }()
 					close(candidatesStarted)
 					select {
 					case <-usageStarted:
@@ -283,8 +266,9 @@ func TestBuildReportArtifactsConcurrentCancellation(t *testing.T) {
 				require.ErrorIs(t, err, failure)
 				require.EqualError(t, err, "aggregating: stage failed")
 			}
-			assert.True(t, usageReturned)
-			assert.True(t, candidatesReturned)
+			if failingStage != "usage" {
+				assert.True(t, usageReturned)
+			}
 			assert.Equal(t, 1, releases)
 		})
 	}

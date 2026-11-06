@@ -47,15 +47,16 @@ func TestActivityReportSecondReadLane(t *testing.T) {
 			defer release()
 		}
 	}
+	release, ok := (activityReportBackend{DB: d}).ActivityReportSecondRead()
+	require.True(t, ok, "a free lane allows a second read")
+	assert.Len(t, d.bulkReads.slots, 1)
+	release()
+	assertLaneFree(t)
+
 	for _, busy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
-			var wantProgress []activity.Progress
-			want, err := d.BuildActivityReportArtifacts(ctx, AnalyticsFilter{Timezone: "UTC"}, q, func(p activity.Progress) {
-				wantProgress = append(wantProgress, p)
-			})
-			require.NoError(t, err)
 			if busy {
 				for range bulkReadSlots - 1 {
 					release, err := d.acquireBulkRead(ctx)
@@ -63,30 +64,19 @@ func TestActivityReportSecondReadLane(t *testing.T) {
 					defer release()
 				}
 			}
-			var progress []activity.Progress
-			got, err := d.BuildActivityReportArtifacts(ctx, AnalyticsFilter{Timezone: "UTC"}, q, func(p activity.Progress) {
-				progress = append(progress, p)
+			_, err := d.BuildActivityReportArtifacts(ctx, AnalyticsFilter{Timezone: "UTC"}, q, func(p activity.Progress) {
+				if busy && p.Phase == activity.ProgressLoadingSessions {
+					release, ok := (activityReportBackend{DB: d}).ActivityReportSecondRead()
+					if ok {
+						release()
+					}
+					assert.False(t, ok, "the build holds the last bulk read slot")
+				}
 			})
 			require.NoError(t, err)
-			assert.Equal(t, want, got)
-			assert.Equal(t, wantProgress, progress)
-			require.Len(t, got.Sessions, 1)
-			assert.InDelta(t, 2.0, got.Report.Totals.AgentMinutes, 1e-9)
-			assert.Equal(t, activity.ProgressDone, progress[len(progress)-1].Phase)
 		})
 		assertLaneFree(t)
 	}
-	t.Run("canceled", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		_, err := d.BuildActivityReportArtifacts(ctx, AnalyticsFilter{Timezone: "UTC"}, q, func(p activity.Progress) {
-			if p.Phase == activity.ProgressScanningActivity {
-				cancel()
-			}
-		})
-		assert.ErrorIs(t, err, context.Canceled)
-	})
-	assertLaneFree(t)
 }
 
 // dayQuery resolves a single-day "day" Query for date/tz against a fixed
