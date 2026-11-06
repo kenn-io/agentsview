@@ -570,15 +570,37 @@ func (db *DB) searchContentTerms(
 		}
 		defer release()
 	}
-	indexed, err := db.termsIndexQueries(ctx, f, terms)
-	if err != nil {
-		return ContentSearchPage{}, err
-	}
+	return searchWithTermsIndex(ctx, db, f, terms,
+		func(indexed map[string]string) (ContentSearchPage, error) {
+			return db.termsSearchPage(ctx, f, terms, indexed)
+		})
+}
+
+// searchWithTermsIndex chooses the terms the substring index prefilters and
+// runs search with them, rerunning it once when an archive import dropped
+// the index in between (see searchWithSubstringCandidates).
+func searchWithTermsIndex(
+	ctx context.Context, db *DB, f ContentSearchFilter, terms []string,
+	search func(indexed map[string]string) (ContentSearchPage, error),
+) (ContentSearchPage, error) {
+	return retryWhenSubstringIndexDropped(func() (ContentSearchPage, error) {
+		indexed, err := db.termsIndexQueries(ctx, f, terms)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		return search(indexed)
+	})
+}
+
+// termsSearchPage runs the terms query, prefiltering sessions through the
+// substring index for the terms in indexed.
+func (db *DB) termsSearchPage(
+	ctx context.Context, f ContentSearchFilter, terms []string, indexed map[string]string,
+) (ContentSearchPage, error) {
 	query, args, err := buildTermsSearchSQL(f, terms, SQLiteQueryDialect(), indexed)
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
-
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return ContentSearchPage{}, fmt.Errorf("terms search: %w", err)

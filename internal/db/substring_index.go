@@ -157,6 +157,13 @@ func searchWithSubstringCandidates[T any](
 		}
 		return search(candidates)
 	}
+	return retryWhenSubstringIndexDropped(attempt)
+}
+
+// retryWhenSubstringIndexDropped runs attempt, and runs it once more when it
+// named a substring index table an archive import dropped after the attempt
+// chose to use the index. The second attempt finds no index and scans.
+func retryWhenSubstringIndexDropped[T any](attempt func() (T, error)) (T, error) {
 	out, err := attempt()
 	if substringIndexDropped(err) {
 		return attempt()

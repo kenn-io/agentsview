@@ -368,3 +368,32 @@ func TestSearchContentTermsIndexMatchesScan(t *testing.T) {
 		assert.Equal(t, before[pattern], substringHits(t, d, filter(pattern)), pattern)
 	}
 }
+
+// Terms search gets the same rerun as substring search when an import drops
+// the index between choosing the index prefilter and running the query.
+func TestTermsSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", "where is the rare-token"},
+		{"assistant", "nothing to see"},
+	})
+	countMessagesForSubstringIndex(t, d, "s1")
+	f := ContentSearchFilter{Pattern: "rare-token", Mode: "terms", Scope: "all", Limit: 50}
+	terms := ParseContentSearchTerms(f.Pattern)
+
+	var usedIndex []bool
+	page, err := searchWithTermsIndex(ctx, d, f, terms,
+		func(indexed map[string]string) (ContentSearchPage, error) {
+			usedIndex = append(usedIndex, len(indexed) > 0)
+			if len(usedIndex) == 1 {
+				require.NoError(t, d.DropFTS(ctx))
+			}
+			return d.termsSearchPage(ctx, f, terms, indexed)
+		})
+	require.NoError(t, err)
+	assert.Equal(t, []bool{true, false}, usedIndex)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "message", page.Matches[0].Location)
+	assert.Equal(t, 0, page.Matches[0].Ordinal)
+}
