@@ -678,7 +678,7 @@ func buildViaDaemon(
 ) error {
 	if err := client.startBuild(ctx, req); err != nil {
 		apiErr, hasApiErr := errors.AsType[*daemonAPIError](err)
-		if hasApiErr && apiErr.status == http.StatusConflict {
+		if hasApiErr && apiErr.status == http.StatusConflict && apiErr.code != "embeddings_setup_busy" {
 			fmt.Fprintln(out, "a build is already running (daemon)")
 		} else {
 			return err
@@ -1002,6 +1002,7 @@ type embeddingsDaemonClient struct {
 // from other failures.
 type daemonAPIError struct {
 	status  int
+	code    string
 	message string
 }
 
@@ -1115,9 +1116,19 @@ func daemonEmbeddingStore(name string) string {
 
 func embeddingResponseError(status int, body []byte, err error) error {
 	if status >= 300 {
-		return &daemonAPIError{status: status, message: daemonErrorMessage(status, body)}
+		return &daemonAPIError{status: status, code: daemonErrorCode(body), message: daemonErrorMessage(status, body)}
 	}
 	return err
+}
+
+// daemonErrorCode extracts the optional "code" a daemon error carries, such
+// as the one that tells setup refusing a build from a build already running.
+func daemonErrorCode(body []byte) string {
+	var apiErr struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(body, &apiErr)
+	return apiErr.Code
 }
 
 // daemonErrorMessage extracts the {"error": "..."} message huma's error

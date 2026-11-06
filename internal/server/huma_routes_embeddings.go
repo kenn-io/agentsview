@@ -106,13 +106,17 @@ func (s *Server) embeddingsUnavailableError() error {
 	return apiError(http.StatusNotImplemented, msg)
 }
 
+// embeddingsSetupBusyCode marks the 409 a build gets while setup runs, so a
+// client can tell it from a build that is already running and will finish.
+const embeddingsSetupBusyCode = "embeddings_setup_busy"
+
 // embeddingsBuildUnavailableError refuses a build with 409 while setup is
 // replacing the managers, so the caller retries once setup finishes instead
 // of reading the 501 as a missing provider.
 func (s *Server) embeddingsBuildUnavailableError(ctx context.Context) error {
 	if s.embeddingsRuntime != nil {
 		if setup, err := s.embeddingsRuntime.SetupStatus(ctx); err == nil && setup.Busy {
-			return embeddingsActionError(vector.ErrBuildRunning)
+			return apiErrorWithCode(http.StatusConflict, embeddingsSetupBusyCode, "search by meaning is being set up; run the build again when it finishes")
 		}
 	}
 	return s.embeddingsUnavailableError()
