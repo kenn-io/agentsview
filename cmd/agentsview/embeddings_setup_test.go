@@ -259,6 +259,90 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 	}
 }
 
+func TestLiveEmbeddingsSetupRejectsConcurrentBuild(t *testing.T) {
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+	})
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Input []string `json:"input"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		data := make([]map[string]any, len(request.Input))
+		for i := range data {
+			values := make([]float32, 768)
+			values[0] = 1
+			data[i] = map[string]any{"index": i, "embedding": values}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
+	}))
+	defer stub.Close()
+	raw := "[vector]\nenabled=true\n[vector.embeddings]\nmodel='nomic-embed-text'\ndimension=768\n[vector.embeddings.servers.ollama]\nendpoint='" + stub.URL + "/v1'\nollama_cpu_fallback=true\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(raw), 0o600))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{DownloadBytes: 295_000_000}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+	downloading, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	installLocalEmbeddings = func(ctx context.Context, _ embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		close(downloading)
+		select {
+		case <-resume:
+			return embedlocal.Installation{}, errors.New("download interrupted")
+		case <-ctx.Done():
+			return embedlocal.Installation{}, ctx.Err()
+		}
+	}
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() {
+		release()
+		require.NoError(t, owner.Close())
+	}()
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	writeDaemonRuntimeForTest(t, dir, cfg.Host, port, "test", false)
+	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
+	<-downloading
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/embeddings/build", strings.NewReader(`{}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", ts.URL)
+	response, err := ts.Client().Do(req)
+	require.NoError(t, err)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	assert.Equal(t, http.StatusConflict, response.StatusCode, string(body))
+	cliDone := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	cmd := newEmbeddingsBuildCommand()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetArgs([]string{})
+	go func() { cliDone <- cmd.ExecuteContext(ctx) }()
+	require.ErrorContains(t, <-cliDone, "being set up", "CLI must refuse the build while setup owns the index")
+	release()
+	<-owner.done
+}
+
 func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
 	oldInspect, oldEndpoint, oldOnBattery := inspectLocalEmbeddings, localEmbeddingEndpoint, onBattery
 	t.Cleanup(func() {
