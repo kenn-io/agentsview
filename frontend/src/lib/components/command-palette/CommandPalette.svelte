@@ -278,7 +278,7 @@
         value={inputValue}
         oninput={handleInput}
       />
-      <KbdBadge keys={["⎋"]} ariaLabel="Escape" />
+      <KbdBadge keys={["⎋"]} joiner="compact" ariaLabel="Escape" />
     </div>
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->

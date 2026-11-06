@@ -28,6 +28,8 @@ for (const width of [1280, 390]) {
         await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: /^Embeddings/ }).click();
       } else {
         await page.getByRole("button", { name: /Search sessions/ }).click();
+        const escapeBadge = page.locator(".palette-input-wrap kbd").first();
+        expect.soft(await escapeBadge.evaluate((el) => getComputedStyle(el).fontFamily)).toBe(await page.locator(".palette-input").evaluate((el) => getComputedStyle(el).fontFamily));
         if (entry === "semantic") await page.getByRole("radio", { name: "Semantic", exact: true }).click();
         await page.locator(".palette-input").fill("connections");
       }
@@ -49,6 +51,9 @@ for (const width of [1280, 390]) {
         await expect(retry).toBeVisible();
         await expect.soft(page.locator(".kit-search-by-meaning").getByText("On", { exact: true })).not.toBeVisible();
         expect.soft((await retry.boundingBox())!.width).toBeLessThan(160);
+        const errorBox = (await page.getByRole("alert").filter({ hasText: "encoder unavailable" }).boundingBox())!;
+        const retryBox = (await retry.boundingBox())!;
+        expect.soft(Math.max(0, retryBox.y - errorBox.y - errorBox.height)).toBeLessThanOrEqual(8);
         for (const provider of ["ollama", "ollama-other"]) {
           phase = provider;
           await page.reload();

@@ -303,10 +303,12 @@
         </div>
       {/if}
     {:else if status.last_error}
-      <p class="msg error" role="alert">{status.last_error}</p>
-      {#if status.setup?.enabled && !sync.readOnly}
-        <Button class="retry-build" size="sm" label={m.shared_retry()} onclick={() => void retryBuild()} />
-      {/if}
+      <div class="build-error">
+        <p class="msg error" role="alert">{status.last_error}</p>
+        {#if status.setup?.enabled && !sync.readOnly}
+          <Button size="sm" label={m.shared_retry()} onclick={() => void retryBuild()} />
+        {/if}
+      </div>
     {:else if status.last_result}
       <div class="status-grid">
         <span class="row-label">{m.settings_embeddings_last_build_label()}</span
@@ -360,8 +362,11 @@
 </div>
 
 <style>
-  .embeddings-settings :global(.retry-build) {
-    align-self: flex-end;
+  .build-error {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
   }
   .embeddings-settings {
     display: flex;
