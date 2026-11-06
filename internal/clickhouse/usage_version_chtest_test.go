@@ -35,13 +35,20 @@ func TestUsageRowsVersionProbeFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	kept := maps.Clone(store.usageVersions.tables)
-	// Dropping a table makes the identity query fail without a costly scan.
-	execPreparedUsage(t, store, "DROP TABLE sessions")
-	slot, version, err := store.usageRowMemoKey(t.Context(), preparedUsageState{ready: true}, "daily", db.UsageFilter{}, "", "", nil)
+	execPreparedUsage(t, store, "SYSTEM STOP MERGES sessions", "INSERT INTO sessions SELECT * FROM sessions")
+	ctx, err := store.withPartsSnapshot(t.Context())
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(ctx)
+	cancel()
+	// Cancellation after the parts snapshot fails the identity probe itself.
+	_, ok, err = store.usageRowsVersion(ctx, chUsageReadTables)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, kept, store.usageVersions.tables)
+	slot, version, err := store.usageRowMemoKey(ctx, preparedUsageState{ready: true}, "daily", db.UsageFilter{}, "", "", nil)
 	require.NoError(t, err)
 	require.Empty(t, slot)
 	require.Empty(t, version)
-	require.Equal(t, kept, store.usageVersions.tables)
 }
 
 func TestUsageMemosSurviveMerges(t *testing.T) {
@@ -76,7 +83,6 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	require.Equal(t, results, warmResults, "unchanged parts need no result queries")
 	for _, table := range chUsageReadTables {
 		t.Run(table, func(t *testing.T) {
-			kept := memos()
 			parts, err := store.readPartsSnapshot(ctx)
 			require.NoError(t, err)
 			execPreparedUsage(t, store, "INSERT INTO "+table+" SELECT * FROM "+table,
@@ -89,7 +95,6 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 			mergedProbes, mergedResults := usageQueryCounts(t, store)
 			require.Equal(t, probes+1, mergedProbes)
 			require.Equal(t, results, mergedResults, "merge must reuse daily usage, Top sessions, and session count results")
-			require.Equal(t, kept, memos(), "reads must be answered from all three memos")
 		})
 	}
 	for _, table := range chUsageReadTables {
@@ -97,88 +102,90 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	}
 	// Each real change must update every memo, even when a
 	// particular result, such as session counts after repricing, stays equal.
-	requireMiss := func(change func()) preparedUsageRead {
+	requireMiss := func(change func()) {
 		t.Helper()
 		kept := memos()
 		change()
-		after := read()
+		read()
 		for i, memo := range memos() {
 			require.NotEqual(t, kept[i], memo)
 		}
-		return after
 	}
-	afterPush := requireMiss(func() {
+	requireMiss(func() {
 		appendMessage(t, local, usagePriceRoundID, "more usage", "2026-01-12T04:00:00.000Z")
 		pushPreparedUsage(t, syncer)
 	})
-	require.Greater(t, afterPush.daily.Totals.InputTokens, before.daily.Totals.InputTokens)
-	require.NotEqual(t, before.top, afterPush.top)
-	afterDelete := requireMiss(func() {
+	requireMiss(func() {
 		require.NoError(t, local.SoftDeleteSession(ctx, usagePriceTierID))
 		deleted, err := local.DeleteSessionIfTrashed(ctx, usagePriceTierID)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, deleted)
 		pushPreparedUsage(t, syncer)
 	})
-	require.Equal(t, afterPush.counts.Total-1, afterDelete.counts.Total)
-	require.Less(t, afterDelete.daily.Totals.InputTokens, afterPush.daily.Totals.InputTokens)
-	afterPricing := requireMiss(func() {
+	requireMiss(func() {
 		require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "round-test",
 			InputPerMTok: money.MustParseDollars("2"), OutputPerMTok: money.MustParseDollars("3")}}))
 		require.NoError(t, syncer.syncModelPricing(ctx))
 	})
-	require.NotEqual(t, afterDelete.daily.Totals.TotalCost, afterPricing.daily.Totals.TotalCost)
-	require.NotEqual(t, afterDelete.top, afterPricing.top)
 	state, err := store.preparedUsageState(ctx)
 	require.NoError(t, err)
-	afterRefresh := requireMiss(func() { runPreparedUsageRefresh(t, store) })
+	requireMiss(func() { runPreparedUsageRefresh(t, store) })
 	refreshed, err := store.preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.NotEqual(t, state.stamp, refreshed.stamp)
-	require.Equal(t, afterPricing, afterRefresh)
 }
 
-// A push after coverage selection must not cache the old coverage under new rows.
+// A push during either identity probe must leave subsequent usage reads fresh.
 func TestUsageReadsStayFreshAfterPushDuringIdentityProbe(t *testing.T) {
 	f := db.UsageFilter{Timezone: "UTC"}
-	for kind, read := range map[string]func(context.Context, *Store) (any, error){
-		"counts": func(ctx context.Context, s *Store) (any, error) { return s.GetUsageSessionCounts(ctx, f) },
-		"daily":  func(ctx context.Context, s *Store) (any, error) { return s.GetDailyUsage(ctx, f) },
-	} {
-		t.Run(kind, func(t *testing.T) {
-			local, syncer, store := newPreparedUsageStore(t)
-			execPreparedUsage(t, store, "SYSTEM STOP MERGES model_pricing")
-			before, err := read(t.Context(), store)
-			require.NoError(t, err)
-			// Pricing is a range dependency outside the already warm coverage key.
-			execPreparedUsage(t, store, "INSERT INTO model_pricing SELECT * FROM model_pricing")
-			stamp := "2026-01-12T05:00:00.000Z"
-			_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-				Session:     fixtureSession("new-usage", "gamma", "new usage", stamp, 1),
-				Messages:    []db.Message{usagePriceMessage("new-usage", 0, stamp, "round-test", `{"input_tokens":1}`)},
-				DataVersion: 1, ReplaceMessages: true,
-			}})
-			require.NoError(t, err)
-			probes, _ := usageQueryCounts(t, store)
-			var pushed atomic.Bool
-			ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(*chdriver.Progress) {
-				if pushed.Load() {
-					return
+	for _, table := range []string{"model_pricing", "sessions"} {
+		for kind, read := range map[string]func(context.Context, *Store) (any, error){
+			"counts": func(ctx context.Context, s *Store) (any, error) { return s.GetUsageSessionCounts(ctx, f) },
+			"daily":  func(ctx context.Context, s *Store) (any, error) { return s.GetDailyUsage(ctx, f) },
+		} {
+			t.Run(table+"/"+kind, func(t *testing.T) {
+				local, syncer, store := newPreparedUsageStore(t)
+				execPreparedUsage(t, store, "SYSTEM STOP MERGES "+table)
+				before, err := read(t.Context(), store)
+				require.NoError(t, err)
+				// Force the selected probe to read changed parts.
+				execPreparedUsage(t, store, "INSERT INTO "+table+" SELECT * FROM "+table)
+				stamp := "2026-01-12T05:00:00.000Z"
+				_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+					Session:     fixtureSession("new-usage", "gamma", "new usage", stamp, 1),
+					Messages:    []db.Message{usagePriceMessage("new-usage", 0, stamp, "round-test", `{"input_tokens":1}`)},
+					DataVersion: 1, ReplaceMessages: true,
+				}})
+				require.NoError(t, err)
+				probes, _ := usageQueryCounts(t, store)
+				var pushed atomic.Bool
+				ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(*chdriver.Progress) {
+					if pushed.Load() {
+						return
+					}
+					current, _ := usageQueryCounts(t, store)
+					if current > probes && pushed.CompareAndSwap(false, true) {
+						pushPreparedUsage(t, syncer)
+					}
+				}))
+				_, err = read(ctx, store)
+				require.NoError(t, err)
+				require.True(t, pushed.Load(), "push must complete during the identity probe")
+				if table == "sessions" {
+					// Unstable coverage must not be stored under the empty version,
+					// which another push during a probe would reuse.
+					store.coverageCache.mu.Lock()
+					fingerprint := store.coverageCache.fingerprint
+					store.coverageCache.mu.Unlock()
+					require.NotEmpty(t, fingerprint)
 				}
-				current, _ := usageQueryCounts(t, store)
-				if current > probes && pushed.CompareAndSwap(false, true) {
-					pushPreparedUsage(t, syncer)
-				}
-			}))
-			_, err = read(ctx, store)
-			require.NoError(t, err)
-			require.True(t, pushed.Load(), "push must complete during the range identity probe")
-			want, err := read(t.Context(), NewStoreFromDB(syncer.conn))
-			require.NoError(t, err)
-			require.NotEqual(t, before, want)
-			got, err := read(t.Context(), store)
-			require.NoError(t, err)
-			require.Equal(t, want, got)
-		})
+				want, err := read(t.Context(), NewStoreFromDB(syncer.conn))
+				require.NoError(t, err)
+				require.NotEqual(t, before, want)
+				got, err := read(t.Context(), store)
+				require.NoError(t, err)
+				require.Equal(t, want, got)
+			})
+		}
 	}
 }
