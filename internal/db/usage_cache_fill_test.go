@@ -362,6 +362,40 @@ func TestUsageCacheFillInstallsCompleteSessionFacts(t *testing.T) {
 	assert.Equal(t, "source-id", got[0].sourceUUID)
 }
 
+func TestUsageCacheFillPreservesMessageTimestampOrder(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "session-a", "project")
+	insertSession(t, database, "session-b", "project")
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{
+		{SessionID: "session-a", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:02:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":2}`)},
+		{SessionID: "session-a", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":3}`)},
+		{SessionID: "session-b", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:01:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":5}`)},
+		{SessionID: "session-b", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T09:03:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":7}`)},
+	}))
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	_, err = cache.fill.Ensure(t.Context(), snapshot.Versions, snapshot.CursorHighWater)
+	require.NoError(t, err)
+
+	rows, err := cache.db.QueryContext(t.Context(), `
+		SELECT s.session_id, f.message_ordinal
+		FROM usage_facts f JOIN usage_cached_sessions s ON s.id = f.cached_session_id
+		ORDER BY s.session_id, f.fact_index`)
+	require.NoError(t, err)
+	defer rows.Close()
+	got := make(map[string][]int)
+	for rows.Next() {
+		var sessionID string
+		var ordinal int
+		require.NoError(t, rows.Scan(&sessionID, &ordinal))
+		got[sessionID] = append(got[sessionID], ordinal)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[string][]int{"session-a": {1, 0}, "session-b": {0, 1}}, got)
+}
+
 func TestUsageCacheFillExtractionUsesNarrowIndexes(t *testing.T) {
 	database := usageCandidateFixture(t)
 	conn, err := database.getReader().Conn(t.Context())
@@ -391,8 +425,10 @@ func TestUsageCacheFillExtractionUsesNarrowIndexes(t *testing.T) {
 		require.NoError(t, rows.Err())
 		return strings.Join(details, "\n")
 	}
-	assert.Contains(t, plan(usageFillMessageFactsSQL),
+	messagePlan := plan(usageFillMessageFactsSQL)
+	assert.Contains(t, messagePlan,
 		"SEARCH m USING COVERING INDEX idx_messages_usage_session_covering")
+	assert.NotContains(t, messagePlan, "USE TEMP B-TREE FOR ORDER BY")
 	assert.Contains(t, plan(usageFillActivityFactsSQL),
 		"idx_messages_session_role")
 	assert.Contains(t, plan(usageFillEventFactsSQL),

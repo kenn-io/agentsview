@@ -915,7 +915,7 @@ const usageFillMessageFactsSQL = usageFillMessageColumnsSQL + `
 	CROSS JOIN messages m INDEXED BY idx_messages_usage_session_covering
 	  ON m.session_id = f.session_id
 	WHERE m.token_usage != '' AND m.model != '' AND m.model != '<synthetic>'
-	ORDER BY m.timestamp, m.session_id, m.ordinal`
+	ORDER BY f.session_id, m.timestamp, m.ordinal`
 
 const usageFillActivityFactsSQL = `
 	SELECT m.session_id, m.ordinal, m.role, COALESCE(m.timestamp, ''), m.model, m.provider_id
