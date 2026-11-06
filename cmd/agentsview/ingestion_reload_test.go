@@ -234,6 +234,26 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 	assert.True(t, sessionImported(t, f.database, "gemini:old"), "wake imports copied files with preserved old modification times")
 }
 
+func TestReviewWakeReportsImportedCount(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.Suspend()
+	f.ingestion.applying.Wait()
+	writeReloadGeminiSession(t, f.root, "overnight")
+	ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion)
+
+	_, body := searchIngestionArchive(t, ts.URL, "overnight")
+	require.Contains(t, body, "hello from overnight")
+	f.ingestion.applying.Wait()
+
+	client, err := apiclient.NewHTTPClient(ts.URL, "", http.DefaultClient)
+	require.NoError(t, err)
+	response, err := client.GetAPIV1SyncStatusWithResponse(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, response.StatusCode, string(response.Body))
+	require.NotNil(t, response.JSON200)
+	assert.EqualValues(t, 1, response.JSON200.Stats.Synced)
+}
+
 func TestDaemonIngestionReloadWhileSuspended(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
 	f.ingestion.OpenWatcherDispatch()

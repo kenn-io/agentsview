@@ -539,8 +539,6 @@ On startup, the server:
 1. Starts periodic sync (every 15 minutes)
 1. Serves the Svelte SPA and REST API
 
-`sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the pause.
-
 During a full parser or archive-only preservation rebuild, the daemon serves the
 retained archive with stale
 warnings. Archive writes return HTTP 503 with `Retry-After`; the CLI reports the
@@ -644,6 +642,9 @@ second writer. A background daemon self-exits after the idle timeout when no
 external request or daemon-owned job is active. Periodic sync and file-watcher
 work prevent exit while they run, but do not keep the daemon alive forever by
 themselves.
+
+`sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
+pause.
 
 #### CLI daemon behavior
 

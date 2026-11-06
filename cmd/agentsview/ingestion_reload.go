@@ -282,11 +282,15 @@ func (d *daemonIngestion) syncAndReconcile(ctx context.Context, runner server.Lo
 	}
 	stats, err := runner(ctx, progress)
 	if err == nil {
+		var gapErr error
 		if roots := reconcileRootPaths(d.Config()); len(roots) > 0 {
-			if err := d.engine.ReconcileWatchRoots(ctx, roots, false); err != nil {
-				log.Printf("idle catch-up reconciliation: %v", err)
+			gapErr = d.engine.ReconcileWatchRoots(ctx, roots, false)
+			if gapErr != nil {
+				log.Printf("idle catch-up reconciliation: %v", gapErr)
 			}
 		}
+		// Keep the full pass's outcome, as startup does after its gap pass.
+		d.engine.RecordStartupReconciled(stats, gapErr)
 	}
 	return stats, err
 }
