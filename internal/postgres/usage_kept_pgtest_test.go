@@ -212,6 +212,22 @@ func TestUsageKeptPushBetweenReads(t *testing.T) {
 	queries := maps.Clone(counter.queries)
 	require.Equal(t, previous, read(store))
 	require.Equal(t, queries, counter.queries)
+	t.Run("top sessions sort and limit reuse", func(t *testing.T) {
+		topFilter := f
+		topFilter.TopSessionsSort = db.TopSessionsSortTokens
+		got, err := store.GetTopSessionsByCost(ctx, topFilter, 10)
+		require.NoError(t, err)
+		assert.Equal(t, previous[2], got)
+		assert.Equal(t, queries, counter.queries)
+
+		got, err = store.GetTopSessionsByCost(ctx, topFilter, 1)
+		require.NoError(t, err)
+		assert.Equal(t, previous[2].([]db.TopSessionEntry)[:1], got)
+		assert.Equal(t, queries, counter.queries)
+
+		assert.Equal(t, previous, read(store))
+		assert.Equal(t, queries, counter.queries)
+	})
 	for _, tc := range []struct {
 		name   string
 		change func()
