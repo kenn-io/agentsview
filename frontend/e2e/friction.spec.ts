@@ -259,3 +259,35 @@ test.describe("Friction Log", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(`Friction Log — ${DATE}`);
   });
 });
+
+test.describe("Friction Log missing states", () => {
+  test("puts the off state where Pinned puts its empty state", async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.route("**/api/v1/pins**", (route: Route) => route.fulfill({ json: { pins: [] } }));
+    await page.goto("/pinned");
+    const pinned = page.locator(".missing-data");
+    await expect(pinned).toContainText("No pinned messages");
+    const pinnedIcon = (await pinned.locator(".missing-data__icon").boundingBox())!;
+
+    await page.route("**/api/v1/version", async (route: Route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        json: { ...(await response.json()), friction_available: false, friction_readable: true },
+      });
+    });
+    await page.route("**/api/v1/friction/digests", (route: Route) =>
+      route.fulfill({ json: { digests: [] } }),
+    );
+    await page.goto("/friction");
+    const off = page.locator(".missing-data");
+    await expect(off).toContainText("Friction Log is off on this server");
+    const offIcon = (await off.locator(".missing-data__icon").boundingBox())!;
+
+    // Same column and nearly the same height: the two pages' headers
+    // differ by a few pixels, not by a layout.
+    expect(Math.abs(offIcon.x + offIcon.width / 2 - (pinnedIcon.x + pinnedIcon.width / 2)))
+      .toBeLessThanOrEqual(2);
+    expect(Math.abs(offIcon.y - pinnedIcon.y)).toBeLessThanOrEqual(12);
+  });
+});
