@@ -289,20 +289,18 @@ func sessionListDefaultExclusionNotice(
 		if !f.IncludeChildren {
 			all.Limit = db.MaxSessionLimit
 		}
-		list, err := svc.List(ctx, all)
-		if err != nil {
-			return "", fmt.Errorf("counting child session exclusions: %w", err)
-		}
-		if f.IncludeChildren {
-			hiddenChildren = max(0, hiddenSessionCount(list.Total, visibleTotal)-hiddenOneShot-hiddenAutomated)
-		} else {
-			for _, session := range list.Sessions {
-				if session.RelationshipType == "subagent" || session.RelationshipType == "fork" {
-					hiddenChildren++
+		if list, err := svc.List(ctx, all); err == nil {
+			if f.IncludeChildren {
+				hiddenChildren = max(0, hiddenSessionCount(list.Total, visibleTotal)-hiddenOneShot-hiddenAutomated)
+			} else {
+				for _, session := range list.Sessions {
+					if session.RelationshipType == "subagent" || session.RelationshipType == "fork" {
+						hiddenChildren++
+					}
 				}
-			}
-			if hiddenChildren > 0 && (list.NextCursor != "" || list.Total > len(list.Sessions)) {
-				lowerBound = "at least "
+				if hiddenChildren > 0 && (list.NextCursor != "" || list.Total > len(list.Sessions)) {
+					lowerBound = "at least "
+				}
 			}
 		}
 	}

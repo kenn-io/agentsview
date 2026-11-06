@@ -445,3 +445,45 @@ func TestSessionListChildMembershipPartialPage(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionListKeepsResultsWhenChildCountFails(t *testing.T) {
+	newAgentDataDir(t)
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/api/v1/sessions" {
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		calls++
+		assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
+		assert.Equal(t, "true", r.URL.Query().Get("include_automated"))
+		if r.URL.Query().Get("include_children") == "true" {
+			http.Error(w, "child count unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"sessions":[{"id":"visible"}],"total":1}`))
+	}))
+	defer srv.Close()
+	out, err := executeCommand(newRootCommand(), "session", "list", "--server", srv.URL, "--include-one-shot", "--include-automated", "--json")
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, []string{"visible"}, sessionListIDs(t, out))
+}
+
+func TestSessionListKeepsMeasuredCountsWhenChildCountFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("include_children") == "true" {
+			http.Error(w, "child count unavailable", http.StatusServiceUnavailable)
+		} else if r.URL.Query().Get("include_one_shot") == "true" {
+			_, _ = w.Write([]byte(`{"total":2}`))
+		} else {
+			_, _ = w.Write([]byte(`{"total":1}`))
+		}
+	}))
+	defer srv.Close()
+	notice, err := sessionListDefaultExclusionNotice(t.Context(), servicehttp.NewHTTPBackend(srv.URL, "", false, ""), service.ListFilter{}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "Excluded 1 session by default: 1 one-shot. Use --include-one-shot to include them.", notice)
+}
