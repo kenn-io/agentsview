@@ -10,11 +10,11 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 )
 
-// BenchmarkSQLiteActivityReportPairTranscripts pairs a month of transcripts
-// the way a first Activity open does, before the pairing memo holds them:
-// 2,000 sessions of 50 alternating user and assistant messages with 1-3 KB
-// bodies, so reading a message's model costs what it does in a real archive.
-func BenchmarkSQLiteActivityReportPairTranscripts(b *testing.B) {
+// seedActivityTranscriptBenchmark writes a month of transcripts: 2,000
+// sessions of 50 alternating user and assistant messages with 1-3 KB bodies,
+// so reading a message's model costs what it does in a real archive.
+func seedActivityTranscriptBenchmark(b *testing.B) (*DB, []string, activity.Query) {
+	b.Helper()
 	d := testDB(b)
 	const sessionCount = 2_000
 	for _, stmt := range []string{
@@ -48,6 +48,14 @@ func BenchmarkSQLiteActivityReportPairTranscripts(b *testing.B) {
 		Preset: "month", Date: "2026-07-01", Timezone: "UTC",
 	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(b, err)
+	return d, ids, q
+}
+
+// BenchmarkSQLiteActivityReportPairTranscripts pairs a month of transcripts
+// the way a first Activity open does, before the pairing memo holds them.
+func BenchmarkSQLiteActivityReportPairTranscripts(b *testing.B) {
+	d, ids, q := seedActivityTranscriptBenchmark(b)
+	sessionCount := len(ids)
 	source := d.activityReportCandidateSQL(ids, q)
 	b.ReportAllocs()
 	for b.Loop() {
@@ -57,5 +65,36 @@ func BenchmarkSQLiteActivityReportPairTranscripts(b *testing.B) {
 			return nil
 		}))
 		require.Equal(b, sessionCount*49, count)
+	}
+}
+
+// BenchmarkSQLiteActivityReportMessageCounts counts a month's user and
+// assistant messages per bucket after its pairs were read, as every report
+// does once pairing finishes.
+func BenchmarkSQLiteActivityReportMessageCounts(b *testing.B) {
+	d, ids, q := seedActivityTranscriptBenchmark(b)
+	artifacts, err := d.BuildActivityReportArtifacts(b.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
+	require.NoError(b, err)
+	total := 0
+	for _, bucket := range artifacts.Report.Buckets {
+		total += bucket.UserMessages + bucket.AssistantMessages
+	}
+	require.Equal(b, len(ids)*50, total)
+	b.ReportAllocs()
+	for b.Loop() {
+		require.NoError(b, d.activityReportMessageCounts(b.Context(), ids, q, &artifacts))
+	}
+}
+
+// BenchmarkSQLiteActivityReportFirstOpen builds a month's report with an
+// empty pairing memo, as the first Activity open after a start does.
+func BenchmarkSQLiteActivityReportFirstOpen(b *testing.B) {
+	d, ids, q := seedActivityTranscriptBenchmark(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		d.activityMemo.swap(func() {})
+		artifacts, err := d.BuildActivityReportArtifacts(b.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
+		require.NoError(b, err)
+		require.Len(b, artifacts.Sessions, len(ids))
 	}
 }
