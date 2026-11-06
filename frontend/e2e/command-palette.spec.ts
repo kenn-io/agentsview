@@ -47,8 +47,12 @@ test("search shows placeholder rows at a result-list size while it runs", async 
   await openSearch(page, "synchronous DB read");
 
   const loading = page.locator(".palette-loading");
+  const status = page.getByRole("status").filter({ hasText: "Searching" });
   await expect(loading).toBeVisible();
-  await expect(loading).toHaveAttribute("role", "status");
+  await expect(status).toHaveCount(1);
+  // The announcer sits outside the busy results, so it is not muted.
+  expect(await status.evaluate((el) => el.closest("[aria-busy=true]"))).toBeNull();
+  await expect(page.locator(".palette-results")).toHaveAttribute("aria-busy", "true");
   await expect(loading.locator(".skeleton-row").first()).toBeVisible();
   const sizes = await page.evaluate(() => {
     const palette = document.querySelector(".palette")!.getBoundingClientRect();
@@ -62,4 +66,6 @@ test("search shows placeholder rows at a result-list size while it runs", async 
   release();
   await expect(page.locator(".palette-item").first()).toBeVisible();
   await expect(loading).toHaveCount(0);
+  await expect(status).toHaveCount(0);
+  await expect(page.locator(".palette-results")).toHaveAttribute("aria-busy", "false");
 });
