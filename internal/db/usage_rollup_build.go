@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -92,7 +93,7 @@ type usageExceptionRow struct {
 type usageRollupBuild struct {
 	SessionID, Agent, StartedAt string
 	Project, Machine, GitBranch string
-	GroupKey                    string
+	GroupKey, GroupLabel        string
 	IsAutomated                 bool
 	UserMessageCount            int
 	HasAuthoritative            bool
@@ -553,7 +554,7 @@ func buildUsageRollupSessions(
 		}
 		builds = append(builds, usageRollupBuild{
 			SessionID: id, Agent: sessions[id].Agent, StartedAt: sessions[id].StartedAt,
-			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch, GroupKey: sessions[id].GroupKey,
+			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch, GroupKey: sessions[id].GroupKey, GroupLabel: parser.HermesCronJobName(sessions[id].GroupKey, sessions[id].SessionName),
 			IsAutomated: sessions[id].IsAutomated, UserMessageCount: sessions[id].UserMessageCount,
 			HasAuthoritative: hasAuthoritative,
 			PricingInputs:    pricingInputs, PricingHash: pricingHash,

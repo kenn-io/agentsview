@@ -402,7 +402,6 @@ func (db *DB) GetUsageSessionCounts(ctx context.Context, filter UsageFilter) (Us
 		kind = usageQueryKindDayTotals
 	}
 	filter.SkipSessionCounts = false
-	filter.sessionCountsOnly = true
 	_, facts, _, err := db.queryUsageRollups(ctx, filter, kind, false, 0)
 	if err != nil {
 		return UsageSessionCounts{}, err

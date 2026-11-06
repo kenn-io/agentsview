@@ -42,9 +42,11 @@ counts, and discarded-snapshot output. Go owns model resolution, rate-band
 selection, money rounding, and result assembly.
 
 Installs bake `agent`, `started_at`, `project`, `machine`, `git_branch`,
-`group_key`, `is_automated`, and `user_message_count`; cron labels use current
-names. A journaled metadata change rebuilds that session's rows and moves
-its day totals to the new dimensions. Termination and `active_since` filters still
+`group_key`, `group_label`, `is_automated`, and `user_message_count`.
+`group_label` is the cron label derived from `session_name`. A journaled
+metadata change rebuilds that session's rows and moves its day totals to the
+new dimensions. Name changes on grouped sessions journal through their own
+trigger, which writers that predate it do not drop. Termination and `active_since` filters still
 use archive metadata and per-session rows.
 
 After a completed timezone coverage pass, daily reads apply session and model
@@ -52,13 +54,11 @@ filters to day totals in SQL. They load install metadata only for authoritative
 sessions and exception owners. SQL counts ordinary sessions by project and
 agent; surviving exception owners add their distinct counts. Warm Top sessions
 reads fold exception owners first, then rank their contributions together with
-ordinary session rows in one SQL query. Grouped reads select representatives for
-the agent and latest start, and retain contributor IDs for returned groups. The
-archive selects each group's latest currently named contributor. Those
-representatives and returned individual sessions share the bounded metadata
-load. SQL computes the trailing remainder from the same units. Daily reads and
-billed-session counts share the distinct count reader. Direct count reads skip
-the day-total cost and token groups. Warm preparations skip window-session
+ordinary session rows in one SQL query. Grouped units take agent and start from
+their newest member and the label from their newest labelled member. Only
+returned individual sessions load archive names. SQL computes the trailing
+remainder from the same units. Daily reads and billed-session counts share the
+distinct count reader. Warm preparations skip window-session
 discovery. Each archive snapshot loads its pricing catalog and computes its
 digest.
 

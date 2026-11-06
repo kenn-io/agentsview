@@ -56,6 +56,9 @@ func usageChangeJournalSQL() (string, string) {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
 	}
 	add("trg_sessions_usage_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "NEW.id")
+	// Installed group labels come from cron run names. Older writers recreate
+	// only the triggers they name, so this one survives their opens.
+	add("trg_sessions_usage_change_group_label", "UPDATE OF session_name", "sessions", "OLD.session_name IS NOT NEW.session_name AND (OLD.group_key!='' OR NEW.group_key!='')", "NEW.id")
 	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id")
 	add("trg_usage_events_usage_change_insert", "INSERT", "usage_events", "", "NEW.session_id")
 	columns = []string{"id", "session_id", "message_ordinal", "source", "model", "provider_id", "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "reasoning_tokens", "cost_microdollars", "cost_status", "cost_source", "occurred_at", "dedup_key"}

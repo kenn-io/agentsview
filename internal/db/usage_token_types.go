@@ -57,42 +57,22 @@ func (t UsageTokenTypes) normalized() UsageTokenTypes {
 	return t
 }
 
+// weights returns 1 for each selected counter, in Total's argument order.
+func (t UsageTokenTypes) weights() [4]int {
+	t = t.normalized()
+	var w [4]int
+	for i, bit := range []UsageTokenTypes{UsageTokenTypeInput, UsageTokenTypeOutput, UsageTokenTypeCacheWrite, UsageTokenTypeCacheRead} {
+		if t&bit != 0 {
+			w[i] = 1
+		}
+	}
+	return w
+}
+
 // Total sums only counters selected by this set.
 func (t UsageTokenTypes) Total(
 	input, output, cacheWrite, cacheRead int,
 ) int {
-	t = t.normalized()
-	total := 0
-	if t&UsageTokenTypeInput != 0 {
-		total += input
-	}
-	if t&UsageTokenTypeCacheWrite != 0 {
-		total += cacheWrite
-	}
-	if t&UsageTokenTypeCacheRead != 0 {
-		total += cacheRead
-	}
-	if t&UsageTokenTypeOutput != 0 {
-		total += output
-	}
-	return total
-}
-
-// SQLTotal sums the selected counters using the same selection as Total.
-func (t UsageTokenTypes) SQLTotal(input, output, cacheWrite, cacheRead string) string {
-	columns := []string{"0"}
-	for _, counter := range []struct {
-		bit    UsageTokenTypes
-		column string
-	}{
-		{UsageTokenTypeInput, input},
-		{UsageTokenTypeOutput, output},
-		{UsageTokenTypeCacheWrite, cacheWrite},
-		{UsageTokenTypeCacheRead, cacheRead},
-	} {
-		if t.normalized()&counter.bit != 0 {
-			columns = append(columns, counter.column)
-		}
-	}
-	return strings.Join(columns, "+")
+	w := t.weights()
+	return w[0]*input + w[1]*output + w[2]*cacheWrite + w[3]*cacheRead
 }

@@ -11,14 +11,6 @@ import (
 // readUsageDayTotals reads ordinary totals and prepares the exceptional session
 // metadata for the shared rollup query's exception fold.
 func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) (usageFactsResult, error) {
-	if filter.sessionCountsOnly {
-		if err := readUsageOwners(ctx, conn, timezoneID, snapshot, filter); err != nil {
-			return usageFactsResult{}, err
-		}
-		result := usageFactsResult{MatchingSessions: make(map[string]UsageSessionInfo)}
-		err := readUsageSessionCounts(ctx, conn, timezoneID, *snapshot, filter, &result)
-		return result, err
-	}
 	from, to := usageRollupDateBounds(*snapshot)
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	where := `s.timezone_id=` + b.Add(timezoneID)
@@ -141,7 +133,7 @@ func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snap
 	}
 	authoritativeScope += ` AND s.id IN (SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE ` + dates + `)`
 	owner := usageOwnerPredicate("s", b, from, to, authoritativeScope)
-	rows, err := conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, s.group_key, (`+passing+`)
+	rows, err := conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, (`+passing+`)
         FROM (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s WHERE `+where+` AND (`+owner+`)`, b.Args()...)
 	if err != nil {
 		return err
@@ -150,7 +142,7 @@ func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snap
 	snapshot.Sessions = nil
 	for rows.Next() {
 		var session usageQuerySession
-		if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.GroupKey, &session.PassesFilter); err != nil {
+		if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.PassesFilter); err != nil {
 			return err
 		}
 		if millis, _, _ := usagefacts.ParseTimestamp(session.StartedAt); millis != nil {

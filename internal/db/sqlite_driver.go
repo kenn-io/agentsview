@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mattn/go-sqlite3"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 const (
@@ -94,9 +93,6 @@ func configureSQLiteConnection(conn *sqlite3.SQLiteConn) error {
 }
 
 func configureArchiveSQLiteConnection(conn *sqlite3.SQLiteConn) error {
-	if err := conn.RegisterFunc("agentsview_top_session_group_label", parser.HermesCronJobName, true); err != nil {
-		return err
-	}
 	if err := configureSQLiteConnection(conn); err != nil {
 		return err
 	}

@@ -86,7 +86,7 @@ func TestUsageTopSessionsLoadsOnlyReturnedMetadata(t *testing.T) {
 	warmJournaledUsage(t, database, filter)
 
 	// Observe display-name evaluations at the archive query boundary, preserving
-	// NULLIF semantics. Groups load only their current label representative.
+	// NULLIF semantics. Groups use installed labels and load no names.
 	database.rawReader().SetMaxOpenConns(1)
 	conn, err := database.getReader().Conn(t.Context())
 	require.NoError(t, err)
@@ -110,8 +110,8 @@ func TestUsageTopSessionsLoadsOnlyReturnedMetadata(t *testing.T) {
 		loaded  []string
 	}{
 		{"individual", false, 1, []string{"Owner 127"}},
-		{"group", true, 1, []string{"Owner 127"}},
-		{"group and individual", true, 2, []string{"Owner 125", "Owner 127"}},
+		{"group", true, 1, nil},
+		{"group and individual", true, 2, []string{"Owner 125"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loaded = nil
@@ -237,7 +237,7 @@ func CheckUsageTopSessionsBoundedGroupMembers(t *testing.T, database *DB, filter
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Empty(t, got[0].SessionID)
-	assert.Equal(t, "codex", got[0].Agent)
+	assert.Equal(t, "claude", got[0].Agent, "the newest member's agent")
 	assert.Equal(t, "2026-08-09T12:00:00Z", got[0].StartedAt)
 	assert.Equal(t, "Latest report", got[0].GroupLabel)
 	assert.Equal(t, "Latest report", got[0].DisplayName)
@@ -326,15 +326,32 @@ func TestUsageTopSessionsZeroCostTies(t *testing.T) {
 func CheckUsageSessionCountsJournaled(t *testing.T, database *DB) {
 	t.Helper()
 	filter := UsageFilter{From: "2026-08-03", To: "2026-08-10", Timezone: "UTC", SkipSessionCounts: true}
-	cache := warmJournaledUsage(t, database, filter)
-	want, err := database.getUsageSessionCountsLegacy(t.Context(), filter)
-	require.NoError(t, err)
-	cache.db.SetMaxOpenConns(1)
-	conn, err := cache.db.Conn(t.Context())
+	warmJournaledUsage(t, database, filter)
+	cases := usageDayTotalsFilterCases()
+	want := make([]UsageSessionCounts, len(cases))
+	for i, tc := range cases {
+		f := filter
+		tc.change(&f)
+		var err error
+		want[i], err = database.getUsageSessionCountsLegacy(t.Context(), f)
+		require.NoError(t, err)
+		if f.ActiveSince != "" {
+			// Activity windows capture candidates from the archive.
+			got, err := database.GetUsageSessionCounts(t.Context(), f)
+			require.NoError(t, err)
+			assert.Equal(t, want[i], got, tc.name)
+		}
+	}
+	// Day-total counts come from the cache, so archive names stay unread.
+	type authorizer interface {
+		RegisterAuthorizer(func(int, string, string, string) int)
+	}
+	database.rawReader().SetMaxOpenConns(1)
+	conn, err := database.getReader().Conn(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
-			if op == sqlite3.SQLITE_READ && (table == "usage_day_totals" || table == "usage_daily_rollups" && (column == "input_tokens" || column == "estimated_cost_microdollars")) {
+		raw.(authorizer).RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "sessions" && (column == "display_name" || column == "session_name") {
 				return sqlite3.SQLITE_DENY
 			}
 			return sqlite3.SQLITE_OK
@@ -343,17 +360,26 @@ func CheckUsageSessionCountsJournaled(t *testing.T, database *DB) {
 	}))
 	require.NoError(t, conn.Close())
 	t.Cleanup(func() {
-		conn, err := cache.db.Conn(context.WithoutCancel(t.Context()))
+		conn, err := database.getReader().Conn(context.WithoutCancel(t.Context()))
 		require.NoError(t, err)
 		defer conn.Close()
 		require.NoError(t, conn.Raw(func(raw any) error {
-			raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
+			raw.(authorizer).RegisterAuthorizer(nil)
 			return nil
 		}))
 	})
-	got, err := database.GetUsageSessionCounts(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
+	for i, tc := range cases {
+		f := filter
+		tc.change(&f)
+		if f.ActiveSince != "" {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := database.GetUsageSessionCounts(t.Context(), f)
+			require.NoError(t, err)
+			assert.Equal(t, want[i], got)
+		})
+	}
 }
 
 func TestUsageTopSessionsGroupRenameAfterWarmup(t *testing.T) {
@@ -373,24 +399,34 @@ func TestUsageTopSessionsGroupRenameAfterWarmup(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, got, 1)
 			assert.Equal(t, "Original report", got[0].GroupLabel)
-			before, err := database.UsageChangeRevision(t.Context())
-			require.NoError(t, err)
 			for _, tc := range []struct{ name, label, display string }{
 				{"Renamed report · run", "Renamed report", "Renamed report"},
 				{"daily · run", "", "daily"},
 				{"Another report · run", "Another report", "Another report"},
 			} {
-				_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_name=? WHERE id='grouped'`, tc.name)
-				require.NoError(t, err)
-				after, err := database.UsageChangeRevision(t.Context())
-				require.NoError(t, err)
-				assert.Equal(t, before, after, "name edits do not enter the usage journal")
+				require.NoError(t, database.RefreshSessionName(t.Context(), "grouped", &tc.name))
 				got, err = database.GetTopSessionsByCost(t.Context(), filter, 1)
 				require.NoError(t, err)
 				require.Len(t, got, 1)
 				assert.Equal(t, tc.label, got[0].GroupLabel)
 				assert.Equal(t, tc.display, got[0].DisplayName)
 			}
+
+			// An older writer's open drops and recreates only the triggers it names.
+			const name = "trg_sessions_usage_change_group_label"
+			drops := strings.Replace(usageChangeJournalTriggerDropsSQL, "DROP TRIGGER IF EXISTS "+name+";\n", "", 1)
+			creates := usageChangeJournalTriggerSQL
+			start := strings.Index(creates, "CREATE TRIGGER "+name+" ")
+			require.GreaterOrEqual(t, start, 0)
+			end := start + strings.Index(creates[start:], "END;\n") + len("END;\n")
+			_, err = database.getWriter().ExecContext(t.Context(), drops+creates[:start]+creates[end:])
+			require.NoError(t, err)
+			renamed := "Older writer report · run"
+			require.NoError(t, database.RefreshSessionName(t.Context(), "grouped", &renamed))
+			got, err = database.GetTopSessionsByCost(t.Context(), filter, 1)
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, "Older writer report", got[0].GroupLabel)
 		})
 	}
 }

@@ -700,16 +700,17 @@ The usage cache filename is derived from its format version and the archive
 `database_id`. A format or database-ID change selects a new generation; it does
 not migrate or rewrite the archive. Facts contain only message- and
 usage-event-derived data. Aggregate fingerprints bake session `agent`,
-`started_at`, `project`, `machine`, `git_branch`, `group_key`, `is_automated`,
-and `user_message_count`. Those fields determine deduplication, day bucketing,
-and the filter dimensions of stored day totals. Cron labels use current session
-names. Journaled changes rebuild the session's rows and totals. Warm daily
-reads filter totals in SQL and read per-session rows for authoritative costs
-and dedup exceptions. Warm Top
-sessions rank session or group units in cache SQL. Grouped candidates load at
-most three representatives per group for the agent, latest start, and latest
-usable cron label. Individual sessions load their candidate names. Session
-counts group ordinary daily rows in SQL and add surviving owners.
+`started_at`, `project`, `machine`, `git_branch`, `group_key`, the cron label
+derived from `session_name`, `is_automated`, and `user_message_count`. Those
+fields determine deduplication, day bucketing, grouping, and the filter
+dimensions of stored day totals. Journaled changes rebuild the session's rows
+and totals; a separately named trigger journals `session_name` changes on
+grouped sessions so older writers' trigger rebuilds leave it in place. Warm
+daily reads filter totals in SQL and read per-session rows for authoritative
+costs and dedup exceptions. Warm Top sessions rank session or group units in
+cache SQL and use installed group labels. Only returned individual sessions load
+archive names. Session counts group ordinary daily rows in SQL and add
+surviving owners.
 Termination and `active_since` filters still use the archive snapshot. Do not
 widen or narrow this live/baked boundary implicitly.
 
