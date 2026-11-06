@@ -438,6 +438,11 @@ func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 				assert.Empty(t, status.Setup.Action)
 			}
 			embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"`+action+`"}`), want)
+			if inspectFailure {
+				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) { return embedlocal.Status{}, nil }
+				require.NoError(t, os.Mkdir(filepath.Join(dir, "config.toml"), 0o700))
+				embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"turn-on"}`), http.StatusInternalServerError)
+			}
 		})
 	}
 }
