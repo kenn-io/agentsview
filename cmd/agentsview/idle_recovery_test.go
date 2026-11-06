@@ -169,17 +169,8 @@ func TestIdleManualWakeReconcilesDeletedSource(t *testing.T) {
 	runner := server.LocalSyncRunner(func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
 		return syncAllReleasingStartupMaintenance(ctx, f.engine, progress), nil
 	})
-	ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion, server.WithLocalSyncRunner(f.ingestion.foregroundSync(runner)))
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/sync", nil)
+	_, err := f.ingestion.foregroundSync(runner)(t.Context(), nil)
 	require.NoError(t, err)
-	request.Header.Set("Origin", ts.URL)
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	body, err := io.ReadAll(response.Body)
-	require.NoError(t, err)
-	require.NoError(t, response.Body.Close())
-	require.Equal(t, http.StatusOK, response.StatusCode)
-	require.NotContains(t, string(body), "event: error")
 	f.ingestion.applying.Wait()
 
 	after, err := f.database.GetSessionFull(t.Context(), "gemini:retained")

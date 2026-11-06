@@ -234,7 +234,7 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 	assert.True(t, sessionImported(t, f.database, "gemini:old"), "wake imports copied files with preserved old modification times")
 }
 
-func TestReviewWakeReportsImportedCount(t *testing.T) {
+func TestIdleWakePreservesImportCounts(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
 	f.ingestion.Suspend()
 	f.ingestion.applying.Wait()
