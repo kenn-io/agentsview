@@ -229,6 +229,7 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 		// Replacement aliases open the rebuilt main file without a sibling WAL.
 		s.walStamp = "nowal"
 		s.reports.Clear()
+		s.usage.Clear()
 	})
 	s.retiring.Add(1)
 	s.handleMu.Unlock()

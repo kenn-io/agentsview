@@ -11,7 +11,11 @@ import (
 // GetPlanUsageSessionCounts counts the sessions a usage report leaves out
 // as plan-only and the sessions it undercounts as partly captured, with
 // the same rules as the SQLite query (db.GetPlanUsageSessionCounts).
-func (s *Store) GetPlanUsageSessionCounts(
+func (s *Store) GetPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (db.PlanUsageSessionCounts, error) {
+	return s.usage.Plan(ctx, f, s.keptVersion(), s.readPlanUsageSessionCounts)
+}
+
+func (s *Store) readPlanUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.PlanUsageSessionCounts, error) {
 	b := duckUsageBoundsForFilter(f)
@@ -64,6 +68,7 @@ func (s *Store) GetPlanUsageSessionCounts(
 		JOIN usage_events ue ON ue.session_id = s.id
 		WHERE ` + eventWhere
 
+	observeAnalyticsQuery(query)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return db.PlanUsageSessionCounts{}, fmt.Errorf("querying duckdb plan usage session counts: %w", err)

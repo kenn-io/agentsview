@@ -1302,6 +1302,7 @@ func (s *Store) forEachDailyUsageAggregateRow(
 		FROM usage_localized
 		-- Visit rows in time order so the last Copilot-reported total is the session cost.
 		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, ts ASC, COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC, model ASC, price_model ASC`
+	observeAnalyticsQuery(query)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb daily usage aggregates: %w", err)
@@ -1335,7 +1336,11 @@ func (s *Store) forEachDailyUsageAggregateRow(
 	return nil
 }
 
-func (s *Store) GetDailyUsage(
+func (s *Store) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
+	return s.usage.Daily(ctx, f, s.keptVersion(), s.readDailyUsage)
+}
+
+func (s *Store) readDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
 	rateResolver, err := s.loadPricingResolver(ctx)
@@ -1704,6 +1709,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		-- Visit rows in time order so the last Copilot-reported total is the session cost.
 		ORDER BY session_id ASC, ts ASC, COALESCE(message_ordinal, -1) ASC,
 			source ASC, usage_dedup_key ASC, model ASC, price_model ASC`
+	observeAnalyticsQuery(query)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb session usage aggregates: %w", err)
@@ -1804,8 +1810,21 @@ func (s *Store) sessionUsageRows(
 	return out, rows.Err()
 }
 
-func (s *Store) GetTopSessionsByCost(
-	ctx context.Context, f db.UsageFilter, limit int,
+func (s *Store) GetTopSessionsByCost(ctx context.Context, f db.UsageFilter, limit int) ([]db.TopSessionEntry, error) {
+	out, err := s.usage.TopTotals(ctx, f, s.keptVersion(), s.readTopSessionTotals)
+	if err != nil {
+		return nil, err
+	}
+	if f.TopSessionsByGroup {
+		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	}
+	return db.SortAndLimitTopSessions(
+		out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
+	), nil
+}
+
+func (s *Store) readTopSessionTotals(
+	ctx context.Context, f db.UsageFilter,
 ) ([]db.TopSessionEntry, error) {
 	rateResolver, err := s.loadPricingResolver(ctx)
 	if err != nil {
@@ -1871,12 +1890,7 @@ func (s *Store) GetTopSessionsByCost(
 		}
 		out = append(out, a.row)
 	}
-	if f.TopSessionsByGroup {
-		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
-	}
-	return db.SortAndLimitTopSessions(
-		out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
-	), nil
+	return out, nil
 }
 
 func (s *Store) GetUsageSessionCounts(
