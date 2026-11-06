@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"sync"
 	"time"
 
@@ -154,22 +155,37 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 		return usagePreparedWindow{}, err
 	}
 	timings.sweep = time.Since(sweepStarted)
+	installs, measured, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, report)
+	if err != nil {
+		return usagePreparedWindow{}, err
+	}
+	timings.fill, timings.rollup = measured.fill, measured.rollup
+	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}, nil
+}
+
+func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot, window *usageQuerySnapshot, report func(string)) (map[string]usageRollupInstall, usageRollupRequestTimings, error) {
+	timings := usageRollupRequestTimings{candidates: len(snapshot.Versions)}
 	fillStarted := time.Now()
 	report(fmt.Sprintf("Preparing usage data for %d sessions in this report", timings.candidates))
 	fills, err := cache.fill.Ensure(ctx, snapshot.Versions, snapshot.CursorHighWater)
 	if err != nil {
-		return usagePreparedWindow{}, err
+		return nil, timings, err
 	}
 	timings.fill = time.Since(fillStarted)
+	// A journal refresh builds only changed sessions, but deletions also
+	// remove those sessions from the report's complete window.
+	if window != snapshot {
+		window.dropDeleted(maps.Clone(fills))
+	}
 	snapshot.dropDeleted(fills)
 	resolver := export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
 	report(fmt.Sprintf("Calculating daily totals for %d sessions in this report", timings.candidates))
-	installs, metrics, err := cache.rollup.Ensure(ctx, snapshot, fills, resolver)
+	installs, metrics, err := cache.rollup.Ensure(ctx, *snapshot, fills, resolver)
 	if err != nil {
-		return usagePreparedWindow{}, err
+		return nil, timings, err
 	}
 	timings.rollup = metrics
-	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}, nil
+	return installs, timings, nil
 }
 
 func (db *DB) queryUsageRollups(

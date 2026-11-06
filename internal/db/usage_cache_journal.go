@@ -5,12 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"maps"
 	"slices"
 	"strings"
 	"time"
-
-	"go.kenn.io/agentsview/internal/export"
 )
 
 type usageZoneCoverage struct {
@@ -123,18 +120,6 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		return nil
 	}
 	if !zone.revision.Valid || zone.foreignPricing {
-		if zone.id == 0 {
-			_, err = cache.db.ExecContext(ctx, `
-				INSERT INTO usage_rollup_timezones (
-					timezone_key, timezone_name, interval_fingerprint, last_requested_at)
-				VALUES (?, ?, ?, ?)
-				ON CONFLICT(timezone_key) DO NOTHING`,
-				identity.Key, identity.Name, identity.IntervalFingerprint,
-				time.Now().UTC().Format(time.RFC3339Nano))
-			if err != nil {
-				return usagePreparedWindow{}, false, err
-			}
-		}
 		return usagePreparedWindow{}, false, fallback()
 	}
 	snapshot, refresh, refreshIDs, trusted, err := db.captureJournaledUsageWindow(ctx, filter, kind, cursor, databaseID, zone, lost, window)
@@ -151,8 +136,10 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	}
 	timings.capture = captureDuration
 	timings.candidates = len(snapshot.Sessions)
-	err = cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs)
-	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings, journaled: true, installSeq: zone.installSeq}, true, err
+	if err := cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs); err != nil {
+		return usagePreparedWindow{}, false, nil
+	}
+	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings, journaled: true, installSeq: zone.installSeq}, true, nil
 }
 
 func (cache *usageCache) captureUsageZoneWindow(ctx context.Context, identity usageTimezoneIdentity, filter UsageFilter) (usageZoneCoverage, []string, []string, error) {
@@ -253,26 +240,11 @@ func (cache *usageCache) refreshJournaledUsageWindow(ctx context.Context, snapsh
 		refresh.Versions = append(refresh.Versions, version)
 	}
 	refresh.CursorHighWater = snapshot.CursorHighWater
-	var installs map[string]usageRollupInstall
-	var timings usageRollupRequestTimings
 	if len(refreshIDs) > 0 || refresh.CursorHighWater > 0 {
 		report("Checking the usage cache for this report")
-		started := time.Now()
-		fills, err := cache.fill.Ensure(ctx, refresh.Versions, refresh.CursorHighWater)
-		if err != nil {
-			return nil, timings, err
-		}
-		timings.fill = time.Since(started)
-		snapshot.dropDeleted(maps.Clone(fills))
-		refresh.dropDeleted(fills)
-		built, metrics, err := cache.rollup.Ensure(ctx, refresh, fills, export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest))
-		if err != nil {
-			return nil, timings, err
-		}
-		timings.rollup = metrics
-		installs = built
+		return cache.fillAndRollupUsageWindow(ctx, &refresh, snapshot, func(string) {})
 	}
-	return installs, timings, nil
+	return nil, usageRollupRequestTimings{}, nil
 }
 
 func usageSessionsWithoutRollup(ctx context.Context, q sessionExportQuerier, timezoneID int64, limit int) ([]string, error) {

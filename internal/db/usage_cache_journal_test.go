@@ -164,6 +164,8 @@ func TestUsageJournaledFreshness(t *testing.T) {
 				require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{Source: "session", Model: "journal-model", InputTokens: 100}}))
 			}
 			if name == "restore" {
+				_, err := database.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
 				require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
 			}
 			warmJournaledUsage(t, database, filter)
@@ -517,6 +519,109 @@ func TestUsageJournaledClaimSurvivingInstalls(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestUsageJournaledBackfillClaimChecksEarlierBatch(t *testing.T) {
+	database := testDB(t)
+	for i := range usageCacheBackfillBatchSize + 1 {
+		seedJournaledUsage(t, database, fmt.Sprintf("session-%03d", i))
+	}
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "session-000"))
+	filter := UsageFilter{Timezone: "UTC"}
+	databaseID, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), databaseID)
+	require.NoError(t, err)
+	_, revision, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{{SessionID: "session-000"}})
+	require.NoError(t, err)
+	_, err = database.RestoreSession(t.Context(), "session-000")
+	require.NoError(t, err)
+	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindActivity)
+	require.NoError(t, err)
+	identity := usageTimezoneIdentityFor(filter.Location(), nil)
+	zone, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
+	require.NoError(t, err)
+	activity, err := database.usageBackfillActivity(t.Context())
+	require.NoError(t, err)
+	orderUsageBackfillSnapshot(&snapshot, activity)
+	firstID := snapshot.Versions[0].SessionID
+	require.Equal(t, "session-000", firstID)
+	var published atomic.Bool
+	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+		if slices.ContainsFunc(builds, func(build usageRollupBuild) bool { return build.SessionID == "session-256" }) && published.CompareAndSwap(false, true) {
+			insertSession(t, database, "tombstone", "project")
+			require.NoError(t, database.DeleteSession(t.Context(), "tombstone"))
+		}
+	}
+	var resumed atomic.Bool
+	cache.fill.observer.beforeDeletionSweep = func() {
+		var installed int
+		err := cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs i
+			JOIN usage_rollup_timezones z ON z.id = i.timezone_id WHERE z.timezone_key = ?`, identity.Key).Scan(&installed)
+		require.NoError(t, err)
+		if installed == usageCacheBackfillBatchSize+1 && resumed.CompareAndSwap(false, true) {
+			require.NoError(t, cache.fill.deleteNotificationSessions([]string{firstID}, revision))
+		}
+	}
+	require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
+	cache.rollup.observer.beforeInstall = nil
+	cache.fill.observer.beforeDeletionSweep = nil
+	require.True(t, resumed.Load(), "resume the deletion after every batch installs")
+	after, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
+	require.NoError(t, err)
+	assert.False(t, after.revision.Valid, "a missing first-batch install must prevent the coverage claim")
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 25700, got.Totals.InputTokens)
+}
+
+func holdUsageCacheWriter(t *testing.T, cache *usageCache) {
+	t.Helper()
+	conn, err := cache.db.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	_, err = conn.ExecContext(t.Context(), `BEGIN IMMEDIATE`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := conn.ExecContext(context.WithoutCancel(t.Context()), `ROLLBACK`)
+		require.NoError(t, err)
+	})
+}
+
+func TestUsageJournaledEmptyNewTimezoneWhileCacheWriterBusy(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	cache := warmJournaledUsage(t, database, UsageFilter{Timezone: "UTC"})
+	holdUsageCacheWriter(t, cache)
+	got, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "America/New_York", From: "2026-09-01", To: "2026-09-01"})
+	require.NoError(t, err, "an empty report in a new timezone needs no cache write")
+	assert.Empty(t, got.Daily)
+	assert.Zero(t, got.Totals.InputTokens)
+}
+
+func TestUsageJournaledClaimFailureWhileCacheWriterBusy(t *testing.T) {
+	database := testDB(t)
+	seedJournaledUsage(t, database, "session")
+	seedJournaledUsage(t, database, "unchanged")
+	filter := UsageFilter{Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	identity := usageTimezoneIdentityFor(filter.Location(), nil)
+	before, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
+	require.NoError(t, err)
+	// Project metadata advances the journal without changing the cached facts
+	// or the fields baked into daily totals.
+	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project = 'renamed' WHERE id = 'session'`)
+	require.NoError(t, err)
+	holdUsageCacheWriter(t, cache)
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err, "a failed coverage claim must leave valid report data readable")
+	assert.Equal(t, 200, got.Totals.InputTokens)
+	counts, err := database.GetUsageSessionCounts(t.Context(), UsageFilter{Timezone: "UTC", Project: "renamed"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, counts.Total)
+	after, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
+	require.NoError(t, err)
+	assert.Equal(t, before.revision, after.revision, "a failed claim must leave coverage unchanged")
 }
 
 func TestUsageJournaledWarmReadWhileCacheWriterBusy(t *testing.T) {
