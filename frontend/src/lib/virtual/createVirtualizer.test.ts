@@ -271,6 +271,36 @@ describe("createVirtualizer reactivity", () => {
     vi.useRealTimers();
   });
 
+  it.each(["element", "window"] as const)(
+    "readers see new options even when TanStack does not notify ($type virtualizer)",
+    async (type) => {
+      // The mocked instance never calls onChange, like TanStack when a new
+      // count leaves the rendered index range unchanged.
+      const onInstanceChange = vi.fn();
+      const scrollDiv = document.createElement("div");
+      const options = (count: number) => ({
+        count,
+        getScrollElement: () => scrollDiv,
+        estimateSize: (): number => 50,
+      });
+      const component = mount(VirtualizerTest, {
+        target: document.createElement("div"),
+        props: { type, options: options(400), onInstanceChange },
+      });
+      await tick();
+      expect(onInstanceChange).toHaveBeenCalledTimes(1);
+
+      component.setOptions(options(90));
+      await tick();
+
+      expect(onInstanceChange).toHaveBeenCalledTimes(2);
+      const reread = onInstanceChange.mock.calls[1]![0] as { options: { count: number } };
+      expect(reread.options.count).toBe(90);
+
+      unmount(component);
+    },
+  );
+
   it.each([
     {
       type: "element" as const,

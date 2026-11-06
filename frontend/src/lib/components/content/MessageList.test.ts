@@ -421,7 +421,10 @@ describe("MessageList follow cancellation", () => {
     await flushScrollUpdates();
     flushFrames();
 
-    expect(element.scrollTop).toBe(800);
+    // The new top row renders at the fixture's 100px instead of the 120px
+    // estimate, and TanStack keeps the view steady by scrolling up 20px.
+    // A jump still reconciling would land on ordinal 11 at 900.
+    expect(element.scrollTop).toBe(780);
   });
 
   it.each(["search closes", "match disappears", "ordinal target is hidden"])(
