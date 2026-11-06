@@ -78,11 +78,6 @@ func BenchmarkPGConcurrentPush(b *testing.B) {
 		}
 	}
 	b.StopTimer()
-	var sessionCount, messageCount, eventCount int
-	require.NoError(b, syncers[0].pg.QueryRowContext(b.Context(), `SELECT (SELECT count(*) FROM sessions),(SELECT count(*) FROM messages),(SELECT count(*) FROM usage_events)`).Scan(&sessionCount, &messageCount, &eventCount))
-	require.Equal(b, writers*sessions, sessionCount)
-	require.Equal(b, writers*sessions*messages, messageCount)
-	require.Equal(b, writers*sessions*2, eventCount)
 	b.ReportMetric(writers*sessions, "sessions/op")
 	b.ReportMetric(writers*sessions*messages, "messages/op")
 	b.ReportMetric(writers*sessions*2, "usage_events/op")

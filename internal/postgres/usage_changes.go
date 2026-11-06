@@ -32,7 +32,7 @@ BEGIN
     END IF;
     EXECUTE format('INSERT INTO usage_session_changes(session_id, revision)
  SELECT DISTINCT %s, 0 FROM (%s) changed WHERE %s
- ON CONFLICT(session_id) DO UPDATE SET revision = 0 WHERE usage_session_changes.revision <> 0',
+ ON CONFLICT(session_id) DO UPDATE SET revision = 0',
         session_key, changed, filter);
     RETURN NULL;
 END;
@@ -69,24 +69,9 @@ var usageChangeTablesPG = []struct{ table, sessionColumn string }{
 	{"source_worktree_project_mappings", ""}, {"source_worktree_project_mapping_scopes", ""},
 }
 
-// usageChangeJournalInstalledPG reports whether any journal version is
-// recorded, so a newer binary's journal stays untouched.
-func usageChangeJournalInstalledPG(ctx context.Context, q hostedQuerier) (bool, error) {
-	var version string
-	err := q.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = 'usage_change_journal_version'`).Scan(&version)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
-}
-
 func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) error {
 	column, err := sessionVersionColumnPG(ctx, pg)
 	if err != nil || column != "xmin" {
-		return err
-	}
-	installed, err := usageChangeJournalInstalledPG(ctx, pg)
-	if err != nil || installed {
 		return err
 	}
 	tx, err := pg.BeginTx(ctx, nil)
@@ -109,8 +94,10 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 	if err := lockSyncMetadataRow(ctx, tx, "usage_change_journal_lock"); err != nil {
 		return err
 	}
-	installed, err := usageChangeJournalInstalledPG(ctx, tx)
-	if err != nil || installed {
+	// Any recorded version, including a newer binary's, stays untouched.
+	var version string
+	err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = 'usage_change_journal_version'`).Scan(&version)
+	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	var schema string
@@ -160,8 +147,7 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 	if _, err = tx.ExecContext(ctx, ddl.String()); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)
- ON CONFLICT(key) DO UPDATE SET value=excluded.value`, fmt.Sprint(usageChangeJournalVersionPG))
+	_, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)`, fmt.Sprint(usageChangeJournalVersionPG))
 	return err
 }
 

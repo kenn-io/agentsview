@@ -16,9 +16,7 @@ recorded in `docs/internal/pg-usage-native-optimization.md`.
 `pg push` and `pg serve` install a usage change journal for future report
 reuse when the role owns the tables. Installation takes a `SHARE ROW EXCLUSIVE`
 lock on the watched tables until it commits: reads continue, and writes wait.
-Roles that already have `SELECT` on `sessions` can read the journal; restricted
-publishers write through it once an owner installs it. CockroachDB skips this
-journal.
+CockroachDB skips this journal.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
