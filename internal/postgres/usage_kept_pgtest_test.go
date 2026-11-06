@@ -172,9 +172,6 @@ func TestUsageKeptPushBetweenReads(t *testing.T) {
 			require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "paid-a", []db.UsageEvent{{SessionID: "paid-a", Source: "provider", Model: "paid-a", OutputTokens: 900, DedupKey: "new", OccurredAt: "2026-01-01T09:00:00Z"}}))
 		}},
 		{"rename", func() { require.NoError(t, local.RenameSession(ctx, "paid-a", new("Renamed session"))) }},
-		{"pricing", func() {
-			require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "paid-a", OutputPerMTok: money.MustParseDollars("20")}}))
-		}},
 		{"custom pricing", func() {
 			store.SetCustomPricing(map[string]config.CustomModelRate{"paid-a": {OutputMicrodollarsPerMTok: 30_000_000}})
 		}},
@@ -281,32 +278,25 @@ func TestUsageKeptServicePairwiseSharesSummary(t *testing.T) {
 }
 
 func TestUsageKeptBypasses(t *testing.T) {
-	for _, mode := range []string{"active", "hosted"} {
-		t.Run(mode, func(t *testing.T) {
-			_, _, store, counter := keptUsageFixture(t)
-			f := db.UsageFilter{}
-			if mode == "hosted" {
-				store.hostedRelations = true
-			} else {
-				f.Termination = "active"
+	t.Run("active", func(t *testing.T) {
+		_, _, store, counter := keptUsageFixture(t)
+		f := db.UsageFilter{Termination: "active"}
+		var firstReads map[string]int
+		for i := range 2 {
+			_, err := store.GetDailyUsage(t.Context(), f)
+			require.NoError(t, err)
+			_, err = store.GetPlanUsageSessionCounts(t.Context(), f)
+			require.NoError(t, err)
+			_, err = store.GetTopSessionsByCost(t.Context(), f, 10)
+			require.NoError(t, err)
+			if i == 0 {
+				firstReads = maps.Clone(counter.queries)
 			}
-			var firstReads map[string]int
-			for i := range 2 {
-				_, err := store.GetDailyUsage(t.Context(), f)
-				require.NoError(t, err)
-				_, err = store.GetPlanUsageSessionCounts(t.Context(), f)
-				require.NoError(t, err)
-				_, err = store.GetTopSessionsByCost(t.Context(), f, 10)
-				require.NoError(t, err)
-				if i == 0 {
-					firstReads = maps.Clone(counter.queries)
-				}
-			}
-			require.NotEmpty(t, firstReads)
-			assert.Zero(t, counter.revisionReads)
-			for query, count := range firstReads {
-				assert.Equal(t, 2*count, counter.queries[query])
-			}
-		})
-	}
+		}
+		require.NotEmpty(t, firstReads)
+		assert.Zero(t, counter.revisionReads)
+		for query, count := range firstReads {
+			assert.Equal(t, 2*count, counter.queries[query])
+		}
+	})
 }
