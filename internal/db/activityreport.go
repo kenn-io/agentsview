@@ -825,7 +825,7 @@ SELECT candidate.session_id, candidate.start_ordinal, candidate.end_ordinal,
 	candidate.closing_role, candidate.closing_model,
 	COALESCE((
 		SELECT prior.model
-		FROM messages prior
+		FROM messages prior INDEXED BY idx_messages_assistant_model
 		WHERE prior.session_id = candidate.session_id
 			AND prior.ordinal <= candidate.start_ordinal
 			AND prior.role = 'assistant'

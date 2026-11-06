@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-06
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -180,6 +180,17 @@ The latest release is
   same archive a month's report went from 250 ms to 210 ms when opened again,
   and from 350 ms to 300 ms on first open. The memory cache for Activity grows
   by about 57 bytes per counted message, at most about 11 MiB.
+
+- The Activity page reads about 8 times less data from the local archive the
+  first time it shows a range. Pairing and counting a session's messages now
+  read only a small index, never the message text. On a 30,000-session test
+  archive, a busy week's report read 0.4 GB instead of 3.3 GB. Its pairing step
+  read 41 MB instead of 1.8 GB and took 0.75 s instead of 1.1 to 1.4 s, or 1.2 s
+  instead of 2.6 s when the archive was not in memory. The whole report still
+  takes about 3.3 s, because it waits on usage, which runs at the same time.
+  The index grows by about 6 bytes per message (10 MB on that archive), and the
+  first start after upgrading waits while it is rebuilt, about 6 s for 1.7
+  million messages.
 
 - The first Usage page after the usage cache is rebuilt, such as after an
   upgrade, loads in about half the time. On a 30,000-session test archive, all
