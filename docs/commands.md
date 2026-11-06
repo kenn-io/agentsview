@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-05
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -2322,9 +2322,11 @@ SQLite archive directly. See
 daemon again.
 
 Use `--profile memory` when the client should discover only the
-`get_memory_status`, `search_content`, and `get_messages` conversation-memory
-tools. `get_memory_status` reports archive, lexical, semantic, vector coverage,
-and source-telemetry readiness without running a search probe. The default
+`agentsview.skills`, `get_memory_status`, `search_content`, and `get_messages`
+conversation-memory tools. `agentsview.skills` lists and reads the bundled
+conversation-history guide. `get_memory_status` reports archive, lexical,
+semantic, vector coverage, and source-telemetry readiness without running a
+search probe. The default
 `full` profile preserves the complete MCP tool surface. Profile selection works
 with both stdio and StreamableHTTP and does not change backend selection.
 

@@ -20,14 +20,16 @@ why the code exists; the repository is the authority for what it contains now.
 
 ## Workflow
 
-1. {{.Delegate}}. Before delegating, verify the agent in effect is the file
+{{if .DirectMCP}}1. Follow the search-and-read steps directly using this server's registered
+   tools. Delegate only when the host authorizes a search agent; no installed
+   skill or generated agent file is required.{{else}}1. {{.Delegate}}. Before delegating, verify the agent in effect is the file
    this skill generated: its definition carries a `# generated-by: agentsview`
    header. If a same-named agent is defined{{if .AgentDir}} in the project's
    `{{.AgentDir}}/` directory{{end}} without that header, it is not
    AgentsView's: do not delegate to it. If you cannot verify the agent, it
    reports that it could not search, or the AgentsView MCP tools are
    not registered in this session, follow the remaining steps directly
-   instead of delegating.
+   instead of delegating.{{end}}
 2. Call the registered AgentsView MCP tool whose leaf name is `search_content`
    with `mode: hybrid`, `scope: all`, `limit: 10`, `include_active: true`,
    `include_one_shot: true`, and `include_automated: true`. When the current
@@ -70,7 +72,9 @@ If semantic search failed, identify and disclose the failure before using a
 lexical fallback. For an unavailable semantic index or transient embedding
 failure, retry once when appropriate, then use `mode: substring` with several
 short queries and synonyms. Preserve the inclusion and current-session flags,
-but omit `scope` because substring mode does not accept it. Describe the
+{{if .DirectMCP}}and preserve `scope: all`; MCP substring mode accepts scope. Describe the
+{{else}}but omit `scope` because substring mode does not accept it. Describe the
+{{end -}}
 fallback in the answer.
 
 Do not fall back on authentication or wrong-target errors. In particular, do

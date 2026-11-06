@@ -52,7 +52,7 @@ require (
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
-	hegel.dev/go/hegel v0.9.28
+	hegel.dev/go/hegel v0.9.29
 	modernc.org/libc v1.79.1
 	modernc.org/sqlite v1.61.0
 )
@@ -187,3 +187,8 @@ require (
 )
 
 tool gotest.tools/gotestsum
+
+// Development bridge for mcpskills: https://github.com/kenn-io/kit/pull/316.
+// Remove after it merges and a verified canonical go.kenn.io/kit version
+// containing mcpskills is selected.
+replace go.kenn.io/kit => github.com/salmonumbrella/kit v0.30.2-0.20261106034802-387e61d2cf42

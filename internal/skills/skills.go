@@ -170,6 +170,8 @@ func ParseRemote(content string) Remote {
 type templateData struct {
 	Delegate   string
 	ServerArgs string
+	// DirectMCP serves the bundled workflow without requiring an installed agent.
+	DirectMCP bool
 	// AgentDir is the harness's project-level agent directory, included in
 	// the delegation guard when the harness installs the search agent. Empty
 	// for harnesses that do not install one, so the guard text omits the

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-05
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -73,6 +73,7 @@ client will see these tools:
 
 | Tool                          | Purpose                                                                  |
 | ----------------------------- | ------------------------------------------------------------------------ |
+| `agentsview.skills`           | List and read the bundled conversation-history skill                     |
 | `search_sessions`             | Full-text search across recorded sessions                                |
 | `list_sessions`               | List recent or filtered sessions                                         |
 | `get_session_overview`        | Fetch metadata and a compact message preview                             |
@@ -93,6 +94,15 @@ client will see these tools:
 | `search_docs`                 | Search the AgentsView guides bundled with this version                   |
 | `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object       |
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                   |
+
+On the development branch, `agentsview.skills {}` lists the fixed catalog of
+bundled how-to guides. Call
+`agentsview.skills {"name":"agentsview-finding-history"}` to read the authored
+conversation-history workflow and its MCP command mappings. Both calls return
+guide metadata in structured content; the named call returns Markdown as text.
+This tool serves only shipped guidance. It does not read paths, install skills,
+or execute them. It is available in both profiles after server startup and
+does not query the archive. `search_docs` separately searches the public guides.
 
 The two Friction Log tools appear when the backend stores the Friction Log.
 `get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
@@ -122,9 +132,9 @@ profile:
 }
 ```
 
-This profile advertises only `get_memory_status`, `search_content`, and
-`get_messages`. The status tool reports the authenticated archive backend,
-read-only mode, server version, lexical availability, semantic generation
+This profile advertises `agentsview.skills`, `get_memory_status`,
+`search_content`, and `get_messages`. The status tool reports the authenticated
+archive backend, read-only mode, server version, lexical availability, semantic generation
 coverage, and whether per-source freshness telemetry is available. Its `ready`,
 `partial`, `unavailable`, or `unknown` states come from the same provider as the
 compact `coverage` object on every successful `search_content` response. Older
