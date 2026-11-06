@@ -32,62 +32,62 @@
   });
 </script>
 
+<!-- One setting, so the row is compact: the label fits its text and the
+     notes sit under the control in the same cell. -->
 <div class="archive-content-settings">
-  <div class="setting-row option-row">
+  <div class="setting-row option-row compact">
     <span class="setting-label">{m.settings_tool_result_images()}</span>
-    <SegmentedControl
-      options={TOOL_RESULT_IMAGE_OPTIONS}
-      value={settings.toolResultImages}
-      ariaLabel={m.settings_tool_result_images()}
-      disabled={settings.saving || settings.readOnly}
-      onchange={async (value) => {
-        if (value !== "keep" && value !== "drop" && value !== "offload") return;
-        if (value === settings.toolResultImages) return;
-        // A failed write leaves the stored policy alone, so the notice waits
-        // for the save the way AgentDirSettings does.
-        if (await settings.save({ tool_result_images: value })) {
-          restartRequired = true;
-        }
-      }}
-    />
+    <div class="control-stack">
+      <SegmentedControl
+        options={TOOL_RESULT_IMAGE_OPTIONS}
+        value={settings.toolResultImages}
+        ariaLabel={m.settings_tool_result_images()}
+        disabled={settings.saving || settings.readOnly}
+        onchange={async (value) => {
+          if (value !== "keep" && value !== "drop" && value !== "offload") return;
+          if (value === settings.toolResultImages) return;
+          // A failed write leaves the stored policy alone, so the notice waits
+          // for the save the way AgentDirSettings does.
+          if (await settings.save({ tool_result_images: value })) {
+            restartRequired = true;
+          }
+        }}
+      />
+      <p class="setting-hint">
+        {imagesHint.before}{#if imagesHint.hasCommand}<InlineCode
+            >{MIGRATE_IMAGES_COMMAND}</InlineCode
+          >{/if}{imagesHint.after}
+      </p>
+      {#if restartRequired}
+        <p class="setting-hint" role="status" aria-live="polite">
+          {m.settings_tool_result_images_restart_notice()}
+        </p>
+      {/if}
+    </div>
   </div>
-  <p class="setting-hint control-offset">
-    {imagesHint.before}{#if imagesHint.hasCommand}<InlineCode
-        >{MIGRATE_IMAGES_COMMAND}</InlineCode
-      >{/if}{imagesHint.after}
-  </p>
-  {#if restartRequired}
-    <p class="setting-hint control-offset" role="status" aria-live="polite">
-      {m.settings_tool_result_images_restart_notice()}
-    </p>
-  {/if}
 </div>
 
 <style>
-  .archive-content-settings {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .setting-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+  /* The row uses the shared settings grid from SettingsPage. The label
+     sits level with the segmented control, not centred on the notes. */
+  .setting-label,
+  .control-stack {
+    align-self: baseline;
   }
 
   .setting-label {
     font-size: 12px;
     font-weight: 500;
     color: var(--text-secondary);
-    white-space: nowrap;
   }
 
-  /* Notes about the control sit under it, on the shared control column,
-     as Remote access and GitHub place theirs. */
-  .control-offset {
-    padding-left: calc(var(--setting-label-width, 222px) + 12px);
+  .control-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    width: 100%;
+    min-width: 0;
   }
 
   .setting-hint {
@@ -98,17 +98,8 @@
   }
 
   @media (max-width: 640px) {
-    .control-offset {
-      padding-left: 0;
-    }
-
-    .setting-row.option-row {
-      flex-direction: column;
+    .control-stack {
       align-items: stretch;
-    }
-
-    .option-row .setting-label {
-      align-self: flex-start;
     }
 
     .option-row :global(.kit-segmented) {

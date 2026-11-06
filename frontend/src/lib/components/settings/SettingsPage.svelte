@@ -383,6 +383,17 @@
     gap: 12px;
   }
 
+  /* A panel with a single setting has no other rows to line up with, so
+     its label column fits the label (up to the shared width, past which
+     long translations wrap) and the control follows one gap later. Phones
+     keep the stacked layout below. */
+  @media (min-width: 641px) {
+    .settings-page :global(.kit-settings__panel .setting-row.compact:not(.column)) {
+      grid-template-columns: fit-content(var(--setting-label-width)) minmax(0, 1fr);
+      column-gap: var(--space-6);
+    }
+  }
+
   .settings-page :global(.kit-settings__panel .setting-row:not(.column) > :only-child) {
     grid-column: 1 / -1;
   }
