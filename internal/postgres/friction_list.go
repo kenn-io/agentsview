@@ -135,16 +135,16 @@ func (s *Store) ListFrictionPatterns(
 	pb := &paramBuilder{}
 	var preds []string
 	if f.Kind != "" {
-		preds = append(preds, "kind = "+pb.add(f.Kind))
+		preds = append(preds, "p.kind = "+pb.add(f.Kind))
 	}
 	if f.Since != "" {
-		preds = append(preds, "last_seen_date >= "+pb.add(f.Since))
+		preds = append(preds, "p.last_seen_date >= "+pb.add(f.Since))
 	}
 	if f.Fingerprints != nil {
 		if len(f.Fingerprints) == 0 {
 			return []db.FrictionPattern{}, "", nil
 		}
-		preds = append(preds, "fingerprint = ANY("+pb.add(f.Fingerprints)+")")
+		preds = append(preds, "p.fingerprint = ANY("+pb.add(f.Fingerprints)+")")
 	}
 	where := ""
 	if len(preds) > 0 {
@@ -152,11 +152,13 @@ func (s *Store) ListFrictionPatterns(
 	}
 	limitParam := pb.add(limit + 1)
 	offsetParam := pb.add(offset)
+	issueColumns, issueJoin := s.frictionIssueSelect(ctx)
 	rows, err := s.pg.QueryContext(ctx, `
-		SELECT fingerprint, kind, title, first_seen_date, last_seen_date,
-			occurrence_count, session_count, last_subject_id, last_ordinal
-		FROM friction_patterns `+where+`
-		ORDER BY occurrence_count DESC, last_seen_date DESC, fingerprint ASC
+		SELECT p.fingerprint, p.kind, p.title, p.first_seen_date,
+			p.last_seen_date, p.occurrence_count, p.session_count,
+			p.last_subject_id, p.last_ordinal, `+issueColumns+`
+		FROM friction_patterns p `+issueJoin+` `+where+`
+		ORDER BY p.occurrence_count DESC, p.last_seen_date DESC, p.fingerprint ASC
 		LIMIT `+limitParam+` OFFSET `+offsetParam, pb.args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("listing friction patterns: %w", err)
@@ -167,13 +169,17 @@ func (s *Store) ListFrictionPatterns(
 		var (
 			p       db.FrictionPattern
 			ordinal sql.NullInt64
+			issue   frictionIssueScan
 		)
-		if err := rows.Scan(&p.Fingerprint, &p.Kind, &p.Title, &p.FirstSeenDate,
+		if err := rows.Scan(append([]any{
+			&p.Fingerprint, &p.Kind, &p.Title, &p.FirstSeenDate,
 			&p.LastSeenDate, &p.OccurrenceCount, &p.SessionCount,
-			&p.LastSubjectID, &ordinal); err != nil {
+			&p.LastSubjectID, &ordinal,
+		}, issue.targets()...)...); err != nil {
 			return nil, "", fmt.Errorf("scanning friction pattern: %w", err)
 		}
 		p.LastOrdinal = pgNullIntPtr(ordinal)
+		p.Issue = issue.link(p.Fingerprint)
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {

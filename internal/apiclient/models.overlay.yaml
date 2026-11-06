@@ -273,3 +273,9 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/service
         name: service
+  # Issue metadata values are strings and numbers; the generator turns an
+  # untyped additionalProperties into map[string]struct{}, which cannot
+  # decode them.
+  - target: $.components.schemas.FrictionIssuePreview.properties.metadata
+    update:
+      x-go-type: map[string]any
