@@ -1025,9 +1025,11 @@
     margin: 6px 0 0;
   }
 
+  /* The tooltip inverts the theme, so page tokens like --text-muted lose
+     contrast here; quiet the inherited ink the way series names do. */
   .tooltip-empty {
     font-size: 12px;
-    color: var(--text-muted);
+    opacity: 0.7;
   }
 
   .tooltip-row {
