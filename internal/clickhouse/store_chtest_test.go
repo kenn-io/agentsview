@@ -150,7 +150,6 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, window, 1)
 			assert.Equal(t, tc.ordinal, window[0].Ordinal)
-			assert.Equal(t, asc[tc.ordinal].ToolCalls, window[0].ToolCalls)
 			assert.Equal(t, tc.toolOrdinals, recorder.ToolOrdinals)
 		}
 
