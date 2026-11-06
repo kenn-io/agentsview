@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1017,19 +1019,22 @@ func TestUsagePageFillShardsLargeWindow(t *testing.T) {
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	var batches [][]usageSourceVersion
+	extracted := make(map[string]usageSourceVersion)
+	var started int
 	barrier := make(chan struct{})
 	var mu sync.Mutex
 	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
 		mu.Lock()
-		// Capture only the first wave; lost-install retries can extract again.
-		if len(batches) < 2 {
-			batches = append(batches, versions)
-			if len(batches) == 2 {
-				close(barrier)
-			}
+		// Lost-install retries can extract a session again.
+		for _, version := range versions {
+			extracted[version.SessionID] = version
+		}
+		started++
+		if started == 2 {
+			close(barrier)
 		}
 		mu.Unlock()
+		// The first extraction waits for a second one to start.
 		select {
 		case <-barrier:
 		case <-ctx.Done():
@@ -1038,8 +1043,7 @@ func TestUsagePageFillShardsLargeWindow(t *testing.T) {
 	installs, _, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, func(string) {})
 	require.NoError(t, err)
 	assert.Len(t, installs, sessions)
-	require.Len(t, batches, 2)
-	assert.ElementsMatch(t, snapshot.Versions, append(batches[0], batches[1]...))
+	assert.ElementsMatch(t, snapshot.Versions, slices.Collect(maps.Values(extracted)))
 }
 
 func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {

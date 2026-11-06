@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -42,6 +43,20 @@ type usageRollupMetrics struct {
 	DailyRows, ExceptionGroups, ExceptionRows int64
 	BuildDuration, InstallDuration            time.Duration
 }
+
+func (m usageRollupMetrics) plus(other usageRollupMetrics) usageRollupMetrics {
+	return usageRollupMetrics{
+		DailyRows:       m.DailyRows + other.DailyRows,
+		ExceptionGroups: m.ExceptionGroups + other.ExceptionGroups,
+		ExceptionRows:   m.ExceptionRows + other.ExceptionRows,
+		BuildDuration:   m.BuildDuration + other.BuildDuration,
+		InstallDuration: m.InstallDuration + other.InstallDuration,
+	}
+}
+
+// usageRollupBuilders bounds the batches one rollup window builds at once.
+// Each holds a cache connection, so warm reads keep the rest of the pool.
+const usageRollupBuilders = 2
 
 var usageTimezoneIdentityCache sync.Map
 
@@ -266,39 +281,19 @@ func (c *usageRollupCoordinator) Ensure(
 			batch.Versions = append(batch.Versions, snapshot.Versions[i])
 		}
 	}
-	var metrics usageRollupMetrics
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, metrics, err
-		}
-		size := min(len(batch.Sessions), usageFillInstallBatchSize)
-		chunk := batch
-		chunk.Sessions = slices.Clone(batch.Sessions[:size])
-		chunk.Versions = slices.Clone(batch.Versions[:size])
-		chunkFills := make(map[string]usageFillResult, size)
-		for _, session := range chunk.Sessions {
-			chunkFills[session.ID] = fills[session.ID]
-		}
-		built, measured, err := c.ensureChunk(ctx, chunk, chunkFills, resolver, catalogHash)
-		metrics.DailyRows += measured.DailyRows
-		metrics.ExceptionGroups += measured.ExceptionGroups
-		metrics.ExceptionRows += measured.ExceptionRows
-		metrics.BuildDuration += measured.BuildDuration
-		metrics.InstallDuration += measured.InstallDuration
-		if err != nil {
-			return nil, metrics, err
-		}
-		maps.Copy(installs, built)
-		batch.Sessions = batch.Sessions[size:]
-		batch.Versions = batch.Versions[size:]
-		batch.CursorHighWater = 0
-		if len(batch.Sessions) == 0 {
-			return installs, metrics, nil
-		}
+	windowFills := make(map[string]usageFillResult, len(batch.Sessions))
+	for _, session := range batch.Sessions {
+		windowFills[session.ID] = fills[session.ID]
 	}
+	built, metrics, err := c.ensureWindow(ctx, batch, windowFills, resolver, catalogHash)
+	if err != nil {
+		return nil, metrics, err
+	}
+	maps.Copy(installs, built)
+	return installs, metrics, nil
 }
 
-func (c *usageRollupCoordinator) ensureChunk(
+func (c *usageRollupCoordinator) ensureWindow(
 	ctx context.Context, snapshot usageQuerySnapshot,
 	fills map[string]usageFillResult, resolver *export.PricingResolver,
 	catalogHash string,
@@ -332,11 +327,13 @@ func (c *usageRollupCoordinator) ensureChunk(
 				return
 			}
 			c.mu.Unlock()
-			call.installs, call.metrics, call.err = c.ensureNow(
-				c.ctx, snapshot, fills, resolver, catalogHash)
+			call.installs, call.metrics, call.err = c.ensureBatches(
+				call, key, snapshot, fills, resolver, catalogHash)
 			zone.Unlock()
 			c.mu.Lock()
-			delete(c.calls, key)
+			if c.calls[key] == call {
+				delete(c.calls, key)
+			}
 			close(call.done)
 			c.mu.Unlock()
 		}) {
@@ -360,6 +357,98 @@ func (c *usageRollupCoordinator) ensureChunk(
 	}
 }
 
+// ensureBatches builds a window's rollups in batches of
+// usageFillInstallBatchSize sessions. Up to usageRollupBuilders batches build
+// at once, each on its own connection and pricing resolver, and they install
+// one at a time in batch order, so each install holds the write lock for one
+// batch. Once every caller has left, batches that have not started to install
+// are dropped; the next request rebuilds them.
+func (c *usageRollupCoordinator) ensureBatches(
+	call *usageRollupCall, key string, snapshot usageQuerySnapshot,
+	fills map[string]usageFillResult, resolver *export.PricingResolver,
+	catalogHash string,
+) (map[string]usageRollupInstall, usageRollupMetrics, error) {
+	var batches []usageQuerySnapshot
+	var batchFills []map[string]usageFillResult
+	// The first batch runs even when empty so a stale Cursor build lands.
+	for first := true; first || len(snapshot.Sessions) > 0; first = false {
+		size := min(len(snapshot.Sessions), usageFillInstallBatchSize)
+		batch := snapshot
+		batch.Sessions = snapshot.Sessions[:size]
+		batch.Versions = snapshot.Versions[:size]
+		batches = append(batches, batch)
+		batchFill := make(map[string]usageFillResult, size)
+		for _, session := range batch.Sessions {
+			batchFill[session.ID] = fills[session.ID]
+		}
+		batchFills = append(batchFills, batchFill)
+		snapshot.Sessions = snapshot.Sessions[size:]
+		snapshot.Versions = snapshot.Versions[size:]
+		snapshot.CursorHighWater = 0
+	}
+	turns := make([]chan struct{}, len(batches)+1)
+	for i := range turns {
+		turns[i] = make(chan struct{})
+	}
+	close(turns[0])
+	installs := make(map[string]usageRollupInstall)
+	var metrics usageRollupMetrics
+	var errs error
+	var mu sync.Mutex
+	var next atomic.Int64
+	var wait sync.WaitGroup
+	for builder := range min(usageRollupBuilders, len(batches)) {
+		builderResolver := resolver
+		if builder > 0 {
+			builderResolver = resolver.Copy()
+		}
+		wait.Go(func() {
+			// A batch proceeds while callers wait and no earlier batch failed.
+			proceed := func() bool {
+				mu.Lock()
+				failed := errs != nil
+				mu.Unlock()
+				return !failed && c.keepCall(call, key)
+			}
+			for i := int(next.Add(1) - 1); i < len(batches); i = int(next.Add(1) - 1) {
+				if !proceed() {
+					close(turns[i+1])
+					continue
+				}
+				canInstall := func() bool {
+					<-turns[i]
+					return proceed()
+				}
+				built, measured, err := c.ensureNow(
+					c.ctx, batches[i], batchFills[i], builderResolver, catalogHash, canInstall)
+				close(turns[i+1])
+				mu.Lock()
+				maps.Copy(installs, built)
+				metrics = metrics.plus(measured)
+				errs = errors.Join(errs, err)
+				mu.Unlock()
+			}
+		})
+	}
+	wait.Wait()
+	return installs, metrics, errs
+}
+
+// keepCall reports whether call still has waiters. An abandoned call leaves
+// the coordinator, so a later request starts its own call instead of joining
+// one that drops batches.
+func (c *usageRollupCoordinator) keepCall(call *usageRollupCall, key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if call.waiters > 0 {
+		return true
+	}
+	if c.calls[key] == call {
+		delete(c.calls, key)
+	}
+	return false
+}
+
 // ensureNow aggregates committed per-session facts out of the usage cache. It
 // never reads the archive, so an append landing mid-build cannot invalidate
 // it: that session's own notification fill installs new facts, which makes its
@@ -367,6 +456,7 @@ func (c *usageRollupCoordinator) ensureChunk(
 func (c *usageRollupCoordinator) ensureNow(
 	ctx context.Context, snapshot usageQuerySnapshot,
 	fills map[string]usageFillResult, resolver *export.PricingResolver, catalogHash string,
+	canInstall func() bool,
 ) (map[string]usageRollupInstall, usageRollupMetrics, error) {
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
 	pricing := newUsagePricingIdentities(resolver)
@@ -383,12 +473,8 @@ func (c *usageRollupCoordinator) ensureNow(
 	// failing the caller.
 	for attempt := 1; ; attempt++ {
 		installs, done, attemptMetrics, attemptErr := c.ensureAttempt(
-			ctx, conn, identity, snapshot, currentFills, pricing, catalogHash)
-		metrics.DailyRows += attemptMetrics.DailyRows
-		metrics.ExceptionRows += attemptMetrics.ExceptionRows
-		metrics.ExceptionGroups += attemptMetrics.ExceptionGroups
-		metrics.BuildDuration += attemptMetrics.BuildDuration
-		metrics.InstallDuration += attemptMetrics.InstallDuration
+			ctx, conn, identity, snapshot, currentFills, pricing, catalogHash, canInstall)
+		metrics = metrics.plus(attemptMetrics)
 		if attemptErr != nil {
 			return nil, metrics, attemptErr
 		}
@@ -411,7 +497,7 @@ func (c *usageRollupCoordinator) ensureNow(
 func (c *usageRollupCoordinator) ensureAttempt(
 	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
 	snapshot usageQuerySnapshot, fills map[string]usageFillResult,
-	pricing *usagePricingIdentities, catalogHash string,
+	pricing *usagePricingIdentities, catalogHash string, canInstall func() bool,
 ) (map[string]usageRollupInstall, bool, usageRollupMetrics, error) {
 	if c.observer.beforeAttempt != nil {
 		c.observer.beforeAttempt(fills)
@@ -479,6 +565,9 @@ func (c *usageRollupCoordinator) ensureAttempt(
 			groups[row.GroupKind+"\x00"+row.GroupKey] = true
 		}
 		metrics.ExceptionGroups += int64(len(groups))
+	}
+	if !canInstall() {
+		return nil, true, metrics, nil
 	}
 	installStarted := time.Now()
 	if c.observer.beforeInstall != nil {

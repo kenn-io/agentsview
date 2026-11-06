@@ -170,11 +170,16 @@ archive-busy races retry at most three times, then fail instead of returning
 stale usage.
 
 Request cancellation detaches the waiter from shared fill work. The fill keeps
-running so retry storms converge. Rollup requests stop dispatching batches when
-canceled; the batch in flight finishes for the next request to reuse. One batch
-per timezone builds at a time, and identical concurrent batches share their
-work. Cursor history stays in one install with the first batch. `cached_at` is
-diagnostic only.
+running so retry storms converge. A large window fills in units of 1,024
+sessions, at most three at once, so one unit installs while others extract.
+
+One rollup request per timezone builds at a time, and identical concurrent
+requests share their work. Inside a request, two batches of 256 sessions build
+at once, each on its own cache connection, and they install one at a time in
+batch order. When every caller has left, the batch that is installing finishes
+for the next request to reuse, and batches that have not started to install are
+dropped. Cursor history stays in one install with the first batch. `cached_at`
+is diagnostic only.
 
 ## Files and generations
 
