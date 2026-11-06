@@ -37,17 +37,21 @@ func countReopenAliasFiles(t *testing.T, dir string) int {
 }
 
 // buildMirrorFixture builds a fresh, on-disk, schema-v3-compatible mirror
-// file at path containing a single session (sessionID). It uses the same
-// rebuildMirror path production rebuilds use, so the resulting file is a
+// file at path containing a single session (sessionID), with an optional prompt.
+// It uses the production rebuildMirror path, so the resulting file is a
 // realistic fixture: real schema, real metadata, real data.
-func buildMirrorFixture(t *testing.T, path, sessionID string) {
+func buildMirrorFixture(t *testing.T, path, sessionID string, prompts ...string) {
 	t.Helper()
 	local := newLocalDB(t)
 	ts := "2026-01-01T00:00:00.000Z"
+	prompt := sessionID + " first"
+	if len(prompts) > 0 {
+		prompt = prompts[0]
+	}
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session: syncSession(sessionID, "alpha", sessionID+" first", ts, 1),
+		Session: syncSession(sessionID, "alpha", prompt, ts, 1),
 		Messages: []db.Message{
-			syncMessage(sessionID, 0, "user", sessionID+" first", ts),
+			syncMessage(sessionID, 0, "user", prompt, ts),
 		},
 		DataVersion:     1,
 		ReplaceMessages: true,
@@ -57,6 +61,11 @@ func buildMirrorFixture(t *testing.T, path, sessionID string) {
 	_, err = rebuildMirror(
 		t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil,
 	)
+	require.NoError(t, err)
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET quality_signal_version = ?", db.CurrentQualitySignalVersion)
 	require.NoError(t, err)
 }
 

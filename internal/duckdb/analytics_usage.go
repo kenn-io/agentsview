@@ -211,6 +211,8 @@ func (s *Store) duckPopulateFrustrationMarkers(
 		return nil
 	}
 	cache := s.path != ""
+	// Pin cached counts and the query start to the same mirror generation.
+	s.handleMu.RLock()
 	generation := s.frustrationMemo.Generation()
 	idx := make(map[string]int, len(rows))
 	placeholders := make([]string, 0, len(rows))
@@ -227,13 +229,15 @@ func (s *Store) duckPopulateFrustrationMarkers(
 		args = append(args, rows[i].ID)
 	}
 	if len(args) == 0 {
+		s.handleMu.RUnlock()
 		return nil
 	}
 	q := `SELECT session_id, content, is_system
 		FROM messages
 		WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN (` +
 		strings.Join(placeholders, ",") + `)`
-	msgRows, err := s.queryContext(ctx, q, args...)
+	msgRows, err := queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, q, args...)
+	s.handleMu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("querying duckdb frustration markers: %w", err)
 	}
@@ -256,9 +260,6 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	if err := msgRows.Err(); err != nil {
 		return fmt.Errorf("iterating duckdb frustration markers: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 	if cache {
 		for id, i := range idx {
