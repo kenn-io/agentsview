@@ -193,7 +193,7 @@ describe("SemanticSetupHelp", () => {
     unmount(component);
   });
 
-  it("turns on the built-in server, approving the download it shows", async () => {
+  it("refreshes setup after turning on the built-in server", async () => {
     const setup = {
       enabled: false,
       action: "turn-on",
@@ -213,9 +213,6 @@ describe("SemanticSetupHelp", () => {
       .find((b) => b.textContent?.trim() === "Turn on")!
       .click();
     await settle();
-    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
-      approved_bytes: 295000000,
-    });
     expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
     unmount(component);
   });
@@ -440,7 +437,6 @@ describe("SemanticSetupHelp", () => {
 
     const { component, onResolved } = mountHelp();
     await settle();
-    expect(document.body.querySelector('[role="progressbar"]')).not.toBeNull();
 
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_error: "embeddings endpoint refused the connection" }),

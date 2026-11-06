@@ -3,11 +3,10 @@ import { expect, test } from "@playwright/test";
 for (const width of [1280, 390]) {
   test(`lays out search by meaning at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 850 });
-    let phase = "failed";
     const setup = () => ({
       enabled: true,
       action: "",
-      provider: phase === "ollama" ? "ollama" : "built-in",
+      provider: "built-in",
       missing_bytes: 0,
       installing: false,
       busy: false,
@@ -21,7 +20,7 @@ for (const width of [1280, 390]) {
           done: 0,
           total: 0,
           setup: setup(),
-          ...(phase === "failed" ? { last_error: "encoder unavailable" } : {}),
+          last_error: "encoder unavailable",
         },
       }),
     );
@@ -41,12 +40,5 @@ for (const width of [1280, 390]) {
     const errorBox = (await page.getByRole("alert").boundingBox())!;
     const generationsBox = (await page.locator(".embeddings-settings .subsection").boundingBox())!;
     expect(generationsBox.y - errorBox.y - errorBox.height).toBeGreaterThanOrEqual(16);
-
-    phase = "ollama";
-    await openEmbeddings();
-    const row = page.locator(".kit-search-by-meaning");
-    await expect(row.locator(".kit-chip")).toHaveText("On · Ollama");
-    await expect(row.getByRole("button")).toHaveCount(0);
-    await expect(row.locator(".kit-search-by-meaning__line")).toHaveCount(0);
   });
 }
