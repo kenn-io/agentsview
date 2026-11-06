@@ -707,7 +707,9 @@ func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
+		assert.NoError(t, json.MarshalWrite(w, map[string]any{"started": true, "build_id": status.BuildID}))
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -785,7 +787,9 @@ END`)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
+		assert.NoError(t, json.MarshalWrite(w, map[string]any{"started": true, "build_id": status.BuildID}))
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
