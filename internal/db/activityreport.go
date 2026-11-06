@@ -92,7 +92,6 @@ func (db *DB) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
-	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true
 	release, err := db.acquireBulkRead(ctx)
@@ -100,10 +99,11 @@ func (db *DB) BuildActivityReportArtifacts(
 		return activity.CandidateArtifacts{}, err
 	}
 	defer release()
+	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 
 	var selection, version string
 	var revision int64
-	if !q.Partial && !db.readOnly {
+	if !q.Partial && !db.readOnly && !TerminationUsesTime(f.Termination) {
 		version, revision, err = db.activityKeptVersion(ctx)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err

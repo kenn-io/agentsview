@@ -88,6 +88,16 @@ func TestActivityReportKeptReuse(t *testing.T) {
 	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
 }
 
+func TestActivityReportKeptSkipsTimeDependentTermination(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	q := dayQuery(t, "2026-06-14", "UTC")
+	f := AnalyticsFilter{Timezone: "UTC", Termination: "active"}
+
+	keptActivityBuild(t, d, f, q, true)
+	keptActivityBuild(t, d, f, q, true)
+}
+
 func TestActivityReportKeptBoundsReadSetMemory(t *testing.T) {
 	d := testDB(t)
 	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
