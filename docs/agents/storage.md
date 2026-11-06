@@ -778,10 +778,10 @@ exact baked metadata, per-session pricing identity, resolved rate hashes, and
 Cursor high-water mark. With a trusted claim, refresh journaled sessions and
 invalidated installs, and verify coverage and concurrent installs in the pinned
 cache transaction. Covered daily totals read ordinary usage from day totals and
-load only window exception owners and matching authoritative sessions. Other
-window reads discover sessions through date indexes. A timezone without a claim
-starts a coverage pass when backfill is enabled. After a conflicting install,
-daily totals retry once with a fresh journal capture; further conflicts and
+load only window exception owners and matching authoritative sessions. Covered
+Top sessions skip discovery; other window reads use date indexes. Without a
+claim, enabled backfill starts coverage. After conflicts, daily totals
+and Top sessions retry once with a fresh journal capture; further conflicts and
 other reads use the full path. A result is no older than the archive snapshot
 captured when the read began, and may be newer for a session whose facts were
 refilled meanwhile. A session confirmed deleted during fill is dropped from the
