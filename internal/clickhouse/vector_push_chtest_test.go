@@ -488,14 +488,15 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 			// An eviction deletes only through the chunk version it observed
 			// with the owner check, so chunks inserted between that read and
 			// the delete survive.
-			otherOwners, newest, err := s.vectorEvictionBound(ctx, vectorFixtureFP, fixtureAlphaID)
+			bounds, err := s.vectorEvictionBounds(ctx, vectorFixtureFP, []string{fixtureAlphaID, fixtureBetaID})
 			require.NoError(t, err)
-			require.False(t, otherOwners)
+			require.NotContains(t, bounds, fixtureBetaID, "beta has another owner")
+			newest := bounds[fixtureAlphaID]
 			require.NotZero(t, newest)
 			require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
 				vectorFixtureFP, "alpha-concurrent", int64(0), fixtureAlphaID, vecAlpha0a, newest + 1,
 			}}))
-			require.NoError(t, s.deleteVectorChunksThrough(ctx, vectorFixtureFP, fixtureAlphaID, newest))
+			require.NoError(t, s.deleteVectorChunksThrough(ctx, vectorFixtureFP, bounds))
 			assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ? AND push_version <= ?", fixtureAlphaID, newest))
 			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "alpha-concurrent"),
 				"chunks newer than the observed version survive the bounded delete")
