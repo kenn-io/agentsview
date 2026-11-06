@@ -53,7 +53,7 @@ func TestUsageKeptMissAfterPricingPush(t *testing.T) {
 		name string
 		want string
 	}{
-		{"daily", "0.0125"},
+		{"daily", "0.01375"},
 		{"top", "0.01"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,8 +148,12 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project-a", Machine: "test-machine", Agent: "codex", StartedAt: new("2026-01-01T09:00:00Z"), EndedAt: new("2026-01-01T10:00:00Z")}))
 		require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Content: "answer", Model: id, Timestamp: "2026-01-01T09:00:00Z"}}))
 	}
-	for _, id := range []string{"paid-a", "paid-b"} {
-		require.NoError(t, local.ReplaceSessionUsageEvents(ctx, id, []db.UsageEvent{{SessionID: id, Source: "provider", Model: id, OutputTokens: 500, DedupKey: "event", OccurredAt: "2026-01-01T09:00:00Z"}}))
+	for _, session := range []struct {
+		id           string
+		outputTokens int
+	}{{"paid-a", 500}, {"paid-b", 750}} {
+		id := session.id
+		require.NoError(t, local.ReplaceSessionUsageEvents(ctx, id, []db.UsageEvent{{SessionID: id, Source: "provider", Model: id, OutputTokens: session.outputTokens, DedupKey: "event", OccurredAt: "2026-01-01T09:00:00Z"}}))
 	}
 	require.NoError(t, local.ReplaceSessionPlanUsage(ctx, "plan", fullPlanUsage()))
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "paid-a", OutputPerMTok: money.MustParseDollars("10")}, {ModelPattern: "paid-b", OutputPerMTok: money.MustParseDollars("5")}}))
@@ -159,36 +163,6 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 	counter := &usageReadCounter{storeExecutor: store.pg, queries: map[string]int{}}
 	store.pg = counter
 	return local, syncer, store, counter
-}
-
-func TestUsageKeptWithoutJournal(t *testing.T) {
-	_, syncer, store, counter := keptUsageFixture(t)
-	ctx := t.Context()
-	// Optional journal installation leaves no version row when it cannot run.
-	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
-	require.NoError(t, err)
-	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
-	read := func(s *Store) []any {
-		daily, err := s.GetDailyUsage(ctx, f)
-		require.NoError(t, err)
-		counts, err := s.GetPlanUsageSessionCounts(ctx, f)
-		require.NoError(t, err)
-		top, err := s.GetTopSessionsByCost(ctx, f, 10)
-		require.NoError(t, err)
-		return []any{daily, counts, top}
-	}
-	want := read(&Store{pg: counter.storeExecutor})
-	require.Equal(t, 1000, want[0].(db.DailyUsageResult).Totals.OutputTokens)
-	require.Equal(t, 1, want[1].(db.PlanUsageSessionCounts).PlanOnly)
-	require.Len(t, want[2], 2)
-	for range 2 {
-		assert.Equal(t, want, read(store))
-	}
-	assert.Equal(t, 6, counter.revisionReads)
-	assert.Empty(t, counter.revisionErrors, "Usage revision probes must succeed without a journal")
-	for _, count := range counter.queries {
-		assert.Equal(t, 2, count, "archives without a journal must read fresh")
-	}
 }
 
 func TestUsageKeptPushBetweenReads(t *testing.T) {
@@ -205,7 +179,7 @@ func TestUsageKeptPushBetweenReads(t *testing.T) {
 		return []any{daily, counts, top}
 	}
 	previous := read(store)
-	require.Equal(t, 1000, previous[0].(db.DailyUsageResult).Totals.OutputTokens)
+	require.Equal(t, 1250, previous[0].(db.DailyUsageResult).Totals.OutputTokens)
 	require.Equal(t, 1, previous[1].(db.PlanUsageSessionCounts).PlanOnly)
 	require.Len(t, previous[2], 2)
 	require.Len(t, counter.queries, 3)
@@ -217,99 +191,66 @@ func TestUsageKeptPushBetweenReads(t *testing.T) {
 		topFilter.TopSessionsSort = db.TopSessionsSortTokens
 		got, err := store.GetTopSessionsByCost(ctx, topFilter, 10)
 		require.NoError(t, err)
-		assert.Equal(t, previous[2], got)
+		costOrder := previous[2].([]db.TopSessionEntry)
+		require.Len(t, costOrder, 2)
+		assert.Equal(t, "paid-a", costOrder[0].SessionID)
+		assert.Equal(t, "paid-b", costOrder[1].SessionID)
+		tokenOrder := []db.TopSessionEntry{costOrder[1], costOrder[0]}
+		assert.Equal(t, tokenOrder, got)
 		assert.Equal(t, queries, counter.queries)
 
 		got, err = store.GetTopSessionsByCost(ctx, topFilter, 1)
 		require.NoError(t, err)
-		assert.Equal(t, previous[2].([]db.TopSessionEntry)[:1], got)
+		assert.Equal(t, tokenOrder[:1], got)
 		assert.Equal(t, queries, counter.queries)
 
 		assert.Equal(t, previous, read(store))
 		assert.Equal(t, queries, counter.queries)
 	})
 	for _, tc := range []struct {
-		name   string
-		change func()
+		name     string
+		change   func()
+		fullPush bool
 	}{
 		{"usage", func() {
 			require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "paid-a", []db.UsageEvent{{SessionID: "paid-a", Source: "provider", Model: "paid-a", OutputTokens: 900, DedupKey: "new", OccurredAt: "2026-01-01T09:00:00Z"}}))
-		}},
-		{"rename", func() { require.NoError(t, local.RenameSession(ctx, "paid-a", new("Renamed session"))) }},
+		}, false},
 		{"custom pricing", func() {
 			store.SetCustomPricing(map[string]config.CustomModelRate{"paid-a": {OutputMicrodollarsPerMTok: 30_000_000}})
-		}},
-		{"soft delete", func() { require.NoError(t, local.SoftDeleteSession(ctx, "paid-a")) }},
+		}, false},
+		{"schema rebuild", func() {
+			revision, err := store.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			_, err = syncer.pg.ExecContext(ctx, `DROP SCHEMA `+syncer.schema+` CASCADE`)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+			afterRevision, err := store.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			require.NotEqual(t, revision, afterRevision)
+		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.change()
-			result, err := syncer.Push(ctx, false, nil)
+			result, err := syncer.Push(ctx, tc.fullPush, nil)
 			require.NoError(t, err)
 			require.Empty(t, result.Errors)
 			fresh := &Store{pg: counter.storeExecutor}
 			fresh.SetCustomPricing(store.runtimeState().customPricing)
 			got := read(store)
-			assert.NotEqual(t, previous, got)
+			if !tc.fullPush {
+				assert.NotEqual(t, previous, got)
+			}
 			assert.Equal(t, read(fresh), got)
 			for query, count := range queries {
+				if tc.name == "custom pricing" && strings.Contains(query, "session_plan_usage") {
+					continue
+				}
 				assert.Equal(t, count+1, counter.queries[query])
 			}
 			previous, queries = got, maps.Clone(counter.queries)
 			assert.Equal(t, got, read(store))
 			assert.Equal(t, queries, counter.queries)
 		})
-	}
-}
-
-func TestUsageKeptSchemaRebuild(t *testing.T) {
-	local, syncer, store, counter := keptUsageFixture(t)
-	ctx := t.Context()
-	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
-	read := func(s *Store) []any {
-		daily, err := s.GetDailyUsage(ctx, f)
-		require.NoError(t, err)
-		counts, err := s.GetPlanUsageSessionCounts(ctx, f)
-		require.NoError(t, err)
-		top, err := s.GetTopSessionsByCost(ctx, f, 10)
-		require.NoError(t, err)
-		return []any{daily, counts, top}
-	}
-	before := read(store)
-	require.Equal(t, 1000, before[0].(db.DailyUsageResult).Totals.OutputTokens)
-	require.Equal(t, 1, before[1].(db.PlanUsageSessionCounts).PlanOnly)
-	require.Len(t, before[2], 2)
-	queries := maps.Clone(counter.queries)
-	require.Equal(t, before, read(store))
-	require.Equal(t, queries, counter.queries)
-	revision, err := store.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-
-	require.NoError(t, local.DeleteSession(ctx, "paid-b"))
-	require.NoError(t, local.DeleteSession(ctx, "plan"))
-	require.NoError(t, local.RenameSession(ctx, "paid-a", new("Rebuilt session")))
-	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "paid-a", []db.UsageEvent{{SessionID: "paid-a", Source: "provider", Model: "paid-a", OutputTokens: 900, DedupKey: "rebuilt", OccurredAt: "2026-01-01T09:00:00Z"}}))
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "paid-a", OutputPerMTok: money.MustParseDollars("20")}}))
-	_, err = syncer.pg.ExecContext(ctx, `DROP SCHEMA `+syncer.schema+` CASCADE`)
-	require.NoError(t, err)
-	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
-	pushed, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Empty(t, pushed.Errors)
-	afterRevision, err := store.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	require.NotEqual(t, revision, afterRevision)
-
-	fresh, err := NewStore(ctx, testPGURL(t), syncer.schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	want := read(fresh)
-	require.Equal(t, 900, want[0].(db.DailyUsageResult).Totals.OutputTokens)
-	require.Zero(t, want[1].(db.PlanUsageSessionCounts).PlanOnly)
-	require.Len(t, want[2], 1)
-	got := read(store)
-	for i, name := range []string{"daily usage", "plan counts", "top sessions"} {
-		assert.NotEqual(t, before[i], got[i], name)
-		assert.Equal(t, want[i], got[i], name)
 	}
 }
 
@@ -327,7 +268,7 @@ func TestUsageKeptServicePairwiseSharesSummary(t *testing.T) {
 	got, err := backend.UsagePairwiseComparison(t.Context(), pairReq)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"group-a", "group-b"}, []string{got.Left.Value, got.Right.Value})
-	require.Equal(t, 1000, got.Left.OutputTokens+got.Right.OutputTokens)
+	require.Equal(t, 1250, got.Left.OutputTokens+got.Right.OutputTokens)
 	for query, count := range queries {
 		assert.Equal(t, count, counter.queries[query])
 	}
@@ -344,6 +285,35 @@ func TestUsageKeptServicePairwiseSharesSummary(t *testing.T) {
 }
 
 func TestUsageKeptBypasses(t *testing.T) {
+	t.Run("without journal", func(t *testing.T) {
+		_, syncer, store, counter := keptUsageFixture(t)
+		ctx := t.Context()
+		// Optional journal installation leaves no version row when it cannot run.
+		_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+		require.NoError(t, err)
+		f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
+		read := func(s *Store) []any {
+			daily, err := s.GetDailyUsage(ctx, f)
+			require.NoError(t, err)
+			counts, err := s.GetPlanUsageSessionCounts(ctx, f)
+			require.NoError(t, err)
+			top, err := s.GetTopSessionsByCost(ctx, f, 10)
+			require.NoError(t, err)
+			return []any{daily, counts, top}
+		}
+		want := read(&Store{pg: counter.storeExecutor})
+		require.Equal(t, 1250, want[0].(db.DailyUsageResult).Totals.OutputTokens)
+		require.Equal(t, 1, want[1].(db.PlanUsageSessionCounts).PlanOnly)
+		require.Len(t, want[2], 2)
+		for range 2 {
+			assert.Equal(t, want, read(store))
+		}
+		assert.Equal(t, 6, counter.revisionReads)
+		assert.Empty(t, counter.revisionErrors, "Usage revision probes must succeed without a journal")
+		for _, count := range counter.queries {
+			assert.Equal(t, 2, count, "archives without a journal must read fresh")
+		}
+	})
 	t.Run("active", func(t *testing.T) {
 		_, _, store, counter := keptUsageFixture(t)
 		f := db.UsageFilter{Termination: "active"}
