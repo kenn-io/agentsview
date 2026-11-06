@@ -464,18 +464,18 @@ func ensureFreshData(
 
 	// A writable daemon owns ingestion even while starting or incompatible.
 	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
+		stale := true
 		if rt := FindWritableDaemonRuntime(appCfg.DataDir, appCfg.AuthToken); rt != nil {
 			api, err := apiclient.NewHTTPClient(transportFromRuntime(rt).URL, appCfg.AuthToken, &http.Client{Timeout: 30 * time.Second})
-			if err != nil {
-				fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
-			} else {
-				ctx, stale := apiclient.TrackArchiveFreshness(ctx, nil)
+			if err == nil {
+				ctx, archiveStale := apiclient.TrackArchiveFreshness(ctx, nil)
 				// Wake idle ingestion through an in-memory status read.
 				response, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
-				if err != nil || response.StatusCode != http.StatusOK || stale() {
-					fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
-				}
+				stale = err != nil || response == nil || response.StatusCode != http.StatusOK || archiveStale()
 			}
+		}
+		if stale {
+			fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
 		}
 		return
 	}

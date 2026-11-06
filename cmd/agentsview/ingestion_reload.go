@@ -274,6 +274,9 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	err := d.restoreCollection()
 	if err == nil {
 		stats := syncAllReleasingStartupMaintenance(d.ctx, d.engine, nil)
+		if err := d.engine.ReconcileWatchRoots(d.ctx, reconcileRootPaths(d.Config()), false); err != nil {
+			log.Printf("idle catch-up reconciliation: %v", err)
+		}
 		if !stats.ProcessingComplete() {
 			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
 		}

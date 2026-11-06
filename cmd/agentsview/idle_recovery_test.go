@@ -112,8 +112,8 @@ func TestIdleDirectReadSkipsSyncWhileDaemonOwnsArchive(t *testing.T) {
 				ensureFreshData(t.Context(), cfg, database, false)
 			})
 
+			assert.Equal(t, apiclient.ArchiveStaleWarning+"\n", stderr)
 			if state == "request fails" {
-				assert.Equal(t, apiclient.ArchiveStaleWarning+"\n", stderr)
 				assert.Equal(t, int64(1), reads.Load(), "the reader attempts to wake the running daemon")
 			}
 			messages, err := database.GetAllMessages(t.Context(), "gemini:overnight")
@@ -121,6 +121,31 @@ func TestIdleDirectReadSkipsSyncWhileDaemonOwnsArchive(t *testing.T) {
 			assert.Empty(t, messages, "the daemon owns ingestion even when a wake request cannot succeed")
 		})
 	}
+}
+
+func TestReviewIdleWakeReconcilesDeletedSource(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.Suspend()
+	f.ingestion.applying.Wait()
+	path := filepath.Join(f.root, "tmp", "project", "chats", "session-retained.json")
+	require.NoError(t, os.Remove(path))
+	before, err := f.database.GetSessionFull(t.Context(), "gemini:retained")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.Nil(t, before.SourceMissingAt)
+
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+
+	after, err := f.database.GetSessionFull(t.Context(), "gemini:retained")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.NotNil(t, after.SourceMissingAt, "wake reconciles sources removed while collection was suspended")
+	assert.Nil(t, after.DeletedAt, "missing sources retain their archived history")
+	messages, err := f.database.GetAllMessages(t.Context(), "gemini:retained")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "hello from retained", messages[0].Content)
 }
 
 func TestIdleWakeReleasesSkippedStartupMaintenance(t *testing.T) {

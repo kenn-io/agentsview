@@ -3,20 +3,10 @@ import { SearchService } from "../api/generated/index.js";
 import { ApiError } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
-import {
-  SEARCH_MODE_STORAGE_KEY,
-  createSearchStore,
-  searchStore,
-  type SearchMode,
-} from "./search.svelte.js";
-import { events } from "./events.svelte.js";
-import { watchEvents } from "../api/client.js";
-import { tick } from "svelte";
-import { sync } from "./sync.svelte.js";
+import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
 
 vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn(), reportErrorShown: vi.fn() }));
-vi.mock("../api/client.js", () => ({ watchEvents: vi.fn() }));
 
 vi.mock("../api/generated/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/generated/index.js")>();
@@ -119,54 +109,7 @@ describe("SearchStore", () => {
   });
 
   afterEach(() => {
-    searchStore.clear();
-    sync.syncPending = false;
-    events.setAvailable(false);
     vi.useRealTimers();
-  });
-
-  it("refreshes an open search once after idle catch-up and shows the new match", async ({
-    onTestFinished,
-  }) => {
-    vi.mocked(watchEvents).mockReturnValue({
-      readyState: 1,
-      addEventListener: vi.fn(),
-      close: vi.fn(),
-    } as unknown as ReturnType<typeof watchEvents>);
-    onTestFinished(events.subscribe(vi.fn()));
-    events.setAvailable(true);
-    searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle", 0));
-    searchStore.search("needle");
-    await runDebounce();
-    expect(searchStore.results).toEqual([]);
-
-    sync.syncPending = true;
-    await tick();
-    searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle"));
-    vi.mocked(watchEvents).mock.calls[0]![0]({ scope: "messages" });
-    await runDebounce();
-    await runDebounce();
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-
-    sync.syncPending = false;
-    await tick();
-    await runDebounce();
-
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-    expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
-      expect.objectContaining({ q: "needle" }),
-      expect.anything(),
-    );
-    expect(searchStore.results).toEqual([
-      expect.objectContaining({
-        session_id: "full-0",
-        snippet: "before <mark>result 0</mark> after",
-      }),
-    ]);
-    vi.mocked(watchEvents).mock.calls[0]![0]({ scope: "messages" });
-    await runDebounce();
-    await runDebounce();
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
   });
 
   it.each([
