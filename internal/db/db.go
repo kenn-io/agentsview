@@ -1977,8 +1977,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 	}
 	db := &DB{
 		path: path, readOnly: true,
-		usageCache:   newUsageCacheManager(path),
-		activityKept: newActivityKeptMemo(),
+		usageCache: newUsageCacheManager(path),
 	}
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)

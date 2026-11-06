@@ -68,8 +68,11 @@ type activityReportBackend struct {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	rows, pricing, read, err := b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
-	*b.read = append(*b.read, read...)
+	rows, pricing, read, err := b.activityReportUsage(
+		ctx, ids, b.lowerBound, b.upperBound, q, b.read != nil)
+	if b.read != nil {
+		*b.read = append(*b.read, read...)
+	}
 	return rows, pricing, err
 }
 
@@ -126,9 +129,14 @@ func (db *DB) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	read := slices.Clone(ids)
+	var read []string
+	var readSet *[]string
+	if selection != "" {
+		read = slices.Clone(ids)
+		readSet = &read
+	}
 	backend := activityReportBackend{
-		read:       &read,
+		read:       readSet,
 		DB:         db,
 		lowerBound: lowerBound, upperBound: upperBound,
 	}
@@ -926,9 +934,10 @@ func (db *DB) ActivityReportCandidateSource(
 // parsed instants so mixed RFC3339 representations remain chronological.
 func (db *DB) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
+	collectRead bool,
 ) ([]activity.UsageRow, *export.PricingBlock, []string, error) {
 	return db.activityReportUsageFrom(
-		ctx, db.getReader(), ids, lowerBound, upperBound, q,
+		ctx, db.getReader(), ids, lowerBound, upperBound, q, collectRead,
 	)
 }
 
@@ -938,6 +947,7 @@ func (db *DB) activityReportUsageFrom(
 	ids []string,
 	lowerBound, upperBound string,
 	q activity.Query,
+	collectRead bool,
 ) ([]activity.UsageRow, *export.PricingBlock, []string, error) {
 	candidates, _, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
 		ctx, source, ids, lowerBound, upperBound, false,
@@ -947,10 +957,15 @@ func (db *DB) activityReportUsageFrom(
 	}
 	sortActivityReportUsageCandidates(candidates)
 	baseRows := make([]activity.UsageRow, len(candidates))
-	read := make([]string, 0, len(candidates))
+	var read []string
+	if collectRead {
+		read = make([]string, 0, len(candidates))
+	}
 	for i, candidate := range candidates {
 		row := candidate.row
-		read = append(read, row.SessionID)
+		if collectRead {
+			read = append(read, row.SessionID)
+		}
 		_, row.OutputTokens, _, _, _ = dailyUsageRowTokens(candidate.scan)
 		row.WebSearchRequests = usageRowWebSearchRequests(
 			candidate.scan.usageSource, candidate.scan.tokenJSON)

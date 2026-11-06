@@ -39,6 +39,8 @@ func newActivityKeptMemo() kept.Memo[activityKept] {
 }
 
 func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
+	// In-memory pricing setters run before writable reports are kept or on
+	// read-only handles, which skip this cache.
 	id, pricingRevision, err := db.databaseIDAndUsagePricingRevision(ctx)
 	if err != nil {
 		return "", 0, fmt.Errorf("reading kept activity version: %w", err)
