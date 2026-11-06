@@ -631,9 +631,6 @@ default as the `[pg]` config key, and an explicit `false` opts out.
 
 ## Backend Parity
 
-PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
-and project identity writes. CockroachDB has no journal.
-
 Automatic repository project naming belongs to the writable SQLite archive.
 `repository_project_names` retains choices derived from producer-recorded
 remotes and source snapshots; explicit folder rules and session assignments win.
@@ -974,6 +971,9 @@ message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
 
 ### PostgreSQL usage comparisons
+
+PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
+and project identity writes. CockroachDB has no journal.
 
 PostgreSQL stores usage timestamps in UTC with microsecond precision, while
 SQLite keeps the timestamp text that the parser produced. Before PostgreSQL push

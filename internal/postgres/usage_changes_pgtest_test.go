@@ -36,6 +36,7 @@ func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 }
 
 func TestUsageChangeJournalBoundedCommit(t *testing.T) {
+	var commits []time.Duration
 	for _, sessions := range []int{8000, 32000} {
 		t.Run(fmt.Sprint(sessions), func(t *testing.T) {
 			_, syncer, store := newUsageJournalFixture(t)
@@ -52,13 +53,17 @@ func TestUsageChangeJournalBoundedCommit(t *testing.T) {
 			require.NoError(t, tx.Commit())
 			elapsed := time.Since(started)
 			t.Logf("%d-session commit: %s", sessions, elapsed)
-			assert.Less(t, elapsed, 2*time.Second, "bulk journal stamping must stay bounded")
+			commits = append(commits, elapsed)
 			through, ids, err := store.LoadUsageChanges(ctx, before)
 			require.NoError(t, err)
 			assert.Equal(t, before+1, through)
 			assert.Len(t, ids, sessions)
 		})
 	}
+	require.Len(t, commits, 2)
+	// Four times the rows allows linear work but rejects quadratic stamping,
+	// which grows sixteenfold. Compare commits rather than host speed.
+	assert.Less(t, commits[1], 10*commits[0], "bulk journal stamping must scale with the changed sessions")
 }
 
 func TestUsageChangeJournalWriteAfterImmediateStamp(t *testing.T) {
@@ -180,45 +185,58 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 func TestUsageChangeJournalPushPaths(t *testing.T) {
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
-	push := func(t *testing.T) {
+	push := func(t *testing.T, full bool) {
 		t.Helper()
-		result, err := syncer.Push(ctx, false, nil)
+		result, err := syncer.Push(ctx, full, nil)
 		require.NoError(t, err)
 		require.Empty(t, result.Errors)
 	}
 	// Publish catalog and identity metadata before measuring individual writes.
-	push(t)
+	push(t, false)
 	session := db.Session{ID: "journal-session", Project: "project-a", Machine: "test-machine", Agent: "codex", CreatedAt: "2026-10-01T09:00:00Z"}
 	for _, tc := range []struct {
 		name   string
 		change func(t *testing.T)
 		ids    []string
+		full   bool
 	}{
-		{"new session", func(t *testing.T) { require.NoError(t, local.UpsertSession(ctx, session)) }, []string{session.ID}},
+		{"new session", func(t *testing.T) { require.NoError(t, local.UpsertSession(ctx, session)) }, []string{session.ID}, false},
 		{"message append", func(t *testing.T) {
 			require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "Explain this query"}}))
-		}, []string{session.ID}},
+		}, []string{session.ID}, false},
+		{"message rewrite", func(t *testing.T) {
+			require.NoError(t, local.ReplaceSessionMessages(ctx, session.ID, []db.Message{{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "Explain the changed query"}}))
+		}, []string{session.ID}, false},
+		{"rename", func(t *testing.T) {
+			require.NoError(t, local.RenameSession(ctx, session.ID, new("Query explanation")))
+		}, []string{session.ID}, false},
 		{"usage only", func(t *testing.T) {
 			require.NoError(t, local.ReplaceSessionUsageEvents(ctx, session.ID, []db.UsageEvent{{SessionID: session.ID, Source: "provider", Model: "model-a", InputTokens: 1200, OutputTokens: 300, DedupKey: "event-a"}}))
-		}, []string{session.ID}},
+		}, []string{session.ID}, false},
 		{"plan usage only", func(t *testing.T) {
 			require.NoError(t, local.ReplaceSessionPlanUsage(ctx, session.ID, fullPlanUsage()))
-		}, []string{session.ID}},
+		}, []string{session.ID}, false},
 		{"pricing", func(t *testing.T) {
 			require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "model-a", InputPerMTok: money.Money{Microdollars: 1000000}}}))
-		}, nil},
+		}, nil, false},
 		{"openrouter bookkeeping", func(t *testing.T) {
 			require.NoError(t, local.SetPricingMeta(pricing.OpenRouterModelsMetaKey, pricing.EncodeOpenRouterModels([]string{"model-a"})))
-		}, nil},
+		}, nil, false},
 		{"project identity", func(t *testing.T) {
 			require.NoError(t, local.UpsertProjectIdentityObservation(ctx, export.ProjectIdentityObservation{Project: "project-c", Machine: "test-machine", RootPath: "/workspace/project-c", GitRemote: "https://example.com/project-c.git"}))
-		}, nil},
+		}, nil, false},
+		{"soft delete", func(t *testing.T) {
+			require.NoError(t, local.SoftDeleteSession(ctx, session.ID))
+		}, []string{session.ID}, false},
+		{"hard delete", func(t *testing.T) {
+			require.NoError(t, local.DeleteSession(ctx, session.ID))
+		}, []string{session.ID}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before, err := store.UsageChangeRevision(ctx)
 			require.NoError(t, err)
 			tc.change(t)
-			push(t)
+			push(t, tc.full)
 			after, err := store.UsageChangeRevision(ctx)
 			require.NoError(t, err)
 			if tc.name == "openrouter bookkeeping" {
@@ -233,7 +251,7 @@ func TestUsageChangeJournalPushPaths(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, after, through)
 			assert.Equal(t, tc.ids, ids)
-			push(t)
+			push(t, false)
 			unchanged, err := store.UsageChangeRevision(ctx)
 			require.NoError(t, err)
 			assert.Equal(t, after, unchanged, "unchanged push")
@@ -345,6 +363,8 @@ func TestUsageChangeJournalInstallTimeoutStillPushes(t *testing.T) {
 	syncer.pg.SetMaxOpenConns(1)
 	_, err = syncer.pg.ExecContext(ctx, `SET lock_timeout = '1s'`)
 	require.NoError(t, err)
+	// pg serve runs the full schema path, while Push uses the fast path.
+	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
 	syncer.schemaDone = false
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "timeout-session", Project: "project", Machine: "test-machine", Agent: "codex"}))
 	result, err := syncer.Push(ctx, false, nil)
@@ -361,7 +381,7 @@ func TestUsageChangeJournalNewerVersion(t *testing.T) {
 	_, err := syncer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version';
  CREATE OR REPLACE FUNCTION mark_usage_sessions() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END;'`)
 	require.NoError(t, err)
-	require.NoError(t, ensureUsageChangeJournalPG(ctx, syncer.pg))
+	ensureUsageChangeJournalPG(ctx, syncer.pg)
 	var body string
 	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure('mark_usage_sessions()')`).Scan(&body))
 	assert.Equal(t, "BEGIN RETURN NULL; END;", body, "an older binary must preserve the newer journal")
@@ -379,7 +399,7 @@ func TestUsageChangeJournalRestrictedRole(t *testing.T) {
 	// The role already reads sessions when the owner installs the journal.
 	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
-	require.NoError(t, ensureUsageChangeJournalPG(ctx, syncer.pg))
+	ensureUsageChangeJournalPG(ctx, syncer.pg)
 	publisher, err := New(ctx, roleURL, syncer.schema, local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, publisher.Close()) })
@@ -417,17 +437,4 @@ func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, through)
 	assert.Empty(t, ids)
-}
-
-func TestUsageChangeJournalMissingCounter(t *testing.T) {
-	_, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	_, err := syncer.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = 'usage_change_revision'`)
-	require.NoError(t, err)
-	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('uncounted','machine','project','codex')`)
-	require.NoError(t, err, "session writes continue without the counter row")
-	through, ids, err := store.LoadUsageChanges(ctx, 0)
-	require.NoError(t, err)
-	assert.Greater(t, through, int64(1000000000000000), "the counter restarts from the clock")
-	assert.Contains(t, ids, "uncounted")
 }

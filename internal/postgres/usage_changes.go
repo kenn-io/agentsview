@@ -52,9 +52,8 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM usage_session_changes WHERE revision = 0) THEN
         RETURN NULL;
     END IF;
-    INSERT INTO sync_metadata(key, value)
-    VALUES('usage_change_revision', (extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text)
-    ON CONFLICT(key) DO UPDATE SET value = (sync_metadata.value::bigint + 1)::text
+    UPDATE sync_metadata SET value = (value::bigint + 1)::text
+    WHERE key = 'usage_change_revision'
     RETURNING value::bigint INTO stamped;
     UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;
     RETURN NULL;
@@ -87,25 +86,28 @@ var dropUsageChangeJournalSQL = func() string {
 	return ddl
 }()
 
-func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) error {
+// Journal installation is optional for both push and serve schema setup.
+func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) {
+	var err error
+	defer func() {
+		if err != nil {
+			log.Printf("pg schema: usage change journal setup failed: %v", err)
+		}
+	}()
 	column, err := sessionVersionColumnPG(ctx, pg)
 	if err != nil || column != "xmin" {
-		return err
+		return
 	}
 	tx, err := pg.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return
 	}
 	defer func() { _ = tx.Rollback() }()
 	err = installUsageChangeJournalPG(ctx, tx)
-	if isInsufficientPrivilege(err) {
-		log.Printf("pg schema: usage change journal skipped, insufficient privilege: %v", err)
-		return nil
-	}
 	if err != nil {
-		return err
+		return
 	}
-	return tx.Commit()
+	err = tx.Commit()
 }
 
 func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
