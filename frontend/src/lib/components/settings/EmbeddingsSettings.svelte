@@ -26,6 +26,10 @@
   let generations = $state<VectorGenerationInfo[]>([]);
   let unavailableReason = $state<string | null>(null);
   let loadError = $state<string | null>(null);
+  // Kept apart from loadError: only a generations read settles it, so a
+  // status-only poll leaves a generations failure on screen.
+  let generationsError = $state<string | null>(null);
+  const shownError = $derived(loadError ?? generationsError);
   let loaded: boolean = $state(false);
   let elapsedMs: number | null = $state(null);
 
@@ -122,10 +126,15 @@
     try {
       const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal }).catch((e) => generationsFailed(e, signal));
       if (disposed || res === null || !generationsRead.isCurrent(signal)) return;
-      generations = res.generations ?? [];
+      showGenerations(res.generations ?? []);
     } finally {
       generationsRead.finish(signal);
     }
+  }
+
+  function showGenerations(rows: VectorGenerationInfo[]): void {
+    generations = rows;
+    generationsError = null;
   }
 
   // A missing manager or a running setup only delays the rows and status
@@ -134,7 +143,7 @@
   function generationsFailed(e: unknown, signal: AbortSignal): null {
     if (disposed || isAbortError(e) || !generationsRead.isCurrent(signal)) return null;
     if (e instanceof ApiError && (e.status === 501 || e.code === "embeddings_setup_busy")) return null;
-    loadError = e instanceof Error && e.message ? e.message : m.settings_embeddings_load_failed();
+    generationsError = e instanceof Error && e.message ? e.message : m.settings_embeddings_load_failed();
     return null;
   }
 
@@ -228,8 +237,8 @@
   {:else if unavailableReason !== null}
     <p class="muted">{m.settings_embeddings_unavailable()}</p>
     <p class="muted detail">{unavailableReason}</p>
-  {:else if loadError !== null}
-    <p class="msg error" role="alert">{loadError}</p>
+  {:else if shownError !== null}
+    <p class="msg error" role="alert">{shownError}</p>
   {:else if status && status.setup?.enabled !== false && !status.setup?.busy}
     {#if status.model || status.dimension || !status.setup}
       <div class="status-grid">
