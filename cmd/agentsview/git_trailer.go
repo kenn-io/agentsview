@@ -49,7 +49,10 @@ func newGitTrailerPrepareCommand() *cobra.Command {
 func newGitHookCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "git-hook", Short: "Manage the optional agent session trailer hook", GroupID: groupMeta,
-		Args: cobra.NoArgs,
+		Long: "Add an Agent-Session trailer that names the current agent session to commits " +
+			"made in a repository. Nothing changes until you install the hook in that repository.",
+		Example: "  agentsview git-hook install",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -57,7 +60,13 @@ func newGitHookCommand() *cobra.Command {
 	cmd.AddCommand(
 		&cobra.Command{
 			Use: "install", Short: "Install in the current repository", Args: cobra.NoArgs,
-			RunE: func(_ *cobra.Command, _ []string) error { return gittrailer.Install(".") },
+			Long: "Write prepare-commit-msg and commit-msg hooks into the hooks directory Git uses " +
+				"for the current repository. A core.hooksPath setting makes them apply to every " +
+				"repository sharing that path. An existing different hook is left alone, and the " +
+				"command prints the line to add to it. A missing agentsview binary or session " +
+				"leaves commit messages unchanged.",
+			Example: "  agentsview git-hook install",
+			RunE:    func(_ *cobra.Command, _ []string) error { return gittrailer.Install(".") },
 		},
 	)
 	return cmd
