@@ -19,7 +19,7 @@ func (e *Engine) withSourceFreshnessSnapshot(
 	agents := []parser.AgentType{}
 	seen := map[parser.AgentType]bool{}
 	for _, file := range files {
-		if !file.ForceParse && !seen[file.Agent] && e.ProviderStatHasher(file.Agent) != nil {
+		if !seen[file.Agent] && e.ProviderStatHasher(file.Agent) != nil {
 			seen[file.Agent] = true
 			agents = append(agents, file.Agent)
 		}
@@ -30,9 +30,6 @@ func (e *Engine) withSourceFreshnessSnapshot(
 	snap, err := e.db.LoadSourceFreshnessSnapshot(ctx, agents)
 	if err != nil {
 		log.Printf("source freshness snapshot: %v", err)
-		return ctx
-	}
-	if snap == nil {
 		return ctx
 	}
 	return context.WithValue(ctx, sourceFreshnessSnapshotKey{}, snap)

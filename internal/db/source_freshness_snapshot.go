@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -27,32 +26,18 @@ type sourceFreshnessRow struct {
 	newestFileSize  sql.NullInt64
 }
 
-// SourceFreshnessState mirrors GetFileInfoByAgentPath plus
-// GetSourceRepairStateByAgentPath for one (agent, file_path).
-type SourceFreshnessState struct {
-	// Active mirrors a successful live repair-state lookup, including non-NULL
-	// size and mtime. Project comes from the newest active row; DataVersion
-	// is the minimum across active rows.
-	Active      bool
-	Project     string
-	DataVersion int
-}
-
 // LoadSourceFreshnessSnapshot reads only the requested providers and their
 // stored agents through one reader transaction.
 func (db *DB) LoadSourceFreshnessSnapshot(ctx context.Context, agents []parser.AgentType) (*SourceFreshnessSnapshot, error) {
-	if len(agents) == 0 {
-		return nil, nil
-	}
-	providerArgs := make([]any, 0, len(agents))
-	storedArgs := []any{}
+	var providers, storedAgents []string
 	for _, agent := range agents {
-		providerArgs = append(providerArgs, string(agent))
+		providers = append(providers, string(agent))
 		for _, stored := range parser.ProviderStoredAgents(agent) {
-			storedArgs = append(storedArgs, string(stored))
+			storedAgents = append(storedAgents, string(stored))
 		}
 	}
-	placeholders := func(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
+	providerIn, providerArgs := InPlaceholders(providers)
+	storedIn, storedArgs := InPlaceholders(storedAgents)
 	snap := &SourceFreshnessSnapshot{
 		statHash: map[SessionSourcePath]uint64{},
 		rows:     map[SessionSourcePath]*sourceFreshnessRow{},
@@ -64,7 +49,7 @@ func (db *DB) LoadSourceFreshnessSnapshot(ctx context.Context, agents []parser.A
 	defer func() { _ = tx.Rollback() }()
 
 	hashRows, err := tx.QueryContext(ctx,
-		"SELECT agent, file_path, stat_hash FROM provider_freshness WHERE agent IN ("+placeholders(len(providerArgs))+")", providerArgs...)
+		"SELECT agent, file_path, stat_hash FROM provider_freshness WHERE agent IN "+providerIn, providerArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("loading provider_freshness: %w", err)
 	}
@@ -86,7 +71,7 @@ func (db *DB) LoadSourceFreshnessSnapshot(ctx context.Context, agents []parser.A
 		"SELECT agent, file_path, project, data_version,"+
 			" file_mtime, file_size, deleted_at IS NULL"+
 			" FROM sessions"+
-			" WHERE file_path IS NOT NULL AND source_missing_at IS NULL AND agent IN ("+placeholders(len(storedArgs))+")", storedArgs...)
+			" WHERE file_path IS NOT NULL AND source_missing_at IS NULL AND agent IN "+storedIn, storedArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("loading source freshness rows: %w", err)
 	}
@@ -124,12 +109,6 @@ func (db *DB) LoadSourceFreshnessSnapshot(ctx context.Context, agents []parser.A
 	if err := sessRows.Err(); err != nil {
 		return nil, err
 	}
-	if err := sessRows.Close(); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
 	return snap, nil
 }
 
@@ -142,23 +121,21 @@ func (s *SourceFreshnessSnapshot) StatHash(agent, path string) (uint64, bool) {
 	return h, ok
 }
 
-// State returns the source's stored freshness state. ok is false when the
-// snapshot holds no non-missing row or the newest active rows tie on mtime.
-// Ties query live because the live query specifies no secondary ordering.
-func (s *SourceFreshnessSnapshot) State(agent, path string) (SourceFreshnessState, bool) {
+// State mirrors GetFileInfoByAgentPath (found) plus
+// GetSourceRepairStateByAgentPath (project, dataVersion, active) for one
+// (agent, file_path). found is false when the snapshot holds no non-missing
+// row or the newest active rows tie on mtime; ties query live because the
+// live query specifies no secondary ordering.
+func (s *SourceFreshnessSnapshot) State(agent, path string) (project string, dataVersion int, active, found bool) {
 	if s == nil {
-		return SourceFreshnessState{}, false
+		return "", 0, false, false
 	}
 	row, ok := s.rows[SessionSourcePath{agent, path}]
 	if !ok || row.tied {
-		return SourceFreshnessState{}, false
+		return "", 0, false, false
 	}
 	if !row.active || !row.newestFileMtime.Valid || !row.newestFileSize.Valid {
-		return SourceFreshnessState{}, true
+		return "", 0, false, true
 	}
-	return SourceFreshnessState{
-		Active:      true,
-		Project:     row.project,
-		DataVersion: row.minDataVersion,
-	}, true
+	return row.project, row.minDataVersion, true, true
 }

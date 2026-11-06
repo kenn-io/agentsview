@@ -66,14 +66,14 @@ func TestSourceFreshnessSnapshotMatchesLiveQueries(t *testing.T) {
 		for _, agent := range []string{"claude", "codex", "traex"} {
 			_, _, liveFound := d.GetFileInfoByAgentPath(ctx, path, agent)
 			project, version, _, _, liveActive := d.GetSourceRepairStateByAgentPath(ctx, path, agent)
-			state, found := snap.State(agent, path)
+			snapProject, snapVersion, active, found := snap.State(agent, path)
 			require.Equal(t, liveFound, found, "%s/%s row presence", name, agent)
 			if !found {
 				continue
 			}
-			assert.Equal(t, liveActive, state.Active, "%s/%s active", name, agent)
-			assert.Equal(t, project, state.Project, "%s/%s project", name, agent)
-			assert.Equal(t, version, state.DataVersion, "%s/%s data version", name, agent)
+			assert.Equal(t, liveActive, active, "%s/%s active", name, agent)
+			assert.Equal(t, project, snapProject, "%s/%s project", name, agent)
+			assert.Equal(t, version, snapVersion, "%s/%s data version", name, agent)
 		}
 	}
 	// Ties can choose different projects under SQLite's query plans. The caller
@@ -82,13 +82,13 @@ func TestSourceFreshnessSnapshotMatchesLiveQueries(t *testing.T) {
 	require.NoError(t, err)
 	snapTie, err := d.LoadSourceFreshnessSnapshot(ctx, []parser.AgentType{parser.AgentClaude})
 	require.NoError(t, err)
-	_, okTie := snapTie.State("claude", paths["twoRows"])
+	_, _, _, okTie := snapTie.State("claude", paths["twoRows"])
 	assert.False(t, okTie)
 	filtered, err := d.LoadSourceFreshnessSnapshot(ctx, []parser.AgentType{parser.AgentCodex})
 	require.NoError(t, err)
 	_, okFiltered := filtered.StatHash("claude", paths["active"])
 	assert.False(t, okFiltered)
-	_, okFiltered = filtered.State("claude", paths["active"])
+	_, _, _, okFiltered = filtered.State("claude", paths["active"])
 	assert.False(t, okFiltered)
 
 	h, ok := snap.StatHash("claude", paths["active"])
@@ -97,6 +97,6 @@ func TestSourceFreshnessSnapshotMatchesLiveQueries(t *testing.T) {
 	_, ok = snap.StatHash("codex", paths["active"])
 	assert.False(t, ok)
 	var nilSnap *SourceFreshnessSnapshot
-	_, ok = nilSnap.State("claude", paths["active"])
+	_, _, _, ok = nilSnap.State("claude", paths["active"])
 	assert.False(t, ok)
 }

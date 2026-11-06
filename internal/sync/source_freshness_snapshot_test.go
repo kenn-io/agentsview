@@ -91,8 +91,6 @@ func TestSourceFreshnessSnapshotProviderSelection(t *testing.T) {
 	fx := newEngineFixture(t)
 	t.Cleanup(fx.engine.Close)
 	ctx := t.Context()
-	for _, file := range []parser.DiscoveredFile{{Agent: parser.AgentVibe}, {Agent: parser.AgentClaude, ForceParse: true}} {
-		require.Nil(t, sourceFreshnessSnapshotFrom(fx.engine.withSourceFreshnessSnapshot(ctx, []parser.DiscoveredFile{file})))
-	}
+	require.Nil(t, sourceFreshnessSnapshotFrom(fx.engine.withSourceFreshnessSnapshot(ctx, []parser.DiscoveredFile{{Agent: parser.AgentVibe}})))
 	require.NotNil(t, sourceFreshnessSnapshotFrom(fx.engine.withSourceFreshnessSnapshot(ctx, []parser.DiscoveredFile{{Agent: parser.AgentClaude}})))
 }

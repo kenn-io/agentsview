@@ -16209,23 +16209,18 @@ func (e *Engine) providerFreshDigestSourceCurrentInDB(ctx context.Context,
 	rowFound := false
 	snap := sourceFreshnessSnapshotFrom(ctx)
 	for _, owned := range parser.ProviderStoredAgents(agent) {
-		var project string
-		var dataVersion int
-		var active bool
-		if state, ok := snap.State(string(owned), lookupPath); ok {
-			rowFound = true
-			project, dataVersion, active = state.Project, state.DataVersion, state.Active
-		} else {
+		project, dataVersion, active, ok := snap.State(string(owned), lookupPath)
+		if !ok {
 			if _, _, ok := e.db.GetFileInfoByAgentPath(ctx,
 				lookupPath, string(owned),
 			); !ok {
 				continue
 			}
-			rowFound = true
 			project, dataVersion, _, _, active = e.db.GetSourceRepairStateByAgentPath(ctx,
 				lookupPath, string(owned),
 			)
 		}
+		rowFound = true
 		if !active {
 			continue
 		}
