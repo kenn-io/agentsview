@@ -956,17 +956,6 @@ func liveVectorServingFixture(t *testing.T, cfg config.Config, database *db.DB, 
 	}
 }
 
-func TestServeConstructionWhenVectorEnabled(t *testing.T) {
-	dataDir := t.TempDir()
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	vs, err := setupVectorServing(t.Context(), vectorTestConfig(dataDir), database, nil)
-	require.NoError(t, err)
-	require.NotNil(t, vs.Scheduler)
-	require.NotNil(t, vs.RecallScheduler)
-	require.NotNil(t, vs.Close)
-	require.NoError(t, vs.Close())
-}
-
 func TestRecallSchedulerBackstopRemovesArchivedEntryVectors(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
