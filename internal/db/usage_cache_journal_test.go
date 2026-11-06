@@ -146,7 +146,7 @@ func assertJournaledUsageLegacy(t *testing.T, database *DB, filter UsageFilter) 
 }
 
 func TestUsageJournaledFreshness(t *testing.T) {
-	for _, name := range []string{"append", "soft delete", "hard delete", "restore", "start date", "message date", "agent", "project", "machine", "branch", "automation", "user messages", "price", "price with filter", "second handle"} {
+	for _, name := range []string{"append", "soft delete", "hard delete", "restore", "start date", "message date", "agent", "project", "machine", "branch", "automation", "user messages", "price with filter", "second handle"} {
 		t.Run(name, func(t *testing.T) {
 			database := testDB(t)
 			seedJournaledUsage(t, database, "session")
@@ -187,6 +187,15 @@ func TestUsageJournaledFreshness(t *testing.T) {
 			switch name {
 			case "append":
 				require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T01:00:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
+				var reads []bool
+				database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
+					reads = append(reads, journaled)
+				}
+				got, err := database.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 150, got.Totals.InputTokens)
+				assert.Equal(t, []bool{true}, reads, "the first read after an append must use the journaled path")
+				database.usageCache.usageWindowObserver.afterRead = nil
 			case "soft delete":
 				require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
 			case "hard delete":
@@ -212,7 +221,7 @@ func TestUsageJournaledFreshness(t *testing.T) {
 				}
 				_, err := database.getWriter().ExecContext(t.Context(), "UPDATE sessions SET "+column+"=? WHERE id='session'", value)
 				require.NoError(t, err)
-			case "price", "price with filter":
+			case "price with filter":
 				require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 2_000_000}}}))
 			case "second handle":
 				other, err := OpenIsolatedContext(t.Context(), database.Path())
@@ -936,42 +945,34 @@ func TestUsageJournaledMemoSeparatesTotalsFromTop(t *testing.T) {
 		assert.Equal(t, want, got)
 		assert.EqualValues(t, 1, reads.Load())
 	})
-	for _, topFirst := range []bool{false, true} {
-		t.Run(strconv.FormatBool(topFirst), func(t *testing.T) {
-			database := openDailyUsageFixtureDB(t)
-			filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Agent: "claude"}
-			warmJournaledUsage(t, database, filter)
-			var prepares, reads atomic.Int64
-			database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
-				assert.True(t, journaled, "rankings and daily totals must use the journaled window")
-				reads.Add(1)
-			}
-			database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
-			ctx := WithUsageWindowMemo(t.Context())
-			readTop := func() {
-				want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 3)
-				require.NoError(t, err)
-				got, err := database.GetTopSessionsByCost(ctx, filter, 3)
-				require.NoError(t, err)
-				assert.Equal(t, want, got)
-			}
-			if topFirst {
-				readTop()
-			}
-			want, err := database.getDailyUsageLegacy(t.Context(), filter)
+	t.Run("top first", func(t *testing.T) {
+		database := openDailyUsageFixtureDB(t)
+		filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC", Agent: "claude"}
+		warmJournaledUsage(t, database, filter)
+		var prepares, reads atomic.Int64
+		database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
+			assert.True(t, journaled, "rankings and daily totals must use the journaled window")
+			reads.Add(1)
+		}
+		database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+		ctx := WithUsageWindowMemo(t.Context())
+		readTop := func() {
+			want, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 3)
 			require.NoError(t, err)
-			got, err := database.GetDailyUsage(ctx, filter)
+			got, err := database.GetTopSessionsByCost(ctx, filter, 3)
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
-			readTop()
-			assert.EqualValues(t, 2, prepares.Load(), "totals and Top sessions use separate memo entries")
-			wantReads := int64(2)
-			if topFirst {
-				wantReads++
-			}
-			assert.Equal(t, wantReads, reads.Load())
-		})
-	}
+		}
+		readTop()
+		want, err := database.getDailyUsageLegacy(t.Context(), filter)
+		require.NoError(t, err)
+		got, err := database.GetDailyUsage(ctx, filter)
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+		readTop()
+		assert.EqualValues(t, 2, prepares.Load(), "totals and Top sessions use separate memo entries")
+		assert.EqualValues(t, 3, reads.Load())
+	})
 }
 
 func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {

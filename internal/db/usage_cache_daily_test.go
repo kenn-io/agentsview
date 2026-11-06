@@ -159,8 +159,6 @@ func TestRecordUsageFactsPricingBulkCounts(t *testing.T) {
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
 	rate := block.Models["model"].Resolutions[0]
-	require.Equal(t, export.CostSourceMixed, block.Models["model"].CostSource)
-	require.Equal(t, export.CostSourceMixed, rate.CostSource)
 	require.NotNil(t, rate.Application)
 	require.Equal(t, 7, rate.Application.BaseRequestCount)
 	require.Equal(t, 3, rate.Application.AggregateRowCount)

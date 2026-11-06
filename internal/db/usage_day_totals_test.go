@@ -4,6 +4,8 @@ package db
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,32 +19,22 @@ import (
 // and provenance counts. Removing either trigger breaks this invariant.
 func assertUsageDayTotals(t *testing.T, cache *usageCache) {
 	t.Helper()
-	const query = `WITH expected AS (
+	var columns []string
+	for _, column := range usageDayTotalsColumns {
+		if column.key || column.sum {
+			columns = append(columns, column.name)
+		}
+	}
+	query := fmt.Sprintf(`WITH expected AS (
         SELECT i.timezone_id AS timezone_id, r.local_date AS local_date, i.project AS project, i.baked_agent AS agent, i.machine AS machine, i.git_branch AS git_branch, i.is_automated AS is_automated, i.user_message_count AS user_message_count, r.reported_model AS reported_model, r.provider_id AS provider_id, r.rate_hash AS rate_hash, r.band_threshold AS band_threshold, COUNT(*) AS row_count, SUM(r.input_tokens) AS input_tokens, SUM(r.output_tokens) AS output_tokens, SUM(r.cache_creation_tokens) AS cache_creation_tokens, SUM(r.cache_read_tokens) AS cache_read_tokens, SUM(r.estimated_cost_microdollars) AS estimated_cost_microdollars, SUM(r.savings_microdollars) AS savings_microdollars, SUM(r.computed_request_count) AS computed_request_count, SUM(r.computed_aggregate_count) AS computed_aggregate_count, SUM(r.reported_count) AS reported_count, SUM(r.base_request_count) AS base_request_count
         FROM usage_daily_rollups r JOIN usage_rollup_installs i ON i.id=r.rollup_install_id
         WHERE i.has_authoritative=0 GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
-    ), missing AS (SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM expected EXCEPT SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals),
-    extra AS (SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals EXCEPT SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM expected)
-    SELECT (SELECT COUNT(*) FROM missing)+(SELECT COUNT(*) FROM extra)+(SELECT COUNT(*) FROM usage_day_totals WHERE row_count<=0)`
+    ), missing AS (SELECT %[1]s FROM expected EXCEPT SELECT %[1]s FROM usage_day_totals),
+    extra AS (SELECT %[1]s FROM usage_day_totals EXCEPT SELECT %[1]s FROM expected)
+    SELECT (SELECT COUNT(*) FROM missing)+(SELECT COUNT(*) FROM extra)+(SELECT COUNT(*) FROM usage_day_totals WHERE row_count<=0)`, strings.Join(columns, ", "))
 	var differences int
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), query).Scan(&differences))
 	assert.Zero(t, differences)
-}
-
-func TestUsageDayTotalsRefreshStaysJournaled(t *testing.T) {
-	database := testDB(t)
-	seedJournaledUsage(t, database, "session")
-	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	warmJournaledUsage(t, database, filter)
-	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":9}`)}}))
-	var reads []bool
-	database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
-		reads = append(reads, journaled)
-	}
-	got, err := database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, 109, got.Totals.InputTokens)
-	assert.Equal(t, []bool{true}, reads, "the first read after an append must use the journaled path")
 }
 
 func TestUsageDayTotalsNotificationDuringReadStaysJournaled(t *testing.T) {

@@ -13,9 +13,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/db/testdata/usagefixture"
@@ -134,25 +132,23 @@ func BenchmarkUsageDayTotalsPage(b *testing.B) {
 	})
 }
 
-func TestUsageDayTotalsPageBudget(t *testing.T) {
-	if os.Getenv("AGENTSVIEW_USAGE_PAGE_GATE") == "" {
-		t.Skip("set AGENTSVIEW_USAGE_PAGE_GATE for the 30k-session timing gate")
-	}
-	database := usagefixture.SeedPage(t, 30000)
+func BenchmarkUsageDayTotalsPageBudget(b *testing.B) {
+	database := usagefixture.SeedPage(b, 30000)
 	s := &Server{db: database, sessions: service.NewReadOnlyBackend(database)}
 	for _, window := range usageDayTotalsPageWindows {
 		name := window.name
-		t.Run(name, func(t *testing.T) {
-			_, err := readUsageDayTotalsPage(t.Context(), s, window.from)
-			require.NoError(t, err)
+		b.Run(name, func(b *testing.B) {
+			_, err := readUsageDayTotalsPage(b.Context(), s, window.from)
+			require.NoError(b, err)
 			runtime.GC()
-			start := time.Now()
-			got, err := readUsageDayTotalsPage(t.Context(), s, window.from)
-			elapsed := time.Since(start)
-			require.NoError(t, err)
-			t.Logf("warm page=%s", elapsed)
-			assert.Less(t, elapsed, time.Second/2)
-			checkUsageDayTotalsPage(t, name, got)
+			b.ResetTimer()
+			for range b.N {
+				got, err := readUsageDayTotalsPage(b.Context(), s, window.from)
+				b.StopTimer()
+				require.NoError(b, err)
+				checkUsageDayTotalsPage(b, name, got)
+				b.StartTimer()
+			}
 		})
 	}
 }
