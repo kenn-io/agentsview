@@ -221,7 +221,9 @@ func TestUsageCacheBackfillPrunesStaleLocalTimezones(t *testing.T) {
 			require.Equal(t, 3, usageCacheCount(t, cache, "usage_rollup_days"))
 
 			snapshot.location = tt.local
-			require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot))
+			zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(snapshot.location, nil).Key)
+			require.NoError(t, err)
+			require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
 			locations, err := usageBackfillLocations(t.Context(), cache, tt.local)
 			require.NoError(t, err)
 
@@ -250,6 +252,7 @@ func TestUsageCacheBackfillPrunesStaleLocalTimezones(t *testing.T) {
 				"pruned timezones must cascade to their installs")
 			assert.Equal(t, kept, usageCacheCount(t, cache, "usage_rollup_days"),
 				"pruned timezones must cascade to their days")
+			assertUsageDayTotals(t, cache)
 		})
 	}
 }
@@ -367,6 +370,36 @@ func TestUsageRollupSameZoneBuildsRunOneAtATime(t *testing.T) {
 			assert.Equal(t, int32(1), builds.Load(), "queued chunks must reuse installs or skip abandoned work")
 		})
 	}
+}
+
+func TestUsageRollupBuildsBatchesInParallel(t *testing.T) {
+	database := testDB(t)
+	seedUsageBatchSessions(t, database, usageFillInstallBatchSize+1,
+		time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
+	snapshot, fills, cache := prepareUsageRollupTest(t, database)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	both := make(chan struct{})
+	var attempts atomic.Int32
+	cache.rollup.observer.beforeAttempt = func(map[string]usageFillResult) {
+		// Each batch waits here until the other batch has started building.
+		if attempts.Add(1) == 2 {
+			close(both)
+		}
+		select {
+		case <-both:
+		case <-ctx.Done():
+		}
+	}
+	var sizes []int
+	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+		sizes = append(sizes, len(builds))
+	}
+	installs, _, err := cache.rollup.Ensure(ctx, snapshot, fills,
+		export.NewPricingResolver(snapshot.PricingRows))
+	require.NoError(t, err, "the second batch must build while the first one builds")
+	assert.Len(t, installs, usageFillInstallBatchSize+1)
+	assert.Equal(t, []int{usageFillInstallBatchSize, 1}, sizes, "batches install in order")
 }
 
 func TestUsageRollupInstallsInBoundedBatches(t *testing.T) {
@@ -858,7 +891,7 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 	}
 	result, err := cache.usageRollupQuery(
-		t.Context(), newSnapshot, filter, oldOutcome.installs,
+		t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter,
 		export.NewPricingResolver(newSnapshot.PricingRows))
 	require.NoError(t, err)
 	require.Len(t, result.Groups, 1)
@@ -926,7 +959,7 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 		"rejecting the older build must preserve the newer install")
 
 	result, err := cache.usageRollupQuery(
-		t.Context(), newSnapshot, filter, newInstalls,
+		t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: newInstalls}, filter,
 		export.NewPricingResolver(newSnapshot.PricingRows))
 	require.NoError(t, err)
 	var inputTokens int64

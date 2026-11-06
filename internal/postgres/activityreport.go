@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -41,12 +44,19 @@ func (s *Store) GetActivityReport(
 type activityReportBackend struct {
 	*Store
 	lowerBound, upperBound string
+	read                   map[string]struct{}
+	pricing                []export.EffectivePricingRow
+	pricingDigest          string
+}
+
+func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
+	return func() {}, b.supportsConcurrentReads()
 }
 
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
+	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q, b.read, b.pricing, b.pricingDigest)
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
@@ -67,9 +77,43 @@ func (s *Store) BuildActivityReportArtifacts(
 	rangeStartUTC, rangeEndUTC := db.ActivityReportInstantBoundsUTC(q)
 	lowerBound := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+	pricing, err := s.loadPricingMap(ctx)
+	if err != nil {
+		return activity.CandidateArtifacts{}, fmt.Errorf("loading pg pricing: %w", err)
+	}
+	pricingDigest, err := export.EffectivePricingDigest(pricing)
+	if err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
+
+	var selection, version string
+	var revision int64
+	if !q.Partial && !s.hostedRelations && !db.TerminationUsesTime(f.Termination) {
+		version, err = s.activityKeptVersion(ctx, pricingDigest)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if version != "" {
+			selection = kept.Selection(f, q)
+			var report kept.Report
+			var hit bool
+			report, revision, hit, err = s.keptActivityReport(ctx, selection, version, f,
+				rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
+			if err != nil {
+				return activity.CandidateArtifacts{}, err
+			}
+			if hit {
+				activity.ReportProgress(onProgress, report.Done)
+				return report.Artifacts, nil
+			}
+			if revision == 0 {
+				selection = ""
+			}
+		}
+	}
 
 	sessions, ids, err := s.activityReportSessions(
-		ctx, f, rangeStartUTC, rangeEndUTC)
+		ctx, f, rangeStartUTC, rangeEndUTC, nil)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -77,12 +121,31 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	backend := activityReportBackend{
-		Store:      s,
-		lowerBound: lowerBound, upperBound: upperBound,
+	var read map[string]struct{}
+	if selection != "" {
+		read = make(map[string]struct{}, len(ids))
 	}
-	artifacts, _, err := activity.BuildReportArtifacts(
+	backend := activityReportBackend{
+		read:          read,
+		pricing:       pricing,
+		pricingDigest: pricingDigest,
+		Store:         s,
+		lowerBound:    lowerBound, upperBound: upperBound,
+	}
+	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating pg activity report")
+	if err == nil && selection != "" {
+		candidates := slices.Clip(slices.Clone(ids))
+		slices.Sort(candidates)
+		for _, id := range candidates {
+			delete(read, id)
+		}
+		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{{
+			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
+			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
+			labels: activity.ProjectLabels(sessions),
+		}})
+	}
 	return artifacts, err
 }
 
@@ -282,11 +345,15 @@ func pgSessionUsageRowLess(
 // keeps the session eligible when it reaches the report range.
 func (s *Store) activityReportSessions(
 	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
+	only []string,
 ) ([]activity.SessionMeta, []string, error) {
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(f, "", pb, false, "s.id", s.sessionDialect())
 	lower := pb.add(rangeStartUTC)
 	upper := pb.add(rangeEndUTC)
+	if only != nil {
+		where += " AND s.id = ANY(" + pb.add(only) + ")"
+	}
 
 	// Each Title candidate is NULLIF'd independently (not a nested
 	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
@@ -602,19 +669,29 @@ func (s *Store) ActivityReportCandidateSource(
 	return s.activityReportCandidateSource(ids, q)
 }
 
+func activityReportClaudePeerPredicate(sessions, lower, upper string) string {
+	return pgUsageMessageEligibility + `
+		AND (m.claude_message_id, m.claude_request_id) IN (
+			SELECT m.claude_message_id, m.claude_request_id
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE ` + pgUsageMessageEligibility + `
+				AND m.session_id = ANY(` + sessions + `)
+				AND m.claude_message_id != '' AND m.claude_request_id != ''
+				AND COALESCE(m.timestamp, s.started_at) >= ` + lower + `::timestamptz
+				AND COALESCE(m.timestamp, s.started_at) <= ` + upper + `::timestamptz
+		)`
+}
+
 // activityReportUsage selects complete snapshots across the padded range,
 // then keeps rows attributed to the candidate sessions. Per-row cost is
 // computed after selection so filtered rows do not affect pricing metadata.
 func (s *Store) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
+	read map[string]struct{}, pricing []export.EffectivePricingRow, pricingDigest string,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
 
-	pricing, err := s.loadPricingMap(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading pg pricing: %w", err)
-	}
-	rateResolver := export.NewPricingResolver(pricing)
+	rateResolver := export.NewPricingResolverWithDigest(pricing, pricingDigest)
 	if len(ids) == 0 {
 		block, err := rateResolver.BuildBlock()
 		if err != nil {
@@ -644,19 +721,8 @@ func (s *Store) activityReportUsage(
 	lower := pb.add(lowerBound)
 	upper := pb.add(upperBound)
 	rowsSQL := pgDailyUsageRowsSQLWithWhere(
-		pgUsageMessageEligibility+`
-			AND (m.session_id = ANY(`+candidateSessions+`)
-				OR (m.claude_message_id, m.claude_request_id) IN (
-					SELECT m.claude_message_id, m.claude_request_id
-					FROM messages m
-					JOIN sessions s ON s.id = m.session_id
-					WHERE `+pgUsageMessageEligibility+`
-						AND m.session_id = ANY(`+peerSessions+`)
-						AND m.claude_message_id != ''
-						AND m.claude_request_id != ''
-						AND COALESCE(m.timestamp, s.started_at) >= `+peerLower+`::timestamptz
-						AND COALESCE(m.timestamp, s.started_at) <= `+peerUpper+`::timestamptz
-				))`,
+		"("+pgUsageMessageEligibility+" AND m.session_id = ANY("+candidateSessions+") OR ("+
+			activityReportClaudePeerPredicate(peerSessions, peerLower, peerUpper)+"))",
 		pgUsageEventEligibility+" AND ue.session_id = ANY("+eventSessions+")")
 	query := pgDailyUsageRowSelectFromRows(rowsSQL) + `
 		AND u.ts >= ` + lower + `::timestamptz
@@ -672,6 +738,9 @@ func (s *Store) activityReportUsage(
 		if scanErr != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report usage: %w", scanErr)
+		}
+		if read != nil {
+			read[r.sessionID] = struct{}{}
 		}
 		ord := int64(-1)
 		if r.messageOrdinal.Valid {

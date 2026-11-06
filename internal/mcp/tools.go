@@ -800,10 +800,11 @@ type contentMatch struct {
 }
 
 type searchContentOut struct {
-	Matches        []contentMatch `json:"matches"`
-	NextCursor     *int           `json:"next_cursor,omitempty"`
-	ActivityCutoff string         `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
-	ExcludedActive int            `json:"excluded_active,omitempty"`
+	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
+	Matches        []contentMatch              `json:"matches"`
+	NextCursor     *int                        `json:"next_cursor,omitempty"`
+	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
+	ExcludedActive int                         `json:"excluded_active,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
 	// resolved, which the caller cannot see in its own request.
 	EffectiveMode      string                  `json:"effective_mode"`
@@ -943,16 +944,20 @@ func (t *toolset) searchContent(
 		out.EffectiveScope = scope
 	}
 	activity := make(map[string]string)
-	for _, m := range res.Matches {
-		if legacy {
+	var keepMatch func(db.ContentMatch) bool
+	if cutoff != "" {
+		keepMatch = func(m db.ContentMatch) bool {
 			ts, ok := t.lookupActivity(ctx, m.SessionID, activity)
 			if !ok {
 				ts = m.Timestamp
 			}
-			if isActiveSince(ts, cutoffTime.Add(activeExclusionWindow)) {
-				out.ExcludedActive++
-				continue
-			}
+			return !isActiveSince(ts, cutoffTime.Add(activeExclusionWindow))
+		}
+	}
+	for _, m := range res.Matches {
+		if legacy && !keepMatch(m) {
+			out.ExcludedActive++
+			continue
 		}
 		out.Matches = append(out.Matches, contentMatch{
 			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
@@ -971,6 +976,7 @@ func (t *toolset) searchContent(
 		nc := res.NextCursor
 		out.NextCursor = &nc
 	}
+	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
 	return nil, out, nil
 }
 

@@ -139,13 +139,13 @@ func (s *Store) BuildProjectIdentityMap(
 		set = slices.Compact(slices.Sorted(slices.Values(labels)))
 	}
 	key := fmt.Sprintf("%v|%#v", labels == nil, set)
-	if kept, ok := s.projectIdentityMaps.get(key, fingerprint); ok {
+	if kept, ok := s.projectIdentityMaps.Get(key, fingerprint); ok {
 		return maps.Clone(kept[0]), nil
 	}
 	projects, err := s.catalog().BuildProjectIdentityMap(ctx, labels)
 	if err != nil {
 		return nil, err
 	}
-	s.projectIdentityMaps.put(key, fingerprint, []map[string]export.ProjectMapEntry{maps.Clone(projects)})
+	s.projectIdentityMaps.Put(key, fingerprint, []map[string]export.ProjectMapEntry{maps.Clone(projects)})
 	return projects, nil
 }

@@ -85,7 +85,7 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 		// Count and sum row hashes so merges and row ordering do not change the
 		// fingerprint, while duplicate rows still contribute to it.
 		err = s.queryRowContext(ctx, `SELECT hex(SHA256(toString(tuple(count(),sumWithOverflow(row_hash)))))
-			FROM (SELECT reinterpretAsUInt128(sipHash128Reference(tuple(*))) AS row_hash
+			FROM (SELECT `+chUsageRowHashSQL("*")+` AS row_hash
 			FROM prepared_usage) SETTINGS final=0`).Scan(&probe.PreparedUsageFingerprint)
 		if err != nil {
 			return activity.SourceProbe{}, fmt.Errorf("probing prepared usage: %w", err)
@@ -144,13 +144,9 @@ func (st preparedUsageState) replaced() []string {
 }
 
 func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, error) {
-	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"sessions", "usage_session_snapshots", "usage_event_prices"})
-	if err != nil {
-		return preparedUsageState{}, err
-	}
 	var filled uint64
 	var comment string
-	err = s.queryRowContext(ctx, `SELECT
+	err := s.queryRowContext(ctx, `SELECT
 		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?)),
 		ifNull((SELECT comment FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'), '')`,
 		usageSnapshotReadyKeyBase+":").Scan(&filled, &comment)
@@ -176,11 +172,15 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	if err != nil {
 		return preparedUsageState{}, fmt.Errorf("reading prepared usage stamp: %w", err)
 	}
+	fingerprint, stable, err := s.usageRowsVersion(ctx, []string{"sessions", "usage_session_snapshots", chUsagePriceTable}, stored.pricingDigest)
+	if err != nil {
+		return preparedUsageState{}, err
+	}
 	stamp := fmt.Sprintf("%s|%d|%d|%s|%d", comment, stored.snapshotCount, stored.snapshotHash,
 		stored.pricingDigest, stored.priceCount)
 	// Coverage and the sessions pushed since the refresh depend on the
 	// tables named in the fingerprint and on the prepared rows, so they only
-	// change when those parts or the stamp do.
+	// change when those rows or the stamp do.
 	live, cached := s.cachedUsageCoverage(fingerprint, stamp)
 	if !cached {
 		// One caller fills the cache; the requests of a page load that
@@ -200,9 +200,11 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 				return preparedUsageState{}, err
 			}
 		}
-		s.coverageCache.mu.Lock()
-		s.coverageCache.fingerprint, s.coverageCache.stamp, s.coverageCache.live = fingerprint, stamp, live
-		s.coverageCache.mu.Unlock()
+		if stable {
+			s.coverageCache.mu.Lock()
+			s.coverageCache.fingerprint, s.coverageCache.stamp, s.coverageCache.live = fingerprint, stamp, live
+			s.coverageCache.mu.Unlock()
+		}
 	}
 	switch {
 	case live.missing == 0:
@@ -237,20 +239,24 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 // chStringArrayLiteral renders values as a ClickHouse Array(String)
 // literal, the text form of a query parameter.
 func chStringArrayLiteral(values []string) string {
-	escape := strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 	var b strings.Builder
 	b.WriteByte('[')
 	for i, v := range values {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteByte('\'')
-		b.WriteString(escape.Replace(v))
-		b.WriteByte('\'')
+		b.WriteString(chStringLiteral(v))
 	}
 	b.WriteByte(']')
 	return b.String()
 }
+
+// chStringLiteral quotes v as a ClickHouse string literal.
+func chStringLiteral(v string) string {
+	return "'" + chStringEscaper.Replace(v) + "'"
+}
+
+var chStringEscaper = strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 
 // readUsageCoverage relates the live sessions and snapshots to the prepared
 // rows. The comparisons run in Go over the identities ClickHouse returns:

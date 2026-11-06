@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-06
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +10,37 @@ The latest release is
 ## Unreleased
 
 **New features**
+
+- Find the session and prompt behind file lines with `agentsview why path:N-M`,
+  or look up a commit with `agentsview why --commit SHA`. The command uses local
+  Git blame and archived commit links without calling a model. Add `--json` for
+  scripts.
+
+- Find editor commits through `Agent-Session` trailers in local Git history.
+  Session commit lookups show the source and suggest the last prompt at or
+  before the commit time, marked as estimated, when the session has a message
+  within the preceding five minutes. Idle sessions have no suggested turn.
+  Trailer links survive transcript rewrites and checkout removal.
+
+- Find a commit's session and prompt on PostgreSQL, DuckDB, and ClickHouse
+  replicas after pushing the archive. Deleted sessions remain visible as missing
+  records when the replica has project evidence for them. Hosted PostgreSQL
+  keeps returning HTTP 501.
+
+- Find the session and prompt behind a Git commit through the session API, or
+  list a session's commits with `agentsview session commits <id>`. Links come
+  from stored Git summaries, including Codex output received through later
+  polls. Summaries need SHAs of 7 to 64 characters; quiet commits have no link.
+  The prompt is the last user turn before the commit call. Repository paths
+  follow the first commit invocation in each call, using the last `cd` before
+  it and any `git -C` options.
+  Transcript-only and usage-only archives retain no links. Deleted sessions
+  remain visible as missing records. Sessions permanently deleted before this
+  release have no links.
+
+- PostgreSQL archives now keep a change journal. Installing it requires
+  `CREATE` on the schema and `TRIGGER` on the watched tables. Roles without
+  these privileges keep working without the journal.
 
 - Investigate an expensive archived session with `session diagnose <id>`. The
   report combines usage, context growth, compactions, large tool results, retry
@@ -120,11 +151,54 @@ The latest release is
   s. The index adds about a fifth of the message text size to the archive, and
   the first start after upgrading waits while it is built, about a minute per 2
   GB of message text.
+- Session search sorted by relevance shows a common word's first page about
+  three times faster. It reads matches from the best-ranked down and stops once
+  it knows the page's sessions. On 172,000 messages of real source text,
+  searching for `return` went from 140 ms to 50 ms. Searches filtered by project
+  or date, and searches sorted by recency, work as before.
 
 - Terms search (`mode=terms`) uses the same substring index to find the sessions
   that mention each word. Searching for a word that appears in a few sessions no
   longer reads every message in the archive; in a benchmark of 100,000 messages
   it went from 192 ms to 7 ms.
+
+- Terms search (`mode=terms`) for a word the substring index lists now starts
+  from the messages that hold it, so it no longer groups every message of every
+  matching session. On a 1.7 million message test archive, a word in 11,600 of
+  30,000 sessions went from 2.5 s to 0.13 s, and the same word paired with a
+  word in every session went from 3.9 s to 0.2 s.
+
+- The Activity page opens about four times faster on the local archive the
+  first time it shows a range. It now pairs each session's messages in one pass
+  instead of looking up each message's successor and model in the database. On
+  a 30,000-session test archive, pairing a month went from 340 ms to 90 ms and a
+  one-year range from 6.0 s to 1.4 s. A report now holds its intervals in memory
+  while it sorts them, about 130 bytes each (about 120 MB for that year).
+
+- The Activity page counts user and assistant messages from the sessions it
+  already holds in memory, so it no longer reads every message twice. On the
+  same archive a month's report went from 250 ms to 210 ms when opened again,
+  and from 350 ms to 300 ms on first open. The memory cache for Activity grows
+  by about 57 bytes per counted message, at most about 11 MiB.
+
+- The Activity page reads about 8 times less data from the local archive the
+  first time it shows a range. Pairing and counting a session's messages now
+  read only a small index, never the message text. On a 30,000-session test
+  archive, a busy week's report read 0.4 GB instead of 3.3 GB. Its pairing step
+  read 41 MB instead of 1.8 GB and took 0.75 s instead of 1.1 to 1.4 s, or 1.2 s
+  instead of 2.6 s when the archive was not in memory. The whole report still
+  takes about 3.3 s, because it waits on usage, which runs at the same time.
+  The index grows by about 6 bytes per message (10 MB on that archive), and the
+  first start after upgrading waits while it is rebuilt, about 6 s for 1.7
+  million messages.
+
+- The first Usage page after the usage cache is rebuilt, such as after an
+  upgrade, loads in about half the time. On a 30,000-session test archive, all
+  history went from about 13 s to about 7 s. Filling an empty cache no longer
+  checks which other sessions share each usage record, because nothing built
+  from them exists yet. The cache prepares each repeated write once, builds two
+  batches of daily totals at once, and saves one batch of sessions while it
+  reads the next.
 
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.

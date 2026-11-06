@@ -2570,6 +2570,7 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 		{http.MethodPost, "/api/v1/sessions/retained/open", `{}`, false, false, http.StatusBadRequest, "opener"},
 		{http.MethodPost, "/api/v1/settings/worktree-mappings/preview", `{"machine":"local","path_prefix":"/work","project":"new-project","enabled":true}`, false, false, http.StatusOK, ""},
 		{http.MethodGet, "/api/v1/sessions", "", false, false, http.StatusOK, ""},
+		{http.MethodPost, "/api/v1/commits/sessions", `{"shas":["abc1234"]}`, false, false, http.StatusOK, `"sha":"abc1234"`},
 		{http.MethodGet, "/api/v1/sync/status", "", false, true, http.StatusOK, ""},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {

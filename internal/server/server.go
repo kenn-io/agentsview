@@ -70,7 +70,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 14
+	APIVersion = 15
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
@@ -161,6 +161,8 @@ type Server struct {
 	// into the SPA's index.html.
 	basePath string
 	idle     *IdleTracker
+
+	ingestionFreshness IngestionFreshness
 
 	// sessionMutationNotify, when set, is called after a route changes a
 	// session's lifecycle (trash, restore, permanent delete), so consumers
@@ -623,6 +625,17 @@ func WithInsightLogDrainTimeouts(drain, stopWait time.Duration) Option {
 	}
 }
 
+// IngestionFreshness tracks the local archive catch-up obligation.
+type IngestionFreshness interface {
+	EnsureFresh(context.Context) bool
+	Pending() bool
+}
+
+// WithIngestionFreshness waits for local ingestion before archive operations.
+func WithIngestionFreshness(f IngestionFreshness) Option {
+	return func(s *Server) { s.ingestionFreshness = f }
+}
+
 func WithIdleTracker(t *IdleTracker) Option {
 	return func(s *Server) { s.idle = t }
 }
@@ -754,7 +767,7 @@ func (s *Server) humaConfig() huma.Config {
 		"application/json": jsonFormat,
 		"json":             jsonFormat,
 	}
-	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild is pending; GET /api/v1/sync/status reports its state."
+	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild or idle catch-up is incomplete; GET /api/v1/sync/status reports its state."
 	cfg.OpenAPIPath = "/api/openapi"
 	cfg.DocsPath = ""
 	cfg.SchemasPath = ""
@@ -969,7 +982,7 @@ func (s *Server) Handler() http.Handler {
 				ServeHTTP(w, r)
 		})
 	}
-	h = s.idle.Wrap(h)
+	h = s.idle.Wrap(h, s.basePath)
 	return h
 }
 
@@ -985,10 +998,16 @@ func archiveFreshnessProbe(path string) bool {
 func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			if !archiveFreshnessProbe(r.URL.Path) && s.archiveStale() {
+			probe := archiveFreshnessProbe(r.URL.Path)
+			pending := false
+			if !probe && s.ingestionFreshness != nil &&
+				(r.Method != http.MethodPost || (r.URL.Path != "/api/v1/resync" && (r.URL.Path != "/api/v1/sync" || !archiveWriteRequest(r)))) {
+				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
+			}
+			if !probe && (s.archiveStale() || pending) {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")
 				// Session sync returns its stale-archive conflict through the route.
-				if archiveWriteRequest(r) && r.URL.Path != "/api/v1/sessions/sync" {
+				if s.archiveStale() && archiveWriteRequest(r) && r.URL.Path != "/api/v1/sessions/sync" {
 					if local, ok := s.db.(*db.DB); ok && local.WriterClosed() {
 						response := writerClosedResponse(w.Header().Add, true)
 						writeError(w, response.Status, response.Message)
@@ -1018,7 +1037,7 @@ func archiveWriteRequest(r *http.Request) bool {
 		return !startupOnly
 	case "/api/v1/recall/import":
 		return r.URL.Query().Get("dry_run") != "true"
-	case "/api/v1/settings", "/api/v1/recall/query", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
+	case "/api/v1/settings", "/api/v1/recall/query", "/api/v1/commits/sessions", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
 		return false
 	}
 	for _, prefix := range []string{"/api/v1/config/", "/api/v1/telemetry/", "/api/v1/remote-sync/", "/api/v1/embeddings/", "/api/v1/raw-sync/uploads", "/api/v1/import/claude-ai/sync/results/"} {

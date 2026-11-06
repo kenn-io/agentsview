@@ -210,19 +210,34 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	if len(rows) == 0 {
 		return nil
 	}
+	cache := s.path != ""
+	// Pin cached counts and the query start to the same mirror generation.
+	s.handleMu.RLock()
+	generation := s.frustrationMemo.Generation()
 	idx := make(map[string]int, len(rows))
-	placeholders := make([]string, len(rows))
-	args := make([]any, len(rows))
+	placeholders := make([]string, 0, len(rows))
+	args := make([]any, 0, len(rows))
 	for i := range rows {
+		if cache {
+			if count, ok := s.frustrationMemo.Lookup(generation, rows[i].ID, ""); ok {
+				rows[i].FrustrationMarkerCount = count
+				continue
+			}
+		}
 		idx[rows[i].ID] = i
-		placeholders[i] = "?"
-		args[i] = rows[i].ID
+		placeholders = append(placeholders, "?")
+		args = append(args, rows[i].ID)
+	}
+	if len(args) == 0 {
+		s.handleMu.RUnlock()
+		return nil
 	}
 	q := `SELECT session_id, content, is_system
 		FROM messages
 		WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN (` +
 		strings.Join(placeholders, ",") + `)`
-	msgRows, err := s.queryContext(ctx, q, args...)
+	msgRows, err := queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, q, args...)
+	s.handleMu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("querying duckdb frustration markers: %w", err)
 	}
@@ -245,6 +260,11 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	if err := msgRows.Err(); err != nil {
 		return fmt.Errorf("iterating duckdb frustration markers: %w", err)
+	}
+	if cache {
+		for id, i := range idx {
+			s.frustrationMemo.Store(generation, id, "", rows[i].FrustrationMarkerCount)
+		}
 	}
 	return nil
 }
@@ -1281,7 +1301,8 @@ func (s *Store) forEachDailyUsageAggregateRow(
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN cost_microdollars ELSE 0 END AS authoritative_cost,
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows
 		FROM usage_localized
-		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, model ASC, price_model ASC, ts ASC, COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC`
+		-- Visit rows in time order so the last Copilot-reported total is the session cost.
+		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, ts ASC, COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC, model ASC, price_model ASC`
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb daily usage aggregates: %w", err)
@@ -1681,8 +1702,9 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN cost_microdollars ELSE 0 END AS authoritative_cost,
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows
 		FROM usage_localized
-		ORDER BY session_id ASC, model ASC, price_model ASC, ts ASC,
-			COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC`
+		-- Visit rows in time order so the last Copilot-reported total is the session cost.
+		ORDER BY session_id ASC, ts ASC, COALESCE(message_ordinal, -1) ASC,
+			source ASC, usage_dedup_key ASC, model ASC, price_model ASC`
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb session usage aggregates: %w", err)

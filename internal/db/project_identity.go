@@ -412,25 +412,32 @@ func (db *DB) CopyArchiveIdentityFrom(ctx context.Context, sourcePath string) er
 }
 
 func (db *DB) GetDatabaseID(ctx context.Context) (string, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var id string
-	err := db.getReader().QueryRowContext(ctx,
-		`SELECT value FROM archive_metadata WHERE key = ?`,
-		archiveMetadataDatabaseIDKey,
-	).Scan(&id)
+	id, _, err := db.databaseIDAndUsagePricingRevision(ctx)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", ErrDatabaseIDMissing
-		}
-		return "", fmt.Errorf("reading database id: %w", err)
+		return "", err
 	}
-	id = strings.TrimSpace(id)
 	if id == "" {
 		return "", ErrDatabaseIDMissing
 	}
 	return id, nil
+}
+
+func (db *DB) databaseIDAndUsagePricingRevision(ctx context.Context) (string, int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var id string
+	var pricingRevision int64
+	err := db.getReader().QueryRowContext(ctx, `SELECT
+		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), ''),
+		COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key = ?), 0)`,
+		archiveMetadataDatabaseIDKey, archiveMetadataUsagePricingRevisionKey,
+	).Scan(&id, &pricingRevision)
+	if err != nil {
+		return "", 0, fmt.Errorf("reading database id: %w", err)
+	}
+	id = strings.TrimSpace(id)
+	return id, pricingRevision, nil
 }
 
 func (db *DB) GetOrCreateDatabaseID(ctx context.Context) (string, error) {

@@ -82,11 +82,17 @@ scale ever demands it.
 
 The vector phase writes changed sessions in batches of up to 500 sessions or
 about 32 MiB of document text and embeddings, whichever fills first. Each batch
-inserts its documents and chunks, deletes its sessions' older chunks and
-documents, then inserts their `vector_push_state` rows, all under one version.
-The statement count grows with the number of batches, not sessions. A crash
-before the state rows land leaves every session in the batch stale, so the next
-push repeats them.
+inserts its documents and chunks, deletes the rows its sessions no longer hold,
+then inserts their `vector_push_state` rows, all under one version. The delete
+covers documents and chunks whose key the batch did not rewrite. A rewritten key
+keeps its older row until `ReplacingMergeTree` collapses it, which every
+`final=1` read already does. Deleting those rows too would write a patch row for
+each one, and every later read of the table pays to apply patch rows until
+merges fold them in. Evictions run in batches of 500 sessions as well. The
+vector tables are not sorted by session, so each statement reads the whole
+session column; the statement count grows with the number of batches, not
+sessions. A crash before the state rows land leaves every session in the batch
+stale, so the next push repeats them.
 
 **Tables are `ReplacingMergeTree(push_version)`.** `push_version` is the push
 start time in Unix nanoseconds. Same-key rows from a retry collapse on merge and
@@ -391,14 +397,19 @@ Serve keeps the results of recent reads in memory so a repeat request between
 pushes reads no rows from ClickHouse; it still runs the small metadata queries
 that check whether its inputs changed. Each kept read has one slot per selection
 (filter, range, and similar inputs), and its key names the rows it read: the
-prepared usage stamp and the parts of the small tables it joins, the candidate
-sessions and their push versions, or the parts of the tables it scanned. A push
-that changes those replaces the slot; a push that does not leaves it in place.
-Usage reads filtered by `active`, `stale`, or `unclean` termination compare
-session times with the current time, so their rows are never kept. Kept reads
-include usage rows, analytics session listings, Activity pairing inputs per
-session version, candidate listings, project label maps, and the whole report of
-an ended range.
+prepared usage stamp and row identities for fully prepared range reads, the
+candidate sessions and their push versions, or the parts of the tables it
+scanned. Row identity probes run only for tables whose parts changed. The
+price record table keeps the records of every pricing digest, so its probe
+covers only the digest a read joins; hashing the whole table took two minutes
+on a mirror holding 534 digests. A failed probe or parts moving during it
+serves that read uncached. Raw, mixed, and
+single-session Usage reads keep parts versions. A push that changes those
+versions replaces the slot; a push that does not leaves it in place. Usage reads
+filtered by `active`, `stale`, or `unclean` termination compare session times
+with the current time, so their rows are never kept. Kept reads include usage
+rows, analytics session listings, Activity pairing inputs per session version,
+candidate listings, project label maps, and the whole report of an ended range.
 
 Nothing rebuilds kept reads in the background. The first request after a push
 that changes a read's rows pays for that read.
