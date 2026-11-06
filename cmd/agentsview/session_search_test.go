@@ -835,7 +835,7 @@ func TestSessionSearchHiddenHints(t *testing.T) {
 			_, err := root.ExecuteC()
 			require.NoError(t, err)
 			assert.Equal(t, "(no matches)\n", stdout.String())
-			assert.Contains(t, stderr.String(), "Hint: 1 match is in")
+			assert.Contains(t, stderr.String(), "Hint: 1 match is")
 
 			out, err := executeCommand(newRootCommand(), "session", "search", "needle with 'quotes'", "--project", "p", "--json", "--exclude-session", "missing-a", "--exclude-session", "missing-b")
 			require.NoError(t, err)

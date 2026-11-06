@@ -19,8 +19,13 @@ type ContentSearchHint struct {
 // Diagnostics are optional: a failed probe contributes no hint. keepMatch applies
 // caller activity filtering when the backend has not applied it.
 func SearchContentHints(ctx context.Context, svc SessionService, req ContentSearchRequest, res *ContentSearchResult, explainChildren bool, keepMatch func(db.ContentMatch) bool) []ContentSearchHint {
-	if req.Cursor != 0 || len(res.Matches) != 0 || res.NextCursor != 0 || res.CandidateTruncated {
+	if req.Cursor != 0 || res.NextCursor != 0 || res.CandidateTruncated {
 		return nil
+	}
+	for _, match := range res.Matches {
+		if keepMatch == nil || res.ActiveFilterApplied || keepMatch(match) {
+			return nil
+		}
 	}
 	var hints []ContentSearchHint
 	vector := len(req.Concepts) > 0 || req.Mode == "semantic" || req.Mode == "hybrid"
@@ -44,7 +49,9 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 	if len(args) > 1 {
 		all.Context = 0
 		if page, err := svc.SearchContent(ctx, all); err == nil {
-			if len(page.Matches) == 0 && page.NextCursor == 0 && !page.CandidateTruncated {
+			// Expanding children changes flat metadata selection to parent-tree selection.
+			// An empty tree does not rule out a matching continuation in the flat retry.
+			if !children && len(page.Matches) == 0 && page.NextCursor == 0 && !page.CandidateTruncated {
 				return nil
 			}
 			expanded = page
@@ -84,14 +91,11 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		}
 		message := fmt.Sprintf("%s %s in %s sessions, hidden by default", n, wording, class)
 		if code == "hidden_combined" {
-			message = fmt.Sprintf("%s %s in child sessions hidden by more than one default", n, wording)
+			message = fmt.Sprintf("%s %s hidden by default", n, wording)
 		}
 		hints = append(hints, ContentSearchHint{Code: code, Message: message, RetryWith: args})
 	}
 	probe := func(code, class string, retry ContentSearchRequest, args map[string]any) bool {
-		if !vector {
-			retry.Limit = max(req.Limit, db.DefaultContentSearchLimit)
-		}
 		retry.Context = 0
 		page, err := svc.SearchContent(ctx, retry)
 		if err != nil {

@@ -178,14 +178,18 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 }
 
 func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
-	for _, response := range []string{"active", "mixed", "idle"} {
+	for _, response := range []string{"active", "mixed", "idle", "active first page"} {
 		t.Run(response, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/api/v1/search/content" {
 					assert.Equal(t, "2024-06-15T11:50:00Z", r.URL.Query().Get("exclude_active_since"))
 					if r.URL.Query().Get("include_one_shot") != "true" {
-						_, _ = w.Write([]byte(`{"matches":[]}`))
+						if response == "active first page" {
+							_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"}]}`))
+						} else {
+							_, _ = w.Write([]byte(`{"matches":[]}`))
+						}
 						return
 					}
 					if response == "active" {
@@ -209,6 +213,9 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "marker"})
 			require.NoError(t, err)
 			assert.Empty(t, out.Matches)
+			if response == "active first page" {
+				assert.Equal(t, 1, out.ExcludedActive)
+			}
 			if response == "active" {
 				assert.Empty(t, out.Hints)
 				return
