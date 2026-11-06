@@ -879,7 +879,7 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
-	frustrationMemo      frustrationMarkerMemo
+	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
 	usageBackfillDone    chan struct{}
@@ -1282,17 +1282,24 @@ func configureReaderPool(reader *sql.DB) {
 	reader.SetConnMaxIdleTime(readerConnMaxIdleTime)
 }
 
-func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func (db *DB) tryAcquireBulkRead() (func(), bool) {
 	db.bulkReads.once.Do(func() {
 		db.bulkReads.slots = make(chan struct{}, bulkReadSlots)
 	})
 	select {
 	case db.bulkReads.slots <- struct{}{}:
-		return func() { <-db.bulkReads.slots }, nil
+		return func() { <-db.bulkReads.slots }, true
 	default:
+		return nil, false
+	}
+}
+
+func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if release, ok := db.tryAcquireBulkRead(); ok {
+		return release, nil
 	}
 	started := time.Now()
 	defer func() {
@@ -5672,7 +5679,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
-		db.frustrationMemo.swap(func() { oldReader = db.reader.Swap(reader) })
+		db.frustrationMemo.Swap(func() { oldReader = db.reader.Swap(reader) })
 	})
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a

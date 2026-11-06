@@ -65,6 +65,10 @@ type activityReportBackend struct {
 	read                   *[]string
 }
 
+func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
+	return b.tryAcquireBulkRead()
+}
+
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {

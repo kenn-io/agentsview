@@ -28,8 +28,9 @@ type SessionsBackend interface {
 	MessageWindowSQL(string, db.MessageWindow) (string, []any, bool)
 	// ScanMessages reports terminal rows.Err().
 	ScanMessages(db.MessageRows) ([]db.Message, error)
-	ToolCallsSQL() string
-	ToolResultEventsSQL() string
+	// A zero ordinal count selects the whole session.
+	ToolCallsSQL(ordinals int) string
+	ToolResultEventsSQL(ordinals int) string
 	TurnRows(context.Context, *db.Session) ([]db.TurnRow, error)
 	CallRows(context.Context, string) ([]db.CallRow, error)
 	Dialect() db.QueryDialect

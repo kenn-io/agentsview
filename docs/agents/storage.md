@@ -22,6 +22,10 @@ The archive writer caches up to 64 prepared SQL statements per connection to
 avoid compiling repeated import and project-attribution queries. The cache stays
 in memory and closes with its connection. Reader connections do not use it.
 
+The startup worker snapshots freshness for digest-capable providers while it
+holds the archive write lock, before the daemon opens the archive; later passes
+query live state.
+
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned
 sessions from the old database, and swap the files atomically. Preserve sessions
@@ -969,6 +973,14 @@ artifact, recall, PostgreSQL, and DuckDB refreshes. Full resync reconciliation
 must compare the same fields so incremental and resync paths agree. A no-op
 message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
+
+### PostgreSQL usage change journal
+
+PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
+and project identity writes, including changes to source archives. Installation
+requires `CREATE` on the schema and `TRIGGER` on the watched tables in addition
+to normal table access. See [PostgreSQL Sync](../pg-sync.md) for installation
+locks. CockroachDB has no journal.
 
 ### PostgreSQL usage comparisons
 

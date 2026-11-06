@@ -53,11 +53,16 @@ type Store struct {
 	frustrationMarkers frustrationMarkerMemo
 	// pricing memoizes the pricing catalog per set of active pricing parts.
 	pricing pricingCache
-	// coverageCache memoizes complete usage snapshot coverage per parts.
+	// coverageCache memoizes complete usage snapshot coverage per rows.
 	coverageCache usageCoverageCache
+	// usageVersions keeps one parts digest and row identity per usage table.
+	usageVersions struct {
+		sync.Mutex
+		tables map[string]usageTableVersion
+	}
 	// deltaCache keeps the prepared rows of changed snapshots.
 	deltaCache usageDeltaCache
-	// The usage row memos keep recent range reads per parts and filter.
+	// The usage row memos keep recent range reads per rows and filter.
 	dailyUsageRows       kept.Memo[chDailyUsageGroupRow]
 	sessionAggregateRows kept.Memo[chUsageAggregateRow]
 	usageSessionRows     kept.Memo[chUsageSessionRow]
@@ -129,6 +134,7 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 // connection's compatibility checks.
 func NewStoreFromDB(conn *sql.DB) *Store {
 	s := &Store{conn: conn}
+	s.usageVersions.tables = map[string]usageTableVersion{}
 	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
 	s.sessionAggregateRows.Size = aggregateRowBytes
 	s.usageSessionRows.Size = usageSessionRowBytes

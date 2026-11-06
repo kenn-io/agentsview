@@ -58,6 +58,9 @@ type Store struct {
 	// gone.
 	retiring sync.WaitGroup
 
+	// frustrationMemo serves local mirrors and resets on handle swap.
+	frustrationMemo db.FrustrationMarkerMemo
+
 	quack          *quackClient
 	connectionKind duckDBConnectionKind
 	cursorMu       sync.RWMutex

@@ -17,19 +17,52 @@ type ReportBackend interface {
 	BuildProjectIdentityMap(context.Context, []string) (map[string]export.ProjectMapEntry, error)
 }
 
+// ConcurrentUsageBackend reserves a second read for usage while candidates stream.
+type ConcurrentUsageBackend interface {
+	ActivityReportSecondRead() (release func(), ok bool)
+}
+
 // BuildReportArtifacts assembles a report and returns the emitted completion event.
 func BuildReportArtifacts(
 	ctx context.Context, backend ReportBackend, sessions []SessionMeta,
 	ids []string, q Query, onProgress ProgressFunc, aggregationLabel string,
 ) (CandidateArtifacts, Progress, error) {
-	usage, pricing, err := backend.ActivityReportUsage(ctx, ids, q)
-	if err != nil {
-		return CandidateArtifacts{}, Progress{}, err
+	var usage []UsageRow
+	var pricing *export.PricingBlock
+	var usageErr error
+	readCtx := ctx
+	loadUsage := func() ([]UsageRow, error) { return usage, nil }
+	var ready chan struct{}
+	var cancel context.CancelCauseFunc
+	if concurrent, ok := backend.(ConcurrentUsageBackend); ok {
+		if release, ok := concurrent.ActivityReportSecondRead(); ok {
+			readCtx, cancel = context.WithCancelCause(ctx)
+			defer cancel(nil)
+			ready = make(chan struct{})
+			go func() {
+				defer close(ready)
+				defer release()
+				usage, pricing, usageErr = backend.ActivityReportUsage(readCtx, ids, q)
+				if usageErr != nil {
+					cancel(usageErr)
+				}
+			}()
+			loadUsage = func() ([]UsageRow, error) {
+				<-ready
+				return usage, usageErr
+			}
+		}
+	}
+	if ready == nil {
+		usage, pricing, usageErr = backend.ActivityReportUsage(ctx, ids, q)
+		if usageErr != nil {
+			return CandidateArtifacts{}, Progress{}, usageErr
+		}
 	}
 
 	rowsProcessed := int64(0)
 	source := backend.ActivityReportCandidateSource(ids, q)
-	artifacts, err := BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, Params{
+	artifacts, err := BuildCandidateArtifactsFromSourceWithSurvivorUsage(readCtx, Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
 		Loc:           q.Loc,
@@ -51,8 +84,14 @@ func BuildReportArtifacts(
 			})
 			return yield(candidate)
 		})
-	}, usage)
+	}, loadUsage)
 	if err != nil {
+		if ready != nil {
+			cancel(err)
+			<-ready
+			// Keep the initiating stage's error, before its peer observes cancellation.
+			err = context.Cause(readCtx)
+		}
 		return CandidateArtifacts{}, Progress{}, fmt.Errorf("%s: %w", aggregationLabel, err)
 	}
 	if err := backend.ActivityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
