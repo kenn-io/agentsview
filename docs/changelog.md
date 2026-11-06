@@ -38,8 +38,10 @@ The latest release is
 - `agentsview diagnostics append` records failures outside agent sessions in
   the daily Friction Log, grouping repeated messages with their count.
 
-- Muse Personal sessions can now appear beside your other agents and sync
-  through native raw capture, with tool results and compaction summaries.
+- Muse Personal sessions now appear beside your other agents, including tool
+  results and compaction summaries. Set `MUSE_PERSONAL_AGENTS_DIR` when they
+  live somewhere other than `~/agents/`. See
+  [Muse Personal](/docs/configuration/#muse-personal).
 
 **Improvements**
 
