@@ -126,7 +126,9 @@ func TestSessionListIncludeSource(t *testing.T) {
 func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 	for _, toggle := range []string{"--include-one-shot=false", "--include-automated=false"} {
 		dataDir := newAgentDataDir(t)
-		seedSessionsWithOpts(t, dataDir, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
+		seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "proj"}, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
+			s.ParentSessionID = new("parent")
+			s.RelationshipType = "subagent"
 			s.UserMessageCount = 1
 			s.IsAutomated = toggle == "--include-automated=false"
 			if s.IsAutomated {
@@ -145,6 +147,18 @@ func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 		require.NoError(t, cmd.Execute())
 		list := decodeCLIJSON[cliSessionList](t, stdout.String())
 		assert.Empty(t, list.Sessions)
+		assert.NotContains(t, stderr.String(), "child")
+		stdout.Reset()
+		stderr.Reset()
+		cmd = newRootCommand()
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&stderr)
+		cmd.SetArgs(args[:len(args)-1])
+		require.NoError(t, cmd.Execute())
+		list = decodeCLIJSON[cliSessionList](t, stdout.String())
+		require.Len(t, list.Sessions, 1)
+		assert.Equal(t, "worker", list.Sessions[0]["id"])
+		assert.Empty(t, stderr.String())
 	}
 }
 

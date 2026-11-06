@@ -280,7 +280,9 @@ func sessionListDefaultExclusionNotice(
 	}
 
 	hiddenChildren := 0
-	if !f.IncludeChildren {
+	// Annotation selections already return matching children directly. Expanding
+	// their parent trees can add ancestors rather than hidden children.
+	if !f.IncludeChildren && len(f.Labels) == 0 && f.PR == "" {
 		withChildren := sessionListCountFilter(f)
 		withChildren.IncludeChildren = true
 		list, err := svc.List(ctx, withChildren)
