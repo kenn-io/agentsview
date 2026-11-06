@@ -120,8 +120,8 @@
   async function refreshGenerations(): Promise<void> {
     const signal = generationsRead.begin();
     try {
-      const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal });
-      if (disposed || !generationsRead.isCurrent(signal)) return;
+      const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal }).catch(() => null);
+      if (disposed || res === null || !generationsRead.isCurrent(signal)) return;
       generations = res.generations ?? [];
     } finally {
       generationsRead.finish(signal);
