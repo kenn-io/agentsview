@@ -99,3 +99,27 @@ func TestClaudePeerRewindKeepsRetryIdentity(t *testing.T) {
 	require.Len(t, results[0].Messages, 2)
 	assert.Equal(t, "try again", results[0].Messages[1].Content)
 }
+
+func TestClaudePeerRewindPreservesLegacyBranches(t *testing.T) {
+	content := loadFixture(t, "claude/peer_nonmeta_rewind.jsonl")
+	path := createTestFile(t, "rewind.jsonl", content)
+	results, err := parseClaudeSession(path, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 2, "non-meta peer records must keep the original main branch and retry fork")
+	assert.Equal(t, "rewind", results[0].Session.ID)
+	assert.Equal(t, "start", results[0].Session.FirstMessage)
+	assert.Equal(t, 1, results[0].Session.UserMessageCount)
+	require.Len(t, results[0].Messages, 9)
+	assert.Equal(t, "answer 3", results[0].Messages[8].Content)
+	for _, ordinal := range []int{1, 3, 5, 7} {
+		assert.True(t, results[0].Messages[ordinal].IsSystem)
+		assert.Equal(t, "peer_message", results[0].Messages[ordinal].SourceSubtype)
+	}
+	assert.Equal(t, "rewind-retry", results[1].Session.ID)
+	assert.Equal(t, "rewind", results[1].Session.ParentSessionID)
+	assert.Equal(t, RelFork, results[1].Session.RelationshipType)
+	assert.Equal(t, "try again", results[1].Session.FirstMessage)
+	assert.Equal(t, 1, results[1].Session.UserMessageCount)
+	require.Len(t, results[1].Messages, 2)
+	assert.Equal(t, "retry answer", results[1].Messages[1].Content)
+}

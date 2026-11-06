@@ -1701,7 +1701,7 @@ func parseDAG(
 			// Build counts once, only if this transcript has a fork.
 			if subtreeTurns == nil {
 				var err error
-				subtreeTurns, subtreeChannel, err = subtreeUserTurnsContext(ctx, entries, children, roots[0])
+				subtreeTurns, subtreeChannel, err = subtreeBranchWeightsContext(ctx, entries, children, roots[0])
 				if err != nil {
 					return nil, err
 				}
@@ -2626,10 +2626,10 @@ func pathWithinDir(path, dir string) bool {
 		rel != ".."
 }
 
-// subtreeUserTurnsContext counts real user and channel turns for every subtree
-// in post-order, so fork decisions can reuse counts for overlapping branches.
-// System-injected user records do not influence branch selection.
-func subtreeUserTurnsContext(
+// subtreeBranchWeightsContext preserves historical branch selection weights.
+// Non-meta peer records can contribute weight without counting as human turns.
+// Meta channel records are counted separately to preserve stored retry ownership.
+func subtreeBranchWeightsContext(
 	ctx context.Context,
 	entries []dagEntry,
 	children map[string][]int,
@@ -2656,7 +2656,7 @@ func subtreeUserTurnsContext(
 			next[current]++
 			continue
 		}
-		if isCountedClaudeUserTurn(ctx, entries[current]) {
+		if contributesClaudeBranchWeight(ctx, entries[current]) {
 			turns[current]++
 			if gjson.Get(entries[current].line, "isMeta").Bool() {
 				channel[current]++
@@ -2668,10 +2668,10 @@ func subtreeUserTurnsContext(
 	return turns, channel, ctx.Err()
 }
 
-func isCountedClaudeUserTurn(ctx context.Context, entry dagEntry) bool {
+func contributesClaudeBranchWeight(ctx context.Context, entry dagEntry) bool {
 	if entry.entryType != "user" ||
-		isHiddenClaudeMeta(entry.line) ||
-		gjson.Get(entry.line, "origin.kind").Str == "peer" ||
+		(gjson.Get(entry.line, "isMeta").Bool() &&
+			gjson.Get(entry.line, "origin.kind").Str != "channel") ||
 		gjson.Get(entry.line, "isCompactSummary").Bool() {
 		return false
 	}
