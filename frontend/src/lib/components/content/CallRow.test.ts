@@ -12,7 +12,7 @@ describe("CallRow measured timing", () => {
   it.each([
     { duration: 2000, isLive: false, label: "2.0s", width: "40%", liveClass: false },
     { duration: 0, isLive: false, label: "0ms", width: "0%", liveClass: false },
-    { duration: null, isLive: false, label: "unknown", width: "0%", liveClass: false },
+    { duration: null, isLive: false, label: "", width: "0%", liveClass: false },
     { duration: null, isLive: true, label: "running 5.0s+", width: "0%", liveClass: true },
     { duration: 2000, isLive: true, label: "2.0s", width: "40%", liveClass: false },
   ])(
@@ -73,7 +73,37 @@ describe("CallRow measured timing", () => {
     expect(onClick).not.toHaveBeenCalled();
     document.querySelector<HTMLElement>(".call")!.click();
     expect(onClick).toHaveBeenCalledOnce();
-    expect(document.querySelector(".cd")?.textContent?.trim()).toBe("unknown");
+    expect(document.querySelector(".cd")?.textContent?.trim()).toBe("");
+    unmount(component);
+  });
+
+  it("drops the bar and duration columns when the list has no timing", async () => {
+    const component = mount(CallRow, {
+      target: document.body,
+      props: {
+        call: {
+          tool_use_id: "call-1",
+          tool_name: "Bash",
+          category: "Bash",
+          duration_ms: null,
+          is_parallel: false,
+          input_preview: "pwd",
+        },
+        barWidthPct: 0,
+        showTiming: false,
+      },
+    });
+    await tick();
+
+    const row = document.querySelector<HTMLElement>(".call")!;
+    expect(row.querySelector(".cbar-wrap")).toBeNull();
+    expect(row.querySelector(".cd")).toBeNull();
+    expect(row.textContent).not.toContain("unknown");
+    expect([...row.children].map((el) => el.className.split(" ")[0])).toEqual([
+      "chev",
+      "cn",
+      "ca",
+    ]);
     unmount(component);
   });
 });

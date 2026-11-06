@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// The served fixture includes measured Bash and closed-child Task execution plus unknown Read calls.
+// The served fixture includes measured Bash and closed-child Task execution plus untimed Read calls.
 
 const SHOWCASE = "test-session-duration-showcase";
 const SHOWCASE_WORKTREE =
@@ -51,7 +51,7 @@ test.describe("Session Vital Signs", () => {
     await expect(page.locator(".v-section .v-h", { hasText: "Calls" })).toBeVisible();
   });
 
-  test("shows measured execution and unknown calls with horizontal activity tracks", async ({
+  test("shows measured execution and untimed calls with horizontal activity tracks", async ({
     page,
   }, testInfo) => {
     await gotoShowcase(page);
@@ -88,7 +88,8 @@ test.describe("Session Vital Signs", () => {
     const read = page
       .locator(".calls .call")
       .filter({ has: page.locator(".cn", { hasText: "Read" }) });
-    await expect(read.locator(".cd")).toHaveText(["unknown", "unknown", "unknown"]);
+    // Untimed calls leave the duration cell empty rather than "unknown".
+    await expect(read.locator(".cd")).toHaveText(["", "", ""]);
     const task = page
       .locator(".calls .call")
       .filter({ has: page.locator(".cn", { hasText: "Task" }) });
