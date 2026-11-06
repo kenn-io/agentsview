@@ -1840,6 +1840,23 @@ func TestLoadFile_EventsCoalesceInterval(t *testing.T) {
 	}
 }
 
+func TestLoadFile_SyncIdleAfter(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data map[string]any
+		want time.Duration
+	}{
+		{"default", map[string]any{}, 10 * time.Minute},
+		{"configured", map[string]any{"sync_idle_after": "4m"}, 4 * time.Minute},
+		{"disabled", map[string]any{"sync_idle_after": "0"}, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadMinimalWithConfig(t, tt.data)
+			assert.Equal(t, tt.want, cfg.SyncIdleAfter)
+		})
+	}
+}
+
 func TestLoadFile_DaemonIdleTimeout(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1854,6 +1871,23 @@ func TestLoadFile_DaemonIdleTimeout(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadMinimalWithConfig(t, tt.data)
 			assert.Equal(t, tt.want, cfg.DaemonIdleTimeout)
+		})
+	}
+}
+
+func TestLoadFile_SyncInterval(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data map[string]any
+		want time.Duration
+	}{
+		{name: "absent uses default", data: map[string]any{}, want: 5 * time.Second},
+		{name: "configured", data: map[string]any{"sync_interval": "60s"}, want: time.Minute},
+		{name: "explicit zero is kept", data: map[string]any{"sync_interval": "0s"}, want: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadMinimalWithConfig(t, tt.data)
+			assert.Equal(t, tt.want, cfg.SyncInterval)
 		})
 	}
 }

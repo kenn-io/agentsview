@@ -68,10 +68,11 @@ func (e *Engine) validateSourceSessionOwnership(ctx context.Context, res process
 	return nil
 }
 
-func (e *Engine) writeAttachedStaged(ctx context.Context, prepared ingest.PreparedSession, pw pendingWrite, provenance *db.ArchiveSessionProvenance) error {
+func (e *Engine) writeAttachedStaged(ctx context.Context, prepared preparedSessionWrite, pw pendingWrite, provenance *db.ArchiveSessionProvenance) error {
 	observation, hasObservation := e.projectIdentityObservationForWrite(pw, prepared.Session)
 	snapshotProject := pw.sess.Project
 	write := db.SessionBatchWrite{
+		CodexForkState: prepared.codexForkState, StagedToolKeys: prepared.stagedToolKeys,
 		Session: prepared.Session, Messages: prepared.Messages, UsageEvents: prepared.UsageEvents, PlanUsage: prepared.PlanUsage,
 		ToolResultImages: &e.toolResultImages, ArchiveProvenance: provenance,
 		IdentityObservation: identityObservationOrZero(observation, hasObservation), IdentitySnapshotProject: &snapshotProject,

@@ -74,7 +74,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     if (!s) return "user";
     const all = sessions.sessions;
     if (sessionAncestryMatches(s, all, (ancestor) => ancestor.relationship_type === "subagent")) return "subagent";
-    if (sessionAncestryMatches(s, all, (ancestor) => (ancestor.first_message ?? "").includes("<teammate-message"))) return "teammate";
+    if (sessionAncestryMatches(s, all, (ancestor) => (sessions.view(ancestor).first_message ?? "").includes("<teammate-message"))) return "teammate";
     return "user";
   });
   let roleLabel = $derived.by(() => {
@@ -122,18 +122,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   let pinFeedback = $state("");
   let pinFailed = $state(false);
   let forkFeedback = $state("");
-  let turnByMessage = $derived.by(() => {
-    const map = new Map<number, TurnTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) map.set(turn.message_id, turn);
-    return map;
-  });
-  let callByToolUseID = $derived.by(() => {
-    const map = new Map<string, CallTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) {
-      for (const call of turn.calls) map.set(call.tool_use_id, call);
-    }
-    return map;
-  });
   function soloDurationLabel(
     ct: CallTiming | undefined,
     turn: TurnTiming | undefined,
@@ -149,13 +137,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
   function isRunningTurn(msg: Message): boolean {
     if (!sessionTiming.timing?.running) return false;
-    const turn = turnByMessage.get(msg.id);
+    const turn = sessionTiming.index.turnByMessage.get(msg.id);
     return turn != null && turn.duration_ms == null;
   }
   let turnSummary = $derived.by(() => {
     if (isUser || !message.has_tool_use) return null;
     const calls = message.tool_calls?.length ?? 0;
-    const turn = turnByMessage.get(message.id);
+    const turn = sessionTiming.index.turnByMessage.get(message.id);
     if (turn?.duration_ms != null) {
       return { text: m.message_content_turn_summary({ duration: formatDuration(turn.duration_ms), count: calls }), slow: false, running: false };
     }
@@ -314,20 +302,20 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     {/each}
     <DocbankMatches sessionId={message.session_id} ordinal={message.ordinal} />
     {#if ui.isBlockVisible("tool")}
-      {@const turn = turnByMessage.get(message.id)}
+      {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
       {@const structuredCalls = message.tool_calls ?? []}
       {#if structuredCalls.length === 1}
         {@const soloCall = structuredCalls[0]!}
         <ToolBlock sessionId={message.session_id} ordinal={message.ordinal} toolCall={soloCall} content="" label={displayToolName(soloCall)}
           durationLabel={soloDurationLabel(
-            callByToolUseID.get(soloCall.tool_use_id ?? ""),
+            sessionTiming.index.callByToolUseID.get(soloCall.tool_use_id ?? ""),
             turn,
             message,
           )}
           isRunning={isRunningTurn(message)}
           searchScope={activeSearchOrdinal === undefined ? undefined : { ordinal: activeSearchOrdinal, callIdx: 0 }} />
       {:else if structuredCalls.length >= 2}
-        <ParallelGroup sessionId={message.session_id} ordinal={message.ordinal} toolCalls={structuredCalls} callTimingByID={callByToolUseID}
+        <ParallelGroup sessionId={message.session_id} ordinal={message.ordinal} toolCalls={structuredCalls} callTimingByID={sessionTiming.index.callByToolUseID}
           isRunning={isRunningTurn(message)} searchOrdinal={activeSearchOrdinal} />
       {:else}
         {#each segments.filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}

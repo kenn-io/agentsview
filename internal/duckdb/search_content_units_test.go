@@ -527,3 +527,70 @@ func TestDuckSearchContentMultiRunReducerParity(t *testing.T) {
 		assert.False(t, byOrd[o].Sidechain, "top-level row %d flag", o)
 	}
 }
+
+// TestDuckSearchContentSystemPrefixedUserRowsDoNotStopRun pins the
+// system-prefix half of the RunExtents stop predicate: user rows stored with
+// is_system = FALSE whose content carries a system prefix are not
+// embeddable, so they do not bound the surrounding assistant run, while a
+// real user prompt does. Two sessions with different layouts share one
+// RunExtents statement, so a stop row from one session must not bound the
+// other session's run.
+func TestDuckSearchContentSystemPrefixedUserRowsDoNotStopRun(t *testing.T) {
+	store := newUnitsStore(t, []db.SessionBatchWrite{
+		{
+			Session: unitSession("duck-unit-pfx-a", 8),
+			Messages: []db.Message{
+				unitMsg("duck-unit-pfx-a", 0, "user", "the question", false, false),
+				unitMsg("duck-unit-pfx-a", 1, "assistant", "PFXHIT a1", false, false),
+				unitMsg("duck-unit-pfx-a", 2, "user",
+					"<command-name>/status</command-name>", false, false),
+				unitMsg("duck-unit-pfx-a", 3, "assistant", "PFXHIT a3", false, false),
+				unitMsg("duck-unit-pfx-a", 4, "user",
+					"[Request interrupted by user]", false, false),
+				unitMsg("duck-unit-pfx-a", 5, "assistant", "PFXHIT a5", false, false),
+				unitMsg("duck-unit-pfx-a", 6, "user", "next question", false, false),
+				unitMsg("duck-unit-pfx-a", 7, "assistant", "PFXHIT a7", false, false),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session: unitSession("duck-unit-pfx-b", 6),
+			Messages: []db.Message{
+				unitMsg("duck-unit-pfx-b", 0, "user", "other question", false, false),
+				unitMsg("duck-unit-pfx-b", 1, "assistant", "step one", false, false),
+				unitMsg("duck-unit-pfx-b", 2, "assistant", "step two", false, false),
+				unitMsg("duck-unit-pfx-b", 3, "user",
+					"<local-command-stdout>ok</local-command-stdout>", false, false),
+				unitMsg("duck-unit-pfx-b", 4, "assistant", "PFXHIT b4", false, false),
+				unitMsg("duck-unit-pfx-b", 5, "assistant", "step five", false, false),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+
+	got, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "PFXHIT", Mode: "substring",
+		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 5, "matches")
+
+	type key struct {
+		session string
+		ordinal int
+	}
+	want := map[key][2]int{
+		{"duck-unit-pfx-a", 1}: {1, 5}, // prefixed rows 2 and 4 do not stop
+		{"duck-unit-pfx-a", 3}: {1, 5},
+		{"duck-unit-pfx-a", 5}: {1, 5}, // the real prompt at 6 stops
+		{"duck-unit-pfx-a", 7}: {7, 7},
+		{"duck-unit-pfx-b", 4}: {1, 5}, // prefixed row 3 does not stop
+	}
+	gotRanges := make(map[key][2]int, len(got.Matches))
+	for _, m := range got.Matches {
+		gotRanges[key{m.SessionID, m.Ordinal}] = m.OrdinalRange
+	}
+	assert.Equal(t, want, gotRanges)
+}

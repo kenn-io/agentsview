@@ -94,10 +94,18 @@ func TestPGCommitLinkParity(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertCommitLinkParity(t, local, store)
+	trailerUpdatedAt := func() string {
+		var at string
+		require.NoError(t, pg.QueryRowContext(ctx, `SELECT to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD') FROM sessions WHERE id='commit-trailer'`).Scan(&at))
+		return at
+	}
+	_, err = pg.ExecContext(ctx, `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id='commit-trailer'`)
+	require.NoError(t, err)
 	dbtest.AssertTrailerIncrementalPush(t, local, func() db.CommitLinkReader { return store }, func() {
 		_, err := syncer.Push(t.Context(), false, nil)
 		require.NoError(t, err)
 	})
+	assert.NotEqual(t, "2000-01-01", trailerUpdatedAt(), "a trailer-only change must advance updated_at for session watchers")
 	_, err = pg.ExecContext(ctx, `UPDATE messages SET content='different revision' WHERE session_id='commit-live' AND ordinal=0`)
 	require.NoError(t, err)
 	links, err := store.SessionCommitLinks(ctx, "commit-live")

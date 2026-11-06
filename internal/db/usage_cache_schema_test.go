@@ -28,7 +28,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cache.temporary)
 	assert.Equal(t, filepath.Join(filepath.Dir(archivePath),
-		"usage-cache-v16-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
+		"usage-cache-v17-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
 
 	info, err := os.Stat(cache.path)
 	require.NoError(t, err)
@@ -593,11 +593,15 @@ func TestUsageCacheRetirementWaitsForDetachedRollup(t *testing.T) {
 	database := testDB(t)
 	seedUsageSnapshotSession(t, database, "retired-rollup", "project-a",
 		"2026-08-10T09:00:00Z", 0, 10, "model-a")
-	snapshot, fills, _ := prepareUsageRollupTest(t, database)
-	databaseID, err := database.GetDatabaseID(t.Context())
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{
+		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+	}, usageQueryKindToken)
 	require.NoError(t, err)
 	cache, releaseGeneration, err := database.usageCache.acquireGeneration(
-		t.Context(), databaseID)
+		t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	// Seed facts synchronously so only the caller and rollup hold generation leases.
+	fills, err := cache.fill.fillSessionsDetached(t.Context(), snapshot.Versions)
 	require.NoError(t, err)
 
 	started := make(chan struct{})

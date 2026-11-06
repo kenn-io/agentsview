@@ -1,5 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "addLabels": ["dependencies"],
   "extends": ["config:recommended", "schedule:weekly"],
   "timezone": "America/New_York",
   "dependencyDashboard": true,

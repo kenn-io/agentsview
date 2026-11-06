@@ -290,6 +290,8 @@ func doctorDebugLineRelevant(line string) bool {
 		"resync:",
 		"aborting swap",
 		"resync aborted",
+		"needs retry",
+		"need retry",
 		"sync complete",
 		"failed",
 		"warning",

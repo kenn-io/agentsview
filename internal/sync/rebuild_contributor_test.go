@@ -773,7 +773,7 @@ func TestSyncThenRunWithRebuildRejectsIncompleteContributor(t *testing.T) {
 		"an incomplete rebuild must not run downstream work")
 }
 
-func TestResyncAllRejectsDeferredLocalReplacement(t *testing.T) {
+func TestResyncAllPreservesDeferredLocalReplacement(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "deferred.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
@@ -795,6 +795,9 @@ func TestResyncAllRejectsDeferredLocalReplacement(t *testing.T) {
 		Machine: "local", Agent: string(parser.AgentCodex),
 		FilePath: &missingPath, MessageCount: 1,
 	}))
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "deferred", []db.Message{
+		{SessionID: "deferred", Ordinal: 0, Role: "assistant", Content: "saved history"},
+	}))
 	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 		Machine:   "local",
@@ -809,7 +812,8 @@ func TestResyncAllRejectsDeferredLocalReplacement(t *testing.T) {
 
 	stats := engine.ResyncAll(t.Context(), nil)
 
-	assert.True(t, stats.Aborted)
+	assert.False(t, stats.Aborted)
+	assert.True(t, stats.ArchiveRebuilt)
 	assert.Equal(t, 1, stats.Deferred)
 	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
 	kept, err := database.GetSession(t.Context(), "deferred")

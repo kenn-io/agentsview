@@ -27,6 +27,58 @@ func reportSessionIDs(sessions []activity.SessionRow) map[string]struct{} {
 	return out
 }
 
+func TestActivityReportSecondReadLane(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:02:00Z")
+	})
+	seedMessage(t, d, "s", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "s", 2, "assistant", "2026-06-16T10:02:00Z", "opus")
+	q := dayQuery(t, "2026-06-16", "UTC")
+	assertLaneFree := func(t *testing.T) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		for range bulkReadSlots {
+			release, err := d.acquireBulkRead(ctx)
+			require.NoError(t, err)
+			defer release()
+		}
+	}
+	release, ok := (activityReportBackend{DB: d}).ActivityReportSecondRead()
+	require.True(t, ok, "a free lane allows a second read")
+	assert.Len(t, d.bulkReads.slots, 1)
+	release()
+	assertLaneFree(t)
+
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			if busy {
+				for range bulkReadSlots - 1 {
+					release, err := d.acquireBulkRead(ctx)
+					require.NoError(t, err)
+					defer release()
+				}
+			}
+			_, err := d.BuildActivityReportArtifacts(ctx, AnalyticsFilter{Timezone: "UTC"}, q, func(p activity.Progress) {
+				if busy && p.Phase == activity.ProgressLoadingSessions {
+					release, ok := (activityReportBackend{DB: d}).ActivityReportSecondRead()
+					if ok {
+						release()
+					}
+					assert.False(t, ok, "the build holds the last bulk read slot")
+				}
+			})
+			require.NoError(t, err)
+		})
+		assertLaneFree(t)
+	}
+}
+
 // dayQuery resolves a single-day "day" Query for date/tz against a fixed
 // far-future now, so the candidate range is the full local day and the
 // report is never partial regardless of the wall clock.
@@ -229,6 +281,70 @@ func TestSQLiteActivityReportCandidateQueryUsesExistingSessionIndex(t *testing.T
 	assert.Contains(t, plan, "idx_messages_velocity")
 	assert.NotContains(t, plan, "idx_messages_activity_timestamp")
 	assert.NotContains(t, plan, "SCAN m")
+}
+
+func TestSQLiteActivityReportCandidatesMatchGoPairingWithoutModels(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "modelless", "p", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:09:00Z")
+	})
+	events := []activity.ActivityEvent{
+		{SessionID: "modelless", Ordinal: 0, Timestamp: "2026-06-16T10:00:00Z", Role: "user"},
+		{SessionID: "modelless", Ordinal: 1, Timestamp: "2026-06-16T10:01:00Z", Role: "assistant"},
+		{SessionID: "modelless", Ordinal: 2, Timestamp: "2026-06-16T10:02:00Z", Role: "user"},
+		{SessionID: "modelless", Ordinal: 3, Timestamp: "2026-06-16T10:03:00Z", Role: "assistant"},
+		{SessionID: "modelless", Ordinal: 4, Timestamp: "2026-06-16T10:04:00Z", Role: "assistant", Model: "model-a"},
+		{SessionID: "modelless", Ordinal: 5, Timestamp: "2026-06-16T10:05:00Z", Role: "user"},
+		{SessionID: "modelless", Ordinal: 6, Timestamp: "2026-06-16T10:06:00Z", Role: "assistant"},
+		{SessionID: "modelless", Ordinal: 7, Timestamp: "2026-06-16T10:07:00Z", Role: "user"},
+		{SessionID: "modelless", Ordinal: 8, Timestamp: "2026-06-16T10:08:00Z", Role: "assistant", Model: "model-b"},
+		{SessionID: "modelless", Ordinal: 9, Timestamp: "2026-06-16T10:09:00Z", Role: "user"},
+	}
+	for _, event := range events {
+		seedMessage(t, d, event.SessionID, event.Ordinal, event.Role, event.Timestamp, event.Model)
+	}
+	q := dayQuery(t, "2026-06-16", "UTC")
+	want := activity.PairActivityEvents(
+		events, q.RangeStart, q.EffectiveEnd,
+		time.Duration(q.GapCapSeconds)*time.Second,
+	)
+
+	got, err := d.activityReportCandidates(t.Context(), []string{"modelless"}, q)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	priors := make([]string, 0, len(got))
+	for _, candidate := range got {
+		priors = append(priors, candidate.PriorModel)
+	}
+	assert.Equal(t, []string{
+		"unknown", "unknown", "unknown", "unknown",
+		"model-a", "model-a", "model-a", "model-a", "model-b",
+	}, priors)
+}
+
+func TestSQLiteActivityReportPriorModelSeeksAssistantModelIndex(t *testing.T) {
+	d := testDB(t)
+	q := dayQuery(t, "2026-06-16", "UTC")
+	lower := q.RangeStart.Add(-5 * time.Minute).UnixMicro()
+	upper := q.EffectiveEnd.UnixMicro()
+	for _, tt := range []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{"message candidates", activityReportCandidatesSQL, []any{
+			`["session"]`, "2026-06-15T09:00:00Z", "2026-06-17T14:00:00Z", lower, upper,
+		}},
+		{"terminal candidates", activityReportTerminalCandidatesSQL, []any{
+			`["session"]`, lower, upper,
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Contains(t, queryPlanOf(t, d, tt.query, tt.args...),
+				"SEARCH prior USING INDEX idx_messages_assistant_model (session_id=? AND ordinal<?)")
+		})
+	}
 }
 
 func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
@@ -458,6 +574,58 @@ func BenchmarkSQLiteActivityReportCandidateSourceLongSession(b *testing.B) {
 				require.Equal(b, benchmark.want, count)
 			}
 		})
+	}
+}
+
+// BenchmarkSQLiteActivityReportCandidateSourceModelless covers a transcript
+// whose assistant turns record no model. Each candidate looks back for the
+// latest assistant turn with a model, so a lookup that steps through every
+// earlier message grows with the square of the session length.
+func BenchmarkSQLiteActivityReportCandidateSourceModelless(b *testing.B) {
+	d := testDB(b)
+	const messageCount = 2_000
+	_, err := d.getWriter().Exec(b.Context(), `
+		INSERT INTO sessions(
+			id, project, started_at, ended_at, message_count
+		) VALUES (
+			'bench-modelless', 'bench', '2026-07-01T00:00:00Z',
+			'2026-07-01T00:33:19Z', ?
+		)`, messageCount)
+	require.NoError(b, err)
+	_, err = d.getWriter().Exec(b.Context(), `
+		WITH RECURSIVE n(i) AS (
+			VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < ?
+		)
+		INSERT INTO messages(
+			session_id, ordinal, role, content, timestamp, model
+		)
+		SELECT 'bench-modelless', i,
+			CASE WHEN i % 2 = 0 THEN 'user' ELSE 'assistant' END,
+			substr(hex(zeroblob(1000)), 1, 1500),
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-07-01T00:00:00Z',
+				printf('+%d seconds', i)),
+			''
+		FROM n`, messageCount-1)
+	require.NoError(b, err)
+	_, err = d.getWriter().Exec(b.Context(), `ANALYZE`)
+	require.NoError(b, err)
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "month", Date: "2026-07-01", Timezone: "UTC",
+	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(b, err)
+	source := d.activityReportCandidateSQL([]string{"bench-modelless"}, q)
+	b.ReportAllocs()
+	for b.Loop() {
+		count := 0
+		err := source(b.Context(), func(candidate activity.IntervalCandidate) error {
+			count++
+			if candidate.PriorModel != "unknown" {
+				return fmt.Errorf("prior model %q, want unknown", candidate.PriorModel)
+			}
+			return nil
+		})
+		require.NoError(b, err)
+		require.Equal(b, messageCount-1, count)
 	}
 }
 

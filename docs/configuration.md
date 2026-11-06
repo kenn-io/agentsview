@@ -250,9 +250,27 @@ cursor_secret = "base64-encoded-secret"
 require_auth = true
 cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
+sync_idle_after = "10m"
+sync_interval = "5s"
 chart_palette = "agentsview"
 zoom_level = 120
 ```
+
+`sync_idle_after` defaults to `"10m"`. After this long without a client request
+or an open event stream, local serve stops watching session files and pauses its
+local sync timers, remote-source sync, S3 imports, and attachment imports.
+Remote-host polling, Codex Cloud capture, replica push, and raw uploads keep their
+own schedules.
+The next archive request starts catch-up for files changed or added since
+collection paused. Requests share a two-second wait budget from the start of
+catch-up. After that, reads return immediately with a stale-results warning
+while catch-up continues in the
+background.
+The warning clears when catch-up finishes or fails, and failures are logged.
+Every client request except `/api/ping` counts as activity. Version and sync-status
+probes report readiness without starting catch-up.
+Desktop health probes keep the daemon alive without restarting sync.
+Set it to `"0"` to keep syncing while idle. Restart the server after changing it.
 
 | Field                               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -271,6 +289,8 @@ zoom_level = 120
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `sync_idle_after`                   | Pause local collection after this long without client activity; defaults to `"10m"`, with `"0"` disabling the pause                                                                                                                                                                                                                                                                                                                                                              |
+| `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.                                                                                                                       |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
@@ -2097,7 +2117,8 @@ mechanisms:
 
 1. **File watcher** — uses FSEvents on macOS and fsnotify elsewhere to detect
     file changes. An isolated edit is batched for 500ms; watcher-driven sync
-    start times remain at least five seconds apart. Common dependency and build
+    start times remain at least five seconds apart by default (see
+    [`sync_interval`](#config-file)). Common dependency and build
     folders (`node_modules`, `__pycache__`, `.git`, `vendor`, `dist`, etc.) are
     automatically skipped to reduce noise and overhead. On macOS, FSEvents
     reports a file that its producer keeps open only when the file is created
@@ -2409,14 +2430,16 @@ sudo sysctl fs.inotify.max_user_watches=524288
 
 ## Memory Behavior
 
-The serve daemon bounds its own memory, so no tuning is required. It installs a
-256 MiB Go soft memory limit, and on Linux it also limits glibc to two malloc
-arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold turns
-off glibc's dynamic adjustment, which otherwise lets a long-running process stop
-trimming until as much as 64 MiB is free, so memory freed by the SQLite driver
-goes back to the operating system instead of accumulating as fragmentation.
-Setting `GOMEMLIMIT`, `MALLOC_ARENA_MAX`, or `MALLOC_TRIM_THRESHOLD_` in the
-daemon's environment overrides the corresponding default.
+The serve daemon installs a 4 GiB Go soft memory limit as a backstop so large
+requests run with normal GC pacing. Setting `GOMEMLIMIT` lower trades GC time
+for a smaller heap. On Linux, every agentsview process limits glibc to two
+malloc arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold
+turns off glibc's dynamic adjustment, which otherwise lets a long-running
+process stop trimming until as much as 64 MiB is free, so memory freed by the
+SQLite driver goes back to the operating system instead of accumulating as
+fragmentation. Setting `GOMEMLIMIT`, `MALLOC_ARENA_MAX`, or
+`MALLOC_TRIM_THRESHOLD_` in the process's environment overrides the
+corresponding default.
 
 ## Manual Sync
 
@@ -2441,8 +2464,8 @@ Check sync status:
 curl http://127.0.0.1:8080/api/v1/sync/status
 ```
 
-The JSON response includes `startup_pending` and `archive_stale` alongside
-sync progress.
+The JSON response includes `startup_pending`, `archive_stale`, and, starting
+with daemon API 15, `sync_pending` alongside sync progress.
 
 ## Privacy and Telemetry
 

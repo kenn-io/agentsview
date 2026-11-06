@@ -1,6 +1,6 @@
 <script lang="ts">
   import { RefreshControl as KitRefreshControl } from "@kenn-io/kit-ui";
-  import { untrack, type ComponentProps } from "svelte";
+  import { onMount, untrack, type ComponentProps } from "svelte";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import type { LiveQuery } from "../../utils/liveQuery.svelte.js";
   import {
@@ -52,8 +52,27 @@
     querySteps = [],
     liveQuery = undefined,
     lastUpdatedAt,
+    onRefresh,
     ...rest
   }: Props = $props();
+
+  let overdue = false;
+  function refreshWhenVisible() {
+    if (document.hidden) {
+      overdue = true;
+      return;
+    }
+    overdue = false;
+    onRefresh();
+  }
+
+  onMount(() => {
+    const onVisibilityChange = () => {
+      if (!document.hidden && overdue) refreshWhenVisible();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  });
 
   // Locale is fixed for the life of a page load (a language change reloads),
   // so the samples are computed once per mount.
@@ -140,6 +159,7 @@
 
 <KitRefreshControl
   {...rest}
+  onRefresh={refreshWhenVisible}
   lastUpdatedAt={status === undefined ? lastUpdatedAt : null}
   formatAge={status === undefined
     ? (at, now) => formatRefreshStatus(at, durationMs, now)

@@ -149,9 +149,16 @@ func analyticsCandidateMessagesSQL(ph string, includeContent bool) string {
 			ORDER BY session_id, ordinal`
 }
 
-func AnalyticsTrendsSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), systemPrefix string, dialect db.QueryDialect) (string, []any) {
+// AnalyticsTrendsSQL selects trend candidate messages from the sessions
+// sessionPred selects. ordered keeps rows grouped by session in ordinal
+// order, which the scope reducer needs when a model filter is set.
+func AnalyticsTrendsSQL(
+	f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any),
+	systemPrefix string, dialect db.QueryDialect,
+	sessionPred string, sessionPredArgs []any, ordered bool,
+) (string, []any) {
 	content := "m.content"
-	where := "s.deleted_at IS NULL"
+	where := "s.deleted_at IS NULL AND " + sessionPred
 	var args []any
 	from, to := AnalyticsWindowBounds(f)
 	inWindow, windowArgs := windowPred("COALESCE(m.timestamp, s.started_at, s.created_at)", from, to)
@@ -159,6 +166,7 @@ func AnalyticsTrendsSQL(f db.AnalyticsFilter, windowPred func(string, string, st
 		content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
 		args = append(args, windowArgs...)
 	}
+	args = append(args, sessionPredArgs...)
 	if sessionWindow, sessionArgs := windowPred("COALESCE(s.started_at, s.created_at)", from, to); sessionWindow != "" {
 		messageWindow, messageArgs := windowPred("wm.timestamp", from, to)
 		where += " AND (" + sessionWindow + " OR s.id IN (SELECT wm.session_id FROM messages wm WHERE wm.timestamp IS NOT NULL AND " + messageWindow + "))"
@@ -173,6 +181,11 @@ func AnalyticsTrendsSQL(f db.AnalyticsFilter, windowPred func(string, string, st
 		where += " AND " + rowWindow
 		args = append(args, windowArgs...)
 	}
+	tail := ""
+	if ordered {
+		tail = `
+		ORDER BY m.session_id, m.ordinal`
+	}
 	return `
 		SELECT m.session_id, m.ordinal, m.role, m.is_system,
 			COALESCE(m.model, ''), ` + content + `, m.timestamp,
@@ -182,8 +195,7 @@ func AnalyticsTrendsSQL(f db.AnalyticsFilter, windowPred func(string, string, st
 		WHERE ` + where + `
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = ` + dialect.FalseLiteral() + `
-			AND ` + systemPrefix + `
-		ORDER BY m.session_id, m.ordinal`, args
+			AND ` + systemPrefix + tail, args
 }
 
 const AnalyticsSessionColumns = `id, project, machine, agent, first_message,

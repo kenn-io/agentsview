@@ -1,12 +1,17 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -102,22 +107,6 @@ func TestContentTypeWrapper(t *testing.T) {
 func TestMiddlewareTimeout(t *testing.T) {
 	t.Parallel()
 
-	srv := testServer(
-		t, 10*time.Millisecond, //nolint:kennlint // deadlinetest: the delayed wrapped handlers must return the timeout response
-		withHandlerDelay(100*time.Millisecond),
-	)
-	// Use a real listener to discover the bound port, then
-	// rebuild Handler() with the correct port in the Host
-	// allowlist.
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := ln.Addr().(*net.TCPAddr).Port
-	srv.SetPort(port)
-	ts := httptest.NewUnstartedServer(srv.Handler())
-	ts.Listener = ln
-	ts.Start()
-	t.Cleanup(ts.Close)
-
 	tests := []struct {
 		name        string
 		path        string
@@ -136,19 +125,28 @@ func TestMiddlewareTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+tt.path, nil)
-			require.NoError(t, err)
-			resp, err := ts.Client().Do(req)
-			require.NoError(t, err)
-			defer resp.Body.Close()
+			synctest.Test(t, func(t *testing.T) {
+				srv := testServer(t, 10*time.Millisecond,
+					withHandlerDelay(100*time.Millisecond))
+				// The in-memory network lets the fake clock expire the write
+				// timeout before the delayed handler can finish.
+				ts := httptest.NewTestServer(t, srv.Handler())
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+tt.path, nil)
+				require.NoError(t, err)
+				resp, err := ts.Client().Do(req)
+				require.NoError(t, err)
+				defer resp.Body.Close()
 
-			if tt.wantTimeout {
-				assertTimeoutResponse(t, resp, tt.wantDetail...)
-			} else {
-				assert.False(t, isTimeoutResponse(t, resp),
-					"%s: unexpected timeout for unwrapped route", tt.path)
-				assert.Equal(t, tt.wantStatus, resp.StatusCode, tt.path)
-			}
+				if tt.wantTimeout {
+					// Let the timed-out handler finish before the bubble exits.
+					defer time.Sleep(100 * time.Millisecond)
+					assertTimeoutResponse(t, resp, tt.wantDetail...)
+				} else {
+					assert.False(t, isTimeoutResponse(t, resp),
+						"%s: unexpected timeout for unwrapped route", tt.path)
+					assert.Equal(t, tt.wantStatus, resp.StatusCode, tt.path)
+				}
+			})
 		})
 	}
 }
@@ -191,7 +189,7 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 			wantCSP: true,
 			wantDirectives: map[string]string{
 				"default-src":     "'self' http://127.0.0.1:8081",
-				"script-src":      "'self' http://127.0.0.1:8081",
+				"script-src":      "'self' http://127.0.0.1:8081 " + holdFirstPaintScriptHash,
 				"connect-src":     "'self' http: https: ws: wss:",
 				"img-src":         "'self' http://127.0.0.1:8081 data: blob:",
 				"style-src":       "'self' http://127.0.0.1:8081 'unsafe-inline' https://fonts.googleapis.com",
@@ -208,7 +206,7 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 			port:    9090,
 			wantCSP: true,
 			wantDirectives: map[string]string{
-				"script-src":  "'self' http://[::1]:9090",
+				"script-src":  "'self' http://[::1]:9090 " + holdFirstPaintScriptHash,
 				"connect-src": "'self' http: https: ws: wss:",
 			},
 		},
@@ -309,7 +307,7 @@ func TestBuildCSPPolicyPinsPublicURLOrigin(t *testing.T) {
 	assert.Equal(t, "'self' https://agentsview.example.com",
 		directives["default-src"],
 	)
-	assert.Equal(t, "'self' https://agentsview.example.com",
+	assert.Equal(t, "'self' https://agentsview.example.com "+holdFirstPaintScriptHash,
 		directives["script-src"],
 	)
 	assert.Equal(t, "'self' https://agentsview.example.com data: blob:",
@@ -332,8 +330,55 @@ func TestBuildCSPPolicyKeepsLocalOriginWithPublicURL(t *testing.T) {
 		directives["default-src"],
 	)
 	assert.Equal(t,
-		"'self' https://agentsview.example.com http://127.0.0.1:8080",
+		"'self' https://agentsview.example.com http://127.0.0.1:8080 "+holdFirstPaintScriptHash,
 		directives["script-src"],
+	)
+}
+
+// The SPA's index.html inlines frontend/src/hold-first-paint.js verbatim,
+// and so do the backend-only fallback page and the desktop loading page.
+// script-src allows the script by hash in both the server's CSP and the
+// desktop webview's. Editing a copy without updating the hash would leave
+// that inline script blocked and the page flashing unstyled.
+func TestHoldFirstPaintScriptHashMatchesSource(t *testing.T) {
+	t.Parallel()
+
+	scriptHash := func(script []byte) string {
+		digest := sha256.Sum256(script)
+		return "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
+	}
+
+	source, err := os.ReadFile(filepath.Join("..", "..", "frontend", "src", "hold-first-paint.js"))
+	require.NoError(t, err)
+	assert.Equal(t, holdFirstPaintScriptHash, scriptHash(source))
+
+	for _, page := range []string{
+		filepath.Join("..", "web", "fallback", "index.html"),
+		filepath.Join("..", "..", "desktop", "ui", "index.html"),
+	} {
+		html, err := os.ReadFile(page)
+		require.NoError(t, err)
+		_, rest, found := strings.Cut(string(html), "<script>")
+		require.True(t, found, "%s has no inline script", page)
+		script, _, found := strings.Cut(rest, "</script>")
+		require.True(t, found, "%s has an unclosed script", page)
+		assert.Equal(t, holdFirstPaintScriptHash, scriptHash([]byte(script)),
+			"%s inlines a hold-first-paint script the CSP does not allow", page)
+	}
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "desktop", "src-tauri", "tauri.conf.json"))
+	require.NoError(t, err)
+	var tauri struct {
+		App struct {
+			Security struct {
+				CSP string `json:"csp"`
+			} `json:"security"`
+		} `json:"app"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &tauri))
+	assert.Contains(t,
+		strings.Fields(parseCSP(tauri.App.Security.CSP)["script-src"]),
+		holdFirstPaintScriptHash,
 	)
 }
 

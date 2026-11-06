@@ -301,6 +301,14 @@ enum BackendStatusProbe {
     Unavailable,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum BackendRecoveryAction {
+    None,
+    Reload,
+    Redirect(u16),
+    Relaunch,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKitGTK 2.40+ DMABUF renderer aborts on some Linux EGL
@@ -896,6 +904,8 @@ fn launch_backend_from_handle(handle: &AppHandle) -> Result<(), DynError> {
     let (rx, child) = spawn_sidecar(handle)?;
     let sidecar_pid = child.pid();
     let generation = save_sidecar(handle, child)?;
+    defer_deep_link_dispatch(handle);
+    clear_sidecar_port(handle);
     forward_sidecar_logs(rx, window, generation, sidecar_pid);
     Ok(())
 }
@@ -1646,6 +1656,19 @@ fn with_current_launch<T>(
 fn act_if_current<T>(state: &SidecarState, generation: u64, act: impl FnOnce() -> T) -> Option<T> {
     let _gate = state.launch_gate.lock().ok()?;
     launch_is_current(state, generation).then(act)
+}
+
+fn act_if_current_backend<T>(
+    state: &SidecarState,
+    generation: u64,
+    expected_port: u16,
+    act: impl FnOnce() -> T,
+) -> Option<T> {
+    let _gate = state.launch_gate.lock().ok()?;
+    if !launch_is_current(state, generation) || sidecar_port(state) != Some(expected_port) {
+        return None;
+    }
+    Some(act())
 }
 
 fn take_restart_after_stop_timeout_for_terminated_sidecar(
@@ -3879,11 +3902,11 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
 }
 
 fn current_backend_port(app: &AppHandle) -> Option<u16> {
-    app.state::<SidecarState>()
-        .backend_port
-        .lock()
-        .ok()
-        .and_then(|guard| *guard)
+    sidecar_port(&app.state::<SidecarState>())
+}
+
+fn sidecar_port(state: &SidecarState) -> Option<u16> {
+    state.backend_port.lock().ok().and_then(|guard| *guard)
 }
 
 fn stop_detached_backend_for_update_with_port(
@@ -4127,6 +4150,84 @@ impl BackendProbeState {
     }
 }
 
+fn backend_recovery_action(
+    stale_port: u16,
+    status: &BackendStatusProbe,
+    endpoint_ready: impl FnOnce(u16) -> bool,
+) -> BackendRecoveryAction {
+    match status {
+        BackendStatusProbe::Ready(port) => {
+            if !endpoint_ready(*port) {
+                return BackendRecoveryAction::None;
+            }
+            if *port == stale_port {
+                BackendRecoveryAction::Reload
+            } else {
+                BackendRecoveryAction::Redirect(*port)
+            }
+        }
+        BackendStatusProbe::NotRunning(_) => BackendRecoveryAction::Relaunch,
+        _ => BackendRecoveryAction::None,
+    }
+}
+
+fn recover_backend_after_failed_probe(window: &WebviewWindow, handle: &AppHandle, stale_port: u16) {
+    let state = handle.state::<SidecarState>();
+    let generation = state.next_generation.load(Ordering::SeqCst);
+    if !launch_is_current(&state, generation) || sidecar_port(&state) != Some(stale_port) {
+        return;
+    }
+
+    let log_sender = spawn_sidecar_log_writer(handle.clone());
+    let status =
+        tauri::async_runtime::block_on(probe_backend_status(handle, &log_sender, generation));
+    let action = backend_recovery_action(stale_port, &status, backend_liveness_ready);
+    match action {
+        BackendRecoveryAction::None => {}
+        BackendRecoveryAction::Reload => {
+            let _ = act_if_current_backend(&state, generation, stale_port, || {
+                let deep_link_state = handle.state::<DeepLinkState>();
+                if let Ok(mut dispatch) = deep_link_state.dispatch.lock() {
+                    if dispatch.observe_backend(stale_port, true) {
+                        eprintln!(
+                            "[agentsview] backend returned on port {stale_port}, reloading window"
+                        );
+                        if let Err(err) = window.reload() {
+                            eprintln!("[agentsview] backend recovery reload failed: {err}");
+                        }
+                    }
+                };
+            });
+        }
+        BackendRecoveryAction::Redirect(port) => {
+            let _ = act_if_current_backend(&state, generation, stale_port, || {
+                eprintln!(
+                    "[agentsview] backend moved from port {stale_port} to {port}, redirecting window"
+                );
+                save_sidecar_port(handle, port);
+                redirect_when_ready(
+                    window.clone(),
+                    port,
+                    generation,
+                    "runtime serve status",
+                    log_sender,
+                );
+            });
+        }
+        BackendRecoveryAction::Relaunch => {
+            let launched = act_if_current_backend(&state, generation, stale_port, || {
+                eprintln!(
+                    "[agentsview] backend on port {stale_port} stopped, starting a replacement"
+                );
+                launch_backend_from_handle(handle)
+            });
+            if let Some(Err(err)) = launched {
+                eprintln!("[agentsview] backend recovery launch failed: {err}");
+            }
+        }
+    }
+}
+
 /// Starts the Rust-side backend probe for the app's lifetime.
 ///
 /// Recovery used to be wired to `WindowEvent::Focused(true)` alone, and the
@@ -4141,19 +4242,26 @@ fn spawn_backend_probe(window: WebviewWindow, handle: AppHandle) {
             if let Some(port) = current_backend_port(&handle) {
                 let reachable = backend_liveness_ready(port);
                 let deep_link_state = handle.state::<DeepLinkState>();
+                let mut should_recover = false;
                 if let Ok(mut dispatch) = deep_link_state.dispatch.lock() {
                     // Recheck after HTTP: startup may have published a new port.
                     // Hold dispatch through the asynchronous reload request so
                     // a new deep link or startup redirect always follows it.
-                    if current_backend_port(&handle) == Some(port)
-                        && dispatch.observe_backend(port, reachable)
-                    {
-                        eprintln!("[agentsview] backend returned on port {port}, reloading window");
-                        if let Err(err) = window.reload() {
-                            eprintln!("[agentsview] backend recovery reload failed: {err}");
+                    if current_backend_port(&handle) == Some(port) {
+                        if dispatch.observe_backend(port, reachable) {
+                            eprintln!(
+                                "[agentsview] backend returned on port {port}, reloading window"
+                            );
+                            if let Err(err) = window.reload() {
+                                eprintln!("[agentsview] backend recovery reload failed: {err}");
+                            }
                         }
+                        should_recover = !reachable;
                     }
                 };
+                if should_recover {
+                    recover_backend_after_failed_probe(&window, &handle, port);
+                }
             }
             thread::sleep(BACKEND_PROBE_INTERVAL);
         }
@@ -6992,6 +7100,69 @@ agentsview running at http://127.0.0.1:18082
             state.observe(9090, true),
             "the new port is navigated to once it answers"
         );
+    }
+
+    #[test]
+    fn backend_recovery_redirects_to_a_new_ready_port() {
+        let mut probed = Vec::new();
+        let action = backend_recovery_action(35035, &BackendStatusProbe::Ready(57295), |port| {
+            probed.push(port);
+            port == 57295
+        });
+
+        assert_eq!(probed, vec![57295]);
+        assert_eq!(action, BackendRecoveryAction::Redirect(57295));
+    }
+
+    #[test]
+    fn backend_recovery_reloads_when_the_same_port_returns() {
+        assert_eq!(
+            backend_recovery_action(35035, &BackendStatusProbe::Ready(35035), |_| true),
+            BackendRecoveryAction::Reload
+        );
+    }
+
+    #[test]
+    fn backend_recovery_waits_for_the_reported_port_to_answer() {
+        assert_eq!(
+            backend_recovery_action(35035, &BackendStatusProbe::Ready(57295), |_| false),
+            BackendRecoveryAction::None
+        );
+    }
+
+    #[test]
+    fn backend_recovery_relaunches_an_absent_daemon() {
+        assert_eq!(
+            backend_recovery_action(
+                35035,
+                &BackendStatusProbe::NotRunning("No agentsview server is running.".to_string()),
+                |_| panic!("an absent daemon has no endpoint to probe"),
+            ),
+            BackendRecoveryAction::Relaunch
+        );
+        assert_eq!(
+            backend_recovery_action(
+                35035,
+                &BackendStatusProbe::Starting("agentsview is starting up.".to_string()),
+                |_| panic!("a starting daemon has no ready endpoint to probe"),
+            ),
+            BackendRecoveryAction::None
+        );
+    }
+
+    #[test]
+    fn stale_backend_recovery_cannot_replace_a_newer_port() {
+        let state = SidecarState::default();
+        state.next_generation.store(1, Ordering::SeqCst);
+        set_sidecar_port(&state, Some(57295));
+        let acted = AtomicBool::new(false);
+
+        assert_eq!(
+            act_if_current_backend(&state, 1, 35035, || { acted.store(true, Ordering::SeqCst) }),
+            None
+        );
+        assert!(!acted.load(Ordering::SeqCst));
+        assert_eq!(sidecar_port(&state), Some(57295));
     }
 
     #[test]

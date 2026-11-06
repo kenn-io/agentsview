@@ -4,20 +4,51 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
 func missingS3ObjectError() error {
-	return minio.ErrorResponse{
-		Code:    minio.NoSuchKey,
-		Message: "not found",
+	return &types.NoSuchKey{Message: new("not found")}
+}
+
+func TestIsMissingS3Object(t *testing.T) {
+	for _, tc := range []struct {
+		code    string
+		status  int
+		missing bool
+	}{
+		{"NoSuchKey", http.StatusNotFound, true},
+		{"AccessDenied", http.StatusForbidden, false},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				if r.Method == http.MethodGet {
+					_, _ = io.WriteString(w, "<Error><Code>"+tc.code+"</Code></Error>")
+				}
+			}))
+			defer server.Close()
+			t.Setenv("AWS_S3_ENDPOINT", server.URL)
+			t.Setenv("AWS_REGION", "us-east-1")
+			t.Setenv("AWS_ACCESS_KEY_ID", "access-key")
+			t.Setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
+
+			_, err := parser.StatS3Object("s3://bucket/sidecar.txt")
+			require.Error(t, err)
+			assert.Equal(t, tc.missing, isMissingS3Object(err), "stat")
+			_, err = parser.FetchS3Object("s3://bucket/sidecar.txt")
+			require.Error(t, err)
+			assert.Equal(t, tc.missing, isMissingS3Object(err), "fetch")
+		})
 	}
 }
 

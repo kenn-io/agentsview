@@ -2,15 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount, type ComponentProps } from "svelte";
 import type { Session } from "../../api/types.js";
-import type {
-  DbMessage as Message,
-  DbSessionTiming as SessionTiming,
-} from "../../api/generated/index.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
+import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import MessageContent from "./MessageContent.svelte";
-
-const timingState = vi.hoisted(() => ({ timing: null as SessionTiming | null }));
-vi.mock("../../stores/sessionTiming.svelte.js", () => ({ sessionTiming: timingState }));
 
 const copyMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const mermaidMock = vi.hoisted(() => vi.fn(() => ({ renderNow: vi.fn(), disconnect: vi.fn() })));
@@ -18,6 +13,7 @@ const forkMock = vi.hoisted(() => vi.fn());
 const pinMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const state = vi.hoisted(() => ({
   sessions: [] as Session[],
+  view: (row: Session) => row,
   activeSession: null as Session | null,
   readOnly: false,
   remote: false,
@@ -156,7 +152,7 @@ beforeEach(() => {
 afterEach(async () => {
   for (const component of components.splice(0)) await unmount(component);
   document.body.replaceChildren();
-  timingState.timing = null;
+  sessionTiming.reset();
   setLocale("en");
   vi.clearAllMocks();
   state.sessions = [];
@@ -203,7 +199,7 @@ describe("MessageContent", () => {
   ])(
     "uses the call evidence for $label, running=$running",
     async ({ duration, running, turnDurationMs, label }) => {
-      timingState.timing = {
+      sessionTiming.timing = {
         session_id: "session-1",
         total_duration_ms: 6000,
         tool_duration_ms: duration ?? 0,

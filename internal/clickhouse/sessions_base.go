@@ -95,23 +95,25 @@ func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Mess
 	return s.sessions().GetAllMessages(ctx, sessionID)
 }
 
-func (s sessionsSQL) ToolCallsSQL() string {
+func (s sessionsSQL) ToolCallsSQL(ordinals int) string {
+	filter := readbase.OrdinalFilterSQL("message_ordinal", ordinals)
 	return `
 		SELECT message_ordinal, call_index, tool_name, category,
 			tool_use_id, input_json, skill_name, result_content_length,
 			result_content, subagent_session_id, file_path, observed_outcome, observed_repeat, sequence_ending
 		FROM tool_calls
-		WHERE session_id = ?
+		WHERE session_id = ?` + filter + `
 		ORDER BY message_ordinal, call_index`
 }
 
-func (s sessionsSQL) ToolResultEventsSQL() string {
+func (s sessionsSQL) ToolResultEventsSQL(ordinals int) string {
+	filter := readbase.OrdinalFilterSQL("tool_call_message_ordinal", ordinals)
 	return `
 		SELECT tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id, source, status,
 			content, content_length, timestamp, event_index
 		FROM tool_result_events
-		WHERE session_id = ?
+		WHERE session_id = ?` + filter + `
 		ORDER BY tool_call_message_ordinal, call_index, event_index`
 }
 

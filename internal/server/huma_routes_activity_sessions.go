@@ -56,6 +56,14 @@ func (s *Server) humaActivityReportSessions(
 	if err != nil {
 		return nil, internalError("activity report source probe error", err)
 	}
+	// A page request against a stale report gets a replacement report whose
+	// first page keeps the requested sort and direction, so a sort that lands
+	// after a sync still sorts. The bucket range is dropped: a replacement
+	// report starts a new generation, and clients clear their range selection
+	// with it.
+	refreshPage := activity.SessionPageOptions{
+		Limit: in.Limit, Sort: activity.SessionSort(in.Sort), Direction: in.Direction,
+	}
 	if currentProbe != reportToken.Probe {
 		artifacts, buildErr := s.buildActivityArtifacts(
 			ctx, artifactStore, selection, currentProbe, nil,
@@ -64,7 +72,7 @@ func (s *Server) humaActivityReportSessions(
 			return nil, internalError("activity report refresh rebuild error", buildErr)
 		}
 		refreshed, prepareErr := s.prepareActivityReport(
-			selection, tokenStore, artifacts, currentProbe,
+			selection, tokenStore, artifacts, currentProbe, refreshPage,
 		)
 		if prepareErr != nil {
 			return nil, internalError("activity report refresh error", prepareErr)
@@ -91,7 +99,7 @@ func (s *Server) humaActivityReportSessions(
 		}
 		if digest != reportToken.Digest {
 			refreshed, prepareErr := s.prepareActivityReport(
-				selection, tokenStore, artifacts, currentProbe,
+				selection, tokenStore, artifacts, currentProbe, refreshPage,
 			)
 			if prepareErr != nil {
 				return nil, internalError("activity report refresh error", prepareErr)

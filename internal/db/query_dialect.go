@@ -110,7 +110,8 @@ func (d QueryDialect) FalseLiteral() string {
 	return d.falseLiteral
 }
 
-func (d QueryDialect) recursiveUnionSQL() string {
+// RecursiveUnionSQL returns the union operator supported by recursive CTEs.
+func (d QueryDialect) RecursiveUnionSQL() string {
 	if d.recursiveUnion == "" {
 		return "UNION"
 	}
@@ -539,10 +540,15 @@ func (b *QueryBuilder) RegexPredicate(col, pattern string) string {
 	return b.dialect.regexPredicate(col, b.Add(pattern))
 }
 
+// CursorTimestamp binds an activity timestamp with the dialect's cursor cast.
+func (b *QueryBuilder) CursorTimestamp(value string) string {
+	return b.dialect.cursorParam(b.Add(value))
+}
+
 // CursorBeforePredicate renders the keyset pagination predicate used by
 // session list queries ordered by recent activity DESC, id DESC.
 func (b *QueryBuilder) CursorBeforePredicate(cur SessionCursor) string {
-	ea := b.dialect.cursorParam(b.Add(cur.EndedAt))
+	ea := b.CursorTimestamp(cur.EndedAt)
 	id := b.Add(cur.ID)
 	return "(" + b.dialect.cursorActivityExpr + ", id) < (" + ea + ", " + id + ")"
 }
@@ -867,7 +873,7 @@ func buildSessionFilterWithBuilder(
 		" WHERE root_session.message_count > 0" +
 		" AND root_session.deleted_at IS NULL AND " +
 		rootMatch +
-		" " + b.dialect.recursiveUnionSQL() + " " +
+		" " + b.dialect.RecursiveUnionSQL() + " " +
 		"SELECT s.id " + b.dialect.recursiveChildJoinSQL() + b.dialect.ParentRelation("s", "t") +
 		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "s") +
 		") SELECT id FROM tree"
@@ -1077,7 +1083,7 @@ func annotationTreePredicate(
 		"SELECT annotated_session.id FROM sessions annotated_session" +
 		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "annotated_session") +
 		" AND " + strings.Join(preds, " AND ") +
-		" " + b.dialect.recursiveUnionSQL() + " " +
+		" " + b.dialect.RecursiveUnionSQL() + " " +
 		"SELECT annotated_parent.id FROM sessions annotated_parent" +
 		" JOIN sessions annotated_child ON " +
 		b.dialect.ParentRelation("annotated_child", "annotated_parent") +

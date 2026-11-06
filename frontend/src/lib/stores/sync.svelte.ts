@@ -49,6 +49,8 @@ export function commitsDisagree(a: string | undefined, b: string | undefined): b
 
 class SyncStore {
   archiveStale: boolean = $state(false);
+  syncPending: boolean = $state(false);
+
   syncing: boolean = $state(false);
   // Message from the last sync or resync that failed, cleared when one
   // succeeds. The header Sync button has no other place to report it.
@@ -84,6 +86,7 @@ class SyncStore {
 
   private watchEventSource: EventSource | null = null;
   private watchVisibilityHandler: (() => void) | null = null;
+  private pollVisibilityHandler: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastStatsParams: {
     include_one_shot?: boolean;
@@ -155,6 +158,7 @@ class SyncStore {
       this.lastSync = newLastSync;
       this.lastSyncStats = status.stats ?? null;
       this.archiveStale = status.archive_stale === true;
+      this.syncPending = status.sync_pending === true;
       const statusProgress = status.progress ?? null;
       let statusProgressCompleted = false;
       if (statusProgress) {
@@ -192,10 +196,21 @@ class SyncStore {
 
   startPolling() {
     this.stopPolling();
-    this.pollTimer = setInterval(() => this.loadStatus(), POLL_INTERVAL_MS);
+    this.pollVisibilityHandler = () => {
+      if (!document.hidden) void this.loadStatus();
+    };
+    document.addEventListener("visibilitychange", this.pollVisibilityHandler);
+    this.pollTimer = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void this.loadStatus();
+    }, POLL_INTERVAL_MS);
   }
 
   stopPolling() {
+    if (this.pollVisibilityHandler) {
+      document.removeEventListener("visibilitychange", this.pollVisibilityHandler);
+      this.pollVisibilityHandler = null;
+    }
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -230,6 +245,7 @@ class SyncStore {
       this.markRemoteReachable(true);
       this.versionMismatch = commitsDisagree(this.buildCommit, this.serverVersion.commit);
     } catch (error) {
+      events.settleStartup();
       if (updateBackendHealth) {
         this.markBackendFailure(error);
       }
@@ -344,17 +360,30 @@ class SyncStore {
 
   watchSession(sessionId: string, onUpdate: () => void, onTiming?: (t: SessionTiming) => void) {
     this.unwatchSession();
+    let settle!: (seen: boolean) => void;
+    const ready = new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => settle(false), 1000);
+      settle = (seen) => {
+        clearTimeout(timer);
+        resolve(seen);
+      };
+    });
     const open = () => {
       this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
       const es = this.watchEventSource;
+      es.addEventListener("error", () => {
+        if (this.watchEventSource !== es) return;
+        settle(false);
+      });
       es.addEventListener("session_ready", () => {
         if (this.watchEventSource !== es) return;
+        settle(true);
         onUpdate();
       });
     };
     if (typeof document === "undefined") {
       open();
-      return;
+      return ready;
     }
     this.watchVisibilityHandler = () => {
       if (document.hidden) {
@@ -367,6 +396,8 @@ class SyncStore {
     };
     document.addEventListener("visibilitychange", this.watchVisibilityHandler);
     if (!document.hidden) open();
+    else settle(false);
+    return ready;
   }
 
   unwatchSession() {

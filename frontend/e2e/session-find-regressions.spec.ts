@@ -48,13 +48,18 @@ async function installMessages(
     const session = await response.json();
     await route.fulfill({ response, json: { ...session, message_count: all.length } });
   });
+  let initialTailFailure = true;
   await page.route(`**/api/v1/sessions/${SESSION_ID}/messages*`, async (route) => {
     const url = new URL(route.request().url());
     const descending = url.searchParams.get("direction") === "desc";
     const from = Number(url.searchParams.get("from") ?? (descending ? all.length - 1 : 0));
     const limit = Number(url.searchParams.get("limit") ?? 1000);
     if (!descending && from >= 1000 && control.failTail) {
-      await route.fulfill({ status: 503, json: { error: "injected history failure" } });
+      // Keep startup recovery out of this manual-retry scenario. Search's
+      // own history load still gets a transient server failure.
+      const status = initialTailFailure ? 400 : 503;
+      initialTailFailure = false;
+      await route.fulfill({ status, json: { error: "injected history failure" } });
       return;
     }
     const messages = descending

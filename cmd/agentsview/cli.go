@@ -1027,6 +1027,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  Each host must be unique.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  Top-level daemon_idle_timeout = \"0s\" keeps serve --background nodes alive.")
+	fmt.Fprintln(w, "  Top-level sync_idle_after = \"10m\" pauses local collection while idle; \"0\" disables the pause.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Data stored in ~/.agentsview/ by default.")
 }

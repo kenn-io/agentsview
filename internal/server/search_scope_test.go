@@ -46,23 +46,12 @@ func TestSearchContentScopeInvalidValueRejected(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "scope")
 }
 
-// TestSearchContentScopeRequiresSemanticOrHybridMode pins that scope is
-// only meaningful for semantic/hybrid: setting it on any other mode is
-// rejected rather than silently ignored.
-func TestSearchContentScopeRequiresSemanticOrHybridMode(t *testing.T) {
+func TestSearchContentScopeRejectedForFTS(t *testing.T) {
 	te := setup(t)
 
-	for _, q := range []string{
-		"pattern=fox&scope=top",
-		"pattern=fox&mode=substring&scope=top",
-		"pattern=fox&mode=regex&scope=all",
-		"pattern=fox&mode=fts&scope=subordinate",
-	} {
-		w := te.get(t, "/api/v1/search/content?"+q)
-		assertStatus(t, w, http.StatusBadRequest)
-		assert.Contains(t, w.Body.String(), "semantic",
-			"error should point at the semantic/hybrid-only restriction")
-	}
+	w := te.get(t, "/api/v1/search/content?pattern=fox&mode=fts&scope=subordinate")
+	assertStatus(t, w, http.StatusBadRequest)
+	assert.Contains(t, w.Body.String(), db.ContentSearchScopeUnsupportedMsg)
 }
 
 func TestSearchContentTermsAndExactFiltersThroughHTTP(t *testing.T) {

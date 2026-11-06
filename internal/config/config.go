@@ -1084,7 +1084,12 @@ type Config struct {
 	// work during bursts of sync activity. Zero disables coalescing.
 	EventsCoalesceInterval time.Duration `json:"events_coalesce_interval,omitzero" toml:"events_coalesce_interval"`
 
+	// SyncIdleAfter pauses local ingestion after client inactivity. Restart to apply changes.
+	SyncIdleAfter     time.Duration `json:"sync_idle_after,omitzero" toml:"sync_idle_after"`
 	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitzero" toml:"daemon_idle_timeout"`
+
+	// SyncInterval is the minimum time between starts of watcher-triggered syncs.
+	SyncInterval time.Duration `json:"sync_interval,omitzero" toml:"sync_interval"`
 
 	ModelAliases       map[string]string          `json:"model_aliases,omitempty" toml:"model_aliases"`
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
@@ -1402,6 +1407,8 @@ func Default() (Config, error) {
 		ResultContentBlockedCategories: []string{"Read", "Glob"},
 		EventsCoalesceInterval:         10 * time.Second,
 		DaemonIdleTimeout:              20 * time.Minute,
+		SyncIdleAfter:                  10 * time.Minute,
+		SyncInterval:                   5 * time.Second,
 		Agent:                          map[string]AgentConfig{},
 		CodexCloud:                     defaultCodexCloudConfig(),
 		Vector: VectorConfig{
@@ -1859,6 +1866,8 @@ func (c *Config) applyConfigTOML(data string) error {
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
+		SyncIdleAfter                  time.Duration          `toml:"sync_idle_after"`
+		SyncInterval                   time.Duration          `toml:"sync_interval"`
 		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		ArchiveSources                 []ArchiveSource        `toml:"archive_sources"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
@@ -2211,8 +2220,14 @@ func (c *Config) applyConfigTOML(data string) error {
 	if meta.IsDefined("events_coalesce_interval") {
 		c.EventsCoalesceInterval = file.EventsCoalesceInterval
 	}
+	if meta.IsDefined("sync_idle_after") {
+		c.SyncIdleAfter = file.SyncIdleAfter
+	}
 	if meta.IsDefined("daemon_idle_timeout") {
 		c.DaemonIdleTimeout = file.DaemonIdleTimeout
+	}
+	if meta.IsDefined("sync_interval") {
+		c.SyncInterval = file.SyncInterval
 	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes

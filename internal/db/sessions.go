@@ -3861,6 +3861,11 @@ type VirtualContainerMemberFreshnessRow struct {
 	VirtualContainerMemberFreshness
 }
 
+const virtualContainerMemberFreshnessQuery = `SELECT file_path, file_mtime, data_version, file_hash,
+ deleted_at IS NOT NULL, agent, project FROM sessions INDEXED BY idx_sessions_file_path
+ WHERE file_path %s ? AND file_path < ? || '$' AND source_missing_at IS NULL
+ ORDER BY file_path, rowid`
+
 // ListVirtualContainerMemberFreshnessPage returns the freshness signal for
 // stored sessions whose file_path is a virtual member of the shared container
 // at containerPath ("<containerPath>#<sessionID>"), excluding source-missing
@@ -3874,84 +3879,28 @@ type VirtualContainerMemberFreshnessRow struct {
 // into the sync pipeline while peak memory stays one page — never the
 // container's full membership.
 //
-// Two queries per page keep each path's fold complete without materializing
-// the container: a DISTINCT path page rides idx_sessions_file_path ('$' is
-// the ASCII successor of '#', so the half-open range covers exactly the
-// "<containerPath>#" prefix), and the row fetch is bounded to that page's
-// [first, last] interval, so duplicate session rows for one path can never
-// split across pages. Folded in Go rather than GROUP BY: the fold needs
-// MAX(file_mtime), MIN(data_version), and the hash of the newest-mtime row,
-// and SQLite's bare-column-from-the-extreme-row guarantee only holds with
-// exactly one min/max aggregate in the query.
+// One ordered scan rides idx_sessions_file_path, read lazily up to limit
+// paths. '$' is the ASCII successor of '#', so the half-open range covers
+// exactly the "<containerPath>#" prefix. A page ends only when the path
+// changes, keeping each path's fold complete. Duplicates fold in rowid order:
+// MAX(file_mtime), MIN(data_version), and the hash of the first newest-mtime
+// row. SQLite's bare-column-from-the-extreme-row guarantee only holds with
+// exactly one min/max aggregate, so the fold stays in Go.
 func (db *DB) ListVirtualContainerMemberFreshnessPage(
 	ctx context.Context, containerPath, idPrefix, afterPath string, limit int,
 ) ([]VirtualContainerMemberFreshnessRow, bool, error) {
 	if containerPath == "" || limit <= 0 {
 		return nil, true, nil
 	}
-	notMissing := " AND source_missing_at IS NULL"
 	lower := containerPath + "#"
 	lowerOp := ">="
 	if afterPath > lower {
 		lower = afterPath
 		lowerOp = ">"
 	}
-	pathRows, err := db.getReader().QueryContext(ctx,
-		"SELECT DISTINCT file_path FROM sessions"+
-			" WHERE file_path "+lowerOp+" ? AND file_path < ? || '$'"+
-			notMissing+
-			" ORDER BY file_path LIMIT ?",
-		lower, containerPath, limit,
-	)
-	if err != nil {
-		return nil, false, fmt.Errorf(
-			"listing container member paths %s: %w", containerPath, err,
-		)
-	}
-	defer pathRows.Close()
-	var paths []string
-	for pathRows.Next() {
-		var path string
-		if err := pathRows.Scan(&path); err != nil {
-			return nil, false, fmt.Errorf(
-				"scanning container member path %s: %w", containerPath, err,
-			)
-		}
-		paths = append(paths, path)
-	}
-	if err := pathRows.Err(); err != nil {
-		return nil, false, err
-	}
-	excluded, err := db.listExcludedContainerMemberPaths(
-		ctx, containerPath, idPrefix, afterPath, limit,
-	)
-	if err != nil {
-		return nil, false, err
-	}
-	done := len(paths) < limit && len(excluded) < limit
-	merged, excludedSet := mergeContainerMemberPaths(paths, excluded)
-	if len(merged) > limit {
-		merged = merged[:limit]
-		done = false
-	}
-	if len(merged) == 0 {
-		return nil, true, nil
-	}
-	paths = paths[:0]
-	for _, path := range merged {
-		if _, ok := excludedSet[path]; !ok {
-			paths = append(paths, path)
-		}
-	}
-	if len(paths) == 0 {
-		return excludedContainerMemberRows(merged), done, nil
-	}
-
 	rows, err := db.getReader().QueryContext(ctx,
-		"SELECT file_path, file_mtime, data_version, file_hash,"+
-			" deleted_at IS NOT NULL, agent, project FROM sessions"+
-			" WHERE file_path >= ? AND file_path <= ?"+notMissing,
-		paths[0], paths[len(paths)-1],
+		fmt.Sprintf(virtualContainerMemberFreshnessQuery, lowerOp),
+		lower, containerPath,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf(
@@ -3959,7 +3908,8 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 		)
 	}
 	defer rows.Close()
-	members := make(map[string]VirtualContainerMemberFreshness, len(paths))
+	var paths []string
+	members := make(map[string]VirtualContainerMemberFreshness, limit)
 	for rows.Next() {
 		var path string
 		var mtime, version sql.NullInt64
@@ -3980,6 +3930,10 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 		}
 		member, seen := members[path]
 		if !seen {
+			if len(paths) == limit {
+				break
+			}
+			paths = append(paths, path)
 			members[path] = row
 			continue
 		}
@@ -3996,6 +3950,26 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, err
+	}
+	// An early page boundary leaves rows open. Release this reader before
+	// querying exclusions so one page uses only one reader connection.
+	if err := rows.Close(); err != nil {
+		return nil, false, err
+	}
+	excluded, err := db.listExcludedContainerMemberPaths(
+		ctx, containerPath, idPrefix, afterPath, limit,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	done := len(paths) < limit && len(excluded) < limit
+	merged, excludedSet := mergeContainerMemberPaths(paths, excluded)
+	if len(merged) > limit {
+		merged = merged[:limit]
+		done = false
+	}
+	if len(merged) == 0 {
+		return nil, true, nil
 	}
 	page := make([]VirtualContainerMemberFreshnessRow, 0, len(merged))
 	for _, path := range merged {
@@ -4088,14 +4062,6 @@ func mergeContainerMemberPaths(
 		merged = append(merged, excluded[j:]...)
 	}
 	return merged, excludedSet
-}
-
-func excludedContainerMemberRows(paths []string) []VirtualContainerMemberFreshnessRow {
-	page := make([]VirtualContainerMemberFreshnessRow, 0, len(paths))
-	for _, path := range paths {
-		page = append(page, VirtualContainerMemberFreshnessRow{Path: path, Excluded: true})
-	}
-	return page
 }
 
 // GetProjectByPath returns the stored project for the newest
@@ -5337,12 +5303,21 @@ func baselineActiveSessionSourcePathsTx(
 			continue
 		}
 		execArgs := append([]any{machine}, args...)
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, baselineActiveSessionSourcePathsQuery(filter), execArgs...); err != nil {
+			return fmt.Errorf("baselining active session source paths: %w", err)
+		}
+	}
+	return nil
+}
+
+func baselineActiveSessionSourcePathsQuery(filter string) string {
+	// Seek the admitted paths instead of scanning every session on the machine.
+	return `
 			INSERT INTO local_session_source_baselines
 				(session_id, machine, agent, file_path)
 			SELECT id, machine, agent, file_path
-			FROM sessions
-			WHERE machine = ? AND `+filter+`
+			FROM sessions INDEXED BY idx_sessions_file_path
+			WHERE machine = ? AND ` + filter + `
 			  AND file_path IS NOT NULL AND deleted_at IS NULL
 			  AND source_missing_at IS NULL
 			ON CONFLICT(session_id) DO UPDATE SET
@@ -5351,13 +5326,7 @@ func baselineActiveSessionSourcePathsTx(
 				file_path = excluded.file_path
 			WHERE local_session_source_baselines.machine IS NOT excluded.machine
 			   OR local_session_source_baselines.agent IS NOT excluded.agent
-			   OR local_session_source_baselines.file_path IS NOT excluded.file_path`,
-			execArgs...,
-		); err != nil {
-			return fmt.Errorf("baselining active session source paths: %w", err)
-		}
-	}
-	return nil
+			   OR local_session_source_baselines.file_path IS NOT excluded.file_path`
 }
 
 // MarkSessionSourceMissing records unavailable source material only while the
@@ -6908,6 +6877,22 @@ func (db *DB) WaitForWriter(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// RetryAcrossHandoff retries a write rejected by a closed writer, waiting for
+// the worker handoff to finish or ctx to end before trying again.
+func RetryAcrossHandoff[T any](
+	ctx context.Context, local *DB, write func() (T, error),
+) (T, error) {
+	for {
+		value, err := write()
+		if !errors.Is(err, ErrWriterClosed) {
+			return value, err
+		}
+		if err := local.WaitForWriter(ctx); err != nil {
+			return value, err
+		}
+	}
 }
 
 type writerWaitNoticeKey struct{}

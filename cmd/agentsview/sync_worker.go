@@ -43,13 +43,15 @@ type workerLine struct {
 // "ok" only when the pass completed and discovery was authoritative; the parent
 // treats anything else, or a missing/duplicate result, as a failed run.
 type workerResult struct {
-	Status            string `json:"status"` // "ok" | "aborted" | "failed"
-	Synced            int    `json:"synced"`
-	Skipped           int    `json:"skipped"`
-	Failed            int    `json:"failed"`
-	Tombstoned        int    `json:"tombstoned,omitempty"`
-	DiscoveryComplete bool   `json:"discoveryComplete"`
-	Error             string `json:"error,omitempty"`
+	Status            string          `json:"status"` // "ok" | "aborted" | "failed"
+	Synced            int             `json:"synced"`
+	Skipped           int             `json:"skipped"`
+	Failed            int             `json:"failed"`
+	Tombstoned        int             `json:"tombstoned,omitempty"`
+	DiscoveryComplete bool            `json:"discoveryComplete"`
+	Error             string          `json:"error,omitempty"`
+	Deferred          int             `json:"deferred,omitempty"`
+	DeferredRetry     sync.WatchBatch `json:"deferredRetry,omitempty"`
 	// Stats carries the complete public SyncStats payload so the daemon's
 	// /sync and /resync responses keep result parity with in-process passes
 	// (total sessions, orphan counts, warnings, anomalies). The summary
@@ -201,6 +203,7 @@ func runSyncWorkerStartup(
 	engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 	defer engine.Close()
 	engine.RetainSubagentLinkRetry(request.LinksPending)
+	engine.SetSoleArchiveWriter(mode == "startup")
 
 	if database.NeedsResync() && mode != "startup" {
 		// A resync would CloseConnections + rename the archive file, but the
@@ -245,19 +248,28 @@ func runSyncWorkerStartup(
 		}
 		result = workerResultFromStats(ctx, stats)
 		result.Tombstoned = tombstoned
-		if auditErr != nil && result.Status == "ok" {
-			result.Status = "failed"
+		if auditErr != nil {
+			if result.Status == "ok" {
+				result.Status = "failed"
+			}
+			// The reconciliation error names the cause more precisely than
+			// the stats summary.
 			result.Error = auditErr.Error()
 		}
 	default:
-		result = workerResultFromStats(ctx, engine.SyncAll(ctx, onProgress))
+		stats := engine.SyncAll(ctx, onProgress)
+		result = workerResultFromStats(ctx, stats)
+	}
+	if mode == "startup" && result.Deferred > 0 && result.Failed == 0 && result.DiscoveryComplete && ctx.Err() == nil {
+		result.Status = "ok"
+		result.Error = ""
 	}
 
 	result.Stats.LinksPending = engine.PendingSubagentLinks()
 	result.LinkStateKnown = true
 	emit(workerLine{Result: &result})
 	if result.Status != "ok" || !result.DiscoveryComplete {
-		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
+		return fmt.Errorf("sync worker %s: %s", mode, workerResultDetail(result))
 	}
 	return nil
 }
@@ -302,14 +314,14 @@ func runSyncWorkerResyncBuild(
 		if buildErr != nil {
 			return fmt.Errorf("sync worker %s: %w", mode, buildErr)
 		}
-		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
+		return fmt.Errorf("sync worker %s: %s", mode, workerResultDetail(result))
 	}
 	return nil
 }
 
 // resyncBuildResultFromStats maps a resync build outcome to a terminal result.
 // Unlike a live sync pass, a completed build tolerates a minority of permanent
-// parse failures: shouldAbortResyncSwap already folded that judgment into
+// parse failures: resyncSwapAbortReason already folded that judgment into
 // stats.Aborted, so Failed alone must not fail the pass and make the daemon
 // discard an otherwise valid replacement of a stale-version archive.
 //
@@ -328,6 +340,8 @@ func resyncBuildResultFromStats(
 		Tombstoned:        stats.Tombstoned,
 		DiscoveryComplete: stats.AuthoritativeDiscoveryComplete(),
 		Stats:             &statsCopy,
+		Deferred:          stats.Deferred,
+		DeferredRetry:     stats.DeferredRetryBatch(),
 	}
 	switch {
 	case ctx.Err() != nil:
@@ -340,10 +354,10 @@ func resyncBuildResultFromStats(
 	case stats.Aborted:
 		result.Status = "aborted"
 		result.DiscoveryComplete = false
-	case stats.Deferred > 0:
-		result.Status = "failed"
+		result.Error = stats.AbortCause()
 	case !result.DiscoveryComplete:
 		result.Status = "failed"
+		result.Error = "did not read every session: " + stats.IncompleteCause()
 	default:
 		result.Status = "ok"
 	}
@@ -378,6 +392,8 @@ func workerResultFromStats(
 		Tombstoned:        stats.Tombstoned,
 		DiscoveryComplete: stats.AuthoritativeDiscoveryComplete(),
 		Stats:             &statsCopy,
+		Deferred:          stats.Deferred,
+		DeferredRetry:     stats.DeferredRetryBatch(),
 	}
 	switch {
 	case ctx.Err() != nil || stats.Aborted:
@@ -387,9 +403,12 @@ func workerResultFromStats(
 		result.DiscoveryComplete = false
 		if ctx.Err() != nil {
 			result.Error = ctx.Err().Error()
+		} else {
+			result.Error = stats.AbortCause()
 		}
 	case !stats.ProcessingComplete() || !result.DiscoveryComplete:
 		result.Status = "failed"
+		result.Error = stats.IncompleteCause()
 	default:
 		result.Status = "ok"
 	}

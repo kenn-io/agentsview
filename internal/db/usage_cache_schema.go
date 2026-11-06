@@ -55,7 +55,8 @@ const (
 	// resolver changes like those behind versions 6, 9, 12 and 14 whenever
 	// they change a used lookup's result.
 	// Version 16 retains proven message prefixes for incremental token fills.
-	usageCacheFormatVersion             = 16
+	// Version 17 tracks journal coverage and the archive revision of rollup builds.
+	usageCacheFormatVersion             = 17
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -144,7 +145,10 @@ CREATE TABLE usage_rollup_timezones (
     timezone_key TEXT NOT NULL UNIQUE,
     timezone_name TEXT NOT NULL,
     interval_fingerprint TEXT NOT NULL,
-    last_requested_at TEXT NOT NULL
+    last_requested_at TEXT NOT NULL,
+    change_revision INTEGER,
+    change_install_revision INTEGER NOT NULL DEFAULT 0,
+    change_pricing TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE usage_rollup_days (
     timezone_id INTEGER NOT NULL REFERENCES usage_rollup_timezones(id)
@@ -159,6 +163,8 @@ CREATE TABLE usage_rollup_installs (
     timezone_id INTEGER NOT NULL REFERENCES usage_rollup_timezones(id)
         ON DELETE CASCADE,
     session_id TEXT NOT NULL,
+    source_change_revision INTEGER NOT NULL,
+    source_pricing TEXT NOT NULL,
     source_sync_marker TEXT NOT NULL,
     source_transcript_rev TEXT NOT NULL,
     usage_event_fingerprint TEXT NOT NULL,
@@ -171,6 +177,20 @@ CREATE TABLE usage_rollup_installs (
     cached_at TEXT NOT NULL,
     UNIQUE (timezone_id, session_id)
 );
+CREATE INDEX usage_rollup_installs_changes
+    ON usage_rollup_installs (timezone_id, install_revision, source_change_revision);
+CREATE TABLE usage_rollup_invalidations (
+    timezone_id INTEGER NOT NULL REFERENCES usage_rollup_timezones(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES usage_cached_sessions(session_id) ON DELETE CASCADE,
+    PRIMARY KEY (timezone_id, session_id)
+) WITHOUT ROWID;
+CREATE TRIGGER usage_rollup_invalidated AFTER DELETE ON usage_rollup_installs
+WHEN EXISTS (SELECT 1 FROM usage_cached_sessions WHERE session_id=OLD.session_id)
+ AND EXISTS (SELECT 1 FROM usage_rollup_timezones WHERE id=OLD.timezone_id)
+BEGIN
+    INSERT OR IGNORE INTO usage_rollup_invalidations(timezone_id, session_id)
+        VALUES (OLD.timezone_id, OLD.session_id);
+END;
 CREATE TABLE usage_daily_rollups (
     rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
         ON DELETE CASCADE,
@@ -280,6 +300,8 @@ type usageCacheProbe struct {
 }
 
 type usageCacheManager struct {
+	usageWindowObserver usageWindowObserver
+
 	archivePath string
 	archive     *DB
 	ctx         context.Context
@@ -798,11 +820,12 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        is_headless, dedup_key
 		 FROM cursor_usage_facts LIMIT 0`,
 		`SELECT id, timezone_key, timezone_name, interval_fingerprint,
-		        last_requested_at
+		        last_requested_at, change_revision, change_install_revision, change_pricing
 		 FROM usage_rollup_timezones LIMIT 0`,
 		`SELECT timezone_id, local_date, from_ms, to_ms
 		 FROM usage_rollup_days LIMIT 0`,
-		`SELECT id, timezone_id, session_id, source_sync_marker,
+		`SELECT timezone_id, session_id FROM usage_rollup_invalidations LIMIT 0`,
+		`SELECT id, timezone_id, session_id, source_change_revision, source_pricing, source_sync_marker,
 		        source_transcript_rev, usage_event_fingerprint,
 		        fact_install_revision, baked_agent, baked_started_at,
 		        pricing_inputs, pricing_hash, install_revision, cached_at
@@ -835,7 +858,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		}
 	}
 	for _, index := range []string{
-		"usage_daily_rollups_window", "usage_rollup_exceptions_window",
+		"usage_rollup_installs_changes", "usage_daily_rollups_window", "usage_rollup_exceptions_window",
 		"usage_facts_claude_identity", "usage_facts_source_uuid",
 		"usage_facts_usage_dedup_key", "cursor_usage_facts_dedup_key",
 	} {

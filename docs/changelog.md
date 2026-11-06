@@ -38,6 +38,10 @@ The latest release is
   remain visible as missing records. Sessions permanently deleted before this
   release have no links.
 
+- PostgreSQL archives now keep a change journal. Installing it requires
+  `CREATE` on the schema and `TRIGGER` on the watched tables. Roles without
+  these privileges keep working without the journal.
+
 - Investigate an expensive archived session with `session diagnose <id>`. The
   report combines usage, context growth, compactions, large tool results, retry
   candidates, and child links. Use `--format json` for scripts or `--pg` to read
@@ -49,6 +53,13 @@ The latest release is
   even when they came up in different parts of the conversation. Pass two to
   five `concepts` to `search_content`. Each result shows the passage that
   matched each idea. This needs the semantic search index.
+
+- Friction Log patterns can be filed as Kata issues from the hub, with **File
+  to Kata** on the Friction Log page or `agentsview friction file <fingerprint>`. AgentsView links the issue Kata
+  already holds for a pattern instead of filing a duplicate, masks secrets in
+  what it sends, and shows each pattern's issue in `friction patterns`, the API,
+  and MCP results. `friction link` and `friction unlink` manage a link by hand.
+  See [Kata](/docs/kata/#file-friction-log-patterns).
 
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
@@ -122,8 +133,8 @@ The latest release is
 
 - AgentsView can check an optional Kata issue tracker connection, through a
   local daemon or an HTTPS hub. Configure `[kata]`, then run
-  `agentsview kata status` or request `GET /api/v1/kata/status`. Issue filing is
-  not available yet. See [Kata](/docs/kata/).
+  `agentsview kata status` or request `GET /api/v1/kata/status`. See
+  [Kata](/docs/kata/).
 
 - Container deployments can pass the embeddings API key for PostgreSQL recipe
   adoption in `AGENTSVIEW_EMBEDDINGS_API_KEY` instead of mounting a key file.
@@ -133,6 +144,32 @@ The latest release is
   rename that variable.
 
 **Improvements**
+
+- Substring and regex content search skip messages that cannot contain the
+  search text, using a new substring index in the local archive. On a 1.7
+  million message test archive, searching for rare text went from 2.1 s to 0.4
+  s. The index adds about a fifth of the message text size to the archive, and
+  the first start after upgrading waits while it is built, about a minute per 2
+  GB of message text.
+- Session search sorted by relevance shows a common word's first page about
+  three times faster. It reads matches from the best-ranked down and stops once
+  it knows the page's sessions. On 172,000 messages of real source text,
+  searching for `return` went from 140 ms to 50 ms. Searches filtered by project
+  or date, and searches sorted by recency, work as before.
+
+- Terms search (`mode=terms`) uses the same substring index to find the sessions
+  that mention each word. Searching for a word that appears in a few sessions no
+  longer reads every message in the archive; in a benchmark of 100,000 messages
+  it went from 192 ms to 7 ms.
+
+- Terms search (`mode=terms`) for a word the substring index lists now starts
+  from the messages that hold it, so it no longer groups every message of every
+  matching session. On a 1.7 million message test archive, a word in 11,600 of
+  30,000 sessions went from 2.5 s to 0.13 s, and the same word paired with a
+  word in every session went from 3.9 s to 0.2 s.
+
+- Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
+  rows show quickly on large archives.
 
 - Session sidebars on hosted PostgreSQL avoid repeatedly resolving the same
   parent links when counting roots and loading child trees, including pages
@@ -161,12 +198,33 @@ The latest release is
   because their file details alone could not show whether they changed, how
   many bytes were read, and how long the sync took. For a few less common
   agents, the read figures can be lower than the real reads.
+- When a sync or archive rebuild holds sessions for retry or stops early,
+  `debug.log` and the sync status now say why. Before, the log said only
+  `resync-build worker pass reported aborted`. A held session gets a
+  `sync: session needs retry:` line naming the session, its file, and the
+  reason, such as
+  `could not read the Codex session it was forked from (<session id>)` when a
+  fork's parent rollout file was deleted. Each pass then logs one summary. A
+  pass logs at most 20 sessions one by one and counts the rest. A rebuild that
+  stops names its cause, for example
+  `kept the existing archive: the rebuild found no session files, but the archive has 1 session from files`.
+  `agentsview doctor sync` includes the new lines in its log evidence.
 - Anonymous telemetry events now say which distribution built the binary, such
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
 **Bug fixes**
 
+- Roborev test-value reviews, look-ahead reviews, fix plans, rebase fixes, and
+  non-PR review summaries are now hidden as automated sessions, like other
+  roborev runs. The session list and analytics stopped counting them as your
+  conversations. Existing sessions are reclassified the next time AgentsView
+  opens the archive. Custom roborev review types still need an
+  [`[automated]` pattern](/docs/configuration/#automated-session-detection).
+- Large Usage and Activity pages no longer stall in garbage collection on big
+  archives; peak memory during large requests can be higher, and a lower
+  `GOMEMLIMIT` can reduce it by overriding the 4 GiB default.
+- The Usage page now starts loading the vs-prior comparison alongside the totals.
 - Codex code-mode `wait` calls now show their script output. The next sync
   restores missing results in previously imported sessions. Subagent waits
   keep their existing behavior.

@@ -460,7 +460,7 @@ describe("UsageStore filter persistence", () => {
     expect(usage.summary?.unsupportedUsage).toEqual({
       kind: "copilot-no-token-data",
     });
-    expect(usage.summary?.comparison).toEqual(usageComparison());
+    await vi.waitFor(() => expect(usage.summary?.comparison).toEqual(usageComparison()));
   });
 
   it("falls back to defaults on corrupted localStorage", async () => {
@@ -833,6 +833,12 @@ describe("UsageStore session filter params", () => {
         expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(
           failRecovery ? 1 : 2,
         );
+        if (!failRecovery) {
+          expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).not.toHaveProperty(
+            "exclude_project_key",
+          );
+          expect(usage.summary?.comparison).toEqual(usageComparison());
+        }
         expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(3);
         expect(
           usageServiceMocks.getApiV1UsagePairwiseComparison.mock.lastCall?.[0],
@@ -1420,6 +1426,44 @@ describe("UsageStore session filter params", () => {
     }
   });
 
+  it("excludes waiting for the window summary from comparison apply time", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      const { usage } = await loadStore();
+      usage.applyDateRange("2026-06-04", "2026-06-18");
+      usage.summary = usageSummary(15);
+      usage.selectedTimeRange = { from: "2026-06-07", to: "2026-06-10" };
+      const windowResponse = Promise.withResolvers<UsageSummaryResponse>();
+      usageServiceMocks.getApiV1UsageSummary
+        .mockImplementationOnce(async () => {
+          const data = usageSummary(3);
+          attachResponseTiming(data, { sentAt: 0, headersAt: 10, bodyAt: 20 });
+          return data;
+        })
+        .mockReturnValueOnce(windowResponse.promise);
+      usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(async () => {
+        const data = usageComparison();
+        attachResponseTiming(data, { sentAt: 0, headersAt: 10, bodyAt: 30 });
+        return data;
+      });
+
+      const refresh = usage.fetchAll({ preserveTimeRange: true });
+      vi.advanceTimersByTime(100);
+      windowResponse.resolve(usageSummary(15));
+      await refresh;
+
+      expect(usage.summary?.comparison).toEqual(usageComparison());
+      const comparison = usage.lastQuerySteps.find((step) => step.name === "comparison")!;
+      expect(comparison.segments!.find((segment) => segment.phase === "apply")).toEqual({
+        phase: "apply",
+        startMs: 100,
+        durationMs: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records the window summary as its own step and delays apply until both arrive", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance"] });
     try {
@@ -1535,52 +1579,76 @@ describe("UsageStore session filter params", () => {
     }
   });
 
-  it("starts summary and top sessions together during full refresh", async () => {
-    const calls: string[] = [];
-    let resolveSummary: ((value: unknown) => void) | undefined;
-    const summaryPromise = new Promise((resolve) => {
-      resolveSummary = resolve;
-    });
-    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => {
-      calls.push("summary");
-      return summaryPromise;
-    });
-    usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(() => {
-      calls.push("topSessions");
-      return Promise.resolve([]);
-    });
-    usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(() => {
-      calls.push("comparison");
-      return Promise.resolve({
-        priorFrom: "2023-12-01",
-        priorTo: "2023-12-31",
-        priorTotalCost: testMoney(1),
-        deltaPct: 0.5,
-      });
-    });
+  it.each(["summary first", "comparison first"])(
+    "starts comparison with summary during full refresh, %s",
+    async (order) => {
+      let resolveSummary!: (value: UsageSummaryResponse) => void;
+      let resolveComparison!: (value: Comparison) => void;
+      usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSummary = resolve;
+          }),
+      );
+      usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveComparison = resolve;
+          }),
+      );
 
+      const { usage } = await loadStore();
+      const fetch = usage.fetchAll();
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalled();
+      expect(usageServiceMocks.getApiV1UsageComparison).toHaveBeenCalledTimes(1);
+      expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalled();
+      expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).toHaveProperty(
+        "current_microdollars",
+        0,
+      );
+      expect(usage.summary).toBeNull();
+
+      if (order === "summary first") {
+        resolveSummary(usageSummary(3));
+        await vi.waitFor(() => expect(usage.summary?.totals.totalCost).toEqual(testMoney(3)));
+        expect(usage.summary?.comparison).toBeUndefined();
+        resolveComparison(usageComparison());
+      } else {
+        resolveComparison(usageComparison());
+        await Promise.resolve();
+        expect(usage.summary).toBeNull();
+        resolveSummary(usageSummary(3));
+      }
+      await fetch;
+      expect(usage.summary?.totals.totalCost).toEqual(testMoney(3));
+      expect(usage.summary?.comparison).toEqual(usageComparison());
+    },
+  );
+
+  it("aborts pending comparison when totals fail during full refresh", async () => {
+    let rejectSummary!: (error: Error) => void;
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectSummary = reject;
+        }),
+    );
+    usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(
+      (_params, { signal }) =>
+        new Promise((_, reject) => {
+          signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        }),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { usage } = await loadStore();
     const fetch = usage.fetchAll();
-    await Promise.resolve();
-
-    expect(calls).toEqual(["summary", "topSessions"]);
-    expect(usage.summary).toBeNull();
-
-    resolveSummary?.(usageSummary());
+    const signal = usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[1].signal;
+    expect(signal?.aborted).toBe(false);
+    rejectSummary(new Error("Summary failed"));
     await fetch;
-    await Promise.resolve();
-
-    expect(calls).toEqual(["summary", "topSessions", "comparison"]);
-    expect(usage.summary).not.toBeNull();
-    expect(usage.summary?.comparison).toEqual({
-      priorFrom: "2023-12-01",
-      priorTo: "2023-12-31",
-      priorTotalCost: testMoney(1),
-      deltaPct: 0.5,
-    });
-    expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ current_microdollars: 0 }),
-    );
+    expect(signal?.aborted).toBe(true);
+    expect(usage.querying.comparison).toBe(false);
+    warn.mockRestore();
   });
 
   it("tracks cached usage refetches as querying without first-load skeletons", async () => {
@@ -1635,16 +1703,23 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts visible panel requests on teardown", async () => {
-    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
+    const response = Promise.withResolvers<UsageSummaryResponse>();
+    usageServiceMocks.getApiV1UsageSummary
+      .mockReturnValueOnce(response.promise)
+      .mockResolvedValueOnce(usageSummary(7));
     const { usage } = await loadStore();
 
-    void usage.fetchSummary();
+    const interrupted = usage.fetchSummary();
     await Promise.resolve();
     usage.cancelInFlightReads();
 
     expect(vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal?.aborted).toBe(
       true,
     );
+    await usage.fetchSummary();
+    response.resolve(usageSummary(1));
+    await interrupted;
+    expect(usage.summary?.totals.totalCost).toEqual(testMoney(7));
   });
 
   it("reuses summary params for top sessions during full refresh", async () => {
@@ -1695,15 +1770,15 @@ describe("UsageStore session filter params", () => {
     const compare = usage as unknown as {
       fetchComparison: (
         summaryVersion: number,
-        summary: UsageSummaryResponse,
         params: typeof loadedSummary.params,
+        summary: Promise<typeof loadedSummary | null>,
       ) => Promise<void>;
     };
 
     const currentComparison = compare.fetchComparison(
       loadedSummary.version,
-      loadedSummary.summary,
       loadedSummary.params,
+      Promise.resolve(loadedSummary),
     );
     await Promise.resolve();
     const currentSignal = vi.mocked(UsageService.getApiV1UsageComparison).mock.calls[0]?.[1]
@@ -1713,8 +1788,8 @@ describe("UsageStore session filter params", () => {
 
     await compare.fetchComparison(
       loadedSummary.version - 1,
-      loadedSummary.summary,
       loadedSummary.params,
+      Promise.resolve(loadedSummary),
     );
 
     expect(currentSignal?.aborted).toBe(false);
@@ -1735,14 +1810,14 @@ describe("UsageStore session filter params", () => {
     const compare = usage as unknown as {
       fetchComparison: (
         summaryVersion: number,
-        summary: UsageSummaryResponse,
         params: typeof loadedSummary.params,
+        summary: Promise<typeof loadedSummary | null>,
       ) => Promise<void>;
     };
     void compare.fetchComparison(
       loadedSummary.version,
-      loadedSummary.summary,
       loadedSummary.params,
+      Promise.resolve(loadedSummary),
     );
     await Promise.resolve();
     const comparisonSignal = vi.mocked(UsageService.getApiV1UsageComparison).mock.calls[0]?.[1]
@@ -1761,7 +1836,7 @@ describe("UsageStore session filter params", () => {
     const { usage } = await loadStore();
 
     await usage.fetchSummary();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(usage.summary?.comparison).toEqual(usageComparison()));
 
     expect(usageServiceMocks.getApiV1UsageComparison).toHaveBeenCalledTimes(1);
     expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
@@ -1986,6 +2061,20 @@ describe("UsageStore time-series range selection", () => {
   beforeEach(() => {
     installStorage();
     vi.clearAllMocks();
+  });
+
+  it("applies the brushed-range comparison", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = { ...usageSummary(15), comparison: usageComparison() };
+    const rangeResponse = Promise.withResolvers<UsageSummaryResponse>();
+    usageServiceMocks.getApiV1UsageSummary.mockReturnValueOnce(rangeResponse.promise);
+
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+
+    rangeResponse.resolve(usageSummary(3));
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.summary?.comparison).toEqual(usageComparison());
   });
 
   it("filters Usage requests without replacing the parent chart window", async () => {
@@ -3098,8 +3187,8 @@ describe("UsageStore project zoom", () => {
     expect(usage.zoomRows).toEqual([]);
   });
 
-  it.each(["a metric change", "a same-range refresh"])(
-    "keeps zoom rows through %s, even when it fails",
+  it.each(["a metric change", "a same-range refresh", "a cancelled read"])(
+    "keeps zoom rows through %s",
     async (event) => {
       const { usage } = await loadStore();
       usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
@@ -3121,12 +3210,18 @@ describe("UsageStore project zoom", () => {
       expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(2);
       expect(usage.zoomRows).toEqual([group(1)]);
       expect(usage.loading.zoom).toBe(false);
+      if (event === "a cancelled read") {
+        usage.cancelInFlightReads();
+        expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[1]?.signal?.aborted).toBe(true);
+      }
       reject(new Error("zoom failed"));
       await refreshed;
       await vi.waitFor(() => expect(usage.querying.zoom).toBe(false));
       expect(usage.zoomRows).toEqual([group(1)]);
       expect(usage.errors.zoom).toBeNull();
-      expect(warn).toHaveBeenCalledWith("usage.zoom refetch failed:", new Error("zoom failed"));
+      if (event === "a cancelled read") expect(warn).not.toHaveBeenCalled();
+      else
+        expect(warn).toHaveBeenCalledWith("usage.zoom refetch failed:", new Error("zoom failed"));
       warn.mockRestore();
       usage.cancelInFlightReads();
     },

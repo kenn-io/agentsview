@@ -330,7 +330,9 @@ func TestUsageNotificationRefreshChunks(t *testing.T) {
 			}
 			var fillSizes []int
 			cache.rollup.observer.beforeAttempt = func(fills map[string]usageFillResult) { fillSizes = append(fillSizes, len(fills)) }
-			database.refreshUsageRollups(t.Context(), cache, fills)
+			revision, err := database.UsageChangeRevision(t.Context())
+			require.NoError(t, err)
+			database.refreshUsageRollups(t.Context(), cache, fills, revision)
 			assert.Len(t, sizes, len(testCase.wantSizes), "failed chunk prevented the later chunk from running")
 			assert.Equal(t, testCase.wantSizes, fillSizes, "rollup attempts received fills outside their notification chunk")
 			assert.Equal(t, testCase.wantInstalls, usageCacheCount(t, cache, "usage_rollup_installs"))
@@ -427,7 +429,7 @@ func TestUsageTimezoneRecencyFollowsRequests(t *testing.T) {
 	require.NoError(t, err)
 	fills, err := cache.fill.Ensure(t.Context(), written.Versions, 0)
 	require.NoError(t, err)
-	database.refreshUsageRollups(t.Context(), cache, fills)
+	database.refreshUsageRollups(t.Context(), cache, fills, written.ChangeRevision)
 	require.Positive(t, installs.Load())
 	assert.Equal(t, []string{"Pacific/Auckland", "Europe/Paris", "Asia/Tokyo"}, recentZones(),
 		"background rebuilds reordered request recency")
@@ -493,4 +495,37 @@ func TestUsageTimezoneRecencyBreaksStampTies(t *testing.T) {
 				"equal stamps did not favor the zone requested last")
 		})
 	}
+}
+
+// A resync bulk load suspends the usage generation insert trigger. Usage
+// cached before the load must not let a message inserted before the cached
+// tail during the load be skipped as an append, and the restored trigger must
+// keep catching such inserts afterwards.
+func TestBulkImportRestoresUsageGenerationInvalidation(t *testing.T) {
+	database := testDB(t)
+	const day = "2026-08-10T09:00:00Z"
+	seedLiveWriteSession(t, database, "session", "project", day, 0, 10)
+	appendLiveWriteMessage(t, database, "session", day, 4, 7)
+	require.Equal(t, 17, liveWriteDailyInput(t, database, "project"))
+
+	require.NoError(t, database.DropBulkImportIndexes(t.Context()))
+	appendLiveWriteMessage(t, database, "session", day, 2, 5)
+	seedLiveWriteSession(t, database, "loaded", "project", day, 0, 3)
+	require.NoError(t, database.RebuildBulkImportIndexes(t.Context()))
+
+	// Append reuse needs a generation; a session created during the load has
+	// none until the rebuild assigns one. Check before any later insert, whose
+	// restored trigger would assign one itself.
+	var missing int
+	require.NoError(t, database.getReader().QueryRow(t.Context(),
+		`SELECT count(*) FROM sessions WHERE usage_generation IS NULL`,
+	).Scan(&missing))
+	assert.Zero(t, missing)
+
+	assert.Equal(t, 25, liveWriteDailyInput(t, database, "project"))
+
+	appendLiveWriteMessage(t, database, "session", day, 1, 11)
+	assert.Equal(t, 36, liveWriteDailyInput(t, database, "project"))
+	appendLiveWriteMessage(t, database, "loaded", day, 1, 13)
+	assert.Equal(t, 49, liveWriteDailyInput(t, database, "project"))
 }

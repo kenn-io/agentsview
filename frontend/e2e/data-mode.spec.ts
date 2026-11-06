@@ -13,15 +13,12 @@ function workspace(page: Page) {
 }
 
 function waitForApiResponse(page: Page, method: string, pathname: string) {
-  return page
-    .waitForResponse((response) => {
-      const url = new URL(response.url());
-      return response.request().method() === method && url.pathname === pathname && response.ok();
-    })
-    .then(async (response) => {
-      await response.finished();
-      return response;
-    });
+  // A live refresh can cancel this response after its headers arrive.
+  // The assertions after each action wait for the rendered result.
+  return page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === method && url.pathname === pathname && response.ok();
+  });
 }
 
 test.describe("Data mode project reclassification", () => {

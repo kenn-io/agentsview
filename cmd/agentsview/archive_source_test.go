@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawarchive"
 	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
@@ -111,6 +112,77 @@ func TestArchiveSourceDaemonRemoteSyncIncludesAttachedHistory(t *testing.T) {
 			assert.Equal(t, "archived message", messages[0].Content)
 		})
 	}
+}
+
+func TestDaemonIngestionWakeIncludesAttachedHistory(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.ArchiveSources = []config.ArchiveSource{archiveSourceCommandFixture(t)}
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := sync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+	attached, err := archivesource.NewManager(t.Context(), cfg, database, engine, nil)
+	require.NoError(t, err)
+	t.Cleanup(attached.Close)
+	t.Cleanup(ingestion.Stop)
+	ingestion.attached = attached
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	messages, err := database.GetAllMessages(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "archived message", messages[0].Content)
+}
+
+func TestAttachedSourcesDrainAfterRebuildWithDeferredFork(t *testing.T) {
+	source := archiveSourceCommandFixture(t)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.ArchiveSources = []config.ArchiveSource{source}
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := sync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
+	t.Cleanup(engine.Close)
+	attached, err := archivesource.NewManager(t.Context(), cfg, database, engine, nil)
+	require.NoError(t, err)
+	t.Cleanup(attached.Close)
+	runner := withAttachedSources(attached, func(context.Context, func(sync.Progress)) (sync.SyncStats, error) {
+		return sync.SyncStats{ArchiveRebuilt: true, Deferred: 1}, nil
+	})
+	_, err = runner(t.Context(), nil)
+	require.NoError(t, err)
+	messages, err := database.GetAllMessages(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+}
+
+func TestDirectResyncDrainsAttachedHistoryWithDeferredFork(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.ArchiveSources = []config.ArchiveSource{archiveSourceCommandFixture(t)}
+	root := t.TempDir()
+	cfg.AgentDirs[parser.AgentCodex] = []string{root}
+	path := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	_, stats, err := runLocalSyncResult(t.Context(), cfg, database, true)
+	require.NoError(t, err)
+	assert.True(t, stats.ArchiveRebuilt)
+	assert.Equal(t, 1, stats.Deferred)
+	messages, err := database.GetAllMessages(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "archived message", messages[0].Content)
+	_, pending, err := runLocalSyncResult(t.Context(), cfg, database, false)
+	require.ErrorContains(t, err, "local sync processing incomplete")
+	assert.False(t, pending.ArchiveRebuilt)
+	assert.Equal(t, 1, pending.Deferred)
 }
 
 func TestArchiveSourceNoSyncDaemonManualSync(t *testing.T) {

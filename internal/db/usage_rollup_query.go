@@ -56,10 +56,11 @@ func usageCursorIncluded(filter UsageFilter) bool {
 // usageRollupQuery reads compact daily rows and resolves only facts whose
 // deduplication can depend on the requested window or live session filters.
 func (cache *usageCache) usageRollupQuery(
-	ctx context.Context, snapshot usageQuerySnapshot, filter UsageFilter,
-	installs map[string]usageRollupInstall, resolver *export.PricingResolver,
+	ctx context.Context, prepared usagePreparedWindow, filter UsageFilter,
+	resolver *export.PricingResolver,
 ) (usageFactsResult, error) {
-	if len(snapshot.Sessions) == 0 && snapshot.CursorHighWater == 0 {
+	snapshot := prepared.snapshot
+	if !prepared.journaled && len(snapshot.Sessions) == 0 && snapshot.CursorHighWater == 0 {
 		return usageFactsResult{
 			MatchingSessions: make(map[string]UsageSessionInfo),
 		}, nil
@@ -80,8 +81,7 @@ func (cache *usageCache) usageRollupQuery(
 		}
 	}()
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
-	timezoneID, err := verifyUsageRollupQuery(
-		ctx, conn, identity.Key, snapshot, installs)
+	timezoneID, err := verifyPreparedUsageRollup(ctx, conn, identity.Key, prepared)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
@@ -221,7 +221,10 @@ func readUsageDailyRollups(
 	}
 	defer rows.Close()
 	sessions := usageRollupSessionMap(snapshot)
-	result := usageFactsResult{MatchingSessions: make(map[string]UsageSessionInfo)}
+	result := usageFactsResult{
+		Groups:           make([]usageFactsGroup, 0, len(snapshot.Sessions)),
+		MatchingSessions: make(map[string]UsageSessionInfo, len(snapshot.Sessions)),
+	}
 	for rows.Next() {
 		var group usageFactsGroup
 		var rateOK int
@@ -287,8 +290,8 @@ func readUsageRollupExceptions(
 		return nil, err
 	}
 	defer rows.Close()
-	sessions := usageRollupSessionMap(snapshot)
 	var result []usageRollupFact
+	var sessions map[string]*usageQuerySession
 	for rows.Next() {
 		var fact usageRollupFact
 		var ordinal, millis, nanos, reported sql.NullInt64
@@ -308,6 +311,9 @@ func readUsageRollupExceptions(
 		}
 		if result == nil && resultCount > 0 {
 			result = make([]usageRollupFact, 0, resultCount)
+		}
+		if sessions == nil {
+			sessions = usageRollupSessionMap(snapshot)
 		}
 		if _, ok := sessions[fact.SourceSessionID]; !ok &&
 			fact.SourceSessionID != "" {
@@ -337,6 +343,9 @@ func readUsageRollupExceptions(
 		fact.Fact.TokenEligible = true
 		fact.DedupTimestamp = fact.Fact.RawTimestamp
 		session := sessions[fact.SourceSessionID]
+		if session == nil {
+			session = &usageQuerySession{}
+		}
 		fact.Agent = session.Agent
 		fact.AttributionSessionID = fact.SourceSessionID
 		if fact.Fact.UsesSessionStart {
@@ -372,8 +381,7 @@ func (cache *usageCache) usageRollupActivityQuery(
 		}
 	}()
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
-	timezoneID, err := verifyUsageRollupQuery(
-		ctx, conn, identity.Key, snapshot, installs)
+	timezoneID, err := verifyUsageRollupQuery(ctx, conn, identity.Key, snapshot, installs)
 	if err != nil {
 		return nil, err
 	}
@@ -420,6 +428,9 @@ func aggregateUsageRollupExceptions(
 	facts []usageRollupFact, snapshot usageQuerySnapshot, filter UsageFilter,
 	resolver *export.PricingResolver,
 ) ([]usageFactsGroup, error) {
+	if len(facts) == 0 {
+		return nil, nil
+	}
 	sessions := usageRollupSessionMap(snapshot)
 	plain, general, discarded := rankUsageRollupSnapshots(facts)
 	plain = filterUsageRollupOwners(plain, sessions, filter)
@@ -459,7 +470,10 @@ func aggregateUsageRollupExceptions(
 		}
 		group := groups[itemKey]
 		if group == nil {
-			session := sessions[fact.AttributionSessionID]
+			var session usageQuerySession
+			if captured := sessions[fact.AttributionSessionID]; captured != nil {
+				session = *captured
+			}
 			if fact.AttributionSessionID == "" {
 				session.Agent = "cursor"
 			}
@@ -631,7 +645,7 @@ func rankUsageRollupSnapshots(
 }
 
 func filterUsageRollupOwners(
-	facts []usageRollupFact, sessions map[string]usageQuerySession,
+	facts []usageRollupFact, sessions map[string]*usageQuerySession,
 	filter UsageFilter,
 ) []usageRollupFact {
 	result := facts[:0]
@@ -818,9 +832,10 @@ func usageRollupModelPasses(filter UsageFilter, model string) bool {
 	return !slices.Contains(CSVFilterValues(filter.ExcludeModel), model)
 }
 
-func usageRollupSessionMap(snapshot usageQuerySnapshot) map[string]usageQuerySession {
-	result := make(map[string]usageQuerySession, len(snapshot.Sessions))
-	for _, session := range snapshot.Sessions {
+func usageRollupSessionMap(snapshot usageQuerySnapshot) map[string]*usageQuerySession {
+	result := make(map[string]*usageQuerySession, len(snapshot.Sessions))
+	for i := range snapshot.Sessions {
+		session := &snapshot.Sessions[i]
 		result[session.ID] = session
 	}
 	return result

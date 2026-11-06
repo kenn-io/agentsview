@@ -39,6 +39,7 @@ func syncEventDescription(op *huma.Operation) {
 }
 
 type syncStatusResponse struct {
+	SyncPending    bool               `json:"sync_pending" doc:"Local ingestion is catching up after an idle period"`
 	ArchiveStale   bool               `json:"archive_stale" doc:"Results may reflect the archive before a required parser rebuild"`
 	StartupPending bool               `json:"startup_pending" doc:"Startup ingestion has not completed successfully"`
 	LastSync       string             `json:"last_sync"`
@@ -187,7 +188,7 @@ func (s *Server) humaSyncStatus(
 ) (*jsonOutput[syncStatusResponse], error) {
 	engine := s.syncStatusEngine()
 	if engine == nil {
-		return &jsonOutput[syncStatusResponse]{Body: syncStatusResponse{ArchiveStale: s.archiveStale()}}, nil
+		return &jsonOutput[syncStatusResponse]{Body: syncStatusResponse{ArchiveStale: s.archiveStale(), SyncPending: s.syncPending()}}, nil
 	}
 	startupPending := s.engine != nil && !s.engine.StartupReconciled()
 	lastSync := engine.LastSync()
@@ -203,6 +204,7 @@ func (s *Server) humaSyncStatus(
 	return &jsonOutput[syncStatusResponse]{
 		Body: syncStatusResponse{
 			ArchiveStale:   s.archiveStale(),
+			SyncPending:    s.syncPending(),
 			StartupPending: startupPending,
 			LastSync:       lastSyncStr,
 			Stats:          &stats,
@@ -366,6 +368,10 @@ func (s *Server) runSyncWhenReady(
 // error. The body remains the human-readable explanation.
 const ResyncRequiredHeader = "X-Agentsview-Resync-Required"
 
+func (s *Server) syncPending() bool {
+	return s.ingestionFreshness != nil && s.ingestionFreshness.Pending()
+}
+
 func (s *Server) archiveStale() bool {
 	local, ok := s.db.(*db.DB)
 	return ok && local.NeedsResync()
@@ -475,7 +481,10 @@ func (s *Server) runResyncWithFallback(
 			}
 			return stats, err
 		}
-		return stats, requireProcessingComplete(stats)
+		if !stats.ProcessingCompleteOrRetrying() {
+			return stats, requireProcessingComplete(stats)
+		}
+		return stats, nil
 	}
 	stats, err := engine.SyncThenRun(
 		ctx, true, progress, func(bool) error { return nil },
@@ -493,8 +502,8 @@ func (s *Server) finishLocalSync(
 	ctx context.Context, engine *syncpkg.Engine, stats syncpkg.SyncStats,
 	progress func(syncpkg.Progress), scheduled bool,
 ) (syncpkg.SyncStats, error) {
-	if err := requireProcessingComplete(stats); err != nil {
-		return stats, err
+	if !stats.ProcessingCompleteOrRetrying() {
+		return stats, requireProcessingComplete(stats)
 	}
 	manager := s.archiveSources
 	if manager == nil {
@@ -721,7 +730,7 @@ func (s *Server) runRemoteSyncRequest(
 				},
 			)
 			localStats = &stats
-			if err == nil && !stats.Aborted {
+			if err == nil && !stats.Aborted && !stats.ProcessingCompleteOrRetrying() {
 				err = requireProcessingComplete(stats)
 			}
 			return remotesync.SyncStats{}, err

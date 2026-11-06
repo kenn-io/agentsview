@@ -349,7 +349,8 @@ GO_TEST_P_FLAG := $(if $(GO_TEST_P),-p $(GO_TEST_P),)
 # Run the cacheable unit/integration suite. The external-service lanes below
 # intentionally retain `-count=1` because they require fresh state.
 test: pricing-snapshot ensure-embed-dir
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -v
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
+	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
 # Reproducible synthetic ingest, steady-state sync, and analytics measurements.
 .PHONY: perf-sim
@@ -621,6 +622,9 @@ nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	root=$$(pwd); \
 	dirs=$$(go list -export -f '{{.Dir}}' ./...); \
 	pkgs=$$(for dir in $$dirs; do \
+		case "$${dir#$$root/}" in \
+			node_modules/*|*/node_modules/*) continue ;; \
+		esac; \
 		if [ "$$dir" = "$$root" ]; then \
 			printf '%s\n' "."; \
 		else \
