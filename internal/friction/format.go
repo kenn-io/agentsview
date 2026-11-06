@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
-// truncatedMarker is jilog's suffix.
-const truncatedMarker = " … [truncated]"
+// TruncatedMarker is jilog's suffix.
+const TruncatedMarker = " … [truncated]"
 
 // TruncateRunes keeps at most n runes and adds no ellipsis.
 func TruncateRunes(s string, n int) string {
@@ -19,7 +20,20 @@ func TruncateRunes(s string, n int) string {
 // TruncateWithMarker keeps at most n runes and appends the marker only
 // when text was removed.
 func TruncateWithMarker(s string, n int) string {
-	return stringutil.TruncateRunes(s, n, truncatedMarker)
+	return stringutil.TruncateRunes(s, n, TruncatedMarker)
+}
+
+// CutByDetector reports whether a detector of kind k shortened text to its
+// length limit. It returns text without the truncation marker; a caller
+// that changes the text appends TruncatedMarker again.
+func CutByDetector(k Kind, text string) (string, bool) {
+	switch {
+	case k == KindError && strings.HasSuffix(text, TruncatedMarker):
+		return strings.TrimSuffix(text, TruncatedMarker), true
+	case k == KindWorkaround && utf8.RuneCountInString(text) >= workaroundContextRunes:
+		return text, true
+	}
+	return text, false
 }
 
 // PythonRepr approximates Python repr() for a string: single quotes;

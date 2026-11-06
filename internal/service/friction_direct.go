@@ -159,7 +159,18 @@ func (b *directBackend) FrictionPatterns(
 			FirstSeenDate: p.FirstSeenDate, LastSeenDate: p.LastSeenDate,
 			OccurrenceCount: p.OccurrenceCount, SessionCount: p.SessionCount,
 			LastSubjectID: p.LastSubjectID, LastOrdinal: p.LastOrdinal,
+			Issue: frictionIssueView(p.Issue),
 		})
 	}
 	return page, nil
+}
+
+func frictionIssueView(l *db.FrictionIssueLink) *FrictionIssueView {
+	if l == nil {
+		return nil
+	}
+	return &FrictionIssueView{
+		QualifiedID: l.QualifiedID, WebURL: l.WebURL, IssueUID: l.IssueUID,
+		Source: l.Source, LinkedAt: l.LinkedAt.UTC(),
+	}
 }
