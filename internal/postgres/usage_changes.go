@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -65,26 +66,34 @@ const usageChangeJournalVersionPG = 1
 // Messages and plan usage reach the journal through the sessions.updated_at
 // bump every released publisher writes with them.
 var usageChangeTablesPG = []struct{ table, sessionColumn string }{
-	{"sessions", "id"}, {"usage_events", "session_id"},
-	{"model_pricing", ""}, {"model_pricing_bands", ""}, {"genai_pricing", ""}, {"cursor_usage_events", ""},
+	{"sessions", "id"},
+	{"usage_events", "session_id"},
+	{"model_pricing", ""},
+	{"model_pricing_bands", ""},
+	{"genai_pricing", ""},
+	{"cursor_usage_events", ""},
 	{"source_archives", ""},
-	{"source_project_identity_observations", ""}, {"source_project_identity_observation_scopes", ""},
-	{"source_session_project_identity_snapshots", ""}, {"source_session_project_identity_snapshot_scopes", ""},
-	{"source_worktree_project_mappings", ""}, {"source_worktree_project_mapping_scopes", ""},
+	{"source_project_identity_observations", ""},
+	{"source_project_identity_observation_scopes", ""},
+	{"source_session_project_identity_snapshots", ""},
+	{"source_session_project_identity_snapshot_scopes", ""},
+	{"source_worktree_project_mappings", ""},
+	{"source_worktree_project_mapping_scopes", ""},
 }
 
 var dropUsageChangeJournalSQL = func() string {
-	ddl := `DROP TABLE IF EXISTS usage_session_changes;
+	var ddl strings.Builder
+	ddl.WriteString(`DROP TABLE IF EXISTS usage_session_changes;
  DROP FUNCTION IF EXISTS stamp_usage_change();
  DO $cleanup$ BEGIN
  IF to_regclass('sync_metadata') IS NOT NULL THEN
      DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version');
  END IF;
- END $cleanup$;`
+ END $cleanup$;`)
 	for _, table := range usageChangeTablesPG {
-		ddl += "DROP FUNCTION IF EXISTS mark_usage_" + table.table + "() CASCADE;"
+		ddl.WriteString("DROP FUNCTION IF EXISTS mark_usage_" + table.table + "() CASCADE;")
 	}
-	return ddl
+	return ddl.String()
 }()
 
 // Journal installation is optional for both push and serve schema setup.
@@ -178,7 +187,7 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 	if _, err = tx.ExecContext(ctx, ddl.String()); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)`, fmt.Sprint(usageChangeJournalVersionPG))
+	_, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)`, strconv.Itoa(usageChangeJournalVersionPG))
 	return err
 }
 
@@ -211,7 +220,7 @@ func (s *Store) loadUsageChanges(ctx context.Context, afterRevision int64) (int6
   AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value = $1)
  ), 0) AS revision) r
  LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision AND c.session_id <> ''
- ORDER BY c.revision, c.session_id`, fmt.Sprint(usageChangeJournalVersionPG), afterRevision)
+ ORDER BY c.revision, c.session_id`, strconv.Itoa(usageChangeJournalVersionPG), afterRevision)
 	if err != nil {
 		return 0, nil, err
 	}
