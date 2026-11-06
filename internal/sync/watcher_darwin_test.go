@@ -1218,9 +1218,23 @@ func TestDarwinWatcherMissingRootRealCreationDeletionRecreation(t *testing.T) {
 	ancestor := t.TempDir()
 	intermediate := filepath.Join(ancestor, "state")
 	root := filepath.Join(intermediate, "sessions")
+	second := filepath.Join(root, "second.jsonl")
+	var secondObserved atomic.Bool
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
 	watcher, batches := newDarwinTestWatcherWithBackend(t, backend)
+	onChange := watcher.onChange
+	watcher.onChange = func(ctx context.Context, batch WatchBatch) error {
+		if slices.Contains(batch.Paths, second) || batch.FullSync ||
+			slices.Contains(batch.ReconcileRoots, ancestor) {
+			if _, err := os.Stat(second); err == nil {
+				secondObserved.Store(true)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		return onChange(ctx, batch)
+	}
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
@@ -1255,11 +1269,10 @@ func TestDarwinWatcherMissingRootRealCreationDeletionRecreation(t *testing.T) {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
 	require.Eventually(t, rootOpen, 5*time.Second, time.Millisecond)
-	second := filepath.Join(root, "second.jsonl")
 	require.NoError(t, os.WriteFile(second, []byte("second"), 0o600))
-	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
-		return slices.Contains(batch.Paths, second)
-	})
+	// Delayed removal events can retire the replacement stream after it opens.
+	// Its reconciliation must observe the file even when no path event survives.
+	require.Eventually(t, secondObserved.Load, 5*time.Second, time.Millisecond)
 }
 
 func TestDarwinWatcherRootShallowRenameAndRecreation(t *testing.T) {

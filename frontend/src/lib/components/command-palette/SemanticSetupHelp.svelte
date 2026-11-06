@@ -179,7 +179,7 @@ enabled = true`;
 
   function schedulePoll(): void {
     if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(() => void poll(), BUILD_POLL_MS);
+    timer = setTimeout(() => void (document.hidden ? schedulePoll() : poll()), BUILD_POLL_MS);
   }
 
   async function poll(): Promise<void> {

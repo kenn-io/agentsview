@@ -53,7 +53,7 @@ function isTransient(err: unknown): boolean {
 }
 
 export class MessagesStore {
-  messages: Message[] = $state([]);
+  messages: Message[] = $state.raw([]);
   loading: boolean = $state(false);
   sessionId: string | null = $state(null);
   messageCount: number = $state(0);
@@ -556,7 +556,7 @@ export class MessagesStore {
         return;
       }
       const chunk = [...res.messages].reverse();
-      this.messages.unshift(...chunk);
+      this.messages = [...chunk, ...this.messages];
       this.hasOlder = chunk[0]!.ordinal > 0;
       this.historyComplete = !this.hasOlder;
       this.publishPendingSessionToken(id);

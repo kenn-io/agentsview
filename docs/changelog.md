@@ -11,6 +11,37 @@ The latest release is
 
 **New features**
 
+- Find the session and prompt behind file lines with `agentsview why path:N-M`,
+  or look up a commit with `agentsview why --commit SHA`. The command uses local
+  Git blame and archived commit links without calling a model. Add `--json` for
+  scripts.
+
+- Find editor commits through `Agent-Session` trailers in local Git history.
+  Session commit lookups show the source and suggest the last prompt at or
+  before the commit time, marked as estimated, when the session has a message
+  within the preceding five minutes. Idle sessions have no suggested turn.
+  Trailer links survive transcript rewrites and checkout removal.
+
+- Find a commit's session and prompt on PostgreSQL, DuckDB, and ClickHouse
+  replicas after pushing the archive. Deleted sessions remain visible as missing
+  records when the replica has project evidence for them. Hosted PostgreSQL
+  keeps returning HTTP 501.
+
+- Find the session and prompt behind a Git commit through the session API, or
+  list a session's commits with `agentsview session commits <id>`. Links come
+  from stored Git summaries, including Codex output received through later
+  polls. Summaries need SHAs of 7 to 64 characters; quiet commits have no link.
+  The prompt is the last user turn before the commit call. Repository paths
+  follow the first commit invocation in each call, using the last `cd` before
+  it and any `git -C` options.
+  Transcript-only and usage-only archives retain no links. Deleted sessions
+  remain visible as missing records. Sessions permanently deleted before this
+  release have no links.
+
+- PostgreSQL archives now keep a change journal. Installing it requires
+  `CREATE` on the schema and `TRIGGER` on the watched tables. Roles without
+  these privileges keep working without the journal.
+
 - Investigate an expensive archived session with `session diagnose <id>`. The
   report combines usage, context growth, compactions, large tool results, retry
   candidates, and child links. Use `--format json` for scripts or `--pg` to read
@@ -22,6 +53,13 @@ The latest release is
   even when they came up in different parts of the conversation. Pass two to
   five `concepts` to `search_content`. Each result shows the passage that
   matched each idea. This needs the semantic search index.
+
+- Friction Log patterns can be filed as Kata issues from the hub, with **File
+  to Kata** on the Friction Log page or `agentsview friction file <fingerprint>`. AgentsView links the issue Kata
+  already holds for a pattern instead of filing a duplicate, masks secrets in
+  what it sends, and shows each pattern's issue in `friction patterns`, the API,
+  and MCP results. `friction link` and `friction unlink` manage a link by hand.
+  See [Kata](/docs/kata/#file-friction-log-patterns).
 
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
@@ -95,8 +133,8 @@ The latest release is
 
 - AgentsView can check an optional Kata issue tracker connection, through a
   local daemon or an HTTPS hub. Configure `[kata]`, then run
-  `agentsview kata status` or request `GET /api/v1/kata/status`. Issue filing is
-  not available yet. See [Kata](/docs/kata/).
+  `agentsview kata status` or request `GET /api/v1/kata/status`. See
+  [Kata](/docs/kata/).
 
 - Container deployments can pass the embeddings API key for PostgreSQL recipe
   adoption in `AGENTSVIEW_EMBEDDINGS_API_KEY` instead of mounting a key file.
@@ -106,6 +144,50 @@ The latest release is
   rename that variable.
 
 **Improvements**
+
+- Substring and regex content search skip messages that cannot contain the
+  search text, using a new substring index in the local archive. On a 1.7
+  million message test archive, searching for rare text went from 2.1 s to 0.4
+  s. The index adds about a fifth of the message text size to the archive, and
+  the first start after upgrading waits while it is built, about a minute per 2
+  GB of message text.
+- Session search sorted by relevance shows a common word's first page about
+  three times faster. It reads matches from the best-ranked down and stops once
+  it knows the page's sessions. On 172,000 messages of real source text,
+  searching for `return` went from 140 ms to 50 ms. Searches filtered by project
+  or date, and searches sorted by recency, work as before.
+
+- Terms search (`mode=terms`) uses the same substring index to find the sessions
+  that mention each word. Searching for a word that appears in a few sessions no
+  longer reads every message in the archive; in a benchmark of 100,000 messages
+  it went from 192 ms to 7 ms.
+
+- Terms search (`mode=terms`) for a word the substring index lists now starts
+  from the messages that hold it, so it no longer groups every message of every
+  matching session. On a 1.7 million message test archive, a word in 11,600 of
+  30,000 sessions went from 2.5 s to 0.13 s, and the same word paired with a
+  word in every session went from 3.9 s to 0.2 s.
+
+- The Activity page opens about four times faster on the local archive the
+  first time it shows a range. It now pairs each session's messages in one pass
+  instead of looking up each message's successor and model in the database. On
+  a 30,000-session test archive, pairing a month went from 340 ms to 90 ms and a
+  one-year range from 6.0 s to 1.4 s. A report now holds its intervals in memory
+  while it sorts them, about 130 bytes each (about 120 MB for that year).
+
+- The Activity page counts user and assistant messages from the sessions it
+  already holds in memory, so it no longer reads every message twice. On the
+  same archive a month's report went from 250 ms to 210 ms when opened again,
+  and from 350 ms to 300 ms on first open. The memory cache for Activity grows
+  by about 57 bytes per counted message, at most about 11 MiB.
+
+- The first Usage page after the usage cache is rebuilt, such as after an
+  upgrade, loads in about half the time. On a 30,000-session test archive, all
+  history went from about 13 s to about 7 s. Filling an empty cache no longer
+  checks which other sessions share each usage record, because nothing built
+  from them exists yet. The cache prepares each repeated write once, builds two
+  batches of daily totals at once, and saves one batch of sessions while it
+  reads the next.
 
 - Session sidebars on ClickHouse and DuckDB mirrors load in pages, so the first
   rows show quickly on large archives.

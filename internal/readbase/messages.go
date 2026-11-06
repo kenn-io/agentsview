@@ -39,7 +39,11 @@ func (s Sessions) GetMessagesWindow(ctx context.Context, sessionID string, w db.
 			return nil, err
 		}
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	ordinals := make([]any, len(msgs))
+	for i, msg := range msgs {
+		ordinals[i] = msg.Ordinal
+	}
+	if err := s.attachToolCalls(ctx, msgs, ordinals); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -55,22 +59,22 @@ func (s Sessions) GetAllMessages(ctx context.Context, sessionID string) ([]db.Me
 	if err != nil {
 		return nil, s.backend.ReadError(ScanAllMessages, err)
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, nil); err != nil {
 		return nil, err
 	}
 	return msgs, nil
 }
 
-func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message) error {
+func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message, ordinals []any) error {
 	if len(msgs) == 0 {
 		return nil
 	}
 	index := make(map[int]int, len(msgs))
-	sessionID := msgs[0].SessionID
+	args := append([]any{msgs[0].SessionID}, ordinals...)
 	for i, msg := range msgs {
 		index[msg.Ordinal] = i
 	}
-	rows, err := s.backend.QueryContext(ctx, s.backend.ToolCallsSQL(), sessionID)
+	rows, err := s.backend.QueryContext(ctx, s.backend.ToolCallsSQL(len(ordinals)), args...)
 	if err != nil {
 		return s.backend.ReadError(QueryToolCalls, err)
 	}
@@ -95,7 +99,7 @@ func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message) error 
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if err := s.attachToolResultEvents(ctx, msgs, index, sessionID); err != nil {
+	if err := s.attachToolResultEvents(ctx, msgs, index, args, len(ordinals)); err != nil {
 		return err
 	}
 	// Restore summaries omitted when one result event already carries the content.
@@ -104,9 +108,9 @@ func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message) error 
 }
 
 func (s Sessions) attachToolResultEvents(
-	ctx context.Context, msgs []db.Message, index map[int]int, sessionID string,
+	ctx context.Context, msgs []db.Message, index map[int]int, args []any, ordinalCount int,
 ) error {
-	rows, err := s.backend.QueryContext(ctx, s.backend.ToolResultEventsSQL(), sessionID)
+	rows, err := s.backend.QueryContext(ctx, s.backend.ToolResultEventsSQL(ordinalCount), args...)
 	if err != nil {
 		return s.backend.ReadError(QueryToolResultEvents, err)
 	}
@@ -271,4 +275,12 @@ func MessageWindowSQL(columns, revision string, revisionArgs []any, sessionID st
 		projection = revision + ", " + projection
 	}
 	return "SELECT " + projection + " FROM messages WHERE session_id = ? AND ordinal " + op + " ?" + roleClause + " ORDER BY ordinal " + dir + " LIMIT ?", args, revision != ""
+}
+
+// OrdinalFilterSQL restricts a tool query to loaded messages. Zero selects the whole session.
+func OrdinalFilterSQL(column string, ordinals int) string {
+	if ordinals == 0 {
+		return ""
+	}
+	return " AND " + column + " IN (" + strings.TrimSuffix(strings.Repeat("?,", ordinals), ",") + ")"
 }

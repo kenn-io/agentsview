@@ -356,7 +356,17 @@ func (db *DB) searchContentSubstring(
 		}
 		defer release()
 	}
+	return searchWithSubstringCandidates(ctx, db, f, f.Pattern,
+		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
+			return db.substringSearchPage(ctx, f, candidates)
+		})
+}
 
+// substringSearchPage runs the substring search, limiting the message and
+// thinking branches to the rows candidates lists.
+func (db *DB) substringSearchPage(
+	ctx context.Context, f ContentSearchFilter, candidates substringCandidateFilters,
+) (ContentSearchPage, error) {
 	scope, scopeArgs := sessionScopeSubquery(f)
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
 
@@ -387,10 +397,11 @@ func (db *DB) searchContentSubstring(
 				0 AS src, m.id AS row_id
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
-			WHERE %s LIKE ? ESCAPE '\' AND %s AND m.%s`,
+			WHERE %s LIKE ? ESCAPE '\'%s AND %s AND m.%s`,
 			snippetExpr("COALESCE(m.dialogue_text, m.content)"), "COALESCE(m.dialogue_text, m.content)",
-			sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
+			candidates.message.sql, sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
 		args = append(args, like)
+		args = append(args, candidates.message.args...)
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "thinking") {
@@ -403,9 +414,10 @@ func (db *DB) searchContentSubstring(
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				4 AS src, m.id AS row_id
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE (%t OR m.dialogue_text IS NOT NULL OR m.content NOT LIKE ? ESCAPE '\') AND m.thinking_text LIKE ? ESCAPE '\' AND %s AND m.%s`,
-			snippetExpr("m.thinking_text"), !hasSource(f, "messages"), sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
+			WHERE (%t OR m.dialogue_text IS NOT NULL OR m.content NOT LIKE ? ESCAPE '\') AND m.thinking_text LIKE ? ESCAPE '\'%s AND %s AND m.%s`,
+			snippetExpr("m.thinking_text"), !hasSource(f, "messages"), candidates.thinking.sql, sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
 		args = append(args, like, like)
+		args = append(args, candidates.thinking.args...)
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "tool_input") {
@@ -551,10 +563,6 @@ func (db *DB) searchContentTerms(
 	if len(terms) == 0 {
 		return ContentSearchPage{}, nil
 	}
-	query, args, err := BuildTermsSearchSQL(f, terms, SQLiteQueryDialect())
-	if err != nil {
-		return ContentSearchPage{}, err
-	}
 	if f.SessionID == "" {
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
@@ -562,7 +570,45 @@ func (db *DB) searchContentTerms(
 		}
 		defer release()
 	}
+	return searchWithTermsIndex(ctx, db, f, terms,
+		func(indexed map[string]string) (ContentSearchPage, error) {
+			return db.termsSearchPage(ctx, f, terms, indexed)
+		})
+}
 
+// searchWithTermsIndex chooses the terms the substring index prefilters and
+// runs search with them, rerunning it once when an archive import dropped
+// the index in between (see searchWithSubstringCandidates).
+func searchWithTermsIndex(
+	ctx context.Context, db *DB, f ContentSearchFilter, terms []string,
+	search func(indexed map[string]string) (ContentSearchPage, error),
+) (ContentSearchPage, error) {
+	return retryWhenSubstringIndexDropped(func() (ContentSearchPage, error) {
+		indexed, err := db.termsIndexQueries(ctx, f, terms)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		return search(indexed)
+	})
+}
+
+// termsSearchPage runs the terms query. When the substring index lists one
+// of the terms, the query starts from the messages it lists; otherwise it
+// groups every message of the sessions that hold each term.
+func (db *DB) termsSearchPage(
+	ctx context.Context, f ContentSearchFilter, terms []string, indexed map[string]string,
+) (ContentSearchPage, error) {
+	var query string
+	var args []any
+	if anchor, ok := termsAnchorTerm(terms, indexed); ok {
+		query, args = buildTermsAnchorSQL(f, terms, anchor, indexed[anchor])
+	} else {
+		var err error
+		query, args, err = buildTermsSearchSQL(f, terms, SQLiteQueryDialect(), indexed)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+	}
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return ContentSearchPage{}, fmt.Errorf("terms search: %w", err)
@@ -609,12 +655,31 @@ func (db *DB) searchContentRegex(
 	}
 
 	lit := LiteralPrefix(f.Pattern)
-	rows, err := db.regexCandidateRows(ctx, f, lit)
+	out, err := searchWithSubstringCandidates(ctx, db, f, lit,
+		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
+			rows, err := db.regexCandidateRows(ctx, f, lit, candidates)
+			if err != nil {
+				return nil, err
+			}
+			return regexMatches(f, re, rows)
+		})
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
-	defer rows.Close()
+	page := f.Page(out)
+	if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
+		return ContentSearchPage{}, err
+	}
+	return page, nil
+}
 
+// regexMatches reads candidate rows and keeps the RE2 matches for the page
+// at f.Cursor, plus one more for cursor detection. SQLite reads the schema
+// again on the first row, so a missing index table can surface here.
+func regexMatches(
+	f ContentSearchFilter, re *regexp.Regexp, rows *sql.Rows,
+) ([]ContentMatch, error) {
+	defer rows.Close()
 	out := make([]ContentMatch, 0)
 	var dedupe LegacyThinkingDedupe
 	// Regex paging has no SQL OFFSET: each page re-fetches and re-matches
@@ -631,7 +696,7 @@ func (db *DB) searchContentRegex(
 			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&m.Timestamp, &body, &rowID, &legacyThinking); err != nil {
-			return ContentSearchPage{}, fmt.Errorf("scan candidate: %w", err)
+			return nil, fmt.Errorf("scan candidate: %w", err)
 		}
 		loc := re.FindStringIndex(body)
 		if loc == nil {
@@ -653,29 +718,26 @@ func (db *DB) searchContentRegex(
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return ContentSearchPage{}, err
+		return nil, err
 	}
 	// Close the candidate cursor before deriving units: the loop breaks out
 	// with rows still open once Limit+1 matches are collected, and
 	// deriveLexicalUnits issues new queries that could otherwise block on a
 	// constrained connection pool while this cursor pins a connection.
 	if err := rows.Close(); err != nil {
-		return ContentSearchPage{}, fmt.Errorf("closing regex candidates: %w", err)
+		return nil, fmt.Errorf("closing regex candidates: %w", err)
 	}
-	page := f.Page(out)
-	if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
-		return ContentSearchPage{}, err
-	}
-	return page, nil
+	return out, nil
 }
 
 // regexCandidateRows returns full-body rows for the selected sources,
 // LIKE-prefiltered by lit when non-empty, ordered for stable paging.
 // Each branch selects: session_id, project, agent, transcript_revision,
 // location, role, tool_name, ordinal, ts AS ts, body, sort_ts, src, row_id,
-// legacy_thinking.
+// legacy_thinking. The message and thinking branches keep only the rows
+// candidates lists.
 func (db *DB) regexCandidateRows(
-	ctx context.Context, f ContentSearchFilter, lit string,
+	ctx context.Context, f ContentSearchFilter, lit string, candidates substringCandidateFilters,
 ) (*sql.Rows, error) {
 	scope, scopeArgs := sessionScopeSubquery(f)
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
@@ -699,7 +761,8 @@ func (db *DB) regexCandidateRows(
 			SystemPrefixSQL("m.content", "m.role")
 	}
 	if hasSource(f, "messages") {
-		w := prefilterClause("COALESCE(m.dialogue_text, m.content)")
+		w := prefilterClause("COALESCE(m.dialogue_text, m.content)") + candidates.message.sql
+		args = append(args, candidates.message.args...)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
@@ -717,7 +780,8 @@ func (db *DB) regexCandidateRows(
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "thinking") {
-		w := prefilterClause("m.thinking_text")
+		w := prefilterClause("m.thinking_text") + candidates.thinking.sql
+		args = append(args, candidates.thinking.args...)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent,

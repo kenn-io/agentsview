@@ -358,6 +358,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		emitter = extractTeeEmitter{primary: emitter, scheduler: extractSched}
 	}
 
+	var ingestion *daemonIngestion
 	var frictionReviews *frictionReviewer
 	if cfg.Friction.Enabled {
 		frictionReviews = newFrictionReviewer()
@@ -403,7 +404,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			// archive that has just enabled the setting.
 			frictionReviews.Notify()
 		}
-		ingestion := newDaemonIngestion(
+		ingestion = newDaemonIngestion(
 			ctx, cfg, engine, database, idleTracker, opts.ReloadConfig,
 		)
 		queueRebuildRetry = ingestion.QueueWatchRetry
@@ -415,6 +416,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		if err != nil {
 			fatal("configuring archive sources: %v", err)
 		}
+		ingestion.attached = attachedSources
 		defer attachedSources.Close()
 		acknowledgeStartup := newStartupReconciliationHandler(
 			ctx, database.CheckpointWALTruncateWithRetry, ingestion.OpenWatcherDispatch,
@@ -501,8 +503,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			validRemotes = false
 		}
 		ingestion.StartLiveActivity()
+		if idleTracker != nil {
+			idleTracker.SetSyncIdle(cfg.SyncIdleAfter, ingestion.Suspend)
+		}
 		go startPeriodicSync(
-			ctx, cfg, ingestion.Config, engine, database, writeLock, idleTracker,
+			ctx, cfg, ingestion, engine, database, writeLock, idleTracker,
 			validRemotes, emitter, attachedSources,
 		)
 		memoryRefresh = newMemoryRefreshQueue()
@@ -625,10 +630,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if engine != nil {
 		srvOpts = append(srvOpts, server.WithArchiveSources(attachedSources))
 		srvOpts = append(srvOpts, server.WithLocalSyncRunner(
-			withAttachedSources(attachedSources, newForegroundSyncRunner(ctx, cfg, engine, database, writeLock)),
+			ingestion.foregroundSync(withAttachedSources(attachedSources, newForegroundSyncRunner(ctx, cfg, engine, database, writeLock))),
 		))
 		srvOpts = append(srvOpts, server.WithLocalResyncRunner(
-			server.LocalResyncRunner(withAttachedSources(attachedSources, server.LocalSyncRunner(newForegroundResyncRunner(ctx, cfg, engine, database)))),
+			server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(attachedSources, server.LocalSyncRunner(newForegroundResyncRunner(ctx, cfg, engine, database))))),
 		))
 	}
 	if memoryRefresh != nil {
@@ -646,6 +651,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
 		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
 	))
+	if ingestion != nil {
+		srvOpts = append(srvOpts, server.WithIngestionFreshness(ingestion))
+	}
 	srv := server.New(cfg, database, engine, srvOpts...)
 	waitFriction := startLocalFrictionReview(ctx, cfg, database, srv, idleTracker)
 	defer func() {
@@ -665,7 +673,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 		go func() {
 			defer close(auditDone)
-			startArchiveAudit(auditCtx, cfg, engine, database, writeLock, idleTracker, emitter, startupReady, power.OnBattery)
+			startArchiveAudit(auditCtx, cfg, engine, database, writeLock, idleTracker, emitter, startupReady, ingestion, power.OnBattery)
 		}()
 		if startupRebuild {
 			select {
@@ -1450,11 +1458,11 @@ func ensureServeAuthToken(cfg *config.Config) error {
 }
 
 func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.IdleTracker {
-	if !runningAsBackgroundChild() {
-		return nil
+	timeout := time.Duration(0)
+	if runningAsBackgroundChild() {
+		timeout = cfg.DaemonIdleTimeout
 	}
-	timeout := cfg.DaemonIdleTimeout
-	if raw := os.Getenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT"); raw != "" {
+	if raw := os.Getenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT"); runningAsBackgroundChild() && raw != "" {
 		parsed, err := time.ParseDuration(raw)
 		if err != nil {
 			log.Printf(
@@ -1465,7 +1473,7 @@ func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.Id
 			timeout = parsed
 		}
 	}
-	if timeout <= 0 {
+	if timeout <= 0 && (cfg.NoSync || cfg.SyncIdleAfter <= 0) {
 		return nil
 	}
 	return server.NewIdleTracker(timeout, func() {
@@ -3181,7 +3189,7 @@ func collectLegacyWatchRoots(
 func startPeriodicSync(
 	ctx context.Context,
 	cfg config.Config,
-	sourceConfig func() config.Config,
+	ingestion *daemonIngestion,
 	engine *sync.Engine,
 	database *db.DB,
 	lock *writeOwnerLock,
@@ -3208,18 +3216,22 @@ func startPeriodicSync(
 			return
 		case <-ticker.C:
 		}
+		if !ingestion.Active() {
+			continue
+		}
 		log.Println("Running scheduled reconciliation...")
 		idleTracker.Do(func() {
 			// Roots follow provider settings changes, and the scheduled
 			// reconcile targets are re-probed each tick because disk
 			// availability changes.
-			current := sourceConfig()
+			current := ingestion.Config()
 			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
 			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
 			if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("archive sources: %v", err)
 			}
 			recomputePendingSessions(ctx, engine, database)
+			engine.ReconcileCommitTrailers(ctx)
 			recomputeStaleFriction(ctx, engine)
 		})
 	}
@@ -3236,6 +3248,7 @@ func startArchiveAudit(
 	idleTracker *server.IdleTracker,
 	emitter sync.Emitter,
 	startupReady chan struct{},
+	ingestion *daemonIngestion,
 	onBattery func() bool,
 ) {
 	first := archiveAuditInterval
@@ -3256,6 +3269,10 @@ func startArchiveAudit(
 				case <-ctx.Done():
 					return false
 				case <-timer.C:
+					if ingestion != nil && !ingestion.Active() {
+						timer.Reset(batteryRecheckInterval)
+						continue
+					}
 					if startupReady != nil || database.NeedsResync() || onBattery == nil || !onBattery() {
 						return true
 					}

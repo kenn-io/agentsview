@@ -28,6 +28,11 @@ commands. Do not copy their catalogues into this file.
 For CI runner selection and caching, read the
 [CI runner policy](docs/agents/build.md#ci-runner-policy).
 
+The `CI gate` job runs on a Namespace profile that uses Namespace's
+[Restricted access level](https://namespace.so/docs/solutions/github-actions/runner-controls/access-levels),
+which disables workload access to Namespace features and APIs. GitHub fork
+approvals, token permissions, and secrets are separate controls.
+
 ## Roborev
 
 - Never run `roborev review` unless the user asks for it.
@@ -185,11 +190,11 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
 - Tests must bind loopback (`127.0.0.1:0` or `[::1]:0`, or `httptest`, which
   already does). A wildcard listen (`0.0.0.0`, `[::]`, bare `:0`) makes the
   host firewall prompt for the test binary, and because `go test` relinks it
-  into a fresh temporary directory every run, the prompt returns every run.
-  A test that genuinely needs wildcard bind semantics must call
+  into a fresh temporary directory every run, the prompt returns every run. A
+  test that genuinely needs wildcard bind semantics must call
   `internal/testutil.RequireWildcardListen(t)` first, which skips it on local
-  Windows runs unless `CI=true`. `AGENTSVIEW_TEST_WILDCARD_LISTEN=1`
-  enables these tests; `0` skips them on every platform.
+  Windows runs unless `CI=true`. `AGENTSVIEW_TEST_WILDCARD_LISTEN=1` enables
+  these tests; `0` skips them on every platform.
 - Format Markdown with `mdformat --wrap 80` when `mdformat` and
   `mdformat-tables` are available.
 

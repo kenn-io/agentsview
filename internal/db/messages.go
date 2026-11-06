@@ -1886,7 +1886,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 		}
 	}
 	if transcriptChanged {
-		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+		if err := bumpIncrementalTranscriptRevisionTx(tx, sessionID, msgs, update); err != nil {
 			return false, err
 		}
 	}
@@ -2288,7 +2288,10 @@ func replaceSessionMessagesTx(
 // mutated existing session. Touching local_modified_at fires the
 // sync_marker trigger so push targets re-select the session.
 func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
-	return bumpTranscriptRevision(tx, sessionID, true)
+	if err := bumpTranscriptRevision(tx, sessionID, true); err != nil {
+		return err
+	}
+	return refreshSessionCommitLinksTx(tx, sessionID)
 }
 
 // bumpInsertedTranscriptRevisionTx advances the revision for a session
@@ -2296,7 +2299,10 @@ func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
 // sync_marker, so skipping the local_modified_at touch avoids a
 // redundant trigger recompute on every bulk-loaded session.
 func bumpInsertedTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
-	return bumpTranscriptRevision(tx, sessionID, false)
+	if err := bumpTranscriptRevision(tx, sessionID, false); err != nil {
+		return err
+	}
+	return refreshSessionCommitLinksTx(tx, sessionID)
 }
 
 func bumpTranscriptRevision(
@@ -2381,13 +2387,19 @@ func sessionHasCurrentCJKFTSTx(
 func deleteSessionMessageRowsTx(
 	tx transactionQueries, sessionID string,
 ) error {
+	searchContentDelete := func(table string) []string {
+		return []string{`INSERT INTO ` + table + `(` + table + `, rowid, rendered, content)
+			 SELECT 'delete', id, rendered, content FROM message_search_content WHERE session_id = ?`}
+	}
 	tables := []struct {
 		name       string
 		deleteName string
 		deleteDDL  string
+		bulkDelete []string
 	}{
-		{"messages_fts", "messages_ad", messagesADTriggerDDL},
-		{"messages_cjk_fts", "messages_cjk_ad", messagesCJKADTriggerDDL},
+		{"messages_fts", "messages_ad", messagesADTriggerDDL, searchContentDelete("messages_fts")},
+		{"messages_cjk_fts", "messages_cjk_ad", messagesCJKADTriggerDDL, searchContentDelete("messages_cjk_fts")},
+		{"message_trigram_fts", "messages_trigram_ad", messagesTrigramADTriggerDDL, substringIndexBulkDeleteSQL},
 	}
 	active := tables[:0]
 	for _, table := range tables {
@@ -2409,12 +2421,10 @@ func deleteSessionMessageRowsTx(
 	for _, table := range active {
 		// Bulk-delete the FTS entries first so the later row delete
 		// does not re-tokenize large message blobs through delete triggers.
-		if _, err := tx.Exec(
-			`INSERT INTO `+table.name+`(`+table.name+`, rowid, rendered, content)
-			 SELECT 'delete', id, rendered, content FROM message_search_content WHERE session_id = ?`,
-			sessionID,
-		); err != nil {
-			return fmt.Errorf("bulk-deleting %s entries: %w", table.name, err)
+		for _, stmt := range table.bulkDelete {
+			if _, err := tx.Exec(stmt, sessionID); err != nil {
+				return fmt.Errorf("bulk-deleting %s entries: %w", table.name, err)
+			}
 		}
 		if _, err := tx.Exec(
 			"DROP TRIGGER IF EXISTS " + table.deleteName,

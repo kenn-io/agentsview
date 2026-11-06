@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -180,7 +184,7 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			return nil
 		}, nil, true},
 		{"usage source recheck", func(ctx context.Context) error {
-			_, err := cache.fill.recheckSourceVersions(ctx, snapshot.Versions)
+			_, _, err := cache.fill.recheckSourceVersions(ctx, snapshot.Versions)
 			return err
 		}, nil, true},
 		{"usage backfill activity", func(ctx context.Context) error {
@@ -362,6 +366,40 @@ func TestUsageCacheFillInstallsCompleteSessionFacts(t *testing.T) {
 	assert.Equal(t, "source-id", got[0].sourceUUID)
 }
 
+func TestUsageCacheFillPreservesMessageTimestampOrder(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "session-a", "project")
+	insertSession(t, database, "session-b", "project")
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{
+		{SessionID: "session-a", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:02:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":2}`)},
+		{SessionID: "session-a", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":3}`)},
+		{SessionID: "session-b", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:01:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":5}`)},
+		{SessionID: "session-b", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T09:03:00Z", Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":7}`)},
+	}))
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	_, err = cache.fill.Ensure(t.Context(), snapshot.Versions, snapshot.CursorHighWater)
+	require.NoError(t, err)
+
+	rows, err := cache.db.QueryContext(t.Context(), `
+		SELECT s.session_id, f.message_ordinal
+		FROM usage_facts f JOIN usage_cached_sessions s ON s.id = f.cached_session_id
+		ORDER BY s.session_id, f.fact_index`)
+	require.NoError(t, err)
+	defer rows.Close()
+	got := make(map[string][]int)
+	for rows.Next() {
+		var sessionID string
+		var ordinal int
+		require.NoError(t, rows.Scan(&sessionID, &ordinal))
+		got[sessionID] = append(got[sessionID], ordinal)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[string][]int{"session-a": {1, 0}, "session-b": {0, 1}}, got)
+}
+
 func TestUsageCacheFillExtractionUsesNarrowIndexes(t *testing.T) {
 	database := usageCandidateFixture(t)
 	conn, err := database.getReader().Conn(t.Context())
@@ -391,8 +429,10 @@ func TestUsageCacheFillExtractionUsesNarrowIndexes(t *testing.T) {
 		require.NoError(t, rows.Err())
 		return strings.Join(details, "\n")
 	}
-	assert.Contains(t, plan(usageFillMessageFactsSQL),
+	messagePlan := plan(usageFillMessageFactsSQL)
+	assert.Contains(t, messagePlan,
 		"SEARCH m USING COVERING INDEX idx_messages_usage_session_covering")
+	assert.Contains(t, messagePlan, "USE TEMP B-TREE FOR LAST 2 TERMS OF ORDER BY")
 	assert.Contains(t, plan(usageFillActivityFactsSQL),
 		"idx_messages_session_role")
 	assert.Contains(t, plan(usageFillEventFactsSQL),
@@ -954,6 +994,58 @@ func TestUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
 	assert.Equal(t, int32(1), extractions.Load())
 }
 
+func TestUsagePageFillShardsLargeWindow(t *testing.T) {
+	database := testDB(t)
+	database.SetUsageCacheNotificationWork(func() (func(), bool) { return nil, false })
+	const sessions = 2*usageFillShardMinSessions + 5
+	_, err := database.getWriter().ExecContext(t.Context(), `
+		WITH RECURSIVE seq(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM seq WHERE n < ?-1)
+		INSERT INTO sessions (id, project, machine, agent, message_count, started_at, ended_at)
+		SELECT printf('session-%06d', n), 'project', 'local', 'claude', 2,
+			'2026-08-10T10:00:00Z', '2026-08-10T10:01:00Z' FROM seq`, sessions)
+	require.NoError(t, err)
+	_, err = database.getWriter().ExecContext(t.Context(), `
+		INSERT INTO messages (session_id, ordinal, role, content, model, timestamp, token_usage)
+		SELECT s.id, o.ordinal, 'assistant', 'answer', 'model',
+			'2026-08-10T10:00:00Z',
+			'{"input_tokens":10,"output_tokens":5}'
+		FROM sessions s CROSS JOIN (SELECT 0 AS ordinal UNION ALL SELECT 1) o`)
+	require.NoError(t, err)
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{Timezone: "UTC"}, usageQueryKindToken)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	require.Len(t, snapshot.Versions, sessions)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	extracted := make(map[string]usageSourceVersion)
+	var started int
+	barrier := make(chan struct{})
+	var mu sync.Mutex
+	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
+		mu.Lock()
+		// Lost-install retries can extract a session again.
+		for _, version := range versions {
+			extracted[version.SessionID] = version
+		}
+		started++
+		if started == 2 {
+			close(barrier)
+		}
+		mu.Unlock()
+		// The first extraction waits for a second one to start.
+		select {
+		case <-barrier:
+		case <-ctx.Done():
+		}
+	}
+	installs, _, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, func(string) {})
+	require.NoError(t, err)
+	assert.Len(t, installs, sessions)
+	assert.ElementsMatch(t, snapshot.Versions, slices.Collect(maps.Values(extracted)))
+}
+
 func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
 	database := usageCandidateFixture(t)
 	snapshot, err := database.captureUsageQuery(
@@ -992,7 +1084,7 @@ func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
 		UPDATE sessions SET transcript_revision = 'newer' WHERE id = ?`,
 		oldVersion.SessionID)
 	require.NoError(t, err)
-	current, err := cache.fill.recheckSourceVersions(
+	current, _, err := cache.fill.recheckSourceVersions(
 		t.Context(), []usageSourceVersion{{SessionID: oldVersion.SessionID}})
 	require.NoError(t, err)
 	newVersion := current[oldVersion.SessionID]
@@ -1038,7 +1130,7 @@ func TestUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t *testing.T) {
 	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions
 		SET transcript_revision='pending' WHERE id=?`, oldVersion.SessionID)
 	require.NoError(t, err)
-	current, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{oldVersion})
+	current, _, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{oldVersion})
 	require.NoError(t, err)
 	oldVersion = current[oldVersion.SessionID]
 	oldExtracted := make(chan struct{})
@@ -1073,7 +1165,7 @@ func TestUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t *testing.T) {
 		WHERE id = ?`, oldVersion.SessionID)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
-	current, err = cache.fill.recheckSourceVersions(
+	current, _, err = cache.fill.recheckSourceVersions(
 		t.Context(), []usageSourceVersion{{SessionID: oldVersion.SessionID}})
 	require.NoError(t, err)
 	newVersion := current[oldVersion.SessionID]
@@ -1109,7 +1201,7 @@ func TestUsageFillRecheckRestoresReaderBusyTimeout(t *testing.T) {
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
-	_, err = cache.fill.recheckSourceVersions(t.Context(), snapshot.Versions[:1])
+	_, _, err = cache.fill.recheckSourceVersions(t.Context(), snapshot.Versions[:1])
 	require.NoError(t, err)
 	var timeout int
 	require.NoError(t, database.getReader().QueryRow(t.Context(),
@@ -1751,4 +1843,44 @@ func TestUsageSpoolAppendFallbacks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A cold cache has no rollup installs, so a fill skips the dedup sharer
+// diff. A rollup build that read its facts before that fill committed must
+// still see the new sharer when it installs, and rebuild.
+func TestUsageColdFillSharerReachesInFlightRollup(t *testing.T) {
+	database, cache := usageSpoolExtractionFixture(t, 2)
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Sessions, 1)
+	fills, err := cache.fill.Ensure(t.Context(), snapshot.Versions, 0)
+	require.NoError(t, err)
+	require.Zero(t, usageCacheCount(t, cache, "usage_rollup_installs"))
+
+	var installs int
+	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
+		installs++
+		if installs > 1 {
+			return
+		}
+		insertSession(t, database, "resumed", "project")
+		insertMessages(t, database, Message{
+			SessionID: "resumed", Ordinal: 0, Role: "assistant", Model: "model",
+			Timestamp: "2026-08-10T09:00:00Z", SourceUUID: "message-0",
+			TokenUsage: json.RawMessage(`{"input_tokens":10}`),
+		})
+		_, fillErr := cache.fill.fillSessionsDetached(t.Context(),
+			[]usageSourceVersion{{SessionID: "resumed"}})
+		require.NoError(t, fillErr)
+		require.Zero(t, usageCacheCount(t, cache, "usage_rollup_installs"),
+			"the sharer fill must run while the cache has no installs")
+	}
+	_, _, err = cache.rollup.Ensure(t.Context(), snapshot, fills,
+		export.NewPricingResolver(snapshot.PricingRows))
+	require.NoError(t, err)
+	assert.Greater(t, installs, 1, "the first install must reject the stale build")
+	cache.rollup.observer.beforeInstall = nil
+	assert.Equal(t, getDailyUsageLegacyForRollupTest(t, database, filter),
+		getDailyUsageRollupForTest(t, database, filter))
 }

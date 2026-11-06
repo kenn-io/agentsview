@@ -398,7 +398,15 @@ func TestHostedTenantAdoptsLegacyAndEnforcesRelationships(t *testing.T) {
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
 	_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('preserved','project','device','claude'); INSERT INTO starred_sessions(session_id) VALUES('preserved')`)
 	require.NoError(t, err)
+	var journalExists bool
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT to_regclass('usage_session_changes') IS NOT NULL`).Scan(&journalExists))
+	require.True(t, journalExists, "adopt a schema with a usage journal")
 	require.NoError(t, EnsureHostedTenant(t.Context(), pg, schema, "tenant-a"))
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT to_regclass('usage_session_changes') IS NOT NULL`).Scan(&journalExists))
+	assert.False(t, journalExists, "hosted adoption removes the legacy journal")
+	var journalTriggers int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_trigger WHERE tgrelid IN (SELECT oid FROM pg_class WHERE relnamespace=$1::regnamespace) AND tgname LIKE 'trg_uc_%'`, schema).Scan(&journalTriggers))
+	assert.Zero(t, journalTriggers, "hosted adoption removes legacy journal triggers")
 	var id, tenant string
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT session_id,tenant_id FROM starred_sessions`).Scan(&id, &tenant))
 	assert.Equal(t, "preserved", id)
@@ -485,21 +493,25 @@ func TestHostedTenantProvisioningUsesOneConnection(t *testing.T) {
 	require.NoError(t, EnsureHostedTenant(ctx, pg, schema, "tenant-a"))
 }
 
-func TestHostedTenantUpgradeInstallsFrictionTablesBeforeCatalogCheck(t *testing.T) {
-	f := newHostedFixture(t, "tenant-a")
-	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE friction_findings`)
-	require.NoError(t, err)
-
-	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
-	for _, relation := range []string{
-		"friction_findings",
-		"idx_friction_findings_session",
+func TestHostedTenantUpgradeInstallsTablesBeforeCatalogCheck(t *testing.T) {
+	for _, tt := range []struct{ table, index string }{
+		{"friction_findings", "idx_friction_findings_session"},
+		{"commit_links", "idx_commit_links_sha"},
 	} {
-		var exists bool
-		require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT to_regclass(format('%I.%I',$1::text,$2::text)) IS NOT NULL`, f.schema, relation).Scan(&exists))
-		assert.True(t, exists, relation)
+		t.Run(tt.table, func(t *testing.T) {
+			f := newHostedFixture(t, "tenant-a")
+			_, err := f.admin.ExecContext(t.Context(), `DROP TABLE `+tt.table)
+			require.NoError(t, err)
+
+			require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+			for _, relation := range []string{tt.table, tt.index} {
+				var exists bool
+				require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT to_regclass(format('%I.%I',$1::text,$2::text)) IS NOT NULL`, f.schema, relation).Scan(&exists))
+				assert.True(t, exists, relation)
+			}
+			require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+		})
 	}
-	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
 }
 
 func TestHostedTenantConcurrentProvisioning(t *testing.T) {

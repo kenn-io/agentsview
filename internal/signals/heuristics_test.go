@@ -3,9 +3,11 @@ package signals
 import (
 	"fmt"
 	"math/rand"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"testing/quick"
 	"unicode"
 
 	"github.com/stretchr/testify/assert"
@@ -184,38 +186,45 @@ func TestCountDuplicatePromptsAllocationGrowthStaysNearLinear(t *testing.T) {
 }
 
 func TestCountDuplicatePromptsMatchesPairwiseReference(t *testing.T) {
-	rng := rand.New(rand.NewSource(1))
 	vocabulary := []string{
 		"alpha", "beta", "gamma", "delta", "epsilon", "zeta",
 		"eta", "theta", "iota", "kappa", "lambda", "mu",
 	}
-	for trial := range 100 {
-		count := 1 + rng.Intn(60)
-		prompts := make([]promptInfo, 0, count)
-		for i := range count {
-			tokenCount := 4 + rng.Intn(12)
-			tokens := make([]string, tokenCount)
-			for j := range tokenCount {
-				tokens[j] = vocabulary[rng.Intn(len(vocabulary))]
+	trial := 0
+	config := &quick.Config{
+		MaxCount: 100,
+		Rand:     rand.New(rand.NewSource(1)),
+		Values: func(args []reflect.Value, rng *rand.Rand) {
+			count := 1 + rng.Intn(60)
+			prompts := make([]promptInfo, 0, count)
+			for i := range count {
+				tokenCount := 4 + rng.Intn(12)
+				tokens := make([]string, tokenCount)
+				for j := range tokenCount {
+					tokens[j] = vocabulary[rng.Intn(len(vocabulary))]
+				}
+				normalized := fmt.Sprintf(
+					"synthetic prompt trial %d item %d", trial, i,
+				)
+				if i > 0 && rng.Intn(8) == 0 {
+					normalized = prompts[rng.Intn(i)].Normalized
+				}
+				prompts = append(prompts, promptInfo{
+					Normalized: normalized,
+					Tokens:     tokens,
+				})
 			}
-			normalized := fmt.Sprintf(
-				"synthetic prompt trial %d item %d", trial, i,
-			)
-			if i > 0 && rng.Intn(8) == 0 {
-				normalized = prompts[rng.Intn(i)].Normalized
-			}
-			prompts = append(prompts, promptInfo{
-				Normalized: normalized,
-				Tokens:     tokens,
-			})
-		}
-
-		assert.Equal(t,
+			args[0] = reflect.ValueOf(prompts)
+			trial++
+		},
+	}
+	assert.NoError(t, quick.Check(func(prompts []promptInfo) bool {
+		return assert.Equal(t,
 			countDuplicatePromptsPairwise(prompts),
 			countDuplicatePrompts(prompts),
-			"trial %d", trial,
+			"trial %d", trial-1,
 		)
-	}
+	}, config))
 }
 
 func countDuplicatePromptsPairwise(prompts []promptInfo) int {

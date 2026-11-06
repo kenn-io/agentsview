@@ -102,6 +102,13 @@ export default defineConfig(({ command }) => {
       },
     },
     base: "/",
+    experimental: {
+      renderBuiltUrl(filename, { hostType }) {
+        // Keep the worker URL relative to its JS chunk under a server base path.
+        if (hostType === "js" && filename.includes("syntax-highlight.worker"))
+          return { relative: true };
+      },
+    },
     optimizeDeps: {
       exclude: ["@kenn-io/kit-ui"],
     },

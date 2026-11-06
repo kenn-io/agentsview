@@ -6349,6 +6349,7 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	// recreate the table without is_system.
 	_, err = raw.ExecContext(t.Context(), `
 		DROP VIEW IF EXISTS message_search_content;
+		DROP VIEW IF EXISTS message_trigram_source;
 		CREATE TABLE messages_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,

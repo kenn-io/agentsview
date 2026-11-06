@@ -23,6 +23,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -877,7 +878,8 @@ type DB struct {
 	reads                readRegistry
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
-	frustrationMemo      frustrationMarkerMemo
+	activityKept         kept.Memo[activityKept]
+	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
 	usageBackfillDone    chan struct{}
@@ -1262,6 +1264,8 @@ func makeDSN(path string, readOnly bool) string {
 	if readOnly {
 		params.Set("mode", "ro")
 	} else {
+		// Imports repeatedly execute the same SQL, including project attribution.
+		params.Set("_stmt_cache_size", "64")
 		params.Set("_journal_mode", "WAL")
 		params.Set("_synchronous", "NORMAL")
 	}
@@ -1278,17 +1282,24 @@ func configureReaderPool(reader *sql.DB) {
 	reader.SetConnMaxIdleTime(readerConnMaxIdleTime)
 }
 
-func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func (db *DB) tryAcquireBulkRead() (func(), bool) {
 	db.bulkReads.once.Do(func() {
 		db.bulkReads.slots = make(chan struct{}, bulkReadSlots)
 	})
 	select {
 	case db.bulkReads.slots <- struct{}{}:
-		return func() { <-db.bulkReads.slots }, nil
+		return func() { <-db.bulkReads.slots }, true
 	default:
+		return nil, false
+	}
+}
+
+func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if release, ok := db.tryAcquireBulkRead(); ok {
+		return release, nil
 	}
 	started := time.Now()
 	defer func() {
@@ -1989,6 +2000,8 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 }
 
 var readOnlyRequiredTables = []string{
+	"commit_trailers",
+	"commit_links",
 	"sessions",
 	"messages",
 	"stats",
@@ -2016,6 +2029,7 @@ var readOnlyRequiredTables = []string{
 	"friction_digests",
 	"friction_digest_sessions",
 	"friction_patterns",
+	"friction_issue_links",
 	"recall_entries",
 	"recall_evidence",
 	"recall_query_events",
@@ -3287,6 +3301,12 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := ensureSubstringIndex(ctx, w, progress); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	progress.report("Backfilling database metadata")
 	if err := db.backfillIsAutomatedLocked(ctx, w); err != nil {
 		return err
@@ -3295,6 +3315,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	if err := db.backfillToolCallFieldsLocked(ctx, w); err != nil {
+		return err
+	}
+	if err := db.backfillCommitLinksLocked(ctx, w); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -3971,6 +3994,13 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		// through every earlier message when a transcript records no model.
 		`CREATE INDEX IF NOT EXISTS idx_messages_assistant_model
 		 ON messages(session_id, ordinal) WHERE role = 'assistant' AND model != ''`,
+		// Holds only messages whose timestamp is missing or unreadable, so
+		// analytics can find them without parsing every message timestamp.
+		// Covering the timestamp keeps SQLite on this index even before
+		// ANALYZE has counted its rows.
+		`CREATE INDEX IF NOT EXISTS idx_messages_unparsed_timestamp
+		 ON messages(session_id, timestamp)
+		 WHERE timestamp IS NULL OR timestamp = '' OR strftime('%Y', timestamp) IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_claude_snapshot
@@ -4821,7 +4851,10 @@ func openAndInit(
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
 
-	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
+	db := &DB{
+		path: path, usageCache: newUsageCacheManager(path),
+		activityKept: newActivityKeptMemo(),
+	}
 	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
@@ -4994,7 +5027,7 @@ func (db *DB) stopWALCheckpointLoop() {
 	<-done
 }
 
-// DropFTS drops the FTS table and its triggers. This makes
+// DropFTS drops the FTS tables and their triggers. This makes
 // bulk message delete+reinsert fast by avoiding per-row FTS
 // index updates. Call RebuildFTS after to restore search.
 func (db *DB) DropFTS(ctx context.Context) error {
@@ -5013,6 +5046,7 @@ func (db *DB) DropFTS(ctx context.Context) error {
 		"DROP TRIGGER IF EXISTS messages_au",
 		"DROP TABLE IF EXISTS messages_fts",
 	}
+	stmts = append(stmts, dropSubstringIndexSQL...)
 	// One transaction, so an interrupted drop cannot leave the index without
 	// its triggers while the corpus marker still says it is current.
 	tx, err := db.getWriter().BeginTx(ctx, nil)
@@ -5033,13 +5067,16 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// RebuildFTS recreates the FTS table, triggers, and
-// repopulates the index from the messages table.
+// RebuildFTS recreates the FTS tables, triggers, and
+// repopulates the indexes from the messages table.
 func (db *DB) RebuildFTS(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
 	if err := rebuildMessageFTS(ctx, w, nil); err != nil {
+		return err
+	}
+	if err := rebuildSubstringIndex(ctx, w); err != nil {
 		return err
 	}
 	if err := ensureCJKFTS(ctx, w, true); err != nil {
@@ -5645,8 +5682,9 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
+	db.activityKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
-		db.frustrationMemo.swap(func() { oldReader = db.reader.Swap(reader) })
+		db.frustrationMemo.Swap(func() { oldReader = db.reader.Swap(reader) })
 	})
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a

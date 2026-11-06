@@ -503,6 +503,16 @@ func applyArchiveContentToCopiedSessionsTx(
 	policy config.ArchiveContent, sourceVersion int,
 ) error {
 	var err error
+	if policy.UsageOnly() {
+		owners, err := resolveTrailerOwners(ctx, tx, "1=1")
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_trailers WHERE session_id IN (
+   SELECT key FROM json_each(?) WHERE value IN (SELECT id FROM `+tempIDsTable+`))`, owners); err != nil {
+			return err
+		}
+	}
 	switch policy {
 	case config.ArchiveContentFull:
 		// Skip unchanged projections only when the source already carries
@@ -511,8 +521,14 @@ func applyArchiveContentToCopiedSessionsTx(
 			return nil
 		}
 	case config.ArchiveContentTranscripts:
+		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
+			return err
+		}
 		err = dropCopiedToolContentTx(ctx, tx, tempIDsTable)
 	case config.ArchiveContentUsage:
+		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
+			return err
+		}
 		err = compactCopiedSessionsForUsageTx(ctx, tx, tempIDsTable)
 	}
 	if err != nil {

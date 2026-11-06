@@ -114,6 +114,28 @@ func TestArchiveSourceDaemonRemoteSyncIncludesAttachedHistory(t *testing.T) {
 	}
 }
 
+func TestDaemonIngestionWakeIncludesAttachedHistory(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.ArchiveSources = []config.ArchiveSource{archiveSourceCommandFixture(t)}
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := sync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+	attached, err := archivesource.NewManager(t.Context(), cfg, database, engine, nil)
+	require.NoError(t, err)
+	t.Cleanup(attached.Close)
+	t.Cleanup(ingestion.Stop)
+	ingestion.attached = attached
+	ingestion.Suspend()
+	ingestion.applying.Wait()
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	messages, err := database.GetAllMessages(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "archived message", messages[0].Content)
+}
+
 func TestAttachedSourcesDrainAfterRebuildWithDeferredFork(t *testing.T) {
 	source := archiveSourceCommandFixture(t)
 	cfg := testConfigWithClaudeFixture(t)

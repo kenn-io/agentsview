@@ -7,8 +7,12 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -21,8 +25,8 @@ import (
 )
 
 const (
-	usagePriceRoundID   = "ch-price-round"
-	usagePriceTierID    = "ch-price-tier"
+	usagePriceRoundID   = "cron_price-check_20260112_030000"
+	usagePriceTierID    = "cron_price-check_20260112_031000"
 	usagePriceSnapAID   = "ch-price-snap-a"
 	usagePriceSnapBID   = "ch-price-snap-b"
 	usagePriceCopilotID = "ch-price-copilot"
@@ -158,6 +162,10 @@ func seedUsagePriceFixture(t *testing.T) (*db.DB, Target) {
 		},
 	}
 	for i := range writes {
+		if i < 2 {
+			writes[i].Session.Agent = "hermes"
+			writes[i].Session.GroupKey = "price-check"
+		}
 		writes[i].DataVersion = 1
 		writes[i].ReplaceMessages = true
 	}
@@ -245,7 +253,7 @@ func dailyUsageGroupRowStats(
 	require.NoError(t, err)
 	customModels := chCustomPricedModels(contexts, export.NewPricingResolver(catalog.rows))
 	var stats usageGroupRowStats
-	err = store.forEachDailyUsageGroupRow(t.Context(), filter, catalog.digest, customModels, func(r chDailyUsageGroupRow) error {
+	err = store.forEachDailyUsageGroupRow(t.Context(), filter, catalog.digest, customModels, false, func(r chDailyUsageGroupRow) error {
 		stats.rows++
 		stats.events += r.events
 		if r.explicit {
@@ -283,6 +291,38 @@ func modelCost(t *testing.T, result db.DailyUsageResult, model string) money.Mon
 		}
 	}
 	return total
+}
+
+func normalizeSQLiteTopSessions(t *testing.T, entries []db.TopSessionEntry) {
+	t.Helper()
+	for i := range entries {
+		if entries[i].StartedAt != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, entries[i].StartedAt)
+			require.NoError(t, err)
+			entries[i].StartedAt = parsed.UTC().Format(time.RFC3339Nano)
+		}
+		if entries[i].Machine == "local" {
+			entries[i].Machine = fixtureMachine
+		}
+	}
+}
+
+func newTopSessionsRetryStore(t *testing.T, target Target, readingContexts *atomic.Bool) *Store {
+	t.Helper()
+	options, err := parseDSN(target.URL)
+	require.NoError(t, err)
+	options.Auth.Database = target.Database
+	options.Settings["final"] = 1
+	options.Debug = true
+	options.Debugf = func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		if strings.Contains(line, "sending query") {
+			readingContexts.Store(strings.Contains(line, "FROM usage_price_contexts"))
+		}
+	}
+	store := NewStoreFromDB(chdriver.OpenDB(options))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	return store
 }
 
 func TestDailyUsagePersistedPricesMatchSQLite(t *testing.T) {
@@ -360,7 +400,7 @@ func TestDailyUsagePersistedPricesKeepRequestRounding(t *testing.T) {
 	t.Parallel()
 	store, _, _ := newUsagePriceStore(t)
 	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
-		Timezone: "UTC", Agent: "claude",
+		Timezone: "UTC", Agent: "hermes",
 	})
 	require.NoError(t, err)
 
@@ -458,7 +498,7 @@ func TestDailyUsagePricesFollowSourceUpdatesAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 	assertDailyUsageParity(t, local, store)
 	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
-		Timezone: "UTC", Agent: "claude",
+		Timezone: "UTC", Agent: "hermes",
 	})
 	require.NoError(t, err)
 	assert.Zero(t, modelCost(t, got, "round-test"))
@@ -488,7 +528,7 @@ func TestDailyUsagePricesFollowPricingRefresh(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, before.digest, after.digest)
 	assertDailyUsageParity(t, local, store)
-	filter := db.UsageFilter{Timezone: "UTC", Agent: "claude"}
+	filter := db.UsageFilter{Timezone: "UTC", Agent: "hermes"}
 	got, err := store.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	// 0.8 and 1.6 microdollars round to 1 and 2: 5*1 + 3*2.
@@ -526,7 +566,7 @@ func TestDailyUsageCustomRatesOverridePersistedPrices(t *testing.T) {
 	assertDailyUsageParity(t, local, store)
 
 	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
-		Timezone: "UTC", Agent: "claude",
+		Timezone: "UTC", Agent: "hermes",
 	})
 	require.NoError(t, err)
 	// $5/MTok input: 11 tokens over eight requests cost 55 microdollars.
@@ -582,4 +622,217 @@ func TestServeStoreBackgroundPricesWithCustomRates(t *testing.T) {
 
 	local.SetCustomPricing(custom)
 	assertDailyUsageParity(t, local, serve)
+}
+
+func TestCopilotCostFollowsLatestEvent(t *testing.T) {
+	t.Parallel()
+	local, target := seedFixture(t)
+	firstCost := money.MustParseDollars("0.30")
+	latestCost := money.MustParseDollars("0.50")
+	session := fixtureSession(
+		"copilot-order", "gamma", "copilot order", "2026-01-12T05:00:00.000Z", 0,
+	)
+	session.Agent = "copilot"
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session: session,
+		UsageEvents: []db.UsageEvent{
+			{
+				Source: "shutdown", Model: "zzz-model", InputTokens: 5,
+				Cost: &firstCost, CostStatus: "exact",
+				CostSource: db.CopilotReportedCostSource,
+				OccurredAt: "2026-01-12T05:01:00.000Z", DedupKey: "copilot-order-first",
+			},
+			{
+				Source: "shutdown", Model: "aaa-model", InputTokens: 5,
+				Cost: &latestCost, CostStatus: "exact",
+				CostSource: db.CopilotReportedCostSource,
+				OccurredAt: "2026-01-12T05:02:00.000Z", DedupKey: "copilot-order-latest",
+			},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.DB().ExecContext(t.Context(), "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+
+	filter := db.UsageFilter{Timezone: "UTC", Agent: "copilot"}
+	costOf := func(entries []db.TopSessionEntry) money.Money {
+		for _, e := range entries {
+			if e.SessionID == session.ID {
+				return e.Cost
+			}
+		}
+		t.Fatalf("session %s missing", session.ID)
+		return money.Money{}
+	}
+	got, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	assert.Equal(t, latestCost, costOf(got), "clickhouse top")
+
+	lsu, err := local.GetSessionUsage(t.Context(), session.ID, false)
+	require.NoError(t, err)
+	csu, err := store.GetSessionUsage(t.Context(), session.ID, false)
+	require.NoError(t, err)
+	assert.Equal(t, lsu.Cost, csu.Cost, "session usage matches sqlite")
+	ld, err := local.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	cd, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, ld.Totals.TotalCost, cd.Totals.TotalCost, "daily usage matches sqlite")
+}
+
+func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
+	t.Parallel()
+	rankings := map[string]struct {
+		sort       string
+		tokenTypes db.UsageTokenTypes
+	}{
+		"cost":            {},
+		"tokens":          {sort: db.TopSessionsSortTokens},
+		"tokens selected": {sort: db.TopSessionsSortTokens, tokenTypes: db.UsageTokenTypeCacheRead},
+	}
+	for _, custom := range []map[string]config.CustomModelRate{
+		nil,
+		{"round-test": {InputMicrodollarsPerMTok: 2_000_000, OutputMicrodollarsPerMTok: 3_000_000}},
+	} {
+		store, _, local := newUsagePriceStore(t)
+		_, err := store.DB().ExecContext(t.Context(), "SYSTEM WAIT VIEW prepare_usage")
+		require.NoError(t, err)
+		state, err := store.preparedUsageState(t.Context())
+		require.NoError(t, err)
+		require.True(t, state.ready, "prepared usage must be ready for this parity test")
+		local.SetCustomPricing(custom)
+		store.SetCustomPricing(custom)
+		catalog, err := chLoadPricingCatalog(t.Context(), store.conn, store.customPricing)
+		require.NoError(t, err)
+		require.Equal(t, catalog.digest, state.pricingDigest,
+			"the prepared usage must carry stored prices for this catalog")
+		filters := usagePriceFilters()
+		if custom == nil {
+			filters["grouped"] = db.UsageFilter{Timezone: "UTC", TopSessionsByGroup: true}
+		}
+		for name, filter := range filters {
+			for rankingName, ranking := range rankings {
+				filter.TopSessionsSort = ranking.sort
+				filter.TopSessionsTokenTypes = ranking.tokenTypes
+				name := name + "/" + rankingName
+				want, err := local.GetTopSessionsByCost(t.Context(), filter, 5)
+				require.NoError(t, err, name)
+				require.NotEmpty(t, want, name)
+				normalizeSQLiteTopSessions(t, want)
+				got, err := store.GetTopSessionsByCost(t.Context(), filter, 5)
+				require.NoError(t, err, name)
+				assert.Equal(t, want, got, name)
+			}
+		}
+	}
+}
+
+func TestTopSessionsRetriesWhenContextsChange(t *testing.T) {
+	t.Parallel()
+	local, target := seedUsagePriceFixture(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "push-test", InputPerMTok: money.MustParseDollars("1"),
+	}}))
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	// Keep reads on raw usage while the callback pushes new pricing contexts.
+	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM STOP VIEW prepare_usage")
+	require.NoError(t, err)
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+
+	// The driver's query log identifies the context SELECT. Its progress
+	// callback runs after the server reads those contexts and before the
+	// caller can issue the group query.
+	var readingContexts, pushed atomic.Bool
+	store := newTopSessionsRetryStore(t, target, &readingContexts)
+	stamp := "2026-01-13T05:00:00.000Z"
+	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session: fixtureSession("pushed-price", "gamma", "pushed first", stamp, 1),
+		Messages: []db.Message{usagePriceMessage("pushed-price", 0, stamp,
+			"push-test", `{"input_tokens":1000000}`)},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	pushResult := make(chan error, 1)
+	ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(p *chdriver.Progress) {
+		if p.Rows == 0 || !readingContexts.Load() || !pushed.CompareAndSwap(false, true) {
+			return
+		}
+		_, err := syncer.Push(t.Context(), false, nil)
+		pushResult <- err
+	}))
+	top, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{Timezone: "UTC", Model: "push-test"}, 10)
+	require.True(t, pushed.Load(), "the push must land after the context SELECT reads its rows")
+	require.NoError(t, <-pushResult)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, "pushed-price", top[0].SessionID)
+	assert.Equal(t, money.MustParseDollars("1"), top[0].Cost)
+	assert.Equal(t, 1_000_000, top[0].TotalTokens)
+}
+
+func TestTopSessionsRetryExhaustionCachesNothing(t *testing.T) {
+	t.Parallel()
+	local, target := seedUsagePriceFixture(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "push-test-*", InputPerMTok: money.MustParseDollars("1"),
+	}}))
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	// Keep reads on raw usage while the callback pushes new pricing contexts.
+	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM STOP VIEW prepare_usage")
+	require.NoError(t, err)
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+
+	var readingContexts atomic.Bool
+	var attempts atomic.Int32
+	store := newTopSessionsRetryStore(t, target, &readingContexts)
+	pushResults := make(chan error, 3)
+	ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(p *chdriver.Progress) {
+		if p.Rows == 0 || !readingContexts.CompareAndSwap(true, false) {
+			return
+		}
+		attempt := attempts.Add(1)
+		// A fourth attempt gets no push, so an excessive retry returns success
+		// and fails the exhaustion assertion instead of looping indefinitely.
+		if attempt > 3 {
+			return
+		}
+		id := fmt.Sprintf("pushed-price-%d", attempt)
+		stamp := "2026-01-13T05:00:00.000Z"
+		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+			Session: fixtureSession(id, "gamma", "pushed first", stamp, 1),
+			Messages: []db.Message{usagePriceMessage(id, 0, stamp,
+				fmt.Sprintf("push-test-%d", attempt), `{"input_tokens":1000000}`)},
+			DataVersion: 1, ReplaceMessages: true,
+		}})
+		if err == nil {
+			_, err = syncer.Push(t.Context(), false, nil)
+		}
+		pushResults <- err
+	}))
+	filter := db.UsageFilter{Timezone: "UTC", Project: "gamma"}
+	top, err := store.GetTopSessionsByCost(ctx, filter, 20)
+	require.ErrorIs(t, err, errUsagePriceContextChanged)
+	assert.Empty(t, top)
+	require.EqualValues(t, 3, attempts.Load())
+	for range 3 {
+		require.NoError(t, <-pushResults)
+	}
+
+	// With pushes finished, the next read must return complete totals.
+	want, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+	normalizeSQLiteTopSessions(t, want)
+	top, err = store.GetTopSessionsByCost(t.Context(), filter, 20)
+	require.NoError(t, err)
+	assert.Equal(t, want, top)
 }

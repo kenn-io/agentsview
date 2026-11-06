@@ -391,14 +391,19 @@ Serve keeps the results of recent reads in memory so a repeat request between
 pushes reads no rows from ClickHouse; it still runs the small metadata queries
 that check whether its inputs changed. Each kept read has one slot per selection
 (filter, range, and similar inputs), and its key names the rows it read: the
-prepared usage stamp and the parts of the small tables it joins, the candidate
-sessions and their push versions, or the parts of the tables it scanned. A push
-that changes those replaces the slot; a push that does not leaves it in place.
-Usage reads filtered by `active`, `stale`, or `unclean` termination compare
-session times with the current time, so their rows are never kept. Kept reads
-include usage rows, analytics session listings, Activity pairing inputs per
-session version, candidate listings, project label maps, and the whole report of
-an ended range.
+prepared usage stamp and row identities for fully prepared range reads, the
+candidate sessions and their push versions, or the parts of the tables it
+scanned. Row identity probes run only for tables whose parts changed. The
+price record table keeps the records of every pricing digest, so its probe
+covers only the digest a read joins; hashing the whole table took two minutes
+on a mirror holding 534 digests. A failed probe or parts moving during it
+serves that read uncached. Raw, mixed, and
+single-session Usage reads keep parts versions. A push that changes those
+versions replaces the slot; a push that does not leaves it in place. Usage reads
+filtered by `active`, `stale`, or `unclean` termination compare session times
+with the current time, so their rows are never kept. Kept reads include usage
+rows, analytics session listings, Activity pairing inputs per session version,
+candidate listings, project label maps, and the whole report of an ended range.
 
 Nothing rebuilds kept reads in the background. The first request after a push
 that changes a read's rows pays for that read.

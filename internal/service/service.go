@@ -76,6 +76,8 @@ type SessionService interface {
 	List(ctx context.Context, f ListFilter) (*SessionList, error)
 	Messages(ctx context.Context, id string, f MessageFilter) (*MessageList, error)
 	ToolCalls(ctx context.Context, id string) (*ToolCallList, error)
+	SessionCommits(ctx context.Context, id string) (*db.SessionCommitList, error)
+	CommitSessions(ctx context.Context, shas []string) (*db.CommitSessionList, error)
 	// ChildSessions lists the sub-agent and fork sessions whose parent is id.
 	ChildSessions(ctx context.Context, id string) ([]db.Session, error)
 	// RecentEdits pages edited files, newest edit first, with the sessions

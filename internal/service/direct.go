@@ -1801,3 +1801,19 @@ func cursorAttributionSource(status, warning string) db.CodeAttributionSource {
 	}
 	return out
 }
+
+func (b *directBackend) SessionCommits(ctx context.Context, id string) (*db.SessionCommitList, error) {
+	reader, ok := b.db.(db.CommitLinkReader)
+	if !ok {
+		return nil, db.ErrCommitLinksUnavailable
+	}
+	return reader.SessionCommitLinks(ctx, id)
+}
+
+func (b *directBackend) CommitSessions(ctx context.Context, shas []string) (*db.CommitSessionList, error) {
+	reader, ok := b.db.(db.CommitLinkReader)
+	if !ok {
+		return nil, db.ErrCommitLinksUnavailable
+	}
+	return reader.CommitSessionLinks(ctx, shas)
+}
