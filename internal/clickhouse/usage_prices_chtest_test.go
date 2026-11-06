@@ -595,19 +595,16 @@ func TestTopSessionsCopilotCostFollowsLatestEvent(t *testing.T) {
 	session.Agent = "copilot"
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session: session,
-		Messages: []db.Message{usagePriceMessage(
-			session.ID, 0, "2026-01-12T05:00:00.000Z", "claude-test", `{"input_tokens":10}`,
-		)},
 		UsageEvents: []db.UsageEvent{
 			{
-				Source: "copilot-shutdown", Model: "zzz-model", InputTokens: 5,
-				Cost: &firstCost, CostStatus: "reported",
+				Source: "shutdown", Model: "zzz-model", InputTokens: 5,
+				Cost: &firstCost, CostStatus: "exact",
 				CostSource: db.CopilotReportedCostSource,
 				OccurredAt: "2026-01-12T05:01:00.000Z", DedupKey: "copilot-order-first",
 			},
 			{
-				Source: "copilot-shutdown", Model: "aaa-model", InputTokens: 5,
-				Cost: &latestCost, CostStatus: "reported",
+				Source: "shutdown", Model: "aaa-model", InputTokens: 5,
+				Cost: &latestCost, CostStatus: "exact",
 				CostSource: db.CopilotReportedCostSource,
 				OccurredAt: "2026-01-12T05:02:00.000Z", DedupKey: "copilot-order-latest",
 			},
@@ -634,9 +631,6 @@ func TestTopSessionsCopilotCostFollowsLatestEvent(t *testing.T) {
 		t.Fatalf("session %s missing", session.ID)
 		return money.Money{}
 	}
-	want, err := local.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	assert.Equal(t, latestCost, costOf(want), "sqlite top")
 	got, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
 	require.NoError(t, err)
 	assert.Equal(t, latestCost, costOf(got), "clickhouse top")

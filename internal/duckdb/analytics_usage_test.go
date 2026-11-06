@@ -1717,8 +1717,8 @@ func TestDuckUsageCopilotCostFollowsLatestEvent(t *testing.T) {
 	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
 		Session: session,
 		UsageEvents: []db.UsageEvent{
-			{Source: "copilot-shutdown", Model: "zzz-model", InputTokens: 5, Cost: &first, CostStatus: "reported", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:01:00Z", DedupKey: "first"},
-			{Source: "copilot-shutdown", Model: "aaa-model", InputTokens: 5, Cost: &latest, CostStatus: "reported", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:02:00Z", DedupKey: "latest"},
+			{Source: "shutdown", Model: "zzz-model", InputTokens: 5, Cost: &first, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:01:00Z", DedupKey: "first"},
+			{Source: "shutdown", Model: "aaa-model", InputTokens: 5, Cost: &latest, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:02:00Z", DedupKey: "latest"},
 		},
 		DataVersion: 1, ReplaceMessages: true,
 	}})
@@ -1742,8 +1742,8 @@ func TestDuckUsageBlankModelFiltersPreserveReportedCost(t *testing.T) {
 	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
 		Session: session,
 		UsageEvents: []db.UsageEvent{
-			{Source: "shutdown", Model: "model-a", InputTokens: 10, Cost: &first, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:00:00Z", DedupKey: "first"},
-			{Source: "shutdown", Model: "model-a", InputTokens: 20, Cost: &last, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T10:00:00Z", DedupKey: "last"},
+			{Source: "shutdown", Model: "zzz-model", InputTokens: 10, Cost: &first, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:00:00Z", DedupKey: "first"},
+			{Source: "shutdown", Model: "aaa-model", InputTokens: 20, Cost: &last, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T10:00:00Z", DedupKey: "last"},
 		},
 		DataVersion: 1, ReplaceMessages: true,
 	}})
@@ -1756,6 +1756,11 @@ func TestDuckUsageBlankModelFiltersPreserveReportedCost(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, top, 1)
 		assert.Equal(t, last, top[0].Cost)
+		if filter.Model == "" && filter.ExcludeModel == "" {
+			usage, err := store.GetSessionUsage(t.Context(), session.ID, false)
+			require.NoError(t, err)
+			assert.Equal(t, last, usage.Cost)
+		}
 	}
 }
 
