@@ -47,11 +47,11 @@ func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimez
 		zone.installRevision == zone.installSeq && zone.pricing == catalog {
 		return nil
 	}
-	ids := make([]int64, 0, len(installs))
+	stamps := make([][2]int64, 0, len(installs))
 	for _, install := range installs {
-		ids = append(ids, install.ID)
+		stamps = append(stamps, [2]int64{install.ID, install.InstallRevision})
 	}
-	encoded, err := json.Marshal(ids)
+	encoded, err := json.Marshal(stamps)
 	if err != nil {
 		return err
 	}
@@ -71,9 +71,10 @@ func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimez
 			SELECT 1 FROM usage_rollup_installs WHERE timezone_id = (
 				SELECT id FROM usage_rollup_timezones WHERE timezone_key = ?)
 			AND install_revision >= ? AND source_pricing <> ?)
-		-- A delayed deletion must not erase refreshed usage before this claim.
-		AND (SELECT COUNT(*) FROM usage_rollup_installs
-			WHERE id IN (SELECT value FROM json_each(?))) = ?
+		-- Every checked install must survive unchanged, including after rowid reuse.
+		AND (SELECT COUNT(*) FROM json_each(?) expected
+			JOIN usage_rollup_installs i ON i.id = json_extract(expected.value, '$[0]')
+			AND i.install_revision = json_extract(expected.value, '$[1]')) = ?
 		-- Advance an existing claim with the captured revision, sequence, and catalog.
 		ON CONFLICT(timezone_key) DO UPDATE SET
 			change_revision = excluded.change_revision,
@@ -83,7 +84,7 @@ func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimez
 		WHERE usage_rollup_timezones.change_revision IS ?
 			AND usage_rollup_timezones.change_install_revision = ?`,
 		identity.Key, identity.Name, identity.IntervalFingerprint, revision, identity.Key, zone.installSeq, revision, zone.installSeq, catalog,
-		identity.Key, zone.installSeq, catalog, string(encoded), len(ids), zone.revision, zone.installRevision)
+		identity.Key, zone.installSeq, catalog, string(encoded), len(stamps), zone.revision, zone.installRevision)
 	return err
 }
 

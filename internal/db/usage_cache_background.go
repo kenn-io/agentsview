@@ -257,6 +257,7 @@ func (db *DB) runUsageCacheBackfillPass(
 	covered, deleted := 0, 0
 	var dailyRows, exceptionGroups, exceptionRows int64
 	allResults := make(map[string]usageFillResult, len(snapshot.Versions))
+	var installs []map[string]usageRollupInstall
 	for start := 0; start < len(snapshot.Versions); start += usageCacheBackfillBatchSize {
 		end := min(start+usageCacheBackfillBatchSize, len(snapshot.Versions))
 		cursorTarget := int64(0)
@@ -272,10 +273,11 @@ func (db *DB) runUsageCacheBackfillPass(
 		batch.Sessions = snapshot.Sessions[start:end]
 		batch.Versions = snapshot.Versions[start:end]
 		batch.CursorHighWater = cursorTarget
-		metrics, err := ensureUsageRollupsAcross(ctx, cache, batch, results, resolver, locations)
+		built, metrics, err := ensureUsageRollupsAcross(ctx, cache, batch, results, resolver, locations)
 		if err != nil {
 			return fmt.Errorf("building usage rollups during backfill: %w", err)
 		}
+		installs = built
 		dailyRows += metrics.DailyRows
 		exceptionGroups += metrics.ExceptionGroups
 		exceptionRows += metrics.ExceptionRows
@@ -300,10 +302,11 @@ func (db *DB) runUsageCacheBackfillPass(
 	// snapshot once after every fact is filled, so the pass never
 	// completes with rollups it deleted itself.
 	if len(snapshot.Versions) > usageCacheBackfillBatchSize {
-		metrics, err := ensureUsageRollupsAcross(ctx, cache, snapshot, allResults, resolver, locations)
+		built, metrics, err := ensureUsageRollupsAcross(ctx, cache, snapshot, allResults, resolver, locations)
 		if err != nil {
 			return fmt.Errorf("rebuilding invalidated usage rollups during backfill: %w", err)
 		}
+		installs = built
 		dailyRows += metrics.DailyRows
 		exceptionGroups += metrics.ExceptionGroups
 		exceptionRows += metrics.ExceptionRows
@@ -313,10 +316,11 @@ func (db *DB) runUsageCacheBackfillPass(
 		if err != nil {
 			return err
 		}
-		metrics, err := ensureUsageRollupsAcross(ctx, cache, snapshot, results, resolver, locations)
+		built, metrics, err := ensureUsageRollupsAcross(ctx, cache, snapshot, results, resolver, locations)
 		if err != nil {
 			return fmt.Errorf("building Cursor usage rollups during backfill: %w", err)
 		}
+		installs = built
 		dailyRows += metrics.DailyRows
 		exceptionGroups += metrics.ExceptionGroups
 		exceptionRows += metrics.ExceptionRows
@@ -339,8 +343,8 @@ func (db *DB) runUsageCacheBackfillPass(
 	); err != nil {
 		return fmt.Errorf("recording usage cache completion time: %w", err)
 	}
-	for i, location := range locations {
-		if err := cache.claimUsageZone(ctx, usageTimezoneIdentityFor(location, nil), zones[i], snapshot.ChangeRevision, snapshot.PricingIdentity, nil); err != nil {
+	for i, expected := range installs {
+		if err := cache.claimUsageZone(ctx, usageTimezoneIdentityFor(locations[i], nil), zones[i], snapshot.ChangeRevision, snapshot.PricingIdentity, expected); err != nil {
 			return err
 		}
 	}
@@ -612,19 +616,21 @@ func (c *usageFillCoordinator) maintainBetweenInstallBatches(ctx context.Context
 	runtime.Gosched()
 }
 
-func ensureUsageRollupsAcross(ctx context.Context, cache *usageCache, snapshot usageQuerySnapshot, fills map[string]usageFillResult, resolver *export.PricingResolver, locations []*time.Location) (usageRollupMetrics, error) {
+func ensureUsageRollupsAcross(ctx context.Context, cache *usageCache, snapshot usageQuerySnapshot, fills map[string]usageFillResult, resolver *export.PricingResolver, locations []*time.Location) ([]map[string]usageRollupInstall, usageRollupMetrics, error) {
 	var total usageRollupMetrics
+	installs := make([]map[string]usageRollupInstall, 0, len(locations))
 	for _, location := range locations {
 		snapshot.location = location
-		_, metrics, err := cache.rollup.Ensure(ctx, snapshot, fills, resolver)
+		built, metrics, err := cache.rollup.Ensure(ctx, snapshot, fills, resolver)
 		if err != nil {
-			return total, err
+			return nil, total, err
 		}
+		installs = append(installs, built)
 		total.DailyRows += metrics.DailyRows
 		total.ExceptionGroups += metrics.ExceptionGroups
 		total.ExceptionRows += metrics.ExceptionRows
 	}
-	return total, nil
+	return installs, total, nil
 }
 
 func (db *DB) refreshUsageRollups(ctx context.Context, cache *usageCache, fills map[string]usageFillResult, revision int64) {
@@ -655,7 +661,7 @@ func (db *DB) refreshUsageRollups(ctx context.Context, cache *usageCache, fills 
 			for _, id := range chunk {
 				chunkFills[id] = fills[id]
 			}
-			_, err = ensureUsageRollupsAcross(ctx, cache, snapshot, chunkFills, export.NewPricingResolver(snapshot.PricingRows), locations)
+			_, _, err = ensureUsageRollupsAcross(ctx, cache, snapshot, chunkFills, export.NewPricingResolver(snapshot.PricingRows), locations)
 			return err
 		}()
 		if err != nil && !errors.Is(err, context.Canceled) {
