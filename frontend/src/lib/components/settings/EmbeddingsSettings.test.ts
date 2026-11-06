@@ -187,10 +187,16 @@ describe("EmbeddingsSettings", () => {
     const component = mount(EmbeddingsSettings, { target: document.body });
     try {
       await settle();
-      if (code === 500)
-        expect(document.body.querySelector('[role="alert"]')?.textContent ?? "").toContain(
-          "internal error",
+      if (code === 500) {
+        const error = document.body.querySelector('[role="alert"]');
+        expect(error?.textContent ?? "").toContain("internal error");
+        expect(error?.closest(".subsection")?.querySelector("h4")?.textContent ?? "").toContain(
+          "Generations",
         );
+        expect(document.body.textContent).toContain("test-embed-model");
+        expect(document.body.textContent).toContain("256");
+        expect(document.body.textContent).toContain("Elapsed 5s");
+      }
       embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2, { setup }));
       await settle(60_000);
       expect(document.body.textContent).toContain("Indexing 2 of");
