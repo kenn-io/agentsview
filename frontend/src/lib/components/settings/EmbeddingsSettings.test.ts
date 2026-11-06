@@ -121,6 +121,37 @@ describe("EmbeddingsSettings", () => {
     },
   );
 
+  it("follows a concurrent build after setup returns 409 without retaining an error", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "built-in",
+      rebuild_required: false,
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsSetup.mockImplementation(async () => {
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+        runningStatus(1, { setup: { ...setup, enabled: true, action: "" } }),
+      );
+      throw new ApiError(409, "embedding build already running");
+    });
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    await settle();
+    [...document.body.querySelectorAll("button")]
+      .find((b) => b.textContent?.trim() === "Turn on")!
+      .click();
+    await settle();
+    expect(document.body.textContent).toContain("Indexing");
+    expect(document.body.textContent).not.toContain("embedding build already running");
+    expect(document.body.querySelector('[role="alert"]')).toBeNull();
+    unmount(component);
+  });
+
   it("retries a failed first build without repeating installation", async () => {
     const setup = {
       enabled: true,

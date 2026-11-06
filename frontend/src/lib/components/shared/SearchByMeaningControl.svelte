@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Button, SearchByMeaningHint, SearchByMeaningRow, type SearchByMeaningState } from "@kenn-io/kit-ui";
   import { EmbeddingsService, type VectorBuildStatus, type VectorGenerationInfo } from "../../api/generated/index.js";
+  import { ApiError } from "../../api/runtime.js";
   import { getLocale, m } from "../../i18n/index.js";
 
   let { status, generations = [], hint = false, onchange = () => {} }: {
@@ -36,7 +37,7 @@
     if (action !== "turn-on" && action !== "use-built-in") return;
     error = null;
     try {
-      await EmbeddingsService.postApiV1EmbeddingsSetup({ action });
+      await EmbeddingsService.postApiV1EmbeddingsSetup({ action }).catch((e) => { if (!(e instanceof ApiError && e.status === 409)) throw e; });
       onchange();
     } catch (e) {
       error = e instanceof Error ? e.message : m.settings_embeddings_load_failed();
