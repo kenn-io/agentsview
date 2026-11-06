@@ -26,31 +26,54 @@ import (
 )
 
 func TestIdleDirectReadWakesDaemon(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	cfg := config.Config{DataDir: t.TempDir(), Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	engine.SyncAll(t.Context(), nil)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
-	t.Cleanup(ingestion.Stop)
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	writeReloadGeminiSession(t, root, "overnight")
-	require.False(t, sessionImported(t, database, "gemini:overnight"))
-	ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
-	ep := serverEndpoint(t, ts)
-	_, err := WriteDaemonRuntime(cfg.DataDir, ep.Host, ep.Port, "test", false)
-	require.NoError(t, err)
-	require.True(t, IsLocalDaemonActive(cfg.DataDir))
+	for _, slow := range []bool{false, true} {
+		name := "fresh"
+		if slow {
+			name = "catch-up exceeds wait budget"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newIngestionLifecycleFixture(t)
+			f.cfg.DataDir = t.TempDir()
+			f.ingestion.Suspend()
+			f.ingestion.applying.Wait()
+			writeReloadGeminiSession(t, f.root, "overnight")
+			require.False(t, sessionImported(t, f.database, "gemini:overnight"))
+			ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion)
+			ep := serverEndpoint(t, ts)
+			_, err := WriteDaemonRuntime(f.cfg.DataDir, ep.Host, ep.Port, "test", false)
+			require.NoError(t, err)
 
-	ensureFreshData(t.Context(), cfg, database, false)
+			unblock := func() {}
+			if slow {
+				entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				unblock = sync.OnceFunc(func() { close(release); <-finished })
+				defer unblock()
+				go func() {
+					defer close(finished)
+					_ = f.engine.RunExclusive(func() error { close(entered); <-release; return nil })
+				}()
+				<-entered
+			}
 
-	assert.True(t, ingestion.Active(), "the direct reader wakes daemon collection")
-	messages, err := database.GetAllMessages(t.Context(), "gemini:overnight")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "hello from overnight", messages[0].Content)
+			stderr := captureStderr(t, func() {
+				ensureFreshData(t.Context(), f.cfg, f.database, false)
+			})
+
+			assert.True(t, f.ingestion.Active(), "the direct reader wakes daemon collection")
+			if slow {
+				assert.Equal(t, apiclient.ArchiveStaleWarning+"\n", stderr)
+				assert.False(t, sessionImported(t, f.database, "gemini:overnight"), "the reader returns while catch-up is blocked")
+			} else {
+				assert.Empty(t, stderr)
+			}
+			unblock()
+			f.ingestion.applying.Wait()
+			messages, err := f.database.GetAllMessages(t.Context(), "gemini:overnight")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "hello from overnight", messages[0].Content)
+		})
+	}
 }
 
 func TestIdleDirectReadFallsBackAfterDaemonRequestFails(t *testing.T) {
@@ -62,7 +85,7 @@ func TestIdleDirectReadFallsBackAfterDaemonRequestFails(t *testing.T) {
 	cfg.Port = ts.Listener.Addr().(*net.TCPAddr).Port
 	daemon := server.New(cfg, database, nil).Handler()
 	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/projects" {
+		if r.URL.Path == "/api/v1/codex-cloud/status" {
 			reads.Add(1)
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
@@ -88,75 +111,60 @@ func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("fixture needs enforced POSIX file permissions")
 	}
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
-	t.Cleanup(ingestion.Stop)
-	ingestion.Suspend()
-	ingestion.applying.Wait()
-	writeReloadGeminiSession(t, root, "overnight")
-	path := filepath.Join(root, "tmp", "project", "chats", "session-overnight.json")
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.Suspend()
+	f.ingestion.applying.Wait()
+	writeReloadGeminiSession(t, f.root, "overnight")
+	path := filepath.Join(f.root, "tmp", "project", "chats", "session-overnight.json")
 	require.NoError(t, os.Chmod(path, 0))
 	t.Cleanup(func() { require.NoError(t, os.Chmod(path, 0o600)) })
 	_, err := os.ReadFile(path)
 	require.ErrorIs(t, err, os.ErrPermission)
 	logs := captureLogOutput(t)
-	ts := serveIngestionArchive(t, cfg, database, engine, ingestion)
+	ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion)
 	headers, body := searchIngestionArchive(t, ts.URL, "overnight")
-	ingestion.applying.Wait()
-	ingestion.Stop()
+	f.ingestion.applying.Wait()
+	f.ingestion.Stop()
 	assert.NotContains(t, body, "hello from overnight")
 	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-	assert.False(t, ingestion.Pending(), "a finished wake pass clears pending even when a source fails")
+	assert.False(t, f.ingestion.Pending(), "a finished wake pass clears pending even when a source fails")
 	assert.Contains(t, logs.String(), "idle catch-up incomplete: 1 failed, aborted=false")
 }
 
 func TestIdleSuspendsAfterSlowCatchupWithoutAnotherReader(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	writeReloadGeminiSession(t, root, "before")
-	cfg := config.Config{Host: "127.0.0.1", AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "test-machine"})
-	t.Cleanup(engine.Close)
-	engine.SyncAll(t.Context(), nil)
-	tracker := server.NewIdleTracker(0, func() {})
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, tracker, nil)
-	t.Cleanup(ingestion.Stop)
+	f := newIngestionLifecycleFixture(t)
 	var attempts atomic.Int64
 	//nolint:kennlint // deadlinetest: the held engine must outlast the suspension deadline before release
-	tracker.SetSyncIdle(100*time.Millisecond, func() {
-		ingestion.Suspend()
+	f.tracker.SetSyncIdle(100*time.Millisecond, func() {
+		f.ingestion.Suspend()
 		attempts.Add(1)
 	})
 	trackerCtx, cancel := context.WithCancel(t.Context())
 	trackerDone := make(chan struct{})
-	go func() { defer close(trackerDone); tracker.Run(trackerCtx) }()
+	go func() { defer close(trackerDone); f.tracker.Run(trackerCtx) }()
 	defer func() { cancel(); <-trackerDone }()
-	require.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return !f.ingestion.Active() }, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return attempts.Load() == 1 }, time.Second, time.Millisecond)
-	ingestion.applying.Wait()
-	writeReloadGeminiSession(t, root, "overnight")
+	f.ingestion.applying.Wait()
+	writeReloadGeminiSession(t, f.root, "overnight")
 	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
 	defer func() { unblock(); <-finished }()
 	go func() {
 		defer close(finished)
-		_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
+		_ = f.engine.RunExclusive(func() error { close(entered); <-release; return nil })
 	}()
 	<-entered
-	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithIdleTracker(tracker))
+	ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion, server.WithIdleTracker(f.tracker))
 	headers, _ := searchIngestionArchive(t, ts.URL, "overnight")
 	require.Equal(t, "true", headers.Get(apiclient.ArchiveStaleHeader))
 	require.Eventually(t, func() bool { return attempts.Load() >= 2 }, time.Second, time.Millisecond, "the idle deadline fires while catch-up holds the engine")
-	assert.True(t, ingestion.Active(), "an idle deadline during catch-up keeps collection alive")
-	assert.True(t, ingestion.Pending(), "the blocked catch-up still owes an archive refresh")
+	assert.True(t, f.ingestion.Active(), "an idle deadline during catch-up keeps collection alive")
+	assert.True(t, f.ingestion.Pending(), "the blocked catch-up still owes an archive refresh")
 	unblock()
 	<-finished
-	require.Eventually(t, func() bool { return !ingestion.Active() }, time.Second, time.Millisecond, "catch-up completed after the idle deadline, so collection must stop without needing another request")
-	require.True(t, sessionImported(t, database, "gemini:overnight"))
+	require.Eventually(t, func() bool { return !f.ingestion.Active() }, time.Second, time.Millisecond, "catch-up completed after the idle deadline, so collection must stop without needing another request")
+	require.True(t, sessionImported(t, f.database, "gemini:overnight"))
 }
 
 func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
