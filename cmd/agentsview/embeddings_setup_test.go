@@ -473,7 +473,7 @@ func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
 	if err == nil {
 		<-owner.done
 	}
-	assert.ErrorContains(t, err, "max_batch_tokens (512) must be at least model_context_tokens (2048)")
+	require.ErrorContains(t, err, "max_batch_tokens (512) must be at least model_context_tokens (2048)")
 	assert.Zero(t, downloads)
 	saved, err := os.ReadFile(path)
 	require.NoError(t, err)
