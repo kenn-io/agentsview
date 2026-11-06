@@ -49,7 +49,13 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.appearance_title(),
       description: m.appearance_description(),
       group: preferences,
-      keywords: m.settings_search_keywords_appearance(),
+      // The multi-word control labels, so searching a setting by the
+      // name it shows finds this panel in every locale.
+      keywords: [
+        m.settings_search_keywords_appearance(),
+        m.appearance_message_layout(),
+        m.appearance_reading_width(),
+      ].join(" "),
     },
     {
       id: "language",
