@@ -23,8 +23,6 @@ concurrency, and the search path — see
 
 Semantic search is disabled by default. Open **Settings → Embeddings** and choose **Turn on**, or choose it from the search palette. AgentsView asks for the required download through that button, shows download and indexing progress, and starts semantic search without a restart. Full-text search remains available during indexing.
 
-For Ollama on its standard port, Settings offers **Use built-in instead**. Nomic recipes keep their indexed content; another model requires a rebuild, with a rough estimate shown before switching.
-
 For CLI setup, add a `[vector]` section to
 `~/.agentsview/config.toml`:
 
@@ -916,20 +914,14 @@ On a local SQLite daemon, Turn on in Settings → Embeddings or the search
 palette enables semantic search, installs missing shared server files, and
 starts indexing. Replica and DuckDB servers have no local setup control.
 
-`GET /api/v1/embeddings/status` includes `setup` when browser setup is available.
-`POST /api/v1/embeddings/setup` accepts an `action` of `turn-on` or
-`use-built-in`, plus `approved_bytes`, the download size disclosed to the user.
-It returns `202` with `{"started":true}` when setup is accepted. A concurrent
-setup or build returns `409`.
+`GET /api/v1/embeddings/status` includes `setup` when browser setup is
+available. `POST /api/v1/embeddings/setup` accepts `approved_bytes`, the
+download size disclosed to the user. It returns `202` with `{"started":true}`
+when setup is accepted. A concurrent setup returns `409`.
 
 Approval covers at most `approved_bytes`. If installation verifies that a
 larger download is required, it declines the download and reports the verified
 size in `setup.missing_bytes`. Retry must disclose and approve that amount.
-
-The generic unavailable search error returns `501` with code
-`semantic_setup_required`. The code lets the palette offer setup where it is
-available; the generic error text makes no assumption about the storage backend.
-Backend-specific readiness errors retain their own recovery message.
 
 ## Error taxonomy
 
@@ -937,7 +929,7 @@ Backend-specific readiness errors retain their own recovery message.
 | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `[vector]` not enabled                                                                                                          | `vector search is not enabled: set [vector] enabled = true in config.toml` (from `agentsview index embeddings ...`)                                                   |
 | DuckDB backend | `semantic search not available: semantic search is not supported by the DuckDB backend` |
-| No `VectorSearcher` wired (index never built, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available`                                                           |
+| No `VectorSearcher` wired (index never built, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'`                                                        |
 | Only a building generation exists                                                                                               | same message, plus `: index is building: N% complete`                                                                                                                 |
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |

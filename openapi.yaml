@@ -471,9 +471,6 @@ components:
       properties:
         code:
           type: string
-        current_build_id:
-          format: int64
-          type: integer
         current_generation:
           format: int64
           type: integer
@@ -4894,14 +4891,10 @@ components:
     EmbeddingsBuildResponse:
       additionalProperties: false
       properties:
-        build_id:
-          format: int64
-          type: integer
         started:
           type: boolean
       required:
         - started
-        - build_id
       type: object
     EmbeddingsGenerationActionRequest:
       additionalProperties: false
@@ -4922,18 +4915,11 @@ components:
     EmbeddingsSetupInputBody:
       additionalProperties: false
       properties:
-        action:
-          enum:
-            - turn-on
-            - use-built-in
-          type: string
         approved_bytes:
           description: Download size the user saw; a larger download is declined
           format: int64
           minimum: 0
           type: integer
-      required:
-        - action
       type: object
     EmptyTrashResponse:
       additionalProperties: false
@@ -8973,8 +8959,6 @@ components:
           type: integer
         provider:
           type: string
-        rebuild_required:
-          type: boolean
         total_bytes:
           format: int64
           type: integer
@@ -8982,7 +8966,6 @@ components:
         - enabled
         - provider
         - action
-        - rebuild_required
         - missing_bytes
         - installing
         - busy

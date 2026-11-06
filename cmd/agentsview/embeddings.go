@@ -671,39 +671,33 @@ func runEmbeddingsBuildDaemon(
 }
 
 // buildViaDaemon starts a build via POST /build, printing a status line
-// and following the running build the 409 names instead of failing when one
-// is already running, then polls /status until that build stops running.
+// instead of failing when one is already running (409), then polls
+// /status until the build stops running.
 func buildViaDaemon(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient, req vector.BuildRequest,
 ) error {
-	buildID, err := client.startBuild(ctx, req)
-	if err != nil {
+	if err := client.startBuild(ctx, req); err != nil {
 		apiErr, hasApiErr := errors.AsType[*daemonAPIError](err)
-		if !hasApiErr || apiErr.status != http.StatusConflict || apiErr.Code == "embeddings_setup_busy" || apiErr.CurrentBuildID <= 0 {
+		if hasApiErr && apiErr.status == http.StatusConflict {
+			fmt.Fprintln(out, "a build is already running (daemon)")
+		} else {
 			return err
 		}
-		fmt.Fprintln(out, "a build is already running (daemon)")
-		buildID = apiErr.CurrentBuildID
 	}
-	return pollDaemonBuildStatus(ctx, out, client, buildID)
+	return pollDaemonBuildStatus(ctx, out, client)
 }
 
 // pollDaemonBuildStatus polls the daemon's build status at
 // embeddingsPollInterval, printing a progress line on every poll while the
-// build is running, until it reports Running == false. buildID names the
-// build this command started or followed; status for any other build means
-// setup or another build replaced it, so its outcome is no longer reported.
+// build is running, until it reports Running == false.
 func pollDaemonBuildStatus(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient, buildID int64,
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient,
 ) error {
 	var progress buildProgressPrinter
 	for {
 		status, err := client.status(ctx)
 		if err != nil {
 			return err
-		}
-		if status.BuildID != buildID {
-			return errors.New("the daemon replaced this build before reporting its outcome; run the build again")
 		}
 		if !status.Running {
 			return finalizeBuildStatus(out, status)
@@ -720,16 +714,13 @@ func pollDaemonBuildStatus(
 // finalizeBuildStatus reports a stopped build's outcome. LastResult prints
 // the same final summary the direct path prints, including partial results
 // from a failed attempt; a non-empty LastError then becomes the returned
-// non-zero-exit error. An absent outcome asks the caller to retry.
+// non-zero-exit error.
 func finalizeBuildStatus(out io.Writer, status vector.BuildStatus) error {
 	if status.LastResult != nil {
 		printBuildSummary(out, *status.LastResult)
 	}
 	if status.LastError != "" {
 		return errors.New(status.LastError)
-	}
-	if status.LastResult == nil {
-		return errors.New("search by meaning was set up while the build ran; run the build again")
 	}
 	return nil
 }
@@ -997,19 +988,16 @@ type embeddingsDaemonClient struct {
 // alongside its message, so callers can distinguish 409 (conflict/refusal)
 // from other failures.
 type daemonAPIError struct {
-	status         int
-	Code           string `json:"code"`
-	Message        string `json:"error"`
-	CurrentBuildID int64  `json:"current_build_id"`
+	status  int
+	message string
 }
 
-func (e *daemonAPIError) Error() string { return e.Message }
+func (e *daemonAPIError) Error() string { return e.message }
 
-// startBuild returns the admitted build's ID from the POST /build response.
-func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) (int64, error) {
+func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) error {
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	response, err := api.PostAPIV1EmbeddingsBuildWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsBuildRequestOptions{Body: &apiclient.EmbeddingsBuildRequest{
 		Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop), RepairInvalid: new(req.RepairInvalid),
@@ -1017,15 +1005,9 @@ func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.Build
 		IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
 	}})
 	if response == nil {
-		return 0, err
+		return err
 	}
-	if err := embeddingResponseError(response.StatusCode, response.Body, err); err != nil {
-		return 0, err
-	}
-	if response.JSON202 == nil || response.JSON202.BuildID <= 0 {
-		return 0, errors.New("daemon build response is missing a build ID")
-	}
-	return response.JSON202.BuildID, nil
+	return embeddingResponseError(response.StatusCode, response.Body, err)
 }
 
 func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus, error) {
@@ -1120,19 +1102,20 @@ func daemonEmbeddingStore(name string) string {
 
 func embeddingResponseError(status int, body []byte, err error) error {
 	if status >= 300 {
-		return daemonError(status, body)
+		return &daemonAPIError{status: status, message: daemonErrorMessage(status, body)}
 	}
 	return err
 }
 
-// daemonError decodes the {"error": "...", "code": "..."} body huma's error
-// responses carry, falling back to a generic "HTTP <status>: <body>" message
-// when the body has no error message.
-func daemonError(status int, body []byte) *daemonAPIError {
-	apiErr := &daemonAPIError{status: status}
-	if json.Unmarshal(body, apiErr) == nil && apiErr.Message != "" {
-		return apiErr
+// daemonErrorMessage extracts the {"error": "..."} message huma's error
+// responses carry, falling back to a generic "HTTP <status>: <body>" when
+// the body isn't in that shape.
+func daemonErrorMessage(status int, body []byte) string {
+	var apiErr struct {
+		Error string `json:"error"`
 	}
-	apiErr.Message = fmt.Sprintf("HTTP %d: %s", status, strings.TrimSpace(string(body)))
-	return apiErr
+	if json.Unmarshal(body, &apiErr) == nil && apiErr.Error != "" {
+		return apiErr.Error
+	}
+	return fmt.Sprintf("HTTP %d: %s", status, strings.TrimSpace(string(body)))
 }

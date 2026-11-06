@@ -20,7 +20,7 @@ var (
 	onBattery              = power.OnBattery
 )
 
-// liveVectorServing owns activation and replacement over the daemon's open indexes.
+// liveVectorServing enables browser setup over the daemon's open indexes.
 type liveVectorServing struct {
 	mu          sync.Mutex
 	serving     vectorServing
@@ -34,8 +34,6 @@ type liveVectorServing struct {
 	setup       server.EmbeddingsSetupStatus
 	reload      func() (config.Config, error)
 	push        *vectorPushSource
-
-	setupFailedBuild int64
 }
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
@@ -86,10 +84,11 @@ func (v *liveVectorServing) Close() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.stopBuilders()
+	var err error
 	if v.serving.Close != nil {
-		return v.serving.Close()
+		err = v.serving.Close()
 	}
-	return nil
+	return errors.Join(err, v.push.Close())
 }
 
 func (v *liveVectorServing) Notify(recall bool) {
@@ -104,28 +103,17 @@ func (v *liveVectorServing) Notify(recall bool) {
 	}
 }
 
-// ManagerSetup looks store's manager up under the hold of v.mu that reads
-// setup, so a manager withheld by setup arrives with the busy state that
-// withheld it; it skips the inspection SetupStatus runs outside v.mu.
-func (v *liveVectorServing) ManagerSetup(store string) (server.EmbeddingsManager, server.EmbeddingsSetupStatus) {
+func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	status := v.setupLocked()
-	status.Enabled = v.cfg.Vector.Enabled
-	return v.managerLocked(store), status
-}
-
-// managerLocked admits store's manager unless setup is replacing it; callers
-// hold v.mu.
-func (v *liveVectorServing) managerLocked(store string) server.EmbeddingsManager {
-	if v.serving.manager == nil || v.setup.Busy {
+	if v.serving.manager == nil {
 		return nil
 	}
 	if store == "" || store == vector.MessageIndexSpec().Name {
-		return v.admit(v.serving.manager)
+		return v.serving.manager
 	}
 	if store == vector.RecallIndexSpec().Name {
-		return v.admit(v.serving.recallManager)
+		return v.serving.recallManager
 	}
 	return nil
 }
@@ -149,27 +137,23 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 	return v.cfg.Vector.IncludeAutomated
 }
 
-// setupLocked clears an installation failure only after a later message build
-// succeeds. Callers hold v.mu.
-func (v *liveVectorServing) setupLocked() server.EmbeddingsSetupStatus {
-	if v.setup.Error != "" && !v.setup.Busy && v.serving.manager != nil {
-		status := v.serving.manager.Status()
-		if !status.Running && status.BuildID > v.setupFailedBuild && status.LastResult != nil && status.LastError == "" {
-			v.setup = server.EmbeddingsSetupStatus{}
-		}
-	}
-	return v.setup
-}
-
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
 	v.mu.Lock()
-	status, cfg, running := v.setupLocked(), v.cfg, v.buildRunning()
+	status, cfg, missingManager := v.setup, v.cfg, v.serving.manager == nil
 	v.mu.Unlock()
-	if status.Busy || running {
+	if status.Busy {
 		status.Enabled = cfg.Vector.Enabled
 		return status, nil
 	}
-	return embeddingsSetupStatus(ctx, status, cfg)
+	status.Action = ""
+	if missingManager && cfg.DeploymentEmbeddings == nil {
+		status.Action = "turn-on"
+	}
+	status, err := embeddingsSetupStatus(ctx, status, cfg)
+	if status.Action == "" {
+		status.Error = ""
+	}
+	return status, err
 }
 
 func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupStatus, cfg config.Config) (server.EmbeddingsSetupStatus, error) {
@@ -186,15 +170,11 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 	if err != nil && cfg.Vector.Embeddings.Model != "" {
 		return status, err
 	}
-	status.RebuildRequired = cfg.Vector.Embeddings.Model != "" && !cfg.Vector.Embeddings.IsNomic()
 	status.Provider = "built-in"
 	if deployment.Endpoint != "" {
 		status.Provider = "configured"
 		if u, err := url.Parse(deployment.Endpoint); (err == nil && u.Port() == "11434") || deployment.OllamaCPUFallback {
 			status.Provider = "ollama"
-		}
-		if status.Enabled && status.Provider == "ollama" && status.Action == "" {
-			offerBuiltIn(&status, &cfg)
 		}
 		if status.Provider != "ollama" {
 			return status, nil
@@ -207,30 +187,11 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 	status.MissingBytes = max(status.MissingBytes, inspected.DownloadBytes)
 	if inspected.OllamaAvailable {
 		status.Provider = "ollama"
-		if status.Enabled && status.Action == "" {
-			offerBuiltIn(&status, &cfg)
-		}
 	} else if inspected.DownloadBytes > 0 && status.Action == "" && status.Provider != "ollama" {
 		status.Action = "turn-on"
 	}
 	status.Installing = inspected.Installing && status.Provider != "ollama"
 	return status, nil
-}
-
-// offerBuiltIn offers the switch to the built-in model unless the saved config
-// already rejects it, as when a sibling server's max_batch_tokens is below the
-// built-in context; status then shows that reason in place of the action.
-func offerBuiltIn(status *server.EmbeddingsSetupStatus, cfg *config.Config) {
-	status.Action = "use-built-in"
-	if _, err := cfg.VectorSetupServer(true); errors.Is(err, config.ErrInvalidVectorSetup) {
-		status.Action, status.Error = "", err.Error()
-	}
-}
-
-// buildRunning reports whether either index is building; callers hold v.mu.
-func (v *liveVectorServing) buildRunning() bool {
-	return (v.serving.manager != nil && v.serving.manager.Status().Running) ||
-		(v.serving.recallManager != nil && v.serving.recallManager.Status().Running)
 }
 
 // setupRequestError reports rejected candidate settings as a bad request and
@@ -242,40 +203,36 @@ func setupRequestError(err error) error {
 	return err
 }
 
-func (v *liveVectorServing) Setup(action string, approvedBytes int64) error {
+func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
 		return err
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.setup.Busy || v.buildRunning() {
+	if v.setup.Busy {
 		return vector.ErrBuildRunning
 	}
-	deployment, err := v.cfg.VectorSetupServer(action == "use-built-in")
+	deployment, err := v.cfg.VectorSetupServer()
 	if err != nil {
 		return setupRequestError(err)
 	}
-	if action != status.Action {
+	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
 	}
 	release, ok := v.idle.BeginWork()
 	if !ok {
 		return errors.New("server is shutting down")
 	}
-	v.setup = server.EmbeddingsSetupStatus{Busy: true, Action: action}
+	v.setup = server.EmbeddingsSetupStatus{Busy: true, Action: "turn-on"}
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(action, deployment, approvedBytes)
+		err := v.activate(deployment, approvedBytes)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
 			v.setup.Error = err.Error()
-			v.setupFailedBuild = 0
-			if v.serving.manager != nil {
-				v.setupFailedBuild = v.serving.manager.Status().BuildID
-			}
 		} else {
 			v.setup.Action = ""
 		}
@@ -289,28 +246,7 @@ func (v *liveVectorServing) Setup(action string, approvedBytes int64) error {
 	return nil
 }
 
-// closeServing drains searches outside v.mu so status answers, then releases
-// the current indexes and records cfg; setup.Busy keeps Setup out and Close
-// waits on done until activate installs the replacement.
-func (v *liveVectorServing) closeServing(cfg config.Config) error {
-	v.database.SetVectorSearcher(nil)
-	v.database.SetRecallVectorSearcher(nil)
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.stopBuilders()
-	if v.serving.Close != nil {
-		if err := v.serving.Close(); err != nil {
-			return err
-		}
-	}
-	v.serving, v.cfg = vectorServing{}, cfg
-	v.push.mu.Lock()
-	v.push.cfg = cfg
-	v.push.mu.Unlock()
-	return nil
-}
-
-func (v *liveVectorServing) activate(action string, deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
 	cfg := v.cfg
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
@@ -331,28 +267,34 @@ func (v *liveVectorServing) activate(action string, deployment config.VectorEmbe
 	if err != nil {
 		return err
 	}
-	if err := cfg.SaveVectorSetup(action == "use-built-in"); err != nil {
-		return err
+	if v.serving.manager == nil {
+		if err := cfg.SaveVectorSetup(); err != nil {
+			return err
+		}
+		cfg, err = v.reload()
+		if err != nil {
+			return err
+		}
+		// Opening can wait on another process's write lock; status stays available.
+		serving, err := setupVectorServing(v.ctx, cfg, v.database, v.idle)
+		if err != nil {
+			return err
+		}
+		v.mu.Lock()
+		v.serving, v.cfg = serving, cfg
+		v.push.mu.Lock()
+		v.push.cfg = cfg
+		v.push.mu.Unlock()
+		if serving.manager == nil {
+			v.mu.Unlock()
+			return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.
+		}
+		v.startSchedulers()
+		v.mu.Unlock()
 	}
-	cfg, err = v.reload()
-	if err != nil {
-		return err
+	err = v.serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
+	if errors.Is(err, vector.ErrBuildRunning) {
+		return nil
 	}
-	if err := v.closeServing(cfg); err != nil {
-		return err
-	}
-	// Opening can wait on another process's write lock; v.mu stays free so status answers.
-	serving, err := setupVectorServing(v.ctx, cfg, v.database, v.idle)
-	if err != nil {
-		return err
-	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.serving = serving
-	if serving.manager == nil {
-		return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.
-	}
-	v.startSchedulers()
-	_, err = serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 	return err
 }

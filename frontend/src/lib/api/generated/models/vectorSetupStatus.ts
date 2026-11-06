@@ -11,6 +11,5 @@ export interface VectorSetupStatus {
   installing: boolean;
   missing_bytes: number;
   provider: string;
-  rebuild_required: boolean;
   total_bytes: number;
 }

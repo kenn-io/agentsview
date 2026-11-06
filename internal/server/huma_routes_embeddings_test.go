@@ -51,14 +51,11 @@ type fakeEmbeddingsManager struct {
 	waitForBuild <-chan struct{}
 }
 
-func (f *fakeEmbeddingsManager) StartBuild(req vector.BuildRequest) (int64, error) {
+func (f *fakeEmbeddingsManager) StartBuild(req vector.BuildRequest) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.startBuildCalls = append(f.startBuildCalls, req)
-	if f.startBuildErr != nil {
-		return f.status.BuildID, f.startBuildErr
-	}
-	return int64(len(f.startBuildCalls)), nil
+	return f.startBuildErr
 }
 
 func (f *fakeEmbeddingsManager) Status() vector.BuildStatus {
@@ -148,12 +145,10 @@ func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusAccepted)
 
 	var body struct {
-		Started bool  `json:"started"`
-		BuildID int64 `json:"build_id"`
+		Started bool `json:"started"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.True(t, body.Started)
-	assert.Equal(t, int64(1), body.BuildID)
 
 	require.Len(t, fake.startBuildCalls, 1)
 	assert.True(t, fake.startBuildCalls[0].FullRebuild)
@@ -293,17 +288,12 @@ func TestEmbeddingsBuildInvalidRequestReturnsBadRequest(t *testing.T) {
 }
 
 func TestEmbeddingsBuildReturnsConflictWhenAlreadyRunning(t *testing.T) {
-	fake := &fakeEmbeddingsManager{startBuildErr: vector.ErrBuildRunning, status: vector.BuildStatus{BuildID: 41}}
+	fake := &fakeEmbeddingsManager{startBuildErr: vector.ErrBuildRunning}
 	s := newEmbeddingsTestServer(t, fake)
 
 	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build", vector.BuildRequest{})
 	assertRecorderStatus(t, w, http.StatusConflict)
 	assert.Contains(t, w.Body.String(), "already running")
-	var body struct {
-		CurrentBuildID int64 `json:"current_build_id"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.Equal(t, int64(41), body.CurrentBuildID)
 }
 
 func TestEmbeddingsBuildUnknownServerReturnsBadRequest(t *testing.T) {

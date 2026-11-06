@@ -262,5 +262,8 @@ func (e *replicaEmbedder) Close() error {
 	if e.serving.Close != nil {
 		err = e.serving.Close()
 	}
-	return err
+	if e.source == nil {
+		return err
+	}
+	return errors.Join(err, e.source.Close())
 }

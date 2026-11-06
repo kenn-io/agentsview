@@ -4,7 +4,6 @@
 
 export interface ApiErrorResponse {
   code?: string;
-  current_build_id?: number;
   current_generation?: number;
   current_manifest_id?: string;
   current_receipt?: string;

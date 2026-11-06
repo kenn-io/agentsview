@@ -1421,10 +1421,12 @@ func ScopeExcludes(scope string, subordinate bool) bool {
 func (db *DB) searchContentSemantic(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	searcher, release, err := db.semanticSearcher(f)
-	defer release()
-	if err != nil {
+	if err := ValidateSemanticFilter(f); err != nil {
 		return ContentSearchPage{}, err
+	}
+	searcher := db.getVectorSearcher()
+	if searcher == nil {
+		return ContentSearchPage{}, ErrSemanticUnavailable
 	}
 
 	k := max(f.Limit*4, SemanticOverfetchMin)
@@ -1609,10 +1611,12 @@ type hybridLeg struct {
 func (db *DB) searchContentHybrid(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	searcher, release, err := db.semanticSearcher(f)
-	defer release()
-	if err != nil {
+	if err := ValidateSemanticFilter(f); err != nil {
 		return ContentSearchPage{}, err
+	}
+	searcher := db.getVectorSearcher()
+	if searcher == nil {
+		return ContentSearchPage{}, ErrSemanticUnavailable
 	}
 	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable

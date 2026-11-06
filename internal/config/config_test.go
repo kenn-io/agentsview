@@ -3195,94 +3195,42 @@ func TestLoadFile_ModelAliases(t *testing.T) {
 }
 
 func TestSaveVectorSetupPreservesSettings(t *testing.T) {
-	for _, tc := range []struct {
-		name, original, edited, local, query, omitted, wantError string
-		builtIn, preserveEnabledOnly                             bool
-		context, cap, port                                       int
-	}{
-		{name: "replace old token cap", builtIn: true, local: "ollama", context: 2048, query: "search_query: ", original: "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\ndefault_server = 'ollama'\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n[vector.embeddings.servers.sibling]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 8192\napi_key_env = 'EMBEDDINGS_TEST_KEY'\nmax_retries = 0\n"},
-		{name: "compatible Nomic", builtIn: true, local: "ollama", context: 512, cap: 512, query: "q: ", omitted: "timeout", original: "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nmodel_context_tokens = 512\nquery_prefix = 'q: '\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n"},
-		{name: "automatic defaults remain omitted", builtIn: true, local: "automatic", context: 2048, query: "search_query: ", omitted: "model =", original: "[vector]\nenabled = true\n"},
-		{name: "turn on reads current edits", query: "edited: ", context: 2048, port: 12345, omitted: "model =", original: "[vector]\nenabled = false\n", edited: "port = 12345\n[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'edited: '\n"},
-		{name: "configured turn on", preserveEnabledOnly: true, original: "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_retries = 0\n"},
-		{name: "sibling server token cap", builtIn: true, original: "[vector]\nenabled = true\n[vector.embeddings]\ndefault_server = 'ollama'\nmodel = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\n[vector.embeddings.servers.sibling]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n", wantError: "max_batch_tokens (512) must be at least model_context_tokens (2048)"},
+	for _, raw := range []string{
+		"port = 12345\n[vector]\nenabled = false\ninclude_automated = true\n",
+		"[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_retries = 0\n",
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(raw, func(t *testing.T) {
 			dir := setupTestEnv(t)
 			path := filepath.Join(dir, configFileName)
-			require.NoError(t, os.WriteFile(path, []byte(tc.original), 0o600))
 			cfg, err := LoadReadOnly()
 			require.NoError(t, err)
-			require.NoError(t, cfg.Vector.Validate())
-			expected := cfg.Vector
-			sibling, hasSibling := cfg.Vector.Embeddings.Servers["sibling"]
-			if tc.edited != "" {
-				require.NoError(t, os.WriteFile(path, []byte(tc.edited), 0o600))
-			}
-			err = cfg.SaveVectorSetup(tc.builtIn)
-			if tc.wantError != "" {
-				require.ErrorContains(t, err, tc.wantError)
-				saved, err := os.ReadFile(path)
-				require.NoError(t, err)
-				assert.Equal(t, tc.original, string(saved))
-				return
-			}
+			// Setup reads edits made after the daemon loaded its config.
+			require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+			var expected map[string]any
+			_, err = toml.Decode(raw, &expected)
 			require.NoError(t, err)
-			saved, err := LoadReadOnly()
+			expected["vector"].(map[string]any)["enabled"] = true
+			require.NoError(t, cfg.SaveVectorSetup())
+			var saved map[string]any
+			_, err = toml.DecodeFile(path, &saved)
 			require.NoError(t, err)
-			require.NoError(t, saved.Vector.Validate())
-			assert.True(t, saved.Vector.Enabled)
-			assert.Equal(t, tc.context, saved.Vector.Embeddings.ModelContextTokens)
-			assert.Equal(t, tc.query, saved.Vector.Embeddings.QueryPrefix)
-			if tc.local != "" {
-				assert.True(t, saved.Vector.Embeddings.Servers[tc.local].Local)
-				assert.Equal(t, tc.cap, saved.Vector.Embeddings.Servers[tc.local].MaxBatchTokens)
-			}
-			if tc.port != 0 {
-				assert.Equal(t, tc.port, saved.Port)
-			}
-			if tc.omitted != "" {
-				raw, err := os.ReadFile(path)
-				require.NoError(t, err)
-				assert.NotContains(t, string(raw), tc.omitted)
-			}
-			if hasSibling {
-				assert.Equal(t, sibling, saved.Vector.Embeddings.Servers["sibling"])
-			}
-			if tc.preserveEnabledOnly {
-				expected.Enabled = true
-				assert.Equal(t, expected, saved.Vector)
-			}
+			assert.Equal(t, expected, saved)
+
 		})
 	}
 }
 
-func TestSaveVectorSetupPreservesComments(t *testing.T) {
-	for _, tc := range []struct{ name, original, local string }{
-		{"section", "# personal settings\nport = 12345 # keep port\n[vector] # search options\nenabled = false # keep toggle\n", "automatic"},
-		{"dotted", "# personal settings\nvector.enabled = false # keep toggle\nport = 12345 # keep port\n", "automatic"},
-		{"inline", "# personal settings\nvector = { enabled = false } # keep toggle\nport = 12345 # keep port\n", "automatic"},
-		{"switch", "# personal settings\nport = 12345 # keep port\n[vector]\nenabled = true # keep toggle\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.ollama] # keep server\nendpoint = 'http://127.0.0.1:11434/v1' # keep endpoint\n", "ollama"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := setupTestEnv(t)
-			path := filepath.Join(dir, configFileName)
-			require.NoError(t, os.WriteFile(path, []byte(tc.original), 0o600))
-			cfg, err := LoadReadOnly()
-			require.NoError(t, err)
-			require.NoError(t, cfg.SaveVectorSetup(true))
-			saved, err := os.ReadFile(path)
-			require.NoError(t, err)
-			for _, comment := range []string{"# personal settings", "# keep port", "# keep toggle", "# search options", "# keep server", "# keep endpoint"} {
-				if strings.Contains(tc.original, comment) {
-					assert.Contains(t, string(saved), comment)
-				}
-			}
-			reloaded, err := LoadReadOnly()
-			require.NoError(t, err)
-			assert.True(t, reloaded.Vector.Enabled)
-			assert.True(t, reloaded.Vector.Embeddings.Servers[tc.local].Local)
-			assert.Equal(t, 12345, reloaded.Port)
-		})
-	}
+func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
+	dir := setupTestEnv(t)
+	cfg, err := LoadReadOnly()
+	require.NoError(t, err)
+	path := filepath.Join(dir, configFileName)
+	raw := "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 512\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 256\n"
+	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+	_, err = cfg.VectorSetupServer()
+	require.ErrorIs(t, err, ErrInvalidVectorSetup)
+	require.ErrorIs(t, cfg.SaveVectorSetup(), ErrInvalidVectorSetup)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, raw, string(data))
 }

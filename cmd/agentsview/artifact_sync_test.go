@@ -294,7 +294,7 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 	assert.Equal(t, 3, result.PublishedArtifacts)
 }
 
-func TestDaemonArtifactExchangeNotifiesClientsAfterImport(
+func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 	t *testing.T,
 ) {
 	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
@@ -305,9 +305,28 @@ func TestDaemonArtifactExchangeNotifiesClientsAfterImport(
 	events, unsubscribe := broadcaster.Subscribe()
 	t.Cleanup(unsubscribe)
 
+	embedManager := &fakeEmbedManager{}
+	embedScheduler := newEmbedScheduler(
+		embedManager,
+		time.Millisecond,
+		0,
+		false,
+		nil,
+	)
+	go embedScheduler.Run(t.Context())
+	t.Cleanup(embedScheduler.Stop)
+
+	recallNotified := make(chan struct{}, 1)
+	cfg := config.Config{}
+	cfg.Vector.Embed.RunAfterSync = new(true)
+	owner := &liveVectorServing{cfg: cfg, serving: vectorServing{
+		Scheduler:            embedScheduler,
+		RecallMutationNotify: func() { recallNotified <- struct{}{} },
+	}}
+	emitter := wrapEmbeddingSyncEmitter(broadcaster, owner.Notify)
 	engine := agentsync.NewEngine(t.Context(),
 		database,
-		agentsync.EngineConfig{Emitter: broadcaster},
+		agentsync.EngineConfig{Emitter: emitter},
 	)
 	t.Cleanup(engine.Close)
 
@@ -328,7 +347,7 @@ func TestDaemonArtifactExchangeNotifiesClientsAfterImport(
 		config.Config{DataDir: t.TempDir()},
 		database,
 		engine,
-		broadcaster,
+		emitter,
 	)
 	result, err := runner(t.Context(), server.ArtifactExchangeRequest{
 		Target: t.TempDir(),
@@ -341,6 +360,16 @@ func TestDaemonArtifactExchangeNotifiesClientsAfterImport(
 		assert.Equal(t, "sessions", event.Scope)
 	case <-time.After(time.Second):
 		require.Fail(t, "artifact import did not notify SSE subscribers")
+	}
+	waitForSchedulerCondition(
+		t,
+		func() bool { return embedManager.callCount() == 1 },
+		"artifact import did not notify the embedding scheduler",
+	)
+	select {
+	case <-recallNotified:
+	case <-time.After(time.Second):
+		require.Fail(t, "artifact import did not notify the recall scheduler")
 	}
 }
 

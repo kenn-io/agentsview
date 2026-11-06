@@ -126,7 +126,7 @@ func postDaemonPush[T, P any](
 				continue
 			}
 			return zero, daemonPushError(
-				daemonError(resp.StatusCode, msg), msg, false,
+				errors.New(daemonErrorMessage(resp.StatusCode, msg)), msg, false,
 			)
 		}
 		defer resp.Body.Close()

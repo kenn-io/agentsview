@@ -211,7 +211,6 @@ export * from "./embeddingsBuildResponse.ts";
 export * from "./embeddingsGenerationActionRequest.ts";
 export * from "./embeddingsGenerationsResponse.ts";
 export * from "./embeddingsSetupInputBody.ts";
-export * from "./embeddingsSetupInputBodyAction.ts";
 export * from "./emptyTrashResponse.ts";
 export * from "./exportAppliedPricingBand.ts";
 export * from "./exportEffectiveModelRate.ts";

@@ -647,6 +647,42 @@ func TestEmbeddingSyncEmitterForwardsThenNotifiesBothStores(t *testing.T) {
 	assert.Equal(t, []bool{false, true}, notifications)
 }
 
+func TestLiveVectorServingNotify(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("run_after_sync=%t", enabled), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				cfg, err := config.Default()
+				require.NoError(t, err)
+				cfg.Vector.Embed.RunAfterSync = new(enabled)
+				fake := &fakeEmbedManager{}
+				scheduler := newEmbedScheduler(fake, time.Millisecond, 0, false, nil)
+				go scheduler.Run(t.Context())
+				defer scheduler.Stop()
+				recalls := 0
+				owner := &liveVectorServing{cfg: cfg, serving: vectorServing{
+					Scheduler: scheduler, RecallMutationNotify: func() { recalls++ },
+				}}
+				owner.Notify(false)
+				synctest.Sleep(2 * time.Millisecond)
+				if enabled {
+					assert.Equal(t, 1, fake.callCount())
+				} else {
+					assert.Zero(t, fake.callCount())
+				}
+				assert.Zero(t, recalls)
+				owner.Notify(true)
+				synctest.Sleep(2 * time.Millisecond)
+				assert.Equal(t, 1, recalls)
+				if enabled {
+					assert.Equal(t, 1, fake.callCount())
+				} else {
+					assert.Zero(t, fake.callCount())
+				}
+			})
+		})
+	}
+}
+
 // --- searcherAdapter error taxonomy ---
 
 func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T) {
@@ -1523,7 +1559,7 @@ func TestEmbeddingsDaemonClientBuildSucceedsThroughRealMiddleware(t *testing.T) 
 	ts := startTestServer(t, ln, srv.Handler())
 
 	client := embeddingsDaemonClient{baseURL: ts.URL}
-	_, err = client.startBuild(t.Context(), vector.BuildRequest{})
+	err = client.startBuild(t.Context(), vector.BuildRequest{})
 	require.NoError(t, err,
 		"a POST build must succeed once the client sets Origin to satisfy the CSRF guard")
 }
@@ -1591,7 +1627,7 @@ func TestVectorServingCloseCancelsAPIStartedRecallBuild(t *testing.T) {
 	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 	client := embeddingsDaemonClient{baseURL: ts.URL}
-	_, err = client.startBuild(t.Context(), vector.BuildRequest{
+	err = client.startBuild(t.Context(), vector.BuildRequest{
 		Store: vector.RecallIndexSpec().Name,
 	})
 	require.NoError(t, err)

@@ -158,7 +158,7 @@ func initializeConversationExport(command *cobra.Command) error {
 			return err
 		}
 		if resp.StatusCode != http.StatusOK {
-			return daemonError(resp.StatusCode, resp.Body)
+			return errors.New(daemonErrorMessage(resp.StatusCode, resp.Body))
 		}
 		return nil
 	}

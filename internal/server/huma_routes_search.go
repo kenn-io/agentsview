@@ -184,9 +184,6 @@ func (s *Server) humaSearchContent(
 			// rather than 501's "not implemented / disabled".
 			return nil, apiError(http.StatusServiceUnavailable, err.Error())
 		}
-		if err == db.ErrSemanticUnavailable { //nolint:errorlint // Only the bare sentinel is generic setup; wrapped causes keep their own guidance.
-			return nil, apiErrorWithCode(http.StatusNotImplemented, "semantic_setup_required", err.Error())
-		}
 		if errors.Is(err, db.ErrSemanticUnavailable) {
 			return nil, apiError(http.StatusNotImplemented, err.Error())
 		}
@@ -197,6 +194,9 @@ func (s *Server) humaSearchContent(
 			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		return nil, apiError(http.StatusInternalServerError, err.Error())
+	}
+	if res.Matches == nil {
+		res.Matches = []db.ContentMatch{}
 	}
 	return &jsonOutput[*service.ContentSearchResult]{Body: res}, nil
 }

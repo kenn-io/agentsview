@@ -323,16 +323,8 @@ type VectorEmbeddingsServerConfig struct {
 
 const defaultNomicModel = "nomic-embed-text"
 
-func defaultNomicRecipe() VectorEmbeddingsConfig {
-	return VectorEmbeddingsConfig{
-		Model: defaultNomicModel, Dimension: 768, MaxInputChars: 4000,
-		ModelContextTokens: 2048, QueryPrefix: "search_query: ", DocumentPrefix: "search_document: ",
-	}
-}
-
-// IsNomic reports whether the recipe can keep its index on the built-in server.
-func (c VectorEmbeddingsConfig) IsNomic() bool {
-	return c.Model == defaultNomicModel || c.Model == "nomic-embed-text:latest" || c.Model == "nomic-embed-text:v1.5"
+func isNomicModel(model string) bool {
+	return model == defaultNomicModel || model == "nomic-embed-text:latest" || model == "nomic-embed-text:v1.5"
 }
 
 // ServerNames returns the available server names, including automatic
@@ -594,7 +586,7 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 	}
 	local := c.Servers == nil
 	for _, name := range sortedServerNames(c.Servers) {
-		if c.Servers[name].Local && !c.IsNomic() {
+		if c.Servers[name].Local && !isNomicModel(c.Model) {
 			return fmt.Errorf("[vector.embeddings.servers.%s] local requires nomic-embed-text; changing models requires rebuilding the index", name)
 		}
 		local = local || c.Servers[name].Local
@@ -2162,23 +2154,22 @@ func (c *Config) applyConfigTOML(data string) error {
 	if meta.IsDefined("vector", "embeddings", "servers") {
 		c.Vector.Embeddings.Servers = normalizedEmbeddingsServers(file.Vector.Embeddings.Servers, meta)
 	}
-	if c.Vector.Enabled && c.Vector.Embeddings.Model == "" && (!meta.IsDefined("vector", "embeddings", "servers") || allEmbeddingsServersLocal(c.Vector.Embeddings.Servers)) {
-		defaults := defaultNomicRecipe()
-		c.Vector.Embeddings.Model = defaults.Model
+	if c.Vector.Enabled && c.Vector.Embeddings.Model == "" && !meta.IsDefined("vector", "embeddings", "servers") {
+		c.Vector.Embeddings.Model = defaultNomicModel
 		if !meta.IsDefined("vector", "embeddings", "dimension") {
-			c.Vector.Embeddings.Dimension = defaults.Dimension
+			c.Vector.Embeddings.Dimension = 768
 		}
 		if !meta.IsDefined("vector", "embeddings", "max_input_chars") {
-			c.Vector.Embeddings.MaxInputChars = defaults.MaxInputChars
+			c.Vector.Embeddings.MaxInputChars = 4000
 		}
 		if !meta.IsDefined("vector", "embeddings", "model_context_tokens") {
-			c.Vector.Embeddings.ModelContextTokens = defaults.ModelContextTokens
+			c.Vector.Embeddings.ModelContextTokens = 2048
 		}
 		if !meta.IsDefined("vector", "embeddings", "query_prefix") {
-			c.Vector.Embeddings.QueryPrefix = defaults.QueryPrefix
+			c.Vector.Embeddings.QueryPrefix = "search_query: "
 		}
 		if !meta.IsDefined("vector", "embeddings", "document_prefix") {
-			c.Vector.Embeddings.DocumentPrefix = defaults.DocumentPrefix
+			c.Vector.Embeddings.DocumentPrefix = "search_document: "
 		}
 	}
 	if file.Vector.Embed.RunAfterSync != nil {
@@ -4105,10 +4096,10 @@ func (invalidVectorSetupError) Is(target error) bool { return target == ErrInval
 
 // VectorSetupServer returns the default embeddings server SaveVectorSetup
 // would save now, or the reason it would refuse, so callers can check before slow work.
-func (c *Config) VectorSetupServer(builtIn bool) (VectorEmbeddingsServerConfig, error) {
+func (c *Config) VectorSetupServer() (VectorEmbeddingsServerConfig, error) {
 	var server VectorEmbeddingsServerConfig
 	err := c.withConfigLock(func() error {
-		_, candidate, err := c.vectorSetupCandidate(builtIn)
+		_, candidate, err := c.vectorSetupCandidate()
 		if err == nil {
 			if _, server, err = candidate.Vector.Embeddings.Server(""); err != nil {
 				err = invalidVectorSetupError{err}
@@ -4120,17 +4111,17 @@ func (c *Config) VectorSetupServer(builtIn bool) (VectorEmbeddingsServerConfig, 
 }
 
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.
-func (c *Config) SaveVectorSetup(builtIn bool) error {
+func (c *Config) SaveVectorSetup() error {
 	return c.withConfigLock(func() error {
-		existing, _, err := c.vectorSetupCandidate(builtIn)
+		existing, _, err := c.vectorSetupCandidate()
 		if err != nil {
 			return err
 		}
-		return c.writeVectorSetup(existing)
+		return c.writeConfigMap(existing)
 	})
 }
 
-func (c *Config) vectorSetupCandidate(builtIn bool) (map[string]any, Config, error) {
+func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 	existing, err := c.readConfigMap()
 	if err != nil {
 		return nil, Config{}, err
@@ -4139,9 +4130,7 @@ func (c *Config) vectorSetupCandidate(builtIn bool) (map[string]any, Config, err
 	if section == nil {
 		section = make(map[string]any)
 	}
-	if err := patchVectorSetup(section, builtIn); err != nil {
-		return nil, Config{}, invalidVectorSetupError{err}
-	}
+	section["enabled"] = true
 	existing["vector"] = section
 	encoded, err := toml.Marshal(existing)
 	if err != nil {
@@ -4159,70 +4148,4 @@ func (c *Config) vectorSetupCandidate(builtIn bool) (map[string]any, Config, err
 		return nil, Config{}, invalidVectorSetupError{err}
 	}
 	return existing, candidate, nil
-}
-
-func patchVectorSetup(section map[string]any, builtIn bool) error {
-	section["enabled"] = true
-	if !builtIn {
-		return nil
-	}
-	encoded, err := toml.Marshal(section)
-	if err != nil {
-		return err
-	}
-	var raw VectorConfig
-	if _, err := toml.Decode(string(encoded), &raw); err != nil {
-		return err
-	}
-	recipe := raw.Embeddings
-	name := "automatic"
-	if len(recipe.Servers) > 0 {
-		var err error
-		name, _, err = recipe.Server("")
-		if err != nil {
-			return err
-		}
-	}
-	embeddings, _ := section["embeddings"].(map[string]any)
-	if embeddings == nil {
-		embeddings = make(map[string]any)
-		section["embeddings"] = embeddings
-	}
-	servers, _ := embeddings["servers"].(map[string]any)
-	if servers == nil {
-		servers = make(map[string]any)
-		embeddings["servers"] = servers
-	}
-	if recipe.Model != "" && !recipe.IsNomic() {
-		defaults := defaultNomicRecipe()
-		maps.Copy(embeddings, map[string]any{
-			"model": defaults.Model, "dimension": defaults.Dimension, "max_input_chars": defaults.MaxInputChars,
-			"model_context_tokens": defaults.ModelContextTokens, "query_prefix": defaults.QueryPrefix, "document_prefix": defaults.DocumentPrefix,
-			"input_suffix": defaults.InputSuffix, "request_dimensions": defaults.RequestDimensions,
-		})
-	}
-	deployment, _ := servers[name].(map[string]any)
-	if deployment == nil {
-		deployment = make(map[string]any)
-		servers[name] = deployment
-	}
-	delete(deployment, "endpoint")
-	delete(deployment, "ollama_cpu_fallback")
-	if recipe.Model != "" && !recipe.IsNomic() {
-		delete(deployment, "max_batch_tokens")
-	}
-	deployment["local"] = true
-	return nil
-}
-
-func allEmbeddingsServersLocal(servers map[string]VectorEmbeddingsServerConfig) bool {
-	if len(servers) == 0 {
-		return false
-	}
-	for _, server := range servers {
-		if !server.Local {
-			return false
-		}
-	}
-	return true
 }

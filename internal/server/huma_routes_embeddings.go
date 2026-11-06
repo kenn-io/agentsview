@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"go.kenn.io/agentsview/internal/vector"
@@ -13,13 +12,11 @@ import (
 
 // EmbeddingsRuntime owns the writable daemon's live vector setup.
 type EmbeddingsRuntime interface {
-	// ManagerSetup reports store's manager with the setup state read
-	// alongside it, so a missing manager can be told from one setup withheld.
-	ManagerSetup(store string) (EmbeddingsManager, EmbeddingsSetupStatus)
+	Manager(store string) EmbeddingsManager
 	IncludeAutomated() bool
 	SetupStatus(context.Context) (EmbeddingsSetupStatus, error)
 	// Setup approves at most approvedBytes of download, the size the user saw.
-	Setup(action string, approvedBytes int64) error
+	Setup(approvedBytes int64) error
 }
 
 type EmbeddingsSetupStatus = vector.SetupStatus
@@ -30,8 +27,7 @@ func WithEmbeddingsRuntime(runtime EmbeddingsRuntime) Option {
 
 type embeddingsSetupInput struct {
 	Body struct {
-		Action        string `json:"action" enum:"turn-on,use-built-in" required:"true"`
-		ApprovedBytes int64  `json:"approved_bytes,omitempty" minimum:"0" doc:"Download size the user saw; a larger download is declined"`
+		ApprovedBytes int64 `json:"approved_bytes,omitempty" minimum:"0" doc:"Download size the user saw; a larger download is declined"`
 	}
 }
 
@@ -39,7 +35,7 @@ func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput
 	if s.embeddingsRuntime == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	if err := s.embeddingsRuntime.Setup(in.Body.Action, in.Body.ApprovedBytes); err != nil {
+	if err := s.embeddingsRuntime.Setup(in.Body.ApprovedBytes); err != nil {
 		if errors.Is(err, vector.ErrBuildRunning) {
 			return nil, embeddingsActionError(err)
 		}
@@ -57,7 +53,7 @@ func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput
 // intentionally excluded: it is the scheduler's synchronous entry point
 // (Task 16), not part of the HTTP surface.
 type EmbeddingsManager interface {
-	StartBuild(req vector.BuildRequest) (int64, error)
+	StartBuild(req vector.BuildRequest) error
 	Wait()
 	Status() vector.BuildStatus
 	Generations(ctx context.Context) ([]vector.GenerationInfo, error)
@@ -111,28 +107,6 @@ func (s *Server) embeddingsUnavailableError() error {
 	return apiError(http.StatusNotImplemented, msg)
 }
 
-// embeddingsSetupBusyCode marks the 409 a build or generation request gets
-// while setup runs, so a client can tell it from a build that will finish.
-const embeddingsSetupBusyCode = "embeddings_setup_busy"
-
-// ErrEmbeddingsSetupBusy is the build or generation refusal from a manager
-// setup began replacing after the route looked it up.
-var ErrEmbeddingsSetupBusy = fmt.Errorf("%w: search by meaning is being set up", vector.ErrBuildRunning)
-
-func embeddingsSetupBusyError() error {
-	return apiErrorWithCode(http.StatusConflict, embeddingsSetupBusyCode, "search by meaning is being set up; retry the build or generation request when it finishes")
-}
-
-// embeddingsBuildRunningError keeps the setup-busy code on a build or
-// generation action refused after the manager lookup, and otherwise names
-// the running build (when known) so a client can follow that build alone.
-func embeddingsBuildRunningError(err error, runningID int64) error {
-	if errors.Is(err, ErrEmbeddingsSetupBusy) {
-		return embeddingsSetupBusyError()
-	}
-	return &apiResponseError{Status: http.StatusConflict, Message: err.Error(), CurrentBuildID: runningID}
-}
-
 func (s *Server) registerEmbeddingsRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/embeddings")
 	configureRouteGroup(group, "Embeddings")
@@ -168,9 +142,6 @@ type embeddingsBuildInput struct {
 
 type embeddingsBuildResponse struct {
 	Started bool `json:"started"`
-	// BuildID is the started build's status build_id. A poller whose status
-	// reports another build_id knows this build's outcome was replaced.
-	BuildID int64 `json:"build_id"`
 }
 
 type embeddingsBuildOutput struct {
@@ -196,46 +167,22 @@ type embeddingsGenerationActionInput struct {
 	Body  embeddingsGenerationActionRequest
 }
 
-func (s *Server) embeddingsManagerFor(store string) (EmbeddingsManager, EmbeddingsSetupStatus) {
+func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
 	if s.embeddingsRuntime != nil {
-		return s.embeddingsRuntime.ManagerSetup(store)
+		return s.embeddingsRuntime.Manager(store)
 	}
 	if store == "" || store == vector.MessageIndexSpec().Name {
-		return s.embeddingsManager, EmbeddingsSetupStatus{}
+		return s.embeddingsManager
 	}
-	return s.embeddingsStores[store], EmbeddingsSetupStatus{}
-}
-
-// embeddingsActionManager keeps a withheld manager paired with its busy state,
-// even when setup finishes before the route receives that snapshot.
-func (s *Server) embeddingsActionManager(store string) (EmbeddingsManager, error) {
-	manager, setup := s.embeddingsManagerFor(store)
-	if manager != nil {
-		return manager, nil
-	}
-	if setup.Busy {
-		return nil, embeddingsSetupBusyError()
-	}
-	return nil, s.embeddingsUnavailableError()
-}
-
-// embeddingsManagerAfterSetup resolves the manager after setup inspection,
-// reading its setup state under the same runtime lock so replacement cannot
-// leave an idle snapshot paired with a withheld manager.
-func (s *Server) embeddingsManagerAfterSetup(store string, setup *EmbeddingsSetupStatus) EmbeddingsManager {
-	manager, current := s.embeddingsManagerFor(store)
-	if setup != nil && manager == nil && (current.Busy || current.Error != "") {
-		*setup = current
-	}
-	return manager
+	return s.embeddingsStores[store]
 }
 
 func (s *Server) humaEmbeddingsBuild(
-	ctx context.Context, in *embeddingsBuildInput,
+	_ context.Context, in *embeddingsBuildInput,
 ) (*embeddingsBuildOutput, error) {
-	manager, err := s.embeddingsActionManager(in.Body.Store)
-	if err != nil {
-		return nil, err
+	manager := s.embeddingsManagerFor(in.Body.Store)
+	if manager == nil {
+		return nil, s.embeddingsUnavailableError()
 	}
 	includeAutomated := s.embeddingsIncludeAutomatedDefault
 	if s.embeddingsRuntime != nil {
@@ -260,11 +207,10 @@ func (s *Server) humaEmbeddingsBuild(
 	if !ok {
 		return nil, apiError(http.StatusServiceUnavailable, "server is shutting down")
 	}
-	buildID, err := manager.StartBuild(req)
-	if err != nil {
+	if err := manager.StartBuild(req); err != nil {
 		release()
 		if errors.Is(err, vector.ErrBuildRunning) {
-			return nil, embeddingsBuildRunningError(err, buildID)
+			return nil, apiError(http.StatusConflict, err.Error())
 		}
 		if errors.Is(err, vector.ErrUnknownServer) ||
 			errors.Is(err, vector.ErrInvalidBuildRequest) {
@@ -278,33 +224,30 @@ func (s *Server) humaEmbeddingsBuild(
 	}()
 	return &embeddingsBuildOutput{
 		Status: http.StatusAccepted,
-		Body:   embeddingsBuildResponse{Started: true, BuildID: buildID},
+		Body:   embeddingsBuildResponse{Started: true},
 	}, nil
 }
 
-func (s *Server) humaEmbeddingsStatus(
-	ctx context.Context, in *embeddingsStoreInput,
-) (*jsonOutput[vector.BuildStatus], error) {
-	var body vector.BuildStatus
+func (s *Server) humaEmbeddingsStatus(ctx context.Context, in *embeddingsStoreInput) (*jsonOutput[vector.BuildStatus], error) {
+	var setup *EmbeddingsSetupStatus
 	if s.embeddingsRuntime != nil {
-		setup, err := s.embeddingsRuntime.SetupStatus(ctx)
+		status, err := s.embeddingsRuntime.SetupStatus(ctx)
 		if err != nil {
-			setup.Error = err.Error()
+			status.Error = err.Error()
 		}
-		body.Setup = &setup
-		if setup.Busy || !setup.Enabled {
-			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
+		setup = &status
+		if status.Busy || !status.Enabled {
+			return &jsonOutput[vector.BuildStatus]{Body: vector.BuildStatus{Setup: setup}}, nil
 		}
 	}
-	manager := s.embeddingsManagerAfterSetup(in.Store, body.Setup)
+	manager := s.embeddingsManagerFor(in.Store)
 	if manager == nil {
-		if body.Setup != nil && (body.Setup.Error != "" || body.Setup.Busy) {
-			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
+		if setup != nil && setup.Action != "" {
+			return &jsonOutput[vector.BuildStatus]{Body: vector.BuildStatus{Setup: setup}}, nil
 		}
 		return nil, s.embeddingsUnavailableError()
 	}
-	setup := body.Setup
-	body = manager.Status()
+	body := manager.Status()
 	body.Setup = setup
 	return &jsonOutput[vector.BuildStatus]{Body: body}, nil
 }
@@ -312,13 +255,13 @@ func (s *Server) humaEmbeddingsStatus(
 func (s *Server) humaEmbeddingsGenerations(
 	ctx context.Context, in *embeddingsStoreInput,
 ) (*jsonOutput[embeddingsGenerationsResponse], error) {
-	manager, err := s.embeddingsActionManager(in.Store)
-	if err != nil {
-		return nil, err
+	manager := s.embeddingsManagerFor(in.Store)
+	if manager == nil {
+		return nil, s.embeddingsUnavailableError()
 	}
 	gens, err := manager.Generations(ctx)
 	if err != nil {
-		return nil, embeddingsGenerationsError(err)
+		return nil, internalError("list embedding generations", err)
 	}
 	if gens == nil {
 		gens = []vector.GenerationInfo{}
@@ -331,9 +274,9 @@ func (s *Server) humaEmbeddingsGenerations(
 func (s *Server) humaEmbeddingsActivate(
 	ctx context.Context, in *embeddingsGenerationActionInput,
 ) (*noContentOutput, error) {
-	manager, err := s.embeddingsActionManager(in.Store)
-	if err != nil {
-		return nil, err
+	manager := s.embeddingsManagerFor(in.Store)
+	if manager == nil {
+		return nil, s.embeddingsUnavailableError()
 	}
 	if err := manager.Activate(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)
@@ -344,23 +287,14 @@ func (s *Server) humaEmbeddingsActivate(
 func (s *Server) humaEmbeddingsRetire(
 	ctx context.Context, in *embeddingsGenerationActionInput,
 ) (*noContentOutput, error) {
-	manager, err := s.embeddingsActionManager(in.Store)
-	if err != nil {
-		return nil, err
+	manager := s.embeddingsManagerFor(in.Store)
+	if manager == nil {
+		return nil, s.embeddingsUnavailableError()
 	}
 	if err := manager.Retire(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)
 	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil
-}
-
-// embeddingsGenerationsError keeps the setup-busy 409 on a list refused after
-// the manager lookup.
-func embeddingsGenerationsError(err error) error {
-	if errors.Is(err, ErrEmbeddingsSetupBusy) {
-		return embeddingsSetupBusyError()
-	}
-	return internalError("list embedding generations", err)
 }
 
 // embeddingsActionError maps Activate/Retire's sentinels — ErrBuildRunning
@@ -369,7 +303,7 @@ func embeddingsGenerationsError(err error) error {
 // internal error.
 func embeddingsActionError(err error) error {
 	if errors.Is(err, vector.ErrBuildRunning) || errors.Is(err, vector.ErrGenerationRefused) {
-		return embeddingsBuildRunningError(err, 0)
+		return apiError(http.StatusConflict, err.Error())
 	}
 	if errors.Is(err, vector.ErrGenerationNotFound) {
 		return apiError(http.StatusNotFound, err.Error())

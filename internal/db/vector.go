@@ -10,11 +10,13 @@ import (
 // was never called, or the concrete backend doesn't support semantic search
 // at all). Backends with more specific context wrap this classification with
 // SemanticUnavailableError.
-var ErrSemanticUnavailable = errors.New("semantic search not available")
+var ErrSemanticUnavailable = errors.New(
+	"semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'")
 
 // SemanticUnavailableError carries a backend-specific reason while retaining
 // ErrSemanticUnavailable as its machine-readable classification. Its rendered
-// message adds the backend's own recovery guidance.
+// message deliberately omits the sentinel's local setup guidance, which is not
+// valid for every storage backend.
 type SemanticUnavailableError struct {
 	Reason string
 }
@@ -171,20 +173,18 @@ func (db *DB) HasSemantic() bool {
 	return db.getVectorSearcher() != nil
 }
 
-// SemanticReadiness reports metadata without waiting for an index replacement.
+// SemanticReadiness reports the wired searcher's metadata-only readiness.
 // Searchers predating this capability remain usable but have unknown detail.
 func (db *DB) SemanticReadiness(ctx context.Context) (SemanticReadiness, error) {
-	if !db.vectorMu.TryRLock() {
-		return SemanticReadiness{State: "unknown", Reason: "index_changing"}, nil
-	}
-	defer db.vectorMu.RUnlock()
-	if provider, ok := db.vectorSearcher.(SemanticReadinessProvider); ok {
-		return provider.SemanticReadiness(ctx)
-	}
-	if db.vectorSearcher == nil {
+	searcher := db.getVectorSearcher()
+	if searcher == nil {
 		return SemanticReadiness{State: "unavailable", Reason: "not_configured"}, nil
 	}
-	return SemanticReadiness{State: "unknown", Reason: "status_unsupported"}, nil
+	provider, ok := searcher.(SemanticReadinessProvider)
+	if !ok {
+		return SemanticReadiness{State: "unknown", Reason: "status_unsupported"}, nil
+	}
+	return provider.SemanticReadiness(ctx)
 }
 
 // getVectorSearcher returns the currently wired VectorSearcher, or nil.
@@ -194,23 +194,8 @@ func (db *DB) getVectorSearcher() VectorSearcher {
 	return db.vectorSearcher
 }
 
-// semanticSearcher validates f and returns the wired VectorSearcher, held
-// against replacement until release.
-func (db *DB) semanticSearcher(f ContentSearchFilter) (VectorSearcher, func(), error) {
-	if err := ValidateSemanticFilter(f); err != nil {
-		return nil, func() {}, err
-	}
+func (db *DB) getRecallVectorSearcher() RecallVectorSearcher {
 	db.vectorMu.RLock()
-	if db.vectorSearcher == nil {
-		db.vectorMu.RUnlock()
-		return nil, func() {}, ErrSemanticUnavailable
-	}
-	return db.vectorSearcher, db.vectorMu.RUnlock, nil
-}
-
-// getRecallVectorSearcher returns the wired RecallVectorSearcher, or nil,
-// held against replacement until release.
-func (db *DB) getRecallVectorSearcher() (RecallVectorSearcher, func()) {
-	db.vectorMu.RLock()
-	return db.recallSearcher, db.vectorMu.RUnlock
+	defer db.vectorMu.RUnlock()
+	return db.recallSearcher
 }

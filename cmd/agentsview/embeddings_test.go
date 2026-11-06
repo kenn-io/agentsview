@@ -707,9 +707,7 @@ func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		assert.NoError(t, json.MarshalWrite(w, map[string]any{"started": true, "build_id": status.BuildID}))
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -787,9 +785,7 @@ END`)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		assert.NoError(t, json.MarshalWrite(w, map[string]any{"started": true, "build_id": status.BuildID}))
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1119,11 +1115,11 @@ func TestEmbeddingsBuildIncludeAutomatedFlagThreadsToDaemonRequest(t *testing.T)
 			gotIncludeAutomated.Store(req.IncludeAutomated)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_ = json.MarshalWrite(w, map[string]any{"started": true, "build_id": 1})
+			_ = json.MarshalWrite(w, map[string]bool{"started": true})
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.MarshalWrite(w, vector.BuildStatus{BuildID: 1, LastResult: &vector.BuildResult{}})
+			_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
 		},
 	})
 
@@ -1145,16 +1141,14 @@ func TestRecallEmbeddingsBuildNormalizesIncludeAutomatedForDaemon(t *testing.T) 
 		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
 			var req vector.BuildRequest
 			assert.NoError(t, json.UnmarshalRead(r.Body, &req))
-			assert.Equal(t, "recall", req.Store)
 			gotIncludeAutomated.Store(req.IncludeAutomated)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_ = json.MarshalWrite(w, map[string]any{"started": true, "build_id": 1})
+			_ = json.MarshalWrite(w, map[string]bool{"started": true})
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "recall", r.URL.Query().Get("store"))
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.MarshalWrite(w, vector.BuildStatus{BuildID: 1, LastResult: &vector.BuildResult{}})
+			_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
 		},
 	})
 
@@ -1199,11 +1193,11 @@ max_retries = 1
 			gotIncludeAutomated.Store(req.IncludeAutomated)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_ = json.MarshalWrite(w, map[string]any{"started": true, "build_id": 1})
+			_ = json.MarshalWrite(w, map[string]bool{"started": true})
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.MarshalWrite(w, vector.BuildStatus{BuildID: 1, LastResult: &vector.BuildResult{}})
+			_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
 		},
 	})
 
@@ -1430,13 +1424,12 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 				"--repair-invalid must pass through to the daemon")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_ = json.MarshalWrite(w, map[string]any{"started": true, "build_id": 1})
+			_ = json.MarshalWrite(w, map[string]bool{"started": true})
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			statusCalled.Store(true)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.MarshalWrite(w, vector.BuildStatus{
-				BuildID: 1,
 				Running: false,
 				LastResult: &vector.BuildResult{
 					Activated: true,
@@ -1475,36 +1468,25 @@ func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {
 	assert.ErrorContains(t, err, "if any flags in the group")
 }
 
-func TestEmbeddingsDaemonClientBuildResponsePreservesBasePathAndOrigin(t *testing.T) {
-	for _, tc := range []struct {
-		name, body string
-		wantError  bool
-	}{
-		{"admitted build", `{"started":true,"build_id":1}`, false},
-		{"missing build identity", `{"started":true}`, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var gotPath, gotOrigin string
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotPath = r.URL.Path
-				gotOrigin = r.Header.Get("Origin")
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusAccepted)
-				_, _ = w.Write([]byte(tc.body))
-			}))
-			t.Cleanup(ts.Close)
-			client := embeddingsDaemonClient{baseURL: ts.URL + "/viewer"}
-			id, err := client.startBuild(t.Context(), vector.BuildRequest{})
-			if tc.wantError {
-				require.ErrorContains(t, err, "missing a build ID")
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, int64(1), id)
-				assert.Equal(t, "/viewer/api/v1/embeddings/build", gotPath)
-				assert.Equal(t, ts.URL, gotOrigin)
-			}
-		})
-	}
+func TestEmbeddingsDaemonClientOriginOmitsBasePath(t *testing.T) {
+	var gotPath, gotOrigin string
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		gotPath = r.URL.Path
+		gotOrigin = r.Header.Get("Origin")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	client := embeddingsDaemonClient{baseURL: ts.URL + "/viewer"}
+	err := client.startBuild(t.Context(), vector.BuildRequest{})
+
+	require.NoError(t, err)
+	assert.Equal(t, "/viewer/api/v1/embeddings/build", gotPath)
+	assert.Equal(t, ts.URL, gotOrigin)
 }
 
 func TestEmbeddingsBuildRejectsRepairWithFullRebuild(t *testing.T) {
@@ -1570,58 +1552,49 @@ func TestEmbeddingsActivateDispatchesToDaemon(t *testing.T) {
 	assert.Equal(t, "Generation 3 activated.\n", out.String())
 }
 
-// TestBuildViaDaemonConflictThenPolls follows an active build while refusing
-// setup conflicts.
+// TestBuildViaDaemonConflictThenPolls drives buildViaDaemon (the daemon
+// build path's core logic) against a fake HTTP server that refuses the
+// first build attempt with 409 and reports Running until the second status
+// poll, asserting the CLI prints the "already running" notice and then the
+// same final summary format the direct path uses.
 func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	orig := embeddingsPollInterval
 	embeddingsPollInterval = time.Millisecond
 	t.Cleanup(func() { embeddingsPollInterval = orig })
-	for _, tc := range []struct {
-		name       string
-		code       string
-		message    string
-		wantError  string
-		wantPolls  int32
-		wantNotice bool
-	}{
-		{name: "running build", message: "an embeddings build is already running", wantPolls: 2, wantNotice: true},
-		{name: "setup refusal", code: "embeddings_setup_busy", message: "search by meaning is being set up", wantError: "being set up"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var statusCalls atomic.Int32
-			mux := http.NewServeMux()
-			mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				_ = json.MarshalWrite(w, map[string]any{"error": tc.message, "code": tc.code, "current_build_id": 1})
-			})
-			mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
-				n := statusCalls.Add(1)
-				status := vector.BuildStatus{BuildID: 1, Running: n < 2}
-				if n >= 2 {
-					status.LastResult = &vector.BuildResult{
-						Activated: true,
-						Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},
-					}
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.MarshalWrite(w, status)
-			})
-			srv := httptest.NewServer(mux)
-			defer srv.Close()
-			var out bytes.Buffer
-			err := buildViaDaemon(t.Context(), &out, embeddingsDaemonClient{baseURL: srv.URL}, vector.BuildRequest{})
-			if tc.wantError != "" {
-				require.ErrorContains(t, err, tc.wantError, tc.name)
-			} else {
-				require.NoError(t, err, tc.name)
-				assert.Contains(t, out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0")
-				assert.Contains(t, out.String(), "Generation activated.")
-			}
-			assert.Equal(t, tc.wantNotice, strings.Contains(out.String(), "a build is already running (daemon)"), tc.name)
-			assert.Equal(t, tc.wantPolls, statusCalls.Load(), tc.name)
+
+	var statusCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.MarshalWrite(w, map[string]string{
+			"error": "an embeddings build is already running",
 		})
-	}
+	})
+	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
+		n := statusCalls.Add(1)
+		status := vector.BuildStatus{Running: n < 2}
+		if n >= 2 {
+			status.LastResult = &vector.BuildResult{
+				Activated: true,
+				Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.MarshalWrite(w, status)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := embeddingsDaemonClient{baseURL: srv.URL}
+	var out bytes.Buffer
+	err := buildViaDaemon(t.Context(), &out, client, vector.BuildRequest{})
+	require.NoError(t, err)
+
+	assert.Contains(t, out.String(), "a build is already running (daemon)")
+	assert.Contains(t, out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0")
+	assert.Contains(t, out.String(), "Generation activated.")
+	assert.GreaterOrEqual(t, statusCalls.Load(), int32(2))
 }
 
 // TestBuildViaDaemonAlwaysSendsIncludeAutomated pins the wire contract for
@@ -1639,11 +1612,11 @@ func TestBuildViaDaemonAlwaysSendsIncludeAutomated(t *testing.T) {
 				assert.NoError(t, json.UnmarshalRead(r.Body, &body))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusAccepted)
-				_ = json.MarshalWrite(w, map[string]any{"started": true, "build_id": 1})
+				_ = json.MarshalWrite(w, map[string]bool{"started": true})
 			})
 			mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.MarshalWrite(w, vector.BuildStatus{BuildID: 1, LastResult: &vector.BuildResult{}})
+				_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
 			})
 			srv := httptest.NewServer(mux)
 			defer srv.Close()
@@ -1670,12 +1643,11 @@ func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		_ = json.MarshalWrite(w, map[string]any{"started": true, "build_id": 1})
+		_ = json.MarshalWrite(w, map[string]bool{"started": true})
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.MarshalWrite(w, vector.BuildStatus{
-			BuildID:   1,
 			Running:   false,
 			LastError: "encoder rejected input",
 			LastResult: &vector.BuildResult{
