@@ -3,7 +3,6 @@
   import {
     Button,
     Card,
-    EmptyState,
     Modal,
     PageHeader,
     SearchInput,
@@ -26,7 +25,8 @@
   } from "../../api/types/recall.js";
   import { ApiError, isAbortError, responseTimingOf, type ResponseTiming } from "../../api/runtime.js";
   import { formatDateTime, m } from "../../i18n/index.js";
-  import { ChevronDownIcon, ChevronRightIcon } from "../../icons.js";
+  import { ChevronDownIcon, ChevronRightIcon, SearchIcon } from "../../icons.js";
+  import MissingData from "../shared/MissingData.svelte";
   import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -916,7 +916,11 @@
   {:else if entriesFailed}
     <p class="entries-state status-error">{m.recall_page_error()}</p>
   {:else if entries.length === 0}
-    <EmptyState title={m.recall_page_empty()} />
+    <MissingData title={m.recall_page_empty()}>
+      {#snippet icon()}
+        <SearchIcon size="24" strokeWidth="1.75" />
+      {/snippet}
+    </MissingData>
   {:else}
     <div class="recall-table-shell">
       <Table unsorted

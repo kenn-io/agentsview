@@ -27,8 +27,8 @@
   import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
-  import StateNotice from "../shared/StateNotice.svelte";
-  import { InfoIcon } from "../../icons.js";
+  import MissingData from "../shared/MissingData.svelte";
+  import { InfoIcon, SparklesIcon } from "../../icons.js";
   import ToolEffectivenessReport from "./ToolEffectivenessReport.svelte";
   import {
     resolveRange,
@@ -414,14 +414,14 @@
       {m.insights_page_loading_archive()}
     </Card>
   {:else if insights.items.length === 0 && insights.tasks.length === 0}
-    <StateNotice
+    <MissingData
       title={m.insights_page_no_generated_saved()}
       description={m.insights_page_no_generated_hint()}
     >
       {#snippet icon()}
-        <InfoIcon size="16" strokeWidth="2" />
+        <SparklesIcon size="24" strokeWidth="1.75" />
       {/snippet}
-    </StateNotice>
+    </MissingData>
   {:else}
     <div class="generated-layout">
       <div class="generated-list" aria-label={m.recall_generated_archive_label()}>

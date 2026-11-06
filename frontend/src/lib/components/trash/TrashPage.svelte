@@ -1,6 +1,6 @@
 <script lang="ts">
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
-  import StateNotice from "../shared/StateNotice.svelte";
+  import MissingData from "../shared/MissingData.svelte";
   import { m } from "../../i18n/index.js";
   import { TrashIcon } from "../../icons.js";
   import { onDestroy, onMount } from "svelte";
@@ -106,11 +106,11 @@
   {#if loading}
     <div class="loading-state">{m.trash_loading()}</div>
   {:else if trashedSessions.length === 0}
-    <StateNotice variant="empty" title={m.trash_empty()} description={m.trash_empty_desc()}>
+    <MissingData title={m.trash_empty()} description={m.trash_empty_desc()}>
       {#snippet icon()}
         <TrashIcon size="24" strokeWidth="1.75" />
       {/snippet}
-    </StateNotice>
+    </MissingData>
   {:else}
 
     <div class="trash-list">

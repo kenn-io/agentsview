@@ -96,6 +96,14 @@ App-level glue that remains local:
   Calendar) should receive `locale={getLocale()}` from the i18n facade so
   their date formatting follows the app language setting instead of the
   browser locale; the shared wrappers above do this.
+- `frontend/src/lib/components/shared/MissingData.svelte` is the one state for
+  a page or panel with nothing to show: nothing saved yet, no rows for these
+  filters, or a feature this server does not offer. It takes an icon, a title,
+  an optional description, and an optional action such as Retry, and it sits
+  centered a fixed step below the page header. Use it instead of kit-ui
+  `EmptyState` or hand-built empty blocks. Keep `StateNotice` for framed notes
+  that sit above content that still renders (read-only mode, date-filter
+  scope), and the alert card for failed loads. It is proposed for kit-ui.
 - `frontend/src/lib/components/content/SessionFindBar.svelte` wires kit-ui
   `FindBar` to the in-session search store.
 - kit-ui `SettingsLayout` owns grouped settings navigation and scroll behavior;
