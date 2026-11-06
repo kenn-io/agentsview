@@ -157,6 +157,13 @@ func (db *DB) assembleDailyUsageFacts(
 	var sessionCounts UsageSessionCounts
 	if !filter.SkipSessionCounts {
 		sessionCounts = NewUsageSessionCounts(facts.MatchingSessions)
+		sessionCounts.Total += facts.SessionCounts.Total
+		for key, count := range facts.SessionCounts.ByProject {
+			sessionCounts.ByProject[key] += count
+		}
+		for key, count := range facts.SessionCounts.ByAgent {
+			sessionCounts.ByAgent[key] += count
+		}
 	}
 	projects, err := db.BuildProjectIdentityMap(ctx, SortedKeys(projectLabels))
 	if err != nil {

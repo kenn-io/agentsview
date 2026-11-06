@@ -107,6 +107,7 @@ type UsageFilter struct {
 	// TopSessionsTokenTypes selects the counters used for token ranking.
 	// The zero value means all token types.
 	TopSessionsTokenTypes UsageTokenTypes
+	topSessionsLimit      int
 
 	// ModelAliases groups plan-only model counts before per-session deduplication.
 	ModelAliases map[string]string
@@ -2676,6 +2677,20 @@ type TopSessionEntry struct {
 
 // GroupTopSessions merges grouped runs and preserves individual sessions.
 func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, tokenTypes UsageTokenTypes) ([]TopSessionEntry, error) {
+	out, err := mergeTopSessions(entries)
+	if err != nil {
+		return nil, err
+	}
+	var total TopSessionEntry
+	for _, entry := range out {
+		if err := addTopSessionTotals(&total, entry); err != nil {
+			return nil, err
+		}
+	}
+	return limitGroupedTopSessions(out, limit, sortBy, tokenTypes, total, len(out))
+}
+
+func mergeTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 	type key struct{ project, machine, group string }
 	type group struct {
 		TopSessionEntry
@@ -2720,17 +2735,26 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 		}
 		out = append(out, row.TopSessionEntry)
 	}
+	return out, nil
+}
+
+func limitGroupedTopSessions(out []TopSessionEntry, limit int, sortBy string, tokenTypes UsageTokenTypes, total TopSessionEntry, units int) ([]TopSessionEntry, error) {
 	sortTopSessions(out, sortBy, tokenTypes)
 	limit = min(len(out), normalizeTopSessionsLimit(limit))
 	ranked := out[:limit]
-	if len(ranked) < len(out) {
-		var remainder TopSessionEntry
-		for _, row := range out[len(ranked):] {
-			if err := addTopSessionTotals(&remainder, row); err != nil {
+	if units > limit {
+		for _, entry := range ranked {
+			entry.InputTokens = -entry.InputTokens
+			entry.OutputTokens = -entry.OutputTokens
+			entry.CacheCreationTokens = -entry.CacheCreationTokens
+			entry.CacheReadTokens = -entry.CacheReadTokens
+			entry.TotalTokens = -entry.TotalTokens
+			entry.Cost.Microdollars = -entry.Cost.Microdollars
+			if err := addTopSessionTotals(&total, entry); err != nil {
 				return nil, err
 			}
 		}
-		ranked = append(ranked, remainder)
+		ranked = append(ranked, total)
 	}
 	return ranked, nil
 }

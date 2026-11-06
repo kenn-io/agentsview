@@ -309,18 +309,38 @@ func (db *DB) queryUsageRollups(
 func (db *DB) GetTopSessionsByCost(
 	ctx context.Context, filter UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
+	kind := usageQueryKindToken
+	if filter.ActiveSince == "" && filter.Termination == "" {
+		kind = usageQueryKindTopSessions
+	}
+	filter.topSessionsLimit = limit
 	snapshot, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindToken, false)
+		ctx, filter, kind, false)
 	if err != nil {
 		return nil, err
 	}
+	if facts.TopSessions != nil {
+		return db.finishUsageTopSessions(ctx, facts, filter, limit)
+	}
+	result, err := foldUsageTopSessions(snapshot.Sessions, facts.Groups, filter)
+	if err != nil {
+		return nil, err
+	}
+	if filter.TopSessionsByGroup {
+		return GroupTopSessions(result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes)
+	}
+	return SortAndLimitTopSessions(result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes), nil
+}
+
+func foldUsageTopSessions(sessions []usageQuerySession, groups []usageFactsGroup, filter UsageFilter) ([]TopSessionEntry, error) {
+	var err error
 	type totals struct {
 		input, output, cacheWrite, cacheRead int
 		cost                                 money.Money
 		authoritative                        *money.Money
 	}
 	bySession := make(map[string]*totals)
-	for _, group := range facts.Groups {
+	for _, group := range groups {
 		if group.SessionID == "" {
 			continue
 		}
@@ -344,8 +364,8 @@ func (db *DB) GetTopSessionsByCost(
 			current.authoritative = &value
 		}
 	}
-	metadata := make(map[string]usageQuerySession, len(snapshot.Sessions))
-	for _, session := range snapshot.Sessions {
+	metadata := make(map[string]usageQuerySession, len(sessions))
+	for _, session := range sessions {
 		metadata[session.ID] = session
 	}
 	result := make([]TopSessionEntry, 0, len(bySession))
@@ -373,12 +393,7 @@ func (db *DB) GetTopSessionsByCost(
 		}
 		result = append(result, entry)
 	}
-	if filter.TopSessionsByGroup {
-		return GroupTopSessions(result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes)
-	}
-	return SortAndLimitTopSessions(
-		result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes,
-	), nil
+	return result, nil
 }
 
 // GetUsageSessionCounts returns distinct billed survivor owners by metadata.

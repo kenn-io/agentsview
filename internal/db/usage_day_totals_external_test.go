@@ -12,3 +12,7 @@ import (
 func TestUsageDayTotalsFiltersMatchLegacy(t *testing.T) {
 	db.CheckUsageDayTotalsFiltersMatchLegacy(t, usagefixture.SeedPage(t, 32))
 }
+
+func TestUsageTopSessionsMatchLegacy(t *testing.T) {
+	db.CheckUsageTopSessionsMatchLegacy(t, usagefixture.SeedPage(t, 32))
+}

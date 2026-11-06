@@ -55,9 +55,68 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 		return usageFactsResult{}, err
 	}
 
+	if err := readUsageOwners(ctx, conn, timezoneID, snapshot, filter); err != nil {
+		return usageFactsResult{}, err
+	}
+	authoritative, err := readUsageDailyRollups(ctx, conn, timezoneID, *snapshot, filter, " AND i.has_authoritative=1")
+	if err != nil {
+		return usageFactsResult{}, err
+	}
+	result.Groups = append(result.Groups, authoritative.Groups...)
+	result.MatchingSessions = authoritative.MatchingSessions
+	if !filter.SkipSessionCounts {
+		b = NewQueryBuilder(SQLiteQueryDialect(), 0)
+		where = `s.timezone_id=` + b.Add(timezoneID)
+		if from != "" {
+			where += ` AND r.local_date>=` + b.Add(from)
+		}
+		if to != "" {
+			where += ` AND r.local_date<=` + b.Add(to)
+		}
+		where = AppendUsagePredicates(where, BuildUsageSessionFilter(filter, b, ""), "")
+		where = AppendUsagePredicates(where, BuildUsageSourceFilter(filter, b, "r.reported_model"), "")
+		owner := usageOwnerPredicate("s", b, from, to)
+		rows, err = conn.QueryContext(ctx, `WITH eligible AS (
+            SELECT s.session_id, s.project, s.baked_agent, s.id, s.has_authoritative FROM usage_daily_rollups r
+            JOIN (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s ON s.id=r.rollup_install_id WHERE `+where+`
+        ) SELECT CASE WHEN (`+owner+`) THEN s.session_id ELSE '' END AS owner_id,
+            s.project, s.baked_agent, COUNT(DISTINCT s.session_id) FROM eligible s
+            GROUP BY owner_id, s.project, s.baked_agent`, b.Args()...)
+		if err != nil {
+			return usageFactsResult{}, err
+		}
+		result.SessionCounts = NewUsageSessionCounts(nil)
+		for rows.Next() {
+			var id, project, agent string
+			var count int
+			if err := rows.Scan(&id, &project, &agent, &count); err != nil {
+				_ = rows.Close()
+				return usageFactsResult{}, err
+			}
+			if id != "" {
+				result.MatchingSessions[id] = UsageSessionInfo{Project: project, Agent: agent}
+				continue
+			}
+			result.SessionCounts.Total += count
+			result.SessionCounts.ByProject[project] += count
+			result.SessionCounts.ByAgent[agent] += count
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return usageFactsResult{}, err
+		}
+		if err := rows.Close(); err != nil {
+			return usageFactsResult{}, err
+		}
+	}
+	return result, nil
+}
+
+func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) error {
+	from, to := usageRollupDateBounds(*snapshot)
 	// Include every exception owner before ranking; filtering earlier can change
 	// snapshot attribution. Authoritative sessions keep per-session allocation.
-	b = NewQueryBuilder(SQLiteQueryDialect(), 0)
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	passing := strings.Join(BuildUsageSessionFilter(filter, b, ""), " AND ")
 	if passing == "" {
 		passing = "1=1"
@@ -74,19 +133,19 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	}
 	args = append(args, b.Args()...)
 	args = append(args, b.Args()...)
-	rows, err = conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, (`+passing+`)
+	rows, err := conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, s.group_key, (`+passing+`)
         FROM (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s WHERE s.timezone_id=? AND ((s.has_authoritative=1 AND (`+passing+`) AND s.id IN (
         SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE `+dates+`)) OR s.id IN (
         SELECT e.rollup_install_id FROM usage_rollup_exceptions e WHERE `+dates+`))`, args...)
 	if err != nil {
-		return usageFactsResult{}, err
+		return err
 	}
 	defer rows.Close()
 	snapshot.Sessions = nil
 	for rows.Next() {
 		var session usageQuerySession
-		if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.PassesFilter); err != nil {
-			return usageFactsResult{}, err
+		if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.GroupKey, &session.PassesFilter); err != nil {
+			return err
 		}
 		if millis, _, _ := usagefacts.ParseTimestamp(session.StartedAt); millis != nil {
 			session.StartedAtMillis = millis
@@ -95,40 +154,21 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 		snapshot.Sessions = append(snapshot.Sessions, session)
 	}
 	if err := rows.Err(); err != nil {
-		return usageFactsResult{}, err
+		return err
 	}
-	authoritative, err := readUsageDailyRollups(ctx, conn, timezoneID, *snapshot, filter, true)
-	if err != nil {
-		return usageFactsResult{}, err
+	if err := rows.Close(); err != nil {
+		return err
 	}
-	result.Groups = append(result.Groups, authoritative.Groups...)
-	if !filter.SkipSessionCounts {
-		b = NewQueryBuilder(SQLiteQueryDialect(), 0)
-		where = `s.timezone_id=` + b.Add(timezoneID)
-		if from != "" {
-			where += ` AND r.local_date>=` + b.Add(from)
-		}
-		if to != "" {
-			where += ` AND r.local_date<=` + b.Add(to)
-		}
-		where = AppendUsagePredicates(where, BuildUsageSessionFilter(filter, b, ""), "")
-		where = AppendUsagePredicates(where, BuildUsageSourceFilter(filter, b, "r.reported_model"), "")
-		rows, err = conn.QueryContext(ctx, `SELECT DISTINCT s.session_id, s.project, s.baked_agent FROM usage_daily_rollups r JOIN (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s ON s.id=r.rollup_install_id WHERE `+where, b.Args()...)
-		if err != nil {
-			return usageFactsResult{}, err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			var info UsageSessionInfo
-			if err := rows.Scan(&id, &info.Project, &info.Agent); err != nil {
-				return usageFactsResult{}, err
-			}
-			result.MatchingSessions[id] = info
-		}
-		if err := rows.Err(); err != nil {
-			return usageFactsResult{}, err
-		}
+	return nil
+}
+
+func usageOwnerPredicate(alias string, b *QueryBuilder, from, to string) string {
+	dates := "1=1"
+	if from != "" {
+		dates += ` AND local_date>=` + b.Add(from)
 	}
-	return result, nil
+	if to != "" {
+		dates += ` AND local_date<=` + b.Add(to)
+	}
+	return alias + `.has_authoritative=1 OR ` + alias + `.id IN (SELECT rollup_install_id FROM usage_rollup_exceptions WHERE ` + dates + `)`
 }

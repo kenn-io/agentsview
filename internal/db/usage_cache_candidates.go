@@ -20,6 +20,7 @@ const (
 	usageQueryKindToken usageQueryKind = iota
 	usageQueryKindActivity
 	usageQueryKindDayTotals
+	usageQueryKindTopSessions
 )
 
 type usageSourceVersion struct {

@@ -275,3 +275,35 @@ func mustUsageJSON(tb testing.TB, result DailyUsageResult) string {
 	require.NoError(tb, err)
 	return string(raw)
 }
+
+func usageDayTotalsFilterCases() []struct {
+	name   string
+	change func(*UsageFilter)
+} {
+	return []struct {
+		name   string
+		change func(*UsageFilter)
+	}{
+		{"unfiltered", func(f *UsageFilter) {}},
+		{"breakdowns", func(f *UsageFilter) { f.Breakdowns = true }},
+		{"project", func(f *UsageFilter) { f.Project = "project-0" }},
+		{"project labels", func(f *UsageFilter) { f.ProjectLabels = []string{"project-0", "project-1"} }},
+		{"agent", func(f *UsageFilter) { f.Agent = "claude" }},
+		{"machine", func(f *UsageFilter) { f.Machine = "machine-1" }},
+		{"branch", func(f *UsageFilter) { f.GitBranch = EncodeBranchFilterToken("project-0", "branch-0") }},
+		{"model", func(f *UsageFilter) { f.Model = "journal-model" }},
+		{"exclude project", func(f *UsageFilter) { f.ExcludeProject = "project-0" }},
+		{"exclude labels", func(f *UsageFilter) { f.ExcludeProjectLabels = []string{"project-0"} }},
+		{"exclude agent", func(f *UsageFilter) { f.ExcludeAgent = "claude" }},
+		{"exclude model", func(f *UsageFilter) { f.ExcludeModel = "journal-model" }},
+		{"human", func(f *UsageFilter) { f.AutomatedScope = "human" }},
+		{"automated", func(f *UsageFilter) { f.AutomatedScope = "automated" }},
+		{"exclude automated", func(f *UsageFilter) { f.ExcludeAutomated = true }},
+		{"exclude one shot", func(f *UsageFilter) { f.ExcludeOneShot = true }},
+		{"human multiple messages", func(f *UsageFilter) { f.ExcludeOneShot = true; f.AutomatedScope = "human" }},
+		{"minimum messages", func(f *UsageFilter) { f.MinUserMessages = 3 }},
+		{"skip counts", func(f *UsageFilter) { f.SkipSessionCounts = true }},
+		{"all history", func(f *UsageFilter) { f.From = ""; f.To = "" }},
+		{"active since", func(f *UsageFilter) { f.ActiveSince = "2026-08-06T00:00:00Z" }},
+	}
+}

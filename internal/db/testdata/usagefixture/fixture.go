@@ -45,7 +45,7 @@ func PageExceptions() []db.SessionBatchWrite {
 			{SessionID: "reported", Role: "assistant", Ordinal: 0, Timestamp: started, Model: Models[0], TokenUsage: []byte(`{"input_tokens":100,"output_tokens":20}`)},
 			{SessionID: "reported", Role: "assistant", Ordinal: 1, Timestamp: "2026-08-04T00:30:00Z", Model: Models[0], TokenUsage: []byte(`{"input_tokens":200,"output_tokens":30}`)},
 		}},
-		{Session: db.Session{ID: "duplicate-a", Project: "project-0", Agent: "claude", StartedAt: &started, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "duplicate-a", Role: "assistant", Timestamp: started, Model: Models[0], TokenUsage: []byte(`{"output_tokens":10}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}},
+		{Session: db.Session{ID: "duplicate-a", Project: "project-0", Agent: "claude", StartedAt: &started, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "duplicate-a", Role: "assistant", Timestamp: started, Model: Models[0], TokenUsage: []byte(`{"output_tokens":10}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}, {SessionID: "duplicate-a", Role: "assistant", Ordinal: 1, Timestamp: started, Model: Models[0], TokenUsage: []byte(`{"input_tokens":17}`)}}},
 		{Session: db.Session{ID: "duplicate-b", Project: "project-1", Agent: "claude", StartedAt: &started, UserMessageCount: 2}, Messages: []db.Message{{SessionID: "duplicate-b", Role: "assistant", Timestamp: started, Model: Models[0], TokenUsage: []byte(`{"output_tokens":20}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}},
 	}
 }
