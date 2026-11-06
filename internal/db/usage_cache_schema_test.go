@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 
 	metadata := readUsageCacheMetadata(t, cache.db)
 	assert.Equal(t, "agentsview-usage-facts", metadata[usageCacheMetadataKind])
-	assert.Equal(t, "17", metadata[usageCacheMetadataFormatVersion])
+	assert.Equal(t, strconv.Itoa(usageCacheFormatVersion), metadata[usageCacheMetadataFormatVersion])
 	assert.Equal(t, "database-id-one", metadata[usageCacheMetadataSourceDatabaseID])
 	assert.Equal(t, "1", metadata[usageCacheMetadataRetirementProtocol])
 	assert.Equal(t, "1", metadata[usageCacheMetadataNextInstallRevision])

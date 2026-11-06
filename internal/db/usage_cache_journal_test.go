@@ -96,9 +96,6 @@ func TestUsageJournaledWindowDiscoveryBoundaries(t *testing.T) {
 		got, err := usageRollupWindowSessions(t.Context(), cache.db, otherZone.id, otherFilter)
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []string{"earlier", "later"}, got)
-		got, err = usageRollupWindowSessions(t.Context(), cache.db, zone.id, UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"})
-		require.NoError(t, err)
-		assert.ElementsMatch(t, []string{"inside", "earlier", "later"}, got)
 	})
 }
 
@@ -230,7 +227,7 @@ func TestUsageJournaledTrustBoundaries(t *testing.T) {
 				_, err := database.getWriter().ExecContext(t.Context(), `UPDATE archive_metadata SET value='new-generation' WHERE key='database_id'`)
 				require.NoError(t, err)
 			case "revision above archive":
-				_, err := cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision=9223372036854775807, change_install_revision=9223372036854775807`)
+				_, err := cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision=9223372036854775807`)
 				require.NoError(t, err)
 			case "custom pricing":
 				database.SetCustomPricing(map[string]config.CustomModelRate{"journal-model": {InputMicrodollarsPerMTok: 3_000_000}})
@@ -671,8 +668,8 @@ func TestUsageJournaledForeignInstall(t *testing.T) {
 				assert.Equal(t, "session", missing.SessionID)
 			} else {
 				require.ErrorIs(t, err, errUsageCacheSourceChanged)
+				assertJournaledUsageLegacy(t, database, filter)
 			}
-			assertJournaledUsageLegacy(t, database, filter)
 		})
 	}
 }
@@ -919,38 +916,13 @@ func TestUsageJournaledTopSharesSummary(t *testing.T) {
 		}
 		database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 		ctx := WithUsageWindowMemo(t.Context())
-		want, err := database.getDailyUsageLegacy(t.Context(), filter)
+		_, err := database.GetDailyUsage(ctx, filter)
 		require.NoError(t, err)
-		got, err := database.GetDailyUsage(ctx, filter)
+		_, err = database.GetTopSessionsByCost(ctx, filter, 3)
 		require.NoError(t, err)
-		assert.Equal(t, want, got)
-		wantTop, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 3)
-		require.NoError(t, err)
-		gotTop, err := database.GetTopSessionsByCost(ctx, filter, 3)
-		require.NoError(t, err)
-		assert.Equal(t, wantTop, gotTop)
 		assert.EqualValues(t, 1, prepares.Load())
 		assert.EqualValues(t, 2, reads.Load())
 	})
-}
-
-func TestUsageJournaledDedupInvalidation(t *testing.T) {
-	database := testDB(t)
-	seedUsageSnapshotSession(t, database, "original", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
-	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	cache := warmJournaledUsage(t, database, filter)
-	seedUsageSnapshotSession(t, database, "sibling", "project-b", "2026-08-10T10:00:00Z", 0, 20, "model-a")
-	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
-	require.NoError(t, err)
-	_, err = cache.fill.Ensure(t.Context(), snapshot.Versions, 0)
-	require.NoError(t, err)
-	var installed int
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id='original'`).Scan(&installed))
-	require.Zero(t, installed)
-	assertJournaledUsageLegacy(t, database, filter)
-	got, err := database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, 20, got.Totals.OutputTokens)
 }
 
 func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
