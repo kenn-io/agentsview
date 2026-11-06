@@ -73,7 +73,92 @@ const (
 	usageCacheMetadataRetirementProtocol  = "retirement_protocol_version"
 )
 
-const usageCacheSchemaSQL = `
+// Each column defines its table declaration, rollup source, and trigger behavior.
+var usageDayTotalsColumns = []struct {
+	name, definition, source string
+	key, sum                 bool
+}{
+	{"timezone_id", "INTEGER NOT NULL REFERENCES usage_rollup_timezones(id) ON DELETE CASCADE", "i.timezone_id", true, false},
+	{"local_date", "TEXT NOT NULL", "r.local_date", true, false},
+	{"project", "TEXT NOT NULL", "i.project", true, false},
+	{"agent", "TEXT NOT NULL", "i.baked_agent", true, false},
+	{"machine", "TEXT NOT NULL", "i.machine", true, false},
+	{"git_branch", "TEXT NOT NULL", "i.git_branch", true, false},
+	{"is_automated", "INTEGER NOT NULL", "i.is_automated", true, false},
+	{"user_message_count", "INTEGER NOT NULL", "i.user_message_count", true, false},
+	{"reported_model", "TEXT NOT NULL", "r.reported_model", true, false},
+	{"provider_id", "TEXT NOT NULL", "r.provider_id", true, false},
+	{"rate_hash", "TEXT NOT NULL", "r.rate_hash", true, false},
+	{"band_threshold", "INTEGER NOT NULL", "r.band_threshold", true, false},
+	{"priced_model", "TEXT NOT NULL", "r.priced_model", false, false},
+	{"pricing_timestamp", "TEXT NOT NULL", "r.pricing_timestamp", false, false},
+	{"row_count", "INTEGER NOT NULL", "1", false, true},
+	{"input_tokens", "INTEGER NOT NULL", "r.input_tokens", false, true},
+	{"output_tokens", "INTEGER NOT NULL", "r.output_tokens", false, true},
+	{"cache_creation_tokens", "INTEGER NOT NULL", "r.cache_creation_tokens", false, true},
+	{"cache_read_tokens", "INTEGER NOT NULL", "r.cache_read_tokens", false, true},
+	{"estimated_cost_microdollars", "INTEGER NOT NULL", "r.estimated_cost_microdollars", false, true},
+	{"savings_microdollars", "INTEGER NOT NULL", "r.savings_microdollars", false, true},
+	{"computed_request_count", "INTEGER NOT NULL", "r.computed_request_count", false, true},
+	{"computed_aggregate_count", "INTEGER NOT NULL", "r.computed_aggregate_count", false, true},
+	{"reported_count", "INTEGER NOT NULL", "r.reported_count", false, true},
+	{"base_request_count", "INTEGER NOT NULL", "r.base_request_count", false, true},
+}
+
+var usageDayTotalsColumnNames = func() string {
+	names := make([]string, 0, len(usageDayTotalsColumns))
+	for _, column := range usageDayTotalsColumns {
+		names = append(names, column.name)
+	}
+	return strings.Join(names, ", ")
+}()
+
+func usageDayTotalsSchemaSQL() string {
+	var definitions, keys, updates []string
+	for _, column := range usageDayTotalsColumns {
+		definitions = append(definitions, column.name+" "+column.definition)
+		if column.key {
+			keys = append(keys, column.name)
+		}
+		if column.sum {
+			updates = append(updates, column.name+"=usage_day_totals."+column.name+"+excluded."+column.name)
+		}
+	}
+	keyNames := strings.Join(keys, ", ")
+	schema := "CREATE TABLE usage_day_totals (" + strings.Join(definitions, ", ") + ", PRIMARY KEY (" + keyNames + ")) WITHOUT ROWID;\n"
+	for _, action := range []string{"INSERT", "DELETE"} {
+		row, sign := "NEW.", ""
+		if action == "DELETE" {
+			row, sign = "OLD.", "-"
+		}
+		var values, keyValues []string
+		for _, column := range usageDayTotalsColumns {
+			value := strings.ReplaceAll(column.source, "r.", row)
+			if column.key {
+				keyValues = append(keyValues, value)
+			}
+			if column.sum {
+				value = sign + value
+			}
+			values = append(values, value)
+		}
+		schema += fmt.Sprintf(`CREATE TRIGGER usage_day_totals_%s AFTER %s ON usage_daily_rollups
+BEGIN
+    INSERT INTO usage_day_totals (%s)
+    SELECT %s FROM usage_rollup_installs i WHERE i.id=%srollup_install_id AND i.has_authoritative=0
+    ON CONFLICT (%s) DO UPDATE SET %s;
+`, strings.ToLower(action), action, usageDayTotalsColumnNames, strings.Join(values, ", "), row, keyNames, strings.Join(updates, ", "))
+		if action == "DELETE" {
+			schema += fmt.Sprintf(`    DELETE FROM usage_day_totals WHERE row_count=0 AND (%s) =
+        (SELECT %s FROM usage_rollup_installs i WHERE i.id=OLD.rollup_install_id);
+`, keyNames, strings.Join(keyValues, ", "))
+		}
+		schema += "END;\n"
+	}
+	return schema
+}
+
+var usageCacheSchemaSQL = `
 CREATE TABLE usage_cache_metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -231,76 +316,7 @@ CREATE TABLE usage_daily_rollups (
 CREATE INDEX usage_daily_rollups_window
     ON usage_daily_rollups (local_date, rollup_install_id);
 
-CREATE TABLE usage_day_totals (
-    timezone_id INTEGER NOT NULL REFERENCES usage_rollup_timezones(id) ON DELETE CASCADE,
-    local_date TEXT NOT NULL,
-    project TEXT NOT NULL,
-    agent TEXT NOT NULL,
-    machine TEXT NOT NULL,
-    git_branch TEXT NOT NULL,
-    is_automated INTEGER NOT NULL,
-    user_message_count INTEGER NOT NULL,
-    reported_model TEXT NOT NULL,
-    provider_id TEXT NOT NULL,
-    rate_hash TEXT NOT NULL,
-    band_threshold INTEGER NOT NULL,
-    priced_model TEXT NOT NULL,
-    pricing_timestamp TEXT NOT NULL,
-    row_count INTEGER NOT NULL,
-    input_tokens INTEGER NOT NULL,
-    output_tokens INTEGER NOT NULL,
-    cache_creation_tokens INTEGER NOT NULL,
-    cache_read_tokens INTEGER NOT NULL,
-    estimated_cost_microdollars INTEGER NOT NULL,
-    savings_microdollars INTEGER NOT NULL,
-    computed_request_count INTEGER NOT NULL,
-    computed_aggregate_count INTEGER NOT NULL,
-    reported_count INTEGER NOT NULL,
-    base_request_count INTEGER NOT NULL,
-    PRIMARY KEY (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold)
-) WITHOUT ROWID;
-CREATE TRIGGER usage_day_totals_insert AFTER INSERT ON usage_daily_rollups
-BEGIN
-    INSERT INTO usage_day_totals (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, pricing_timestamp, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count)
-    SELECT i.timezone_id, NEW.local_date, i.project, i.baked_agent, i.machine, i.git_branch, i.is_automated, i.user_message_count, NEW.reported_model, NEW.provider_id, NEW.rate_hash, NEW.band_threshold, NEW.priced_model, NEW.pricing_timestamp, 1, NEW.input_tokens, NEW.output_tokens, NEW.cache_creation_tokens, NEW.cache_read_tokens, NEW.estimated_cost_microdollars, NEW.savings_microdollars, NEW.computed_request_count, NEW.computed_aggregate_count, NEW.reported_count, NEW.base_request_count
-    FROM usage_rollup_installs i WHERE i.id=NEW.rollup_install_id AND i.has_authoritative=0
-    ON CONFLICT (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold) DO UPDATE SET
-        row_count=usage_day_totals.row_count+excluded.row_count,
-        input_tokens=usage_day_totals.input_tokens+excluded.input_tokens,
-        output_tokens=usage_day_totals.output_tokens+excluded.output_tokens,
-        cache_creation_tokens=usage_day_totals.cache_creation_tokens+excluded.cache_creation_tokens,
-        cache_read_tokens=usage_day_totals.cache_read_tokens+excluded.cache_read_tokens,
-        estimated_cost_microdollars=usage_day_totals.estimated_cost_microdollars+excluded.estimated_cost_microdollars,
-        savings_microdollars=usage_day_totals.savings_microdollars+excluded.savings_microdollars,
-        computed_request_count=usage_day_totals.computed_request_count+excluded.computed_request_count,
-        computed_aggregate_count=usage_day_totals.computed_aggregate_count+excluded.computed_aggregate_count,
-        reported_count=usage_day_totals.reported_count+excluded.reported_count,
-        base_request_count=usage_day_totals.base_request_count+excluded.base_request_count;
-END;
-CREATE TRIGGER usage_day_totals_delete AFTER DELETE ON usage_daily_rollups
-BEGIN
-    INSERT INTO usage_day_totals (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, pricing_timestamp, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count)
-    SELECT i.timezone_id, OLD.local_date, i.project, i.baked_agent, i.machine, i.git_branch, i.is_automated, i.user_message_count, OLD.reported_model, OLD.provider_id, OLD.rate_hash, OLD.band_threshold, OLD.priced_model, OLD.pricing_timestamp, -1, -OLD.input_tokens, -OLD.output_tokens, -OLD.cache_creation_tokens, -OLD.cache_read_tokens, -OLD.estimated_cost_microdollars, -OLD.savings_microdollars, -OLD.computed_request_count, -OLD.computed_aggregate_count, -OLD.reported_count, -OLD.base_request_count
-    FROM usage_rollup_installs i WHERE i.id=OLD.rollup_install_id AND i.has_authoritative=0
-    ON CONFLICT (timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold) DO UPDATE SET
-        row_count=usage_day_totals.row_count+excluded.row_count,
-        input_tokens=usage_day_totals.input_tokens+excluded.input_tokens,
-        output_tokens=usage_day_totals.output_tokens+excluded.output_tokens,
-        cache_creation_tokens=usage_day_totals.cache_creation_tokens+excluded.cache_creation_tokens,
-        cache_read_tokens=usage_day_totals.cache_read_tokens+excluded.cache_read_tokens,
-        estimated_cost_microdollars=usage_day_totals.estimated_cost_microdollars+excluded.estimated_cost_microdollars,
-        savings_microdollars=usage_day_totals.savings_microdollars+excluded.savings_microdollars,
-        computed_request_count=usage_day_totals.computed_request_count+excluded.computed_request_count,
-        computed_aggregate_count=usage_day_totals.computed_aggregate_count+excluded.computed_aggregate_count,
-        reported_count=usage_day_totals.reported_count+excluded.reported_count,
-        base_request_count=usage_day_totals.base_request_count+excluded.base_request_count;
-    DELETE FROM usage_day_totals WHERE row_count=0
-      AND (timezone_id, project, agent, machine, git_branch, is_automated, user_message_count) =
-          (SELECT timezone_id, project, baked_agent, machine, git_branch, is_automated, user_message_count
-           FROM usage_rollup_installs WHERE id=OLD.rollup_install_id)
-      AND local_date=OLD.local_date AND reported_model=OLD.reported_model
-      AND provider_id=OLD.provider_id AND rate_hash=OLD.rate_hash AND band_threshold=OLD.band_threshold;
-END;
+` + usageDayTotalsSchemaSQL() + `
 CREATE TRIGGER usage_day_totals_install_delete BEFORE DELETE ON usage_rollup_installs
 WHEN EXISTS (SELECT 1 FROM usage_rollup_timezones WHERE id=OLD.timezone_id)
 BEGIN
@@ -921,7 +937,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        computed_aggregate_count, reported_count, base_request_count,
 		        discarded_snapshot_output_tokens
 		 FROM usage_daily_rollups LIMIT 0`,
-		`SELECT timezone_id, local_date, project, agent, machine, git_branch, is_automated, user_message_count, reported_model, provider_id, rate_hash, band_threshold, priced_model, pricing_timestamp, row_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, estimated_cost_microdollars, savings_microdollars, computed_request_count, computed_aggregate_count, reported_count, base_request_count FROM usage_day_totals LIMIT 0`,
+		"SELECT " + usageDayTotalsColumnNames + " FROM usage_day_totals LIMIT 0",
 		`SELECT rollup_install_id, local_date, model, user_message_count
 		 FROM usage_activity_rollups LIMIT 0`,
 		`SELECT rollup_install_id, group_kind, group_key, cached_session_id,

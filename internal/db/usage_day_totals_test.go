@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db/testdata/usagefixture"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
@@ -46,8 +45,9 @@ func TestUsageDayTotalsRefreshStaysJournaled(t *testing.T) {
 	assert.Equal(t, []bool{true}, reads, "the first read after an append must use the journaled path")
 }
 
-func TestUsageDayTotalsFiltersMatchLegacy(t *testing.T) {
-	database := seedUsageDayTotalsPage(t, 32)
+// CheckUsageDayTotalsFiltersMatchLegacy checks private cache state for the external fixture test.
+func CheckUsageDayTotalsFiltersMatchLegacy(t *testing.T, database *DB) {
+	t.Helper()
 	filter := UsageFilter{From: "2026-08-03", To: "2026-08-10", Timezone: "UTC"}
 	cache := warmJournaledUsage(t, database, filter)
 	for _, tc := range []struct {
@@ -214,23 +214,6 @@ func TestUsageDayTotalsHistoricalRateCollisionMatchesLegacy(t *testing.T) {
 			assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
 		})
 	}
-}
-
-func seedUsageDayTotalsPage(tb testing.TB, count int) *DB {
-	tb.Helper()
-	database, _, _ := seedUsageJournalBenchmark(tb, count, 1)
-	var writes []SessionBatchWrite
-	for _, input := range usagefixture.PageExceptions() {
-		writes = append(writes, usageFixtureWrite(input))
-	}
-	_, err := database.WriteSessionBatchAtomic(tb.Context(), writes)
-	require.NoError(tb, err)
-	cost := money.Money{Microdollars: usagefixture.ReportedCostMicrodollars}
-	require.NoError(tb, database.ReplaceSessionUsageEvents(tb.Context(), "reported", []UsageEvent{{Source: "shutdown", Model: "journal-model", InputTokens: usagefixture.ReportedInputTokens, Cost: &cost, CostStatus: "exact", CostSource: CopilotReportedCostSource, OccurredAt: usagefixture.ReportedTimestamp, DedupKey: "reported"}}))
-	require.NoError(tb, database.StartUsageCacheBackfill(tb.Context()))
-	require.NoError(tb, database.WaitUsageCacheBackfill(tb.Context()))
-	database.StopUsageCacheBackfill()
-	return database
 }
 
 func mustUsageJSON(tb testing.TB, result DailyUsageResult) string {
