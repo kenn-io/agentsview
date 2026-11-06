@@ -3,6 +3,7 @@
 package clickhouse
 
 import (
+	"context"
 	"maps"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,34 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
 )
+
+func TestUsageRowsVersionProbeFailure(t *testing.T) {
+	store, _, _ := newPushedStore(t)
+	ctx := t.Context()
+	_, ok, err := store.usageRowsVersion(ctx, chUsageReadTables)
+	require.NoError(t, err)
+	require.True(t, ok)
+	kept := maps.Clone(store.usageVersions.tables)
+	// Dropping a table makes the identity query fail without a costly scan.
+	execPreparedUsage(t, store, "DROP TABLE sessions")
+	_, err = store.readUsageRowIdentities(ctx, []string{"sessions"})
+	require.Error(t, err)
+	slot, version, err := store.usageRowMemoKey(ctx, preparedUsageState{ready: true}, "daily", db.UsageFilter{}, "", "", nil)
+	require.NoError(t, err)
+	require.Empty(t, slot)
+	require.Empty(t, version)
+	require.Equal(t, kept, store.usageVersions.tables)
+
+	// Keep the snapshot available so cancellation reaches the identity probe.
+	snapshot, err := store.readPartsSnapshot(ctx)
+	require.NoError(t, err)
+	canceled, cancel := context.WithCancel(context.WithValue(ctx, partsSnapshotKey{}, snapshot))
+	cancel()
+	_, ok, err = store.usageRowsVersion(canceled, chUsageReadTables)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, ok)
+	require.Equal(t, kept, store.usageVersions.tables)
+}
 
 func TestUsageMemosSurviveMerges(t *testing.T) {
 	ctx := t.Context()

@@ -2249,7 +2249,7 @@ type usageTableVersion struct {
 }
 
 // usageRowsVersion probes only tables whose parts changed. If parts move
-// during the probe, the read is served uncached.
+// during the probe or the probe fails, the read is served uncached.
 func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, bool, error) {
 	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	if !ok {
@@ -2274,7 +2274,7 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 	if len(changed) > 0 {
 		identities, err := s.readUsageRowIdentities(ctx, changed)
 		if err != nil {
-			return "", false, err
+			return "", false, ctx.Err()
 		}
 		fresh, err := s.readPartsSnapshot(ctx)
 		if err != nil {
