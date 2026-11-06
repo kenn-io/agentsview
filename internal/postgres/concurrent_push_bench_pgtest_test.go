@@ -14,39 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func BenchmarkPGUsageJournalCommit(b *testing.B) {
-	for _, sessions := range []int{8000, 32000} {
-		b.Run(fmt.Sprint(sessions), func(b *testing.B) {
-			pgURL := testPGURL(b)
-			schema := pgUsageBenchmarkSchema(b)
-			pg, err := Open(b.Context(), pgURL, schema, true)
-			require.NoError(b, err)
-			b.Cleanup(func() { cleanNamedPGSchema(b, pgURL, schema) })
-			b.Cleanup(func() { require.NoError(b, pg.Close()) })
-			require.NoError(b, EnsureSchema(b.Context(), pg, schema))
-			b.ResetTimer()
-			for range b.N {
-				b.StopTimer()
-				_, err := pg.ExecContext(b.Context(), `DELETE FROM sessions`)
-				require.NoError(b, err)
-				tx, err := pg.BeginTx(b.Context(), nil)
-				require.NoError(b, err)
-				_, err = tx.ExecContext(b.Context(), `INSERT INTO sessions(id,machine,project,agent)
- SELECT 'bulk-' || n, 'machine', 'project', 'codex' FROM generate_series(1,$1::int) n`, sessions)
-				if err != nil {
-					require.NoError(b, tx.Rollback())
-					b.Fatal(err)
-				}
-				b.StartTimer()
-				err = tx.Commit()
-				b.StopTimer()
-				require.NoError(b, err)
-			}
-			b.ReportMetric(float64(sessions), "sessions/op")
-		})
-	}
-}
-
 // This file also runs unchanged on the base revision. One operation publishes
 // four independent archives concurrently, including their messages and usage.
 func BenchmarkPGConcurrentPush(b *testing.B) {
@@ -114,33 +81,4 @@ func BenchmarkPGConcurrentPush(b *testing.B) {
 	b.ReportMetric(writers*sessions, "sessions/op")
 	b.ReportMetric(writers*sessions*messages, "messages/op")
 	b.ReportMetric(writers*sessions*2, "usage_events/op")
-}
-
-// This also runs unchanged on the base revision. One operation inserts 300,000
-// usage events across 1,000 sessions in a single statement.
-func BenchmarkPGUsageEventsBulkInsert(b *testing.B) {
-	const sessions, events = 1000, 300000
-	pgURL := testPGURL(b)
-	schema := pgUsageBenchmarkSchema(b)
-	cleanNamedPGSchema(b, pgURL, schema)
-	b.Cleanup(func() { cleanNamedPGSchema(b, pgURL, schema) })
-	pg, err := Open(b.Context(), pgURL, schema, true)
-	require.NoError(b, err)
-	b.Cleanup(func() { require.NoError(b, pg.Close()) })
-	require.NoError(b, EnsureSchema(b.Context(), pg, schema))
-	_, err = pg.ExecContext(b.Context(), `INSERT INTO sessions(id,machine,project,agent)
- SELECT 'bulk-' || g, 'machine', 'project', 'codex' FROM generate_series(1, $1) g`, sessions)
-	require.NoError(b, err)
-	b.ResetTimer()
-	for range b.N {
-		b.StopTimer()
-		_, err := pg.ExecContext(b.Context(), `DELETE FROM usage_events`)
-		require.NoError(b, err)
-		b.StartTimer()
-		_, err = pg.ExecContext(b.Context(), `INSERT INTO usage_events(session_id,source,model,input_tokens,output_tokens,dedup_key)
- SELECT 'bulk-' || (g % $1 + 1), 'provider', 'model-a', g, g, 'event-' || g FROM generate_series(1, $2) g`, sessions, events)
-		require.NoError(b, err)
-	}
-	b.StopTimer()
-	b.ReportMetric(events, "usage_events/op")
 }

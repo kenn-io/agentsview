@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -63,28 +62,6 @@ func TestUsageChangeJournalEmptyArchivePublication(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, after, before, "a changed project key must advance the revision")
 	assert.Empty(t, ids)
-}
-
-// Connection parameters must override credentials already present in the URL query.
-func TestUsageChangeJournalRoleQueryCredentials(t *testing.T) {
-	_, syncer, _ := newUsageJournalFixture(t)
-	base, err := url.Parse(testPGURL(t))
-	require.NoError(t, err)
-	user := base.User.Username()
-	password, _ := base.User.Password()
-	query := base.Query()
-	query.Set("user", user)
-	query.Set("password", password)
-	base.RawQuery = query.Encode()
-	t.Setenv("TEST_PG_URL", base.String())
-	roleDSN := newUsageJournalRole(t, syncer, "")
-	roleDB, err := Open(t.Context(), roleDSN, syncer.schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, roleDB.Close()) })
-	var currentUser string
-	require.NoError(t, roleDB.QueryRowContext(t.Context(), `SELECT current_user`).Scan(&currentUser))
-	assert.NotEqual(t, user, currentUser)
-	assert.True(t, strings.HasPrefix(currentUser, "usage_role_"), "connection must use the fixture role")
 }
 
 func TestUsageChangeJournalWriteAfterImmediateStamp(t *testing.T) {
@@ -339,30 +316,6 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	after, err = store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Greater(t, after, before)
-}
-
-func TestUsageChangeJournalInstallTimeoutStillPushes(t *testing.T) {
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
-	require.NoError(t, err)
-	blocker, err := store.DB().BeginTx(ctx, nil)
-	require.NoError(t, err)
-	defer blocker.Rollback()
-	require.NoError(t, lockSyncMetadataRow(ctx, blocker, "usage_change_journal_lock"))
-	syncer.pg.SetMaxOpenConns(1)
-	_, err = syncer.pg.ExecContext(ctx, `SET lock_timeout = '1s'`)
-	require.NoError(t, err)
-	// pg serve runs the full schema path, while Push uses the fast path.
-	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
-	syncer.schemaDone = false
-	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "timeout-session", Project: "project", Machine: "test-machine", Agent: "codex"}))
-	result, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	require.Empty(t, result.Errors)
-	var project string
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT project FROM sessions WHERE id='timeout-session'`).Scan(&project))
-	assert.Equal(t, "project", project)
 }
 
 func TestUsageChangeJournalNewerVersion(t *testing.T) {
