@@ -1299,24 +1299,3 @@ func TestUsageJournaledWarmSevenDaysReuseInstalledTotals(t *testing.T) {
 	assert.Zero(t, fills.Load(), "warm reads must reuse cached facts")
 	assert.Zero(t, builds.Load(), "warm reads must reuse installed daily totals")
 }
-
-func TestUsageJournaledGroupKey(t *testing.T) {
-	database := testDB(t)
-	seedJournaledUsage(t, database, "session")
-	filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC", TopSessionsByGroup: true}
-	warmJournaledUsage(t, database, filter)
-	before, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	require.Len(t, before, 1)
-	assert.Equal(t, "session", before[0].SessionID)
-	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET group_key='daily:run', session_name='Daily report · run' WHERE id='session'`)
-	require.NoError(t, err)
-	after, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	require.Len(t, after, 1)
-	assert.Empty(t, after[0].SessionID)
-	assert.Equal(t, "daily:run", after[0].GroupKey)
-	assert.Equal(t, "Daily report", after[0].GroupLabel)
-	assert.Equal(t, before[0].Cost, after[0].Cost)
-	assert.Equal(t, before[0].TotalTokens, after[0].TotalTokens)
-}

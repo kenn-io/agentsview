@@ -57,9 +57,8 @@ representatives per returned group for the agent, latest start, and latest
 usable cron label. SQL computes the trailing remainder from the same units.
 Individual sessions load archive names only for returned rows; grouped rows use
 cached labels. Daily reads and billed-session counts share the distinct count
-reader. Count-only reads resolve surviving exception owners without summing or
-pricing usage. Warm preparations skip window-session discovery. Each archive
-snapshot loads its pricing catalog and computes its digest.
+reader. Warm preparations skip window-session discovery. Each archive snapshot
+loads its pricing catalog and computes its digest.
 
 ### Dedup exceptions
 

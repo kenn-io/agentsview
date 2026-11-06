@@ -32,7 +32,7 @@ type usageFactsResult struct {
 	Groups           []usageFactsGroup
 	MatchingSessions map[string]UsageSessionInfo
 	SessionCounts    UsageSessionCounts
-	TopSessions      *usageTopSessionCandidates
+	TopSessions      []TopSessionEntry
 }
 
 type usageCacheMissingSessionError struct{ SessionID string }
@@ -88,13 +88,7 @@ func (cache *usageCache) usageRollupQuery(
 		return usageFactsResult{}, err
 	}
 	var result usageFactsResult
-	if prepared.journaled && prepared.kind == usageQueryKindSessionCounts {
-		err = readUsageOwners(ctx, conn, timezoneID, &snapshot, filter)
-		if err == nil {
-			result.MatchingSessions = make(map[string]UsageSessionInfo)
-			err = readUsageSessionCounts(ctx, conn, timezoneID, snapshot, filter, &result)
-		}
-	} else if prepared.journaled && prepared.kind == usageQueryKindDayTotals {
+	if prepared.journaled && prepared.kind == usageQueryKindDayTotals {
 		result, err = readUsageDayTotals(ctx, conn, timezoneID, &snapshot, filter)
 	} else if prepared.journaled && prepared.kind == usageQueryKindTopSessions {
 		result, err = readUsageTopSessionOwners(ctx, conn, timezoneID, &snapshot, filter)
@@ -109,24 +103,17 @@ func (cache *usageCache) usageRollupQuery(
 	if err != nil {
 		return usageFactsResult{}, err
 	}
-	if prepared.journaled && prepared.kind == usageQueryKindSessionCounts {
-		sessions := usageRollupSessionMap(snapshot)
-		survivors, _ := usageRollupExceptionSurvivors(exceptions, sessions, filter)
-		for _, fact := range survivors {
-			if session := sessions[fact.AttributionSessionID]; session != nil {
-				result.MatchingSessions[session.ID] = UsageSessionInfo{Project: session.Project, Agent: session.Agent}
-			}
-		}
-	} else {
-		exceptionGroups, err := aggregateUsageRollupExceptions(exceptions, snapshot, filter, resolver)
-		if err != nil {
-			return usageFactsResult{}, err
-		}
-		result.Groups = append(result.Groups, exceptionGroups...)
-		slices.SortFunc(result.Groups, compareUsageFactsGroup)
-		for _, group := range exceptionGroups {
-			if group.SessionID != "" {
-				result.MatchingSessions[group.SessionID] = UsageSessionInfo{Project: group.Project, Agent: group.Agent}
+	exceptionGroups, err := aggregateUsageRollupExceptions(
+		exceptions, snapshot, filter, resolver)
+	if err != nil {
+		return usageFactsResult{}, err
+	}
+	result.Groups = append(result.Groups, exceptionGroups...)
+	slices.SortFunc(result.Groups, compareUsageFactsGroup)
+	for _, group := range exceptionGroups {
+		if group.SessionID != "" {
+			result.MatchingSessions[group.SessionID] = UsageSessionInfo{
+				Project: group.Project, Agent: group.Agent,
 			}
 		}
 	}
@@ -467,14 +454,6 @@ func (cache *usageCache) usageRollupActivityQuery(
 	return result, nil
 }
 
-func usageRollupExceptionSurvivors(facts []usageRollupFact, sessions map[string]*usageQuerySession, filter UsageFilter) ([]usageRollupFact, int64) {
-	plain, general, discarded := rankUsageRollupSnapshots(facts)
-	plain = filterUsageRollupOwners(plain, sessions, filter)
-	general = filterUsageRollupOwners(general, sessions, filter)
-	general = deduplicateUsageRollupGeneral(general)
-	return slices.Concat(plain, general), discarded
-}
-
 func aggregateUsageRollupExceptions(
 	facts []usageRollupFact, snapshot usageQuerySnapshot, filter UsageFilter,
 	resolver *export.PricingResolver,
@@ -483,7 +462,11 @@ func aggregateUsageRollupExceptions(
 		return nil, nil
 	}
 	sessions := usageRollupSessionMap(snapshot)
-	survivors, discarded := usageRollupExceptionSurvivors(facts, sessions, filter)
+	plain, general, discarded := rankUsageRollupSnapshots(facts)
+	plain = filterUsageRollupOwners(plain, sessions, filter)
+	general = filterUsageRollupOwners(general, sessions, filter)
+	general = deduplicateUsageRollupGeneral(general)
+	survivors := slices.Concat(plain, general)
 	type key struct {
 		session, agent, date, model, providerID, priced, pattern, rateHash string
 		rateOK                                                             bool

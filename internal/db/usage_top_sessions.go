@@ -7,10 +7,6 @@ import (
 	"strings"
 )
 
-type usageTopSessionCandidates struct {
-	Entries []TopSessionEntry
-}
-
 // readUsageTopSessionOwners loads only the daily contributions that need the
 // shared exception fold before they can enter SQL ranking.
 func readUsageTopSessionOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) (usageFactsResult, error) {
@@ -33,7 +29,7 @@ func readUsageTopSessionOwners(ctx context.Context, conn *sql.Conn, timezoneID i
 
 // readUsageTopSessions ranks ordinary and resolved owner contributions together.
 // Only the returned units load their cached representatives and archive names.
-func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot usageQuerySnapshot, facts usageFactsResult, filter UsageFilter, limit int) (*usageTopSessionCandidates, error) {
+func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot usageQuerySnapshot, facts usageFactsResult, filter UsageFilter, limit int) ([]TopSessionEntry, error) {
 	owners, err := foldUsageTopSessions(snapshot.Sessions, facts.Groups, filter)
 	if err != nil {
 		return nil, err
@@ -99,7 +95,7 @@ func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64,
 		return nil, err
 	}
 	defer rows.Close()
-	result := &usageTopSessionCandidates{Entries: make([]TopSessionEntry, 0)}
+	result := make([]TopSessionEntry, 0)
 	for rows.Next() {
 		var entry TopSessionEntry
 		if err := rows.Scan(&entry.SessionID, &entry.Project, &entry.Machine, &entry.GroupKey, &entry.Agent, &entry.StartedAt, &entry.GroupLabel,
@@ -110,15 +106,18 @@ func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64,
 		if entry.SessionID != "" {
 			entry.GroupLabel = ""
 		} else if entry.GroupKey != "" {
-			entry.DisplayName = topSessionGroupDisplayName(entry.GroupKey, entry.GroupLabel)
+			entry.DisplayName = entry.GroupLabel
+			if entry.DisplayName == "" {
+				entry.DisplayName, _, _ = strings.Cut(entry.GroupKey, ":")
+			}
 		}
-		result.Entries = append(result.Entries, entry)
+		result = append(result, entry)
 	}
 	return result, rows.Err()
 }
 
 func (db *DB) finishUsageTopSessions(ctx context.Context, facts usageFactsResult) ([]TopSessionEntry, error) {
-	entries := facts.TopSessions.Entries
+	entries := facts.TopSessions
 	ids := make([]string, 0, len(entries))
 	for i := range entries {
 		if entries[i].SessionID != "" {

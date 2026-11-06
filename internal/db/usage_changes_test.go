@@ -11,36 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUsageChangeJournalSessionNames(t *testing.T) {
-	for _, tc := range []struct {
-		name, oldGroup, newGroup string
-		journaled                bool
-	}{
-		{"ordinary rename", "", "", false},
-		{"grouped rename", "daily:job", "daily:job", true},
-		{"join group", "", "daily:job", true},
-		{"leave group", "daily:job", "", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			database := testDB(t)
-			require.NoError(t, database.UpsertSession(t.Context(), Session{ID: "session", Project: "project", Agent: "codex", GroupKey: tc.oldGroup}))
-			before, err := database.UsageChangeRevision(t.Context())
-			require.NoError(t, err)
-			_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_name='New report · run', group_key=? WHERE id='session'`, tc.newGroup)
-			require.NoError(t, err)
-			after, err := database.UsageChangeRevision(t.Context())
-			require.NoError(t, err)
-			ids, err := database.LoadUsageChanges(t.Context(), before, after)
-			require.NoError(t, err)
-			if tc.journaled {
-				assert.Greater(t, after, before)
-				assert.Equal(t, []string{"session"}, ids)
-			} else {
-				assert.Equal(t, before, after)
-				assert.Empty(t, ids)
-			}
-		})
-	}
+func TestUsageChangeJournalSkipsOrdinaryRenames(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.UpsertSession(t.Context(), Session{ID: "session", Project: "project", Agent: "codex"}))
+	before, err := database.UsageChangeRevision(t.Context())
+	require.NoError(t, err)
+	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_name='New report · run' WHERE id='session'`)
+	require.NoError(t, err)
+	after, err := database.UsageChangeRevision(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
 }
 
 func TestUsageChangeJournal(t *testing.T) {
