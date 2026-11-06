@@ -270,7 +270,7 @@ func httpSessionUsageData(
 		if query.OwnOnly || query.NoSync {
 			return nil, tokenUseExitNotFound, nil
 		}
-		startupPending, archiveStale, statusErr := httpSessionSyncStatus(
+		startupPending, archiveStale, syncPending, statusErr := httpSessionSyncStatus(
 			ctx, baseURL, token,
 		)
 		if statusErr != nil {
@@ -278,10 +278,10 @@ func httpSessionUsageData(
 				"checking sync status: %w", statusErr,
 			)
 		}
-		if startupPending || archiveStale {
+		if startupPending || archiveStale || syncPending {
 			return nil, tokenUseExitErr, errors.New(
 				"session usage is not yet available; retry after startup ingestion " +
-					"or the archive rebuild finishes",
+					"or archive catch-up finishes",
 			)
 		}
 		// Startup or rebuild work can finish after the first lookup but before
@@ -334,24 +334,24 @@ func httpSessionUsageData(
 
 func httpSessionSyncStatus(
 	ctx context.Context, baseURL, token string,
-) (startupPending, archiveStale bool, err error) {
+) (startupPending, archiveStale, syncPending bool, err error) {
 	api, err := apiclient.NewHTTPClient(baseURL, token, sessionUsageHTTPClient)
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	response, err := api.GetAPIV1SyncStatusWithResponse(ctx)
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	if response == nil {
-		return false, false, io.ErrUnexpectedEOF
+		return false, false, false, io.ErrUnexpectedEOF
 	}
 	if response.JSON200 == nil {
-		return false, false, fmt.Errorf(
+		return false, false, false, fmt.Errorf(
 			"sync status: HTTP %d: %s", response.StatusCode, response.Body,
 		)
 	}
-	return response.JSON200.StartupPending, response.JSON200.ArchiveStale, nil
+	return response.JSON200.StartupPending, response.JSON200.ArchiveStale, response.JSON200.SyncPending, nil
 }
 
 func storeSessionUsageData(

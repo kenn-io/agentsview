@@ -3,12 +3,13 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
 // IdleTracker tracks external client activity and internal write work for a
-// daemon that should self-reap after a quiet period.
+// server that suspends local ingestion and optionally exits after a quiet period.
 type IdleTracker struct {
 	mu             sync.Mutex
 	timeout        time.Duration
@@ -18,27 +19,42 @@ type IdleTracker struct {
 	activeWork     int
 	draining       bool
 	notify         chan struct{}
+
+	lastSyncActivity time.Time
+	syncTimeout      time.Duration
+	onSyncIdle       func()
+	syncIdle         bool
 }
 
 func NewIdleTracker(timeout time.Duration, onIdle func()) *IdleTracker {
 	return &IdleTracker{
-		timeout:      timeout,
-		onIdle:       onIdle,
-		lastExternal: time.Now(),
-		notify:       make(chan struct{}, 1),
+		timeout:          timeout,
+		onIdle:           onIdle,
+		lastExternal:     time.Now(),
+		lastSyncActivity: time.Now(),
+		notify:           make(chan struct{}, 1),
 	}
 }
 
-func (t *IdleTracker) Wrap(next http.Handler) http.Handler {
+// SetSyncIdle installs a repeatable suspension callback. It marks ingestion
+// pending synchronously; resource teardown must run outside this callback.
+func (t *IdleTracker) SetSyncIdle(timeout time.Duration, suspend func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.syncTimeout, t.onSyncIdle = timeout, suspend
+}
+
+func (t *IdleTracker) Wrap(next http.Handler, basePath string) http.Handler {
 	if t == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !t.beginExternal() {
+		syncActivity := strings.TrimPrefix(r.URL.Path, basePath) != "/api/ping"
+		if !t.beginExternal(syncActivity) {
 			http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
 			return
 		}
-		defer t.endExternal()
+		defer t.endExternal(syncActivity)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -58,17 +74,14 @@ func (t *IdleTracker) BeginWork() (func(), bool) {
 	t.mu.Unlock()
 	t.signal()
 
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			t.mu.Lock()
-			if t.activeWork > 0 {
-				t.activeWork--
-			}
-			t.mu.Unlock()
-			t.signal()
-		})
-	}, true
+	return sync.OnceFunc(func() {
+		t.mu.Lock()
+		t.activeWork = max(t.activeWork-1, 0)
+		// Retry a suspension that catch-up could not yet accept.
+		t.syncIdle = false
+		t.mu.Unlock()
+		t.signal()
+	}), true
 }
 
 // Do runs fn as tracked work, skipping it entirely when the daemon is already
@@ -90,13 +103,14 @@ func (t *IdleTracker) Touch() {
 	t.mu.Lock()
 	if !t.draining {
 		t.lastExternal = time.Now()
+		t.lastSyncActivity = t.lastExternal
 	}
 	t.mu.Unlock()
 	t.signal()
 }
 
 func (t *IdleTracker) Run(ctx context.Context) {
-	if t == nil || t.timeout <= 0 {
+	if t == nil {
 		return
 	}
 	for {
@@ -121,23 +135,31 @@ func (t *IdleTracker) Run(ctx context.Context) {
 	}
 }
 
-func (t *IdleTracker) beginExternal() bool {
+func (t *IdleTracker) beginExternal(syncActivity bool) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.draining {
 		return false
 	}
 	t.lastExternal = time.Now()
+	if syncActivity {
+		t.syncIdle = false
+		t.lastSyncActivity = t.lastExternal
+	}
 	t.activeExternal++
 	return true
 }
 
-func (t *IdleTracker) endExternal() {
+func (t *IdleTracker) endExternal(syncActivity bool) {
 	t.mu.Lock()
 	if t.activeExternal > 0 {
 		t.activeExternal--
 	}
 	t.lastExternal = time.Now()
+	if syncActivity {
+		t.syncIdle = false
+		t.lastSyncActivity = t.lastExternal
+	}
 	t.mu.Unlock()
 	t.signal()
 }
@@ -148,16 +170,27 @@ func (t *IdleTracker) nextWait() (time.Duration, bool) {
 	if t.draining {
 		return 0, true
 	}
-	if t.activeExternal > 0 || t.activeWork > 0 {
-		return t.timeout, false
+	wait := time.Hour
+	// Internal work holds only the exit lease; local collection may suspend.
+	if t.activeExternal == 0 && t.syncTimeout > 0 && !t.syncIdle {
+		remaining := t.syncTimeout - time.Since(t.lastSyncActivity)
+		if remaining <= 0 {
+			t.syncIdle = true
+			t.onSyncIdle()
+		} else {
+			wait = min(wait, remaining)
+		}
 	}
-	remaining := t.timeout - time.Since(t.lastExternal)
-	if remaining > 0 {
-		return remaining, false
+	if t.activeExternal == 0 && t.activeWork == 0 && t.timeout > 0 {
+		remaining := t.timeout - time.Since(t.lastExternal)
+		if remaining <= 0 {
+			t.draining = true
+			go t.onIdle()
+			return 0, true
+		}
+		wait = min(wait, remaining)
 	}
-	t.draining = true
-	go t.onIdle()
-	return 0, true
+	return wait, false
 }
 
 func (t *IdleTracker) signal() {
