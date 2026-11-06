@@ -39,25 +39,11 @@
   const generationsRead = new LatestRead();
 
   const numberFormat = $derived(new Intl.NumberFormat(getLocale()));
-  const percentFormat = $derived(
-    new Intl.NumberFormat(getLocale(), {
-      style: "percent",
-      maximumFractionDigits: 0,
-    }),
-  );
-
   const running = $derived(status?.running ?? false);
   const settingUp = $derived(status?.setup?.busy || status?.setup?.installing);
   const phase = $derived(status?.phase ?? "");
   const estimateReady = $derived(status?.estimate_ready ?? false);
   const ratePerSecond = $derived(status?.rate_per_second ?? null);
-  const etaMs = $derived(status?.eta_milliseconds ?? null);
-  const progressFraction = $derived(
-    status && status.running && status.total > 0
-      ? Math.min(1, status.done / status.total)
-      : null,
-  );
-
   function clearTimer(): void {
     if (timer !== null) {
       clearTimeout(timer);
@@ -208,12 +194,6 @@
     return m.settings_embeddings_duration_seconds({ seconds });
   }
 
-  function phaseLabel(): string {
-    if (phase === "scanning") return m.settings_embeddings_status_scanning();
-    if (phase === "embedding") return m.settings_embeddings_status_embedding();
-    return m.settings_embeddings_status_running();
-  }
-
   function stateLabel(state: string): string {
     if (state === "active") return m.settings_embeddings_state_active();
     if (state === "building") return m.settings_embeddings_state_building();
@@ -239,7 +219,7 @@
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
   {:else if status && status.setup?.enabled !== false && !status.setup?.busy}
-    {#if status.model || status.dimension || !status.setup}
+    {#if status.model || status.dimension}
       <div class="status-grid">
         {#if status.model}
           <span class="row-label">{m.settings_embeddings_model_label()}</span>
@@ -249,20 +229,6 @@
           <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
           <span class="row-value">{numberFormat.format(status.dimension)}</span>
         {/if}
-        {#if !status.setup}
-          <span class="row-label">{m.settings_embeddings_status_label()}</span>
-          <span class="row-value">
-            {#if running}
-              <Chip size="xs" tone="warning">{phaseLabel()}</Chip>
-            {:else if status.last_error}
-              <Chip size="xs" tone="danger">
-                {m.settings_embeddings_last_build_failed()}
-              </Chip>
-            {:else}
-              {m.settings_embeddings_status_idle()}
-            {/if}
-          </span>
-        {/if}
       </div>
     {/if}
 
@@ -271,36 +237,9 @@
         <p class="muted" aria-live="polite">
           {m.settings_embeddings_scanning_hint()}
         </p>
-      {:else if !status.setup || (estimateReady && ratePerSecond !== null) || elapsedMs !== null}
+      {:else if (estimateReady && ratePerSecond !== null) || elapsedMs !== null}
         <div class="progress-block" aria-live="polite">
-          {#if !status.setup}
-            <div
-              class="progress-track"
-              role="progressbar"
-              aria-label={m.settings_embeddings_progress_aria()}
-              aria-valuemin={0}
-              aria-valuemax={status.total}
-              aria-valuenow={status.done}
-            >
-              <div
-                class="progress-fill"
-                style:width={`${(progressFraction ?? 0) * 100}%`}
-              ></div>
-            </div>
-          {/if}
           <div class="progress-stats">
-            {#if !status.setup}
-              <span>
-                {m.settings_embeddings_progress_chunks({
-                  count: status.total,
-                  doneLabel: numberFormat.format(status.done),
-                  totalLabel: numberFormat.format(status.total),
-                })}
-              </span>
-            {/if}
-            {#if !status.setup && progressFraction !== null}
-              <span>{percentFormat.format(progressFraction)}</span>
-            {/if}
             {#if estimateReady && ratePerSecond !== null}
               <span>
                 {m.settings_embeddings_rate({
@@ -315,19 +254,6 @@
                   duration: formatDurationLocalized(elapsedMs),
                 })}
               </span>
-            {/if}
-            {#if !status.setup}
-              {#if estimateReady && etaMs !== null}
-                <span class="eta">
-                  {m.settings_embeddings_eta({
-                    duration: formatDurationLocalized(etaMs),
-                  })}
-                </span>
-              {:else}
-                <span class="eta muted"
-                  >{m.settings_embeddings_eta_estimating()}</span
-                >
-              {/if}
             {/if}
           </div>
         </div>
@@ -455,34 +381,12 @@
     gap: 6px;
   }
 
-  .progress-track {
-    height: 6px;
-    border-radius: 3px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    overflow: hidden;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--accent-blue);
-    transition: width 0.4s ease;
-  }
-
   .progress-stats {
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
     font-size: 11px;
     color: var(--text-secondary);
-  }
-
-  .progress-stats .eta {
-    color: var(--text-primary);
-  }
-
-  .progress-stats .eta.muted {
-    color: var(--text-muted);
   }
 
   .subsection {

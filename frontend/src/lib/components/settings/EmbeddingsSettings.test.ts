@@ -40,6 +40,17 @@ function runningStatus(
 ): VectorBuildStatus {
   return {
     running: true,
+    setup: {
+      enabled: true,
+      action: "",
+      provider: "built-in",
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+      rebuild_required: false,
+    },
     build_id: 1,
     started_at: "2026-07-11T10:00:00Z",
     phase: "embedding",
@@ -273,14 +284,14 @@ describe("EmbeddingsSettings", () => {
     unmount(component);
   });
 
-  it("shows an estimating state while the daemon warms its estimate", async () => {
+  it("shows indexing while the daemon warms its estimate", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
       runningStatus(100, { estimate_ready: false }),
     );
 
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
-    expect(document.body.textContent).toContain("Estimating time remaining...");
+    expect(document.body.textContent).toContain("Indexing 100 of 1,000 text sections");
 
     unmount(component);
   });
@@ -295,7 +306,9 @@ describe("EmbeddingsSettings", () => {
 
     expect(document.body.textContent).toContain("Scanning");
     expect(document.body.textContent).toContain("the total amount of work is not known yet");
-    expect(document.body.querySelector('[role="progressbar"]')).toBeNull();
+    expect(document.body.querySelector('[role="progressbar"]')?.getAttribute("aria-valuemax")).toBe(
+      "0",
+    );
 
     unmount(component);
   });
@@ -310,6 +323,7 @@ describe("EmbeddingsSettings", () => {
       embeddingsService.getApiV1EmbeddingsGenerations.mock.calls.length;
 
     current = {
+      setup: runningStatus(0).setup,
       running: false,
       build_id: 1,
       started_at: "2026-07-11T10:00:00Z",
@@ -360,13 +374,14 @@ describe("EmbeddingsSettings", () => {
       eta_milliseconds: 0,
       model: "test-embed-model",
       dimension: 256,
+      setup: runningStatus(0).setup,
       last_error: "encode batch: connection refused",
     });
 
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
 
-    expect(document.body.textContent).toContain("Failed");
+    expect(document.body.querySelector(".kit-search-by-meaning .kit-chip")?.textContent).toBe("On");
     expect(document.body.textContent).toContain("encode batch: connection refused");
 
     unmount(component);
@@ -407,6 +422,7 @@ describe("EmbeddingsSettings", () => {
 
     // Idle cadence: after the build finishes, 2s ticks stop...
     current = {
+      setup: runningStatus(0).setup,
       running: false,
       done: 0,
       total: 0,

@@ -117,7 +117,7 @@ for (const width of [1280, 390]) {
         await expect(page.getByRole("alert")).toContainText("encoder unavailable");
         expect((await name.boundingBox())!.y).toBe(indexingNameTop);
         const failedChip = page.locator(".kit-search-by-meaning .kit-chip");
-        await expect(failedChip).toHaveText("Failed");
+        await expect(failedChip).toHaveText("On");
         await expect(failedChip).toHaveCSS("text-transform", "none");
         const retry = page.getByRole("button", { name: "Retry", exact: true });
         const errorBox = (await page.getByRole("alert").boundingBox())!;

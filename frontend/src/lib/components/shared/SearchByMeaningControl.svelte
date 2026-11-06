@@ -12,7 +12,6 @@
   } = $props();
   let error = $state<string | null>(null);
   const setup = $derived(status?.setup);
-  const buildFailed = $derived(!!status?.last_error && !status?.running);
   const activeGeneration = $derived(generations.find((g) => g.state === "active"));
   const documents = $derived((activeGeneration?.embedded ?? 0) + (activeGeneration?.missing ?? 0));
   // No historical throughput survives a build; use a rough local throughput estimate.
@@ -27,8 +26,8 @@
   const downloadLabel = $derived(m.meaning_download({ size: new Intl.NumberFormat(getLocale(), { style: "unit", unit: "megabyte", maximumFractionDigits: 0 }).format((setup?.missing_bytes ?? 0) / 1000000) }));
   const labels = $derived({
     name: m.meaning_name(), off: m.meaning_off(),
-    on: buildFailed ? m.settings_embeddings_last_build_failed() : m.meaning_on(),
-    ollama: buildFailed ? m.settings_embeddings_last_build_failed() : m.meaning_ollama(),
+    on: m.meaning_on(),
+    ollama: m.meaning_ollama(),
     turningOn: m.meaning_turning_on(), turnOn: m.meaning_turn_on(), useBuiltIn: m.meaning_use_builtin(),
     download: m.meaning_download({ size: "{size}" }), downloaded: setup?.provider === "ollama" ? m.meaning_uses_ollama() : setup?.provider === "configured" ? m.meaning_configured() : m.meaning_downloaded(),
     keepsIndex: m.meaning_keeps_index(), rebuild: m.meaning_rebuild({ time: "{time}", countLabel: "{count}", items: "{items}" }), downloading: setup?.total_bytes ? m.meaning_downloading({ done: "{done}", total: "{total}" }) : m.meaning_turning_on(),
@@ -56,9 +55,7 @@
       <SearchByMeaningHint {labels} onturnon={() => void activate()} />
     {/if}
   {:else}
-    <div class:build-failed={buildFailed}>
-      <SearchByMeaningRow state={rowState} {labels} readonly={!setup.action || !!setup.error} itemNoun={status?.running ? m.meaning_chunks({ count: status?.total ?? 0 }) : m.meaning_documents({ count: documents })} onturnon={() => void activate()} onusebuiltin={() => void activate()} />
-    </div>
+    <SearchByMeaningRow state={rowState} {labels} readonly={!setup.action || !!setup.error} itemNoun={status?.running ? m.meaning_chunks({ count: status?.total ?? 0 }) : m.meaning_documents({ count: documents })} onturnon={() => void activate()} onusebuiltin={() => void activate()} />
   {/if}
   {#if !hint && setup.action === "use-built-in" && setup.missing_bytes > 0}
     <p class="download-size">{downloadLabel}</p>
@@ -88,11 +85,5 @@
     font-size: var(--font-size-xs);
     color: var(--text-muted);
     line-height: 1.45;
-  }
-  .build-failed :global(.kit-search-by-meaning) {
-    min-height: 0;
-  }
-  .build-failed {
-    --accent-green: var(--accent-red);
   }
 </style>
