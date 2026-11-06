@@ -124,10 +124,6 @@ func (p *embedExportSpy) PushWithOptions(ctx context.Context, opts storage.PushO
 				return res, err
 			}
 		}
-		if p.replica.source == nil {
-			res.Vectors.Skipped = true
-			break
-		}
 		export, ok, err := p.replica.source.BeginExport(ctx, nil)
 		if err != nil && !errors.Is(err, storage.ErrVectorSourceNotReady) {
 			return res, err

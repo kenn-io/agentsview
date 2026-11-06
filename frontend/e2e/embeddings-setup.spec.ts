@@ -5,7 +5,7 @@ for (const width of [1280, 390]) {
     test(`${entry} activates search by meaning at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 850 });
       let phase = "off";
-      let actions = 0;
+      const actions: unknown[] = [];
       const setup = () => ({
         enabled: phase !== "off",
         action: phase.startsWith("ollama")
@@ -44,9 +44,7 @@ for (const width of [1280, 390]) {
         }),
       );
       await page.route("**/api/v1/embeddings/setup", async (route) => {
-        if (entry !== "settings")
-          expect(route.request().postDataJSON()).toEqual({ action: "turn-on" });
-        actions++;
+        actions.push(route.request().postDataJSON());
         phase = "download";
         await route.fulfill({ status: 202, json: { started: true } });
       });
@@ -92,13 +90,18 @@ for (const width of [1280, 390]) {
         await page.locator(".palette-input").fill("connections");
       }
       await expect(page.getByRole("button", { name: "Turn on", exact: true })).toBeVisible();
-      expect(actions).toBe(0);
-      await expect(page.getByText(/Downloads 295 MB/)).toBeVisible();
+      expect(actions).toHaveLength(0);
       await page.getByRole("button", { name: "Turn on", exact: true }).click();
-      await expect(page.getByText(/Downloading/).first()).toBeVisible();
-      expect(actions).toBe(1);
+      await expect(page.locator(".kit-search-by-meaning [role=progressbar]")).toHaveAttribute(
+        "aria-valuemax",
+        "295000000",
+      );
+      expect(actions).toEqual([{ action: "turn-on" }]);
       phase = "index";
-      await expect(page.getByText(/Indexing/).first()).toBeVisible();
+      await expect(page.locator(".kit-search-by-meaning [role=progressbar]")).toHaveAttribute(
+        "aria-valuenow",
+        "25",
+      );
       phase = "ready";
       if (entry === "settings") {
         await expect(

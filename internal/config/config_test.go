@@ -3201,19 +3201,56 @@ func TestSaveVectorSetupRejectsIncompatibleSwitch(t *testing.T) {
 	}
 }
 
-func TestSaveVectorSetupReplacesOllamaTokenCap(t *testing.T) {
-	dir := setupTestEnv(t)
-	original := "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\ndefault_server = 'ollama'\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n[vector.embeddings.servers.sibling]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 8192\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(original), 0o600))
-	cfg, err := LoadReadOnly()
-	require.NoError(t, err)
-	require.NoError(t, cfg.Vector.Validate())
-	require.NoError(t, cfg.SaveVectorSetup(true))
-	saved, err := LoadReadOnly()
-	require.NoError(t, err)
-	require.NoError(t, saved.Vector.Validate())
-	assert.Equal(t, 2048, saved.Vector.Embeddings.ModelContextTokens)
-	assert.True(t, saved.Vector.Embeddings.Servers["ollama"].Local)
-	assert.Zero(t, saved.Vector.Embeddings.Servers["ollama"].MaxBatchTokens)
-	assert.Equal(t, cfg.Vector.Embeddings.Servers["sibling"], saved.Vector.Embeddings.Servers["sibling"])
+func TestSaveVectorSetupPreservesSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name, original, edited, local, query, omitted string
+		builtIn                                       bool
+		context, cap, port                            int
+	}{
+		{name: "replace old token cap", builtIn: true, local: "ollama", context: 2048, query: "search_query: ", original: "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\ndefault_server = 'ollama'\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n[vector.embeddings.servers.sibling]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 8192\napi_key_env = 'EMBEDDINGS_TEST_KEY'\nmax_retries = 0\n"},
+		{name: "compatible Nomic", builtIn: true, local: "ollama", context: 512, cap: 512, query: "q: ", omitted: "timeout", original: "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nmodel_context_tokens = 512\nquery_prefix = 'q: '\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n"},
+		{name: "automatic defaults remain omitted", builtIn: true, local: "automatic", context: 2048, query: "search_query: ", omitted: "model =", original: "[vector]\nenabled = true\n"},
+		{name: "turn on reads current edits", query: "edited: ", context: 2048, port: 12345, omitted: "model =", original: "[vector]\nenabled = false\n", edited: "port = 12345\n[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'edited: '\n"},
+		{name: "configured turn on", original: "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_retries = 0\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			path := filepath.Join(dir, configFileName)
+			require.NoError(t, os.WriteFile(path, []byte(tc.original), 0o600))
+			cfg, err := LoadReadOnly()
+			require.NoError(t, err)
+			require.NoError(t, cfg.Vector.Validate())
+			expected := cfg.Vector
+			sibling, hasSibling := cfg.Vector.Embeddings.Servers["sibling"]
+			if tc.edited != "" {
+				require.NoError(t, os.WriteFile(path, []byte(tc.edited), 0o600))
+			}
+			require.NoError(t, cfg.SaveVectorSetup(tc.builtIn))
+			saved, err := LoadReadOnly()
+			require.NoError(t, err)
+			require.NoError(t, saved.Vector.Validate())
+			assert.True(t, saved.Vector.Enabled)
+			assert.Equal(t, tc.context, saved.Vector.Embeddings.ModelContextTokens)
+			assert.Equal(t, tc.query, saved.Vector.Embeddings.QueryPrefix)
+			if tc.local != "" {
+				assert.True(t, saved.Vector.Embeddings.Servers[tc.local].Local)
+				assert.Equal(t, tc.cap, saved.Vector.Embeddings.Servers[tc.local].MaxBatchTokens)
+			}
+			if tc.port != 0 {
+				assert.Equal(t, tc.port, saved.Port)
+			}
+			if tc.omitted != "" {
+				raw, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.NotContains(t, string(raw), tc.omitted)
+			}
+			if hasSibling {
+				assert.Equal(t, sibling, saved.Vector.Embeddings.Servers["sibling"])
+			}
+			if tc.name == "configured turn on" {
+				expected.Enabled = true
+				assert.Equal(t, expected, saved.Vector)
+			}
+		})
+	}
 }

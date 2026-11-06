@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/embedlocal"
 	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 
@@ -639,30 +640,29 @@ func (e *recordingEmitter) count() int {
 }
 
 func TestEmbeddingSyncEmitterForwardsAndNotifiesLiveServing(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		primary := &recordingEmitter{}
-		fake := &fakeEmbedManager{}
-		s := newEmbedScheduler(fake, 10*time.Millisecond, 0, false, nil)
-		go s.Run(t.Context())
-		defer s.Stop()
-
-		recallNotifications := 0
-		owner := &liveVectorServing{serving: vectorServing{Scheduler: s, RecallMutationNotify: func() { recallNotifications++ }}}
-		owner.cfg.Vector.Embed.RunAfterSync = new(false)
-		emitter := wrapEmbeddingSyncEmitter(primary, owner.Notify)
-		emitter.Emit("sessions")
-		assert.Equal(t, 1, primary.count())
-		assert.Equal(t, 1, recallNotifications)
-		synctest.Sleep(30 * time.Millisecond)
-		assert.Equal(t, 0, fake.callCount(), "runAfterSync=false must not notify the scheduler")
-
-		owner.cfg.Vector.Embed.RunAfterSync = new(true)
-		emitter.Emit("sessions")
-		assert.Equal(t, 2, primary.count())
-		assert.Equal(t, 2, recallNotifications)
-		synctest.Sleep(30 * time.Millisecond)
-		require.Equal(t, 1, fake.callCount(), "runAfterSync=true must notify the scheduler")
-	})
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fanout and run-after-sync=%v", enabled), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				primary := &recordingEmitter{}
+				fake := &fakeEmbedManager{}
+				s := newEmbedScheduler(fake, 10*time.Millisecond, 0, false, nil)
+				go s.Run(t.Context())
+				defer s.Stop()
+				recallNotifications := 0
+				owner := &liveVectorServing{serving: vectorServing{Scheduler: s, RecallMutationNotify: func() { recallNotifications++ }}}
+				owner.cfg.Vector.Embed.RunAfterSync = &enabled
+				wrapEmbeddingSyncEmitter(primary, owner.Notify).Emit("sessions")
+				synctest.Sleep(30 * time.Millisecond)
+				assert.Equal(t, []string{"sessions"}, primary.scopes)
+				assert.Equal(t, 1, recallNotifications, "fanout always reaches Recall")
+				wantBuilds := 0
+				if enabled {
+					wantBuilds = 1
+				}
+				assert.Equal(t, wantBuilds, fake.callCount(), "live serving gates session builds on run_after_sync")
+			})
+		})
+	}
 }
 
 func TestRunRemoteHostSyncLoopEmitsSyncedSessions(t *testing.T) {
@@ -946,10 +946,8 @@ func startTestServer(t *testing.T, ln net.Listener, handler http.Handler) *httpt
 }
 
 // TestServeConstructionRegistersEmbeddingsRoutesWhenVectorEnabled drives the
-// real setupVectorServing + server.New construction path (not a fake mux)
-// with a vector-enabled config and asserts the embeddings status endpoint
-// responds, then a sibling test rebuilds with vector disabled and asserts
-// it does not.
+// real live-serving options through server.New, with vector serving enabled.
+// The disabled case below checks that the same route exposes browser setup.
 func TestServeConstructionRegistersEmbeddingsRoutesWhenVectorEnabled(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
@@ -964,7 +962,7 @@ func TestServeConstructionRegistersEmbeddingsRoutesWhenVectorEnabled(t *testing.
 	require.NotNil(t, vs.Close)
 	defer func() { require.NoError(t, vs.Close()) }()
 
-	srv := server.New(cfg, database, nil, vs.ServerOpts...)
+	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
@@ -1143,7 +1141,7 @@ func TestRecallSchedulerSessionDeletionRemovesImportedEntryWithoutExtraction(t *
 			waitForSchedulerCondition(t, func() bool { return embeddedCount() == 1 },
 				"startup reconciliation did not embed the imported entry")
 
-			srv := server.New(cfg, database, nil, vs.ServerOpts...)
+			srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
 			ts := startTestServer(t, ln, srv.Handler())
 			req, err := http.NewRequestWithContext(
 				t.Context(), http.MethodDelete, ts.URL+tc.path, nil,
@@ -1191,7 +1189,7 @@ func TestMessageSchedulerQueuesBuildOnSessionDeletion(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, vs.Close()) })
 			require.Empty(t, vs.Scheduler.dirty, "setup must not queue a message build")
 
-			srv := server.New(cfg, database, nil, vs.ServerOpts...)
+			srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
 			ts := startTestServer(t, ln, srv.Handler())
 			req, err := http.NewRequestWithContext(
 				t.Context(), http.MethodDelete, ts.URL+tc.path, nil,
@@ -1466,7 +1464,7 @@ func TestRecallSchedulerRequiresExplicitOptInForAutomaticBuilds(t *testing.T) {
 	}, 100*time.Millisecond, 5*time.Millisecond,
 		"Recall content must not be embedded automatically without explicit opt-in")
 
-	srv := server.New(cfg, database, nil, vs.ServerOpts...)
+	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 	input := strings.NewReader(`
 {"candidate_id":"second-import","type":"fact","scope":"repository","title":"Import policy","body":"Keep imports manual too.","project":"agentsview","agent":"codex","session_id":"import-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
@@ -1526,7 +1524,7 @@ func TestRecallImportSchedulesEmbeddingRefresh(t *testing.T) {
 		require.NoError(t, vs.Close())
 	})
 
-	srv := server.New(cfg, database, nil, vs.ServerOpts...)
+	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 	input := strings.NewReader(`
 {"candidate_id":"imported-entry","type":"fact","scope":"repository","title":"Database pool","body":"Reuse idle connections.","project":"agentsview","agent":"codex","session_id":"import-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
@@ -1573,7 +1571,7 @@ func TestEmbeddingsDaemonClientBuildSucceedsThroughRealMiddleware(t *testing.T) 
 	require.NoError(t, err)
 	defer func() { require.NoError(t, vs.Close()) }()
 
-	srv := server.New(cfg, database, nil, vs.ServerOpts...)
+	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 
 	client := embeddingsDaemonClient{baseURL: ts.URL}
@@ -1642,7 +1640,7 @@ func TestVectorServingCloseCancelsAPIStartedRecallBuild(t *testing.T) {
 	}
 	t.Cleanup(func() { require.NoError(t, closeVectorServing()) })
 
-	srv := server.New(cfg, database, nil, vs.ServerOpts...)
+	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 	client := embeddingsDaemonClient{baseURL: ts.URL}
 	require.NoError(t, client.startBuild(t.Context(), vector.BuildRequest{
@@ -1731,7 +1729,12 @@ func TestSetupVectorServingAcquiresAndReleasesWriteLock(t *testing.T) {
 	require.NoError(t, held.Close())
 }
 
-func TestServeConstructionKeepsEmbeddingsRoutesUnavailableWhenVectorDisabled(t *testing.T) {
+func TestServeConstructionReportsSetupWhenVectorDisabled(t *testing.T) {
+	oldInspect := inspectLocalEmbeddings
+	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{}, nil
+	}
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 
@@ -1746,7 +1749,7 @@ func TestServeConstructionKeepsEmbeddingsRoutesUnavailableWhenVectorDisabled(t *
 	assert.Nil(t, vs.Close)
 	assert.Empty(t, vs.ServerOpts)
 
-	srv := server.New(cfg, database, nil, vs.ServerOpts...)
+	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
@@ -1754,8 +1757,12 @@ func TestServeConstructionKeepsEmbeddingsRoutesUnavailableWhenVectorDisabled(t *
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode,
-		"the embeddings API should be documented and registered, but unavailable when vector is disabled")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var status vector.BuildStatus
+	require.NoError(t, json.UnmarshalRead(resp.Body, &status))
+	require.NotNil(t, status.Setup)
+	assert.False(t, status.Setup.Enabled)
+	assert.Equal(t, "turn-on", status.Setup.Action)
 	assert.Equal(t, "application/json", mediaType(t, resp.Header.Get("Content-Type")))
 }
 
