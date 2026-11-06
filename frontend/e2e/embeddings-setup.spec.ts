@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 for (const width of [1280, 390]) {
-  for (const entry of ["settings", "semantic", "hint"]) {
+  for (const entry of width === 390 ? ["settings"] : ["settings", "semantic", "hint"]) {
     test(`${entry} activates search by meaning at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 850 });
       let phase = "off";

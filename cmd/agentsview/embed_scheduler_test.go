@@ -1711,7 +1711,7 @@ func TestSetupVectorServingAcquiresAndReleasesWriteLock(t *testing.T) {
 	require.NoError(t, held.Close())
 }
 
-func TestServeConstructionWhenVectorDisabled(t *testing.T) {
+func TestSetupVectorServingDisabled(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}

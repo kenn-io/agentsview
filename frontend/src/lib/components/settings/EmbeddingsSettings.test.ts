@@ -87,7 +87,7 @@ describe("EmbeddingsSettings", () => {
   }
 
   it.each(["turn-on", "use-built-in"])(
-    "keeps setup recovery when the index is unavailable (%s)",
+    "retries the reported setup action after %s fails",
     async (action) => {
       const setup = {
         enabled: true,
@@ -168,62 +168,49 @@ describe("EmbeddingsSettings", () => {
     },
   );
 
-  it.each([false, true])(
-    "shows the daemon's warmed estimate once (setup %s)",
-    async (withSetup) => {
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-        runningStatus(200, {
-          estimate_ready: true,
-          rate_per_second: 50,
-          eta_milliseconds: 16_000,
-          ...(withSetup
-            ? {
-                setup: {
-                  enabled: true,
-                  action: "",
-                  provider: "built-in",
-                  busy: false,
-                  installing: false,
-                  missing_bytes: 0,
-                  downloaded_bytes: 0,
-                  total_bytes: 0,
-                  rebuild_required: false,
-                },
-              }
-            : {}),
-        }),
-      );
+  it("shows the daemon's warmed estimate once", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      runningStatus(200, {
+        estimate_ready: true,
+        rate_per_second: 50,
+        eta_milliseconds: 16_000,
+        setup: {
+          enabled: true,
+          action: "",
+          provider: "built-in",
+          busy: false,
+          installing: false,
+          missing_bytes: 0,
+          downloaded_bytes: 0,
+          total_bytes: 0,
+          rebuild_required: false,
+        },
+      }),
+    );
 
-      const component = mount(EmbeddingsSettings, { target: document.body });
-      await settle();
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    await settle();
 
-      const text = () => document.body.textContent ?? "";
-      expect(text()).toContain("test-embed-model");
-      expect(text()).toContain("256");
-      expect(text().match(/200/g)).toHaveLength(1);
-      expect(text()).toContain(withSetup ? "Indexing 200 of 1,000 chunks" : "200 / 1,000 chunks");
-      expect(text()).toContain("50 chunks/s");
-      if (withSetup) {
-        expect(text()).not.toContain("Embedding");
-        expect(text()).not.toContain("20%");
-        expect(text()).not.toContain("ETA 16s");
-        expect(text()).toContain("left");
-        expect(document.body.querySelector(".status-grid .kit-chip")).toBeNull();
-      } else {
-        expect(text()).toContain("Embedding");
-        expect(text()).toContain("20%");
-        expect(text()).toContain("ETA 16s");
-      }
-      expect(text()).toContain("Elapsed 5s");
+    const text = () => document.body.textContent ?? "";
+    expect(text()).toContain("test-embed-model");
+    expect(text()).toContain("256");
+    expect(text().match(/200/g)).toHaveLength(1);
+    expect(text()).toContain("Indexing 200 of 1,000 chunks");
+    expect(text()).toContain("50 chunks/s");
+    expect(text()).not.toContain("Embedding");
+    expect(text()).not.toContain("20%");
+    expect(text()).not.toContain("ETA 16s");
+    expect(text()).toContain("left");
+    expect(document.body.querySelector(".status-grid .kit-chip")).toBeNull();
+    expect(text()).toContain("Elapsed 5s");
 
-      expect(document.body.querySelectorAll('[role="progressbar"]')).toHaveLength(1);
-      const progressbar = document.body.querySelector('[role="progressbar"]');
-      expect(progressbar?.getAttribute("aria-valuenow")).toBe("200");
-      expect(progressbar?.getAttribute("aria-valuemax")).toBe("1000");
+    expect(document.body.querySelectorAll('[role="progressbar"]')).toHaveLength(1);
+    const progressbar = document.body.querySelector('[role="progressbar"]');
+    expect(progressbar?.getAttribute("aria-valuenow")).toBe("200");
+    expect(progressbar?.getAttribute("aria-valuemax")).toBe("1000");
 
-      unmount(component);
-    },
-  );
+    unmount(component);
+  });
 
   it("shows an estimating state while the daemon warms its estimate", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(

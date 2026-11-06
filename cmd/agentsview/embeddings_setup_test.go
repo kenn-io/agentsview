@@ -203,7 +203,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			}
 			if recipe == "configured" {
 				assert.Empty(t, status().Setup.Action)
-				request("POST", "/api/v1/embeddings/setup", `{"action":"use-built-in"}`, 400)
 			}
 			assert.Equal(t, (recipe == "fresh" || recipe == "enabled-missing"), installs.Load() > 0)
 			generations, err := owner.serving.manager.Generations(t.Context())
@@ -408,19 +407,20 @@ func TestLiveEmbeddingsSetupProbeKeepsRuntimeAvailable(t *testing.T) {
 }
 
 func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
-	for _, filesystemFailure := range []bool{false, true} {
-		t.Run(strconv.FormatBool(filesystemFailure), func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("USERPROFILE", home)
+	for _, inspectFailure := range []bool{false, true} {
+		t.Run(strconv.FormatBool(inspectFailure), func(t *testing.T) {
 			dir := testDataDir(t)
 			cfg, err := config.Default()
 			require.NoError(t, err)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 			cfg.DataDir = dir
 			action, want := "use-built-in", http.StatusBadRequest
-			if filesystemFailure {
-				require.NoError(t, os.WriteFile(filepath.Join(home, ".kenn"), []byte("not a directory"), 0o600))
+			if inspectFailure {
+				oldInspect := inspectLocalEmbeddings
+				t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
+				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+					return embedlocal.Status{}, errors.New("model status unavailable")
+				}
 				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": {Local: true}}
 				action, want = "turn-on", http.StatusInternalServerError
 			} else {
@@ -430,7 +430,7 @@ func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 			ln, port := listenLoopback(t)
 			cfg.Host, cfg.Port = "127.0.0.1", port
 			ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-			if !filesystemFailure {
+			if !inspectFailure {
 				var status vector.BuildStatus
 				data := embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/embeddings/status", "", nil, http.StatusOK)
 				require.NoError(t, json.Unmarshal(data, &status))

@@ -3177,41 +3177,20 @@ func TestLoadFile_ModelAliases(t *testing.T) {
 	}
 }
 
-func TestSaveVectorSetupRejectsIncompatibleSwitch(t *testing.T) {
-	for _, tc := range []struct {
-		name, recipe, servers, wantError string
-	}{
-		{"oversized Nomic", "model = 'nomic-embed-text:v1.5'\ndimension = 1024\n", "", "dimension must be at most 768"},
-		{"small Nomic without selection", "model = 'nomic-embed-text:v1.5'\ndimension = 256\n", "", "request_dimensions must be true"},
-		{"sibling server token cap", "model = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\n", "[vector.embeddings.servers.sibling]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n", "max_batch_tokens (512) must be at least model_context_tokens (2048)"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := setupTestEnv(t)
-			original := "[vector]\nenabled = true\n[vector.embeddings]\ndefault_server = 'ollama'\n" + tc.recipe + "[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\n" + tc.servers
-			path := filepath.Join(dir, configFileName)
-			require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
-			cfg, err := LoadReadOnly()
-			require.NoError(t, err)
-			require.NoError(t, cfg.Vector.Validate())
-			require.ErrorContains(t, cfg.SaveVectorSetup(true), tc.wantError)
-			saved, err := os.ReadFile(path)
-			require.NoError(t, err)
-			assert.Equal(t, original, string(saved))
-		})
-	}
-}
-
 func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 	for _, tc := range []struct {
-		name, original, edited, local, query, omitted string
-		builtIn                                       bool
-		context, cap, port                            int
+		name, original, edited, local, query, omitted, wantError string
+		builtIn, preserveEnabledOnly                             bool
+		context, cap, port                                       int
 	}{
 		{name: "replace old token cap", builtIn: true, local: "ollama", context: 2048, query: "search_query: ", original: "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\ndefault_server = 'ollama'\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n[vector.embeddings.servers.sibling]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 8192\napi_key_env = 'EMBEDDINGS_TEST_KEY'\nmax_retries = 0\n"},
 		{name: "compatible Nomic", builtIn: true, local: "ollama", context: 512, cap: 512, query: "q: ", omitted: "timeout", original: "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nmodel_context_tokens = 512\nquery_prefix = 'q: '\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n"},
 		{name: "automatic defaults remain omitted", builtIn: true, local: "automatic", context: 2048, query: "search_query: ", omitted: "model =", original: "[vector]\nenabled = true\n"},
 		{name: "turn on reads current edits", query: "edited: ", context: 2048, port: 12345, omitted: "model =", original: "[vector]\nenabled = false\n", edited: "port = 12345\n[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'edited: '\n"},
-		{name: "configured turn on", original: "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_retries = 0\n"},
+		{name: "configured turn on", preserveEnabledOnly: true, original: "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_retries = 0\n"},
+		{name: "oversized Nomic", builtIn: true, original: "[vector]\nenabled = true\n[vector.embeddings]\ndefault_server = 'ollama'\nmodel = 'nomic-embed-text:v1.5'\ndimension = 1024\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\n", wantError: "dimension must be at most 768"},
+		{name: "small Nomic without selection", builtIn: true, original: "[vector]\nenabled = true\n[vector.embeddings]\ndefault_server = 'ollama'\nmodel = 'nomic-embed-text:v1.5'\ndimension = 256\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\n", wantError: "request_dimensions must be true"},
+		{name: "sibling server token cap", builtIn: true, original: "[vector]\nenabled = true\n[vector.embeddings]\ndefault_server = 'ollama'\nmodel = 'other-model'\ndimension = 1024\nmodel_context_tokens = 512\n[vector.embeddings.servers.ollama]\nendpoint = 'http://127.0.0.1:11434/v1'\n[vector.embeddings.servers.sibling]\nendpoint = 'http://127.0.0.1:11434/v1'\nmax_batch_tokens = 512\n", wantError: "max_batch_tokens (512) must be at least model_context_tokens (2048)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := setupTestEnv(t)
@@ -3225,7 +3204,15 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 			if tc.edited != "" {
 				require.NoError(t, os.WriteFile(path, []byte(tc.edited), 0o600))
 			}
-			require.NoError(t, cfg.SaveVectorSetup(tc.builtIn))
+			err = cfg.SaveVectorSetup(tc.builtIn)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				saved, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, tc.original, string(saved))
+				return
+			}
+			require.NoError(t, err)
 			saved, err := LoadReadOnly()
 			require.NoError(t, err)
 			require.NoError(t, saved.Vector.Validate())
@@ -3247,7 +3234,7 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 			if hasSibling {
 				assert.Equal(t, sibling, saved.Vector.Embeddings.Servers["sibling"])
 			}
-			if tc.name == "configured turn on" {
+			if tc.preserveEnabledOnly {
 				expected.Enabled = true
 				assert.Equal(t, expected, saved.Vector)
 			}
