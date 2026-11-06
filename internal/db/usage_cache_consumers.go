@@ -47,6 +47,7 @@ type usagePreparedWindow struct {
 	snapshot   usageQuerySnapshot
 	installs   map[string]usageRollupInstall
 	journaled  bool
+	kind       usageQueryKind
 	installSeq int64
 	timings    usageRollupRequestTimings
 }
@@ -233,8 +234,8 @@ func (db *DB) queryUsageRollups(
 	if memo != nil {
 		key = usageWindowKey(filter, kind, cursor)
 	}
-	// Concurrent installs can fail a journaled read's check. Retries take
-	// today's path, with today's number of attempts.
+	// Day totals get one fresh journaled attempt after concurrent installs.
+	// Further conflicts use full-window preparation within the same budget.
 	for attempt := 1; attempt <= usageFillMaxAttempts+1; attempt++ {
 		if attempt > 1 {
 			memo.drop(key)
@@ -245,7 +246,7 @@ func (db *DB) queryUsageRollups(
 		if attempt == 1 {
 			prepared, err = db.sharedUsageWindow(ctx, key, filter, kind, cursor)
 		} else {
-			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, false, filter.Progress)
+			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, attempt == 2 && kind == usageQueryKindDayTotals, filter.Progress)
 		}
 		if err != nil {
 			if errors.Is(err, errUsageCacheSourceChanged) {

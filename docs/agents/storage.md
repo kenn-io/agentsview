@@ -700,9 +700,13 @@ The usage cache filename is derived from its format version and the archive
 `database_id`. A format or database-ID change selects a new generation; it does
 not migrate or rewrite the archive. Facts contain only message- and
 usage-event-derived data. Aggregate fingerprints additionally bake the exact
-session `agent` and `started_at`, because those fields affect deduplication and
-day bucketing. All other session metadata and filters come from the archive read
-snapshot. Do not widen or narrow this live/baked boundary implicitly.
+session `agent`, `started_at`, `project`, `machine`, `git_branch`,
+`is_automated`, and `user_message_count`. Those fields determine deduplication,
+day bucketing, and the filter dimensions of stored day totals. Journaled changes
+rebuild the session's rows and totals. Warm daily reads filter totals in SQL and
+read per-session rows for authoritative costs and dedup exceptions. Termination
+and `active_since` filters still use the archive snapshot. Do not widen or
+narrow this live/baked boundary implicitly.
 
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
@@ -757,13 +761,16 @@ timezone rollups, then reads them in one pinned cache transaction. Without a
 trusted timezone claim, verify every candidate session's facts fingerprint,
 exact baked metadata, per-session pricing identity, resolved rate hashes, and
 Cursor high-water mark. With a trusted claim, refresh journaled sessions and
-invalidated installs, discover window sessions through date indexes, and verify
-coverage and concurrent installs in the pinned cache transaction. A timezone
-without a claim starts a coverage pass when backfill is enabled. A conflicting
-install sends the request's retries through the full path. A result is no older
-than the archive snapshot captured when the read began, and may be newer for a
-session whose facts were refilled meanwhile. A session confirmed deleted during
-fill is dropped from the request. `cached_at` is diagnostic only.
+invalidated installs, and verify coverage and concurrent installs in the pinned
+cache transaction. Covered daily totals read ordinary usage from day totals and
+load only window exception owners and matching authoritative sessions. Other
+window reads discover sessions through date indexes. A timezone without a claim
+starts a coverage pass when backfill is enabled. After a conflicting install,
+daily totals retry once with a fresh journal capture; further conflicts and
+other reads use the full path. A result is no older than the archive snapshot
+captured when the read began, and may be newer for a session whose facts were
+refilled meanwhile. A session confirmed deleted during fill is dropped from the
+request. `cached_at` is diagnostic only.
 
 The layers are kept apart so a live archive cannot veto a read. A fill reads one
 session's facts and that session's source version inside a single archive read

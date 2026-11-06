@@ -97,7 +97,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	}
 	defer release()
 	identity := usageTimezoneIdentityFor(filter.Location(), nil)
-	zone, lost, window, err := cache.captureUsageZoneWindow(ctx, identity, filter)
+	zone, lost, window, err := cache.captureUsageZoneWindow(ctx, identity, filter, kind)
 	if err != nil {
 		return usagePreparedWindow{}, false, err
 	}
@@ -139,10 +139,10 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	if err := cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs); err != nil {
 		return usagePreparedWindow{}, false, nil
 	}
-	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings, journaled: true, installSeq: zone.installSeq}, true, nil
+	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings, journaled: true, kind: kind, installSeq: zone.installSeq}, true, nil
 }
 
-func (cache *usageCache) captureUsageZoneWindow(ctx context.Context, identity usageTimezoneIdentity, filter UsageFilter) (usageZoneCoverage, []string, []string, error) {
+func (cache *usageCache) captureUsageZoneWindow(ctx context.Context, identity usageTimezoneIdentity, filter UsageFilter, kind usageQueryKind) (usageZoneCoverage, []string, []string, error) {
 	// Window discovery and missing-install discovery share the same cache view.
 	var zone usageZoneCoverage
 	tx, err := cache.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -161,9 +161,12 @@ func (cache *usageCache) captureUsageZoneWindow(ctx context.Context, identity us
 	if err != nil {
 		return zone, nil, nil, err
 	}
-	window, err := usageRollupWindowSessions(ctx, tx, zone.id, filter)
-	if err != nil {
-		return zone, nil, nil, err
+	var window []string
+	if kind != usageQueryKindDayTotals {
+		window, err = usageRollupWindowSessions(ctx, tx, zone.id, filter)
+		if err != nil {
+			return zone, nil, nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return zone, nil, nil, err
@@ -345,6 +348,10 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 		if err := rows.Scan(&id, &revision, &pricing, &agent, &startedAt); err != nil {
 			_ = rows.Close()
 			return 0, err
+		}
+		if prepared.kind == usageQueryKindDayTotals && (revision != snapshot.ChangeRevision || pricing != catalog) {
+			_ = rows.Close()
+			return 0, errUsageCacheSourceChanged
 		}
 		if sessions == nil {
 			sessions = usageRollupSessionMap(snapshot)

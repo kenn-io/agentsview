@@ -18,7 +18,7 @@ after cache construction.
 
 ## Derived data
 
-The cache has two internal layers:
+The cache has three internal layers:
 
 1. Narrow, timezone-neutral facts contain parsed message and usage-event fields
    but no transcript content. They make rebuilding another timezone
@@ -26,6 +26,10 @@ The cache has two internal layers:
 1. Timezone rollups contain daily contributions at logical grain
    `(session_id, local_day, model)` plus activity rows and narrow dedup
    exceptions.
+1. Day totals sum non-authoritative daily rows by date, filter dimensions,
+   model, provider, rate, and band. Row triggers add and subtract contributions
+   in the install transaction. Authoritative-cost sessions and dedup exceptions
+   keep their existing per-session allocation and ranking.
 
 The facts layer is a build substrate only. Warm aggregate requests read rollups
 and exceptions; they never fall back to the live aggregate path.
@@ -37,11 +41,16 @@ per-row-rounded estimated cost, savings, authoritative cost markers, request
 counts, and discarded-snapshot output. Go owns model resolution, rate-band
 selection, money rounding, and result assembly.
 
-Project, machine, automation state, termination state, curation fields, and
-other filters remain live archive metadata. Rollup installs bake only `agent`
-and `started_at`: `agent` participates in general dedup keys, while `started_at`
-supplies the date for facts without their own timestamp. Both exact values are
-verified on every read.
+Rollup installs bake `agent`, `started_at`, `project`, `machine`, `git_branch`,
+`is_automated`, and `user_message_count`. A journaled metadata change rebuilds
+that session's rows and moves its day totals to the new dimensions. Termination
+and `active_since` filters still use archive metadata and per-session rows.
+
+After a completed timezone coverage pass, daily reads apply session and model
+filters to day totals in SQL. They load install metadata only for authoritative
+sessions and exception owners. Distinct matching sessions come from daily rows
+plus surviving exceptions. Warm preparations skip window-session discovery. Each
+archive snapshot loads its pricing catalog and computes its digest.
 
 ### Dedup exceptions
 
@@ -115,9 +124,9 @@ After a completed timezone coverage pass, an aggregate request reads the archive
 change journal and refreshes only journaled sessions and cached sessions that
 lost their rollup install. Deleting an install queues its session in an indexed
 worklist in the same transaction. Reinstalling it clears that entry, and
-deleting its cached facts removes it. Requests read window IDs and that worklist
-in one cache transaction, then capture archive revisions, pricing, current
-session metadata, and changed-session fingerprints in one archive transaction.
+deleting its cached facts removes it. Requests read the worklist and, except for
+daily totals, window IDs in a cache transaction, then revisions, pricing, session
+metadata, and changed-session fingerprints in an archive transaction.
 Deletion sweeps and notifications lower claims to the revision captured before
 their archive deletion check in the same transaction that removes cached facts.
 That preserves journal replay if another handle has already restored or
@@ -145,10 +154,13 @@ whether a pass can vouch for the current rates.
 
 Before reading rows, the pinned cache transaction checks timezone coverage,
 pricing, intervening installs for captured sessions, and missing installs. Empty
-windows run the same checks. A conflicting install or invalidated dedup peer
-sends the request's retries through the full path. Activity matching counts
-always take the full path. Warm window reads load filter and attribution
-metadata, including the display fields shared with Top sessions.
+windows run the same checks. After a conflicting install or invalidated dedup
+peer, daily totals retry once with a fresh journal capture; further conflicts
+and other reads use the full path. Activity matching counts always take the full
+path. Covered daily totals read ordinary usage from day totals and load only
+window exception owners and matching authoritative sessions. Other warm window
+reads load filter and attribution metadata, including the display fields shared
+with Top sessions.
 
 Within one Pairwise request, concurrent and sequential reads share one capture,
 fill check, and rollup check when their window, session predicate, and Cursor

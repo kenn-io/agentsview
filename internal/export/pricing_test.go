@@ -517,6 +517,42 @@ func TestModelRatesCostForTokensScopedAggregateUsesBaseRate(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 300_000}, cost)
 }
 
+func TestPricingResolverRecordResolvedCountsMatchesIndividualRecords(t *testing.T) {
+	rows := []EffectivePricingRow{{
+		ModelPattern: "priced-model",
+		Rates: ModelRates{
+			InputPerMTok: money.MustParseDollars("1"),
+			Source:       PricingRowSourceFetched,
+			Bands:        []PricingBand{{AboveInputTokens: 200_000, InputPerMTok: money.MustParseDollars("2")}},
+		},
+	}}
+	for _, model := range []string{"priced-model", "unknown-model"} {
+		t.Run(model, func(t *testing.T) {
+			individual := NewPricingResolver(rows)
+			counts := NewPricingResolver(rows)
+			lookup := individual.Lookup(model)
+			for range 2 {
+				individual.RecordResolvedReported("reported-model", model, lookup)
+				individual.RecordResolvedComputedRequest("reported-model", model, lookup, 100, 0, 0)
+			}
+			for range 3 {
+				individual.RecordResolvedComputedRequest("reported-model", model, lookup, 200_001, 0, 0)
+			}
+			for range 4 {
+				individual.RecordResolvedComputedAggregate("reported-model", model, lookup)
+			}
+			counts.RecordResolvedCounts("reported-model", model, lookup, 2, 2, 4, nil)
+			counts.RecordResolvedCounts("reported-model", model, lookup, 0, 3, 0, new(200_000))
+			counts.RecordResolvedCounts("unused-model", model, lookup, 0, 0, 0, nil)
+			want, err := individual.BuildBlock()
+			require.NoError(t, err)
+			got, err := counts.BuildBlock()
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
 func TestPricingResolverBuildBlockPricingBandsAndApplicationCounts(t *testing.T) {
 	baseUpdatedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 	bandUpdatedAt := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)

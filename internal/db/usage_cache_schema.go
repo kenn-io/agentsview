@@ -56,7 +56,10 @@ const (
 	// they change a used lookup's result.
 	// Version 16 retains proven message prefixes for incremental token fills.
 	// Version 17 tracks journal coverage and the archive revision of rollup builds.
-	usageCacheFormatVersion             = 17
+	// Version 18 adds stored per-day totals. Main builds already wrote version
+	// 17 caches without them, so keeping 17 would fail their schema check and
+	// leave those archives on a temporary cache after every restart.
+	usageCacheFormatVersion             = 18
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -73,7 +76,93 @@ const (
 	usageCacheMetadataRetirementProtocol  = "retirement_protocol_version"
 )
 
-const usageCacheSchemaSQL = `
+// Each column defines its table declaration, rollup source, and trigger behavior.
+var usageDayTotalsColumns = []struct {
+	name, definition, source string
+	key, sum                 bool
+}{
+	{"timezone_id", "INTEGER NOT NULL REFERENCES usage_rollup_timezones(id) ON DELETE CASCADE", "i.timezone_id", true, false},
+	{"local_date", "TEXT NOT NULL", "{row}.local_date", true, false},
+	{"project", "TEXT NOT NULL", "i.project", true, false},
+	{"agent", "TEXT NOT NULL", "i.baked_agent", true, false},
+	{"machine", "TEXT NOT NULL", "i.machine", true, false},
+	{"git_branch", "TEXT NOT NULL", "i.git_branch", true, false},
+	{"is_automated", "INTEGER NOT NULL", "i.is_automated", true, false},
+	{"user_message_count", "INTEGER NOT NULL", "i.user_message_count", true, false},
+	{"reported_model", "TEXT NOT NULL", "{row}.reported_model", true, false},
+	{"provider_id", "TEXT NOT NULL", "{row}.provider_id", true, false},
+	{"rate_hash", "TEXT NOT NULL", "{row}.rate_hash", true, false},
+	{"band_threshold", "INTEGER NOT NULL", "{row}.band_threshold", true, false},
+	{"priced_model", "TEXT NOT NULL", "{row}.priced_model", false, false},
+	{"pricing_timestamp", "TEXT NOT NULL", "{row}.pricing_timestamp", false, false},
+	{"row_count", "INTEGER NOT NULL", "1", false, true},
+	{"input_tokens", "INTEGER NOT NULL", "{row}.input_tokens", false, true},
+	{"output_tokens", "INTEGER NOT NULL", "{row}.output_tokens", false, true},
+	{"cache_creation_tokens", "INTEGER NOT NULL", "{row}.cache_creation_tokens", false, true},
+	{"cache_read_tokens", "INTEGER NOT NULL", "{row}.cache_read_tokens", false, true},
+	{"estimated_cost_microdollars", "INTEGER NOT NULL", "{row}.estimated_cost_microdollars", false, true},
+	{"savings_microdollars", "INTEGER NOT NULL", "{row}.savings_microdollars", false, true},
+	{"computed_request_count", "INTEGER NOT NULL", "{row}.computed_request_count", false, true},
+	{"computed_aggregate_count", "INTEGER NOT NULL", "{row}.computed_aggregate_count", false, true},
+	{"reported_count", "INTEGER NOT NULL", "{row}.reported_count", false, true},
+	{"base_request_count", "INTEGER NOT NULL", "{row}.base_request_count", false, true},
+}
+
+var usageDayTotalsColumnNames = func() string {
+	names := make([]string, 0, len(usageDayTotalsColumns))
+	for _, column := range usageDayTotalsColumns {
+		names = append(names, column.name)
+	}
+	return strings.Join(names, ", ")
+}()
+
+func usageDayTotalsSchemaSQL() string {
+	var definitions, keys, updates []string
+	for _, column := range usageDayTotalsColumns {
+		definitions = append(definitions, column.name+" "+column.definition)
+		if column.key {
+			keys = append(keys, column.name)
+		}
+		if column.sum {
+			updates = append(updates, column.name+"=usage_day_totals."+column.name+"+excluded."+column.name)
+		}
+	}
+	keyNames := strings.Join(keys, ", ")
+	var schema strings.Builder
+	schema.WriteString("CREATE TABLE usage_day_totals (" + strings.Join(definitions, ", ") + ", PRIMARY KEY (" + keyNames + ")) WITHOUT ROWID;\n")
+	for _, action := range []string{"INSERT", "DELETE"} {
+		row, sign := "NEW.", ""
+		if action == "DELETE" {
+			row, sign = "OLD.", "-"
+		}
+		var values, keyValues []string
+		for _, column := range usageDayTotalsColumns {
+			value := strings.ReplaceAll(column.source, "{row}.", row)
+			if column.key {
+				keyValues = append(keyValues, value)
+			}
+			if column.sum {
+				value = sign + value
+			}
+			values = append(values, value)
+		}
+		fmt.Fprintf(&schema, `CREATE TRIGGER usage_day_totals_%s AFTER %s ON usage_daily_rollups
+BEGIN
+    INSERT INTO usage_day_totals (%s)
+    SELECT %s FROM usage_rollup_installs i WHERE i.id=%srollup_install_id AND i.has_authoritative=0
+    ON CONFLICT (%s) DO UPDATE SET %s;
+`, strings.ToLower(action), action, usageDayTotalsColumnNames, strings.Join(values, ", "), row, keyNames, strings.Join(updates, ", "))
+		if action == "DELETE" {
+			fmt.Fprintf(&schema, `    DELETE FROM usage_day_totals WHERE row_count=0 AND (%s) =
+        (SELECT %s FROM usage_rollup_installs i WHERE i.id=OLD.rollup_install_id);
+`, keyNames, strings.Join(keyValues, ", "))
+		}
+		schema.WriteString("END;\n")
+	}
+	return schema.String()
+}
+
+var usageCacheSchemaSQL = `
 CREATE TABLE usage_cache_metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -171,6 +260,12 @@ CREATE TABLE usage_rollup_installs (
     fact_install_revision INTEGER NOT NULL,
     baked_agent TEXT NOT NULL,
     baked_started_at TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT '',
+    machine TEXT NOT NULL DEFAULT '',
+    git_branch TEXT NOT NULL DEFAULT '',
+    is_automated INTEGER NOT NULL DEFAULT 0,
+    user_message_count INTEGER NOT NULL DEFAULT 0,
+    has_authoritative INTEGER NOT NULL DEFAULT 0,
     pricing_inputs TEXT NOT NULL,
 	pricing_hash TEXT NOT NULL,
     install_revision INTEGER NOT NULL,
@@ -224,6 +319,13 @@ CREATE TABLE usage_daily_rollups (
 ) WITHOUT ROWID;
 CREATE INDEX usage_daily_rollups_window
     ON usage_daily_rollups (local_date, rollup_install_id);
+
+` + usageDayTotalsSchemaSQL() + `
+CREATE TRIGGER usage_day_totals_install_delete BEFORE DELETE ON usage_rollup_installs
+WHEN EXISTS (SELECT 1 FROM usage_rollup_timezones WHERE id=OLD.timezone_id)
+BEGIN
+    DELETE FROM usage_daily_rollups WHERE rollup_install_id=OLD.id;
+END;
 CREATE TABLE usage_activity_rollups (
     rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
         ON DELETE CASCADE,
@@ -827,7 +929,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		`SELECT timezone_id, session_id FROM usage_rollup_invalidations LIMIT 0`,
 		`SELECT id, timezone_id, session_id, source_change_revision, source_pricing, source_sync_marker,
 		        source_transcript_rev, usage_event_fingerprint,
-		        fact_install_revision, baked_agent, baked_started_at,
+		        fact_install_revision, baked_agent, baked_started_at, project, machine, git_branch, is_automated, user_message_count, has_authoritative,
 		        pricing_inputs, pricing_hash, install_revision, cached_at
 		 FROM usage_rollup_installs LIMIT 0`,
 		`SELECT rollup_install_id, local_date, reported_model, priced_model,
@@ -839,6 +941,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        computed_aggregate_count, reported_count, base_request_count,
 		        discarded_snapshot_output_tokens
 		 FROM usage_daily_rollups LIMIT 0`,
+		"SELECT " + usageDayTotalsColumnNames + " FROM usage_day_totals LIMIT 0",
 		`SELECT rollup_install_id, local_date, model, user_message_count
 		 FROM usage_activity_rollups LIMIT 0`,
 		`SELECT rollup_install_id, group_kind, group_key, cached_session_id,
