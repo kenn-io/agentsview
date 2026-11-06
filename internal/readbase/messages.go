@@ -99,7 +99,7 @@ func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message, ordina
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if err := s.attachToolResultEvents(ctx, msgs, index, ordinals); err != nil {
+	if err := s.attachToolResultEvents(ctx, msgs, index, args, len(ordinals)); err != nil {
 		return err
 	}
 	// Restore summaries omitted when one result event already carries the content.
@@ -108,10 +108,9 @@ func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message, ordina
 }
 
 func (s Sessions) attachToolResultEvents(
-	ctx context.Context, msgs []db.Message, index map[int]int, ordinals []any,
+	ctx context.Context, msgs []db.Message, index map[int]int, args []any, ordinalCount int,
 ) error {
-	args := append([]any{msgs[0].SessionID}, ordinals...)
-	rows, err := s.backend.QueryContext(ctx, s.backend.ToolResultEventsSQL(len(ordinals)), args...)
+	rows, err := s.backend.QueryContext(ctx, s.backend.ToolResultEventsSQL(ordinalCount), args...)
 	if err != nil {
 		return s.backend.ReadError(QueryToolResultEvents, err)
 	}
