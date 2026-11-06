@@ -1,0 +1,50 @@
+package sync
+
+import (
+	"context"
+	"log"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
+)
+
+type sourceFreshnessSnapshotKey struct{}
+
+// withSourceFreshnessSnapshot loads the pass's per-source freshness state once
+// and carries it in ctx to the workers. A load failure leaves ctx unchanged so
+// every lookup falls back to its live query.
+func (e *Engine) withSourceFreshnessSnapshot(
+	ctx context.Context, files []parser.DiscoveredFile,
+) context.Context {
+	agents := []parser.AgentType{}
+	paths := []string{}
+	seen := map[parser.AgentType]bool{}
+	for _, file := range files {
+		if e.ProviderStatHasher(file.Agent) == nil {
+			continue
+		}
+		path := file.Path
+		if file.ProviderSource != nil {
+			path = providerDiscoveredPath(*file.ProviderSource)
+		}
+		paths = append(paths, e.effectiveSourcePath(path))
+		if !seen[file.Agent] {
+			seen[file.Agent] = true
+			agents = append(agents, file.Agent)
+		}
+	}
+	if len(agents) == 0 {
+		return ctx
+	}
+	snap, err := e.db.LoadSourceFreshnessSnapshot(ctx, agents, paths)
+	if err != nil {
+		log.Printf("source freshness snapshot: %v", err)
+		return ctx
+	}
+	return context.WithValue(ctx, sourceFreshnessSnapshotKey{}, snap)
+}
+
+func sourceFreshnessSnapshotFrom(ctx context.Context) *db.SourceFreshnessSnapshot {
+	snap, _ := ctx.Value(sourceFreshnessSnapshotKey{}).(*db.SourceFreshnessSnapshot)
+	return snap
+}
