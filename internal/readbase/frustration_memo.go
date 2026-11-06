@@ -13,6 +13,7 @@ type frustrationMarkerEntry[V comparable] struct {
 	count   int
 }
 
+// Lookup returns the count if the stored session version matches.
 func (m *FrustrationMarkerMemo[V]) Lookup(id string, version V) (int, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -23,6 +24,7 @@ func (m *FrustrationMarkerMemo[V]) Lookup(id string, version V) (int, bool) {
 	return entry.count, true
 }
 
+// Store replaces the session's count and content version.
 func (m *FrustrationMarkerMemo[V]) Store(id string, version V, count int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

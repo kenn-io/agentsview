@@ -2826,36 +2826,30 @@ func (s *Store) populateFrustrationMarkers(
 	rows []db.SignalRow,
 	versions map[string]int64,
 ) error {
-	if len(rows) == 0 {
-		return nil
-	}
 	memo := &s.runtimeState().frustrationMarkers
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
-		if version, ok := versions[rows[i].ID]; ok {
-			if count, hit := memo.Lookup(rows[i].ID, version); hit {
-				rows[i].FrustrationMarkerCount = count
-				continue
-			}
+		if count, hit := memo.Lookup(rows[i].ID, versions[rows[i].ID]); hit {
+			rows[i].FrustrationMarkerCount = count
+			continue
 		}
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
-	if len(ids) == 0 {
-		return nil
-	}
+	scannedVersions := make(map[string]int64, len(ids))
 	err := pgQueryChunked(ids, func(chunk []string) error {
 		pb := &paramBuilder{}
 		placeholders := make([]string, 0, len(chunk))
 		for _, id := range chunk {
 			placeholders = append(placeholders, pb.add(id))
 		}
-		q := `SELECT session_id, ordinal, content, is_system
-			FROM messages
-			WHERE role = 'user'
-			  AND COALESCE(source_subtype, '') <> 'tool_result'
-			  AND session_id IN (` + strings.Join(placeholders, ",") + `)`
+		q := `SELECT s.id, s.updated_at, COALESCE(m.content, ''), COALESCE(m.is_system, false)
+			FROM sessions s
+			LEFT JOIN messages m ON m.session_id = s.id
+			  AND m.role = 'user'
+			  AND COALESCE(m.source_subtype, '') <> 'tool_result'
+			WHERE s.id IN (` + strings.Join(placeholders, ",") + `)`
 		msgRows, err := s.pg.QueryContext(ctx, q, pb.args...)
 		if err != nil {
 			return fmt.Errorf(
@@ -2865,21 +2859,21 @@ func (s *Store) populateFrustrationMarkers(
 		defer msgRows.Close()
 		for msgRows.Next() {
 			var sessionID, content string
-			var ordinal int
+			var updatedAt time.Time
 			var isSystem bool
 			if err := msgRows.Scan(
-				&sessionID, &ordinal, &content, &isSystem,
+				&sessionID, &updatedAt, &content, &isSystem,
 			); err != nil {
 				return fmt.Errorf(
 					"scanning frustration marker: %w", err,
 				)
 			}
-			i, ok := idx[sessionID]
-			if !ok || isSystem {
+			scannedVersions[sessionID] = updatedAt.UnixMicro()
+			if isSystem {
 				continue
 			}
 			if signals.IsFrustrationMarker(content) {
-				rows[i].FrustrationMarkerCount++
+				rows[idx[sessionID]].FrustrationMarkerCount++
 			}
 		}
 		if err := msgRows.Err(); err != nil {
@@ -2892,11 +2886,9 @@ func (s *Store) populateFrustrationMarkers(
 	if err != nil {
 		return err
 	}
-	// Only complete scans are memoized; failed reads must be retried.
-	for id, i := range idx {
-		if version, ok := versions[id]; ok {
-			memo.Store(id, version, rows[i].FrustrationMarkerCount)
-		}
+	// Only complete scans are memoized, using versions read with the prompts.
+	for id, version := range scannedVersions {
+		memo.Store(id, version, rows[idx[id]].FrustrationMarkerCount)
 	}
 	return nil
 }

@@ -4,12 +4,77 @@ package postgres
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
 )
+
+func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		want int
+	}{
+		{"edit", 1},
+		{"remove-prompts", 0},
+		{"remove-session", 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const schema = "agentsview_signals_memo_race_test"
+			const id = "signals-memo-race"
+			syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
+			url := testPGURL(t)
+			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+			require.NoError(t, local.UpsertSession(ctx, db.Session{
+				ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1,
+			}))
+			require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+				SessionID: id, Ordinal: 0, Role: "user", Content: "Please explain this function.",
+			}}))
+			_, err := syncer.Push(ctx, false, nil)
+			require.NoError(t, err)
+			store, err := NewStore(ctx, url, schema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			rows, versions, err := store.signalRows(ctx, db.AnalyticsFilter{})
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			require.Contains(t, versions, id)
+
+			// Publish after selection, before the separate prompt scan.
+			tx, err := pg.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer tx.Rollback()
+			switch test.name {
+			case "edit":
+				_, err = tx.ExecContext(ctx, `UPDATE messages SET content = 'this is broken' WHERE session_id = $1`, id)
+			case "remove-prompts":
+				_, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE session_id = $1`, id)
+			case "remove-session":
+				_, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, id)
+			}
+			require.NoError(t, err)
+			var updatedAt time.Time
+			if test.name != "remove-session" {
+				require.NoError(t, tx.QueryRowContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = $1 RETURNING updated_at`, id).Scan(&updatedAt))
+			}
+			require.NoError(t, tx.Commit())
+
+			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions))
+			assert.Equal(t, test.want, rows[0].FrustrationMarkerCount)
+			memo := &store.runtimeState().frustrationMarkers
+			_, hit := memo.Lookup(id, versions[id])
+			assert.False(t, hit, "the prompt scan must not cache published content under the selected old version")
+			if test.name != "remove-session" {
+				count, hit := memo.Lookup(id, updatedAt.UnixMicro())
+				assert.True(t, hit, "the prompt scan must cache the version it read, including sessions without prompts")
+				assert.Equal(t, test.want, count)
+			}
+		})
+	}
+}
 
 func TestFrustrationMemo(t *testing.T) {
 	for _, test := range []struct {
