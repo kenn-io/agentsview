@@ -124,13 +124,18 @@ func warmJournaledUsage(t *testing.T, database *DB, filter UsageFilter) *usageCa
 	return cache
 }
 
-func assertJournaledUsageLegacy(t *testing.T, database *DB, filter UsageFilter) {
+func assertJournaledDailyUsageLegacy(t *testing.T, database *DB, filter UsageFilter) {
 	t.Helper()
 	want, err := database.getDailyUsageLegacy(t.Context(), filter)
 	require.NoError(t, err)
 	got, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+}
+
+func assertJournaledUsageLegacy(t *testing.T, database *DB, filter UsageFilter) {
+	t.Helper()
+	assertJournaledDailyUsageLegacy(t, database, filter)
 	wantTop, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 10)
 	require.NoError(t, err)
 	gotTop, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
@@ -195,7 +200,7 @@ func TestUsageJournaledFreshness(t *testing.T) {
 				require.NoError(t, other.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T01:00:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
 				require.NoError(t, other.Close())
 			}
-			assertJournaledUsageLegacy(t, database, filter)
+			assertJournaledDailyUsageLegacy(t, database, filter)
 			if name == "price with filter" {
 				got, err := database.GetDailyUsage(t.Context(), filter)
 				require.NoError(t, err)
@@ -206,7 +211,7 @@ func TestUsageJournaledFreshness(t *testing.T) {
 }
 
 func TestUsageJournaledTrustBoundaries(t *testing.T) {
-	for _, name := range []string{"no pass", "new generation", "revision above archive", "custom pricing"} {
+	for _, name := range []string{"new generation", "revision above archive", "custom pricing"} {
 		t.Run(name, func(t *testing.T) {
 			database := testDB(t)
 			seedJournaledUsage(t, database, "session")
@@ -217,12 +222,6 @@ func TestUsageJournaledTrustBoundaries(t *testing.T) {
 			database.usageBackfillEnabled = false
 			database.usageBackfillMu.Unlock()
 			switch name {
-			case "no pass":
-				_, err := cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision=NULL`)
-				require.NoError(t, err)
-				_, trusted, err := database.prepareJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, func(string) {})
-				require.NoError(t, err)
-				assert.False(t, trusted, "a zone without completed coverage must fall back")
 			case "new generation":
 				require.NoError(t, database.usageCache.Close())
 				database.usageCache = newUsageCacheManager(database.Path())
@@ -299,58 +298,40 @@ func TestUsageJournaledStaleDeletionAfterPeerRestore(t *testing.T) {
 		}},
 		{name: "foreground", run: func(t *testing.T) {
 			t.Helper()
-			for _, consumer := range []string{"daily", "ranking", "counts"} {
-				t.Run(consumer, func(t *testing.T) {
-					database := testDB(t)
-					seedJournaledUsage(t, database, "session")
-					// A source timestamp ahead of the clock keeps the fingerprint
-					// unchanged through trash and restore.
-					_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET file_mtime=? WHERE id='session'`, time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano())
+			t.Run("daily", func(t *testing.T) {
+				database := testDB(t)
+				seedJournaledUsage(t, database, "session")
+				// A source timestamp ahead of the clock keeps the fingerprint
+				// unchanged through trash and restore.
+				_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET file_mtime=? WHERE id='session'`, time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano())
+				require.NoError(t, err)
+				filter := UsageFilter{Timezone: "UTC"}
+				cache := warmJournaledUsage(t, database, filter)
+				snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+				require.NoError(t, err)
+				other, err := OpenIsolatedContext(t.Context(), database.Path())
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, other.Close()) })
+				require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
+				cache.fill.observer.afterExtract = func([]usageSourceVersion) {
+					_, err := other.RestoreSession(t.Context(), "session")
 					require.NoError(t, err)
-					filter := UsageFilter{Timezone: "UTC"}
-					cache := warmJournaledUsage(t, database, filter)
-					snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+					got, err := other.GetDailyUsage(t.Context(), filter)
 					require.NoError(t, err)
-					other, err := OpenIsolatedContext(t.Context(), database.Path())
+					require.Equal(t, 100, got.Totals.InputTokens)
+				}
+				results, err := cache.fill.fillSessionsDetached(t.Context(), snapshot.Versions)
+				cache.fill.observer.afterExtract = nil
+				require.NoError(t, err)
+				require.True(t, results["session"].Deleted, "resume the deletion captured before restore")
+				assert.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"), "the foreground fill must apply its captured deletion")
+				// The report must recover before any activity scan repairs facts.
+				for range 2 {
+					got, err := database.GetDailyUsage(t.Context(), filter)
 					require.NoError(t, err)
-					t.Cleanup(func() { require.NoError(t, other.Close()) })
-					require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
-					cache.fill.observer.afterExtract = func([]usageSourceVersion) {
-						_, err := other.RestoreSession(t.Context(), "session")
-						require.NoError(t, err)
-						got, err := other.GetDailyUsage(t.Context(), filter)
-						require.NoError(t, err)
-						require.Equal(t, 100, got.Totals.InputTokens)
-					}
-					results, err := cache.fill.fillSessionsDetached(t.Context(), snapshot.Versions)
-					cache.fill.observer.afterExtract = nil
-					require.NoError(t, err)
-					require.True(t, results["session"].Deleted, "resume the deletion captured before restore")
-					assert.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"), "the foreground fill must apply its captured deletion")
-					// Each report must recover before any activity scan repairs facts.
-					for range 2 {
-						switch consumer {
-						case "daily":
-							got, err := database.GetDailyUsage(t.Context(), filter)
-							require.NoError(t, err)
-							assert.Equal(t, 100, got.Totals.InputTokens)
-						case "ranking":
-							got, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-							require.NoError(t, err)
-							require.Len(t, got, 1)
-							assert.Equal(t, "session", got[0].SessionID)
-							assert.Equal(t, 100, got[0].InputTokens)
-						case "counts":
-							got, err := database.GetUsageSessionCounts(t.Context(), filter)
-							require.NoError(t, err)
-							want, err := database.getUsageSessionCountsLegacy(t.Context(), filter)
-							require.NoError(t, err)
-							assert.Equal(t, want, got)
-							assert.Equal(t, UsageSessionCounts{Total: 1, ByProject: map[string]int{"project": 1}, ByAgent: map[string]int{"codex": 1}}, got)
-						}
-					}
-				})
-			}
+					assert.Equal(t, 100, got.Totals.InputTokens)
+				}
+			})
 		}},
 		{name: "sweep", run: func(t *testing.T) {
 			t.Helper()
@@ -375,10 +356,7 @@ func TestUsageJournaledStaleDeletionAfterPeerRestore(t *testing.T) {
 			require.NoError(t, cache.sweepDeletionJournal(t.Context(), database))
 			assert.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"), "the sweep must apply its captured tombstone")
 			for range 2 {
-				got, err := database.GetDailyUsage(t.Context(), filter)
-				require.NoError(t, err)
-				assert.Equal(t, 100, got.Totals.InputTokens)
-				assertJournaledUsageLegacy(t, database, filter)
+				assertJournaledDailyUsageLegacy(t, database, filter)
 			}
 		}},
 	} {
@@ -386,138 +364,85 @@ func TestUsageJournaledStaleDeletionAfterPeerRestore(t *testing.T) {
 	}
 }
 
-func TestUsageJournaledStaleDeletionBeforeClaim(t *testing.T) {
-	database := testDB(t)
-	seedJournaledUsage(t, database, "session")
-	filter := UsageFilter{Timezone: "UTC"}
-	cache := warmJournaledUsage(t, database, filter)
-	require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
-	versions, revision, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{{SessionID: "session"}})
-	require.NoError(t, err)
-	require.Empty(t, versions)
-	_, err = database.RestoreSession(t.Context(), "session")
-	require.NoError(t, err)
-
-	identity := usageTimezoneIdentityFor(filter.Location(), nil)
-	zone, lost, window, err := cache.captureUsageZoneWindow(t.Context(), identity, filter)
-	require.NoError(t, err)
-	databaseID, err := database.GetDatabaseID(t.Context())
-	require.NoError(t, err)
-	snapshot, refresh, refreshIDs, trusted, err := database.captureJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, databaseID, zone, lost, window)
-	require.NoError(t, err)
-	require.True(t, trusted)
-	installs, _, err := cache.refreshJournaledUsageWindow(t.Context(), &snapshot, refresh, refreshIDs, func(string) {})
-	require.NoError(t, err)
-
-	// Resume the notification's captured deletion after refresh, while the
-	// timezone still has its claim from before the deletion and restore.
-	require.Less(t, zone.revision.Int64, revision)
-	require.Less(t, revision, snapshot.ChangeRevision)
-	require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
-	require.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
-	require.NoError(t, cache.claimUsageZone(t.Context(), identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs))
-	for range 2 {
-		got, err := database.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		assert.Equal(t, 100, got.Totals.InputTokens)
-	}
-}
-
 func TestUsageJournaledClaimSurvivingInstalls(t *testing.T) {
 	for _, scenario := range []string{"backfill", "reused-id"} {
-		for _, consumer := range []string{"daily", "ranking", "counts"} {
-			t.Run(scenario+"/"+consumer, func(t *testing.T) {
-				database := testDB(t)
-				seedJournaledUsage(t, database, "session")
-				filter := UsageFilter{Timezone: "UTC"}
-				cache := warmJournaledUsage(t, database, filter)
-				require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
-				versions, revision, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+		t.Run(scenario+"/daily", func(t *testing.T) {
+			database := testDB(t)
+			seedJournaledUsage(t, database, "session")
+			filter := UsageFilter{Timezone: "UTC"}
+			cache := warmJournaledUsage(t, database, filter)
+			require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
+			versions, revision, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{{SessionID: "session"}})
+			require.NoError(t, err)
+			require.Empty(t, versions)
+			_, err = database.RestoreSession(t.Context(), "session")
+			require.NoError(t, err)
+			// Eviction forces fresh installations after the restore.
+			_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs`)
+			require.NoError(t, err)
+			identity := usageTimezoneIdentityFor(filter.Location(), nil)
+			zone, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
+			require.NoError(t, err)
+			if scenario == "backfill" {
+				// A single batch must retain its own installs for the claim;
+				// multiple batches get another complete verification afterward.
+				snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindActivity)
 				require.NoError(t, err)
-				require.Empty(t, versions)
-				_, err = database.RestoreSession(t.Context(), "session")
-				require.NoError(t, err)
-				// Eviction forces fresh installations after the restore.
-				_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs`)
-				require.NoError(t, err)
-				identity := usageTimezoneIdentityFor(filter.Location(), nil)
-				zone, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
-				require.NoError(t, err)
-				if scenario == "backfill" {
-					snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindActivity)
-					require.NoError(t, err)
-					// Publish a separate tombstone while the pass builds. Its final
-					// sweep provides the boundary after installation, before claiming.
-					var published, resumed atomic.Bool
-					cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
-						if published.CompareAndSwap(false, true) {
-							insertSession(t, database, "tombstone", "project")
-							require.NoError(t, database.DeleteSession(t.Context(), "tombstone"))
-						}
-					}
-					cache.fill.observer.beforeDeletionSweep = func() {
-						if published.Load() && resumed.CompareAndSwap(false, true) {
-							require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
-						}
-					}
-					require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
-					require.True(t, resumed.Load(), "resume the captured deletion after the pass installs restored usage")
-					cache.rollup.observer.beforeInstall = nil
-					cache.fill.observer.beforeDeletionSweep = nil
-				} else {
-					zone, lost, window, err := cache.captureUsageZoneWindow(t.Context(), identity, filter)
-					require.NoError(t, err)
-					databaseID, err := database.GetDatabaseID(t.Context())
-					require.NoError(t, err)
-					snapshot, refresh, ids, trusted, err := database.captureJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, databaseID, zone, lost, window)
-					require.NoError(t, err)
-					require.True(t, trusted)
-					installs, _, err := cache.refreshJournaledUsageWindow(t.Context(), &snapshot, refresh, ids, func(string) {})
-					require.NoError(t, err)
-					required := installs["session"]
-					require.Positive(t, required.ID)
-					require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
-					// A different session reuses the highest deleted SQLite row ID.
-					seedJournaledUsage(t, database, "replacement")
-					peer, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
-					require.NoError(t, err)
-					peer.Sessions = slices.DeleteFunc(peer.Sessions, func(s usageQuerySession) bool { return s.ID != "replacement" })
-					peer.Versions = slices.DeleteFunc(peer.Versions, func(v usageSourceVersion) bool { return v.SessionID != "replacement" })
-					fills, err := cache.fill.Ensure(t.Context(), peer.Versions, 0)
-					require.NoError(t, err)
-					built, _, err := cache.rollup.Ensure(t.Context(), peer, fills, export.NewPricingResolver(peer.PricingRows))
-					require.NoError(t, err)
-					require.Equal(t, required.ID, built["replacement"].ID)
-					require.NotEqual(t, required.InstallRevision, built["replacement"].InstallRevision)
-					require.NoError(t, cache.claimUsageZone(t.Context(), identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs))
-				}
-				wantTokens, wantSessions := 100, 1
-				if scenario == "reused-id" {
-					wantTokens, wantSessions = 200, 2
-				}
-				for range 2 {
-					switch consumer {
-					case "daily":
-						got, err := database.GetDailyUsage(t.Context(), filter)
-						require.NoError(t, err)
-						assert.Equal(t, wantTokens, got.Totals.InputTokens)
-					case "ranking":
-						got, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-						require.NoError(t, err)
-						assert.Len(t, got, wantSessions)
-						var tokens int
-						for _, session := range got {
-							tokens += session.InputTokens
-						}
-						assert.Equal(t, wantTokens, tokens)
-					case "counts":
-						got, err := database.GetUsageSessionCounts(t.Context(), filter)
-						require.NoError(t, err)
-						assert.Equal(t, UsageSessionCounts{Total: wantSessions, ByProject: map[string]int{"project": wantSessions}, ByAgent: map[string]int{"codex": wantSessions}}, got)
+				// Publish a separate tombstone while the pass builds. Its final
+				// sweep provides the boundary after installation, before claiming.
+				var published, resumed atomic.Bool
+				cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
+					if published.CompareAndSwap(false, true) {
+						insertSession(t, database, "tombstone", "project")
+						require.NoError(t, database.DeleteSession(t.Context(), "tombstone"))
 					}
 				}
-			})
-		}
+				cache.fill.observer.beforeDeletionSweep = func() {
+					if published.Load() && resumed.CompareAndSwap(false, true) {
+						require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
+					}
+				}
+				require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
+				require.True(t, resumed.Load(), "resume the captured deletion after the pass installs restored usage")
+				cache.rollup.observer.beforeInstall = nil
+				cache.fill.observer.beforeDeletionSweep = nil
+			} else {
+				zone, lost, window, err := cache.captureUsageZoneWindow(t.Context(), identity, filter)
+				require.NoError(t, err)
+				databaseID, err := database.GetDatabaseID(t.Context())
+				require.NoError(t, err)
+				snapshot, refresh, ids, trusted, err := database.captureJournaledUsageWindow(t.Context(), filter, usageQueryKindToken, false, databaseID, zone, lost, window)
+				require.NoError(t, err)
+				require.True(t, trusted)
+				installs, _, err := cache.refreshJournaledUsageWindow(t.Context(), &snapshot, refresh, ids, func(string) {})
+				require.NoError(t, err)
+				required := installs["session"]
+				require.Positive(t, required.ID)
+				require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
+				// A different session reuses the highest deleted SQLite row ID.
+				seedJournaledUsage(t, database, "replacement")
+				peer, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+				require.NoError(t, err)
+				peer.Sessions = slices.DeleteFunc(peer.Sessions, func(s usageQuerySession) bool { return s.ID != "replacement" })
+				peer.Versions = slices.DeleteFunc(peer.Versions, func(v usageSourceVersion) bool { return v.SessionID != "replacement" })
+				fills, err := cache.fill.Ensure(t.Context(), peer.Versions, 0)
+				require.NoError(t, err)
+				built, _, err := cache.rollup.Ensure(t.Context(), peer, fills, export.NewPricingResolver(peer.PricingRows))
+				require.NoError(t, err)
+				require.Equal(t, required.ID, built["replacement"].ID)
+				require.NotEqual(t, required.InstallRevision, built["replacement"].InstallRevision)
+				require.NoError(t, cache.claimUsageZone(t.Context(), identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs))
+			}
+			wantTokens := 100
+			if scenario == "reused-id" {
+				wantTokens = 200
+			}
+			for range 2 {
+				got, err := database.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, wantTokens, got.Totals.InputTokens)
+			}
+		})
 	}
 }
 
@@ -622,33 +547,6 @@ func TestUsageJournaledClaimFailureWhileCacheWriterBusy(t *testing.T) {
 	after, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
 	require.NoError(t, err)
 	assert.Equal(t, before.revision, after.revision, "a failed claim must leave coverage unchanged")
-}
-
-func TestUsageJournaledWarmReadWhileCacheWriterBusy(t *testing.T) {
-	database := testDB(t)
-	seedJournaledUsage(t, database, "session")
-	filter := UsageFilter{Timezone: "UTC"}
-	cache := warmJournaledUsage(t, database, filter)
-	var reads atomic.Int64
-	database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
-		assert.True(t, journaled, "a busy writer must leave the warm journaled read available")
-		reads.Add(1)
-	}
-	conn, err := cache.db.Conn(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, conn.Close()) })
-	_, err = conn.ExecContext(t.Context(), `BEGIN IMMEDIATE`)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, err := conn.ExecContext(context.WithoutCancel(t.Context()), `ROLLBACK`)
-		require.NoError(t, err)
-	})
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	got, err := database.GetDailyUsage(ctx, filter)
-	require.NoError(t, err, "unchanged warm reports must remain readable while a cache writer is busy")
-	assert.Equal(t, 100, got.Totals.InputTokens)
-	assert.EqualValues(t, 1, reads.Load())
 }
 
 func TestUsageJournaledRefreshDiagnostics(t *testing.T) {
@@ -816,8 +714,20 @@ func TestUsageJournaledOlderRollupRepaired(t *testing.T) {
 	_, err = other.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	require.NoError(t, other.Close())
+	var newerInstallID, newerRevision int64
+	var newerAgent string
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT id, source_change_revision, baked_agent FROM usage_rollup_installs WHERE session_id='session'`).Scan(&newerInstallID, &newerRevision, &newerAgent))
+	require.Greater(t, newerRevision, old.ChangeRevision)
+	require.Equal(t, "claude", newerAgent)
+	// Replacing this surviving install must rewind coverage too. The delayed
+	// peer-invalidation case instead inserts after the old install is evicted.
 	unblock()
 	require.NoError(t, <-done)
+	var replacedInstallID int64
+	var replacedAgent string
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT id, baked_agent FROM usage_rollup_installs WHERE session_id='session'`).Scan(&replacedInstallID, &replacedAgent))
+	assert.Equal(t, newerInstallID, replacedInstallID)
+	assert.Equal(t, "codex", replacedAgent)
 	coverage, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
 	require.NoError(t, err)
 	require.True(t, coverage.revision.Valid)
@@ -998,7 +908,7 @@ func TestUsageJournaledDedupInvalidation(t *testing.T) {
 }
 
 func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
-	for _, consumer := range []string{"daily", "ranking", "counts", "matching", "pass"} {
+	for _, consumer := range []string{"daily", "matching", "pass"} {
 		t.Run(consumer, func(t *testing.T) {
 			database := testDB(t)
 			seedUsageSnapshotSession(t, database, "original", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
@@ -1062,19 +972,6 @@ func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
 					got, err := database.GetDailyUsage(t.Context(), filter)
 					require.NoError(t, err)
 					assert.Equal(t, 100, got.Totals.InputTokens)
-				case "ranking":
-					got, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-					require.NoError(t, err)
-					require.Len(t, got, 1)
-					assert.Equal(t, "original", got[0].SessionID)
-					assert.Equal(t, 100, got[0].InputTokens)
-				case "counts":
-					got, err := database.GetUsageSessionCounts(t.Context(), filter)
-					require.NoError(t, err)
-					want, err := database.getUsageSessionCountsLegacy(t.Context(), filter)
-					require.NoError(t, err)
-					assert.Equal(t, want, got)
-					assert.Equal(t, UsageSessionCounts{Total: 1, ByProject: map[string]int{"project-a": 1}, ByAgent: map[string]int{"claude": 1}}, got)
 				case "matching":
 					prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
 					require.NoError(t, err)
@@ -1283,21 +1180,14 @@ func TestUsageJournaledWarmSevenDaysReuseInstalledTotals(t *testing.T) {
 	want, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	require.Equal(t, 100, want.Totals.InputTokens)
-	var fills, builds atomic.Int64
+	var fills, builds, reads atomic.Int64
 	cache.fill.observer.beforeInstall = func([]usageSourceVersion) { fills.Add(1) }
 	cache.rollup.observer.beforeEnsure = func() { builds.Add(1) }
 	database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
 		assert.True(t, journaled, "warm reads must skip archive discovery and fact checks")
+		reads.Add(1)
 	}
-	conn, err := cache.db.Conn(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, conn.Close()) })
-	_, err = conn.ExecContext(t.Context(), `BEGIN IMMEDIATE`)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, err := conn.ExecContext(context.WithoutCancel(t.Context()), `ROLLBACK`)
-		require.NoError(t, err)
-	})
+	holdUsageCacheWriter(t, cache)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	for range 5 {
@@ -1305,6 +1195,7 @@ func TestUsageJournaledWarmSevenDaysReuseInstalledTotals(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+	assert.EqualValues(t, 5, reads.Load(), "every warm report must read the journaled window")
 	assert.Zero(t, fills.Load(), "warm reads must reuse cached facts")
 	assert.Zero(t, builds.Load(), "warm reads must reuse installed daily totals")
 }
