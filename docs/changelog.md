@@ -11,6 +11,11 @@ The latest release is
 
 **New features**
 
+- Find the session and prompt behind file lines with `agentsview why path:N-M`,
+  or look up a commit with `agentsview why --commit SHA`. The command uses local
+  Git blame and archived commit links without calling a model. Add `--json` for
+  scripts.
+
 - Find editor commits through `Agent-Session` trailers in local Git history.
   Session commit lookups show the source and suggest the last prompt at or
   before the commit time, marked as estimated, when the session has a message
