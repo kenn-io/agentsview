@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -988,6 +989,60 @@ func TestUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
 	require.ErrorIs(t, <-firstDone, context.Canceled)
 	require.NoError(t, <-secondDone)
 	assert.Equal(t, int32(1), extractions.Load())
+}
+
+func TestUsagePageFillShardsLargeWindow(t *testing.T) {
+	database := testDB(t)
+	database.SetUsageCacheNotificationWork(func() (func(), bool) { return nil, false })
+	const sessions = 2*usageFillShardMinSessions + 5
+	_, err := database.getWriter().ExecContext(t.Context(), `
+		WITH RECURSIVE seq(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM seq WHERE n < ?-1)
+		INSERT INTO sessions (id, project, machine, agent, message_count, started_at, ended_at)
+		SELECT printf('session-%06d', n), 'project', 'local', 'claude', 2,
+			'2026-08-10T10:00:00Z', '2026-08-10T10:01:00Z' FROM seq`, sessions)
+	require.NoError(t, err)
+	_, err = database.getWriter().ExecContext(t.Context(), `
+		INSERT INTO messages (session_id, ordinal, role, content, model, timestamp, token_usage)
+		SELECT s.id, o.ordinal, 'assistant', 'answer', 'model',
+			CASE o.ordinal WHEN 0 THEN '2026-08-10T10:01:00Z' ELSE '2026-08-10T10:00:00Z' END,
+			'{"input_tokens":10,"output_tokens":5}'
+		FROM sessions s CROSS JOIN (SELECT 0 AS ordinal UNION ALL SELECT 1) o`)
+	require.NoError(t, err)
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{Timezone: "UTC"}, usageQueryKindToken)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	require.Len(t, snapshot.Versions, sessions)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	var sizes []int
+	var mu sync.Mutex
+	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
+		mu.Lock()
+		defer mu.Unlock()
+		sizes = append(sizes, len(versions))
+	}
+	installs, _, err := cache.fillAndRollupUsageWindow(t.Context(), &snapshot, &snapshot, func(string) {})
+	require.NoError(t, err)
+	assert.Len(t, installs, sessions)
+	var total int
+	for _, size := range sizes {
+		total += size
+	}
+	assert.Greater(t, len(sizes), 1)
+	assert.LessOrEqual(t, len(sizes), bulkReadSlots)
+	assert.Equal(t, sessions, total)
+	var cached, facts, ordered int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_cached_sessions`).Scan(&cached))
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_facts`).Scan(&facts))
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `
+		SELECT COUNT(*) FROM usage_facts earlier JOIN usage_facts later
+		ON earlier.cached_session_id=later.cached_session_id
+		WHERE earlier.fact_index=0 AND later.fact_index=1
+		AND earlier.message_ordinal=1 AND later.message_ordinal=0
+		AND earlier.timestamp_ms < later.timestamp_ms`).Scan(&ordered))
+	assert.Equal(t, sessions, cached)
+	assert.Equal(t, 2*sessions, facts)
+	assert.Equal(t, sessions, ordered)
 }
 
 func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {

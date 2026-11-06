@@ -20,6 +20,7 @@ import (
 const (
 	usageFillMaxAttempts          = 3
 	usageFillInstallBatchSize     = 256
+	usageFillShardMinSessions     = 1024
 	usageCursorCopyBatchSize      = 1_000
 	usageFillNotificationDebounce = 100 * time.Millisecond
 	usageFillNotificationCapacity = 1024
