@@ -30,25 +30,49 @@ func usageQueryCounts(t *testing.T, store *Store) (probes, results uint64) {
 }
 
 func TestUsageRowsVersionProbeFailure(t *testing.T) {
-	store, _, _ := newPushedStore(t)
-	_, ok, err := store.usageRowsVersion(t.Context(), chUsageReadTables)
-	require.NoError(t, err)
-	require.True(t, ok)
-	kept := maps.Clone(store.usageVersions.tables)
-	execPreparedUsage(t, store, "SYSTEM STOP MERGES sessions", "INSERT INTO sessions SELECT * FROM sessions")
-	ctx, err := store.withPartsSnapshot(t.Context())
-	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(ctx)
-	cancel()
-	// Cancellation after the parts snapshot fails the identity probe itself.
-	_, ok, err = store.usageRowsVersion(ctx, chUsageReadTables)
-	require.NoError(t, err)
-	require.False(t, ok)
-	require.Equal(t, kept, store.usageVersions.tables)
-	slot, version, err := store.usageRowMemoKey(ctx, preparedUsageState{ready: true}, "daily", db.UsageFilter{}, "", "", nil)
-	require.NoError(t, err)
-	require.Empty(t, slot)
-	require.Empty(t, version)
+	for _, failure := range []string{"identity cancellation", "parts timeout"} {
+		t.Run(failure, func(t *testing.T) {
+			store, _, _ := newPushedStore(t)
+			_, ok, err := store.usageRowsVersion(t.Context(), chUsageReadTables)
+			require.NoError(t, err)
+			require.True(t, ok)
+			kept := maps.Clone(store.usageVersions.tables)
+			execPreparedUsage(t, store, "SYSTEM STOP MERGES sessions", "INSERT INTO sessions SELECT * FROM sessions")
+			ctx, err := store.withPartsSnapshot(t.Context())
+			require.NoError(t, err)
+			failingContext := func() context.Context {
+				if failure == "identity cancellation" {
+					ctx, cancel := context.WithCancel(ctx)
+					cancel()
+					return ctx
+				}
+				settings := chdriver.Settings{"timeout_before_checking_execution_speed": 0}
+				return chdriver.Context(ctx, chdriver.WithSettings(settings), chdriver.WithProgress(func(*chdriver.Progress) {
+					// The identity query has already sent its settings. Make only
+					// the following parts re-read exceed its statement budget.
+					settings["max_execution_time"] = 0.000001
+				}))
+			}
+			_, ok, err = store.usageRowsVersion(failingContext(), chUsageReadTables)
+			require.NoError(t, err)
+			require.False(t, ok)
+			require.Equal(t, kept, store.usageVersions.tables)
+			slot, version, err := store.usageRowMemoKey(failingContext(), preparedUsageState{ready: true}, "daily", db.UsageFilter{}, "", "", nil)
+			require.NoError(t, err)
+			require.Empty(t, slot)
+			require.Empty(t, version)
+			if failure == "parts timeout" {
+				execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+				var timeouts uint64
+				require.NoError(t, store.DB().QueryRowContext(t.Context(), `
+			SELECT count() FROM system.query_log
+			WHERE current_database = currentDatabase() AND exception_code = 159
+				AND position(query, 'FROM system.parts') > 0
+		`).Scan(&timeouts))
+				require.EqualValues(t, 2, timeouts, "both optional parts re-reads must time out")
+			}
+		})
+	}
 }
 
 func TestUsageMemosSurviveMerges(t *testing.T) {

@@ -2277,7 +2277,8 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 		}
 		fresh, err := s.readPartsSnapshot(ctx)
 		if err != nil {
-			return "", false, err
+			s.logUsageReadiness(fmt.Sprintf("parts recheck failed, serving uncached: %v", err))
+			return "", false, nil
 		}
 		for _, table := range tables {
 			if fresh[table] != snapshot[table] {
