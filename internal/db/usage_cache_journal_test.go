@@ -701,47 +701,52 @@ func TestUsageJournaledForeignInstall(t *testing.T) {
 }
 
 func TestUsageJournaledNotificationCapturesNewerMetadata(t *testing.T) {
-	for _, field := range []string{"started_at", "agent"} {
-		t.Run(field, func(t *testing.T) {
-			database := testDB(t)
-			seedJournaledUsage(t, database, "session")
-			// Untimed session usage is assigned to the session's start day.
-			require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{Source: "session", Model: "session-model", InputTokens: 300}}))
-			filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-			cache := warmJournaledUsage(t, database, filter)
-			captured, err := database.captureUsageSessions(t.Context(), []string{"session"})
-			require.NoError(t, err)
-			fills, err := cache.fill.Ensure(t.Context(), captured.Versions, 0)
-			require.NoError(t, err)
-			prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
-			require.NoError(t, err)
-			require.True(t, prepared.journaled)
-			require.Equal(t, captured.ChangeRevision, prepared.snapshot.ChangeRevision)
-			session, err := database.GetSession(t.Context(), "session")
-			require.NoError(t, err)
-			require.NotNil(t, session)
-			if field == "started_at" {
-				session.StartedAt = new("2026-08-11T09:00:00Z")
-			} else {
-				session.Agent = "claude"
-			}
-			require.NoError(t, database.UpsertSession(t.Context(), *session))
-			// Resume a notification after its fact capture, using its older
-			// coverage revision and the metadata refreshUsageRollups reads now.
-			database.usageBackfillMu.Lock()
-			database.usageBackfillEnabled = true
-			database.usageBackfillMu.Unlock()
-			database.refreshUsageRollups(t.Context(), cache, fills, captured.ChangeRevision)
-			var installedRevision int64
-			var agent, startedAt string
-			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision, baked_agent, baked_started_at FROM usage_rollup_installs WHERE session_id='session'`).Scan(&installedRevision, &agent, &startedAt))
-			require.Equal(t, captured.ChangeRevision, installedRevision)
-			require.Equal(t, session.Agent, agent)
-			require.Equal(t, *session.StartedAt, startedAt)
-			_, err = cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows))
-			require.ErrorIs(t, err, errUsageCacheSourceChanged)
-			assertJournaledUsageLegacy(t, database, filter)
-		})
+	for _, kind := range []usageQueryKind{usageQueryKindToken, usageQueryKindDayTotals} {
+		for _, field := range []string{"started_at", "agent"} {
+			t.Run(fmt.Sprintf("%d/%s", kind, field), func(t *testing.T) {
+				database := testDB(t)
+				seedJournaledUsage(t, database, "session")
+				// Untimed session usage is assigned to the session's start day.
+				require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{Source: "session", Model: "session-model", InputTokens: 300}}))
+				filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+				cache := warmJournaledUsage(t, database, filter)
+				captured, err := database.captureUsageSessions(t.Context(), []string{"session"})
+				require.NoError(t, err)
+				fills, err := cache.fill.Ensure(t.Context(), captured.Versions, 0)
+				require.NoError(t, err)
+				prepared, err := database.prepareUsageWindow(t.Context(), filter, kind, false, true, nil)
+				require.NoError(t, err)
+				require.True(t, prepared.journaled)
+				require.Equal(t, captured.ChangeRevision, prepared.snapshot.ChangeRevision)
+				session, err := database.GetSession(t.Context(), "session")
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				if field == "started_at" {
+					session.StartedAt = new("2026-08-11T09:00:00Z")
+				} else {
+					session.Agent = "claude"
+				}
+				require.NoError(t, database.UpsertSession(t.Context(), *session))
+				metadata, err := database.captureUsageSessions(t.Context(), []string{"session"})
+				require.NoError(t, err)
+				require.Greater(t, metadata.ChangeRevision, captured.ChangeRevision)
+				// Resume a notification after its fact capture, using the newer
+				// metadata refreshUsageRollups reads now.
+				database.usageBackfillMu.Lock()
+				database.usageBackfillEnabled = true
+				database.usageBackfillMu.Unlock()
+				database.refreshUsageRollups(t.Context(), cache, fills)
+				var installedRevision int64
+				var agent, startedAt string
+				require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT source_change_revision, baked_agent, baked_started_at FROM usage_rollup_installs WHERE session_id='session'`).Scan(&installedRevision, &agent, &startedAt))
+				assert.Equal(t, metadata.ChangeRevision, installedRevision)
+				require.Equal(t, session.Agent, agent)
+				require.Equal(t, *session.StartedAt, startedAt)
+				_, err = cache.usageRollupQuery(t.Context(), prepared, filter, export.NewPricingResolver(prepared.snapshot.PricingRows))
+				require.ErrorIs(t, err, errUsageCacheSourceChanged)
+				assertJournaledUsageLegacy(t, database, filter)
+			})
+		}
 	}
 }
 

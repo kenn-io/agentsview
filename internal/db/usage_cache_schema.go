@@ -125,7 +125,8 @@ func usageDayTotalsSchemaSQL() string {
 		}
 	}
 	keyNames := strings.Join(keys, ", ")
-	schema := "CREATE TABLE usage_day_totals (" + strings.Join(definitions, ", ") + ", PRIMARY KEY (" + keyNames + ")) WITHOUT ROWID;\n"
+	var schema strings.Builder
+	schema.WriteString("CREATE TABLE usage_day_totals (" + strings.Join(definitions, ", ") + ", PRIMARY KEY (" + keyNames + ")) WITHOUT ROWID;\n")
 	for _, action := range []string{"INSERT", "DELETE"} {
 		row, sign := "NEW.", ""
 		if action == "DELETE" {
@@ -142,20 +143,20 @@ func usageDayTotalsSchemaSQL() string {
 			}
 			values = append(values, value)
 		}
-		schema += fmt.Sprintf(`CREATE TRIGGER usage_day_totals_%s AFTER %s ON usage_daily_rollups
+		fmt.Fprintf(&schema, `CREATE TRIGGER usage_day_totals_%s AFTER %s ON usage_daily_rollups
 BEGIN
     INSERT INTO usage_day_totals (%s)
     SELECT %s FROM usage_rollup_installs i WHERE i.id=%srollup_install_id AND i.has_authoritative=0
     ON CONFLICT (%s) DO UPDATE SET %s;
 `, strings.ToLower(action), action, usageDayTotalsColumnNames, strings.Join(values, ", "), row, keyNames, strings.Join(updates, ", "))
 		if action == "DELETE" {
-			schema += fmt.Sprintf(`    DELETE FROM usage_day_totals WHERE row_count=0 AND (%s) =
+			fmt.Fprintf(&schema, `    DELETE FROM usage_day_totals WHERE row_count=0 AND (%s) =
         (SELECT %s FROM usage_rollup_installs i WHERE i.id=OLD.rollup_install_id);
 `, keyNames, strings.Join(keyValues, ", "))
 		}
-		schema += "END;\n"
+		schema.WriteString("END;\n")
 	}
-	return schema
+	return schema.String()
 }
 
 var usageCacheSchemaSQL = `

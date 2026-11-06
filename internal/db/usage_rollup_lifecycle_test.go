@@ -494,7 +494,6 @@ func TestUsageRollupCallKeyIncludesBakedSessionMetadata(t *testing.T) {
 		change(&snapshot.Sessions[0])
 		assert.NotEqual(t, before, usageRollupCallKey(snapshot, fills, "pricing"))
 	}
-
 }
 
 func TestUsagePricingHashTracksPricingSemantics(t *testing.T) {

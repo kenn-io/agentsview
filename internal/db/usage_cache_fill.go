@@ -1805,7 +1805,7 @@ func (c *usageFillCoordinator) processNotificationBatch(
 				if err != nil && c.ctx.Err() == nil {
 					log.Printf("usage cache notification fill: %v", err)
 				}
-				c.archive.refreshUsageRollups(c.ctx, c.cache, fills, revision)
+				c.archive.refreshUsageRollups(c.ctx, c.cache, fills)
 			}
 		}
 	}

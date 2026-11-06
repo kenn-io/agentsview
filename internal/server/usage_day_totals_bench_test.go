@@ -48,7 +48,7 @@ func readUsageDayTotalsPage(ctx context.Context, s *Server, from string) ([3][]b
 		results[0], errs[0] = json.Marshal(out.Body)
 	})
 	wg.Go(func() {
-		out, err := s.humaUsagePairwiseComparison(ctx, &usagePairwiseComparisonInput{UsageSummaryInput: UsageSummaryInput{UsageFilterInput: input}})
+		out, err := s.humaUsagePairwiseComparison(ctx, &usagePairwiseComparisonInput{UsageFilterInput: input})
 		if err != nil {
 			errs[1] = err
 			return
@@ -83,7 +83,7 @@ func checkUsageDayTotalsPage(tb testing.TB, name string, got [3][]byte) {
 			require.Equal(tb, string(base), string(got[i]), "base/head %s", file)
 		}
 		if dir := os.Getenv("AGENTSVIEW_USAGE_RESULTS_DIR"); dir != "" {
-			require.NoError(tb, os.WriteFile(filepath.Join(dir, file), got[i], 0600))
+			require.NoError(tb, os.WriteFile(filepath.Join(dir, file), got[i], 0o600))
 		}
 		tb.Logf("%s response-%d sha256=%x", name, i, sha256.Sum256(got[i]))
 	}

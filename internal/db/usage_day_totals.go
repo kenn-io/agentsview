@@ -33,6 +33,7 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	if err != nil {
 		return usageFactsResult{}, err
 	}
+	defer rows.Close()
 	result := usageFactsResult{MatchingSessions: make(map[string]UsageSessionInfo)}
 	for rows.Next() {
 		var group usageFactsGroup
@@ -43,7 +44,6 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 			&group.InputTokens, &group.OutputTokens, &group.CacheCreationTokens, &group.CacheReadTokens,
 			&group.CostMicrodollars, &group.SavingsMicrodollars, &group.ComputedRequestCount, &group.ComputedAggregateCount,
 			&group.ReportedCount, &group.BaseRequestCount, &band); err != nil {
-			_ = rows.Close()
 			return usageFactsResult{}, err
 		}
 		if band >= 0 {
@@ -52,10 +52,6 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 		result.Groups = append(result.Groups, group)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return usageFactsResult{}, err
-	}
-	if err := rows.Close(); err != nil {
 		return usageFactsResult{}, err
 	}
 
@@ -85,11 +81,11 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	if err != nil {
 		return usageFactsResult{}, err
 	}
+	defer rows.Close()
 	snapshot.Sessions = nil
 	for rows.Next() {
 		var session usageQuerySession
 		if err := rows.Scan(&session.ID, &session.Project, &session.Agent, &session.Machine, &session.StartedAt, &session.PassesFilter); err != nil {
-			_ = rows.Close()
 			return usageFactsResult{}, err
 		}
 		if millis, _, _ := usagefacts.ParseTimestamp(session.StartedAt); millis != nil {
@@ -99,10 +95,6 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 		snapshot.Sessions = append(snapshot.Sessions, session)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return usageFactsResult{}, err
-	}
-	if err := rows.Close(); err != nil {
 		return usageFactsResult{}, err
 	}
 	authoritative, err := readUsageDailyRollups(ctx, conn, timezoneID, *snapshot, filter, true)
@@ -125,20 +117,16 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 		if err != nil {
 			return usageFactsResult{}, err
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var id string
 			var info UsageSessionInfo
 			if err := rows.Scan(&id, &info.Project, &info.Agent); err != nil {
-				_ = rows.Close()
 				return usageFactsResult{}, err
 			}
 			result.MatchingSessions[id] = info
 		}
 		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return usageFactsResult{}, err
-		}
-		if err := rows.Close(); err != nil {
 			return usageFactsResult{}, err
 		}
 	}
