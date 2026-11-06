@@ -211,6 +211,12 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 }
 
 func (d *daemonIngestion) restoreCollection() error {
+	d.mu.Lock()
+	watching := d.watchers != nil
+	d.mu.Unlock()
+	if watching {
+		return nil
+	}
 	d.applyMu.Lock()
 	defer d.applyMu.Unlock()
 	d.mu.Lock()
@@ -251,6 +257,10 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 	}
 	return func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
 		d.mu.Lock()
+		if !d.pending || d.stopped {
+			d.mu.Unlock()
+			return runner(ctx, progress)
+		}
 		if d.pending && d.catchup == nil && !d.stopped {
 			done := d.registerCatchupLocked()
 			defer d.finishCatchup(done)

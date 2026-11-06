@@ -305,6 +305,40 @@ func TestDaemonIngestionWakeKeepsStartupDispatchClosed(t *testing.T) {
 	require.Eventually(t, func() bool { return sessionImported(t, database, "gemini:before-startup-ack") }, 5*time.Second, 20*time.Millisecond)
 }
 
+func TestActiveManualSyncDoesNotWaitForReloadOrReconcile(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	require.True(t, f.ingestion.Active())
+	// Dispatch stays closed so only an unwanted reconcile could mark this source missing.
+	require.NoError(t, os.Remove(filepath.Join(f.root, "tmp", "project", "chats", "session-retained.json")))
+	var calls atomic.Int64
+	runner := f.ingestion.foregroundSync(func(context.Context, func(agentsync.Progress)) (agentsync.SyncStats, error) {
+		calls.Add(1)
+		return agentsync.SyncStats{}, nil
+	})
+	f.ingestion.applyMu.Lock()
+	done := make(chan struct{})
+	defer func() {
+		f.ingestion.applyMu.Unlock()
+		<-done
+	}()
+	var runErr error
+	go func() {
+		defer close(done)
+		_, runErr = runner(t.Context(), nil)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "active manual sync waited for the provider reload lock")
+	}
+	require.NoError(t, runErr)
+	assert.Equal(t, int64(1), calls.Load())
+	after, err := f.database.GetSessionFull(t.Context(), "gemini:retained")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Nil(t, after.SourceMissingAt, "active manual sync leaves source reconciliation to the runner")
+}
+
 func TestArchiveWriteRoutesHandleIdleCollection(t *testing.T) {
 	for _, tc := range []struct{ name, route string }{{"resync", "/resync"}, {"startup-only", "/sync?startup_only=true"}, {"nil receiver pass-through", "/sync"}} {
 		t.Run(tc.name, func(t *testing.T) {
