@@ -1730,8 +1730,8 @@ func TestDuckUsageCopilotCostFollowsLatestEvent(t *testing.T) {
 				},
 				DataVersion: 1, ReplaceMessages: true,
 			}})
-			t.Run("unfiltered", func(t *testing.T) {
-				filter := db.UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+			for _, filter := range []db.UsageFilter{{}, {Model: " , "}, {ExcludeModel: " , "}, {Model: " , ", ExcludeModel: " , "}} {
+				filter.From, filter.To, filter.Timezone = "2026-08-10", "2026-08-10", "UTC"
 				daily, err := store.GetDailyUsage(t.Context(), filter)
 				require.NoError(t, err)
 				assert.Equal(t, latest, daily.Totals.TotalCost)
@@ -1739,7 +1739,7 @@ func TestDuckUsageCopilotCostFollowsLatestEvent(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, top, 1)
 				assert.Equal(t, latest, top[0].Cost)
-			})
+			}
 			usage, err := store.GetSessionUsage(t.Context(), session.ID, false)
 			require.NoError(t, err)
 			assert.Equal(t, latest, usage.Cost)
