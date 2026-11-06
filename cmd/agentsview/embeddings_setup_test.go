@@ -665,7 +665,18 @@ func TestLiveEmbeddingsSetupRejectsSiblingCapBeforeDownload(t *testing.T) {
 		return embedlocal.Status{DownloadBytes: 295_000_000}, nil
 	}
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
-	err = owner.Setup("use-built-in")
-	require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	var status vector.BuildStatus
+	body := embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/embeddings/status", "", nil, http.StatusOK)
+	require.NoError(t, json.Unmarshal(body, &status))
+	require.NotNil(t, status.Setup)
+	assert.Empty(t, status.Setup.Action, "a predictable configuration constraint must be shown before offering the switch")
+	assert.Contains(t, status.Setup.Error, "max_batch_tokens")
+	body = embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusBadRequest)
+	assert.Contains(t, string(body), "max_batch_tokens")
 }
