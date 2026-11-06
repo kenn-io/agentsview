@@ -88,10 +88,15 @@ func (db *DB) BuildActivityReportArtifacts(
 	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
+	defer release()
+
 	var selection, version string
 	var revision int64
 	if !q.Partial && !db.readOnly {
-		var err error
 		version, revision, err = db.activityKeptVersion(ctx)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
@@ -108,14 +113,11 @@ func (db *DB) BuildActivityReportArtifacts(
 			}
 		}
 	}
-	release, err := db.acquireBulkRead(ctx)
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	defer release()
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
 	lowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+	startInstant := q.RangeStart.UTC().Format(time.RFC3339Nano)
+	endInstant := q.RangeEnd.UTC().Format(time.RFC3339Nano)
 
 	sessions, ids, err := db.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC)
@@ -139,7 +141,10 @@ func (db *DB) BuildActivityReportArtifacts(
 		read = slices.Compact(read)
 		db.activityKept.Put(selection, version, []activityKept{{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
-			read: read, lower: lowerBound, upper: upperBound,
+			read: read, labels: activity.ProjectLabels(sessions),
+			rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC,
+			paddedLower: lowerBound, paddedUpper: upperBound,
+			startInstant: startInstant, endInstant: endInstant,
 		}})
 	}
 	return artifacts, err
@@ -472,21 +477,7 @@ func (db *DB) activityReportSessionsFrom(
 		s.relationship_type = 'subagent'
 	FROM sessions s
 	WHERE ` + where + `
-		AND (COALESCE(NULLIF(s.ended_at, ''),
-				(SELECT MAX(m.timestamp) FROM messages m
-					WHERE m.session_id = s.id AND m.timestamp != ''),
-				NULLIF(s.started_at, ''), s.created_at) >= ?
-			OR EXISTS (
-				SELECT 1 FROM tool_result_events tre
-				WHERE tre.session_id = s.id
-					AND tre.source = 'tool_execution'
-					AND tre.status IN ('completed', 'errored')
-					AND tre.timestamp IS NOT NULL
-					AND tre.timestamp != ''
-					AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
-					AND tre.timestamp >= ?
-			))
-		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?`
+		AND ` + activityReportSessionWindowPredicate()
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -521,6 +512,28 @@ func (db *DB) activityReportSessionsFrom(
 		ids = append(ids, session.SessionID)
 	}
 	return sessions, ids, nil
+}
+
+func activityReportSessionWindowPredicate() string {
+	return `(
+		(
+			COALESCE(NULLIF(s.ended_at, ''),
+				(SELECT MAX(m.timestamp) FROM messages m
+					WHERE m.session_id = s.id AND m.timestamp != ''),
+				NULLIF(s.started_at, ''), s.created_at) >= ?
+			OR EXISTS (
+				SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = s.id
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp IS NOT NULL
+					AND tre.timestamp != ''
+					AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
+					AND tre.timestamp >= ?
+			)
+		)
+		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?
+	)`
 }
 
 func (db *DB) activityReportActivityFrom(

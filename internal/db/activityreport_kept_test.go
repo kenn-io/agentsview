@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -74,6 +76,175 @@ func TestActivityReportKeptReuse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, result.WrittenSessions)
 	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+}
+
+func TestActivityReportKeptJournalReadsChangesPastSnapshot(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
+	f.IncludeForks = true
+	f.IncludeSubagents = true
+	keptActivityBuild(t, d, f, q, true)
+
+	selection := kept.Selection(f, q)
+	cacheVersion, _, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	entries, ok := d.activityKept.Get(selection, cacheVersion)
+	require.True(t, ok)
+	cachedRevision := entries[0].revision
+	before, err := d.UsageChangeRevision(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, d.RenameSession(t.Context(), "past", new("first rename")))
+	version, snapshot, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, cacheVersion, version)
+	require.Greater(t, snapshot, cachedRevision)
+	assert.Greater(t, snapshot, before)
+	require.NoError(t, d.RenameSession(t.Context(), "past", new("second rename")))
+	var latestJournalRevision int64
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(),
+		`SELECT revision FROM usage_session_changes WHERE session_id = 'past'`).Scan(&latestJournalRevision))
+	require.Greater(t, latestJournalRevision, snapshot)
+	boundedChanges, err := d.LoadUsageChanges(t.Context(), cachedRevision, snapshot)
+	require.NoError(t, err)
+	require.Empty(t, boundedChanges)
+
+	_, hit, err := d.keptActivityReport(t.Context(), selection, version, snapshot)
+	require.NoError(t, err)
+	assert.False(t, hit, "the second write to one session must invalidate the kept report")
+}
+
+func TestActivityReportKeptAdvancesPastJournalSnapshot(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	keptActivitySession(t, d, "today", "project-a", "2026-06-17")
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{
+		Timezone: "UTC", IncludeForks: true, IncludeSubagents: true,
+	}
+	keptActivityBuild(t, d, f, q, true)
+	selection := kept.Selection(f, q)
+	cacheVersion, _, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	entries, ok := d.activityKept.Get(selection, cacheVersion)
+	require.True(t, ok)
+	cachedRevision := entries[0].revision
+
+	require.NoError(t, d.RenameSession(t.Context(), "today", new("first rename")))
+	version, snapshot, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, cacheVersion, version)
+	require.NoError(t, d.RenameSession(t.Context(), "today", new("second rename")))
+	var latestJournalRevision int64
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(),
+		`SELECT revision FROM usage_session_changes WHERE session_id = 'today'`).Scan(&latestJournalRevision))
+	require.Greater(t, latestJournalRevision, snapshot)
+
+	_, hit, err := d.keptActivityReport(t.Context(), selection, version, snapshot)
+	require.NoError(t, err)
+	require.True(t, hit)
+	entries, ok = d.activityKept.Get(selection, version)
+	require.True(t, ok)
+	assert.Equal(t, latestJournalRevision, entries[0].revision)
+	assert.Greater(t, entries[0].revision, cachedRevision)
+}
+
+func TestActivityReportKeptInvalidatesForTerminalEventAfterRange(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "old", "project-a", "2026-06-12")
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
+	first := keptActivityBuild(t, d, f, q, true)
+	assert.Empty(t, first.Sessions)
+
+	timingInsertToolResultEvent(t, d, "old", 0, 0, "call", "completed", "2026-06-16T10:00:00Z", 0)
+	require.NoError(t, d.RenameSession(t.Context(), "old", new("terminal session")))
+	after := keptActivityBuild(t, d, f, q, true)
+	require.Len(t, after.Sessions, 1)
+	assert.Equal(t, "old", after.Sessions[0].SessionID)
+}
+
+func TestActivityReportKeptIgnoresSessionOutsideExactRange(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	keptActivitySession(t, d, "today", "project-a", "2026-06-15")
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
+	first := keptActivityBuild(t, d, f, q, true)
+	require.Len(t, first.Sessions, 1)
+	require.NoError(t, d.RenameSession(t.Context(), "today", new("today changed")))
+	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+}
+
+func TestActivityReportKeptIgnoresSameIdentityObservationFromToday(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	identity := export.ProjectIdentityObservation{
+		Project: "project-a", Machine: defaultMachine, RootPath: "/work/project-a",
+		GitRemote: "https://example.com/team/project-a.git",
+	}
+	identity.SessionID = "past"
+	identity.ObservedAt = time.Date(2026, 6, 14, 11, 0, 0, 0, time.UTC)
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), identity))
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
+	first := keptActivityBuild(t, d, f, q, true)
+	beforeIdentityRevision, err := d.ProjectIdentityPublicationRevision(t.Context())
+	require.NoError(t, err)
+
+	today := Session{
+		ID: "today", Project: "project-a", Machine: defaultMachine, Agent: "claude",
+		StartedAt: new("2026-06-15T10:00:00Z"), EndedAt: new("2026-06-15T10:01:00Z"),
+		MessageCount: 1,
+	}
+	identity.SessionID = today.ID
+	identity.ObservedAt = time.Date(2026, 6, 15, 10, 2, 0, 0, time.UTC)
+	snapshotProject := today.Project
+	result, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{
+		Session:             today,
+		Messages:            []Message{{SessionID: today.ID, Ordinal: 0, Role: "user", Content: "today", Timestamp: "2026-06-15T10:00:00Z"}},
+		IdentityObservation: identity, IdentitySnapshotProject: &snapshotProject,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.WrittenSessions)
+	afterIdentityRevision, err := d.ProjectIdentityPublicationRevision(t.Context())
+	require.NoError(t, err)
+	assert.Greater(t, afterIdentityRevision, beforeIdentityRevision)
+	projects, err := d.BuildProjectIdentityMap(t.Context(), []string{"project-a"})
+	require.NoError(t, err)
+	assert.Equal(t, first.Report.Projects, export.ProjectMapForWire(projects))
+	snapshots, err := d.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{today.ID})
+	require.NoError(t, err)
+	require.Contains(t, snapshots, today.ID)
+	assert.Equal(t, today.ID, snapshots[today.ID].SessionID)
+	after := keptActivityBuild(t, d, f, q, false)
+	requireKeptActivityEqual(t, first, after)
+	selection := kept.Selection(AnalyticsFilter{Timezone: "UTC", IncludeForks: true, IncludeSubagents: true}, q)
+	version, revision, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	entries, ok := d.activityKept.Get(selection, version)
+	require.True(t, ok)
+	assert.GreaterOrEqual(t, entries[0].revision, revision)
+}
+
+func TestActivityReportKeptValidationWaitsForBulkReadPermit(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
+	keptActivityBuild(t, d, f, q, true)
+
+	releases := make([]func(), 0, bulkReadSlots)
+	for range bulkReadSlots {
+		release, err := d.acquireBulkRead(t.Context())
+		require.NoError(t, err)
+		releases = append(releases, release)
+	}
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	_, err := d.BuildActivityReportArtifacts(ctx, f, q, nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestActivityReportKeptChanges(t *testing.T) {

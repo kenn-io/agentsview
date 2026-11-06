@@ -14,7 +14,7 @@ includes one-shot and automated sessions by default, then lets you narrow the
 result with the page controls.
 
 On a local archive, reopening an ended range reuses its finished report until a
-session in or entering its padded range, pricing, or project identity changes.
+session in or entering its range, pricing, or project identity changes.
 
 ## Range And Filters
 
