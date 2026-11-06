@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 func usagePriceTestRows(input string, updatedAt time.Time) []export.EffectivePricingRow {
@@ -243,4 +244,58 @@ func BenchmarkUsagePricingDigest(b *testing.B) {
 		_, err := chUsagePricingDigest(export.NewPricingResolver(rows), models)
 		require.NoError(b, err)
 	}
+}
+
+// genAIHistoryDocument prices gpt-hist-test and gpt-other-test at their
+// base input rates until 2026-01-13 and at 3 dollars per million input
+// tokens from then on.
+func genAIHistoryDocument(t *testing.T, histBase, otherBase string) db.GenAIPricingDocument {
+	t.Helper()
+	model := func(id, base string) string {
+		return `{"id": "` + id + `", "match": {"equals": "` + id + `"}, "prices": [
+			{"prices": {"input_mtok": ` + base + `, "output_mtok": 1}},
+			{"constraint": {"start_date": "2026-01-13"}, "prices": {"input_mtok": 3, "output_mtok": 1}}
+		]}`
+	}
+	data := []byte(`[{
+		"id": "openai", "name": "OpenAI", "api_pattern": "https://example.invalid",
+		"model_match": {"starts_with": "gpt-"},
+		"models": [` + model("gpt-hist-test", histBase) + `, ` + model("gpt-other-test", otherBase) + `]
+	}]`)
+	prices, err := pricingpkg.ParseGenAIPrices(data)
+	require.NoError(t, err)
+	return db.GenAIPricingDocument{
+		Version: prices.Version(), SourceRef: "test",
+		Source: db.GenAIPricingSourceFetched, Data: data,
+		UpdatedAt: "2026-01-01T00:00:00Z",
+	}
+}
+
+func genAIHistoryRows(t *testing.T, histBase, otherBase string) []export.EffectivePricingRow {
+	t.Helper()
+	document := genAIHistoryDocument(t, histBase, otherBase)
+	genAI, err := genAIEffectivePricingRow(&document)
+	require.NoError(t, err)
+	return []export.EffectivePricingRow{genAI}
+}
+
+// A query for a past day prices each row at the rate in effect on that day,
+// so a change to a past price period of a priced model must change the
+// digest and reprice the mirror. The same change for an unpriced model must
+// not.
+func TestUsagePricingDigestFollowsPastPricePeriods(t *testing.T) {
+	used := chUsagePriceModel{model: "gpt-hist-test", priceModel: "gpt-hist-test"}
+	before := time.Date(2026, 1, 12, 12, 0, 0, 0, time.UTC)
+	after := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	resolver := export.NewPricingResolver(genAIHistoryRows(t, "1", "1"))
+	_, past := resolver.ResolveAt(used.model, used.priceModel, before)
+	_, current := resolver.ResolveAt(used.model, used.priceModel, after)
+	require.Equal(t, money.MustParseDollars("1"), past.Rates.InputPerMTok)
+	require.Equal(t, money.MustParseDollars("3"), current.Rates.InputPerMTok)
+
+	base := usagePriceTestDigest(t, genAIHistoryRows(t, "1", "1"), used)
+	assert.NotEqual(t, base, usagePriceTestDigest(t, genAIHistoryRows(t, "2", "1"), used),
+		"a priced model's past rate changed")
+	assert.Equal(t, base, usagePriceTestDigest(t, genAIHistoryRows(t, "1", "2"), used),
+		"only an unpriced model's past rate changed")
 }

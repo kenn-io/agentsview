@@ -247,3 +247,66 @@ func TestEnsureSchemaPartitionsPriceTables(t *testing.T) {
 	assert.Positive(t, digests[pricedDigest(t, store.conn)])
 	assertDailyUsageParity(t, local, store)
 }
+
+func dayModelCost(t *testing.T, result db.DailyUsageResult, date, model string) money.Money {
+	t.Helper()
+	for _, day := range result.Daily {
+		if day.Date != date {
+			continue
+		}
+		for _, breakdown := range day.ModelBreakdowns {
+			if breakdown.ModelName == model {
+				return breakdown.Cost
+			}
+		}
+	}
+	require.Failf(t, "no cost", "model %s has no cost on %s", model, date)
+	return money.Money{}
+}
+
+// A past day's usage costs what its rate was that day. When the catalog
+// later corrects that past rate, the next push reprices the past day, and
+// later days keep their own rate.
+func TestPushRepricesPastDaysWhenPastRateChanges(t *testing.T) {
+	t.Parallel()
+	store, syncer, local := newUsagePriceStore(t)
+	ctx := t.Context()
+	const model = "gpt-hist-test"
+	require.NoError(t, local.UpsertGenAIPricing(ctx, genAIHistoryDocument(t, "1", "1")))
+	for _, s := range []struct{ id, ts string }{
+		{"ch-price-hist-past", "2026-01-12T05:00:00.000Z"},
+		{"ch-price-hist-now", "2026-01-14T05:00:00.000Z"},
+	} {
+		_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: fixtureSession(s.id, "gamma", "history first", s.ts, 1),
+			Messages: []db.Message{
+				usagePriceMessage(s.id, 0, s.ts, model, `{"input_tokens":1000000}`),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		}})
+		require.NoError(t, err)
+	}
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
+	got, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("1"), dayModelCost(t, got, "2026-01-12", model))
+	assert.Equal(t, money.MustParseDollars("3"), dayModelCost(t, got, "2026-01-14", model))
+	priced := dailyUsageGroupRowStats(t, store, db.UsageFilter{Timezone: "UTC"})
+	digest := pricedDigest(t, store.conn)
+
+	require.NoError(t, local.UpsertGenAIPricing(ctx, genAIHistoryDocument(t, "2", "1")))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, digest, pricedDigest(t, store.conn))
+	got, err = store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("2"), dayModelCost(t, got, "2026-01-12", model))
+	assert.Equal(t, money.MustParseDollars("3"), dayModelCost(t, got, "2026-01-14", model))
+	assert.Equal(t, priced.explicit, dailyUsageGroupRowStats(t, store, db.UsageFilter{Timezone: "UTC"}).explicit,
+		"the past day is priced from the new digest's records")
+	assertDailyUsageParity(t, local, store)
+}
