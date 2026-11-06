@@ -185,7 +185,7 @@ func TestManagerBuildUnknownUsingFailsBeforeStarting(t *testing.T) {
 	gen := fakeGeneration("fake-model")
 	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
 
-	err := m.StartBuild(BuildRequest{Using: "nope"})
+	_, err := m.StartBuild(BuildRequest{Using: "nope"})
 	require.ErrorContains(t, err, `no embeddings server named "nope"`)
 	require.ErrorIs(t, err, ErrUnknownServer,
 		"callers map unknown-server errors to a client error via the sentinel")
@@ -217,7 +217,7 @@ func TestManagerRejectsConflictingRepairRequestBeforeStarting(t *testing.T) {
 			m := NewManager(ix, twoDocSource(), soloEncoders(fakeBuildEncoder()),
 				fakeGeneration("fake-model"))
 
-			err := m.StartBuild(tt.req)
+			_, err := m.StartBuild(tt.req)
 			require.Error(t, err)
 			require.ErrorContains(t, err, "mutually exclusive")
 			assert.False(t, m.Status().Running)
@@ -238,11 +238,13 @@ func TestManagerStartBuildSetsRunningAndConcurrentStartReturnsErrBuildRunning(t 
 	release := make(chan struct{})
 	m := NewManager(ix, src, soloEncoders(blockingEncoder(release)), gen)
 
-	require.NoError(t, m.StartBuild(BuildRequest{}))
+	firstID, err := m.StartBuild(BuildRequest{})
+	require.NoError(t, err)
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
 
-	err := m.StartBuild(BuildRequest{})
+	followedID, err := m.StartBuild(BuildRequest{})
 	require.ErrorIs(t, err, ErrBuildRunning)
+	assert.Equal(t, firstID, followedID)
 
 	close(release)
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
@@ -256,7 +258,7 @@ func TestManagerWaitBlocksUntilAsyncBuildCompletes(t *testing.T) {
 		ix, twoDocSource(), soloEncoders(blockingEncoder(release)),
 		fakeGeneration("fake-model"),
 	)
-	require.NoError(t, m.StartBuild(BuildRequest{}))
+	requireStartBuild(t, m, BuildRequest{})
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
 
 	waited := make(chan struct{})
@@ -296,7 +298,7 @@ func TestManagerShutdownCancelsDetachedStartBuild(t *testing.T) {
 		m.cancelDetached()
 		m.Wait()
 	})
-	require.NoError(t, m.StartBuild(BuildRequest{}))
+	requireStartBuild(t, m, BuildRequest{})
 	// Running is set before the build goroutine starts. Wait for the encoder
 	// so Shutdown exercises cancellation there, after SQLite setup finishes.
 	select {
@@ -327,7 +329,7 @@ func TestManagerTryBuildReturnsFalseWhileRunning(t *testing.T) {
 	release := make(chan struct{})
 	m := NewManager(ix, src, soloEncoders(blockingEncoder(release)), gen)
 
-	require.NoError(t, m.StartBuild(BuildRequest{}))
+	requireStartBuild(t, m, BuildRequest{})
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
 
 	started, err := m.TryBuild(t.Context(), BuildRequest{})
@@ -344,7 +346,7 @@ func TestManagerStatusTransitionsToLastResultOnCompletion(t *testing.T) {
 	gen := fakeGeneration("fake-model")
 	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
 
-	require.NoError(t, m.StartBuild(BuildRequest{}))
+	requireStartBuild(t, m, BuildRequest{})
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
 
 	status := m.Status()
@@ -363,7 +365,7 @@ func TestManagerStatusSetsLastErrorOnEncoderFailure(t *testing.T) {
 	}
 	m := NewManager(ix, src, soloEncoders(failingEncoder), gen)
 
-	require.NoError(t, m.StartBuild(BuildRequest{}))
+	requireStartBuild(t, m, BuildRequest{})
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
 
 	status := m.Status()
@@ -420,23 +422,38 @@ func TestManagerStatusStampsBuildIdentityAndSpace(t *testing.T) {
 		"the configured space is reported even before any build")
 	assert.Equal(t, 3, status.Dimension)
 
-	started, err := m.TryBuild(t.Context(), BuildRequest{})
+	firstID, err := m.StartBuild(BuildRequest{})
 	require.NoError(t, err)
-	require.True(t, started)
+	m.Wait()
 
 	status = m.Status()
-	assert.Equal(t, int64(1), status.BuildID)
+	assert.Positive(t, firstID)
+	assert.Equal(t, firstID, status.BuildID)
 	assert.Equal(t, "2026-07-11T10:00:00Z", status.StartedAt)
 
 	m.now = func() time.Time { return base.Add(time.Minute) }
-	started, err = m.TryBuild(t.Context(), BuildRequest{FullRebuild: true})
+	started, err := m.TryBuild(t.Context(), BuildRequest{FullRebuild: true})
 	require.NoError(t, err)
 	require.True(t, started)
 
 	status = m.Status()
-	assert.Equal(t, int64(2), status.BuildID,
+	assert.Greater(t, status.BuildID, firstID,
 		"each build start must get a fresh identity so pollers can tell builds apart")
 	assert.Equal(t, "2026-07-11T10:01:00Z", status.StartedAt)
+
+	replacement := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
+	replacement.now = m.now
+	replacementID, err := replacement.StartBuild(BuildRequest{})
+	require.NoError(t, err)
+	replacement.Wait()
+	assert.Greater(t, replacementID, status.BuildID,
+		"a replacement manager must not reuse a build identity a client is following")
+}
+
+func requireStartBuild(t *testing.T, m *Manager, req BuildRequest) {
+	t.Helper()
+	_, err := m.StartBuild(req)
+	require.NoError(t, err)
 }
 
 func TestManagerStatusPublishesAndClearsBuildETA(t *testing.T) {
@@ -447,7 +464,8 @@ func TestManagerStatusPublishesAndClearsBuildETA(t *testing.T) {
 		now: func() time.Time { return now },
 	}
 
-	require.NoError(t, m.begin())
+	_, err := m.begin()
+	require.NoError(t, err)
 	m.reportProgress(BuildProgress{Phase: "embedding", Done: 0, Total: 1000})
 	now = base.Add(2 * time.Second)
 	m.reportProgress(BuildProgress{Phase: "embedding", Done: 100, Total: 1000})
@@ -599,7 +617,7 @@ func TestManagerStartBuildRecoversPanickedEncoder(t *testing.T) {
 	}
 	m := NewManager(ix, src, soloEncoders(panickingEncoder), gen)
 
-	require.NoError(t, m.StartBuild(BuildRequest{}))
+	requireStartBuild(t, m, BuildRequest{})
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished after panic")
 
 	status := m.Status()
@@ -607,8 +625,8 @@ func TestManagerStartBuildRecoversPanickedEncoder(t *testing.T) {
 	assert.Contains(t, status.LastError, "encoder exploded")
 	require.NotNil(t, status.LastResult)
 
-	require.NoError(t, m.StartBuild(BuildRequest{}),
-		"manager must accept a new build after a panicked one")
+	_, err := m.StartBuild(BuildRequest{})
+	require.NoError(t, err, "manager must accept a new build after a panicked one")
 	waitFor(t, func() bool { return !m.Status().Running }, "second build never finished")
 }
 
@@ -639,7 +657,7 @@ func TestManagerActivateAndRetireRefuseWhileBuildRunning(t *testing.T) {
 	release := make(chan struct{})
 	m := NewManager(ix, src, soloEncoders(blockingEncoder(release)), gen)
 
-	require.NoError(t, m.StartBuild(BuildRequest{}))
+	requireStartBuild(t, m, BuildRequest{})
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
 
 	err := m.Activate(ctx, 1, true)

@@ -57,7 +57,7 @@ func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput
 // intentionally excluded: it is the scheduler's synchronous entry point
 // (Task 16), not part of the HTTP surface.
 type EmbeddingsManager interface {
-	StartBuild(req vector.BuildRequest) error
+	StartBuild(req vector.BuildRequest) (int64, error)
 	Wait()
 	Status() vector.BuildStatus
 	Generations(ctx context.Context) ([]vector.GenerationInfo, error)
@@ -124,12 +124,13 @@ func embeddingsSetupBusyError() error {
 }
 
 // embeddingsBuildRunningError keeps the setup-busy code on a build or
-// generation action refused after the manager lookup.
-func embeddingsBuildRunningError(err error) error {
+// generation action refused after the manager lookup, and otherwise names
+// the running build (when known) so a client can follow that build alone.
+func embeddingsBuildRunningError(err error, runningID int64) error {
 	if errors.Is(err, ErrEmbeddingsSetupBusy) {
 		return embeddingsSetupBusyError()
 	}
-	return apiError(http.StatusConflict, err.Error())
+	return &apiResponseError{Status: http.StatusConflict, Message: err.Error(), CurrentBuildID: runningID}
 }
 
 func (s *Server) registerEmbeddingsRoutes() {
@@ -167,6 +168,9 @@ type embeddingsBuildInput struct {
 
 type embeddingsBuildResponse struct {
 	Started bool `json:"started"`
+	// BuildID is the started build's status build_id. A poller whose status
+	// reports another build_id knows this build's outcome was replaced.
+	BuildID int64 `json:"build_id"`
 }
 
 type embeddingsBuildOutput struct {
@@ -256,10 +260,11 @@ func (s *Server) humaEmbeddingsBuild(
 	if !ok {
 		return nil, apiError(http.StatusServiceUnavailable, "server is shutting down")
 	}
-	if err := manager.StartBuild(req); err != nil {
+	buildID, err := manager.StartBuild(req)
+	if err != nil {
 		release()
 		if errors.Is(err, vector.ErrBuildRunning) {
-			return nil, embeddingsBuildRunningError(err)
+			return nil, embeddingsBuildRunningError(err, buildID)
 		}
 		if errors.Is(err, vector.ErrUnknownServer) ||
 			errors.Is(err, vector.ErrInvalidBuildRequest) {
@@ -273,7 +278,7 @@ func (s *Server) humaEmbeddingsBuild(
 	}()
 	return &embeddingsBuildOutput{
 		Status: http.StatusAccepted,
-		Body:   embeddingsBuildResponse{Started: true},
+		Body:   embeddingsBuildResponse{Started: true, BuildID: buildID},
 	}, nil
 }
 
@@ -364,7 +369,7 @@ func embeddingsGenerationsError(err error) error {
 // internal error.
 func embeddingsActionError(err error) error {
 	if errors.Is(err, vector.ErrBuildRunning) || errors.Is(err, vector.ErrGenerationRefused) {
-		return embeddingsBuildRunningError(err)
+		return embeddingsBuildRunningError(err, 0)
 	}
 	if errors.Is(err, vector.ErrGenerationNotFound) {
 		return apiError(http.StatusNotFound, err.Error())

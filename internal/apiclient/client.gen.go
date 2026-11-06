@@ -25451,6 +25451,7 @@ type AgentTotal = service.AgentTotal
 
 type APIErrorResponse struct {
 	Code              *string  `json:"code,omitempty"`
+	CurrentBuildID    *int64   `json:"current_build_id,omitempty"`
 	CurrentGeneration *int64   `json:"current_generation,omitempty"`
 	CurrentManifestID *string  `json:"current_manifest_id,omitempty"`
 	CurrentReceipt    *string  `json:"current_receipt,omitempty"`
@@ -26845,7 +26846,8 @@ type EmbeddingsBuildRequest struct {
 }
 
 type EmbeddingsBuildResponse struct {
-	Started bool `json:"started"`
+	BuildID int64 `json:"build_id"`
+	Started bool  `json:"started"`
 }
 
 type EmbeddingsGenerationActionRequest struct {

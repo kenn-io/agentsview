@@ -1523,7 +1523,7 @@ func TestEmbeddingsDaemonClientBuildSucceedsThroughRealMiddleware(t *testing.T) 
 	ts := startTestServer(t, ln, srv.Handler())
 
 	client := embeddingsDaemonClient{baseURL: ts.URL}
-	err = client.startBuild(t.Context(), vector.BuildRequest{})
+	_, err = client.startBuild(t.Context(), vector.BuildRequest{})
 	require.NoError(t, err,
 		"a POST build must succeed once the client sets Origin to satisfy the CSRF guard")
 }
@@ -1591,9 +1591,10 @@ func TestVectorServingCloseCancelsAPIStartedRecallBuild(t *testing.T) {
 	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 	client := embeddingsDaemonClient{baseURL: ts.URL}
-	require.NoError(t, client.startBuild(t.Context(), vector.BuildRequest{
+	_, err = client.startBuild(t.Context(), vector.BuildRequest{
 		Store: vector.RecallIndexSpec().Name,
-	}))
+	})
+	require.NoError(t, err)
 	select {
 	case <-encodeStarted:
 	case <-time.After(time.Second):

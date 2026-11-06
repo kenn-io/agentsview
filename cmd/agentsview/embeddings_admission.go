@@ -35,8 +35,9 @@ func (a admittedManager) admitted(call func() error) error {
 	return call()
 }
 
-func (a admittedManager) StartBuild(req vector.BuildRequest) error {
-	return a.admitted(func() error { return a.Manager.StartBuild(req) })
+func (a admittedManager) StartBuild(req vector.BuildRequest) (id int64, err error) {
+	err = a.admitted(func() error { id, err = a.Manager.StartBuild(req); return err })
+	return id, err
 }
 
 // Wait runs after the build route starts a build; once that build succeeds,

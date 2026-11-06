@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/kit/embedmodel"
@@ -15,6 +16,10 @@ import (
 // ErrBuildRunning is returned by StartBuild when a build is already in
 // flight, and by Activate/Retire when they are called while one is running.
 var ErrBuildRunning = errors.New("an embeddings build is already running")
+
+// buildIDs numbers builds across every manager in the process, so a manager
+// that replaces another cannot reuse the ID of a build a client is following.
+var buildIDs atomic.Int64
 
 // ErrGenerationRefused indicates Activate or Retire declined to change a
 // generation's state without --force (incomplete coverage, or retiring the
@@ -151,11 +156,11 @@ type BuildStatus struct {
 	Setup *SetupStatus `json:"setup,omitempty"`
 
 	Running bool `json:"running"`
-	// BuildID identifies one build within this daemon process: it increments
-	// each time a build starts, so a polling client can tell two builds
-	// apart (e.g. to reset a progress-rate estimator across page reloads)
-	// instead of treating unrelated builds as continuous. Zero until the
-	// first build of the process.
+	// BuildID identifies one build within this daemon process: it increases
+	// each time any manager starts a build, so a polling client can tell two
+	// builds apart (e.g. to reset a progress-rate estimator across page
+	// reloads, or to notice its build was replaced) instead of treating
+	// unrelated builds as continuous. Zero until this manager's first build.
 	BuildID int64 `json:"build_id,omitempty"`
 	// StartedAt is when the current (or, once it finished, most recent)
 	// build began, RFC3339 UTC. Empty until the first build of the process.
@@ -289,26 +294,28 @@ func recoveringEncoder(enc kitvec.EncodeFunc) kitvec.EncodeFunc {
 	}
 }
 
-// StartBuild launches a Build in a background goroutine, returning
-// ErrBuildRunning if one is already in flight rather than queuing behind it.
-// The goroutine runs against the manager's detached lifecycle context so it
-// outlives the HTTP request that triggered it but still stops on Shutdown.
-func (m *Manager) StartBuild(req BuildRequest) error {
+// StartBuild launches a Build in a background goroutine and returns its
+// BuildID, or ErrBuildRunning with the running build's ID if one is already
+// in flight rather than queuing behind it. The goroutine runs against the manager's detached
+// lifecycle context so it outlives the HTTP request that triggered it but
+// still stops on Shutdown.
+func (m *Manager) StartBuild(req BuildRequest) (int64, error) {
 	if err := validateBuildRequest(req); err != nil {
-		return err
+		return 0, err
 	}
 	me, err := m.resolveEncoder(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if err := m.begin(); err != nil {
-		return err
+	id, err := m.begin()
+	if err != nil {
+		return id, err
 	}
 	go func() {
 		result, err := m.runBuild(m.detachedCtx, req, me)
 		m.finish(result, err)
 	}()
-	return nil
+	return id, nil
 }
 
 // TryBuild runs one Build synchronously, for a periodic scheduler that
@@ -322,7 +329,7 @@ func (m *Manager) TryBuild(ctx context.Context, req BuildRequest) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	if err := m.begin(); err != nil {
+	if _, err := m.begin(); err != nil {
 		if errors.Is(err, ErrBuildRunning) {
 			return false, nil
 		}
@@ -437,27 +444,28 @@ func (m *Manager) Retire(ctx context.Context, id int64, force bool) error {
 }
 
 // begin transitions the manager into the running state, resetting the
-// progress fields of status for the new run. It returns ErrBuildRunning
-// without changing anything if a build is already in flight. Taking opMu
-// first serializes build starts behind any in-flight Activate/Retire.
-func (m *Manager) begin() error {
+// progress fields of status for the new run, and returns the new BuildID. It
+// returns ErrBuildRunning with the running build's ID, without changing
+// anything, if a build is already in flight. Taking opMu first serializes build starts behind any in-flight
+// Activate/Retire.
+func (m *Manager) begin() (int64, error) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.running {
-		return ErrBuildRunning
+		return m.status.BuildID, ErrBuildRunning
 	}
 	m.running = true
 	m.buildDone = make(chan struct{})
 	m.status.Running = true
-	m.status.BuildID++
+	m.status.BuildID = buildIDs.Add(1)
 	m.status.StartedAt = m.now().UTC().Format(time.RFC3339)
 	m.status.Phase = ""
 	m.status.Done = 0
 	m.status.Total = 0
 	m.clearETA()
-	return nil
+	return m.status.BuildID, nil
 }
 
 // runBuild performs the actual Index.Build call, wiring the manager's

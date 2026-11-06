@@ -3,5 +3,6 @@
  */
 
 export interface EmbeddingsBuildResponse {
+  build_id: number;
   started: boolean;
 }

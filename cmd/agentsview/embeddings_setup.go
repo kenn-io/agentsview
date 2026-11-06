@@ -326,5 +326,6 @@ func (v *liveVectorServing) activate(action string, deployment config.VectorEmbe
 		return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.
 	}
 	v.startSchedulers()
-	return serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
+	_, err = serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
+	return err
 }

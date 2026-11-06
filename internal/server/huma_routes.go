@@ -53,6 +53,7 @@ type apiResponseError struct {
 	CurrentManifestID   string   `json:"current_manifest_id,omitempty"`
 	CurrentReceipt      string   `json:"current_receipt,omitempty"`
 	CurrentGeneration   int64    `json:"current_generation,omitzero"`
+	CurrentBuildID      int64    `json:"current_build_id,omitzero"`
 	CurrentUploadOffset *int64   `json:"upload_offset,omitempty"`
 }
 

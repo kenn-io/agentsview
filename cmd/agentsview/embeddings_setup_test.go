@@ -379,7 +379,8 @@ func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
 		unblock()
 		require.NoError(t, owner.Close())
 	}()
-	require.NoError(t, owner.serving.manager.StartBuild(vector.BuildRequest{}))
+	_, err = owner.serving.manager.StartBuild(vector.BuildRequest{})
+	require.NoError(t, err)
 	owner.serving.manager.Wait()
 	require.Empty(t, owner.serving.manager.Status().LastError)
 	var closed atomic.Bool

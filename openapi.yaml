@@ -471,6 +471,9 @@ components:
       properties:
         code:
           type: string
+        current_build_id:
+          format: int64
+          type: integer
         current_generation:
           format: int64
           type: integer
@@ -4786,10 +4789,14 @@ components:
     EmbeddingsBuildResponse:
       additionalProperties: false
       properties:
+        build_id:
+          format: int64
+          type: integer
         started:
           type: boolean
       required:
         - started
+        - build_id
       type: object
     EmbeddingsGenerationActionRequest:
       additionalProperties: false
