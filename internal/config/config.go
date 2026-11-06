@@ -983,7 +983,10 @@ type sessionSourceConfig struct {
 type Config struct {
 	// CodexCloud is the [agents.codex-cloud] table, read from config.toml
 	// only.
-	CodexCloud           CodexCloudConfig            `json:"-" toml:"-"`
+	CodexCloud CodexCloudConfig `json:"-" toml:"-"`
+	// ClaudeAI is the organizations setting of [agents.claude-ai], read
+	// from config.toml only.
+	ClaudeAI             ClaudeAIConfig              `json:"-" toml:"-"`
 	Host                 string                      `json:"host" toml:"host"`
 	Port                 int                         `json:"port" toml:"port"`
 	ChartPalette         ChartPalette                `json:"chart_palette" toml:"chart_palette"`
@@ -2276,6 +2279,7 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 
 	c.CodexCloud = parseCodexCloudTable(c.configPath(), raw["agents"])
+	c.ClaudeAI = parseClaudeAITable(c.configPath(), raw["agents"])
 	if err := c.applyAgentDirectories(raw["agents"]); err != nil {
 		return err
 	}

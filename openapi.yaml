@@ -15424,7 +15424,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
-          description: Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running.
+          description: Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running; claude_ai_config_invalid reports an invalid [agents.claude-ai] table in config.toml.
         "422":
           content:
             application/json:

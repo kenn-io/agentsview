@@ -27,7 +27,7 @@ func (s *Server) registerImportRoutes() {
 	group.UseSimpleModifier(func(op *huma.Operation) {
 		if op.Method == http.MethodPost && op.Path == "/api/v1/import/claude-ai/sync" {
 			if response := op.Responses["409"]; response != nil {
-				response.Description = "Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running."
+				response.Description = "Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running; claude_ai_config_invalid reports an invalid [agents.claude-ai] table in config.toml."
 			}
 		}
 	})
@@ -135,6 +135,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
 	}
+	if err := s.cfg.ClaudeAI.Err; err != nil {
+		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_config_invalid", err.Error())
+	}
 	if in.Browser == "chrome" && !s.chrome.Connected() {
 		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_chrome_host_required", "Run agentsview source chrome setup, restart AgentsView, and keep Chrome open, then Sync again")
 	}
@@ -173,7 +176,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				return response, err
 			}
 		}
-		stats, err := importer.SyncClaudeAI(ctx, store, fetch, &importer.ImportCallbacks{
+		stats, err := importer.SyncClaudeAI(ctx, store, fetch, s.cfg.ClaudeAI.Organizations, &importer.ImportCallbacks{
 			SerializeWrite: func(write func() error) error {
 				return s.SerializeArchiveWrite(ctx, write)
 			},

@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/chromehost"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/kit/stacktest"
@@ -135,6 +136,17 @@ func TestChromeHostAbsent(t *testing.T) {
 	srv.mux.ServeHTTP(response, req)
 	assert.Equal(t, http.StatusConflict, response.Code)
 	assert.JSONEq(t, `{"code":"claude_ai_chrome_host_required","error":"Run agentsview source chrome setup, restart AgentsView, and keep Chrome open, then Sync again"}`, response.Body.String())
+}
+
+func TestClaudeAISyncRefusesInvalidOrganizations(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	srv.cfg.ClaudeAI = config.ClaudeAIConfig{Err: &config.ClaudeAIConfigError{Path: "config.toml", Key: "organizations", Reason: "expected an array of organization UUIDs"}}
+	response := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	srv.mux.ServeHTTP(response, req)
+	assert.Equal(t, http.StatusConflict, response.Code)
+	assert.JSONEq(t, `{"code":"claude_ai_config_invalid","error":"config.toml has an invalid value for \"organizations\" under [agents.claude-ai]: expected an array of organization UUIDs. Claude.ai Sync stays off until this is fixed."}`, response.Body.String())
 }
 
 func TestClaudeAIChromeStatus(t *testing.T) {
