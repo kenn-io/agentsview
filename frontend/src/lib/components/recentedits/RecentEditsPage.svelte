@@ -1,5 +1,6 @@
 <script lang="ts">
   import { SearchInput, TableHeaderCell, VirtualTable } from "@kenn-io/kit-ui";
+  import { untrack } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
   import { PencilIcon, RefreshCwIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
@@ -69,40 +70,59 @@
   // visits. Plain: the table owns the live widths once it has sized them.
   let keptWidths = loadColumnWidths();
   const resizedColumns = new Set<string>();
+  // The column whose resize handle was last pressed. A width change marks
+  // it resized; tabbing across handles without resizing marks nothing.
+  let touchedColumn: string | undefined;
 
   // The toolbar spans the list's width, and it is laid out before the
   // first rows arrive, when the table sizes its columns.
   let listWidth = $state(0);
+  // The width the table was built for. VirtualTable keeps the widths it
+  // sized until someone resizes a column, so after the window changes
+  // size the table is rebuilt for the new width: resized columns keep
+  // their widths and the others start over.
+  let tableWidth = $state(0);
+  $effect(() => {
+    const width = listWidth;
+    const timer = setTimeout(
+      () => (tableWidth = width),
+      untrack(() => tableWidth) === 0 ? 0 : 150,
+    );
+    return () => clearTimeout(timer);
+  });
 
   function columnWidth(column: string): number | undefined {
     const widths = stacked.current
       ? STACKED_WIDTHS
       : {
           ...DEFAULT_WIDTHS,
-          project: Math.round(Math.min(220, Math.max(100, listWidth * 0.25))),
+          project: Math.round(Math.min(220, Math.max(100, tableWidth * 0.25))),
           ...keptWidths,
         };
     if (column !== "file") return widths[column];
     if (widths.file !== undefined) return widths.file;
     // The file column starts with what the other columns leave inside the
     // list's border, so the table opens without sideways scrolling.
-    if (listWidth <= 0) return undefined;
+    if (tableWidth <= 0) return undefined;
     const others = columns
       .filter((c) => c !== "file")
       .reduce((sum, c) => sum + (widths[c] ?? 0), 0);
-    return Math.max(160, listWidth - 2 - others);
+    return Math.max(160, tableWidth - 2 - others);
   }
 
-  // A drag, key press, or double-click on a header's resize handle marks
-  // that column as user-sized, so only its width is kept.
+  // A drag, key press, or double-click on a header's resize handle names
+  // the column a following width change belongs to.
   function noteResize(event: Event) {
     const handle = (event.target as Element | null)?.closest?.(".kit-th__resize");
     const cell = handle?.closest("th");
-    const column = cell ? columns[cell.cellIndex] : undefined;
-    if (column) resizedColumns.add(column);
+    touchedColumn = cell ? columns[cell.cellIndex] : undefined;
   }
 
+  // Called only after a resize or fit, so the touched column is the one
+  // that changed; only resized columns' widths are kept.
   function keepWidths(widths: number[]) {
+    if (touchedColumn) resizedColumns.add(touchedColumn);
+    touchedColumn = undefined;
     // Phone widths fit the phone; they are not kept for wider windows.
     if (stacked.current) return;
     keptWidths = mergeColumnWidths(keptWidths, columns, widths, resizedColumns);
@@ -281,6 +301,7 @@
       onkeydowncapture={noteResize}
       ondblclickcapture={noteResize}
     >
+      {#key tableWidth}
       <VirtualTable
         items={rows}
         rowKey={(row) => `${row.kind}:${key(row.file)}`}
@@ -380,6 +401,7 @@
           {/if}
         {/snippet}
       </VirtualTable>
+      {/key}
     </div>
     {#if hasMore}
       <button class="re-load-more" onclick={loadMore} disabled={loading}>

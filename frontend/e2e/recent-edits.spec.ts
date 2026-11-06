@@ -172,6 +172,64 @@ test.describe("Recent Edits feed", () => {
     expect(reloaded.overflow).toBeLessThanOrEqual(2);
   });
 
+  const tableLayout = (page: Page) =>
+    page.locator(".re-list").evaluate((list) => {
+      const cols = [...list.querySelectorAll("thead th")].map((th) =>
+        Math.round(th.getBoundingClientRect().width),
+      );
+      return {
+        columns: cols,
+        overflow:
+          list.querySelector(".kit-table")!.getBoundingClientRect().width -
+          list.getBoundingClientRect().width,
+      };
+    });
+
+  test("columns nobody resized follow a window resize", async ({ page }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    const listWidth = () => page.locator(".re-list").evaluate((el) => el.getBoundingClientRect().width);
+    const wide = await tableLayout(page);
+    const wideList = await listWidth();
+
+    // Narrower: the table still fits, and the file column gives way.
+    await page.setViewportSize({ width: 760, height: 800 });
+    await expect.poll(listWidth).toBeLessThan(wideList - 200);
+    await expect.poll(async () => (await tableLayout(page)).overflow).toBeLessThanOrEqual(2);
+    const narrow = await tableLayout(page);
+    expect(narrow.columns[1]).toBeLessThan(wide.columns[1]! - 100);
+
+    // Wider again: the spare room goes back to the file column, not to
+    // Last edit.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect.poll(async () => (await tableLayout(page)).columns).toEqual(wide.columns);
+  });
+
+  test("tabbing across resize handles keeps no width; resizing one keeps only that one", async ({
+    page,
+  }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+
+    const handles = page.locator(".re-list thead th").getByRole("separator");
+    await handles.first().focus();
+    await page.keyboard.press("Tab");
+    await expect(handles.nth(1)).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(handles.nth(2)).toBeFocused();
+    // Widen Edits (the third column) by one keyboard step.
+    await page.keyboard.press("ArrowRight");
+
+    const kept = await page.evaluate(() =>
+      Object.keys(JSON.parse(localStorage.getItem("agentsview-recent-edits-columns") ?? "{}")),
+    );
+    expect(kept).toEqual(["edits"]);
+  });
+
   test("expand file row and jump to session transcript", async ({ page }) => {
     // Navigate to Recent Edits via its TopBar tab.
     await clickNavTab(page, "Recent Edits");
