@@ -415,8 +415,8 @@ class UsageStore {
   private zoomRanking = "";
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
+  // Monotonic milliseconds shared by query timings and automatic refreshes.
   lastFetchStartedAt = $state(0);
-  refreshPending = $state(false);
   // Wall-clock ms of the most recent full refresh, request start to data
   // applied, shown next to the refresh label. null until the first load.
   lastQueryDurationMs: number | null = $state(null);
@@ -424,9 +424,8 @@ class UsageStore {
   lastQuerySteps: QueryStep[] = $state([]);
   // Latest successful timing per panel, collected while a full refresh runs
   // and snapshotted into lastQuerySteps when it completes. Offsets are
-  // relative to refreshStartedAt.
+  // relative to lastFetchStartedAt.
   private stepTimings = new Map<UsageStep, QueryStep>();
-  private refreshStartedAt = 0;
   // The full refresh running now, drawn live by the refresh control.
   readonly liveQuery = new LiveQuery();
   hasNewData: boolean = $state(false);
@@ -470,8 +469,6 @@ class UsageStore {
   }
 
   markNewData(): void {
-    this.refreshPending = true;
-    if (this.lastUpdatedAt === null) return;
     this.hasNewData = true;
   }
 
@@ -999,22 +996,21 @@ class UsageStore {
   }
 
   private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
-    this.lastFetchStartedAt = Date.now();
-    const wasPending = this.refreshPending;
-    this.refreshPending = false;
+    const wasPending = this.hasNewData;
+    this.hasNewData = false;
     const version = this.fetchAllVersion + 1;
     let completed = false;
     this.dropExcludedSelection();
     const startedAt = performance.now();
+    this.lastFetchStartedAt = startedAt;
     this.stepTimings.clear();
-    this.refreshStartedAt = startedAt;
     const live = this.liveQuery.begin(startedAt);
     try {
       const result = await this.fetchAllSteps(startedAt, options);
       completed = result === "ok";
       return result;
     } finally {
-      if (!completed && wasPending && version === this.fetchAllVersion) this.refreshPending = true;
+      if (!completed && wasPending && version === this.fetchAllVersion) this.hasNewData = true;
       this.liveQuery.end(live);
     }
   }
@@ -1647,7 +1643,6 @@ class UsageStore {
     this.lastUpdatedAt = Date.now();
     this.lastQueryDurationMs = performance.now() - startedAt;
     this.lastQuerySteps = USAGE_STEP_ORDER.flatMap((name) => this.stepTimings.get(name) ?? []);
-    this.hasNewData = false;
   }
 
   private recordStep(
@@ -1678,7 +1673,7 @@ class UsageStore {
       responseTimingOf(data),
       startedAt,
       performance.now(),
-      this.refreshStartedAt,
+      this.lastFetchStartedAt,
       applyStartedAt,
     );
     this.stepTimings.set(step, timing);

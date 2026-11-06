@@ -62,12 +62,12 @@
   let unsubEvents: (() => void) | undefined;
   let pendingRefresh = false;
   let visible = $state(!document.hidden);
+  const refreshReady = $derived(
+    visible && urlInitRan && urlWritebackReady && !sessions.machineFilterPending,
+  );
 
   function refreshUsage(): void {
-    if (
-      document.hidden || !urlInitRan || !urlWritebackReady ||
-      sessions.machineFilterPending
-    ) {
+    if (document.hidden || !refreshReady) {
       pendingRefresh = true;
       return;
     }
@@ -89,11 +89,10 @@
   }
 
   $effect(() => {
-    if (!usage.refreshPending || !visible || usage.isQuerying ||
-      !urlInitRan || !urlWritebackReady || sessions.machineFilterPending) return;
+    if (!usage.hasNewData || !refreshReady || usage.isQuerying) return;
     const timer = setTimeout(() => {
       if (!usage.isQuerying) refreshUsage();
-    }, Math.max(0, usage.lastFetchStartedAt + 60_000 - Date.now()));
+    }, Math.max(0, usage.lastFetchStartedAt + 60_000 - performance.now()));
     return () => clearTimeout(timer);
   });
 
@@ -561,13 +560,14 @@
           usage.deselectAllModels(modelItems.map((m) => m.name))}
       />
 
+      <!-- kit-ui shares one callback between button clicks and automatic ticks. -->
       <RefreshControl
         lastUpdatedAt={usage.lastUpdatedAt}
         queryDurationMs={usage.lastQueryDurationMs}
         querySteps={usage.lastQuerySteps}
         liveQuery={usage.liveQuery}
         busy={usage.isQuerying}
-        onRefresh={() => usage.markNewData()}
+        onRefresh={() => window.event?.type === "click" ? refreshUsage() : usage.markNewData()}
         label={m.usage_refresh()}
         title={m.shared_refresh()}
       />
