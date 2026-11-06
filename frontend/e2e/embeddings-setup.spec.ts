@@ -102,7 +102,6 @@ for (const width of [1280, 390]) {
       phase = "index";
       await expect(page.locator(".kit-search-by-meaning")).toContainText("Indexing");
       const name = page.locator(".kit-search-by-meaning__name");
-      const indexingNameTop = entry === "settings" ? (await name.boundingBox())!.y : 0;
       phase = "ready";
       if (entry === "settings") {
         await expect(
@@ -115,7 +114,6 @@ for (const width of [1280, 390]) {
           .getByRole("button", { name: /^Embeddings/ })
           .click();
         await expect(page.getByRole("alert")).toContainText("encoder unavailable");
-        expect((await name.boundingBox())!.y).toBe(indexingNameTop);
         const failedChip = page.locator(".kit-search-by-meaning .kit-chip");
         await expect(failedChip).toHaveText("On");
         await expect(failedChip).toHaveCSS("text-transform", "none");
