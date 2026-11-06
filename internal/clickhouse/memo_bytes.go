@@ -3,7 +3,7 @@ package clickhouse
 import (
 	"unsafe"
 
-	"go.kenn.io/agentsview/internal/kept"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -18,6 +18,14 @@ const (
 // strings and slices it holds. They leave out allocator and map overhead,
 // so they bound a memo's memory roughly rather than exactly.
 
+func stringBytes(values ...string) int64 {
+	var n int64
+	for _, v := range values {
+		n += int64(len(v))
+	}
+	return n
+}
+
 func optionalStringBytes(values ...*string) int64 {
 	var n int64
 	for _, v := range values {
@@ -29,22 +37,26 @@ func optionalStringBytes(values ...*string) int64 {
 }
 
 func aggregateRowBytes(r chUsageAggregateRow) int64 {
-	return int64(unsafe.Sizeof(r)) + kept.StringBytes(r.date, r.ts, r.pricingTS, r.sessionID, r.project,
+	return int64(unsafe.Sizeof(r)) + stringBytes(r.date, r.ts, r.pricingTS, r.sessionID, r.project,
 		r.agent, r.machine, r.model, r.providerID, r.priceModel, r.source, r.displayName, r.startedAt, r.groupKey, r.sessionName)
 }
 
 func dailyUsageRowBytes(r chDailyUsageGroupRow) int64 {
 	return aggregateRowBytes(r.chUsageAggregateRow) + int64(unsafe.Sizeof(r)-unsafe.Sizeof(r.chUsageAggregateRow)) +
-		kept.StringBytes(r.kind, r.contextID, r.priceError)
+		stringBytes(r.kind, r.contextID, r.priceError)
 }
 
 func usageSessionRowBytes(r chUsageSessionRow) int64 {
-	return int64(unsafe.Sizeof(r)) + kept.StringBytes(r.sessionID, r.project, r.agent)
+	return int64(unsafe.Sizeof(r)) + stringBytes(r.sessionID, r.project, r.agent)
+}
+
+func topSessionBytes(e db.TopSessionEntry) int64 {
+	return int64(unsafe.Sizeof(e)) + stringBytes(e.SessionID, e.DisplayName, e.Agent, e.Project, e.StartedAt, e.Machine, e.GroupKey, e.GroupLabel, e.SessionName)
 }
 
 func analyticsSessionBytes(r readbase.AnalyticsSession) int64 {
 	return int64(unsafe.Sizeof(r)) +
-		kept.StringBytes(r.ID, r.Project, r.Machine, r.Agent, r.StartedAt, r.EndedAt, r.CreatedAt,
+		stringBytes(r.ID, r.Project, r.Machine, r.Agent, r.StartedAt, r.EndedAt, r.CreatedAt,
 			r.Outcome, r.OutcomeConfidence) +
 		optionalStringBytes(r.FirstMessage, r.DisplayName, r.TerminationStatus, r.HealthGrade)
 }
@@ -52,7 +64,7 @@ func analyticsSessionBytes(r readbase.AnalyticsSession) int64 {
 func sessionListingBytes(l activitySessionListing) int64 {
 	n := int64(unsafe.Sizeof(l))
 	for _, s := range l.sessions {
-		n += int64(unsafe.Sizeof(s)) + kept.StringBytes(s.SessionID, s.Title, s.Project, s.ProjectKey,
+		n += int64(unsafe.Sizeof(s)) + stringBytes(s.SessionID, s.Title, s.Project, s.ProjectKey,
 			s.Agent, s.Machine, s.StartedAt, s.EndedAt)
 	}
 	for _, id := range l.ids {

@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
@@ -1337,7 +1338,16 @@ func (s *Store) forEachDailyUsageAggregateRow(
 }
 
 func (s *Store) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
-	return s.usage.Daily(ctx, f, s.keptVersion(), s.readDailyUsage)
+	result, err := s.dailyUsage.Do(ctx, kept.UsageSlot(f, true), s.keptVersion(), func(ctx context.Context) (db.DailyUsageResult, error) {
+		full := f
+		full.SkipSessionCounts = false
+		return s.readDailyUsage(ctx, full)
+	})
+	result = result.Clone()
+	if f.SkipSessionCounts {
+		result.SessionCounts = db.UsageSessionCounts{}
+	}
+	return result, err
 }
 
 func (s *Store) readDailyUsage(
@@ -1811,10 +1821,13 @@ func (s *Store) sessionUsageRows(
 }
 
 func (s *Store) GetTopSessionsByCost(ctx context.Context, f db.UsageFilter, limit int) ([]db.TopSessionEntry, error) {
-	out, err := s.usage.TopTotals(ctx, f, s.keptVersion(), s.readTopSessionTotals)
+	out, err := s.topUsage.Do(ctx, kept.UsageSlot(f, false), s.keptVersion(), func(ctx context.Context) ([]db.TopSessionEntry, error) {
+		return s.readTopSessionTotals(ctx, f)
+	})
 	if err != nil {
 		return nil, err
 	}
+	out = slices.Clone(out)
 	if f.TopSessionsByGroup {
 		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}

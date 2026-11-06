@@ -46,7 +46,9 @@ type Store struct {
 	fileInfo      os.FileInfo
 	walStamp      string
 	reports       kept.Reports
-	usage         kept.Usage
+	dailyUsage    kept.Reads[db.DailyUsageResult]
+	planUsage     kept.Reads[*db.PlanUsageCountTally]
+	topUsage      kept.Reads[[]db.TopSessionEntry]
 	pricingDigest string
 	aliasPath     string
 	closed        bool
@@ -269,7 +271,9 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	digest := sha256.Sum256(fmt.Appendf(nil, "%#v", p))
 	s.pricingDigest = hex.EncodeToString(digest[:])
 	s.reports.Clear()
-	s.usage.Clear()
+	s.dailyUsage.Clear()
+	s.planUsage.Clear()
+	s.topUsage.Clear()
 }
 
 func (s *Store) SetCursorSecret(secret []byte) {

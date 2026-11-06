@@ -1075,13 +1075,9 @@ func (b *directBackend) UsagePairwiseComparison(
 		if err != nil {
 			return nil, err
 		}
-		var rankingPlanUsage db.PlanUsageSessionCounts
-		groupedDefault := useDefault && req.GroupModels && b.modelGroups.Configured()
-		if !groupedDefault {
-			rankingPlanUsage, err = b.db.GetPlanUsageSessionCounts(ctx, rankingFilter)
-			if err != nil {
-				return nil, err
-			}
+		rankingPlanUsage, err := b.db.GetPlanUsageSessionCounts(ctx, rankingFilter)
+		if err != nil {
+			return nil, err
 		}
 		summary, err := buildUsageSummary(rankingFilter, rankingResult, rankingPlanUsage)
 		if err != nil {

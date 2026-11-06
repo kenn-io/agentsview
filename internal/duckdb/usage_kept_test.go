@@ -3,7 +3,11 @@
 package duckdb
 
 import (
+	"fmt"
+	"maps"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestUsageKeptSharesDailyAndTopReads(t *testing.T) {
@@ -78,6 +83,10 @@ func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(string) { reads++ }
+	t.Cleanup(func() { analyticsQueryObserver = previous })
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 10_000_000}})
 	first, err := store.GetDailyUsage(t.Context(), f)
@@ -87,6 +96,7 @@ func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.GetPlanUsageSessionCounts(t.Context(), f)
 	require.NoError(t, err)
+	require.Equal(t, 3, reads)
 	next := filepath.Join(dir, "next.duckdb")
 	keptActivityMirror(t, next, "session-b", 900)
 	require.NoError(t, swapMirrorFile(next, path))
@@ -99,6 +109,9 @@ func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, top, 1)
 	require.Equal(t, "session-b", top[0].SessionID)
+	_, err = store.GetPlanUsageSessionCounts(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, 6, reads)
 	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 	repriced, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
@@ -106,6 +119,9 @@ func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 	top, err = store.GetTopSessionsByCost(t.Context(), f, 10)
 	require.NoError(t, err)
 	require.Equal(t, money.MustParseDollars("0.018"), top[0].Cost)
+	_, err = store.GetPlanUsageSessionCounts(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, 9, reads)
 }
 
 func TestUsageKeptBorrowedHandleReadsEveryTime(t *testing.T) {
@@ -153,4 +169,147 @@ func TestUsageKeptDistinguishesEmptyProjectLabels(t *testing.T) {
 	missing, err = store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Zero(t, missing.Totals.OutputTokens)
+}
+
+func keptUsageMirror(t *testing.T, path string) {
+	t.Helper()
+	keptActivityMirror(t, path, "session-a", 500)
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, project, agent, started_at, ended_at, message_count, user_message_count)
+ VALUES ('plan-only', 'alpha', 'codex-cloud', TIMESTAMP '2026-01-01 00:00:00', TIMESTAMP '2026-01-01 00:01:00', 3, 1)`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO session_plan_usage (session_id, has_plan_usage) VALUES ('plan-only', true)`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp, model)
+ VALUES (3, 'plan-only', 0, 'user', 'hello', TIMESTAMP '2026-01-01 00:00:00', ''),
+ (4, 'plan-only', 1, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'plan-a'),
+ (5, 'plan-only', 2, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'plan-b')`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp, model, token_usage, output_tokens)
+ VALUES (6, 'session-a', 2, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'other-model', '{"output_tokens":250}', 250)`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+}
+
+func TestUsageKeptArrivalOrdersAndAliases(t *testing.T) {
+	for _, rankingFirst := range []bool{false, true} {
+		for _, aliases := range []map[string]string{nil, {"plan-a": "group", "plan-b": "group"}} {
+			t.Run(fmt.Sprintf("ranking first %t aliases %t", rankingFirst, aliases != nil), func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "mirror.duckdb")
+				keptUsageMirror(t, path)
+				store, err := NewStore(t.Context(), path)
+				require.NoError(t, err)
+				defer store.Close()
+				fresh := NewStoreFromDB(store.DB())
+				reads := 0
+				previous := analyticsQueryObserver
+				analyticsQueryObserver = func(string) { reads++ }
+				t.Cleanup(func() { analyticsQueryObserver = previous })
+				summary := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true, ModelAliases: aliases}
+				ranking := summary
+				ranking.ModelAliases = nil
+				ranking.SkipSessionCounts = true
+				filters := []db.UsageFilter{summary, ranking}
+				if rankingFirst {
+					slices.Reverse(filters)
+				}
+				for range 2 {
+					for _, f := range filters {
+						got, err := store.GetDailyUsage(t.Context(), f)
+						require.NoError(t, err)
+						require.Equal(t, 750, got.Totals.OutputTokens)
+						counts, err := store.GetPlanUsageSessionCounts(t.Context(), f)
+						require.NoError(t, err)
+						require.Equal(t, 1, counts.PlanOnly)
+						if f.ModelAliases != nil {
+							require.Equal(t, map[string]int{"group": 1}, counts.PlanOnlyByModel)
+						} else {
+							require.Equal(t, map[string]int{"plan-a": 1, "plan-b": 1}, counts.PlanOnlyByModel)
+						}
+						top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
+						require.NoError(t, err)
+						before := reads
+						want, err := fresh.GetDailyUsage(t.Context(), f)
+						require.NoError(t, err)
+						require.Equal(t, want, got)
+						wantCounts, err := fresh.GetPlanUsageSessionCounts(t.Context(), f)
+						require.NoError(t, err)
+						require.Equal(t, wantCounts, counts)
+						wantTop, err := fresh.GetTopSessionsByCost(t.Context(), f, 10)
+						require.NoError(t, err)
+						require.Equal(t, wantTop, top)
+						reads = before
+					}
+				}
+				require.Equal(t, 3, reads)
+			})
+		}
+	}
+}
+
+func TestUsageKeptUncacheableTerminations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	for _, termination := range []string{"active", "stale", "unclean", "\xff"} {
+		t.Run(termination, func(t *testing.T) {
+			reads := 0
+			previous := analyticsQueryObserver
+			analyticsQueryObserver = func(string) { reads++ }
+			t.Cleanup(func() { analyticsQueryObserver = previous })
+			f := db.UsageFilter{Termination: termination}
+			for range 2 {
+				_, err := store.GetDailyUsage(t.Context(), f)
+				require.NoError(t, err)
+				_, err = store.GetPlanUsageSessionCounts(t.Context(), f)
+				require.NoError(t, err)
+				_, err = store.GetTopSessionsByCost(t.Context(), f, 10)
+				require.NoError(t, err)
+			}
+			require.Equal(t, 6, reads)
+		})
+	}
+}
+
+func TestUsageKeptServicePairwiseModelGroups(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptUsageMirror(t, path)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	groups := service.NewModelGroups(map[string]string{"kept-model": "paid-group", "other-model": "other-group", "plan-a": "plan-group", "plan-b": "plan-group"})
+	backend := service.NewReadOnlyBackend(store, service.WithModelGroups(groups))
+	var mu sync.Mutex
+	reads := map[string]int{}
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) { mu.Lock(); defer mu.Unlock(); reads[query]++ }
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	req := service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true, GroupModels: true}
+	summary, err := backend.UsageSummary(t.Context(), req)
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.PlanOnlySessions)
+	require.Len(t, reads, 2)
+	summaryReads := maps.Clone(reads)
+	pairReq := service.UsagePairwiseComparisonRequest{UsageRequest: req, LeftDimension: "model", LeftValue: "missing", RightDimension: "model", RightValue: "paid-group", FallbackToDefault: true}
+	got, err := backend.UsagePairwiseComparison(t.Context(), pairReq)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"paid-group", "other-group"}, []string{got.Left.Value, got.Right.Value})
+	require.Equal(t, 750, got.Left.OutputTokens+got.Right.OutputTokens)
+	for query := range summaryReads {
+		require.Equal(t, 1, reads[query])
+	}
+	fresh := service.NewReadOnlyBackend(NewStoreFromDB(store.DB()), service.WithModelGroups(groups))
+	want, err := fresh.UsagePairwiseComparison(t.Context(), pairReq)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	// Grouping a returned day must leave the kept raw models intact.
+	rawFilter, err := service.BuildUsageFilter(req, groups)
+	require.NoError(t, err)
+	raw, err := store.GetDailyUsage(t.Context(), rawFilter)
+	require.NoError(t, err)
+	require.Contains(t, raw.Daily[0].ModelsUsed, "kept-model")
 }

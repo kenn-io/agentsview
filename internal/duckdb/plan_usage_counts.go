@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -12,12 +13,20 @@ import (
 // as plan-only and the sessions it undercounts as partly captured, with
 // the same rules as the SQLite query (db.GetPlanUsageSessionCounts).
 func (s *Store) GetPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (db.PlanUsageSessionCounts, error) {
-	return s.usage.Plan(ctx, f, s.keptVersion(), s.readPlanUsageSessionCounts)
+	tally, err := s.planUsage.Do(ctx, kept.UsageSlot(f, false), s.keptVersion(), func(ctx context.Context) (*db.PlanUsageCountTally, error) {
+		raw := f
+		raw.ModelAliases = nil
+		return s.readPlanUsageSessionCounts(ctx, raw)
+	})
+	if err != nil {
+		return db.PlanUsageSessionCounts{}, err
+	}
+	return tally.CountsFor(f.ModelAliases), nil
 }
 
 func (s *Store) readPlanUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
-) (db.PlanUsageSessionCounts, error) {
+) (*db.PlanUsageCountTally, error) {
 	b := duckUsageBoundsForFilter(f)
 	var args []any
 
@@ -71,7 +80,7 @@ func (s *Store) readPlanUsageSessionCounts(
 	observeAnalyticsQuery(query)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
-		return db.PlanUsageSessionCounts{}, fmt.Errorf("querying duckdb plan usage session counts: %w", err)
+		return nil, fmt.Errorf("querying duckdb plan usage session counts: %w", err)
 	}
 	defer rows.Close()
 	tally := db.NewPlanUsageCountTally(f)
@@ -80,18 +89,18 @@ func (s *Store) readPlanUsageSessionCounts(
 		var kind, sessionID, model string
 		var ts any
 		if err := rows.Scan(&kind, &sessionID, &model, &ts); err != nil {
-			return db.PlanUsageSessionCounts{}, fmt.Errorf("scanning duckdb plan usage session count: %w", err)
+			return nil, fmt.Errorf("scanning duckdb plan usage session count: %w", err)
 		}
 		date := ""
 		if t, ok := readbase.ParseAnalyticsTime(formatDBTime(ts)); ok {
 			date = t.In(loc).Format("2006-01-02")
 		}
 		if err := tally.Add(kind, sessionID, model, date); err != nil {
-			return db.PlanUsageSessionCounts{}, err
+			return nil, err
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return db.PlanUsageSessionCounts{}, fmt.Errorf("iterating duckdb plan usage session counts: %w", err)
+		return nil, fmt.Errorf("iterating duckdb plan usage session counts: %w", err)
 	}
-	return tally.Counts(), nil
+	return tally, nil
 }

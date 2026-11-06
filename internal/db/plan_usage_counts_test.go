@@ -323,3 +323,20 @@ func TestPlanUsageCountsWaitForBulkReadSlot(t *testing.T) {
 		require.NoError(t, <-done)
 	})
 }
+
+func TestPlanUsageCountTallyCountsFor(t *testing.T) {
+	aliases := map[string]string{"model-a": "group", "model-b": "group"}
+	tally := NewPlanUsageCountTally(UsageFilter{ModelAliases: aliases})
+	for _, row := range [][3]string{
+		{PlanUsageCountKindPlanOnly, "session-a", "model-a"},
+		{PlanUsageCountKindPlanOnly, "session-a", "model-b"},
+		{PlanUsageCountKindPlanOnly, "session-a", "model-a"},
+		{PlanUsageCountKindPlanOnly, "session-b", "model-b"},
+		{PlanUsageCountKindPartlyCaptured, "session-c", "model-a"},
+	} {
+		require.NoError(t, tally.Add(row[0], row[1], row[2], "2026-01-01"))
+	}
+	require.Equal(t, PlanUsageSessionCounts{PlanOnly: 2, PlanOnlyByModel: map[string]int{"group": 2}, PartlyCaptured: 1}, tally.CountsFor(aliases))
+	require.Equal(t, tally.CountsFor(aliases), tally.Counts())
+	require.Equal(t, PlanUsageSessionCounts{PlanOnly: 2, PlanOnlyByModel: map[string]int{"model-a": 1, "model-b": 2}, PartlyCaptured: 1}, tally.CountsFor(nil))
+}

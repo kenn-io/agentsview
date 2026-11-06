@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 )
 
@@ -65,9 +66,6 @@ func (t *PlanUsageCountTally) Add(kind, sessionID, model, date string) error {
 			t.planOnly[sessionID] = models
 		}
 		if model != "" {
-			if group, ok := t.filter.ModelAliases[model]; ok {
-				model = group
-			}
 			models[model] = struct{}{}
 		}
 	case PlanUsageCountKindPartlyCaptured:
@@ -80,13 +78,34 @@ func (t *PlanUsageCountTally) Add(kind, sessionID, model, date string) error {
 
 // Counts returns the tallied counts.
 func (t *PlanUsageCountTally) Counts() PlanUsageSessionCounts {
+	return t.CountsFor(t.filter.ModelAliases)
+}
+
+// Bytes measures the raw rows retained by the tally.
+func (t *PlanUsageCountTally) Bytes() int64 {
+	encoded, err := json.Marshal([]any{t.filter, t.planOnly, t.partly})
+	if err != nil {
+		return 1<<63 - 1
+	}
+	return int64(len(encoded))
+}
+
+// CountsFor folds raw models into aliases, counting each session once per alias.
+func (t *PlanUsageCountTally) CountsFor(aliases map[string]string) PlanUsageSessionCounts {
 	out := PlanUsageSessionCounts{
 		PlanOnly:        len(t.planOnly),
 		PlanOnlyByModel: map[string]int{},
 		PartlyCaptured:  len(t.partly),
 	}
 	for _, models := range t.planOnly {
+		seen := make(map[string]struct{}, len(models))
 		for model := range models {
+			if alias, ok := aliases[model]; ok {
+				model = alias
+			}
+			seen[model] = struct{}{}
+		}
+		for model := range seen {
 			out.PlanOnlyByModel[model]++
 		}
 	}
