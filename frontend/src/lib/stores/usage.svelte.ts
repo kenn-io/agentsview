@@ -415,6 +415,8 @@ class UsageStore {
   private zoomRanking = "";
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
+  lastFetchStartedAt = $state(0);
+  refreshPending = $state(false);
   // Wall-clock ms of the most recent full refresh, request start to data
   // applied, shown next to the refresh label. null until the first load.
   lastQueryDurationMs: number | null = $state(null);
@@ -468,6 +470,7 @@ class UsageStore {
   }
 
   markNewData(): void {
+    this.refreshPending = true;
     if (this.lastUpdatedAt === null) return;
     this.hasNewData = true;
   }
@@ -996,14 +999,22 @@ class UsageStore {
   }
 
   private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
+    this.lastFetchStartedAt = Date.now();
+    const wasPending = this.refreshPending;
+    this.refreshPending = false;
+    const version = this.fetchAllVersion + 1;
+    let completed = false;
     this.dropExcludedSelection();
     const startedAt = performance.now();
     this.stepTimings.clear();
     this.refreshStartedAt = startedAt;
     const live = this.liveQuery.begin(startedAt);
     try {
-      return await this.fetchAllSteps(startedAt, options);
+      const result = await this.fetchAllSteps(startedAt, options);
+      completed = result === "ok";
+      return result;
     } finally {
+      if (!completed && wasPending && version === this.fetchAllVersion) this.refreshPending = true;
       this.liveQuery.end(live);
     }
   }

@@ -61,8 +61,7 @@
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
   let pendingRefresh = false;
-  let pendingEvent = $state(false);
-  let lastRefreshStartedAt = 0;
+  let visible = $state(!document.hidden);
 
   function refreshUsage(): void {
     if (
@@ -73,12 +72,11 @@
       return;
     }
     pendingRefresh = false;
-    pendingEvent = false;
-    lastRefreshStartedAt = Date.now();
     void usage.fetchAll({ preserveTimeRange: true });
   }
 
   function onVisibilityChange(): void {
+    visible = !document.hidden;
     if (document.hidden) {
       if (usage.isQuerying) {
         pendingRefresh = true;
@@ -86,13 +84,16 @@
       }
     } else {
       if (pendingRefresh) refreshUsage();
-      else if (!usage.isQuerying) pendingEvent = true;
+      else usage.markNewData();
     }
   }
 
   $effect(() => {
-    if (!pendingEvent || usage.isQuerying) return;
-    const timer = setTimeout(refreshUsage, Math.max(0, lastRefreshStartedAt + 60_000 - Date.now()));
+    if (!usage.refreshPending || !visible || usage.isQuerying ||
+      !urlInitRan || !urlWritebackReady || sessions.machineFilterPending) return;
+    const timer = setTimeout(() => {
+      if (!usage.isQuerying) refreshUsage();
+    }, Math.max(0, usage.lastFetchStartedAt + 60_000 - Date.now()));
     return () => clearTimeout(timer);
   });
 
@@ -477,10 +478,7 @@
     // The Agent dropdown reads sessions.agents, which is otherwise loaded
     // lazily by the sidebar filter control; a direct /usage visit needs it too.
     sessions.loadAgents();
-    unsubEvents = events.subscribe(() => {
-      usage.markNewData();
-      if (usage.lastUpdatedAt !== null) pendingEvent = true;
-    });
+    unsubEvents = events.subscribe(() => usage.markNewData());
     tick().then(() => {
       urlWritebackReady = true;
     });
@@ -569,7 +567,7 @@
         querySteps={usage.lastQuerySteps}
         liveQuery={usage.liveQuery}
         busy={usage.isQuerying}
-        onRefresh={() => { if (!usage.isQuerying) refreshUsage(); }}
+        onRefresh={() => usage.markNewData()}
         label={m.usage_refresh()}
         title={m.shared_refresh()}
       />
