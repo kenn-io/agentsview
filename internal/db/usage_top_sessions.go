@@ -59,24 +59,24 @@ func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64,
         o.value->>'$.Input', o.value->>'$.Output', o.value->>'$.CacheWrite', o.value->>'$.CacheRead', o.value->>'$.Cost'
         FROM json_each(` + b.Add(string(raw)) + `) o JOIN usage_rollup_installs s ON s.timezone_id=` + b.Add(timezoneID) + ` AND s.session_id=o.value->>'$.id'
     )`
-	unit := `session_id`
-	sortID := `session_id`
-	representatives := `MIN(session_id) AS started_id, NULL AS label_id`
+	ranked := `cost`
+	if strings.EqualFold(filter.TopSessionsSort, TopSessionsSortTokens) {
+		w := filter.TopSessionsTokenTypes.weights()
+		ranked = b.Add(w[0]) + `*input+` + b.Add(w[1]) + `*output+` + b.Add(w[2]) + `*cache_write+` + b.Add(w[3]) + `*cache_read`
+	}
+	unit, sortID, agent, representatives, members := `session_id`, `session_id`, `MAX(agent)`, `MIN(session_id) AS started_id, NULL AS label_id`, `(SELECT *, `+ranked+` AS ranked FROM sessions)`
 	if filter.TopSessionsByGroup {
 		unit = `CASE WHEN group_key='' THEN json_array(session_id) ELSE json_array(project,machine,group_key) END`
 		sortID = `CASE WHEN group_key='' THEN session_id ELSE '' END`
 		representatives = `substr(MAX(agentsview_top_session_started_order(started_at) || session_id),25) AS started_id,
             substr(MAX(CASE WHEN group_label!='' THEN agentsview_top_session_started_order(started_at) || session_id END),25) AS label_id`
-	}
-	ranked := `SUM(cost)`
-	if strings.EqualFold(filter.TopSessionsSort, TopSessionsSortTokens) {
-		w := filter.TopSessionsTokenTypes.weights()
-		ranked = `SUM(` + b.Add(w[0]) + `*input+` + b.Add(w[1]) + `*output+` + b.Add(w[2]) + `*cache_write+` + b.Add(w[3]) + `*cache_read)`
+		agent = `MAX(CASE WHEN member_order=1 THEN agent END)`
+		members = `(SELECT *, ROW_NUMBER() OVER (PARTITION BY ` + unit + ` ORDER BY ranked DESC, session_id) AS member_order FROM (SELECT session_id, project, machine, group_key, group_label, agent, started_at, SUM(input) AS input, SUM(output) AS output, SUM(cache_write) AS cache_write, SUM(cache_read) AS cache_read, SUM(cost) AS cost, SUM(` + ranked + `) AS ranked FROM sessions GROUP BY session_id))`
 	}
 	query := contributions + `, units AS MATERIALIZED (
-        SELECT ` + sortID + ` AS sort_id, project, machine, group_key, ` + representatives + `, MAX(CASE WHEN member_order=1 THEN agent END) AS agent,
+        SELECT ` + sortID + ` AS sort_id, project, machine, group_key, ` + representatives + `, ` + agent + ` AS agent,
         SUM(input) AS input, SUM(output) AS output, SUM(cache_write) AS cache_write, SUM(cache_read) AS cache_read, SUM(cost) AS cost, SUM(ranked) AS ranked
-        FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY ` + unit + ` ORDER BY ranked DESC, session_id) AS member_order FROM (SELECT session_id, project, machine, group_key, group_label, agent, started_at, SUM(input) AS input, SUM(output) AS output, SUM(cache_write) AS cache_write, SUM(cache_read) AS cache_read, SUM(cost) AS cost, ` + ranked + ` AS ranked FROM sessions GROUP BY session_id)) GROUP BY ` + unit + `
+        FROM ` + members + ` GROUP BY ` + unit + `
     ), selected AS MATERIALIZED (
         SELECT * FROM units ORDER BY ranked DESC, sort_id, project, group_key, machine LIMIT ` + b.Add(normalizeTopSessionsLimit(limit)) + `
     ), returned AS (
