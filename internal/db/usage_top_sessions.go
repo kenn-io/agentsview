@@ -51,11 +51,11 @@ func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64,
 	where, owner := usageOrdinaryWindowWhere(b, timezoneID, snapshot, filter)
 	where = `NOT (` + owner + `) AND ` + where
 	contributions := `WITH sessions AS MATERIALIZED (
-        SELECT s.session_id, s.project, s.machine, s.group_key, s.group_label, s.baked_started_at AS started_at,
+        SELECT s.session_id, s.project, s.machine, s.group_key, s.group_label, s.agent, s.baked_started_at AS started_at,
         r.input_tokens AS input, r.output_tokens AS output, r.cache_creation_tokens AS cache_write, r.cache_read_tokens AS cache_read, r.estimated_cost_microdollars AS cost
         FROM usage_daily_rollups r JOIN (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s ON s.id=r.rollup_install_id
         WHERE ` + where + `
-        UNION ALL SELECT o.value->>'$.id', s.project, s.machine, s.group_key, s.group_label, s.baked_started_at,
+        UNION ALL SELECT o.value->>'$.id', s.project, s.machine, s.group_key, s.group_label, s.baked_agent, s.baked_started_at,
         o.value->>'$.Input', o.value->>'$.Output', o.value->>'$.CacheWrite', o.value->>'$.CacheRead', o.value->>'$.Cost'
         FROM json_each(` + b.Add(string(raw)) + `) o JOIN usage_rollup_installs s ON s.timezone_id=` + b.Add(timezoneID) + ` AND s.session_id=o.value->>'$.id'
     )`
@@ -74,15 +74,15 @@ func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64,
 		ranked = `SUM(` + b.Add(w[0]) + `*input+` + b.Add(w[1]) + `*output+` + b.Add(w[2]) + `*cache_write+` + b.Add(w[3]) + `*cache_read)`
 	}
 	query := contributions + `, units AS MATERIALIZED (
-        SELECT ` + sortID + ` AS sort_id, project, machine, group_key, ` + representatives + `,
-        SUM(input) AS input, SUM(output) AS output, SUM(cache_write) AS cache_write, SUM(cache_read) AS cache_read, SUM(cost) AS cost, ` + ranked + ` AS ranked
-        FROM sessions GROUP BY ` + unit + `
+        SELECT ` + sortID + ` AS sort_id, project, machine, group_key, ` + representatives + `, MAX(CASE WHEN member_order=1 THEN agent END) AS agent,
+        SUM(input) AS input, SUM(output) AS output, SUM(cache_write) AS cache_write, SUM(cache_read) AS cache_read, SUM(cost) AS cost, SUM(ranked) AS ranked
+        FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY ` + unit + ` ORDER BY ranked DESC, session_id) AS member_order FROM (SELECT session_id, project, machine, group_key, group_label, agent, started_at, SUM(input) AS input, SUM(output) AS output, SUM(cache_write) AS cache_write, SUM(cache_read) AS cache_read, SUM(cost) AS cost, ` + ranked + ` AS ranked FROM sessions GROUP BY session_id)) GROUP BY ` + unit + `
     ), selected AS MATERIALIZED (
         SELECT * FROM units ORDER BY ranked DESC, sort_id, project, group_key, machine LIMIT ` + b.Add(normalizeTopSessionsLimit(limit)) + `
     ), returned AS (
         SELECT *, 0 AS remainder FROM selected`
 	if filter.TopSessionsByGroup {
-		query += ` UNION ALL SELECT '', '', '', '', NULL, NULL,
+		query += ` UNION ALL SELECT '', '', '', '', NULL, NULL, NULL,
             SUM(input)-(SELECT COALESCE(SUM(input),0) FROM selected),
             SUM(output)-(SELECT COALESCE(SUM(output),0) FROM selected),
             SUM(cache_write)-(SELECT COALESCE(SUM(cache_write),0) FROM selected),
@@ -91,7 +91,7 @@ func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64,
             FROM units HAVING COUNT(*)>(SELECT COUNT(*) FROM selected)`
 	}
 	query += `) SELECT u.sort_id, u.project, u.machine, u.group_key,
-        COALESCE(s.baked_agent,''), COALESCE(s.baked_started_at,''), COALESCE(l.group_label,''),
+        COALESCE(u.agent,''), COALESCE(s.baked_started_at,''), COALESCE(l.group_label,''),
         u.input, u.output, u.cache_write, u.cache_read, u.cost
         FROM returned u
         LEFT JOIN usage_rollup_installs s ON s.timezone_id=` + b.Add(timezoneID) + ` AND s.session_id=u.started_id

@@ -55,8 +55,10 @@ filters to day totals in SQL. They load install metadata only for authoritative
 sessions and exception owners. SQL counts ordinary sessions by project and
 agent; surviving exception owners add their distinct counts. Warm Top sessions
 reads fold exception owners first, then rank their contributions together with
-ordinary session rows in one SQL query. Grouped units take agent and start from
-their newest member and the label from their newest labelled member. Only
+ordinary session rows in one SQL query. Grouped units take agent from their
+highest-ranked member (ties by session ID), matching `GroupTopSessions` over
+ranked entries, start from their newest member, and the label from their newest
+labelled member. Only
 returned individual sessions load archive names. SQL computes the trailing
 remainder from the same units. Daily reads count in SQL; billed-session counts
 read per-session rows. Warm preparations skip window-session discovery. Each
