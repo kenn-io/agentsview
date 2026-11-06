@@ -303,8 +303,17 @@ func TestLiveEmbeddingsSetupRejectsConcurrentBuild(t *testing.T) {
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
 	embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
 	<-downloading
-	body := embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/build", "application/json", strings.NewReader(`{}`), http.StatusConflict)
-	assert.Contains(t, string(body), "embeddings_setup_busy")
+	for _, request := range []struct{ method, path string }{
+		{http.MethodPost, "/build"},
+		{http.MethodGet, "/generations"},
+		{http.MethodPost, "/generations/1/activate"},
+		{http.MethodPost, "/generations/1/retire"},
+	} {
+		t.Run(request.path, func(t *testing.T) {
+			body := embeddingRequest(t, ts.Client(), ts.URL, request.method, "/api/v1/embeddings"+request.path, "application/json", strings.NewReader(`{}`), http.StatusConflict)
+			assert.Contains(t, string(body), "embeddings_setup_busy")
+		})
+	}
 }
 
 func TestLiveEmbeddingsSetupStatusDuringProbe(t *testing.T) {

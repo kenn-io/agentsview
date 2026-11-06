@@ -106,7 +106,7 @@ func TestLiveEmbeddingsSetupRejectsBuildAfterManagerLookup(t *testing.T) {
 func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
 	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
-	for _, operation := range []string{"status", "status-stale", "generations", "activate", "retire"} {
+	for _, operation := range []string{"status", "generations", "activate", "retire"} {
 		t.Run(operation, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
@@ -142,20 +142,19 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			generations, err := initialManager.Generations(t.Context())
 			require.NoError(t, err)
 			require.Len(t, generations, 1)
-			runtime := &pausedEmbeddingsLookup{EmbeddingsRuntime: owner, lookedUp: make(chan struct{}), resume: make(chan struct{})}
-			resume := sync.OnceFunc(func() { close(runtime.resume) })
+			lookedUp, resumed := make(chan struct{}), make(chan struct{})
+			var runtime server.EmbeddingsRuntime
+			if operation == "status" {
+				runtime = &pausedSetupSnapshot{EmbeddingsRuntime: owner, read: lookedUp, resume: resumed}
+			} else {
+				runtime = &pausedEmbeddingsLookup{EmbeddingsRuntime: owner, lookedUp: lookedUp, resume: resumed}
+			}
+			resume := sync.OnceFunc(func() { close(resumed) })
 			defer resume()
 			ln, port := listenLoopback(t)
 			cfg.Host, cfg.Port = "127.0.0.1", port
 			ts := startTestServer(t, ln, server.New(cfg, database, nil, server.WithEmbeddingsRuntime(runtime)).Handler())
-			if operation == "status" {
-				embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
-				<-activating
-			}
 			method, path := http.MethodGet, "/api/v1/embeddings/"+operation
-			if operation == "status-stale" {
-				path = "/api/v1/embeddings/status"
-			}
 			if operation == "activate" || operation == "retire" {
 				method, path = http.MethodPost, "/api/v1/embeddings/generations/"+strconv.FormatInt(generations[0].ID, 10)+"/"+operation
 			}
@@ -181,11 +180,9 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 				body, err := io.ReadAll(response.Body)
 				completed <- result{status: response.StatusCode, body: body, err: err}
 			}()
-			<-runtime.lookedUp
-			if operation != "status" {
-				embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
-				<-activating
-			}
+			<-lookedUp
+			embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"use-built-in"}`), http.StatusAccepted)
+			<-activating
 			releaseInstall()
 			<-owner.done
 			manager := owner.Manager("")
@@ -195,7 +192,7 @@ func TestLiveEmbeddingsSetupRequestsAcrossReplacement(t *testing.T) {
 			resume()
 			got := <-completed
 			require.NoError(t, got.err)
-			if operation == "status" || operation == "status-stale" {
+			if operation == "status" {
 				assert.Equal(t, http.StatusOK, got.status, string(got.body))
 				var status vector.BuildStatus
 				require.NoError(t, json.Unmarshal(got.body, &status))

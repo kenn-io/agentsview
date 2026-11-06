@@ -71,15 +71,18 @@ func TestLiveEmbeddingsSetupStatusAcrossSuccessiveSetups(t *testing.T) {
 			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, owner.Close()) }()
-			lookup := &pausedEmbeddingsLookup{EmbeddingsRuntime: owner, lookedUp: make(chan struct{}), resume: make(chan struct{})}
-			resumeLookup := sync.OnceFunc(func() { close(lookup.resume) })
-			defer resumeLookup()
-			runtime := &pausedSetupSnapshot{EmbeddingsRuntime: lookup, read: make(chan struct{}), resume: make(chan struct{})}
+			runtime := &pausedSetupSnapshot{EmbeddingsRuntime: owner, read: make(chan struct{}), resume: make(chan struct{})}
 			resumeSnapshot := sync.OnceFunc(func() { close(runtime.resume) })
 			defer resumeSnapshot()
 			ln, port := listenLoopback(t)
 			cfg.Host, cfg.Port = "127.0.0.1", port
 			ts := startTestServer(t, ln, server.New(cfg, database, nil, server.WithEmbeddingsRuntime(runtime)).Handler())
+			embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"turn-on"}`), http.StatusAccepted)
+			<-owner.done
+			manager := owner.Manager("")
+			require.NotNil(t, manager)
+			manager.Wait()
+			require.Empty(t, manager.Status().LastError)
 			type result struct {
 				status int
 				body   []byte
@@ -98,14 +101,6 @@ func TestLiveEmbeddingsSetupStatusAcrossSuccessiveSetups(t *testing.T) {
 				body, err := io.ReadAll(response.Body)
 				completed <- result{status: response.StatusCode, body: body, err: err}
 			}()
-			<-lookup.lookedUp
-			embeddingRequest(t, ts.Client(), ts.URL, http.MethodPost, "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"turn-on"}`), http.StatusAccepted)
-			<-owner.done
-			manager := owner.Manager("")
-			require.NotNil(t, manager)
-			manager.Wait()
-			require.Empty(t, manager.Status().LastError)
-			resumeLookup()
 			<-runtime.read
 			var held *writeOwnerLock
 			defer func() {

@@ -114,10 +114,10 @@ func (s *Server) embeddingsUnavailableError() error {
 // while setup runs, so a client can tell it from a build that will finish.
 const embeddingsSetupBusyCode = "embeddings_setup_busy"
 
-// embeddingsBuildUnavailableError refuses a build with 409 while setup is
+// embeddingsManagerUnavailableError refuses a request with 409 while setup is
 // replacing the managers, so the caller retries once setup finishes instead
 // of reading the 501 as a missing provider.
-func (s *Server) embeddingsBuildUnavailableError(ctx context.Context) error {
+func (s *Server) embeddingsManagerUnavailableError(ctx context.Context) error {
 	if s.embeddingsRuntime != nil {
 		if setup, err := s.embeddingsRuntime.SetupStatus(ctx); err == nil && setup.Busy {
 			return embeddingsSetupBusyError()
@@ -213,21 +213,13 @@ func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
 	return s.embeddingsStores[store]
 }
 
-// embeddingsManagerAfterSetup looks the manager up again once setup reports
-// it is no longer busy, since setup may have replaced or withheld it after
-// the route's first lookup.
-func (s *Server) embeddingsManagerAfterSetup(manager EmbeddingsManager, store string, setup *EmbeddingsSetupStatus) EmbeddingsManager {
+// embeddingsManagerAfterSetup resolves the manager after setup inspection,
+// reading its setup state under the same runtime lock so replacement cannot
+// leave an idle snapshot paired with a withheld manager.
+func (s *Server) embeddingsManagerAfterSetup(store string, setup *EmbeddingsSetupStatus) EmbeddingsManager {
 	if setup == nil {
-		return manager
+		return s.embeddingsManagerFor(store)
 	}
-	return s.embeddingsManagerDuringSetup(store, setup)
-}
-
-// embeddingsManagerDuringSetup looks store's manager up with the setup state
-// read beside it and replaces setup with that state when setup withheld the
-// manager or failed since setup was read, leaving a missing or unknown
-// store's setup as it was.
-func (s *Server) embeddingsManagerDuringSetup(store string, setup *EmbeddingsSetupStatus) EmbeddingsManager {
 	manager, current := s.embeddingsRuntime.ManagerSetup(store)
 	if manager == nil && (current.Busy || current.Error != "") {
 		*setup = current
@@ -240,7 +232,7 @@ func (s *Server) humaEmbeddingsBuild(
 ) (*embeddingsBuildOutput, error) {
 	manager := s.embeddingsManagerFor(in.Body.Store)
 	if manager == nil {
-		return nil, s.embeddingsBuildUnavailableError(ctx)
+		return nil, s.embeddingsManagerUnavailableError(ctx)
 	}
 	includeAutomated := s.embeddingsIncludeAutomatedDefault
 	if s.embeddingsRuntime != nil {
@@ -290,7 +282,6 @@ func (s *Server) humaEmbeddingsStatus(
 	ctx context.Context, in *embeddingsStoreInput,
 ) (*jsonOutput[vector.BuildStatus], error) {
 	var body vector.BuildStatus
-	manager := s.embeddingsManagerFor(in.Store)
 	if s.embeddingsRuntime != nil {
 		setup, err := s.embeddingsRuntime.SetupStatus(ctx)
 		if err != nil {
@@ -301,7 +292,8 @@ func (s *Server) humaEmbeddingsStatus(
 			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
 		}
 	}
-	if manager = s.embeddingsManagerAfterSetup(manager, in.Store, body.Setup); manager == nil {
+	manager := s.embeddingsManagerAfterSetup(in.Store, body.Setup)
+	if manager == nil {
 		if body.Setup != nil && (body.Setup.Error != "" || body.Setup.Busy) {
 			return &jsonOutput[vector.BuildStatus]{Body: body}, nil
 		}
@@ -318,7 +310,7 @@ func (s *Server) humaEmbeddingsGenerations(
 ) (*jsonOutput[embeddingsGenerationsResponse], error) {
 	manager := s.embeddingsManagerFor(in.Store)
 	if manager == nil {
-		return nil, s.embeddingsUnavailableError()
+		return nil, s.embeddingsManagerUnavailableError(ctx)
 	}
 	gens, err := manager.Generations(ctx)
 	if err != nil {
@@ -337,7 +329,7 @@ func (s *Server) humaEmbeddingsActivate(
 ) (*noContentOutput, error) {
 	manager := s.embeddingsManagerFor(in.Store)
 	if manager == nil {
-		return nil, s.embeddingsUnavailableError()
+		return nil, s.embeddingsManagerUnavailableError(ctx)
 	}
 	if err := manager.Activate(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)
@@ -350,7 +342,7 @@ func (s *Server) humaEmbeddingsRetire(
 ) (*noContentOutput, error) {
 	manager := s.embeddingsManagerFor(in.Store)
 	if manager == nil {
-		return nil, s.embeddingsUnavailableError()
+		return nil, s.embeddingsManagerUnavailableError(ctx)
 	}
 	if err := manager.Retire(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)
