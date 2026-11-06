@@ -15,6 +15,58 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func TestUsageTopSessionsConcurrentRefreshLoadsOnlyReturnedMetadata(t *testing.T) {
+	database := testDB(t)
+	for i := range 11 {
+		id := fmt.Sprintf("session-%02d", i)
+		seedJournaledUsage(t, database, id)
+		_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET display_name=? WHERE id=?`, fmt.Sprintf("Session %02d", i), id)
+		require.NoError(t, err)
+	}
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", TopSessionsSort: "tokens"}
+	warmJournaledUsage(t, database, filter)
+	other, err := OpenIsolatedContext(t.Context(), database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+
+	// Count display records read by the foreground request, including retries.
+	database.rawReader().SetMaxOpenConns(1)
+	conn, err := database.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	var loaded []string
+	require.NoError(t, conn.Raw(func(driverConn any) error {
+		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other any) any {
+			if name, ok := value.(string); ok && strings.HasPrefix(name, "Session ") {
+				loaded = append(loaded, name)
+			}
+			if value == other {
+				return nil
+			}
+			return value
+		}, true)
+	}))
+	require.NoError(t, conn.Close())
+	refreshed := false
+	filter.Progress = func(phase string) {
+		if phase != "Reading cached daily totals" || refreshed {
+			return
+		}
+		refreshed = true
+		// Sync appends usage after Top sessions prepares. A peer Usage request
+		// refreshes the shared cache before Top sessions reads its snapshot.
+		require.NoError(t, other.InsertMessages(t.Context(), []Message{{SessionID: "session-10", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":1}`)}}))
+		_, err := other.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC", SkipSessionCounts: true})
+		require.NoError(t, err)
+	}
+	got, err := database.GetTopSessionsByCost(t.Context(), filter, 1)
+	require.NoError(t, err)
+	require.True(t, refreshed)
+	require.Len(t, got, 1)
+	assert.Equal(t, "session-10", got[0].SessionID)
+	assert.Equal(t, 101, got[0].InputTokens)
+	assert.Equal(t, []string{"Session 10"}, loaded)
+}
+
 func TestUsageTopSessionsLoadsOnlyReturnedMetadata(t *testing.T) {
 	database := testDB(t)
 	for i := range 128 {

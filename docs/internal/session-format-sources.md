@@ -4093,7 +4093,7 @@ schemas keep their existing ordering behavior.
   example was reverified on 2026-10-09. The `home scopes` subtest of
   `TestHermesCronStateGroups` verifies that rewritten Windows paths keep
   distinct homes separate by accepting both path separators. Warm usage reads
-  use the label installed with the rollup from the recorded `session_name`;
+  derive cron labels from the current `session_name`;
   usage-only archives show job IDs because their titles are discarded.
   Resync copies preserve stored job IDs,
   including imported sessions. Archived runs whose sources were gone before

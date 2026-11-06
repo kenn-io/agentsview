@@ -241,7 +241,7 @@ func (db *DB) queryUsageRollups(
 	if memo != nil {
 		key = usageWindowKey(filter, kind, cursor)
 	}
-	// Day totals get one fresh journaled attempt after concurrent installs.
+	// Totals readers get one fresh journaled attempt after concurrent installs.
 	// Further conflicts use full-window preparation within the same budget.
 	for attempt := 1; attempt <= usageFillMaxAttempts+1; attempt++ {
 		if attempt > 1 {
@@ -253,7 +253,7 @@ func (db *DB) queryUsageRollups(
 		if attempt == 1 {
 			prepared, err = db.sharedUsageWindow(ctx, key, filter, kind, cursor)
 		} else {
-			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, attempt == 2 && kind == usageQueryKindDayTotals, filter.Progress)
+			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, attempt == 2 && kind.readsJournaledTotals(), filter.Progress)
 		}
 		if err != nil {
 			if errors.Is(err, errUsageCacheSourceChanged) {

@@ -41,11 +41,11 @@ per-row-rounded estimated cost, savings, authoritative cost markers, request
 counts, and discarded-snapshot output. Go owns model resolution, rate-band
 selection, money rounding, and result assembly.
 
-Rollup installs bake `agent`, `started_at`, `project`, `machine`, `git_branch`,
-`group_key`, the derived cron label, `is_automated`, and `user_message_count`. A
-journaled metadata change rebuilds that session's rows and moves its day totals
-to the new dimensions. Termination and `active_since` filters still use archive
-metadata and per-session rows.
+Installs bake `agent`, `started_at`, `project`, `machine`, `git_branch`,
+`group_key`, `is_automated`, and `user_message_count`; cron labels use current
+names. A journaled metadata change rebuilds that session's rows and moves
+its day totals to the new dimensions. Termination and `active_since` filters still
+use archive metadata and per-session rows.
 
 After a completed timezone coverage pass, daily reads apply session and model
 filters to day totals in SQL. They load install metadata only for authoritative
