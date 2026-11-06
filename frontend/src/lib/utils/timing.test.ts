@@ -36,7 +36,11 @@ describe("turnHasCategory", () => {
 });
 
 describe("callsHaveTiming", () => {
-  function timingWith(durations: (number | null)[], running: boolean): SessionTiming {
+  function timingWith(
+    durations: (number | null)[],
+    running: boolean,
+    turnDurationMs: number | null = running ? null : 1000,
+  ): SessionTiming {
     return {
       session_id: "s",
       total_duration_ms: 1000,
@@ -54,7 +58,7 @@ describe("callsHaveTiming", () => {
           message_id: 1,
           ordinal: 0,
           started_at: "2026-09-14T00:00:00Z",
-          duration_ms: running ? null : 1000,
+          duration_ms: turnDurationMs,
           primary_category: "Bash",
           calls: durations.map((duration_ms, i) => ({
             tool_use_id: `c${i}`,
@@ -75,5 +79,9 @@ describe("callsHaveTiming", () => {
     { name: "a running call without durations", durations: [null], running: true, want: true },
   ])("is $want when $name", ({ durations, running, want }) => {
     expect(callsHaveTiming(timingWith(durations, running))).toBe(want);
+  });
+
+  it("is false for a running session whose last turn finished untimed", () => {
+    expect(callsHaveTiming(timingWith([null, null], true, 1000))).toBe(false);
   });
 });
