@@ -164,6 +164,17 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.Equal(t, 1400, a.Report.Totals.OutputTokens)
 		}},
+		{name: "ineligible Claude peer", keep: true, prepare: func(t *testing.T, d *db.DB) {
+			t.Helper()
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "past", []db.Message{{SessionID: "past", Ordinal: 0, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":500}`), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"}}))
+		}, write: func(t *testing.T, d *db.DB) {
+			t.Helper()
+			pgKeptSession(t, d, "peer", "project-b", "2026-06-15")
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "peer", []db.Message{{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "no usage", Timestamp: "2026-06-15T10:01:00Z", Model: "kept-model", ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"}}))
+		}, check: func(t *testing.T, a activity.CandidateArtifacts) {
+			t.Helper()
+			assert.Equal(t, 500, a.Report.Totals.OutputTokens)
+		}},
 		{name: "excluded Claude peer", prepare: func(t *testing.T, d *db.DB) {
 			t.Helper()
 			pgKeptSession(t, d, "peer", "project-b", "2026-06-14")

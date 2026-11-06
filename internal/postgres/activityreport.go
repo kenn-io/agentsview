@@ -45,12 +45,13 @@ type activityReportBackend struct {
 	*Store
 	lowerBound, upperBound string
 	read                   map[string]struct{}
+	pricing                []export.EffectivePricingRow
 }
 
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q, b.read)
+	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q, b.read, b.pricing)
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
@@ -71,12 +72,15 @@ func (s *Store) BuildActivityReportArtifacts(
 	rangeStartUTC, rangeEndUTC := db.ActivityReportInstantBoundsUTC(q)
 	lowerBound := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+	pricing, err := s.loadPricingMap(ctx)
+	if err != nil {
+		return activity.CandidateArtifacts{}, fmt.Errorf("loading pg pricing: %w", err)
+	}
 
 	var selection, version string
 	var revision int64
 	if !q.Partial && !s.hostedRelations {
-		var err error
-		version, revision, err = s.activityKeptVersion(ctx)
+		version, revision, err = s.activityKeptVersion(ctx, pricing)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
@@ -111,6 +115,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	backend := activityReportBackend{
 		read:       read,
+		pricing:    pricing,
 		Store:      s,
 		lowerBound: lowerBound, upperBound: upperBound,
 	}
@@ -627,19 +632,28 @@ func (s *Store) ActivityReportCandidateSource(
 	return s.activityReportCandidateSource(ids, q)
 }
 
+func activityReportClaudePeerPredicate(sessions, lower, upper string) string {
+	return pgUsageMessageEligibility + `
+		AND (m.claude_message_id, m.claude_request_id) IN (
+			SELECT m.claude_message_id, m.claude_request_id
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE ` + pgUsageMessageEligibility + `
+				AND m.session_id = ANY(` + sessions + `)
+				AND m.claude_message_id != '' AND m.claude_request_id != ''
+				AND COALESCE(m.timestamp, s.started_at) >= ` + lower + `::timestamptz
+				AND COALESCE(m.timestamp, s.started_at) <= ` + upper + `::timestamptz
+		)`
+}
+
 // activityReportUsage selects complete snapshots across the padded range,
 // then keeps rows attributed to the candidate sessions. Per-row cost is
 // computed after selection so filtered rows do not affect pricing metadata.
 func (s *Store) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
-	read map[string]struct{},
+	read map[string]struct{}, pricing []export.EffectivePricingRow,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
 
-	pricing, err := s.loadPricingMap(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading pg pricing: %w", err)
-	}
 	rateResolver := export.NewPricingResolver(pricing)
 	if len(ids) == 0 {
 		block, err := rateResolver.BuildBlock()
@@ -670,19 +684,8 @@ func (s *Store) activityReportUsage(
 	lower := pb.add(lowerBound)
 	upper := pb.add(upperBound)
 	rowsSQL := pgDailyUsageRowsSQLWithWhere(
-		pgUsageMessageEligibility+`
-			AND (m.session_id = ANY(`+candidateSessions+`)
-				OR (m.claude_message_id, m.claude_request_id) IN (
-					SELECT m.claude_message_id, m.claude_request_id
-					FROM messages m
-					JOIN sessions s ON s.id = m.session_id
-					WHERE `+pgUsageMessageEligibility+`
-						AND m.session_id = ANY(`+peerSessions+`)
-						AND m.claude_message_id != ''
-						AND m.claude_request_id != ''
-						AND COALESCE(m.timestamp, s.started_at) >= `+peerLower+`::timestamptz
-						AND COALESCE(m.timestamp, s.started_at) <= `+peerUpper+`::timestamptz
-				))`,
+		"("+pgUsageMessageEligibility+" AND m.session_id = ANY("+candidateSessions+") OR ("+
+			activityReportClaudePeerPredicate(peerSessions, peerLower, peerUpper)+"))",
 		pgUsageEventEligibility+" AND ue.session_id = ANY("+eventSessions+")")
 	query := pgDailyUsageRowSelectFromRows(rowsSQL) + `
 		AND u.ts >= ` + lower + `::timestamptz

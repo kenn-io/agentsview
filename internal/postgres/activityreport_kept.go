@@ -17,7 +17,7 @@ type pgActivityKept struct {
 	read, labels []string
 }
 
-func (s *Store) activityKeptVersion(ctx context.Context) (string, int64, error) {
+func (s *Store) activityKeptVersion(ctx context.Context, pricing []export.EffectivePricingRow) (string, int64, error) {
 	revision, err := s.UsageChangeRevision(ctx)
 	if err != nil || revision == 0 {
 		return "", 0, err
@@ -31,10 +31,6 @@ func (s *Store) activityKeptVersion(ctx context.Context) (string, int64, error) 
 	}
 	if err != nil {
 		return "", 0, fmt.Errorf("reading kept activity version: %w", err)
-	}
-	pricing, err := s.loadPricingMap(ctx)
-	if err != nil {
-		return "", 0, err
 	}
 	digest, err := export.EffectivePricingDigest(pricing)
 	return fmt.Sprintf("%d|%s", oid, digest), revision, err
@@ -66,16 +62,9 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
    SELECT 1 FROM sessions s WHERE s.id = ANY($1) AND ((`+
 			activityReportSessionWindowPredicate("$2", "$3")+`)
    OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id
-    AND m.claude_message_id != '' AND m.claude_request_id != ''
+    AND (`+activityReportClaudePeerPredicate("$6", "$4", "$5")+`)
     AND COALESCE(m.timestamp, s.started_at) >= $4::timestamptz
-    AND COALESCE(m.timestamp, s.started_at) <= $5::timestamptz
-    AND (m.claude_message_id, m.claude_request_id) IN (
-     SELECT m.claude_message_id, m.claude_request_id
-     FROM messages m JOIN sessions s ON s.id = m.session_id
-     WHERE m.session_id = ANY($6)
-      AND m.claude_message_id != '' AND m.claude_request_id != ''
-      AND COALESCE(m.timestamp, s.started_at) >= $4::timestamptz
-      AND COALESCE(m.timestamp, s.started_at) <= $5::timestamptz))))`,
+    AND COALESCE(m.timestamp, s.started_at) <= $5::timestamptz)))`,
 			changed, rangeStart, rangeEnd, db.PaddedUTCBound(rangeStart, -14), db.PaddedUTCBound(rangeEnd, 14), entry.read).Scan(&overlaps)
 		if err != nil {
 			return kept.Report{}, false, fmt.Errorf("checking kept activity changes: %w", err)

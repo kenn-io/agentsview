@@ -592,7 +592,9 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	q := pgDayQuery(t, "2026-06-16", "UTC")
 	lower := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upper := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil)
+	pricing, err := store.loadPricingMap(ctx)
+	require.NoError(t, err)
+	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil, pricing)
 	require.NoError(t, err)
 
 	// The shared dedup identity leaves one survivor.
