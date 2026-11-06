@@ -2248,8 +2248,8 @@ type usageTableVersion struct {
 	parts, identity string
 }
 
-// usageRowsVersion probes only tables whose parts changed. It retries from
-// fresh parts twice before serving an unstable read uncached.
+// usageRowsVersion probes only tables whose parts changed. If parts move
+// during the probe, the read is served uncached.
 func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, bool, error) {
 	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	if !ok {
@@ -2264,17 +2264,14 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 	// the kept digests after acquiring it.
 	s.usageVersions.Lock()
 	defer s.usageVersions.Unlock()
-	for attempt := range 3 {
-		var changed []string
-		for _, table := range tables {
-			kept, exists := s.usageVersions.tables[table]
-			if !exists || kept.parts != snapshot[table] {
-				changed = append(changed, table)
-			}
+	var changed []string
+	for _, table := range tables {
+		kept, exists := s.usageVersions.tables[table]
+		if !exists || kept.parts != snapshot[table] {
+			changed = append(changed, table)
 		}
-		if len(changed) == 0 {
-			break
-		}
+	}
+	if len(changed) > 0 {
 		identities, err := s.readUsageRowIdentities(ctx, changed)
 		if err != nil {
 			return "", false, err
@@ -2283,16 +2280,10 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 		if err != nil {
 			return "", false, err
 		}
-		stable := true
 		for _, table := range tables {
-			stable = stable && fresh[table] == snapshot[table]
-		}
-		if !stable {
-			if attempt == 2 {
+			if fresh[table] != snapshot[table] {
 				return "", false, nil
 			}
-			snapshot = fresh
-			continue
 		}
 		if s.usageVersions.tables == nil {
 			s.usageVersions.tables = make(map[string]usageTableVersion, len(chUsageReadTables))
@@ -2300,14 +2291,11 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string) (string, 
 		for _, table := range changed {
 			s.usageVersions.tables[table] = usageTableVersion{snapshot[table], identities[table]}
 		}
-		break
 	}
 
-	sum := sha256.New()
-	for _, table := range tables {
-		fmt.Fprintf(sum, "%s\x00%s\x00", table, s.usageVersions.tables[table].identity)
-	}
-	return hex.EncodeToString(sum.Sum(nil)), true, nil
+	return tableValuesFingerprint(tables, func(table string) string {
+		return s.usageVersions.tables[table].identity
+	}), true, nil
 }
 
 func chUsageRowHashSQL(columns string) string {
@@ -2319,6 +2307,7 @@ func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string) (ma
 	for _, table := range tables {
 		columns := "*"
 		if table == "usage_session_snapshots" {
+			// Revision identifies the usage arrays without hashing them; push_version identifies publication.
 			columns = "id, revision, push_version"
 		}
 		queries = append(queries, fmt.Sprintf(`SELECT '%s', toString(tuple(count(),
@@ -2383,12 +2372,16 @@ func (s *Store) tablePartsFingerprint(ctx context.Context, tables []string) (str
 	if len(tables) == 0 {
 		tables = slices.Collect(maps.Keys(snapshot))
 	}
+	return tableValuesFingerprint(tables, func(table string) string { return snapshot[table] }), nil
+}
+
+func tableValuesFingerprint(tables []string, value func(string) string) string {
 	tables = slices.Sorted(slices.Values(tables))
 	sum := sha256.New()
 	for _, table := range slices.Compact(tables) {
-		fmt.Fprintf(sum, "%s\x00%s\x00", table, snapshot[table])
+		fmt.Fprintf(sum, "%s\x00%s\x00", table, value(table))
 	}
-	return hex.EncodeToString(sum.Sum(nil)), nil
+	return hex.EncodeToString(sum.Sum(nil))
 }
 
 // partsSnapshot maps each table to a digest of its active parts.

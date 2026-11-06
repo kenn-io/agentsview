@@ -4,8 +4,10 @@ package clickhouse
 
 import (
 	"maps"
+	"sync/atomic"
 	"testing"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -120,60 +122,62 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	require.Equal(t, afterPricing, afterRefresh)
 }
 
-// A request can take its parts snapshot before another request's merge.
-// Both coverage and range memos must still reuse the unchanged rows.
-func TestUsageRowsVersionRetriesAcrossMerge(t *testing.T) {
-	ctx := t.Context()
-	local, target := seedUsagePriceFixture(t)
-	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
-	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
-	pushPreparedUsage(t, syncer)
-	execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
-		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage", "SYSTEM STOP MERGES sessions")
-	appendMessage(t, local, usagePriceRoundID, "delta usage", "2026-01-12T03:50:00.000Z")
-	pushPreparedUsage(t, syncer)
-	f := db.UsageFilter{Timezone: "UTC"}
-	before := readPreparedUsage(t, store, f)
-	kept := maps.Clone(store.dailyUsageRows.entries)
-	state, err := store.preparedUsageState(ctx)
-	require.NoError(t, err)
-	live := store.coverageCache.live
-	// The insert gives the request a changed snapshot that a later merge replaces.
-	execPreparedUsage(t, store, "INSERT INTO sessions SELECT * FROM sessions")
-	oldCtx, err := store.withPartsSnapshot(ctx)
-	require.NoError(t, err)
-	execPreparedUsage(t, store, "SYSTEM START MERGES sessions", "OPTIMIZE TABLE sessions FINAL", "SYSTEM STOP MERGES sessions")
-	probes := store.usageRowIdentityQueries.Load()
-	got, err := store.preparedUsageState(oldCtx)
-	require.NoError(t, err)
-	require.Equal(t, state, got)
-	require.Equal(t, probes+2, store.usageRowIdentityQueries.Load())
-	require.NotEmpty(t, live.deltaRows)
-	require.Same(t, &live.deltaRows[0], &store.coverageCache.live.deltaRows[0])
-	// The same old request snapshot also reaches the range memo path.
-	probes = store.usageRowIdentityQueries.Load()
-	slot, version, err := store.usageRowMemoKey(oldCtx, state, "daily", f, "", "", nil)
-	require.NoError(t, err)
-	require.NotEmpty(t, slot)
-	require.NotEmpty(t, version)
-	require.Equal(t, probes+1, store.usageRowIdentityQueries.Load())
-	require.Equal(t, before, readPreparedUsage(t, store, f))
-	for slot, entry := range kept {
-		require.Same(t, &entry.rows[0], &store.dailyUsageRows.entries[slot].rows[0])
+// A push after coverage selection must not cache the old coverage under new rows.
+func TestUsageReadsStayFreshAfterPushDuringIdentityProbe(t *testing.T) {
+	for _, kind := range []string{"counts", "daily"} {
+		t.Run(kind, func(t *testing.T) {
+			local, target := seedUsagePriceFixture(t)
+			syncer := newTestSync(t, local, target, storage.PusherOptions{})
+			store := NewStoreFromDB(syncer.conn)
+			execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
+			pushPreparedUsage(t, syncer)
+			execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+				"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage", "SYSTEM STOP MERGES model_pricing")
+			f := db.UsageFilter{Timezone: "UTC"}
+			before := readPreparedUsage(t, store, f)
+			require.Equal(t, 8, before.counts.Total)
+			require.EqualValues(t, 107998, before.daily.Totals.InputTokens)
+			// Pricing is a range dependency outside the already warm coverage key.
+			execPreparedUsage(t, store, "INSERT INTO model_pricing SELECT * FROM model_pricing")
+			stamp := "2026-01-12T05:00:00.000Z"
+			_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+				Session:     fixtureSession("new-usage", "gamma", "new usage", stamp, 1),
+				Messages:    []db.Message{usagePriceMessage("new-usage", 0, stamp, "round-test", `{"input_tokens":1}`)},
+				DataVersion: 1, ReplaceMessages: true,
+			}})
+			require.NoError(t, err)
+			probes := store.usageRowIdentityQueries.Load()
+			var pushed atomic.Bool
+			ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(*chdriver.Progress) {
+				if store.usageRowIdentityQueries.Load() > probes && pushed.CompareAndSwap(false, true) {
+					pushPreparedUsage(t, syncer)
+				}
+			}))
+			if kind == "counts" {
+				_, err = store.GetUsageSessionCounts(ctx, f)
+			} else {
+				_, err = store.GetDailyUsage(ctx, f)
+			}
+			require.NoError(t, err)
+			require.True(t, pushed.Load(), "push must complete during the range identity probe")
+			fresh := NewStoreFromDB(syncer.conn)
+			if kind == "counts" {
+				want, err := fresh.GetUsageSessionCounts(t.Context(), f)
+				require.NoError(t, err)
+				require.Equal(t, 9, want.Total)
+				got, err := store.GetUsageSessionCounts(t.Context(), f)
+				require.NoError(t, err)
+				require.Equal(t, want, got)
+			} else {
+				want, err := fresh.GetDailyUsage(t.Context(), f)
+				require.NoError(t, err)
+				require.EqualValues(t, 107999, want.Totals.InputTokens)
+				got, err := store.GetDailyUsage(t.Context(), f)
+				require.NoError(t, err)
+				require.Equal(t, want, got)
+			}
+		})
 	}
-	// A real write during the same interval must produce a new version.
-	execPreparedUsage(t, store, "INSERT INTO sessions SELECT * FROM sessions")
-	oldCtx, err = store.withPartsSnapshot(ctx)
-	require.NoError(t, err)
-	appendMessage(t, local, usagePriceRoundID, "more usage", "2026-01-12T04:00:00.000Z")
-	pushPreparedUsage(t, syncer)
-	_, changed, err := store.usageRowMemoKey(oldCtx, state, "daily", f, "", "", nil)
-	require.NoError(t, err)
-	require.NotEmpty(t, changed)
-	require.NotEqual(t, version, changed)
-	after := readPreparedUsage(t, store, f)
-	require.Greater(t, after.daily.Totals.InputTokens, before.daily.Totals.InputTokens)
 }
 
 func TestUsageUnpreparedSkipsIdentityProbe(t *testing.T) {
