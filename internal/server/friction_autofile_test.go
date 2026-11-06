@@ -1,8 +1,13 @@
 package server_test
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,4 +108,49 @@ func TestFrictionJobFilesWhenInstalledAfterTheServer(t *testing.T) {
 
 	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
 	require.NotNil(t, patternIssue(t, te, frictionTestSnapshot(date).Signals[0].Fingerprint()))
+}
+
+// A daemon that idles out while automatic filing waits on Kata would stop
+// between creating an issue and saving its link, so the pass holds a work
+// lease.
+func TestAutomaticFilingKeepsTheDaemonAwake(t *testing.T) {
+	s := katatest.New(t)
+	target, err := url.Parse(s.Endpoint())
+	require.NoError(t, err)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/issues") {
+			time.Sleep(time.Second)
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(slow.Close)
+
+	idled := make(chan struct{}, 1)
+	tracker := server.NewIdleTracker(200*time.Millisecond, func() { idled <- struct{}{} })
+	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
+	runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }, BackfillDays: 7}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithFriction(runner, nil), server.WithIdleTracker(tracker),
+		server.WithKataConn(kata.NewConn(kata.Config{
+			Enabled: true, Hub: true, Endpoint: slow.URL, Project: katatest.DefaultProjectName,
+		})),
+	}, func(c *config.Config) {
+		c.Friction.BackfillDays = 7
+		c.Friction.Kata.AutoFile = true
+	})
+	runner.Store = te.db
+	seedFrictionDigest(t, te.db, "2026-09-14")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	tracker.Touch()
+	go tracker.Run(ctx)
+
+	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
+	select {
+	case <-idled:
+		require.Fail(t, "the daemon went idle while automatic filing waited on Kata")
+	default:
+	}
+	assert.NotEmpty(t, s.RequestsMatching(http.MethodPost, "/issues"), "the pass reached Kata")
 }

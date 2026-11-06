@@ -60,55 +60,61 @@ func (f *Filer) Reconcile(ctx context.Context, p Policy) (ReconcileReport, error
 }
 
 // reconcilePages files the due patterns filter selects, skipping those in
-// seen. It reports stop when Kata went away mid-pass; the next pass starts
-// over.
+// seen. It reads every page before filing any pattern: filing takes a
+// pattern out of the retry state, which would shift the offset-based pages
+// and skip patterns. It reports stop when Kata went away mid-pass; the next
+// pass starts over.
 func (f *Filer) reconcilePages(
 	ctx context.Context, filter db.FrictionPatternFilter, seen map[string]bool, rep *ReconcileReport,
 ) (bool, error) {
 	filter.Limit = db.MaxFrictionListLimit
+	var due []db.FrictionPattern
 	for {
 		rows, next, err := f.Store.ListFrictionPatterns(ctx, filter)
 		if err != nil {
 			return false, err
 		}
 		for _, pat := range rows {
-			if err := ctx.Err(); err != nil {
-				return false, err
-			}
-			if seen[pat.Fingerprint] || !due(pat, f.now()) {
-				continue
-			}
-			seen[pat.Fingerprint] = true
-			res, err := f.file(ctx, pat.Fingerprint, true)
-			switch {
-			case errors.Is(err, errPaused):
-				// A person unlinked it meanwhile; leave it paused.
-			case err == nil && res.Created:
-				rep.Created++
-			case err == nil:
-				rep.Linked++
-			case errors.Is(err, ErrKataNotReady):
-				return true, nil
-			default:
-				state, rerr := f.recordFailure(ctx, pat, err)
-				if rerr != nil {
-					return false, rerr
-				}
-				if state == db.FrictionFilingRetry {
-					rep.Retry++
-				} else {
-					rep.NeedsPerson++
-				}
+			if !seen[pat.Fingerprint] && isDue(pat, f.now()) {
+				seen[pat.Fingerprint] = true
+				due = append(due, pat)
 			}
 		}
 		if next == "" {
-			return false, nil
+			break
 		}
 		filter.Cursor = next
 	}
+	for _, pat := range due {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		res, err := f.file(ctx, pat.Fingerprint, true)
+		switch {
+		case errors.Is(err, errPaused):
+			// A person unlinked it meanwhile; leave it paused.
+		case err == nil && res.Created:
+			rep.Created++
+		case err == nil:
+			rep.Linked++
+		case errors.Is(err, ErrKataNotReady):
+			return true, nil
+		default:
+			state, rerr := f.recordFailure(ctx, pat, err)
+			if rerr != nil {
+				return false, rerr
+			}
+			if state == db.FrictionFilingRetry {
+				rep.Retry++
+			} else {
+				rep.NeedsPerson++
+			}
+		}
+	}
+	return false, nil
 }
 
-func due(p db.FrictionPattern, now time.Time) bool {
+func isDue(p db.FrictionPattern, now time.Time) bool {
 	if p.Issue != nil {
 		return false
 	}

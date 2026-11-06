@@ -3,6 +3,7 @@ package filing_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -291,4 +292,28 @@ func TestReconcileKeepsAPauseAPersonSetMeanwhile(t *testing.T) {
 			assert.Equal(t, db.FrictionFilingPaused, row.Filing.State)
 		})
 	}
+}
+
+func TestReconcileRetriesEveryPageOfOldRetries(t *testing.T) {
+	n := db.MaxFrictionListLimit + 5
+	sigs := make([]friction.Signal, n)
+	for i := range sigs {
+		sigs[i] = correction
+		sigs[i].SubjectID = fmt.Sprintf("claude:s%d", i)
+	}
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, sigs...)
+	now := f.Now()
+	first, next := now.Add(-24*time.Hour), now.Add(-time.Minute)
+	for _, sig := range sigs {
+		require.NoError(t, d.SaveFrictionFilingState(t.Context(), db.FrictionFilingState{
+			Fingerprint: sig.Fingerprint(), State: db.FrictionFilingRetry, Attempts: 1,
+			FirstFailedAt: &first, NextAttemptAt: &next, UpdatedAt: next,
+		}))
+	}
+
+	// Filing each one takes it out of the retry state while the pass reads.
+	rep, err := f.Reconcile(t.Context(), filing.Policy{Kinds: friction.FileableKinds, Since: "2026-09-15"})
+	require.NoError(t, err)
+	assert.Equal(t, filing.ReconcileReport{Created: n}, rep)
 }

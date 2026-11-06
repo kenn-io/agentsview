@@ -22,6 +22,13 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 	if !ok || !frictionLinksWritable(store) {
 		return nil
 	}
+	// The catch-up released its work lease; hold one so an idle daemon
+	// does not stop between creating an issue and saving its link.
+	release, ok := s.idle.BeginWork()
+	if !ok {
+		return nil
+	}
+	defer release()
 	latest, err := time.Parse(time.DateOnly, runner.LatestCompleteDate())
 	if err != nil {
 		return err
