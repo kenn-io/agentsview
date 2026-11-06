@@ -1127,12 +1127,8 @@ func TestUsageJournaledConcurrentWriterInstallConflicts(t *testing.T) {
 	}()
 	t.Cleanup(func() { close(writes); <-done })
 	readerErrors := make(chan error, 10) // Three peer writes and seven readers.
-	var reads, conflicts atomic.Int64
-	database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
-		if !journaled {
-			conflicts.Add(1)
-		}
-	}
+	var reads, prepares atomic.Int64
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	var readers sync.WaitGroup
 	for reader := range 7 {
 		filter := filter
@@ -1165,7 +1161,7 @@ func TestUsageJournaledConcurrentWriterInstallConflicts(t *testing.T) {
 	for err := range readerErrors {
 		require.NoError(t, err)
 	}
-	assert.GreaterOrEqual(t, conflicts.Load(), int64(3), "each displaced journaled reader must recapture")
+	assert.GreaterOrEqual(t, prepares.Load(), int64(7*10+3), "each displaced journaled reader must recapture")
 	filter.Progress = nil
 	got, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
