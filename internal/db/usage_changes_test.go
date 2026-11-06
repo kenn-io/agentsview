@@ -426,6 +426,11 @@ func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) 
 			inserted, err := d.UsageChangeRevision(ctx)
 			require.NoError(t, err)
 			assert.Greater(t, inserted, before)
+			var pricingRevision int64
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `
+				SELECT CAST(value AS INTEGER) FROM archive_metadata
+				WHERE key = ?`, archiveMetadataUsagePricingRevisionKey).Scan(&pricingRevision))
+			assert.Equal(t, inserted, pricingRevision)
 			ids, err := d.LoadUsageChanges(ctx, before, inserted)
 			require.NoError(t, err)
 			assert.Empty(t, ids)
@@ -434,14 +439,40 @@ func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) 
 			unchanged, err := d.UsageChangeRevision(ctx)
 			require.NoError(t, err)
 			assert.Equal(t, inserted, unchanged)
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `
+				SELECT CAST(value AS INTEGER) FROM archive_metadata
+				WHERE key = ?`, archiveMetadataUsagePricingRevisionKey).Scan(&pricingRevision))
+			assert.Equal(t, inserted, pricingRevision)
 			_, err = d.getWriter().ExecContext(ctx, "UPDATE "+tc.table+" SET "+tc.column+" = ?", tc.value)
 			require.NoError(t, err)
 			changed, err := d.UsageChangeRevision(ctx)
 			require.NoError(t, err)
 			assert.Greater(t, changed, unchanged)
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `
+				SELECT CAST(value AS INTEGER) FROM archive_metadata
+				WHERE key = ?`, archiveMetadataUsagePricingRevisionKey).Scan(&pricingRevision))
+			assert.Equal(t, changed, pricingRevision)
 			ids, err = d.LoadUsageChanges(ctx, before, changed)
 			require.NoError(t, err)
 			assert.Empty(t, ids)
 		})
 	}
+
+	t.Run("unrelated session write", func(t *testing.T) {
+		var beforePricingRevision int64
+		require.NoError(t, d.getReader().QueryRowContext(ctx, `
+			SELECT CAST(value AS INTEGER) FROM archive_metadata
+				WHERE key = ?`, archiveMetadataUsagePricingRevisionKey).Scan(&beforePricingRevision))
+		beforeUsageRevision, err := d.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		insertSession(t, d, "unrelated-session", "project-a")
+		afterUsageRevision, err := d.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		assert.Greater(t, afterUsageRevision, beforeUsageRevision)
+		var afterPricingRevision int64
+		require.NoError(t, d.getReader().QueryRowContext(ctx, `
+			SELECT CAST(value AS INTEGER) FROM archive_metadata
+			WHERE key = ?`, archiveMetadataUsagePricingRevisionKey).Scan(&afterPricingRevision))
+		assert.Equal(t, beforePricingRevision, afterPricingRevision)
+	})
 }

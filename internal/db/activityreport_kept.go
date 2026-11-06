@@ -33,22 +33,21 @@ func (db *DB) activityKeptVersion(ctx context.Context) (string, int64, error) {
 		db.activityKept.MaxBytes = 128 << 20
 	})
 	var id string
-	var revision int64
+	var revision, pricingRevision int64
 	err := db.getReader().QueryRowContext(ctx, `SELECT
 		COALESCE(MAX(CASE WHEN key = 'database_id' THEN value END), ''),
-		COALESCE(MAX(CASE WHEN key = 'usage_change_revision' THEN CAST(value AS INTEGER) END), 0)
-		FROM archive_metadata WHERE key IN ('database_id', 'usage_change_revision')`).Scan(&id, &revision)
+		COALESCE(MAX(CASE WHEN key = 'usage_change_revision' THEN CAST(value AS INTEGER) END), 0),
+		COALESCE(MAX(CASE WHEN key = ? THEN CAST(value AS INTEGER) END), 0)
+		FROM archive_metadata WHERE key IN ('database_id', 'usage_change_revision', ?)`,
+		archiveMetadataUsagePricingRevisionKey, archiveMetadataUsagePricingRevisionKey,
+	).Scan(&id, &revision, &pricingRevision)
 	if err != nil {
 		return "", 0, fmt.Errorf("reading kept activity version: %w", err)
 	}
 	if id == "" {
 		return "", revision, nil
 	}
-	pricing, err := db.UsagePricingDigest(ctx)
-	if err != nil {
-		return "", 0, err
-	}
-	return id + "|" + pricing, revision, nil
+	return fmt.Sprintf("%s|%d", id, pricingRevision), revision, nil
 }
 
 func (db *DB) keptActivityReport(ctx context.Context, selection, version string, revision int64) (kept.Report, bool, error) {

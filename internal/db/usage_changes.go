@@ -6,7 +6,10 @@ import (
 	"strings"
 )
 
-const archiveMetadataUsageChangeRevisionKey = "usage_change_revision"
+const (
+	archiveMetadataUsageChangeRevisionKey  = "usage_change_revision"
+	archiveMetadataUsagePricingRevisionKey = "usage_pricing_revision"
+)
 
 // Replace triggers atomically with column migrations.
 var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL = usageChangeJournalSQL()
@@ -17,6 +20,13 @@ func usageChangeJournalSQL() (string, string) {
   VALUES ('usage_change_revision', '1')
  ON CONFLICT(key) DO UPDATE SET
   value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
+	const pricingRevisionBody = `
+ INSERT INTO archive_metadata (key, value)
+  VALUES ('usage_pricing_revision', (
+   SELECT value FROM archive_metadata WHERE key = 'usage_change_revision'))
+ ON CONFLICT(key) DO UPDATE SET
+  value = excluded.value,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
 	const sessionBody = counterBody + `
  INSERT INTO usage_session_changes (session_id, revision)
@@ -29,6 +39,10 @@ func usageChangeJournalSQL() (string, string) {
 		body := counterBody
 		if sessionID != "" {
 			body = strings.ReplaceAll(sessionBody, "{{session_id}}", sessionID)
+		}
+		switch table {
+		case "model_pricing", "model_pricing_bands", "genai_pricing":
+			body += pricingRevisionBody
 		}
 		if condition != "" {
 			condition = "WHEN " + condition
