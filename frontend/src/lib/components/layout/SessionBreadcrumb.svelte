@@ -2465,6 +2465,13 @@
       display: none;
     }
 
+    /* The phone header is one fixed-height strip that scrolls sideways,
+       so its groups stay on one line. */
+    .meta-group {
+      flex-wrap: nowrap;
+      max-width: none;
+    }
+
     /* The phone strip scrolls sideways and may start with an empty
        identity group, so it drops the separators. */
     .meta-group + .meta-group::before {
