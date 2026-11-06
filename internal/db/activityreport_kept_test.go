@@ -57,15 +57,6 @@ func keptActivityBuild(t *testing.T, d *DB, f AnalyticsFilter, q activity.Query,
 	return artifacts
 }
 
-func requireKeptActivityEqual(t *testing.T, want, got activity.CandidateArtifacts) {
-	t.Helper()
-	a, err := activity.ArtifactDigest(want)
-	require.NoError(t, err)
-	b, err := activity.ArtifactDigest(got)
-	require.NoError(t, err)
-	assert.Equal(t, a, b)
-}
-
 func clearKeptActivity(d *DB) { d.activityKept.DeleteSlots(func(string) bool { return true }) }
 
 func TestActivityReportKeptReuse(t *testing.T) {
@@ -75,9 +66,9 @@ func TestActivityReportKeptReuse(t *testing.T) {
 	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
 	first := keptActivityBuild(t, d, f, q, true)
 	require.Equal(t, 500, first.Report.Totals.OutputTokens)
-	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+	require.Equal(t, first, keptActivityBuild(t, d, f, q, false))
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "current", Ordinal: 2, Role: "assistant", Content: "more", Timestamp: "2026-06-17T10:02:00Z"}}))
-	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+	require.Equal(t, first, keptActivityBuild(t, d, f, q, false))
 	s, err := d.GetSession(t.Context(), "current")
 	require.NoError(t, err)
 	require.NotNil(t, s)
@@ -85,7 +76,7 @@ func TestActivityReportKeptReuse(t *testing.T) {
 	result, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{Session: *s, Messages: []Message{{SessionID: s.ID, Ordinal: 3, Role: "assistant", Content: "again", Timestamp: "2026-06-17T10:03:00Z"}}}})
 	require.NoError(t, err)
 	require.Equal(t, 1, result.WrittenSessions)
-	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+	require.Equal(t, first, keptActivityBuild(t, d, f, q, false))
 }
 
 func TestActivityReportKeptSkipsTimeDependentTermination(t *testing.T) {
@@ -148,11 +139,11 @@ func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {
 		sizeCalls++
 		return measure(entry)
 	}
-	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+	require.Equal(t, first, keptActivityBuild(t, d, f, q, false))
 	assert.Zero(t, sizeCalls, "an unchanged watermark must not reinsert the report")
 
 	require.NoError(t, d.RenameSession(t.Context(), "today", new("Today changed")))
-	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+	require.Equal(t, first, keptActivityBuild(t, d, f, q, false))
 	version, currentRevision, err := d.activityKeptVersion(t.Context())
 	require.NoError(t, err)
 	entries, ok = d.activityKept.Get(selection, version)
@@ -161,7 +152,7 @@ func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {
 	assert.Equal(t, currentRevision, entries[0].revision)
 	assert.Equal(t, 1, sizeCalls, "advancing the journal watermark should reuse the measured size")
 
-	requireKeptActivityEqual(t, first, keptActivityBuild(t, d, f, q, false))
+	require.Equal(t, first, keptActivityBuild(t, d, f, q, false))
 	assert.Equal(t, 1, sizeCalls, "a second hit at the same watermark must not reinsert the report")
 }
 
@@ -196,7 +187,7 @@ func TestActivityReportKeptResumedSessionPeerChanges(t *testing.T) {
 			})
 			after := keptActivityBuild(t, d, f, q, tc.wantUsage)
 			if !tc.wantUsage {
-				requireKeptActivityEqual(t, first, after)
+				require.Equal(t, first, after)
 			} else {
 				require.Equal(t, 600, after.Report.Totals.OutputTokens)
 			}
@@ -229,7 +220,7 @@ func TestActivityReportKeptUnrelatedPeerReplayDoesNotRebuild(t *testing.T) {
 	)
 	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
 	before := keptActivityBuild(t, d, f, q, true)
-	requireKeptActivityEqual(t, before, keptActivityBuild(t, d, f, q, false))
+	require.Equal(t, before, keptActivityBuild(t, d, f, q, false))
 
 	insertSession(t, d, "unrelated-replay", "project-c", func(s *Session) {
 		s.Agent = "claude"
@@ -245,7 +236,7 @@ func TestActivityReportKeptUnrelatedPeerReplayDoesNotRebuild(t *testing.T) {
 	})
 
 	after := keptActivityBuild(t, d, f, q, false)
-	requireKeptActivityEqual(t, before, after)
+	require.Equal(t, before, after)
 }
 
 func TestActivityReportKeptJournalReadsChangesPastSnapshot(t *testing.T) {
@@ -281,8 +272,17 @@ func TestActivityReportKeptInvalidatesForTerminalEventAfterRange(t *testing.T) {
 	first := keptActivityBuild(t, d, f, q, true)
 	assert.Empty(t, first.Sessions)
 
-	timingInsertToolResultEvent(t, d, "old", 0, 0, "call", "completed", "2026-06-16T10:00:00Z", 0)
-	require.NoError(t, d.RenameSession(t.Context(), "old", new("terminal session")))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "old", []Message{{
+		SessionID: "old", Ordinal: 0, Role: "assistant", Content: "tool call",
+		Timestamp: "2026-06-12T10:00:00Z", HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "old", ToolName: "test", Category: "Other", ToolUseID: "call",
+			ResultEvents: []ToolResultEvent{{
+				ToolUseID: "call", Source: "tool_execution", Status: "completed",
+				Timestamp: "2026-06-16T10:00:00Z",
+			}},
+		}},
+	}}))
 	after := keptActivityBuild(t, d, f, q, true)
 	require.Len(t, after.Sessions, 1)
 	assert.Equal(t, "old", after.Sessions[0].SessionID)
@@ -322,7 +322,7 @@ func TestActivityReportKeptIgnoresSameIdentityObservationFromToday(t *testing.T)
 	require.NoError(t, err)
 	assert.Greater(t, afterIdentityRevision, beforeIdentityRevision)
 	after := keptActivityBuild(t, d, f, q, false)
-	requireKeptActivityEqual(t, first, after)
+	require.Equal(t, first, after)
 }
 
 func TestActivityReportKeptValidationWaitsForBulkReadPermit(t *testing.T) {
@@ -444,18 +444,14 @@ func TestActivityReportKeptChanges(t *testing.T) {
 			}
 			q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
 			before := keptActivityBuild(t, d, f, q, true)
-			requireKeptActivityEqual(t, before, keptActivityBuild(t, d, f, q, false))
+			require.Equal(t, before, keptActivityBuild(t, d, f, q, false))
 			tc.write(t, d)
 			changed := keptActivityBuild(t, d, f, q, true)
 			tc.check(t, changed)
-			a, err := activity.ArtifactDigest(before)
-			require.NoError(t, err)
-			b, err := activity.ArtifactDigest(changed)
-			require.NoError(t, err)
-			assert.NotEqual(t, a, b)
+			assert.NotEqual(t, before, changed)
 			clearKeptActivity(d)
-			requireKeptActivityEqual(t, changed, keptActivityBuild(t, d, f, q, true))
-			requireKeptActivityEqual(t, changed, keptActivityBuild(t, d, f, q, false))
+			require.Equal(t, changed, keptActivityBuild(t, d, f, q, true))
+			require.Equal(t, changed, keptActivityBuild(t, d, f, q, false))
 		})
 	}
 }
@@ -471,7 +467,7 @@ func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {
 	}
 	q := dayQuery(t, "2026-06-14", "UTC")
 	before := keptActivityBuild(t, d, f, q, true)
-	requireKeptActivityEqual(t, before, keptActivityBuild(t, d, f, q, false))
+	require.Equal(t, before, keptActivityBuild(t, d, f, q, false))
 	databaseID, err := d.GetDatabaseID(t.Context())
 	require.NoError(t, err)
 	version, revision, err := d.activityKeptVersion(t.Context())
@@ -481,7 +477,7 @@ func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
 	for range 2 {
-		requireKeptActivityEqual(t, before, keptActivityBuild(t, readOnly, f, q, true))
+		require.Equal(t, before, keptActivityBuild(t, readOnly, f, q, true))
 	}
 	require.NoError(t, readOnly.Close())
 
@@ -503,5 +499,5 @@ func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {
 	require.Len(t, changed.Sessions, 1)
 	assert.Equal(t, "replacement", changed.Sessions[0].SessionID)
 	clearKeptActivity(d)
-	requireKeptActivityEqual(t, changed, keptActivityBuild(t, d, f, q, true))
+	require.Equal(t, changed, keptActivityBuild(t, d, f, q, true))
 }
