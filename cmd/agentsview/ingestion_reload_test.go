@@ -217,11 +217,14 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 	<-finished
 	require.Eventually(t, func() bool { return !f.ingestion.Active() }, time.Second, time.Millisecond, "catch-up completed after the idle deadline, so collection must stop without needing another request")
 	require.True(t, sessionImported(t, f.database, "gemini:overnight"))
-	require.True(t, f.ingestion.EnsureFresh(t.Context()))
-	headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
-	assert.Contains(t, freshBody, "hello from overnight")
-	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
-	assert.True(t, sessionImported(t, f.database, "gemini:old"), "wake imports copied files with preserved old modification times")
+	// Keep the request's activity hold until its fresh archive has been read.
+	f.tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		assert.True(t, f.ingestion.EnsureFresh(t.Context()))
+		headers, freshBody := searchIngestionArchive(t, ts.URL, "overnight")
+		assert.Contains(t, freshBody, "hello from overnight")
+		assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
+		assert.True(t, sessionImported(t, f.database, "gemini:old"), "wake imports copied files with preserved old modification times")
+	}), "").ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search", nil))
 }
 
 func TestDaemonIngestionReloadWhileSuspended(t *testing.T) {

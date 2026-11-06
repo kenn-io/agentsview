@@ -11,6 +11,8 @@ import {
 } from "./search.svelte.js";
 import { events } from "./events.svelte.js";
 import { watchEvents } from "../api/client.js";
+import { tick } from "svelte";
+import { sync } from "./sync.svelte.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
 
 vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn(), reportErrorShown: vi.fn() }));
@@ -118,25 +120,36 @@ describe("SearchStore", () => {
 
   afterEach(() => {
     searchStore.clear();
+    sync.syncPending = false;
     events.setAvailable(false);
     vi.useRealTimers();
   });
 
-  it("refreshes an open search after an archive event and shows the new match", async () => {
+  it("refreshes an open search once after idle catch-up and shows the new match", async ({
+    onTestFinished,
+  }) => {
     vi.mocked(watchEvents).mockReturnValue({
       readyState: 1,
       addEventListener: vi.fn(),
       close: vi.fn(),
     } as unknown as ReturnType<typeof watchEvents>);
+    onTestFinished(events.subscribe(vi.fn()));
     events.setAvailable(true);
     searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle", 0));
     searchStore.search("needle");
     await runDebounce();
     expect(searchStore.results).toEqual([]);
 
+    sync.syncPending = true;
+    await tick();
     searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle"));
     vi.mocked(watchEvents).mock.calls[0]![0]({ scope: "messages" });
     await runDebounce();
+    await runDebounce();
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
+
+    sync.syncPending = false;
+    await tick();
     await runDebounce();
 
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
@@ -150,6 +163,10 @@ describe("SearchStore", () => {
         snippet: "before <mark>result 0</mark> after",
       }),
     ]);
+    vi.mocked(watchEvents).mock.calls[0]![0]({ scope: "messages" });
+    await runDebounce();
+    await runDebounce();
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
   });
 
   it.each([
