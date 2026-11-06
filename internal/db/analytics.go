@@ -4305,13 +4305,11 @@ func (db *DB) populateFrustrationMarkers(
 		return nil
 	}
 	m := &db.frustrationMemo
-	m.mu.Lock()
-	generation := m.generation
-	m.mu.Unlock()
+	generation := m.Generation()
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
-		if count, ok := m.lookup(generation, rows[i].ID, rows[i].transcriptVersion); ok {
+		if count, ok := m.Lookup(generation, rows[i].ID, rows[i].transcriptVersion); ok {
 			rows[i].FrustrationMarkerCount = count
 			continue
 		}
@@ -4364,7 +4362,7 @@ func (db *DB) populateFrustrationMarkers(
 	}
 	for _, id := range ids {
 		r := rows[idx[id]]
-		m.store(generation, id, r.transcriptVersion, r.FrustrationMarkerCount)
+		m.Store(generation, id, r.transcriptVersion, r.FrustrationMarkerCount)
 	}
 	return nil
 }

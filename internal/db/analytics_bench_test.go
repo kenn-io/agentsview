@@ -71,7 +71,7 @@ func BenchmarkSignalsFrustration(b *testing.B) {
 					b.ResetTimer()
 					for b.Loop() {
 						if mode == "cold" || mode == "tool_retries" {
-							d.frustrationMemo.swap(func() {})
+							d.frustrationMemo.Swap(func() {})
 						}
 						if mode == "tool_retries" {
 							resp, err := d.GetAnalyticsSignalSessions(ctx, AnalyticsFilter{}, mode, 10)
