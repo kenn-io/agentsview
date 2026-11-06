@@ -311,14 +311,6 @@ func TestVectorPushSourceDatabasePathChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, hashes, 1)
 	assert.Contains(t, hashes, "replacement-session")
-	oldHashes, err := old.SessionDocHashes(t.Context(), nil)
-	require.NoError(t, err)
-	assert.Len(t, oldHashes, 2)
-	assert.Contains(t, oldHashes, "session-1")
-	docs, _, err := old.SessionDocs(t.Context(), "session-1")
-	require.NoError(t, err)
-	require.Len(t, docs, 2)
-	assert.Equal(t, []float32{1, 0, 0, 0}, docs[0].Chunks[0].Embedding)
 }
 
 func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {

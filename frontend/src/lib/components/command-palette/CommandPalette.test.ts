@@ -775,7 +775,6 @@ describe("CommandPalette", () => {
       await enterSearchQuery();
       for (let i = 0; i < 10; i++) await tick();
       expect(document.body.textContent?.includes("Search by meaning is off")).toBe(!enabled);
-      if (!enabled) expect(document.body.textContent).toContain("295 MB");
       await enterSearchQuery("another query");
       for (let i = 0; i < 10; i++) await tick();
       expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);

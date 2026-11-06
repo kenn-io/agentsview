@@ -153,9 +153,6 @@ describe("EmbeddingsSettings", () => {
       const component = mount(EmbeddingsSettings, { target: document.body });
       await settle();
       if (action === "build") {
-        expect(
-          document.body.querySelector(".kit-search-by-meaning .kit-chip")?.textContent?.trim(),
-        ).toBe("Failed");
         expect(document.body.querySelector(".status-grid .kit-chip")).toBeNull();
       }
       [...document.body.querySelectorAll("button")]

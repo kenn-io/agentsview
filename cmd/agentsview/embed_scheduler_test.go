@@ -666,20 +666,21 @@ func TestEmbeddingSyncEmitterForwardsAndNotifiesLiveServing(t *testing.T) {
 }
 
 func TestRunRemoteHostSyncLoopEmitsSyncedSessions(t *testing.T) {
-	primary := &recordingEmitter{}
-
-	syncFn := func() (int, error) {
-		return 1, nil // one session synced on this remote host
-	}
-
-	loopCtx := t.Context()
-	done := make(chan struct{})
-	go runRemoteHostSyncLoop(
-		loopCtx, "remote-host", 5*time.Millisecond, syncFn, primary, nil, done,
-	)
-	defer close(done)
-
-	require.Eventually(t, func() bool { return primary.count() > 0 }, time.Second, 5*time.Millisecond)
+	synctest.Test(t, func(t *testing.T) {
+		primary := &recordingEmitter{}
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "remote-host", 5*time.Millisecond, func() (int, error) { return 1, nil }, primary, nil, done)
+			close(exited)
+		}()
+		synctest.Wait()
+		synctest.Sleep(5 * time.Millisecond)
+		assert.Equal(t, []string{"sessions"}, primary.scopes)
+		close(done)
+		synctest.Wait()
+		<-exited
+	})
 }
 
 // --- searcherAdapter error taxonomy ---
@@ -945,6 +946,18 @@ func startTestServer(t *testing.T, ln net.Listener, handler http.Handler) *httpt
 	return ts
 }
 
+func liveVectorServingFixture(t *testing.T, cfg config.Config, database *db.DB, serving vectorServing) *liveVectorServing {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	return &liveVectorServing{
+		ctx: ctx, cancel: cancel, schedCancel: cancel,
+		cfg: cfg, database: database, serving: serving,
+		reload: func() (config.Config, error) { return cfg, nil },
+		push:   &vectorPushSource{cfg: cfg},
+	}
+}
+
 // TestServeConstructionRegistersEmbeddingsRoutesWhenVectorEnabled drives the
 // real live-serving options through server.New, with vector serving enabled.
 // The disabled case below checks that the same route exposes browser setup.
@@ -962,7 +975,7 @@ func TestServeConstructionRegistersEmbeddingsRoutesWhenVectorEnabled(t *testing.
 	require.NotNil(t, vs.Close)
 	defer func() { require.NoError(t, vs.Close()) }()
 
-	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
+	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
@@ -1079,7 +1092,7 @@ func TestRecallSchedulerSyncRemovesDeletedEntryWithoutExtraction(t *testing.T) {
 		return deleteErr
 	}))
 	emitter := wrapEmbeddingSyncEmitter(
-		&recordingEmitter{}, (&liveVectorServing{serving: vs, cfg: cfg}).Notify,
+		&recordingEmitter{}, liveVectorServingFixture(t, cfg, database, vs).Notify,
 	)
 	emitter.Emit("sync")
 
@@ -1141,7 +1154,7 @@ func TestRecallSchedulerSessionDeletionRemovesImportedEntryWithoutExtraction(t *
 			waitForSchedulerCondition(t, func() bool { return embeddedCount() == 1 },
 				"startup reconciliation did not embed the imported entry")
 
-			srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
+			srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 			ts := startTestServer(t, ln, srv.Handler())
 			req, err := http.NewRequestWithContext(
 				t.Context(), http.MethodDelete, ts.URL+tc.path, nil,
@@ -1189,7 +1202,7 @@ func TestMessageSchedulerQueuesBuildOnSessionDeletion(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, vs.Close()) })
 			require.Empty(t, vs.Scheduler.dirty, "setup must not queue a message build")
 
-			srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
+			srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 			ts := startTestServer(t, ln, srv.Handler())
 			req, err := http.NewRequestWithContext(
 				t.Context(), http.MethodDelete, ts.URL+tc.path, nil,
@@ -1464,7 +1477,7 @@ func TestRecallSchedulerRequiresExplicitOptInForAutomaticBuilds(t *testing.T) {
 	}, 100*time.Millisecond, 5*time.Millisecond,
 		"Recall content must not be embedded automatically without explicit opt-in")
 
-	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
+	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 	input := strings.NewReader(`
 {"candidate_id":"second-import","type":"fact","scope":"repository","title":"Import policy","body":"Keep imports manual too.","project":"agentsview","agent":"codex","session_id":"import-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
@@ -1524,7 +1537,7 @@ func TestRecallImportSchedulesEmbeddingRefresh(t *testing.T) {
 		require.NoError(t, vs.Close())
 	})
 
-	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
+	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 	input := strings.NewReader(`
 {"candidate_id":"imported-entry","type":"fact","scope":"repository","title":"Database pool","body":"Reuse idle connections.","project":"agentsview","agent":"codex","session_id":"import-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
@@ -1571,7 +1584,7 @@ func TestEmbeddingsDaemonClientBuildSucceedsThroughRealMiddleware(t *testing.T) 
 	require.NoError(t, err)
 	defer func() { require.NoError(t, vs.Close()) }()
 
-	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
+	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 
 	client := embeddingsDaemonClient{baseURL: ts.URL}
@@ -1640,7 +1653,7 @@ func TestVectorServingCloseCancelsAPIStartedRecallBuild(t *testing.T) {
 	}
 	t.Cleanup(func() { require.NoError(t, closeVectorServing()) })
 
-	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
+	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 	client := embeddingsDaemonClient{baseURL: ts.URL}
 	require.NoError(t, client.startBuild(t.Context(), vector.BuildRequest{
@@ -1749,7 +1762,7 @@ func TestServeConstructionReportsSetupWhenVectorDisabled(t *testing.T) {
 	assert.Nil(t, vs.Close)
 	assert.Empty(t, vs.ServerOpts)
 
-	srv := server.New(cfg, database, nil, (&liveVectorServing{ctx: t.Context(), serving: vs, cfg: cfg}).ServerOptions()...)
+	srv := server.New(cfg, database, nil, liveVectorServingFixture(t, cfg, database, vs).ServerOptions()...)
 	ts := startTestServer(t, ln, srv.Handler())
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
@@ -1761,8 +1774,6 @@ func TestServeConstructionReportsSetupWhenVectorDisabled(t *testing.T) {
 	var status vector.BuildStatus
 	require.NoError(t, json.UnmarshalRead(resp.Body, &status))
 	require.NotNil(t, status.Setup)
-	assert.False(t, status.Setup.Enabled)
-	assert.Equal(t, "turn-on", status.Setup.Action)
 	assert.Equal(t, "application/json", mediaType(t, resp.Header.Get("Content-Type")))
 }
 

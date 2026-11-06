@@ -6,6 +6,7 @@ for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: 850 });
       let phase = "off";
       const actions: unknown[] = [];
+      const builds: unknown[] = [];
       const setup = () => ({
         enabled: phase !== "off",
         action: phase.startsWith("ollama")
@@ -49,7 +50,7 @@ for (const width of [1280, 390]) {
         await route.fulfill({ status: 202, json: { started: true } });
       });
       await page.route("**/api/v1/embeddings/build", async (route) => {
-        expect(route.request().postDataJSON()).toEqual({});
+        builds.push(route.request().postDataJSON());
         phase = "index";
         await route.fulfill({ status: 202, json: { started: true } });
       });
@@ -136,6 +137,7 @@ for (const width of [1280, 390]) {
           generationsBox.y - Math.max(errorBox.y + errorBox.height, retryBox.y + retryBox.height),
         ).toBeGreaterThanOrEqual(16);
         await retry.click();
+        await expect.poll(() => builds).toEqual([{}]);
         await expect(page.locator(".kit-search-by-meaning [role=progressbar]")).toHaveAttribute(
           "aria-valuenow",
           "25",

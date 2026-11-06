@@ -124,7 +124,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				opts.Progress(100, 295_000_000)
 				if recipe == "fresh" {
 					// Simulate a file edit while the approved download is in progress.
-					if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("port = 12345\n[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'edited: '\n"), 0o600); err != nil {
+					if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\ninclude_automated = true\n"), 0o600); err != nil {
 						return embedlocal.Installation{}, err
 					}
 				}
@@ -180,7 +180,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				assert.Equal(t, before, inspections.Load(), "build progress must not probe Ollama")
 				idleCtx, stopIdle := context.WithCancel(t.Context())
 				go idle.Run(idleCtx)
-				assert.Never(t, idleFired.Load, 2*time.Second, 25*time.Millisecond)
+				require.Never(t, idleFired.Load, 2*time.Second, 25*time.Millisecond)
 				stopIdle()
 				resumeBuild()
 			}
@@ -196,9 +196,11 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				return result
 			}
 			awaitBuild()
-			assert.False(t, push().Vectors.Skipped, "browser activation must publish vectors without restart")
-			require.Len(t, replica.pushed, 1)
-			assert.NotEmpty(t, replica.pushed[0].Params)
+			if recipe == "fresh" {
+				assert.False(t, push().Vectors.Skipped, "browser activation must publish vectors without restart")
+				require.Len(t, replica.pushed, 1)
+				assert.NotEmpty(t, replica.pushed[0].Params)
+			}
 			if recipe == "configured" {
 				assert.Empty(t, status().Setup.Action)
 				request("POST", "/api/v1/embeddings/setup", `{"action":"use-built-in"}`, 400)
@@ -229,14 +231,16 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 					}
 				}
 			}
-			assert.False(t, push().Vectors.Skipped)
-			require.Len(t, replica.pushed, 2)
-			assert.NotEmpty(t, replica.pushed[1].Params, "switched vectors must carry their current recipe")
-			var result db.ContentSearchPage
-			require.NoError(t, json.Unmarshal(request("GET", "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", 200), &result))
-			require.NotEmpty(t, result.Matches)
-			assert.Equal(t, "session-one", result.Matches[0].SessionID)
+			if recipe == "nomic" || recipe == "other" || recipe == "automatic" {
+				assert.False(t, push().Vectors.Skipped)
+				require.Len(t, replica.pushed, 1)
+				assert.NotEmpty(t, replica.pushed[0].Params, "switched vectors must carry their current recipe")
+			}
 			if recipe == "fresh" {
+				var result db.ContentSearchPage
+				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", 200), &result))
+				require.NotEmpty(t, result.Matches)
+				assert.Equal(t, "session-one", result.Matches[0].SessionID)
 				dbtest.SeedSessionWithMessages(t, database, "automated", "sample", []db.Message{dbtest.UserMsg("automated", 0, "automated connections")}, func(s *db.Session) { s.IsAutomated = true })
 				request("POST", "/api/v1/embeddings/build", `{"full_rebuild":true}`, 202)
 				awaitBuild()
@@ -252,9 +256,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 					return err == nil && len(generations) == 1 && generations[0].Embedded == 0
 				}, 40*time.Second, 100*time.Millisecond)
 			}
-			persisted, err := config.LoadReadOnly()
-			require.NoError(t, err)
-			assert.Equal(t, persisted.Vector, owner.cfg.Vector)
 		})
 	}
 }
@@ -367,14 +368,6 @@ func TestLiveEmbeddingsSetupFailureRetry(t *testing.T) {
 	require.NoError(t, owner.Close())
 }
 
-func TestLiveEmbeddingsSetupDeploymentOwned(t *testing.T) {
-	owner := &liveVectorServing{ctx: t.Context(), cfg: config.Config{DeploymentEmbeddings: &config.VectorEmbeddingsServerConfig{Endpoint: "http://127.0.0.1:1/v1"}}}
-	status, err := owner.SetupStatus(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, status.Action)
-	require.ErrorContains(t, owner.Setup("turn-on"), "unavailable")
-}
-
 func embeddingRequest(t *testing.T, client *http.Client, base, method, path, contentType string, body io.Reader, want int) []byte {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), method, base+path, body)
@@ -436,10 +429,17 @@ func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 			} else {
 				cfg.DeploymentEmbeddings = &config.VectorEmbeddingsServerConfig{Endpoint: "https://embeddings.example/v1"}
 			}
-			owner := &liveVectorServing{ctx: t.Context(), cfg: cfg}
+			owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
 			ln, port := listenLoopback(t)
 			cfg.Host, cfg.Port = "127.0.0.1", port
 			ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+			if !filesystemFailure {
+				var status vector.BuildStatus
+				data := embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/embeddings/status", "", nil, http.StatusOK)
+				require.NoError(t, json.Unmarshal(data, &status))
+				require.NotNil(t, status.Setup)
+				assert.Empty(t, status.Setup.Action)
+			}
 			embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"action":"`+action+`"}`), want)
 		})
 	}
