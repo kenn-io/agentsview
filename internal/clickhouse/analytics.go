@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -314,6 +315,39 @@ func chSessionPushVersions(sessions []readbase.AnalyticsSession) map[string]uint
 	return versions
 }
 
+// frustrationMarkerMemo remembers each session's marker count under the
+// session push version it was read at. A push republishes every message of a
+// changed session under a newer version, so a stale count is never reused,
+// while unchanged sessions skip reading and scanning their prompts again.
+type frustrationMarkerMemo struct {
+	mu     sync.Mutex
+	counts map[string]frustrationMarkerEntry
+}
+
+type frustrationMarkerEntry struct {
+	pushVersion uint64
+	count       int
+}
+
+func (m *frustrationMarkerMemo) lookup(id string, pushVersion uint64) (int, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.counts[id]
+	if !ok || entry.pushVersion != pushVersion {
+		return 0, false
+	}
+	return entry.count, true
+}
+
+func (m *frustrationMarkerMemo) store(id string, pushVersion uint64, count int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.counts == nil {
+		m.counts = make(map[string]frustrationMarkerEntry)
+	}
+	m.counts[id] = frustrationMarkerEntry{pushVersion: pushVersion, count: count}
+}
+
 // chPopulateFrustrationMarkers counts frustration markers for rows whose
 // session version is not memoized. versions maps session IDs to the push
 // version their row was read at; a session absent from it is always scanned.
@@ -329,7 +363,7 @@ func (s *Store) chPopulateFrustrationMarkers(
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
 		if version, ok := versions[rows[i].ID]; ok {
-			if count, hit := s.frustrationMarkers.Lookup(rows[i].ID, version); hit {
+			if count, hit := s.frustrationMarkers.lookup(rows[i].ID, version); hit {
 				rows[i].FrustrationMarkerCount = count
 				continue
 			}
@@ -378,7 +412,7 @@ func (s *Store) chPopulateFrustrationMarkers(
 	// every session in the batch to be scanned again next time.
 	for id, i := range idx {
 		if version, ok := versions[id]; ok {
-			s.frustrationMarkers.Store(id, version, rows[i].FrustrationMarkerCount)
+			s.frustrationMarkers.store(id, version, rows[i].FrustrationMarkerCount)
 		}
 	}
 	return nil

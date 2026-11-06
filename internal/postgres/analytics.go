@@ -2840,10 +2840,11 @@ func (s *Store) populateFrustrationMarkers(
 		return nil
 	}
 	memo := &s.runtimeState().frustrationMarkers
+	generation := memo.Generation()
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
-		if count, hit := memo.Lookup(rows[i].ID, versions[rows[i].ID]); hit {
+		if count, hit := memo.Lookup(generation, rows[i].ID, versions[rows[i].ID]); hit {
 			rows[i].FrustrationMarkerCount = count
 			continue
 		}
@@ -2910,7 +2911,7 @@ func (s *Store) populateFrustrationMarkers(
 	}
 	// Only complete scans are memoized, using versions read with the prompts.
 	for id, version := range scannedVersions {
-		memo.Store(id, version, rows[idx[id]].FrustrationMarkerCount)
+		memo.Store(generation, id, version, rows[idx[id]].FrustrationMarkerCount)
 	}
 	return nil
 }

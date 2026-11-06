@@ -116,10 +116,10 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, versionColumn))
 			assert.Equal(t, test.want, rows[0].FrustrationMarkerCount)
 			memo := &store.runtimeState().frustrationMarkers
-			_, hit := memo.Lookup(id, versions[id])
+			_, hit := memo.Lookup(memo.Generation(), id, versions[id])
 			assert.False(t, hit, "the prompt scan must not cache published content under the selected old version")
 			if test.name != "remove-session" {
-				count, hit := memo.Lookup(id, publishedVersion)
+				count, hit := memo.Lookup(memo.Generation(), id, publishedVersion)
 				assert.True(t, hit, "the prompt scan must cache the version it read, including sessions without prompts")
 				assert.Equal(t, test.want, count)
 			}
@@ -165,7 +165,8 @@ func TestFrustrationMemo(t *testing.T) {
 			require.Contains(t, versions, id)
 			switch test.name {
 			case "reuse":
-				store.runtimeState().frustrationMarkers.Store(id, versions[id], 7)
+				memo := &store.runtimeState().frustrationMarkers
+				memo.Store(memo.Generation(), id, versions[id], 7)
 			case "append":
 				messages = append(messages, db.Message{SessionID: id, Ordinal: 1, Role: "user", Content: "this is broken"})
 			case "replace", "recreate":

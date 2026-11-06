@@ -24,7 +24,7 @@ func TestFrustrationMarkersAreNotMemoizedAfterFailedScan(t *testing.T) {
 	cancel()
 	require.Error(t, store.chPopulateFrustrationMarkers(canceled, rows(), versions))
 	for id := range versions {
-		_, hit := store.frustrationMarkers.Lookup(id, versions[id])
+		_, hit := store.frustrationMarkers.lookup(id, versions[id])
 		require.False(t, hit, "%s must be scanned again after a failed read", id)
 	}
 	scanned := rows()
@@ -33,7 +33,7 @@ func TestFrustrationMarkersAreNotMemoizedAfterFailedScan(t *testing.T) {
 	require.NoError(t, NewStoreFromDB(store.DB()).chPopulateFrustrationMarkers(t.Context(), fresh, nil))
 	require.Equal(t, fresh, scanned)
 	for id := range versions {
-		_, hit := store.frustrationMarkers.Lookup(id, versions[id])
+		_, hit := store.frustrationMarkers.lookup(id, versions[id])
 		require.True(t, hit)
 	}
 }
