@@ -424,6 +424,30 @@ describe("FrictionPage", () => {
       expect(file).toHaveBeenCalledWith(toolError.fingerprint);
     });
 
+    it("links any pattern but files only kinds whose text may leave the machine", async () => {
+      vi.spyOn(friction, "checkKata").mockImplementation(async () => {
+        friction.kataReady = true;
+      });
+      friction.digest!.patterns = [
+        ...friction.digest!.patterns!,
+        {
+          fingerprint: frustrationSignal.fingerprint,
+          kind: "frustration",
+          title: "[friction/frustration] test-session-medium-8: frustrated",
+          first_seen_date: DATE,
+          last_seen_date: DATE,
+          occurrence_count: 1,
+          session_count: 1,
+          last_subject_id: "test-session-medium-8",
+          last_ordinal: 9,
+        },
+      ];
+      await render();
+      await tick();
+      expect(buttons(headlineRow("this is still broken"))).toEqual(["Link issue"]);
+      expect(buttons(headlineRow("command not found"))).toEqual(["File to Kata", "Link issue"]);
+    });
+
     it("offers no actions when Kata is not ready", async () => {
       vi.spyOn(friction, "checkKata").mockImplementation(async () => {
         friction.kataReady = false;

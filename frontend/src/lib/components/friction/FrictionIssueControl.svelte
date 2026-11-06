@@ -79,7 +79,9 @@
     {#if filingNote}
       <span class="filing-note" title={filingNote.title}>{filingNote.label}</span>
     {/if}
-    {#if canFile && fileableKind(kind) && linking}
+    <!-- Linking sends nothing to Kata, so any pattern can be linked; only
+         kinds whose text may leave the machine can be filed. -->
+    {#if canFile && linking}
       <TextInput
         size="sm"
         bind:value={ref}
@@ -93,14 +95,16 @@
       />
       <Button size="sm" label={m.friction_issue_link_submit()} {busy} onclick={() => void link()} />
       <Button size="sm" surface="outline" label={m.friction_issue_cancel()} onclick={cancel} />
-    {:else if canFile && fileableKind(kind)}
-      <Button
-        size="sm"
-        label={m.friction_issue_file()}
-        title={m.friction_issue_file_title()}
-        {busy}
-        onclick={() => void friction.fileIssue(fingerprint)}
-      />
+    {:else if canFile}
+      {#if fileableKind(kind)}
+        <Button
+          size="sm"
+          label={m.friction_issue_file()}
+          title={m.friction_issue_file_title()}
+          {busy}
+          onclick={() => void friction.fileIssue(fingerprint)}
+        />
+      {/if}
       <Button
         size="sm"
         surface="outline"
