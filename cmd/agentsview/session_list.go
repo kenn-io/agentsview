@@ -311,18 +311,22 @@ func sessionListDefaultExclusionNotice(
 
 	var hiddenParts []string
 	var flagParts []string
+	var flatClasses []string
 	if hiddenOneShot > 0 {
 		hiddenParts = append(hiddenParts,
 			fmt.Sprintf("%d one-shot", hiddenOneShot))
 		flagParts = append(flagParts, "--include-one-shot")
+		flatClasses = append(flatClasses, "one-shot")
 	}
 	if hiddenAutomated > 0 {
 		hiddenParts = append(hiddenParts,
 			fmt.Sprintf("%d automated", hiddenAutomated))
 		flagParts = append(flagParts, "--include-automated")
+		flatClasses = append(flatClasses, "automated")
 	}
 
 	separator := " and/or "
+	flatFlags := strings.Join(flagParts, separator)
 	if hiddenChildren > 0 {
 		hiddenParts = append(hiddenParts, fmt.Sprintf("%s%d child", lowerBound, hiddenChildren))
 		flagParts = nil
@@ -341,7 +345,11 @@ func sessionListDefaultExclusionNotice(
 	if hiddenOneShot == 0 && hiddenAutomated == 0 {
 		summary = fmt.Sprintf("%s%d child %s by default", lowerBound, hiddenChildren, pluralSession(hiddenChildren))
 	}
-	return fmt.Sprintf("Excluded %s. Use %s to include them.", summary, strings.Join(flagParts, separator)), nil
+	guidance := fmt.Sprintf("Use %s to include them.", strings.Join(flagParts, separator))
+	if hiddenChildren > 0 && flatFlags != "" && !f.IncludeChildren {
+		guidance = fmt.Sprintf("For %s sessions, use %s. For child sessions, use %s.", strings.Join(flatClasses, " or "), flatFlags, strings.Join(flagParts, separator))
+	}
+	return fmt.Sprintf("Excluded %s. %s", summary, guidance), nil
 }
 
 func sessionListCountFilter(f service.ListFilter) service.ListFilter {

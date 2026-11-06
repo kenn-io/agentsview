@@ -270,7 +270,7 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 	require.Equal(t, 1, got.Total)
 	require.Len(t, got.Sessions, 1)
 	assert.Equal(t, "included", got.Sessions[0]["id"])
-	assert.Equal(t, "Excluded 3 sessions by default: 1 one-shot, 1 automated, 1 child. Use --include-one-shot --include-automated --include-children to include them.\n", stderr.String())
+	assert.Equal(t, "Excluded 3 sessions by default: 1 one-shot, 1 automated, 1 child. For one-shot or automated sessions, use --include-one-shot and/or --include-automated. For child sessions, use --include-one-shot --include-automated --include-children.\n", stderr.String())
 }
 
 // TestResolveSinceFlag_ResolvesRelativeWindow is a fast unit test of the
@@ -458,4 +458,40 @@ func TestSessionListKeepsResultsWhenChildCountFails(t *testing.T) {
 	assert.Equal(t, 4, calls)
 	assert.Equal(t, "Excluded 1 session by default: 1 one-shot. Use --include-one-shot to include them.\n", stderr.String())
 	assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
+}
+
+func TestSessionListSeparatesFlatAndChildRetries(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "parent", project: "selected"},
+		sessionSeed{id: "other-parent", project: "other"},
+		sessionSeed{id: "continuation", project: "selected", mut: func(s *db.Session) {
+			s.ParentSessionID = new("other-parent")
+			s.RelationshipType = "continuation"
+			s.UserMessageCount = 1
+		}},
+		sessionSeed{id: "child", project: "selected", mut: func(s *db.Session) {
+			s.ParentSessionID = new("parent")
+			s.RelationshipType = "subagent"
+		}},
+	)
+	args := []string{"session", "list", "--json", "--project", "selected"}
+	root := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs(args)
+	require.NoError(t, root.Execute())
+	assert.Equal(t, []string{"parent"}, sessionListIDs(t, stdout.String()))
+	assert.Equal(t, "Excluded 2 sessions by default: 1 one-shot, 1 child. For one-shot sessions, use --include-one-shot. For child sessions, use --include-one-shot --include-automated --include-children.\n", stderr.String())
+	stdout.Reset()
+	root = newRootCommand()
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs(append(args, "--include-one-shot"))
+	require.NoError(t, root.Execute())
+	assert.ElementsMatch(t, []string{"parent", "continuation"}, sessionListIDs(t, stdout.String()))
+	tree, err := executeCommand(newRootCommand(), append(args, "--include-one-shot", "--include-automated", "--include-children")...)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"parent", "child"}, sessionListIDs(t, tree))
 }
