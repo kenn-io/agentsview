@@ -180,6 +180,16 @@ The latest release is
   one-year range from 6.0 s to 1.4 s. A report now holds its intervals in memory
   while it sorts them, about 130 bytes each (about 120 MB for that year).
 
+- A busy Activity week opens faster on the local archive the first time it is
+  shown. Activity now reads each message's parsed tokens and duplicate markers
+  from the usage cache that the Usage page already keeps, instead of reading
+  and parsing raw usage from every message again. On a
+  30,000-session test archive with 10,000 sessions in one week, reading that
+  week's usage went from 2.2 s to 0.7 s, and the whole first open from 2.9 s to
+  1.9 s. When the usage cache has never seen those sessions, such as right after
+  an upgrade before the daemon has filled it, Activity fills it first; on that
+  archive that first open took 3.5 s.
+
 - The Activity page counts user and assistant messages from the sessions it
   already holds in memory, so it no longer reads every message twice. On the
   same archive a month's report went from 250 ms to 210 ms when opened again,

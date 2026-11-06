@@ -65,6 +65,7 @@ type activityReportBackend struct {
 	lowerBound, upperBound string
 	read                   *[]string
 	counted                *activityReportCounted
+	usage                  activityUsageWindow
 }
 
 // activityReportCounted holds every counted message the build's pairing
@@ -99,8 +100,8 @@ func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	rows, pricing, read, err := b.activityReportUsage(
-		ctx, ids, b.lowerBound, b.upperBound, q, b.read != nil)
+	rows, pricing, read, err := b.activityReportCachedUsage(
+		ctx, b.usage, ids, b.lowerBound, b.upperBound, q, b.read != nil)
 	if b.read != nil {
 		*b.read = append(*b.read, read...)
 	}
@@ -128,11 +129,12 @@ func (db *DB) BuildActivityReportArtifacts(
 ) (activity.CandidateArtifacts, error) {
 	f.IncludeSubagents = true
 	f.IncludeForks = true
-	release, err := db.acquireBulkRead(ctx)
+	held, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	defer release()
+	release := held
+	defer func() { release() }()
 	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 
 	var selection, version string
@@ -164,6 +166,18 @@ func (db *DB) BuildActivityReportArtifacts(
 	activity.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
+	// Filling the usage cache takes its own archive reads. Waiting for them
+	// while holding one could exhaust the bulk-read slots.
+	release()
+	release = func() {}
+	usage, err := db.prepareActivityUsageWindow(ctx, lowerBound, upperBound)
+	if err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
+	if held, err = db.acquireBulkRead(ctx); err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
+	release = held
 
 	var read []string
 	var readSet *[]string
@@ -176,6 +190,7 @@ func (db *DB) BuildActivityReportArtifacts(
 		DB:         db,
 		lowerBound: lowerBound, upperBound: upperBound,
 		counted: &activityReportCounted{},
+		usage:   usage,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating activity report")
@@ -1005,6 +1020,8 @@ func (db *DB) ActivityReportCandidateSource(
 // activityReportUsage selects complete snapshots across the padded range,
 // then keeps rows attributed to the candidate sessions. Rows are ordered on
 // parsed instants so mixed RFC3339 representations remain chronological.
+// Reports read the same rows from the usage cache through
+// activityReportCachedUsage; this raw-row path is the tests' oracle.
 func (db *DB) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
 	collectRead bool,
@@ -1365,32 +1382,51 @@ func sqliteActivityReportRowStatus(
 func sqliteActivityReportRowStatusWithWebSearchRequests(
 	r dailyUsageScanRow, webSearches int, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
-	pricedModel, lookup := pricing.ResolveAt(
-		r.model, usageLookupModel(r.model, r.pricingTS),
-		usagePricingTimestamp(r.pricingTS),
-	)
-	var inTok, outTok, crTok, cr1hTok, rdTok int
-	reasoningTok := r.reasoningTokens
+	var tokens activityReportRowTokens
+	tokens.reasoning = r.reasoningTokens
 	if r.usageSource == "message" {
-		inTok, outTok, crTok, rdTok, reasoningTok = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
-		cr1hTok = clampedCacheCreation1hTokens(r.tokenJSON)
+		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead, tokens.reasoning = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		tokens.cacheCreation1h = clampedCacheCreation1hTokens(r.tokenJSON)
 	} else {
-		inTok, outTok, crTok, rdTok = UsageEventRowTokens(
+		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead = UsageEventRowTokens(
 			r.usageSource,
 			r.inputTokens, r.outputTokens,
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
+	return activityReportRowCost(
+		r.model, r.pricingTS, r.providerID, r.cost,
+		UsageRowIsRequestScoped(r.usageSource, r.messageOrdinal),
+		tokens, webSearches, pricing)
+}
 
-	if r.cost.Valid {
-		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
-		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
+// activityReportRowTokens holds one usage row's normalized token counters.
+type activityReportRowTokens struct {
+	input, output, reasoning, cacheCreation, cacheCreation1h, cacheRead int
+}
+
+// activityReportRowCost prices one Activity usage row from its normalized
+// tokens, recording the lookup it used.
+func activityReportRowCost(
+	model, pricingTS, providerID string, reported sql.NullInt64,
+	requestScoped bool, tokens activityReportRowTokens, webSearches int,
+	pricing *export.PricingResolver,
+) (cost money.Money, priced, contributes bool, err error) {
+	pricedModel, lookup := pricing.ResolveAt(
+		model, usageLookupModel(model, pricingTS),
+		usagePricingTimestamp(pricingTS),
+	)
+	inTok, outTok, reasoningTok := tokens.input, tokens.output, tokens.reasoning
+	crTok, cr1hTok, rdTok := tokens.cacheCreation, tokens.cacheCreation1h, tokens.cacheRead
+	if reported.Valid {
+		pricing.RecordResolvedReported(model, pricedModel, lookup)
+		return money.Money{Microdollars: reported.Int64}, true, true, nil
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 && webSearches == 0 {
 		return money.Money{}, true, false, nil
 	}
 	if !lookup.OK {
-		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+		pricing.RecordResolvedComputed(model, pricedModel, lookup)
 		fee, feeErr := export.WebSearchFee(webSearches)
 		if feeErr != nil {
 			return money.Money{}, false, false, feeErr
@@ -1398,27 +1434,26 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 		return fee, false, true, nil
 	}
 	pricedModel, lookup, err = pricing.ResolveBilledAt(
-		r.providerID, r.model, usageLookupModel(r.model, r.pricingTS),
-		usagePricingTimestamp(r.pricingTS))
+		providerID, model, usageLookupModel(model, pricingTS),
+		usagePricingTimestamp(pricingTS))
 	if err != nil {
 		return money.Money{}, false, false, err
 	}
-	requestScoped := UsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(
 		requestScoped,
 		inTok, outTok, reasoningTok, crTok, cr1hTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
-			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
+			fmt.Errorf("pricing activity usage for model %q: %w", model, err)
 	}
 	cost, err = export.AddWebSearchFee(cost, webSearches)
 	if err != nil {
 		return money.Money{}, false, false,
-			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
+			fmt.Errorf("pricing activity usage for model %q: %w", model, err)
 	}
 	RecordComputedUsagePricing(
 		pricing,
-		r.model,
+		model,
 		pricedModel,
 		lookup,
 		requestScoped,
