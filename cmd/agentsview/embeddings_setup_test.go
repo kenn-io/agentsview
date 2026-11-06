@@ -259,6 +259,119 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 	}
 }
 
+func TestLiveEmbeddingsSetupDrainsExistingSearch(t *testing.T) {
+	oldInspect, oldEndpoint, oldOnBattery := inspectLocalEmbeddings, localEmbeddingEndpoint, onBattery
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, onBattery = oldInspect, oldEndpoint, oldOnBattery
+	})
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	onBattery = func() bool { return false }
+	dir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+	queryStarted, resume := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(resume) })
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Input []string `json:"input"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if len(request.Input) == 1 && strings.HasPrefix(request.Input[0], "search_query:") {
+			close(queryStarted)
+			<-resume
+		}
+		data := make([]map[string]any, len(request.Input))
+		for i := range data {
+			values := make([]float32, 768)
+			values[0] = 1
+			data[i] = map[string]any{"index": i, "embedding": values}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
+	}))
+	defer stub.Close()
+	defer unblock()
+	raw := "[vector]\nenabled=true\n[vector.embeddings]\nmodel='nomic-embed-text'\ndimension=768\nmax_input_chars=4000\nquery_prefix='search_query: '\ndocument_prefix='search_document: '\n[vector.embeddings.servers.ollama]\nendpoint='" + stub.URL + "/v1'\nollama_cpu_fallback=true\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(raw), 0o600))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return stub.URL + "/v1", nil }
+	reloaded := make(chan struct{})
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, func() (config.Config, error) {
+		next, err := config.LoadReadOnly()
+		close(reloaded)
+		return next, err
+	})
+	require.NoError(t, err)
+	defer func() {
+		unblock()
+		require.NoError(t, owner.Close())
+	}()
+	require.NoError(t, owner.serving.manager.StartBuild(vector.BuildRequest{}))
+	owner.serving.manager.Wait()
+	require.Empty(t, owner.serving.manager.Status().LastError)
+	var closed atomic.Bool
+	oldClose := owner.serving.Close
+	owner.serving.Close = func() error {
+		err := oldClose()
+		closed.Store(true)
+		return err
+	}
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	responseCh := make(chan struct {
+		status int
+		body   string
+		err    error
+	}, 1)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-AgentsView-Search-Intent", "semantic")
+	go func() {
+		var result struct {
+			status int
+			body   string
+			err    error
+		}
+		res, err := ts.Client().Do(req)
+		result.err = err
+		if err == nil {
+			body, err := io.ReadAll(res.Body)
+			result.status, result.body = res.StatusCode, string(body)
+			result.err = errors.Join(err, res.Body.Close())
+		}
+		responseCh <- result
+	}()
+	<-queryStarted
+	require.NoError(t, owner.Setup("use-built-in"))
+	<-reloaded
+	assert.Never(t, closed.Load, 100*time.Millisecond, time.Millisecond, "active search must finish before old index closes")
+	statusClient := &http.Client{Timeout: time.Second}
+	statusReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/embeddings/status", nil)
+	require.NoError(t, err)
+	statusResponse, err := statusClient.Do(statusReq)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, statusResponse.StatusCode)
+	require.NoError(t, statusResponse.Body.Close())
+	unblock()
+	res := <-responseCh
+	require.NoError(t, res.err)
+	assert.Equal(t, http.StatusOK, res.status, res.body)
+	assert.Contains(t, res.body, "session-one")
+	<-owner.done
+	owner.serving.manager.Wait()
+	require.Empty(t, owner.setup.Error)
+}
+
 func TestLiveEmbeddingsSetupStatusDuringWriteLockRetry(t *testing.T) {
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
 	t.Cleanup(func() {
