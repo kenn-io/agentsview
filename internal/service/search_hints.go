@@ -24,21 +24,44 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 	}
 	var hints []ContentSearchHint
 	vector := len(req.Concepts) > 0 || req.Mode == "semantic" || req.Mode == "hybrid"
-	effective := req.Limit
-	if effective <= 0 || effective > db.MaxContentSearchLimit {
-		effective = db.DefaultContentSearchLimit
+	lexical := !vector && (req.Mode == "" || req.Mode == "substring" || req.Mode == "regex" || req.Mode == "fts")
+	children := explainChildren && lexical && !req.IncludeChildren
+	all := req
+	args := make(map[string]any)
+	if !req.IncludeOneShot {
+		all.IncludeOneShot = true
+		args["include_one_shot"] = true
 	}
-	singleSessions := make(map[string]bool)
-	singlesOK := true
-	probe := func(code, class string, retry ContentSearchRequest, args map[string]any, exclude map[string]bool) bool {
+	if !req.IncludeAutomated {
+		all.IncludeAutomated = true
+		args["include_automated"] = true
+	}
+	if children {
+		all.IncludeChildren = true
+		args["include_children"] = true
+	}
+	search := func(retry ContentSearchRequest) (*ContentSearchResult, error) {
 		if !vector {
 			retry.Limit = max(req.Limit, db.DefaultContentSearchLimit)
 		}
 		retry.Context = 0
-		page, err := svc.SearchContent(ctx, retry)
+		return svc.SearchContent(ctx, retry)
+	}
+	var expanded *ContentSearchResult
+	if len(args) > 1 {
+		var err error
+		all.Context = 0
+		expanded, err = svc.SearchContent(ctx, all)
 		if err != nil {
-			return false
+			expanded = nil
 		}
+		if err == nil && len(expanded.Matches) == 0 && expanded.NextCursor == 0 && !expanded.CandidateTruncated {
+			return nil
+		}
+	}
+	singleSessions := make(map[string]bool)
+	singlesOK := true
+	measure := func(code, class string, page *ContentSearchResult, args map[string]any, exclude map[string]bool) {
 		count := 0
 		filtered := false
 		for _, match := range page.Matches {
@@ -55,14 +78,14 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 			count++
 		}
 		if count == 0 {
-			return true
+			return
 		}
 		n := fmt.Sprint(count)
 		wording := "matches are"
 		if count == 1 {
 			wording = "match is"
 		}
-		if filtered || page.CandidateTruncated || vector && len(page.Matches) >= effective || exclude != nil && page.NextCursor != 0 || keepMatch != nil && !page.ActiveFilterApplied && page.NextCursor != 0 {
+		if filtered || page.CandidateTruncated || vector || exclude != nil && page.NextCursor != 0 || keepMatch != nil && !page.ActiveFilterApplied && page.NextCursor != 0 {
 			n = "at least " + n
 		} else if page.NextCursor != 0 {
 			n = "more than " + n
@@ -73,35 +96,32 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 			message = fmt.Sprintf("%s %s in child sessions hidden by more than one default", n, wording)
 		}
 		hints = append(hints, ContentSearchHint{Code: code, Message: message, RetryWith: args})
+	}
+	probe := func(code, class string, retry ContentSearchRequest, args map[string]any) bool {
+		page, err := search(retry)
+		if err != nil {
+			return false
+		}
+		measure(code, class, page, args, nil)
 		return true
 	}
 	if !req.IncludeOneShot {
 		retry := req
 		retry.IncludeOneShot = true
-		singlesOK = probe("hidden_one_shot", "one-shot", retry, map[string]any{"include_one_shot": true}, nil) && singlesOK
+		singlesOK = probe("hidden_one_shot", "one-shot", retry, map[string]any{"include_one_shot": true}) && singlesOK
 	}
 	if !req.IncludeAutomated {
 		retry := req
 		retry.IncludeAutomated = true
-		singlesOK = probe("hidden_automated", "automated", retry, map[string]any{"include_automated": true}, nil) && singlesOK
+		singlesOK = probe("hidden_automated", "automated", retry, map[string]any{"include_automated": true}) && singlesOK
 	}
-	lexical := !vector && (req.Mode == "" || req.Mode == "substring" || req.Mode == "regex" || req.Mode == "fts")
-	if explainChildren && lexical && !req.IncludeChildren {
+	if children {
 		retry := req
 		retry.IncludeChildren = true
-		args := map[string]any{"include_children": true}
-		singlesOK = probe("hidden_children", "child", retry, args, nil) && singlesOK
-		if singlesOK && (!req.IncludeOneShot || !req.IncludeAutomated) {
-			args = map[string]any{"include_children": true}
-			retry.IncludeOneShot, retry.IncludeAutomated = true, true
-			if !req.IncludeOneShot {
-				args["include_one_shot"] = true
-			}
-			if !req.IncludeAutomated {
-				args["include_automated"] = true
-			}
-			probe("hidden_combined", "child", retry, args, singleSessions)
-		}
+		singlesOK = probe("hidden_children", "child", retry, map[string]any{"include_children": true}) && singlesOK
+	}
+	if singlesOK && expanded != nil {
+		measure("hidden_combined", "child", expanded, args, singleSessions)
 	}
 	return hints
 }

@@ -2027,7 +2027,8 @@ matches. Each hint
 includes a command that preserves your filters and enables the required include
 flags. JSON adds `hints` entries with `code`, `message`, and a full `next` command.
 Counts use a bounded search and say `more than N` when more matches exist, or
-`at least N` when candidate limits prevent an exact count.
+`at least N` for semantic and hybrid searches or when filtering or candidate
+limits prevent an exact count.
 For multi-word substring queries over messages, a hint offers `--fts` only when
 that retry finds matches. If several defaults must be relaxed together,
 `hidden_combined` gives a retry with all required include flags. Failed diagnostic
@@ -2055,8 +2056,8 @@ requires auth, or `--pg` to read from configured PostgreSQL.
 default. When that hides matching sessions on the first page, it reports the
 counts and the corresponding `--include-one-shot`, `--include-automated`, or
 `--include-children` flags on stderr, including when the list has visible results.
-Sessions hidden by several defaults appear as `hidden by more than one default`;
-the notice lists the include flags to use together. Stdout, including
+Child counts include sessions hidden by several defaults; the notice lists
+every remaining include flag to use together. Stdout, including
 `--format json`, keeps its existing shape for pipelines.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from

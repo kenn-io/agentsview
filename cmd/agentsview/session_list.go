@@ -280,29 +280,18 @@ func sessionListDefaultExclusionNotice(
 	}
 
 	hiddenChildren := 0
-	canIncludeChildren := !f.IncludeChildren && len(f.Labels) == 0 && f.PR == ""
 	// Annotation filters already select matching children. Tree expansion adds
 	// context outside those matches.
-	if canIncludeChildren {
-		withChildren := sessionListCountFilter(f)
-		withChildren.IncludeChildren = true
-		list, err := svc.List(ctx, withChildren)
-		if err != nil {
-			return "", fmt.Errorf("counting child session exclusions: %w", err)
-		}
-		hiddenChildren = hiddenSessionCount(list.Total, visibleTotal)
-	}
-	hiddenMultiple := 0
-	if canIncludeChildren && (!f.IncludeOneShot || !f.IncludeAutomated) {
+	if len(f.Labels) == 0 && f.PR == "" && (!f.IncludeChildren || !f.IncludeOneShot && !f.IncludeAutomated) {
 		all := sessionListCountFilter(f)
 		all.IncludeChildren, all.IncludeOneShot, all.IncludeAutomated = true, true, true
 		list, err := svc.List(ctx, all)
 		if err != nil {
-			return "", fmt.Errorf("counting combined session exclusions: %w", err)
+			return "", fmt.Errorf("counting child session exclusions: %w", err)
 		}
-		hiddenMultiple = max(0, hiddenSessionCount(list.Total, visibleTotal)-hiddenOneShot-hiddenAutomated-hiddenChildren)
+		hiddenChildren = max(0, hiddenSessionCount(list.Total, visibleTotal)-hiddenOneShot-hiddenAutomated)
 	}
-	hiddenTotal := hiddenOneShot + hiddenAutomated + hiddenChildren + hiddenMultiple
+	hiddenTotal := hiddenOneShot + hiddenAutomated + hiddenChildren
 	if hiddenTotal == 0 {
 		return "", nil
 	}
@@ -322,11 +311,9 @@ func sessionListDefaultExclusionNotice(
 
 	if hiddenChildren > 0 {
 		hiddenParts = append(hiddenParts, fmt.Sprintf("%d child", hiddenChildren))
-		flagParts = append(flagParts, "--include-children")
 	}
 	separator := " and/or "
-	if hiddenMultiple > 0 {
-		hiddenParts = append(hiddenParts, fmt.Sprintf("%d hidden by more than one default", hiddenMultiple))
+	if hiddenChildren > 0 {
 		flagParts = nil
 		if !f.IncludeOneShot {
 			flagParts = append(flagParts, "--include-one-shot")
@@ -334,7 +321,9 @@ func sessionListDefaultExclusionNotice(
 		if !f.IncludeAutomated {
 			flagParts = append(flagParts, "--include-automated")
 		}
-		flagParts = append(flagParts, "--include-children")
+		if !f.IncludeChildren {
+			flagParts = append(flagParts, "--include-children")
+		}
 		separator = " "
 	}
 	return fmt.Sprintf(

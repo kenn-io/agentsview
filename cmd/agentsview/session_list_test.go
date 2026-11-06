@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -328,28 +329,51 @@ func TestResolveSinceFlag_RejectsBothSet(t *testing.T) {
 }
 
 func TestSessionListReportsCombinedDefaultExclusions(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	seedSessionsWithOpts(t, dataDir,
-		sessionSeed{id: "parent", project: "proj"},
-		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
-			s.ParentSessionID = new("parent")
-			s.RelationshipType = "subagent"
-			s.UserMessageCount = 1
-			s.FirstMessage = new("You are a code reviewer. Review this change.")
-		}},
-	)
-	root := newRootCommand()
-	var stdout, stderr bytes.Buffer
-	root.SetOut(&stdout)
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"session", "list", "--json"})
-	require.NoError(t, root.Execute())
-	assert.Equal(t, "Excluded 1 session by default: 1 hidden by more than one default. Use --include-one-shot --include-automated --include-children to include them.\n", stderr.String())
-	visible := decodeCLIJSON[cliSessionList](t, stdout.String())
-	require.Len(t, visible.Sessions, 1)
-	out, err := executeCommand(newRootCommand(), "session", "list", "--json", "--include-one-shot", "--include-automated", "--include-children")
-	require.NoError(t, err)
-	retried := decodeCLIJSON[cliSessionList](t, out)
-	require.Len(t, retried.Sessions, 2)
-	assert.ElementsMatch(t, []any{"parent", "child"}, []any{retried.Sessions[0]["id"], retried.Sessions[1]["id"]})
+	for _, included := range []bool{false, true} {
+		t.Run(fmt.Sprint(included), func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			seedSessionsWithOpts(t, dataDir,
+				sessionSeed{id: "parent", project: "proj", mut: func(s *db.Session) {
+					if included {
+						s.UserMessageCount = 1
+					}
+				}},
+				sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
+					s.ParentSessionID = new("parent")
+					s.RelationshipType = "subagent"
+					s.UserMessageCount = 1
+					s.FirstMessage = new("You are a code reviewer. Review this change.")
+				}},
+			)
+			root := newRootCommand()
+			var stdout, stderr bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&stderr)
+			args := []string{"session", "list", "--json"}
+			flags := "--include-one-shot --include-automated"
+			if included {
+				args = append(args, "--include-children")
+			} else {
+				flags += " --include-children"
+			}
+			root.SetArgs(args)
+			require.NoError(t, root.Execute())
+			wantNotice := "Excluded 1 session by default: 1 child. Use " + flags + " to include them.\n"
+			if included {
+				wantNotice = "Excluded 2 sessions by default: 1 one-shot, 1 child. Use " + flags + " to include them.\n"
+			}
+			assert.Equal(t, wantNotice, stderr.String())
+			visible := decodeCLIJSON[cliSessionList](t, stdout.String())
+			if included {
+				assert.Empty(t, visible.Sessions)
+			} else {
+				require.Len(t, visible.Sessions, 1)
+			}
+			out, err := executeCommand(newRootCommand(), "session", "list", "--json", "--include-one-shot", "--include-automated", "--include-children")
+			require.NoError(t, err)
+			retried := decodeCLIJSON[cliSessionList](t, out)
+			require.Len(t, retried.Sessions, 2)
+			assert.ElementsMatch(t, []any{"parent", "child"}, []any{retried.Sessions[0]["id"], retried.Sessions[1]["id"]})
+		})
+	}
 }

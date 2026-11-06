@@ -249,7 +249,8 @@ runs and subagent or fork sessions. The response also reports the
 a diagnostic search finds hidden matches. Each entry has `code`, `message`, and
 `retry_with`, the arguments to change while keeping the rest of your request.
 Counts say `more than N` when a bounded probe has more results, or `at least N`
-when activity filtering prevents an exact count. Failed probes add
+for semantic and hybrid searches or when activity filtering or candidate limits
+prevent an exact count. Failed probes add
 no hint. Default scope already includes child sessions.
 
 `next_cursor` is present when another page

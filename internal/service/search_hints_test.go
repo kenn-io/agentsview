@@ -1,6 +1,8 @@
 package service_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -113,12 +115,13 @@ func TestSearchContentHintsFTSChildCount(t *testing.T) {
 
 func TestSearchContentHintsCombinedExclusions(t *testing.T) {
 	for _, tc := range []struct {
-		name                            string
-		automated, oneShotParent, mixed bool
+		name                                             string
+		automated, oneShotParent, mixed, includeChildren bool
 	}{
-		{"automated child", true, false, false},
-		{"child of one-shot parent", false, true, false},
-		{"one-shot and automated child", true, false, true},
+		{"automated child", true, false, false, false},
+		{"child of one-shot parent", false, true, false, false},
+		{"one-shot and automated child", true, false, true, false},
+		{"included child with one-shot parent and automation", true, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
@@ -140,7 +143,7 @@ func TestSearchContentHintsCombinedExclusions(t *testing.T) {
 				require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("one", 0, "marker")}))
 			}
 			svc := service.NewDirectBackend(d, nil)
-			req := service.ContentSearchRequest{Pattern: "marker"}
+			req := service.ContentSearchRequest{Pattern: "marker", IncludeChildren: tc.includeChildren}
 			res, err := svc.SearchContent(t.Context(), req)
 			require.NoError(t, err)
 			require.Empty(t, res.Matches)
@@ -155,8 +158,12 @@ func TestSearchContentHintsCombinedExclusions(t *testing.T) {
 			hint := hints[len(hints)-1]
 			assert.Equal(t, "hidden_combined", hint.Code)
 			assert.Equal(t, "1 match is in child sessions hidden by more than one default", hint.Message)
-			assert.Equal(t, map[string]any{"include_one_shot": true, "include_automated": true, "include_children": true}, hint.RetryWith)
-			req.IncludeChildren = hint.RetryWith["include_children"].(bool)
+			wantRetry := map[string]any{"include_one_shot": true, "include_automated": true}
+			if !tc.includeChildren {
+				wantRetry["include_children"] = true
+			}
+			assert.Equal(t, wantRetry, hint.RetryWith)
+			req.IncludeChildren = true
 			req.IncludeOneShot = hint.RetryWith["include_one_shot"].(bool)
 			req.IncludeAutomated = hint.RetryWith["include_automated"].(bool)
 			retried, err := svc.SearchContent(t.Context(), req)
@@ -194,4 +201,53 @@ func TestSearchContentHintsPreserveSemanticCandidateWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, retried.Matches, 1)
 	assert.Equal(t, "hidden", retried.Matches[0].SessionID)
+}
+
+// The service boundary records the diagnostic work required for a miss.
+type hintProbeService struct {
+	service.SessionService
+	search func(service.ContentSearchRequest) (*service.ContentSearchResult, error)
+}
+
+func (s hintProbeService) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	return s.search(req)
+}
+
+func TestSearchContentHintsExpandedGate(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		page      service.ContentSearchResult
+		err       error
+		single    bool
+		wantCalls int
+	}{
+		{name: "complete miss", wantCalls: 1},
+		{name: "continuation", page: service.ContentSearchResult{NextCursor: 50}, wantCalls: 4},
+		{name: "candidate truncation", page: service.ContentSearchResult{CandidateTruncated: true}, wantCalls: 4},
+		{name: "failed gate", err: errors.New("unavailable"), wantCalls: 4},
+		{name: "one disabled flag", single: true, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			svc := hintProbeService{search: func(req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+				calls++
+				assert.Equal(t, "selected", req.Project)
+				assert.Equal(t, 100, req.Limit)
+				if calls == 1 {
+					assert.True(t, req.IncludeOneShot && req.IncludeAutomated && req.IncludeChildren)
+					return &tc.page, tc.err
+				}
+				return &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "hidden"}}}, nil
+			}}
+			req := service.ContentSearchRequest{Pattern: "marker", Project: "selected", Limit: 100, IncludeChildren: tc.single, IncludeAutomated: tc.single}
+			hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
+			assert.Equal(t, tc.wantCalls, calls)
+			if tc.wantCalls > 1 {
+				require.Len(t, hints, 3)
+				assert.Equal(t, "hidden_one_shot", hints[0].Code)
+			} else {
+				assert.Empty(t, hints)
+			}
+		})
+	}
 }
