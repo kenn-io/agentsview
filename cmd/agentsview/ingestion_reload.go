@@ -256,10 +256,7 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 			defer d.finishCatchup(done)
 		}
 		d.mu.Unlock()
-		if err := d.restoreCollection(); err != nil {
-			return agentsync.SyncStats{}, err
-		}
-		stats, err := runner(ctx, progress)
+		stats, err := d.syncAndReconcile(ctx, runner, progress)
 		if err == nil {
 			d.mu.Lock()
 			d.pending = false
@@ -269,14 +266,27 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 	}
 }
 
+func (d *daemonIngestion) syncAndReconcile(ctx context.Context, runner server.LocalSyncRunner, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+	if err := d.restoreCollection(); err != nil {
+		return agentsync.SyncStats{}, err
+	}
+	stats, err := runner(ctx, progress)
+	if err == nil {
+		if roots := reconcileRootPaths(d.Config()); len(roots) > 0 {
+			if err := d.engine.ReconcileWatchRoots(ctx, roots, false); err != nil {
+				log.Printf("idle catch-up reconciliation: %v", err)
+			}
+		}
+	}
+	return stats, err
+}
+
 func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	defer finish()
-	err := d.restoreCollection()
+	stats, err := d.syncAndReconcile(d.ctx, func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+		return syncAllReleasingStartupMaintenance(ctx, d.engine, progress), nil
+	}, nil)
 	if err == nil {
-		stats := syncAllReleasingStartupMaintenance(d.ctx, d.engine, nil)
-		if err := d.engine.ReconcileWatchRoots(d.ctx, reconcileRootPaths(d.Config()), false); err != nil {
-			log.Printf("idle catch-up reconciliation: %v", err)
-		}
 		if !stats.ProcessingComplete() {
 			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
 		}

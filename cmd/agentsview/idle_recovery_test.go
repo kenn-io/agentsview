@@ -148,6 +148,60 @@ func TestReviewIdleWakeReconcilesDeletedSource(t *testing.T) {
 	assert.Equal(t, "hello from retained", messages[0].Content)
 }
 
+func TestReviewIdleUnavailableRootPreservesSourceState(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.Suspend()
+	f.ingestion.applying.Wait()
+	require.NoError(t, os.Rename(f.root, filepath.Join(t.TempDir(), "offline")))
+
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+
+	after, err := f.database.GetSessionFull(t.Context(), "gemini:retained")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Nil(t, after.SourceMissingAt, "an unavailable root leaves source state unchanged")
+	assert.Nil(t, after.DeletedAt)
+	messages, err := f.database.GetAllMessages(t.Context(), "gemini:retained")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "hello from retained", messages[0].Content)
+}
+
+func TestReviewIdleManualWakeReconcilesDeletedSource(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.Suspend()
+	f.ingestion.applying.Wait()
+	require.NoError(t, os.Remove(filepath.Join(f.root, "tmp", "project", "chats", "session-retained.json")))
+	runner := server.LocalSyncRunner(func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+		return syncAllReleasingStartupMaintenance(ctx, f.engine, progress), nil
+	})
+	ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion, server.WithLocalSyncRunner(f.ingestion.foregroundSync(runner)))
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/sync", nil)
+	require.NoError(t, err)
+	request.Header.Set("Origin", ts.URL)
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Contains(t, string(body), "event: done")
+	require.NotContains(t, string(body), "event: error")
+	f.ingestion.applying.Wait()
+
+	after, err := f.database.GetSessionFull(t.Context(), "gemini:retained")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.NotNil(t, after.SourceMissingAt, "manual wake reconciles sources deleted while suspended")
+	assert.Nil(t, after.DeletedAt)
+	assert.False(t, f.ingestion.Pending())
+	messages, err := f.database.GetAllMessages(t.Context(), "gemini:retained")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "hello from retained", messages[0].Content)
+}
+
 func TestIdleWakeReleasesSkippedStartupMaintenance(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
