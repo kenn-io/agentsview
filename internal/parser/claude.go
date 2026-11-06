@@ -3288,10 +3288,14 @@ func isRealClaudeUserMessage(m ParsedMessage) bool {
 // read usage stats) with no actual prompt. Such sessions carry no
 // conversational content and are skipped during parsing. The notion
 // of a real user turn mirrors firstMessageAndUserCountContext: non-system,
-// role=user, non-empty content.
+// role=user, non-empty content. Peer messages prevent exclusion without
+// counting as real user turns.
 func isUsageProbeSession(messages []ParsedMessage) bool {
 	sawUsage := false
 	for _, m := range messages {
+		if m.SourceSubtype == "peer_message" {
+			return false
+		}
 		if !isRealClaudeUserMessage(m) {
 			continue
 		}
