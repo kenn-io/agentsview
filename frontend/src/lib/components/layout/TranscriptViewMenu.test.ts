@@ -69,8 +69,12 @@ describe("TranscriptViewMenu", () => {
     item("menuitemradio", "Skim").click();
     await tick();
     expect(ui.messageLayout).toBe("skim");
-    // Picking a layout closes the menu.
-    expect(document.querySelector('[role="menu"]')).toBeNull();
+    // Picking a layout keeps the menu open, so layouts can be compared in turn.
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    item("menuitemradio", "Compact").click();
+    await tick();
+    expect(ui.messageLayout).toBe("compact");
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
   });
 
   it("switches to prompts and final answers", async () => {
@@ -78,6 +82,7 @@ describe("TranscriptViewMenu", () => {
     item("menuitemradio", "Prompts and final answers").click();
     await tick();
     expect(ui.transcriptMode).toBe("focused");
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
   });
 
   it("toggles a block type without closing the menu", async () => {

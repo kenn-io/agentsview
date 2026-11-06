@@ -154,6 +154,7 @@ test("transcript controls fit a very narrow transcript pane", async ({ page }) =
   await page.getByRole("button", { name: "Show session analysis" }).click();
   await page.locator(".view-trigger").click();
   await page.getByRole("menuitemradio", { name: "Prompts and final answers" }).click();
+  await page.keyboard.press("Escape");
 
   const pane = await box(page, ".session-breadcrumb");
   expect(pane.width).toBeLessThan(300);
@@ -175,11 +176,11 @@ test("the View trigger shows its full label and keeps its width across layouts a
   const trigger = page.locator(".session-breadcrumb .view-trigger");
   const label = trigger.locator(".view-trigger-text");
   const widths = new Set<number>();
+  // Layout and mode picks keep the menu open, so one open covers them all.
+  await trigger.click();
   for (const mode of ["Everything", "Prompts and final answers"]) {
-    await trigger.click();
     await page.getByRole("menuitemradio", { name: new RegExp(`^${mode}`) }).click();
     for (const layout of ["Default", "Compact", "Stream", "Skim"]) {
-      await trigger.click();
       await page.getByRole("menuitemradio", { name: new RegExp(`^${layout}`) }).click();
       await expect(label).toContainText(layout);
       // The label is drawn in full: nothing clipped behind an ellipsis.
