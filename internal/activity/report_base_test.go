@@ -184,7 +184,7 @@ func TestBuildReportArtifactsErrors(t *testing.T) {
 					"aggregating example activity report",
 				)
 				require.ErrorIs(t, err, failure)
-				if stage == "candidates" {
+				if stage == "candidates" || stage == "usage" && concurrent {
 					require.EqualError(t, err, "aggregating example activity report: read failed")
 				} else {
 					require.EqualError(t, err, "read failed")
@@ -275,9 +275,10 @@ func TestBuildReportArtifactsConcurrentCancellation(t *testing.T) {
 			switch failingStage {
 			case "parent":
 				require.ErrorIs(t, err, context.Canceled)
+				require.EqualError(t, err, "aggregating: context canceled")
 			case "usage":
 				require.ErrorIs(t, err, failure)
-				require.EqualError(t, err, "stage failed")
+				require.EqualError(t, err, "aggregating: stage failed")
 			case "candidates":
 				require.ErrorIs(t, err, failure)
 				require.EqualError(t, err, "aggregating: stage failed")

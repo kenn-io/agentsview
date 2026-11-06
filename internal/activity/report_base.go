@@ -86,20 +86,13 @@ func BuildReportArtifacts(
 		})
 	}, loadUsage)
 	if err != nil {
-		err = fmt.Errorf("%s: %w", aggregationLabel, err)
-	}
-	if ready != nil {
-		if err != nil {
+		if ready != nil {
 			cancel(err)
-		}
-		<-ready
-		if err != nil {
+			<-ready
 			// Keep the initiating stage's error, before its peer observes cancellation.
-			return CandidateArtifacts{}, Progress{}, context.Cause(readCtx)
+			err = context.Cause(readCtx)
 		}
-	}
-	if err != nil {
-		return CandidateArtifacts{}, Progress{}, err
+		return CandidateArtifacts{}, Progress{}, fmt.Errorf("%s: %w", aggregationLabel, err)
 	}
 	if err := backend.ActivityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
 		return CandidateArtifacts{}, Progress{}, err
