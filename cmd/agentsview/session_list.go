@@ -286,7 +286,9 @@ func sessionListDefaultExclusionNotice(
 	if len(f.Labels) == 0 && f.PR == "" && (!f.IncludeChildren || !f.IncludeOneShot && !f.IncludeAutomated) {
 		all := sessionListCountFilter(f)
 		all.IncludeChildren, all.IncludeOneShot, all.IncludeAutomated = true, true, true
-		all.Limit = db.MaxSessionLimit
+		if !f.IncludeChildren {
+			all.Limit = db.MaxSessionLimit
+		}
 		list, err := svc.List(ctx, all)
 		if err != nil {
 			return "", fmt.Errorf("counting child session exclusions: %w", err)
@@ -299,7 +301,7 @@ func sessionListDefaultExclusionNotice(
 					hiddenChildren++
 				}
 			}
-			if hiddenChildren > 0 && list.NextCursor != "" {
+			if hiddenChildren > 0 && (list.NextCursor != "" || list.Total > len(list.Sessions)) {
 				lowerBound = "at least "
 			}
 		}

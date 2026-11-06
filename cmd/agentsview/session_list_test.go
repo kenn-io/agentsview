@@ -371,15 +371,32 @@ func TestSessionListReportsCombinedDefaultExclusions(t *testing.T) {
 }
 
 func TestSessionListChildMembershipWithContinuations(t *testing.T) {
-	for _, relationship := range []string{"subagent", "fork", "continuation"} {
-		t.Run(relationship, func(t *testing.T) {
+	for _, tc := range []struct {
+		relationship string
+		date         bool
+	}{
+		{"subagent", false}, {"fork", false}, {"continuation", false}, {"subagent", true},
+	} {
+		t.Run(fmt.Sprintf("%s/date=%v", tc.relationship, tc.date), func(t *testing.T) {
+			relationship := tc.relationship
 			dataDir := newAgentDataDir(t)
 			seedSessionsWithOpts(t, dataDir,
-				sessionSeed{id: "parent", project: "selected"},
-				sessionSeed{id: "other-parent", project: "other"},
+				sessionSeed{id: "parent", project: "selected", mut: func(s *db.Session) {
+					s.StartedAt = new("2024-06-15T10:00:00Z")
+					s.EndedAt = s.StartedAt
+				}},
+				sessionSeed{id: "other-parent", project: "other", mut: func(s *db.Session) {
+					if tc.date {
+						s.Project = "selected"
+					}
+					s.StartedAt = new("2020-01-01T10:00:00Z")
+					s.EndedAt = s.StartedAt
+				}},
 				sessionSeed{id: "child", project: "selected", mut: func(s *db.Session) {
 					s.ParentSessionID = new("parent")
 					s.RelationshipType = relationship
+					s.StartedAt = new("2024-06-15T10:00:00Z")
+					s.EndedAt = s.StartedAt
 					if relationship == "continuation" {
 						s.Project = "other"
 					}
@@ -389,9 +406,14 @@ func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 				seedSessionsWithOpts(t, dataDir, sessionSeed{id: "continuation", project: "selected", mut: func(s *db.Session) {
 					s.ParentSessionID = new("other-parent")
 					s.RelationshipType = "continuation"
+					s.StartedAt = new("2024-06-15T10:00:00Z")
+					s.EndedAt = s.StartedAt
 				}})
 			}
 			args := []string{"session", "list", "--json", "--project", "selected", "--include-one-shot", "--include-automated"}
+			if tc.date {
+				args = []string{"session", "list", "--json", "--date-from", "2024-01-01", "--include-one-shot", "--include-automated"}
+			}
 			root := newRootCommand()
 			var stdout, stderr bytes.Buffer
 			root.SetOut(&stdout)
@@ -416,32 +438,56 @@ func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 }
 
 func TestSessionListChildMembershipPartialPage(t *testing.T) {
-	for _, children := range []bool{true, false} {
-		t.Run(fmt.Sprint(children), func(t *testing.T) {
+	for _, tc := range []struct {
+		name, cursor       string
+		children, included bool
+		total              int
+	}{
+		{"cursor", "next", true, false, 2},
+		{"total without cursor", "", true, false, 501},
+		{"no observed child", "next", false, false, 501},
+		{"children already included", "next", true, true, 501},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				q := r.URL.Query()
-				assert.Equal(t, fmt.Sprint(db.MaxSessionLimit), q.Get("limit"))
+				limit := db.MaxSessionLimit
+				if tc.included {
+					limit = 1
+				}
+				assert.Equal(t, fmt.Sprint(limit), q.Get("limit"))
+				w.Header().Set("Content-Type", "application/json")
+				if tc.included && (q.Get("include_one_shot") != "true" || q.Get("include_automated") != "true") {
+					_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+					return
+				}
 				assert.Equal(t, "selected", q.Get("project"))
 				assert.Equal(t, "messages", q.Get("order_by"))
 				assert.Equal(t, "true", q.Get("descending"))
 				for _, flag := range []string{"include_one_shot", "include_automated", "include_children"} {
 					assert.Equal(t, "true", q.Get(flag))
 				}
-				w.Header().Set("Content-Type", "application/json")
-				if children {
-					_, _ = w.Write([]byte(`{"sessions":[{"id":"a","relationship_type":"subagent"},{"id":"b","relationship_type":"fork"}],"total":501,"next_cursor":"next"}`))
+				if tc.included {
+					_, _ = w.Write([]byte(`{"sessions":[{"id":"a"}],"total":501,"next_cursor":"next"}`))
+				} else if tc.children {
+					_, _ = fmt.Fprintf(w, `{"sessions":[{"id":"a","relationship_type":"subagent"},{"id":"b","relationship_type":"fork"}],"total":%d,"next_cursor":%q}`, tc.total, tc.cursor)
 				} else {
 					_, _ = w.Write([]byte(`{"sessions":[{"id":"a","relationship_type":"continuation"}],"total":501,"next_cursor":"next"}`))
 				}
 			}))
 			defer srv.Close()
 			svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
-			notice, err := sessionListDefaultExclusionNotice(t.Context(), svc, service.ListFilter{Project: "selected", OrderBy: "messages", Descending: new(true), IncludeOneShot: true, IncludeAutomated: true}, 1)
+			notice, err := sessionListDefaultExclusionNotice(t.Context(), svc, service.ListFilter{Project: "selected", OrderBy: "messages", Descending: new(true), IncludeOneShot: !tc.included, IncludeAutomated: !tc.included, IncludeChildren: tc.included}, 1)
 			require.NoError(t, err)
+			if tc.included {
+				assert.Equal(t, 3, calls)
+				assert.Equal(t, "Excluded 500 sessions by default: 500 child. Use --include-one-shot --include-automated to include them.", notice)
+				return
+			}
 			assert.Equal(t, 1, calls)
-			if children {
+			if tc.children {
 				assert.Equal(t, "Excluded at least 2 sessions by default: at least 2 child. Use --include-children to include them.", notice)
 			} else {
 				assert.Empty(t, notice)

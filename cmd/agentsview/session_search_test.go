@@ -845,6 +845,8 @@ func TestSessionSearchHiddenHints(t *testing.T) {
 			require.Len(t, got.Hints, 1)
 			if class == "automated-child" {
 				assert.Equal(t, "excluded_combined", got.Hints[0].Code)
+			} else if class == "automated" {
+				assert.Equal(t, "excluded_automated", got.Hints[0].Code)
 			}
 			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-a")
 			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-b")
