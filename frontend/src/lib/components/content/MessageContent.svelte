@@ -122,18 +122,8 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   let pinFeedback = $state("");
   let pinFailed = $state(false);
   let forkFeedback = $state("");
-  let turnByMessage = $derived.by(() => {
-    const map = new Map<number, TurnTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) map.set(turn.message_id, turn);
-    return map;
-  });
-  let callByToolUseID = $derived.by(() => {
-    const map = new Map<string, CallTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) {
-      for (const call of turn.calls) map.set(call.tool_use_id, call);
-    }
-    return map;
-  });
+  let turnByMessage = $derived(sessionTiming.index.turnByMessage);
+  let callByToolUseID = $derived(sessionTiming.index.callByToolUseID);
   function soloDurationLabel(
     ct: CallTiming | undefined,
     turn: TurnTiming | undefined,
