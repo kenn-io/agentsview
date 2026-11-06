@@ -65,6 +65,15 @@ func BenchmarkUsageRollupJournaled(b *testing.B) {
 	}
 }
 
+func TestUsageJournalBenchmarkInAuckland(t *testing.T) {
+	t.Setenv("TZ", "Pacific/Auckland")
+	for _, dailyRows := range []int{1, 3} {
+		t.Run(fmt.Sprintf("rows-%d", dailyRows), func(t *testing.T) {
+			seedUsageJournalBenchmark(t, 5, dailyRows)
+		})
+	}
+}
+
 func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageFilter, DailyUsageResult) {
 	tb.Helper()
 	database := testDB(tb)
@@ -90,7 +99,7 @@ func seedUsageJournalBenchmark(tb testing.TB, count, dailyRows int) (*DB, UsageF
 		_, err := database.WriteSessionBatchAtomic(tb.Context(), writes)
 		require.NoError(tb, err)
 	}
-	filter := UsageFilter{From: "2026-08-04", To: "2026-08-10", SkipSessionCounts: true}
+	filter := UsageFilter{From: "2026-08-04", To: "2026-08-10", Timezone: "UTC", SkipSessionCounts: true}
 	require.NoError(tb, database.StartUsageCacheBackfill(tb.Context()))
 	require.NoError(tb, database.WaitUsageCacheBackfill(tb.Context()))
 	want, err := database.GetDailyUsage(tb.Context(), filter)
