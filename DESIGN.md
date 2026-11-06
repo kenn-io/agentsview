@@ -137,7 +137,15 @@ props or forked styles.
   (settings), it falls back to the first tab. Until the pin includes a fix,
   `AppHeader.svelte` corrects the result with the temporary
   `topBarNoCurrentTab` action and the `no-current-tab` styles; remove both
-  when the pin moves.
+  when the pin moves. The action also clears the open collapsed menu's
+  selected option.
+- `VirtualTable` keeps measured row heights by index for one `items` array,
+  so any change to the rows (expanding a Recent edits file, loading the next
+  page) drops every measurement. Rows outside the rendered window fall back
+  to the estimate and the list can shift. It needs heights kept by row key.
+- `VirtualTable` keeps the column widths it first sized until someone resizes
+  a column. Recent edits rebuilds the table when its width settles, so
+  columns nobody resized follow the window.
 
 Resolved upstream (adopted at the current pin): `RefreshControl` takes a
 `formatAge` prop, `DateRangePicker`'s `weekOfLabel` substitutes a `{date}`

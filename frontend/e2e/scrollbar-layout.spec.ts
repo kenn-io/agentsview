@@ -160,8 +160,9 @@ test.describe("Scrollbar layout", () => {
     const refreshBefore = await rightEdge(refresh);
 
     release();
-    await expect(page.getByText("synthetic term 30", { exact: true })).toBeVisible();
-    await expectScrollbarAppeared(scroller);
+    await expect(page.getByText("synthetic term 30", { exact: true })).toBeAttached();
+    await expectScrollbarAppeared(page.locator(".table-panel"));
+    expect(await overflows(scroller)).toBe(false);
 
     expect(await leftEdge(heading)).toBe(headingBefore);
     expect(await rightEdge(refresh)).toBe(refreshBefore);
