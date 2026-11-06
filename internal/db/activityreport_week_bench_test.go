@@ -11,7 +11,8 @@ import (
 
 // BenchmarkSQLiteActivityReportBusyWeekFirstOpen builds a week holding 6,000
 // sessions of 50 alternating user and Claude assistant messages, with an empty
-// pairing memo, as the first Activity open after a start does. Each response
+// pairing memo and no kept report, as the first Activity open after a start
+// does. Each response
 // is stored as two rows that share its message and request IDs, as Claude
 // transcripts store multi-part responses. The week exceeds the pairing memo's
 // budgets, so it measures a build the memo cannot hold.
@@ -54,6 +55,7 @@ func BenchmarkSQLiteActivityReportBusyWeekFirstOpen(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		d.activityMemo.swap(func() {})
+		clearKeptActivity(d)
 		artifacts, err := d.BuildActivityReportArtifacts(b.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
 		require.NoError(b, err)
 		require.Len(b, artifacts.Sessions, sessionCount)
