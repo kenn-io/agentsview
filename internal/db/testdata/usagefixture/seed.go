@@ -37,7 +37,7 @@ func SeedJournal(tb testing.TB, count, dailyRows int) (*db.DB, db.UsageFilter, d
 	for start := 0; start < count; start += 256 {
 		var writes []db.SessionBatchWrite
 		for i := start; i < min(start+256, count); i++ {
-			writes = append(writes, sessionWrite(Journal(i, dailyRows)))
+			writes = append(writes, Journal(i, dailyRows))
 		}
 		_, err := database.WriteSessionBatchAtomic(tb.Context(), writes)
 		require.NoError(tb, err)
@@ -60,11 +60,7 @@ func SeedJournal(tb testing.TB, count, dailyRows int) (*db.DB, db.UsageFilter, d
 func SeedPage(tb testing.TB, count int) *db.DB {
 	tb.Helper()
 	database, _, _ := SeedJournal(tb, count, 1)
-	var writes []db.SessionBatchWrite
-	for _, input := range PageExceptions() {
-		writes = append(writes, sessionWrite(input))
-	}
-	_, err := database.WriteSessionBatchAtomic(tb.Context(), writes)
+	_, err := database.WriteSessionBatchAtomic(tb.Context(), PageExceptions())
 	require.NoError(tb, err)
 	cost := money.Money{Microdollars: ReportedCostMicrodollars}
 	require.NoError(tb, database.ReplaceSessionUsageEvents(tb.Context(), "reported", []db.UsageEvent{{Source: "shutdown", Model: "journal-model", InputTokens: ReportedInputTokens, Cost: &cost, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: ReportedTimestamp, DedupKey: "reported"}}))
@@ -72,12 +68,4 @@ func SeedPage(tb testing.TB, count int) *db.DB {
 	require.NoError(tb, database.WaitUsageCacheBackfill(tb.Context()))
 	database.StopUsageCacheBackfill()
 	return database
-}
-
-func sessionWrite(input Session) db.SessionBatchWrite {
-	write := db.SessionBatchWrite{Session: db.Session{ID: input.ID, Project: input.Project, Machine: input.Machine, Agent: input.Agent, GitBranch: input.GitBranch, StartedAt: &input.StartedAt, UserMessageCount: input.UserMessageCount, IsAutomated: input.IsAutomated}}
-	for _, message := range input.Messages {
-		write.Messages = append(write.Messages, db.Message{SessionID: input.ID, Ordinal: message.Ordinal, Role: "assistant", Timestamp: message.Timestamp, Model: message.Model, TokenUsage: []byte(message.TokenUsage), ClaudeMessageID: message.ClaudeMessageID, ClaudeRequestID: message.ClaudeRequestID})
-	}
-	return write
 }

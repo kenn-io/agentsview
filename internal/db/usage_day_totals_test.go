@@ -95,6 +95,10 @@ func TestUsageDayTotalsNotificationDuringReadStaysJournaled(t *testing.T) {
 // CheckUsageDayTotalsFiltersMatchLegacy checks private cache state for the external fixture test.
 func CheckUsageDayTotalsFiltersMatchLegacy(t *testing.T, database *DB) {
 	t.Helper()
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{
+		{OccurredAt: "2026-08-04T09:00:00Z", Model: "journal-model", InputTokens: 11, Charged: money.MustParseDollars("0.10"), DedupKey: "interactive"},
+		{OccurredAt: "2026-08-04T10:00:00Z", Model: "journal-model", InputTokens: 23, Charged: money.MustParseDollars("0.20"), DedupKey: "headless", IsHeadless: true},
+	}))
 	filter := UsageFilter{From: "2026-08-03", To: "2026-08-10", Timezone: "UTC"}
 	cache := warmJournaledUsage(t, database, filter)
 	for _, tc := range []struct {
@@ -106,6 +110,9 @@ func CheckUsageDayTotalsFiltersMatchLegacy(t *testing.T, database *DB) {
 		{"project", func(f *UsageFilter) { f.Project = "project-0" }},
 		{"project labels", func(f *UsageFilter) { f.ProjectLabels = []string{"project-0", "project-1"} }},
 		{"agent", func(f *UsageFilter) { f.Agent = "claude" }},
+		{"cursor human model", func(f *UsageFilter) { f.Agent = "cursor"; f.Model = "journal-model"; f.AutomatedScope = "human" }},
+		{"cursor automated model", func(f *UsageFilter) { f.Agent = "cursor"; f.Model = "journal-model"; f.AutomatedScope = "automated" }},
+		{"exclude cursor", func(f *UsageFilter) { f.ExcludeAgent = "cursor" }},
 		{"machine", func(f *UsageFilter) { f.Machine = "machine-1" }},
 		{"branch", func(f *UsageFilter) { f.GitBranch = EncodeBranchFilterToken("project-0", "branch-0") }},
 		{"model", func(f *UsageFilter) { f.Model = "journal-model" }},
@@ -131,6 +138,13 @@ func CheckUsageDayTotalsFiltersMatchLegacy(t *testing.T, database *DB) {
 			got, err := database.GetDailyUsage(t.Context(), f)
 			require.NoError(t, err)
 			assert.Equal(t, mustUsageJSON(t, want), mustUsageJSON(t, got))
+			if f.Agent == "cursor" {
+				wantInput := 11
+				if f.AutomatedScope == "automated" {
+					wantInput = 23
+				}
+				assert.Equal(t, wantInput, got.Totals.InputTokens)
+			}
 		})
 	}
 	assertUsageDayTotals(t, cache)

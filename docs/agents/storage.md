@@ -761,13 +761,16 @@ timezone rollups, then reads them in one pinned cache transaction. Without a
 trusted timezone claim, verify every candidate session's facts fingerprint,
 exact baked metadata, per-session pricing identity, resolved rate hashes, and
 Cursor high-water mark. With a trusted claim, refresh journaled sessions and
-invalidated installs, discover window sessions through date indexes, and verify
-coverage and concurrent installs in the pinned cache transaction. A timezone
-without a claim starts a coverage pass when backfill is enabled. A conflicting
-install sends the request's retries through the full path. A result is no older
-than the archive snapshot captured when the read began, and may be newer for a
-session whose facts were refilled meanwhile. A session confirmed deleted during
-fill is dropped from the request. `cached_at` is diagnostic only.
+invalidated installs, and verify coverage and concurrent installs in the pinned
+cache transaction. Covered daily totals read ordinary usage from day totals and
+load only window exception owners and matching authoritative sessions. Other
+window reads discover sessions through date indexes. A timezone without a claim
+starts a coverage pass when backfill is enabled. After a conflicting install,
+daily totals retry once with a fresh journal capture; further conflicts and
+other reads use the full path. A result is no older than the archive snapshot
+captured when the read began, and may be newer for a session whose facts were
+refilled meanwhile. A session confirmed deleted during fill is dropped from the
+request. `cached_at` is diagnostic only.
 
 The layers are kept apart so a live archive cannot veto a read. A fill reads one
 session's facts and that session's source version inside a single archive read

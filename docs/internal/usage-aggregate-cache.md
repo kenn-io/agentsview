@@ -154,10 +154,13 @@ whether a pass can vouch for the current rates.
 
 Before reading rows, the pinned cache transaction checks timezone coverage,
 pricing, intervening installs for captured sessions, and missing installs. Empty
-windows run the same checks. A conflicting install or invalidated dedup peer
-sends the request's retries through the full path. Activity matching counts
-always take the full path. Warm window reads load filter and attribution
-metadata, including the display fields shared with Top sessions.
+windows run the same checks. After a conflicting install or invalidated dedup
+peer, daily totals retry once with a fresh journal capture; further conflicts
+and other reads use the full path. Activity matching counts always take the full
+path. Covered daily totals read ordinary usage from day totals and load only
+window exception owners and matching authoritative sessions. Other warm window
+reads load filter and attribution metadata, including the display fields shared
+with Top sessions.
 
 Within one Pairwise request, concurrent and sequential reads share one capture,
 fill check, and rollup check when their window, session predicate, and Cursor
