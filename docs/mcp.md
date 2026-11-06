@@ -100,6 +100,9 @@ and `format` (`markdown` or `summary`). `list_friction_patterns` accepts `kind`,
 `since`, and `limit` (default 20, max 100). Both report
 [Friction Log](/docs/configuration/#friction-log) heuristics, not ground truth.
 
+With Docbank and every optional tool listed, the tool list the server sends is
+about 87 KB. A test fails when it grows past 96 KB.
+
 `list_sessions` accepts `labels` (every listed label must match) and `pr`
 (`owner/repo`, `owner/repo#123`, or `github.com::owner/repo#123`). Its rows
 include each session's labels, pull request links, and parent session. See
@@ -132,6 +135,8 @@ remote servers report `unknown` with an `unsupported` reason. The tools use the
 same schemas and backend selection as the full profile, over either stdio or
 StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
 complete tool list above.
+
+This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
 The native
 [AgentsView Memory package](https://github.com/kenn-io/agentsview/tree/main/plugins/agentsview-memory)

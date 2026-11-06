@@ -129,6 +129,80 @@ func TestServer_GetMemoryStatus(t *testing.T) {
 	assert.Equal(t, service.MemoryPartial, status.Status)
 }
 
+// Base catalog bytes plus 10%, rounded up to the next 1,000; increases need review.
+const (
+	fullCatalogBudget   = 96_000
+	memoryCatalogBudget = 24_000
+)
+
+func listCatalog(t *testing.T, srv *mcp.Server) *mcp.ListToolsResult {
+	t.Helper()
+	st, ct := newInMemoryPair(t, srv)
+	defer func() {
+		require.NoError(t, ct.Close())
+		require.NoError(t, st.Wait())
+	}()
+	tools, err := ct.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	return tools
+}
+
+func checkCatalogBudget(tools *mcp.ListToolsResult, budget int) error {
+	raw, err := json.Marshal(tools)
+	if err != nil {
+		return err
+	}
+	if len(raw) <= budget {
+		return nil
+	}
+	detail := fmt.Sprintf("tool catalog: %d bytes exceeds %d-byte budget", len(raw), budget)
+	for _, tool := range tools.Tools {
+		raw, err := json.Marshal(tool)
+		if err != nil {
+			return err
+		}
+		detail += fmt.Sprintf("\n%s: %d bytes", tool.Name, len(raw))
+	}
+	return errors.New(detail)
+}
+
+func TestNewServer_CatalogFitsBudget(t *testing.T) {
+	for _, tc := range []struct {
+		profile Profile
+		budget  int
+	}{{ProfileFull, fullCatalogBudget}, {ProfileMemory, memoryCatalogBudget}} {
+		t.Run(string(tc.profile), func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			tools := listCatalog(t, newServer(ServeOptions{
+				Service: service.NewDirectBackend(d, nil, withTestDocbank()),
+				Profile: tc.profile,
+			}))
+			raw, err := json.Marshal(tools)
+			require.NoError(t, err)
+			t.Logf("catalog: %d bytes", len(raw))
+			require.NoError(t, checkCatalogBudget(tools, tc.budget))
+		})
+	}
+}
+
+func TestCheckCatalogBudget_FailsOneByteOver(t *testing.T) {
+	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+	mcp.AddTool(srv, &mcp.Tool{Name: "catalog_fixture", Description: "x"},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
+			return nil, struct{}{}, nil
+		})
+	tools := listCatalog(t, srv)
+	raw, err := json.Marshal(tools)
+	require.NoError(t, err)
+	tools.Tools[0].Description += strings.Repeat("x", fullCatalogBudget-len(raw))
+	require.NoError(t, checkCatalogBudget(tools, fullCatalogBudget))
+	tools.Tools[0].Description += "x"
+	err = checkCatalogBudget(tools, fullCatalogBudget)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "96001 bytes exceeds 96000-byte budget")
+	assert.Contains(t, err.Error(), "catalog_fixture:")
+}
+
 func TestParseProfile(t *testing.T) {
 	t.Parallel()
 
