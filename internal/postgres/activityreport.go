@@ -43,6 +43,10 @@ type activityReportBackend struct {
 	lowerBound, upperBound string
 }
 
+func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
+	return func() {}, b.readTx == nil
+}
+
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {

@@ -6,6 +6,8 @@ import (
 	"maps"
 	"slices"
 
+	"golang.org/x/sync/errgroup"
+
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -17,19 +19,56 @@ type ReportBackend interface {
 	BuildProjectIdentityMap(context.Context, []string) (map[string]export.ProjectMapEntry, error)
 }
 
+// ConcurrentUsageBackend reserves a second read for usage while candidates stream.
+type ConcurrentUsageBackend interface {
+	ActivityReportSecondRead() (release func(), ok bool)
+}
+
 // BuildReportArtifacts assembles a report and returns the emitted completion event.
 func BuildReportArtifacts(
 	ctx context.Context, backend ReportBackend, sessions []SessionMeta,
 	ids []string, q Query, onProgress ProgressFunc, aggregationLabel string,
 ) (CandidateArtifacts, Progress, error) {
-	usage, pricing, err := backend.ActivityReportUsage(ctx, ids, q)
-	if err != nil {
-		return CandidateArtifacts{}, Progress{}, err
+	var usage []UsageRow
+	var pricing *export.PricingBlock
+	var usageErr error
+	readCtx := ctx
+	loadUsage := func() ([]UsageRow, error) { return usage, nil }
+	var group *errgroup.Group
+	var cancel context.CancelCauseFunc
+	if concurrent, ok := backend.(ConcurrentUsageBackend); ok {
+		if release, ok := concurrent.ActivityReportSecondRead(); ok {
+			var stageCtx context.Context
+			stageCtx, cancel = context.WithCancelCause(ctx)
+			defer cancel(nil)
+			group, readCtx = errgroup.WithContext(stageCtx)
+			ready := make(chan struct{})
+			group.Go(func() error {
+				defer close(ready)
+				defer release()
+				usage, pricing, usageErr = backend.ActivityReportUsage(readCtx, ids, q)
+				if usageErr != nil {
+					cancel(usageErr)
+				}
+				return usageErr
+			})
+			loadUsage = func() ([]UsageRow, error) {
+				// Wait cancels readCtx, which aggregation still needs for allocation.
+				<-ready
+				return usage, usageErr
+			}
+		}
+	}
+	if group == nil {
+		usage, pricing, usageErr = backend.ActivityReportUsage(ctx, ids, q)
+		if usageErr != nil {
+			return CandidateArtifacts{}, Progress{}, usageErr
+		}
 	}
 
 	rowsProcessed := int64(0)
 	source := backend.ActivityReportCandidateSource(ids, q)
-	artifacts, err := BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, Params{
+	artifacts, err := BuildCandidateArtifactsFromSourceWithSurvivorUsage(readCtx, Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
 		Loc:           q.Loc,
@@ -51,9 +90,22 @@ func BuildReportArtifacts(
 			})
 			return yield(candidate)
 		})
-	}, usage)
+	}, loadUsage)
 	if err != nil {
-		return CandidateArtifacts{}, Progress{}, fmt.Errorf("%s: %w", aggregationLabel, err)
+		err = fmt.Errorf("%s: %w", aggregationLabel, err)
+	}
+	if group != nil {
+		if err != nil {
+			cancel(err)
+		}
+		usageErr = group.Wait()
+		if err != nil || usageErr != nil {
+			// Keep the initiating stage's error, before its peer observes cancellation.
+			return CandidateArtifacts{}, Progress{}, context.Cause(readCtx)
+		}
+	}
+	if err != nil {
+		return CandidateArtifacts{}, Progress{}, err
 	}
 	if err := backend.ActivityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
 		return CandidateArtifacts{}, Progress{}, err

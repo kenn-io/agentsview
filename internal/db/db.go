@@ -1280,17 +1280,24 @@ func configureReaderPool(reader *sql.DB) {
 	reader.SetConnMaxIdleTime(readerConnMaxIdleTime)
 }
 
-func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func (db *DB) tryAcquireBulkRead() (func(), bool) {
 	db.bulkReads.once.Do(func() {
 		db.bulkReads.slots = make(chan struct{}, bulkReadSlots)
 	})
 	select {
 	case db.bulkReads.slots <- struct{}{}:
-		return func() { <-db.bulkReads.slots }, nil
+		return func() { <-db.bulkReads.slots }, true
 	default:
+		return nil, false
+	}
+}
+
+func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if release, ok := db.tryAcquireBulkRead(); ok {
+		return release, nil
 	}
 	started := time.Now()
 	defer func() {
