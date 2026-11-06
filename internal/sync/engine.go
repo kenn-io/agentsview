@@ -660,7 +660,9 @@ type Engine struct {
 	// the provider's full-source fingerprint verifies content. The periodic
 	// archive audit sets it to catch same-stat in-place rewrites that
 	// append-trust would otherwise keep stale.
-	checkpointAudit   atomic.Bool
+	checkpointAudit atomic.Bool
+	// soleArchiveWriter permits a pass-start freshness snapshot while startup
+	// holds the archive write lock and no other archive writer can run.
 	soleArchiveWriter atomic.Bool
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite

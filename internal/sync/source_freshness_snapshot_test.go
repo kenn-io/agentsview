@@ -1,9 +1,13 @@
 package sync
 
 import (
+	"context"
+	"database/sql"
 	"os"
+	"sync/atomic"
 	"testing"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -49,11 +53,60 @@ func TestSourceFreshnessSnapshotPassParity(t *testing.T) {
 					require.NoError(t, f.Close())
 				}
 				fx.engine.Close()
+				if scenario == "unchanged" {
+					// Restart the reader pool too, so cached statements cannot hide
+					// fallback queries from the SQLite authorizer.
+					require.NoError(t, fx.db.CloseConnections(t.Context()))
+					require.NoError(t, fx.db.Reopen())
+				}
 				fx.engineWithEmitter(t.Context(), nil)
 				t.Cleanup(fx.engine.Close)
 				fx.engine.SetSoleArchiveWriter(enabled)
+				var statHashReads, fileSizeReads atomic.Int32
+				if scenario == "unchanged" {
+					reader := fx.db.Reader().(interface {
+						Conn(context.Context) (*sql.Conn, error)
+					})
+					// Hold all four reader connections while registering, so every
+					// worker uses an observed connection once they're released.
+					var conns []*sql.Conn
+					for range 4 {
+						conn, err := reader.Conn(t.Context())
+						require.NoError(t, err)
+						conns = append(conns, conn)
+						t.Cleanup(func() { _ = conn.Close() })
+						require.NoError(t, conn.Raw(func(raw any) error {
+							raw.(interface {
+								RegisterAuthorizer(func(int, string, string, string) int)
+							}).RegisterAuthorizer(func(op int, table, column, _ string) int {
+								if op == sqlite3.SQLITE_READ {
+									if table == "provider_freshness" && column == "stat_hash" {
+										statHashReads.Add(1)
+									}
+									if table == "sessions" && column == "file_size" {
+										fileSizeReads.Add(1)
+									}
+								}
+								return sqlite3.SQLITE_OK
+							})
+							return nil
+						}))
+					}
+					for _, conn := range conns {
+						require.NoError(t, conn.Close())
+					}
+				}
 				stats := fx.engine.SyncAll(t.Context(), nil)
 				require.Zero(t, stats.Failed)
+				if scenario == "unchanged" {
+					if enabled {
+						require.EqualValues(t, 1, statHashReads.Load(), "only the bulk snapshot may read stat hashes")
+						require.EqualValues(t, 1, fileSizeReads.Load(), "only the bulk snapshot may read file sizes")
+					} else {
+						require.Positive(t, statHashReads.Load(), "live stat-hash fallbacks must be observed")
+						require.Positive(t, fileSizeReads.Load(), "live source-state fallbacks must be observed")
+					}
+				}
 				row, err := fx.db.GetSessionFull(t.Context(), "warm")
 				require.NoError(t, err)
 				// These values belong to each fixture's filesystem or write clock.
