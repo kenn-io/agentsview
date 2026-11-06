@@ -145,10 +145,28 @@ func (db *DB) activityReportCandidateSource(ids []string, q activity.Query) acti
 			if len(misses) == 0 {
 				return nil
 			}
+			// The scan reads every message before it yields a pair, so the
+			// candidate budget check below runs too late to bound counted
+			// messages. Each counted message except a session's last starts
+			// a pair, so once kept messages pass the remaining budget by more
+			// than one per session, the report cannot fit and nothing will be
+			// stored.
+			countedBudget := activityMemoMaxCandidates - buffered
+			kept, keptSessions := 0, 0
 			keepCounted := func(id string, message activityCountedMessage) {
-				if buffer, ok := counted[id]; ok {
-					counted[id] = append(buffer, message)
+				buffer, ok := counted[id]
+				if !ok {
+					return
 				}
+				if len(buffer) == 0 {
+					keptSessions++
+				}
+				kept++
+				if kept-keptSessions > countedBudget {
+					buffers, counted = nil, nil
+					return
+				}
+				counted[id] = append(buffer, message)
 			}
 			return db.activityReportCandidateSQL(misses, wide, keepCounted)(ctx, func(c activity.IntervalCandidate) error {
 				if buffer, ok := buffers[c.SessionID]; ok {

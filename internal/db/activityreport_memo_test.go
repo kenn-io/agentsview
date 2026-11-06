@@ -155,6 +155,42 @@ func TestActivityMemoOverflowSkipsReport(t *testing.T) {
 	assert.Equal(t, []string{"large", "small"}, rereadSessions(got, "reread"))
 }
 
+// A report whose pairs fit the candidate budget keeps its memo entry, with
+// counted messages, even though it counts one more message than it pairs. One
+// candidate fewer and nothing is stored, and counts come from storage.
+func TestActivityMemoCountedMessagesFitCandidateBudget(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s", "p", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:05:00Z")
+	})
+	const messages = 5
+	for i := range messages {
+		seedMessage(t, d, "s", i, "assistant", time.Date(2026, 6, 16, 10, i, 0, 0, time.UTC).Format(time.RFC3339), "m")
+	}
+	q := dayQuery(t, "2026-06-16", "UTC")
+	assistantMessages := func(t *testing.T, budget int) (int, bool) {
+		t.Helper()
+		old := activityMemoMaxCandidates
+		activityMemoMaxCandidates = budget
+		t.Cleanup(func() { activityMemoMaxCandidates = old })
+		d.activityMemo.swap(func() {})
+		artifacts, err := d.BuildActivityReportArtifacts(t.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
+		require.NoError(t, err)
+		total := 0
+		for _, bucket := range artifacts.Report.Buckets {
+			total += bucket.AssistantMessages
+		}
+		return total, len(d.activityMemo.entries) > 0
+	}
+	total, stored := assistantMessages(t, messages-1)
+	assert.Equal(t, messages, total)
+	assert.True(t, stored)
+	total, stored = assistantMessages(t, messages-2)
+	assert.Equal(t, messages, total)
+	assert.False(t, stored)
+}
+
 // rewriteActivityModels stores model on every message of the sessions and
 // leaves their transcript revision as it was, so the memo still treats them
 // as unchanged. Pairs read from storage afterwards close on model; pairs the
