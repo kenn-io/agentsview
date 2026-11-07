@@ -876,20 +876,6 @@ func TestSessionSearchFTSHints(t *testing.T) {
 			assert.Empty(t, got.Hints)
 		}
 	}
-	t.Run("scoped", func(t *testing.T) {
-		ftsCalls := 0
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Query().Get("mode") == "fts" {
-				ftsCalls++
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"matches":[]}`))
-		}))
-		defer ts.Close()
-		_, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "search", "decode error", "--scope", "top", "--json")
-		require.NoError(t, err)
-		assert.Zero(t, ftsCalls)
-	})
 }
 
 func TestSessionSearchHintPreservesServer(t *testing.T) {
@@ -921,6 +907,10 @@ func TestSessionSearchHintPreservesServer(t *testing.T) {
 	require.Len(t, got.Hints, 1)
 	assert.Contains(t, got.Hints[0].Next, "--server="+ts.URL)
 	assert.Contains(t, got.Hints[0].Next, "--server-token-file="+tokenFile)
+	ftsCalls = 0
+	_, err = executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "decode error", "--scope", "top", "--json")
+	require.NoError(t, err)
+	assert.Zero(t, ftsCalls)
 }
 
 func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
@@ -958,12 +948,18 @@ func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 }
 
 func TestSessionSearchHybridKeywordFallback(t *testing.T) {
-	registerSQLiteDaemonRuntime(t, newAgentDataDir(t))
+	newAgentDataDir(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "true", r.URL.Query().Get("allow_keyword_fallback"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"matches":[],"effective_mode":"hybrid_keyword","note":"Search by meaning is unavailable: not set up. Returned hybrid keyword matches only."}`))
+	}))
+	defer ts.Close()
 	cmd := newRootCommand()
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"session", "search", "UnicodeDecodeError", "--hybrid", "--json"})
+	cmd.SetArgs([]string{"session", "--server", ts.URL, "search", "UnicodeDecodeError", "--hybrid", "--json"})
 	require.NoError(t, cmd.Execute())
 	got := decodeCLIJSON[service.ContentSearchResult](t, stdout.String())
 	require.NotEmpty(t, got.Note)

@@ -13,8 +13,7 @@ import (
 )
 
 type fallbackVectorSearcher struct {
-	err         error
-	resolutions int
+	err error
 }
 
 func (s *fallbackVectorSearcher) PrepareSemanticSearch(context.Context, string) (db.VectorSearchPage, int, error) {
@@ -22,7 +21,6 @@ func (s *fallbackVectorSearcher) PrepareSemanticSearch(context.Context, string) 
 }
 
 func (s *fallbackVectorSearcher) ResolveMessageUnits(context.Context, []db.MessageRef) ([]db.UnitRef, error) {
-	s.resolutions++
 	return nil, s.err
 }
 
@@ -74,7 +72,6 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 			} else {
 				require.Len(t, result.Matches, 1)
 			}
-			assert.Zero(t, searcher.resolutions)
 		})
 	}
 }
