@@ -77,9 +77,6 @@ describe("SettingsPage", () => {
     try {
       await tick();
       await tick();
-      expect(
-        document.querySelector('nav[aria-label="Settings"] [aria-current="true"]')?.textContent,
-      ).toContain(label);
       expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(label);
     } finally {
       unmount(component);

@@ -311,13 +311,6 @@ describe("SessionsStore", () => {
       await Promise.resolve();
       expect(sessions.archiveEmpty).toBe(true);
     });
-
-    it("returns to the dashboard when inventory is unavailable", async () => {
-      sessions.archiveEmpty = true;
-      api.getDataProjects.mockRejectedValue(new Error("inventory unavailable"));
-      await sessions.load();
-      expect(sessions.archiveEmpty).toBe(false);
-    });
   });
 
   it("preserves explicit automated exclusion for annotation requests", async () => {

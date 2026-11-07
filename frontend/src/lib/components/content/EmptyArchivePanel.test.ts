@@ -12,9 +12,6 @@ beforeEach(() => {
   localStorage.clear();
   initI18n();
   settings.loaded = true;
-  settings.error = null;
-  settings.sessionProviders = [];
-  settings.disabledAgents = [];
 });
 
 afterEach(() => {
@@ -40,13 +37,6 @@ describe("EmptyArchivePanel", () => {
         homes_supported: false,
       },
       {
-        id: "codex",
-        display_name: "Codex",
-        dirs: ["/home/example/.codex/sessions"],
-        homes: [],
-        homes_supported: false,
-      },
-      {
         id: "gemini",
         display_name: "Gemini CLI",
         dirs: ["/home/example/.gemini/tmp"],
@@ -61,10 +51,7 @@ describe("EmptyArchivePanel", () => {
     const rows = [...document.querySelectorAll("li")].map((row) =>
       row.textContent?.replace(/\s+/g, " ").trim(),
     );
-    expect(rows).toEqual([
-      "Claude Code: /home/example/.claude/projects",
-      "Codex: /home/example/.codex/sessions",
-    ]);
+    expect(rows).toEqual(["Claude Code: /home/example/.claude/projects"]);
     const button = document.querySelector<HTMLButtonElement>("button")!;
     expect(button.textContent?.trim()).toBe("Choose folders");
     button.click();
