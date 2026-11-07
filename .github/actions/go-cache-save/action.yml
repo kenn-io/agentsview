@@ -6,20 +6,16 @@ runs:
   using: composite
   steps:
     - name: Prune unused cache entries
-      if: >-
-        github.event_name == 'push' && github.ref == 'refs/heads/main'
-        && env.GO_CACHE_HIT != 'true' && env.GO_CACHE_TRACKING != ''
+      if: env.GO_CACHE_HIT != 'true' && env.GO_CACHE_TRACKING != ''
       shell: bash
       run: |
         while IFS= read -r path; do
           path="${path/#\~/$HOME}"
           if [ "$RUNNER_OS" = 'Windows' ]; then path="$(cygpath -u "$path")"; fi
           if [ -d "$path" ]; then
-            du -sh "$path"
             find "$path" -type f \( -name '*-a' -o -name '*-d' \) ! -newer "$GO_CACHE_TRACKING" -delete
-            du -sh "$path"
           fi
-        done <<< "$GO_CACHE_PRUNE_PATHS"
+        done <<< "$GO_CACHE_PATHS"
 
     - name: Save caches
       if: >-

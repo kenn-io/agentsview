@@ -31,7 +31,6 @@ runs:
       run: |
         # One key per group and day: main refreshes it daily instead of freezing on go.sum.
         {
-          echo "GO_CACHE_TRACKING="
           echo "GO_CACHE_KEY=go-${GROUP}-${GO_SUM}-$(date -u +%Y-%m-%d)"
           echo "GO_CACHE_PREFIX=go-${GROUP}-${GO_SUM}-"
           echo "GO_CACHE_GROUP_PREFIX=go-${GROUP}-"
@@ -40,10 +39,6 @@ runs:
             go env GOCACHE
             go env GOMODCACHE
           fi
-          if [ -n "$EXTRA_PATH" ]; then echo "$EXTRA_PATH"; fi
-          echo "EOF"
-          echo "GO_CACHE_PRUNE_PATHS<<EOF"
-          if [ "$INCLUDE_GO_CACHE" = 'true' ]; then go env GOCACHE; fi
           if [ -n "$EXTRA_PATH" ]; then echo "$EXTRA_PATH"; fi
           echo "EOF"
         } >> "$GITHUB_ENV"
@@ -79,9 +74,8 @@ runs:
           if [ -d "$previous/cache/download/sumdb" ]; then
             cp -R "$previous/cache/download/sumdb" "$modules/cache/download/"
           fi
-          proxy="$previous/cache/download"
-          if [ "$RUNNER_OS" = 'Windows' ]; then proxy="$(cygpath -w "$proxy")"; fi
-          proxy="$(node -e 'console.log(require("node:url").pathToFileURL(process.argv[1]).href)' "$proxy")"
+          proxy="file://$previous/cache/download"
+          if [ "$RUNNER_OS" = 'Windows' ]; then proxy="file:///$(cygpath -m "$previous/cache/download")"; fi
           echo "GOPROXY=$proxy,${GOPROXY:-https://proxy.golang.org,direct}" >> "$GITHUB_ENV"
         fi
         # Go refreshes cache mtimes at most once an hour, so force used entries to refresh.
@@ -96,6 +90,6 @@ runs:
           if [ -d "$path" ]; then
             find "$path" -type f \( -name '*-a' -o -name '*-d' \) -exec touch -t "$aged" {} +
           fi
-        done <<< "$GO_CACHE_PRUNE_PATHS"
+        done <<< "$GO_CACHE_PATHS"
         marker="$(mktemp "$RUNNER_TEMP/go-cache-tracking.XXXXXX")"
         echo "GO_CACHE_TRACKING=$marker" >> "$GITHUB_ENV"
