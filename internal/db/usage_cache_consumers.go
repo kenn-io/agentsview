@@ -326,6 +326,9 @@ func (db *DB) GetTopSessionsByCost(
 		return nil, err
 	}
 	if filter.TopSessionsByGroup {
+		// A group takes the agent of its first entry. The fold returns map order,
+		// so rank members here to match the agent that SQL ranking picks.
+		sortTopSessions(result, filter.TopSessionsSort, filter.TopSessionsTokenTypes)
 		return GroupTopSessions(result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes)
 	}
 	return SortAndLimitTopSessions(result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes), nil

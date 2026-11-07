@@ -367,14 +367,21 @@ func TestUsageTopSessionsGroupRenameAfterWarmup(t *testing.T) {
 				assert.Equal(t, tc.display, got[0].DisplayName)
 			}
 
-			// An older writer's open drops and recreates only the triggers it names.
+			// An older writer's open drops and recreates only the triggers it names,
+			// and its general update trigger does not journal session_name. Only the
+			// dedicated trigger can then report this rename.
 			const name = "trg_sessions_usage_change_group_label"
 			drops := strings.Replace(usageChangeJournalTriggerDropsSQL, "DROP TRIGGER IF EXISTS "+name+";\n", "", 1)
 			creates := usageChangeJournalTriggerSQL
 			start := strings.Index(creates, "CREATE TRIGGER "+name+" ")
 			require.GreaterOrEqual(t, start, 0)
 			end := start + strings.Index(creates[start:], "END;\n") + len("END;\n")
-			_, err = database.getWriter().ExecContext(t.Context(), drops+creates[:start]+creates[end:])
+			older := strings.NewReplacer(
+				", session_name", "",
+				"OLD.session_name IS NOT NEW.session_name OR ", "",
+			).Replace(creates[:start] + creates[end:])
+			require.NotContains(t, older, "session_name")
+			_, err = database.getWriter().ExecContext(t.Context(), drops+older)
 			require.NoError(t, err)
 			renamed := "Older writer report · run"
 			require.NoError(t, database.RefreshSessionName(t.Context(), "grouped", &renamed))
@@ -382,6 +389,55 @@ func TestUsageTopSessionsGroupRenameAfterWarmup(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, got, 1)
 			assert.Equal(t, "Older writer report", got[0].GroupLabel)
+		})
+	}
+}
+
+func TestUsageTopSessionsGroupAgentMatchesAcrossReaders(t *testing.T) {
+	database := testDB(t)
+	for i := range 8 {
+		id := fmt.Sprintf("member-%d", i)
+		insertSession(t, database, id, "project", func(s *Session) {
+			s.Agent = fmt.Sprintf("agent-%d", i)
+			s.StartedAt = new("2026-08-10T23:30:00Z")
+		})
+		usage := fmt.Sprintf(`{"input_tokens":%d}`, 100+i)
+		require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T23:30:00Z", Model: "journal-model", TokenUsage: []byte(usage)}}))
+		_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET group_key='daily:job' WHERE id=?`, id)
+		require.NoError(t, err)
+	}
+	warm := UsageFilter{Timezone: "UTC", TopSessionsByGroup: true}
+	warmJournaledUsage(t, database, warm)
+	fallback := warm
+	fallback.ActiveSince = "2026-08-01T00:00:00Z"
+	for _, tc := range []struct {
+		sort, agent string
+	}{
+		{"tokens", "agent-7"},
+		// Every member costs zero, so the lowest session ID ranks first.
+		{"cost", "agent-0"},
+	} {
+		t.Run(tc.sort, func(t *testing.T) {
+			warm, fallback := warm, fallback
+			warm.TopSessionsSort, fallback.TopSessionsSort = tc.sort, tc.sort
+			_, facts, _, err := database.queryUsageRollups(t.Context(), warm, usageQueryKindTopSessions, false, 1)
+			require.NoError(t, err)
+			require.NotNil(t, facts.TopSessions, "the warm read ranks in SQL")
+			got, err := database.GetTopSessionsByCost(t.Context(), warm, 1)
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.agent, got[0].Agent)
+
+			_, facts, _, err = database.queryUsageRollups(t.Context(), fallback, usageQueryKindToken, false, 1)
+			require.NoError(t, err)
+			require.Nil(t, facts.TopSessions, "an ActiveSince read folds in Go")
+			// The fold's map order changes per read, so one read could pass by chance.
+			for range 5 {
+				got, err := database.GetTopSessionsByCost(t.Context(), fallback, 1)
+				require.NoError(t, err)
+				require.Len(t, got, 1)
+				assert.Equal(t, tc.agent, got[0].Agent)
+			}
 		})
 	}
 }
