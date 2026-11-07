@@ -93,9 +93,7 @@
 
   $effect(() => {
     if (!usage.hasNewData || !refreshReady || usage.isQuerying) return;
-    const timer = setTimeout(() => {
-      if (!usage.isQuerying) refreshUsage();
-    }, Math.max(0, usage.lastFetchStartedAt + 60_000 - performance.now()));
+    const timer = setTimeout(refreshUsage, Math.max(0, usage.lastFetchStartedAt + 60_000 - performance.now()));
     return () => clearTimeout(timer);
   });
 
