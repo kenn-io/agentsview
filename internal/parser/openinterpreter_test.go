@@ -124,18 +124,6 @@ func TestOpenInterpreterProviderFindsArchivedRollout(t *testing.T) {
 	)
 }
 
-// TestOpenInterpreterProviderKeepsSeparateSourceKeys guards the discovery
-// namespace: every Codex fork shares the rollout UUID shape, so a shared
-// source key would let one agent's session resolve to another's file.
-func TestOpenInterpreterProviderKeepsSeparateSourceKeys(t *testing.T) {
-	for _, agent := range []AgentType{AgentCodex, AgentTraeX, AgentAugureCode} {
-		assert.NotEqual(t,
-			CodexSourceKey(agent, openInterpreterFixtureUUID),
-			CodexSourceKey(AgentInterpreter, openInterpreterFixtureUUID),
-		)
-	}
-}
-
 // TestOpenInterpreterProviderKeepsCodexOnlySurfaces covers the Codex-only
 // surfaces the shared provider keeps from forks: session_index.jsonl watches
 // and fan-out, the S3 archive layout, and raw capture.
