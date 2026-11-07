@@ -8,19 +8,13 @@ runs:
     - name: Prune unused cache entries
       if: env.GO_CACHE_HIT != 'true' && env.GO_CACHE_TRACKING != ''
       shell: bash
+      env:
+        CACHE_ACTION_PATH: ${{ github.action_path }}
       run: |
-        paths=()
-        while IFS= read -r path; do
-          path="${path/#\~/$HOME}"
-          if [ "$path" = "$(go env GOMODCACHE)" ]; then continue; fi
-          if [ "$RUNNER_OS" = 'Windows' ]; then path="$(cygpath -u "$path")"; fi
-          if [ -d "$path" ]; then paths+=("$path"); fi
-        done <<< "$GO_CACHE_PATHS"
+        source "$CACHE_ACTION_PATH/../go-cache-restore/select-paths.sh"
         if [ "${#paths[@]}" -eq 0 ]; then exit 0; fi
         keep="$(mktemp "$RUNNER_TEMP/go-cache-keep.XXXXXX")"
-        trap 'rm -f -- "$keep"' EXIT
         # Validate every fresh record before deleting anything, including in other paths.
-        find "${paths[@]}" -mindepth 2 -maxdepth 2 -type f -name '*-a' -newer "$GO_CACHE_TRACKING" -empty -exec false {} +
         find "${paths[@]}" -mindepth 2 -maxdepth 2 -type f -name '*-a' -newer "$GO_CACHE_TRACKING" -exec cat {} + |
           awk '$1 != "v1" || length($3) != 64 || $3 ~ /[^0-9a-f]/ { bad=1 } { print $3 "-d" } END { exit bad }' > "$keep"
         find "${paths[@]}" -mindepth 2 -maxdepth 2 \( -type f -o -type d \) \( -name '*-a' -o -name '*-d' \) ! -newer "$GO_CACHE_TRACKING" -print |

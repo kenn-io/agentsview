@@ -64,6 +64,7 @@ runs:
       shell: bash
       env:
         INCLUDE_GO_CACHE: ${{ inputs.include-go-cache }}
+        CACHE_ACTION_PATH: ${{ github.action_path }}
       run: |
         if [ "$INCLUDE_GO_CACHE" = 'true' ]; then
           modules="$(go env GOMODCACHE)"
@@ -84,13 +85,9 @@ runs:
         else
           aged="$(date -d '2 hours ago' +%Y%m%d%H%M.%S)"
         fi
-        while IFS= read -r path; do
-          path="${path/#\~/$HOME}"
-          if [ "$path" = "$(go env GOMODCACHE)" ]; then continue; fi
-          if [ "$RUNNER_OS" = 'Windows' ]; then path="$(cygpath -u "$path")"; fi
-          if [ -d "$path" ]; then
-            find "$path" -mindepth 2 -maxdepth 2 \( -type f -o -type d \) \( -name '*-a' -o -name '*-d' \) -exec touch -t "$aged" {} +
-          fi
-        done <<< "$GO_CACHE_PATHS"
+        source "$CACHE_ACTION_PATH/select-paths.sh"
+        for path in "${paths[@]}"; do
+          find "$path" -mindepth 2 -maxdepth 2 \( -type f -o -type d \) \( -name '*-a' -o -name '*-d' \) -exec touch -t "$aged" {} +
+        done
         marker="$(mktemp "$RUNNER_TEMP/go-cache-tracking.XXXXXX")"
         echo "GO_CACHE_TRACKING=$marker" >> "$GITHUB_ENV"
