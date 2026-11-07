@@ -338,7 +338,10 @@ func (te *testEnv) writeSessionFile(
 }
 
 func waitForPort(port int, timeout time.Duration) error {
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	return waitForAddress(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), timeout)
+}
+
+func waitForAddress(addr string, timeout time.Duration) error {
 	dialer := &net.Dialer{Timeout: time.Second}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -511,6 +514,60 @@ func TestListenAndServeUsesAvailablePortOutsideFixedRange(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/api/v1/version", nil)
 	require.NoError(t, err)
 	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestListenAndServeAcceptsIPv6Loopback(t *testing.T) {
+	probe, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback is unavailable: %v", err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	require.NoError(t, probe.Close())
+
+	te := setup(t, func(cfg *config.Config) {
+		cfg.Host = "::1"
+		cfg.Port = port
+	})
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- te.srv.ListenAndServe()
+	}()
+
+	addr := net.JoinHostPort("::1", strconv.Itoa(port))
+	if err := waitForAddress(addr, 2*time.Second); err != nil {
+		select {
+		case serveErr := <-serveErrCh:
+			require.NoError(t, serveErr)
+		default:
+		}
+		require.NoError(t, err)
+	}
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(
+			context.WithoutCancel(t.Context()), 5*time.Second,
+		)
+		defer cancel()
+		require.NoError(t, te.srv.Shutdown(ctx))
+		select {
+		case serveErr := <-serveErrCh:
+			require.ErrorIs(t, serveErr, http.ErrServerClosed)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "timed out waiting for IPv6 server shutdown")
+		}
+	})
+
+	baseURL := "http://[::1]:" + strconv.Itoa(port)
+	req, err := http.NewRequestWithContext(
+		t.Context(), http.MethodGet, baseURL+"/api/v1/version", nil,
+	)
+	require.NoError(t, err)
+	transport := &http.Transport{Proxy: nil}
+	t.Cleanup(transport.CloseIdleConnections)
+	resp, err := (&http.Client{Transport: transport}).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

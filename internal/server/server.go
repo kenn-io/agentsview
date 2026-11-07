@@ -1452,7 +1452,7 @@ func localInterfaceIPs() map[string]bool {
 
 // ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe() error {
-	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
+	addr := net.JoinHostPort(s.cfg.Host, strconv.Itoa(s.cfg.Port))
 	listenCtx := context.Background()
 	if s.baseCtx != nil {
 		listenCtx = s.baseCtx
