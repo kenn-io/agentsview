@@ -3215,7 +3215,6 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 			_, err = toml.DecodeFile(path, &saved)
 			require.NoError(t, err)
 			assert.Equal(t, expected, saved)
-
 		})
 	}
 }
