@@ -36,7 +36,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 	})
 	for _, recipe := range []string{"fresh", "automatic", "nomic", "changed-provider"} {
 		t.Run(recipe, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
+			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
@@ -235,7 +235,7 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	t.Cleanup(func() {
 		inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint
 	})
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
 	cfg, err := config.LoadReadOnly()
@@ -309,8 +309,7 @@ func TestLiveEmbeddingsSetupProgress(t *testing.T) {
 	t.Cleanup(func() {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 	})
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", t.TempDir())
+	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
@@ -357,8 +356,7 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 	for _, failure := range []string{"already enabled", "configured provider", "invalid endpoint", "invalid TOML", "model inspection", "config read"} {
 		t.Run(failure, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("USERPROFILE", t.TempDir())
+			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			cfg, err := config.LoadReadOnly()
 			require.NoError(t, err)
@@ -463,8 +461,7 @@ func TestEmbeddingsSetupStatusIdentifiesProviders(t *testing.T) {
 }
 
 func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", t.TempDir())
+	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
