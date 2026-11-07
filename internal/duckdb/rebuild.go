@@ -164,7 +164,7 @@ func publishHeldMirror(
 	}
 	result, pushErr := s.runIncrementalPush(ctx, opts, probe, onProgress)
 	if result.Errors > 0 {
-		pushErr = errors.Join(pushErr, fmt.Errorf("duckdb publication failed with %d session push errors", result.Errors))
+		pushErr = errors.Join(pushErr, fmt.Errorf("%d sessions failed to push", result.Errors))
 	}
 	if pushErr == nil {
 		_, pushErr = s.duck.ExecContext(ctx, "CHECKPOINT")
@@ -174,7 +174,7 @@ func publishHeldMirror(
 	}
 	if _, err := os.Stat(spare + ".wal"); !errors.Is(err, fs.ErrNotExist) {
 		if err == nil {
-			err = errors.New("duckdb standby WAL remains after checkpoint")
+			err = errors.New("updated mirror still has unsaved changes; replacement canceled")
 		}
 		return result, err
 	}
