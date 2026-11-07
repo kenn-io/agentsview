@@ -158,6 +158,18 @@ func Push(
 		log.Printf("duckdbsync: sweeping stale rebuild temp files: %v", err)
 	}
 	scope := db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects)
+	probe, err := ProbeMirror(ctx, path)
+	if err != nil {
+		return storage.MirrorPushResult{}, err
+	}
+	if probe.LockConflict {
+		return storage.MirrorPushResult{}, fmt.Errorf(
+			"another process holds the mirror %s read-write (%s); wait for "+
+				"the running push to finish, or restart the serving process "+
+				"if it predates the read-only serve change",
+			path, probe.ShapeIssue,
+		)
+	}
 	localDeletionRevision, err := local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
 		return storage.MirrorPushResult{}, err
@@ -170,14 +182,17 @@ func Push(
 	if err != nil {
 		return storage.MirrorPushResult{}, fmt.Errorf("reading local archive id: %w", err)
 	}
-	var probe MirrorProbe
-	reason := ""
+
+	reason := rebuildReason(
+		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
+		machine, localDatabaseID, localArchiveID,
+	)
 	run, err := newRebuildRun(ctx, local, machine, opts, reason)
 	if err != nil {
 		return storage.MirrorPushResult{}, err
 	}
-	// The lock spans probing the live mirror through publication, so another
-	// push cannot replace the file after its scope and provenance are checked.
+	// The lock spans reading the rebuild file through the swap, so two pushes
+	// never build, validate, or swap the same file.
 	var lock *flock.Flock
 	defer func() {
 		if lock != nil {
@@ -188,37 +203,18 @@ func Push(
 		run.Reason = pending.Reason
 		reason = "resuming an unfinished rebuild, started because: " + pending.Reason
 	}
-	claim := func() error {
+	claim := func(required bool) error {
 		claimed, pending, restarted, err := claimRebuild(ctx, path, run, full)
 		if err != nil {
 			return err
 		}
 		lock = claimed
-		probe, err = ProbeMirror(ctx, path)
-		if err != nil {
-			return err
-		}
-		if probe.LockConflict {
-			return fmt.Errorf(
-				"another process holds the mirror %s read-write (%s); wait for "+
-					"the running push to finish, or restart the serving process "+
-					"if it predates the read-only serve change",
-				path, probe.ShapeIssue,
-			)
-		}
-
-		reason = rebuildReason(
-			probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
-			machine, localDatabaseID, localArchiveID,
-		)
-
-		run.Reason = reason
 		if restarted {
 			reason += "; discarded an unfinished rebuild"
 		}
 		switch {
 		case pending == nil:
-		case pending.Errored && reason == "":
+		case pending.Errored && !required:
 			err = removeRebuildFile(rebuildFilePath(path))
 		default:
 			// An unfinished rebuild resumes even when the mirror would now
@@ -227,8 +223,14 @@ func Push(
 		}
 		return err
 	}
-	if err := claim(); err != nil {
-		return rebuildClaimFailed(path, opts, err)
+	leftover, err := rebuildFileExists(path)
+	if err != nil {
+		return storage.MirrorPushResult{}, err
+	}
+	if reason != "" || leftover {
+		if err := claim(reason != ""); err != nil {
+			return rebuildClaimFailed(path, opts, err)
+		}
 	}
 	if reason == "" {
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
@@ -238,6 +240,12 @@ func Push(
 		}
 		if !isMirrorHeldError(err) {
 			return result, err
+		}
+		if lock == nil {
+			lock, _, _, err = claimRebuild(ctx, path, run, false)
+			if err != nil {
+				return rebuildClaimFailed(path, opts, err)
+			}
 		}
 		result, err = publishHeldMirror(ctx, path, probe, local, machine, opts, onProgress)
 		if err == nil {
