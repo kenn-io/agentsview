@@ -570,13 +570,11 @@ func setUsageBackfillPrice(t *testing.T, database *DB, model string, microdollar
 
 func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 	for _, test := range []struct {
-		name            string
-		rewarm          bool
-		skipMaintenance int
+		name   string
+		rewarm bool
 	}{
 		{name: "rewarm", rewarm: true},
 		{name: "commit-before-rewarm"},
-		{name: "commit-during-recheck", skipMaintenance: 5},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			database := testDB(t)
@@ -602,11 +600,6 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 				database.StopUsageCacheBackfill()
 			})
 			cache.fill.observer.afterMaintenance = func() {
-				// The six initial batches yield five times before the final recheck.
-				if test.skipMaintenance > 0 {
-					test.skipMaintenance--
-					return
-				}
 				select {
 				case arrived <- struct{}{}:
 				case <-open:

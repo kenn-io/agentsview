@@ -100,9 +100,11 @@ Codex data-loss bug or a merge blocker.
   stored catalog digest changed, including a partial refresh that also reports
   an error. It starts the same coverage pass, which rebuilds only rollups whose
   pricing lookups now resolve differently. A pass resolves prices from the
-  catalog it captured at start. Each batch, including the final rollup recheck,
-  checks the committed pricing revision. A change stops the pass and queues a
-  new pass with the current catalog, even before re-warm is called.
+  catalog it captured at start. The pass checks the committed pricing revision
+  before each batch and once before its final recheck and completion work. A
+  change stops the pass and queues a new pass with the current catalog, even
+  before re-warm is called. The final recheck uses one rollup call across the
+  whole snapshot to repair installs invalidated by later batches.
 - Sweep the archive deletion journal before and after the pass and between
   install batches. Queries also inner-join current archive sessions before
   ranking, so tombstone processing is hygiene rather than a correctness
