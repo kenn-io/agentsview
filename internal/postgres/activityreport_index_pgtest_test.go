@@ -66,7 +66,7 @@ func TestPGActivityReportTerminalLookupIndex(t *testing.T) {
 			require.NoError(t, tx.Rollback())
 
 			_, ids, err := store.activityReportSessions(t.Context(), db.AnalyticsFilter{},
-				"2026-06-16T00:00:00Z", "2026-06-17T00:00:00Z")
+				"2026-06-16T00:00:00Z", "2026-06-17T00:00:00Z", nil)
 			require.NoError(t, err)
 			assert.Equal(t, []string{"completed", "errored"}, ids)
 		})

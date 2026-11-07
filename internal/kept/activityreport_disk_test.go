@@ -1,4 +1,4 @@
-package clickhouse
+package kept
 
 import (
 	"os"
@@ -12,7 +12,7 @@ import (
 // The sweep removes reports whose last open is more than 30 days old and
 // temporary files an interrupted write left over an hour ago. It keeps
 // newer reports and writes still in progress.
-func TestActivityReportSweepRemovesOnlyStaleFiles(t *testing.T) {
+func TestKeptReportSweepRemovesOnlyStaleFiles(t *testing.T) {
 	d := activityReportDisk{dir: t.TempDir()}
 	now := time.Now()
 	files := map[string]time.Duration{

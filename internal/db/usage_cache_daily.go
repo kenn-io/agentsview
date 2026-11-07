@@ -26,8 +26,12 @@ type usageDailyFactsSessionCost struct {
 func (db *DB) GetDailyUsage(
 	ctx context.Context, filter UsageFilter,
 ) (DailyUsageResult, error) {
+	kind := usageQueryKindToken
+	if filter.ActiveSince == "" && filter.Termination == "" {
+		kind = usageQueryKindDayTotals
+	}
 	_, facts, resolver, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindToken, true)
+		ctx, filter, kind, true)
 	if err != nil {
 		return DailyUsageResult{}, err
 	}
@@ -48,9 +52,9 @@ func (snapshot *usageQuerySnapshot) dropDeleted(
 	}
 	versions := snapshot.Versions[:0]
 	for _, version := range snapshot.Versions {
-		if !results[version.SessionID].Deleted {
+		if len(versions) < len(sessions) && sessions[len(versions)].ID == version.SessionID {
 			versions = append(versions, version)
-		} else {
+		} else if results[version.SessionID].Deleted {
 			delete(results, version.SessionID)
 		}
 	}
@@ -182,9 +186,7 @@ func recordUsageFactsPricing(
 		group.Model, group.PricedModel,
 		timestamp,
 	)
-	for range group.ReportedCount {
-		resolver.RecordResolvedReported(group.Model, group.PricedModel, baseLookup)
-	}
+	resolver.RecordResolvedCounts(group.Model, group.PricedModel, baseLookup, group.ReportedCount, 0, 0, nil)
 	requestCount := group.ComputedRequestCount
 	if group.BandThreshold == nil {
 		requestCount = group.BaseRequestCount
@@ -197,18 +199,7 @@ func recordUsageFactsPricing(
 	if err != nil {
 		return fmt.Errorf("resolving billed pricing for model %q: %w", group.Model, err)
 	}
-	for range group.ComputedAggregateCount {
-		resolver.RecordResolvedComputedAggregate(
-			group.Model, group.PricedModel, computedLookup)
-	}
-	inputTokens := 0
-	if group.BandThreshold != nil {
-		inputTokens = *group.BandThreshold + 1
-	}
-	for range requestCount {
-		resolver.RecordResolvedComputedRequest(
-			group.Model, group.PricedModel, computedLookup, inputTokens, 0, 0)
-	}
+	resolver.RecordResolvedCounts(group.Model, group.PricedModel, computedLookup, 0, requestCount, group.ComputedAggregateCount, group.BandThreshold)
 	return nil
 }
 

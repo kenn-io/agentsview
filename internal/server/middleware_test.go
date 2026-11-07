@@ -5,13 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -107,22 +107,6 @@ func TestContentTypeWrapper(t *testing.T) {
 func TestMiddlewareTimeout(t *testing.T) {
 	t.Parallel()
 
-	srv := testServer(
-		t, 10*time.Millisecond, //nolint:kennlint // deadlinetest: the delayed wrapped handlers must return the timeout response
-		withHandlerDelay(100*time.Millisecond),
-	)
-	// Use a real listener to discover the bound port, then
-	// rebuild Handler() with the correct port in the Host
-	// allowlist.
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := ln.Addr().(*net.TCPAddr).Port
-	srv.SetPort(port)
-	ts := httptest.NewUnstartedServer(srv.Handler())
-	ts.Listener = ln
-	ts.Start()
-	t.Cleanup(ts.Close)
-
 	tests := []struct {
 		name        string
 		path        string
@@ -141,19 +125,28 @@ func TestMiddlewareTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+tt.path, nil)
-			require.NoError(t, err)
-			resp, err := ts.Client().Do(req)
-			require.NoError(t, err)
-			defer resp.Body.Close()
+			synctest.Test(t, func(t *testing.T) {
+				srv := testServer(t, 10*time.Millisecond,
+					withHandlerDelay(100*time.Millisecond))
+				// The in-memory network lets the fake clock expire the write
+				// timeout before the delayed handler can finish.
+				ts := httptest.NewTestServer(t, srv.Handler())
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+tt.path, nil)
+				require.NoError(t, err)
+				resp, err := ts.Client().Do(req)
+				require.NoError(t, err)
+				defer resp.Body.Close()
 
-			if tt.wantTimeout {
-				assertTimeoutResponse(t, resp, tt.wantDetail...)
-			} else {
-				assert.False(t, isTimeoutResponse(t, resp),
-					"%s: unexpected timeout for unwrapped route", tt.path)
-				assert.Equal(t, tt.wantStatus, resp.StatusCode, tt.path)
-			}
+				if tt.wantTimeout {
+					// Let the timed-out handler finish before the bubble exits.
+					defer time.Sleep(100 * time.Millisecond)
+					assertTimeoutResponse(t, resp, tt.wantDetail...)
+				} else {
+					assert.False(t, isTimeoutResponse(t, resp),
+						"%s: unexpected timeout for unwrapped route", tt.path)
+					assert.Equal(t, tt.wantStatus, resp.StatusCode, tt.path)
+				}
+			})
 		})
 	}
 }

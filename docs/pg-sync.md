@@ -13,6 +13,19 @@ multi-machine setups.
 The PostgreSQL usage optimization baseline and its architecture boundary are
 recorded in `docs/internal/pg-usage-native-optimization.md`.
 
+`pg push` and `pg serve` install a usage change journal that records changed
+sessions and advances a revision for usage, pricing, and project identity
+writes. In addition to normal table access, installation requires `CREATE` on
+the schema and `TRIGGER` on the watched tables. Installation takes a
+`SHARE ROW EXCLUSIVE` lock on those tables until it commits: reads continue, and
+writes wait. CockroachDB skips this journal.
+`pg serve` roles granted access after installation also need `SELECT` on
+`usage_session_changes`.
+
+On `pg serve`, ended Activity ranges are reused in memory until a push touches
+their sessions or range, pricing changes, or project identity changes.
+Hosted PostgreSQL and archives without the journal rebuild every time.
+
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
 the session browser, analytics dashboard, search, and, as of 0.23.0, the Usage
@@ -27,6 +40,12 @@ dashboard as well.
     archive. Embedding consumption remains future work. Ordinary `pg push` and
     read-only PostgreSQL serving keep their existing behavior; `pg push` refuses
     a schema that has been adopted for hosted raw processing.
+
+Commit lookups return the copied links and prompts.
+The first push after upgrading is a full push to copy existing commit links.
+A deleted session remains visible as a missing record. Project filters use the
+project saved with its links in SQLite, including after a rebuild or a deletion
+before the first push.
 
 ## Hosted raw processing
 

@@ -36,7 +36,7 @@ func (s *Store) loadAnalyticsSessions(
 		return nil, err
 	}
 	memoKey := analyticsSessionMemoKey(where, args)
-	if cached, ok := s.analyticsSessionRows.get(memoKey, fingerprint); ok {
+	if cached, ok := s.analyticsSessionRows.Get(memoKey, fingerprint); ok {
 		return slices.Clone(cached), nil
 	}
 	// The panels of one page ask at once; one read answers them all. The
@@ -46,7 +46,7 @@ func (s *Store) loadAnalyticsSessions(
 		if err != nil {
 			return nil, err
 		}
-		s.analyticsSessionRows.put(memoKey, fingerprint, out)
+		s.analyticsSessionRows.Put(memoKey, fingerprint, out)
 		return out, nil
 	})
 	select {

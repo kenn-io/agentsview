@@ -28,7 +28,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cache.temporary)
 	assert.Equal(t, filepath.Join(filepath.Dir(archivePath),
-		"usage-cache-v16-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
+		"usage-cache-v"+strconv.Itoa(usageCacheFormatVersion)+"-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
 
 	info, err := os.Stat(cache.path)
 	require.NoError(t, err)
@@ -192,6 +192,30 @@ func TestUsageCacheProbeFailsClosed(t *testing.T) {
 			assert.Equal(t, before, after, "foreign or unverifiable file changed")
 		})
 	}
+}
+
+func TestUsageCacheGenerationReplacesVersion17CacheWithoutDayTotals(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "sessions.db")
+	// Main builds wrote version 17 caches before usage_day_totals existed.
+	version17Path := usageCacheGenerationPath(archivePath, 17, "database-id-one")
+	seedRecognizedUsageCacheWithRetirementProtocol(
+		t, version17Path, 17, "database-id-one")
+
+	manager := newUsageCacheManager(archivePath)
+	cache, err := manager.Generation(t.Context(), "database-id-one")
+	require.NoError(t, err)
+	require.False(t, cache.temporary,
+		"an earlier version 17 cache must not force a temporary cache")
+	assert.NoFileExists(t, version17Path)
+	require.NoError(t, manager.Close())
+
+	reopened := newUsageCacheManager(archivePath)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	again, err := reopened.Generation(t.Context(), "database-id-one")
+	require.NoError(t, err)
+	assert.False(t, again.temporary)
+	assert.Equal(t, cache.path, again.path)
 }
 
 func TestUsageCacheGenerationPreservesRecognizedIncompleteCache(t *testing.T) {

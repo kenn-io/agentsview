@@ -203,7 +203,7 @@ func (c *schemaProbeConn) QueryContext(
 		c.state.mu.Lock()
 		c.state.informationQueries++
 		c.state.mu.Unlock()
-		if strings.Contains(normalized, "select exists") {
+		if strings.Contains(normalized, "select exists") || strings.Contains(normalized, "data_type = 'bigint'") {
 			return &schemaProbeRows{
 				columns: []string{"exists"},
 				values:  [][]driver.Value{{true}},
@@ -389,7 +389,7 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 
 	require.NoError(t, EnsureSchema(t.Context(), db, "agentsview"))
 
-	assert.Equal(t, 1, state.informationQueryCount(),
+	assert.Equal(t, 2, state.informationQueryCount(),
 		"information_schema.columns queries")
 }
 
@@ -588,6 +588,7 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
+		"commit_links":                                    true,
 		"model_pricing":                                   true,
 		"model_pricing_bands":                             true,
 		"genai_pricing":                                   true,
@@ -636,6 +637,7 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
+		"commit_links":                                    true,
 		"model_pricing":                                   true,
 		"model_pricing_bands":                             true,
 		"genai_pricing":                                   true,
@@ -952,6 +954,7 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 		},
 	})
 	state.existingTables = map[string]bool{
+		"commit_links":        true,
 		"model_pricing":       true,
 		"cursor_usage_events": true,
 	}
@@ -989,6 +992,7 @@ func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
 	// absent: the read probe passes yet a push would fail on model_pricing,
 	// so the fast path must fall back to EnsureSchema.
 	state.existingTables = map[string]bool{
+		"commit_links":        true,
 		"cursor_usage_events": true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
@@ -1018,6 +1022,7 @@ func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 	// fast path must fall back to EnsureSchema so mapping publication has
 	// a table to write into.
 	state.existingTables = map[string]bool{
+		"commit_links":                              true,
 		"model_pricing":                             true,
 		"model_pricing_bands":                       true,
 		"genai_pricing":                             true,
@@ -1056,6 +1061,7 @@ func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {
 	// read probe passes yet ON CONFLICT DO NOTHING would not dedup cursor
 	// usage rows. The fast path must fall back to EnsureSchema.
 	state.existingTables = map[string]bool{
+		"commit_links":        true,
 		"model_pricing":       true,
 		"model_pricing_bands": true,
 		"genai_pricing":       true,
@@ -1191,14 +1197,14 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 
 	require.NoError(t, EnsureSchema(t.Context(), db, "agentsview"))
 
-	// Six tables have missing columns (sessions: termination_status;
+	// Seven tables have missing columns (sessions: termination_status;
 	// messages: source_parent_uuid, is_sidechain, is_compact_boundary,
-	// thinking_text; usage_events: provider_id;
+	// thinking_text; usage_events: provider_id; cursor_usage_events: agent;
 	// source_project_identity_observations: repository/worktree/checkout/remote
 	// context; excluded_sessions: include_codex_pages; tool_calls: the tool
 	// observation columns). Per-table batching means one ALTER each.
 	// Already-present raw job columns are probed without issuing a redundant ALTER.
-	assert.Equal(t, 6, state.alterTableExecCount(), "ALTER TABLE execs")
+	assert.Equal(t, 7, state.alterTableExecCount(), "ALTER TABLE execs")
 	assert.Contains(t, state.alterTableSQL(), "ADD COLUMN IF NOT EXISTS observed_outcome TEXT, ADD COLUMN IF NOT EXISTS observed_repeat TEXT, ADD COLUMN IF NOT EXISTS sequence_ending TEXT")
 }
 

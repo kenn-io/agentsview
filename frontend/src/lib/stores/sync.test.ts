@@ -98,6 +98,33 @@ function mockResyncFailure(error: Error): void {
   });
 }
 
+describe("hidden status polling", () => {
+  it("leaves a hidden tab quiet and polls again when visible", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const load = vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    try {
+      sync.startPolling();
+      sync.startPolling();
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+      expect(load).not.toHaveBeenCalled();
+      visibility.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(load).toHaveBeenCalledOnce();
+      sync.stopPolling();
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(load).toHaveBeenCalledOnce();
+    } finally {
+      sync.stopPolling();
+      visibility.mockRestore();
+      load.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("session watch visibility", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -726,6 +753,7 @@ describe("SyncStore.remoteUnreachable", () => {
     s.backendDegraded = false;
     s.backendDegradedMessage = null;
     s.statusHydrated = false;
+    s.syncPending = false;
   });
 
   it("flags unreachable when a remote load fails", async () => {

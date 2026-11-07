@@ -22,6 +22,10 @@ The archive writer caches up to 64 prepared SQL statements per connection to
 avoid compiling repeated import and project-attribution queries. The cache stays
 in memory and closes with its connection. Reader connections do not use it.
 
+The startup worker snapshots freshness for digest-capable providers while it
+holds the archive write lock, before the daemon opens the archive; later passes
+query live state.
+
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned
 sessions from the old database, and swap the files atomically. Preserve sessions
@@ -696,20 +700,24 @@ The usage cache filename is derived from its format version and the archive
 `database_id`. A format or database-ID change selects a new generation; it does
 not migrate or rewrite the archive. Facts contain only message- and
 usage-event-derived data. Aggregate fingerprints additionally bake the exact
-session `agent` and `started_at`, because those fields affect deduplication and
-day bucketing. All other session metadata and filters come from the archive read
-snapshot. Do not widen or narrow this live/baked boundary implicitly.
+session `agent`, `started_at`, `project`, `machine`, `git_branch`,
+`is_automated`, and `user_message_count`. Those fields determine deduplication,
+day bucketing, and the filter dimensions of stored day totals. Journaled changes
+rebuild the session's rows and totals. Warm daily reads filter totals in SQL and
+read per-session rows for authoritative costs and dedup exceptions. Termination
+and `active_since` filters still use the archive snapshot. Do not widen or
+narrow this live/baked boundary implicitly.
 
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
-change. Catalog and user-pricing changes are covered per session instead: each
-rollup install records the distinct
+change. Each rollup install records the distinct
 `(provider, reported model, canonical model)` lookups its daily rows used, and a
-read re-resolves only those against the current catalog. A price change
-therefore rebuilds just the sessions whose lookups resolve differently, while
-`updated_at`-only refreshes rebuild nothing. Do not add a write-only
-extractor-version metadata key.
+full-path read re-resolves only those against the current catalog. A catalog
+digest change sends reads through that path until a coverage pass claims the
+timezone with the new digest. The pass rebuilds only sessions whose lookups
+resolve differently; `updated_at`-only refreshes rebuild nothing. Do not add a
+write-only extractor-version metadata key.
 
 Deduplication groups are classified per group at rollup build time. A group is
 finalized into daily rows only when its resolution provably cannot vary with the
@@ -749,12 +757,20 @@ incompatible, use the same schema and query path in a process-owned temporary
 file and warn that the cache will rebuild after restart.
 
 Usage reads are exact. A cold aggregate request fills facts, builds the required
-timezone rollups, then reads them in one pinned cache transaction. Verify every
-candidate session's facts fingerprint, exact baked metadata, per-session pricing
-identity, resolved rate hashes, and Cursor high-water mark. A result is no older
-than the archive snapshot captured when the read began, and may be newer for a
-session whose facts were refilled meanwhile. A session confirmed deleted during
-fill is dropped from the request. `cached_at` is diagnostic only.
+timezone rollups, then reads them in one pinned cache transaction. Without a
+trusted timezone claim, verify every candidate session's facts fingerprint,
+exact baked metadata, per-session pricing identity, resolved rate hashes, and
+Cursor high-water mark. With a trusted claim, refresh journaled sessions and
+invalidated installs, and verify coverage and concurrent installs in the pinned
+cache transaction. Covered daily totals read ordinary usage from day totals and
+load only window exception owners and matching authoritative sessions. Other
+window reads discover sessions through date indexes. A timezone without a claim
+starts a coverage pass when backfill is enabled. After a conflicting install,
+daily totals retry once with a fresh journal capture; further conflicts and
+other reads use the full path. A result is no older than the archive snapshot
+captured when the read began, and may be newer for a session whose facts were
+refilled meanwhile. A session confirmed deleted during fill is dropped from the
+request. `cached_at` is diagnostic only.
 
 The layers are kept apart so a live archive cannot veto a read. A fill reads one
 session's facts and that session's source version inside a single archive read
@@ -817,9 +833,15 @@ SQLite keeps paired candidates in memory per session and range start, with
 separate limits of 200,000 candidates and 4,096 entries. A full cache measured
 64.3 MiB of resident Go heap on Windows amd64, using the post-GC
 `runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
-with 36-byte session IDs, 24-byte models, and append-grown slices. Empty
-sessions use only the entry budget. A week report then a month report keep
-separate entries for their range starts. Entries run to
+with 36-byte session IDs, 24-byte models, and append-grown slices. Each entry
+also keeps the window's counted user and assistant messages. A report counts
+messages from those entries and from its own pairing scan of the other
+sessions, so it never reads messages a second time. The scan's counted messages
+live only for that build, outside the budgets. Every counted message except
+a session's last starts a candidate, so the candidate budget bounds them too.
+They add about 57 bytes each: on Linux amd64 a full cache grew from 48.3 MiB to
+59.3 MiB. Empty sessions use only the entry budget. A week report then a month
+report keep separate entries for their range starts. Entries run to
 `max(EffectiveEnd, RangeEnd)` and remain valid while the transcript revision and
 session creation time match. Reader swaps clear the entries and reject stores
 from earlier generations. Reports exceeding the entry limit reuse retained hits
@@ -838,6 +860,30 @@ The next writable SQLite open or PostgreSQL schema setup builds the index once
 for existing archives. PostgreSQL push must also detect its absence before
 taking the schema-current fast path. Creating the index scans existing tool
 results and can delay that first startup; it does not require a session resync.
+
+Activity pairing and message counts read every timestamped message of the
+selected sessions through `idx_messages_velocity` on `(session_id, ordinal,
+role, timestamp, content_length, model, is_system, source_subtype)`. The index
+covers both queries, so they never load message rows, which carry kilobytes of
+content, thinking, and dialogue text. On a 1.7 million message test archive the
+index takes 99 MiB, 10 MiB more than its older five-column form, and a busy
+week's pairing reads 41 MiB instead of 1.8 GiB. Writable opens widen the older
+form after column migrations and log that startup is waiting; the rebuild took
+about 6 s on that archive and needs no parser resync. Read-only opens use
+whichever form the archive has. PostgreSQL keeps the five-column index.
+
+The terminal candidates query names `idx_messages_assistant_model` with
+`INDEXED BY` for its prior-model lookup. The wider velocity index also covers
+that lookup, and SQLite can otherwise choose it and step back through every
+earlier message of a transcript that records no model.
+
+SQLite keeps completed Activity reports in memory with a 128 MiB estimated-size
+budget. Entries use `database_id` and `usage_pricing_revision` as their
+version. The `usage_session_changes` journal invalidates an entry when a
+selected session or an in-window Claude peer changes; a changed project
+identity map also invalidates it. Partial reports, read-only archives, and
+reports filtered by active, stale, or unclean termination status bypass this
+cache.
 
 ### PostgreSQL push preparation indexes
 
@@ -938,9 +984,15 @@ sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches are
 not indexed.
 
-Terms search uses `message_trigram_fts` in its session prefilter, which finds
-the sessions where each term occurs, under the same share rule per term. The
-exchange grouping still reads every message of those sessions.
+Terms search uses `message_trigram_fts` under the same share rule per term.
+When the index lists any term, the query starts from the messages it lists for
+the first such term. It finds each message's exchange from the nearest eligible
+user message at or before it and the next one after, checks the other terms
+against that exchange's messages, and joins bodies only for the page. When the
+index lists no term, the session prefilter finds the sessions where each term
+occurs and the query groups every message of those sessions into exchanges.
+Both queries must return the same rows;
+`TestSearchContentTermsAnchorMatchesScan` compares them.
 
 Triggers keep both tables current on message insert, delete, and edits to
 `content`, `dialogue_text`, or `thinking_text`. Bulk session deletes remove a
@@ -969,6 +1021,14 @@ artifact, recall, PostgreSQL, and DuckDB refreshes. Full resync reconciliation
 must compare the same fields so incremental and resync paths agree. A no-op
 message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
+
+### PostgreSQL usage change journal
+
+PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
+and project identity writes, including changes to source archives. Installation
+requires `CREATE` on the schema and `TRIGGER` on the watched tables in addition
+to normal table access. See [PostgreSQL Sync](../pg-sync.md) for installation
+locks. CockroachDB has no journal.
 
 ### PostgreSQL usage comparisons
 

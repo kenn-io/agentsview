@@ -5,6 +5,10 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"math/rand/v2"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +29,58 @@ func reportSessionIDs(sessions []activity.SessionRow) map[string]struct{} {
 		out[s.SessionID] = struct{}{}
 	}
 	return out
+}
+
+func TestActivityReportSecondReadLane(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:02:00Z")
+	})
+	seedMessage(t, d, "s", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "s", 2, "assistant", "2026-06-16T10:02:00Z", "opus")
+	q := dayQuery(t, "2026-06-16", "UTC")
+	assertLaneFree := func(t *testing.T) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		for range bulkReadSlots {
+			release, err := d.acquireBulkRead(ctx)
+			require.NoError(t, err)
+			defer release()
+		}
+	}
+	release, ok := (activityReportBackend{DB: d}).ActivityReportSecondRead()
+	require.True(t, ok, "a free lane allows a second read")
+	assert.Len(t, d.bulkReads.slots, 1)
+	release()
+	assertLaneFree(t)
+
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			if busy {
+				for range bulkReadSlots - 1 {
+					release, err := d.acquireBulkRead(ctx)
+					require.NoError(t, err)
+					defer release()
+				}
+			}
+			_, err := d.BuildActivityReportArtifacts(ctx, AnalyticsFilter{Timezone: "UTC"}, q, func(p activity.Progress) {
+				if busy && p.Phase == activity.ProgressLoadingSessions {
+					release, ok := (activityReportBackend{DB: d}).ActivityReportSecondRead()
+					if ok {
+						release()
+					}
+					assert.False(t, ok, "the build holds the last bulk read slot")
+				}
+			})
+			require.NoError(t, err)
+		})
+		assertLaneFree(t)
+	}
 }
 
 // dayQuery resolves a single-day "day" Query for date/tz against a fixed
@@ -207,28 +263,13 @@ func TestSQLiteActivityReportCandidatesMatchGoPairingAtScanBounds(t *testing.T) 
 	assert.Equal(t, want, got)
 }
 
-func TestSQLiteActivityReportCandidateQueryUsesExistingSessionIndex(t *testing.T) {
+func TestSQLiteActivityReportMessageQueryUsesExistingSessionIndex(t *testing.T) {
 	d := testDB(t)
-	q := dayQuery(t, "2026-06-16", "UTC")
-	rows, err := d.getReader().QueryContext(
-		t.Context(), "EXPLAIN QUERY PLAN "+activityReportCandidatesSQL,
-		`["session"]`, "2026-06-15T09:00:00Z", "2026-06-17T14:00:00Z",
-		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro(),
-	)
-	require.NoError(t, err)
-	defer rows.Close()
-	var details []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-		details = append(details, detail)
-	}
-	require.NoError(t, rows.Err())
-	plan := strings.Join(details, "\n")
-	assert.Contains(t, plan, "idx_messages_velocity")
+	plan := queryPlanOf(t, d, activityReportMessagesSQL, `["session"]`)
+	assert.Contains(t, plan, "USING COVERING INDEX idx_messages_velocity")
 	assert.NotContains(t, plan, "idx_messages_activity_timestamp")
-	assert.NotContains(t, plan, "SCAN m")
+	assert.NotContains(t, plan, "SCAN messages")
+	assert.NotContains(t, plan, "TEMP B-TREE")
 }
 
 func TestSQLiteActivityReportCandidatesMatchGoPairingWithoutModels(t *testing.T) {
@@ -271,28 +312,13 @@ func TestSQLiteActivityReportCandidatesMatchGoPairingWithoutModels(t *testing.T)
 	}, priors)
 }
 
-func TestSQLiteActivityReportPriorModelSeeksAssistantModelIndex(t *testing.T) {
+func TestSQLiteActivityReportTerminalPriorModelSeeksAssistantModelIndex(t *testing.T) {
 	d := testDB(t)
 	q := dayQuery(t, "2026-06-16", "UTC")
-	lower := q.RangeStart.Add(-5 * time.Minute).UnixMicro()
-	upper := q.EffectiveEnd.UnixMicro()
-	for _, tt := range []struct {
-		name  string
-		query string
-		args  []any
-	}{
-		{"message candidates", activityReportCandidatesSQL, []any{
-			`["session"]`, "2026-06-15T09:00:00Z", "2026-06-17T14:00:00Z", lower, upper,
-		}},
-		{"terminal candidates", activityReportTerminalCandidatesSQL, []any{
-			`["session"]`, lower, upper,
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Contains(t, queryPlanOf(t, d, tt.query, tt.args...),
-				"SEARCH prior USING INDEX idx_messages_assistant_model (session_id=? AND ordinal<?)")
-		})
-	}
+	plan := queryPlanOf(t, d, activityReportTerminalCandidatesSQL, `["session"]`,
+		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro())
+	assert.Contains(t, plan,
+		"SEARCH prior USING INDEX idx_messages_assistant_model (session_id=? AND ordinal<?)")
 }
 
 func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
@@ -393,7 +419,7 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 
 func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 	d, ids, q := seedSQLiteActivityReportCandidateBenchmark(b)
-	source := d.activityReportCandidateSQL(ids, q)
+	source := d.activityReportCandidateSQL(ids, q, nil)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -410,16 +436,16 @@ func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 func BenchmarkSQLiteActivityReportCandidateSourceWarm100K(b *testing.B) {
 	d, ids, q := seedSQLiteActivityReportCandidateBenchmark(b)
 	source := d.activityReportCandidateSource(ids, q)
-	reads := activityMemoPairingReads(b, d)
 	count := 0
 	require.NoError(b, source(b.Context(), func(activity.IntervalCandidate) error { count++; return nil }))
 	require.Equal(b, 100_000, count)
 	require.Len(b, d.activityMemo.entries, len(ids))
 	require.Equal(b, 100_000, d.activityMemo.rows)
-	require.NotEmpty(b, reads)
-	clear(reads)
-	require.NoError(b, source(b.Context(), func(activity.IntervalCandidate) error { return nil }))
-	require.Empty(b, reads)
+	rewriteActivityModels(b, d, "reread", ids...)
+	require.NoError(b, source(b.Context(), func(c activity.IntervalCandidate) error {
+		require.NotEqual(b, "reread", c.ClosingModel)
+		return nil
+	}))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -510,7 +536,7 @@ func BenchmarkSQLiteActivityReportCandidateSourceLongSession(b *testing.B) {
 		{name: "narrow-3900", q: narrow, want: 3900},
 	} {
 		b.Run(benchmark.name, func(b *testing.B) {
-			source := d.activityReportCandidateSQL([]string{"bench-long"}, benchmark.q)
+			source := d.activityReportCandidateSQL([]string{"bench-long"}, benchmark.q, nil)
 			b.ReportAllocs()
 			for range b.N {
 				count := 0
@@ -561,7 +587,7 @@ func BenchmarkSQLiteActivityReportCandidateSourceModelless(b *testing.B) {
 		Preset: "month", Date: "2026-07-01", Timezone: "UTC",
 	}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(b, err)
-	source := d.activityReportCandidateSQL([]string{"bench-modelless"}, q)
+	source := d.activityReportCandidateSQL([]string{"bench-modelless"}, q, nil)
 	b.ReportAllocs()
 	for b.Loop() {
 		count := 0
@@ -858,8 +884,8 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 	require.Len(t, candidates, 2,
 		"the working set contains the candidate and its Claude peer only")
 	assert.ElementsMatch(t, []string{"candidate", "snapshot-peer"}, []string{
-		candidates[0].row.SessionID,
-		candidates[1].row.SessionID,
+		candidates[0].scan.sessionID,
+		candidates[1].scan.sessionID,
 	})
 
 	// Returning only matching rows is insufficient: scanning unrelated usage
@@ -926,6 +952,64 @@ func TestGetSessionUsageRowsPricesCanonicalClaudeSnapshotAcrossSessions(
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 1)
 	assert.Equal(t, money.Money{Microdollars: 631}, rowSet.Rows[0].Cost)
+}
+
+// The usage sort moves each candidate once instead of many times. Its order
+// must match a stable sort on the same keys, including ties, equivalent
+// instants written differently, and unparseable timestamps.
+func TestSortActivityReportUsageCandidatesMatchesStableSort(t *testing.T) {
+	stamps := []string{
+		"2026-06-16T10:00:00Z", "2026-06-16T05:00:00-05:00",
+		"2026-06-16T10:00:00.5Z", "2026-06-16T09:59:59Z", "", "bad",
+	}
+	rng := rand.New(rand.NewPCG(1, 2))
+	candidates := make([]activityReportUsageCandidate, 500)
+	for i := range candidates {
+		ts := stamps[rng.IntN(len(stamps))]
+		parsed, err := parseTimestamp(ts)
+		candidates[i] = activityReportUsageCandidate{
+			scan: dailyUsageScanRow{
+				sessionID:   []string{"a", "b", "c"}[rng.IntN(3)],
+				ts:          ts,
+				usageSource: []string{"message", "event"}[rng.IntN(2)],
+				// providerID is not a sort key; it identifies each candidate.
+				providerID: strconv.Itoa(i),
+			},
+			ts: parsed, validTS: err == nil, ordinal: int64(rng.IntN(3)),
+		}
+	}
+	want := slices.Clone(candidates)
+	sort.SliceStable(want, func(i, j int) bool {
+		a, b := want[i], want[j]
+		if a.validTS && b.validTS {
+			if !a.ts.Equal(b.ts) {
+				return a.ts.Before(b.ts)
+			}
+		} else {
+			if a.validTS != b.validTS {
+				return a.validTS
+			}
+			if a.scan.ts != b.scan.ts {
+				return a.scan.ts < b.scan.ts
+			}
+		}
+		if a.scan.sessionID != b.scan.sessionID {
+			return a.scan.sessionID < b.scan.sessionID
+		}
+		if a.ordinal != b.ordinal {
+			return a.ordinal < b.ordinal
+		}
+		return compareDailyUsageSemantic(a.scan, b.scan) < 0
+	})
+	sortActivityReportUsageCandidates(candidates)
+	providers := func(cs []activityReportUsageCandidate) []string {
+		out := make([]string, len(cs))
+		for i, c := range cs {
+			out[i] = c.scan.providerID
+		}
+		return out
+	}
+	assert.Equal(t, providers(want), providers(candidates))
 }
 
 func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {

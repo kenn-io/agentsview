@@ -422,7 +422,7 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 	return out, nil
 }
 
-// syncCursorUsageEvents appends the cursor admin usage rows the mirror has
+// syncCursorUsageEvents appends the imported account usage rows the mirror has
 // not consumed yet, tracked by a high-water id in mirror sync_metadata
 // (cursorUsageMaxIDMetadataKey). The local table is append-only with a
 // monotonic id, so each push's work is bounded by the appended batch, not
@@ -432,7 +432,7 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 // commit and the high-water record, the overlap is re-read and deduped by
 // the mirror's unique dedup_key index (ON CONFLICT DO NOTHING).
 func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
-	// Cursor admin rows are global and unattributed, so project-filtered pushes
+	// Account rows are global and unattributed, so project-filtered pushes
 	// cannot sync them honestly.
 	if s.isFiltered() {
 		return nil
@@ -1028,6 +1028,9 @@ func (s *Sync) pushSession(
 	if err := s.replaceToolRows(ctx, exec, sess.ID, msgs); err != nil {
 		return 0, err
 	}
+	if err := s.replaceCommitLinks(ctx, exec, sess.ID); err != nil {
+		return 0, err
+	}
 	if err := s.replaceSecretFindings(ctx, exec, sess.ID); err != nil {
 		return 0, err
 	}
@@ -1043,6 +1046,7 @@ func (s *Sync) replaceSessionDependents(
 	// usage_events is deliberately absent here: replaceUsageEvents owns that
 	// delete+reinsert so the row is cleared exactly once per push.
 	for _, stmt := range []string{
+		`DELETE FROM commit_links WHERE session_id = ?`,
 		`DELETE FROM pinned_messages WHERE session_id = ?`,
 		`DELETE FROM secret_findings WHERE session_id = ?`,
 		`DELETE FROM messages WHERE session_id = ?`,
@@ -1054,6 +1058,7 @@ func (s *Sync) replaceSessionDependents(
 	return nil
 }
 
+// Keep commit_links project evidence until replaceRetainedCommitLinks refreshes it.
 func (s *Sync) deleteMirrorSession(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {
@@ -1525,23 +1530,28 @@ func (s *Sync) bulkInsertCursorUsageEvents(
 
 		var b strings.Builder
 		b.WriteString(`INSERT INTO cursor_usage_events (
-			occurred_at, model, kind,
+			agent, occurred_at, model, kind,
 			input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens,
 			charged_microdollars, cursor_token_fee_microdollars,
 			user_id, user_email, is_headless, dedup_key
 		) VALUES `)
-		args := make([]any, 0, len(batch)*13)
+		args := make([]any, 0, len(batch)*14)
 		for j, ev := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 			occurredAt, ok := parseTimestamp(ev.OccurredAt)
 			if !ok {
 				return fmt.Errorf("parsing cursor usage occurred_at %q", ev.OccurredAt)
 			}
+			agent := ev.Agent
+			if agent == "" {
+				agent = "cursor"
+			}
 			args = append(args,
+				db.SanitizeUTF8(agent),
 				occurredAt,
 				db.SanitizeUTF8(ev.Model),
 				db.SanitizeUTF8(ev.Kind),

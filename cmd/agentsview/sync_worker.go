@@ -203,6 +203,7 @@ func runSyncWorkerStartup(
 	engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 	defer engine.Close()
 	engine.RetainSubagentLinkRetry(request.LinksPending)
+	engine.SetSoleArchiveWriter(mode == "startup")
 
 	if database.NeedsResync() && mode != "startup" {
 		// A resync would CloseConnections + rename the archive file, but the

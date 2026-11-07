@@ -3,9 +3,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"sync"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 // storeExecutor keeps every query on either the owned pool or one read snapshot.
@@ -18,7 +21,18 @@ type storeExecutor interface {
 func (s *Store) runtimeState() *storeRuntime {
 	s.runtimeOnce.Do(func() {
 		if s.runtime == nil {
-			s.runtime = &storeRuntime{}
+			s.runtime = &storeRuntime{
+				activityKept: kept.Memo[pgActivityKept]{
+					MaxBytes: 128 << 20,
+					Size: func(e pgActivityKept) int64 {
+						size := activity.EstimatedArtifactBytes(e.report.Artifacts)
+						for _, id := range slices.Concat(e.candidates, e.peers, e.labels) {
+							size += int64(len(id)) + 16
+						}
+						return size
+					},
+				},
+			}
 		}
 	})
 	return s.runtime
@@ -47,11 +61,15 @@ func (s *Store) readView(tx *sql.Tx) *Store {
 	}
 }
 
+func (s *Store) supportsConcurrentReads() bool {
+	return s.readTx == nil
+}
+
 // runIndependentReads runs reads that do not depend on each other. On the
 // owned pool they run concurrently. A read snapshot shares one transaction,
 // which cannot run statements at once, so there they run in order.
 func (s *Store) runIndependentReads(reads ...func()) {
-	if s.readTx != nil {
+	if !s.supportsConcurrentReads() {
 		for _, read := range reads {
 			read()
 		}

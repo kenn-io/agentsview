@@ -25,7 +25,9 @@ import (
 // and labels. v20 adds codex-cloud plan usage and capture coverage
 // (session_plan_usage).
 // v21 adds messages.dialogue_text.
-const SchemaVersion = 21
+// v22 adds commit provenance and copied prompts.
+// v23 adds the agent identity and 64-bit counters to imported account usage rows.
+const SchemaVersion = 23
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -91,6 +93,31 @@ type columnSpec struct {
 }
 
 var mirrorTables = []tableSpec{
+	{
+		name: "commit_links",
+		create: `CREATE TABLE IF NOT EXISTS commit_links (
+ session_id TEXT NOT NULL, sha TEXT NOT NULL,
+ branch TEXT NOT NULL, subject TEXT NOT NULL, repository TEXT NOT NULL,
+ message_ordinal INTEGER NOT NULL, call_index INTEGER NOT NULL, tool_use_id TEXT NOT NULL,
+ committed_at TEXT NOT NULL, turn_ordinal INTEGER, turn_text TEXT NOT NULL,
+ project TEXT NOT NULL, retained BOOLEAN NOT NULL, PRIMARY KEY(session_id,sha))`,
+		columns: []columnSpec{
+			{name: "session_id", def: "TEXT NOT NULL"},
+			{name: "sha", def: "TEXT NOT NULL"},
+			{name: "branch", def: "TEXT NOT NULL"},
+			{name: "subject", def: "TEXT NOT NULL"},
+			{name: "repository", def: "TEXT NOT NULL"},
+			{name: "message_ordinal", def: "INTEGER NOT NULL"},
+			{name: "call_index", def: "INTEGER NOT NULL"},
+			{name: "tool_use_id", def: "TEXT NOT NULL"},
+			{name: "committed_at", def: "TEXT NOT NULL"},
+			{name: "turn_ordinal", def: "INTEGER"},
+			{name: "turn_text", def: "TEXT NOT NULL"},
+			{name: "project", def: "TEXT NOT NULL"},
+			{name: "retained", def: "BOOLEAN NOT NULL"},
+		},
+		indexes: []string{"CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha)"},
+	},
 	{
 		name: "sync_metadata",
 		create: `CREATE TABLE IF NOT EXISTS sync_metadata (
@@ -439,13 +466,14 @@ var mirrorTables = []tableSpec{
 		name: "cursor_usage_events",
 		create: `CREATE TABLE IF NOT EXISTS cursor_usage_events (
 			id BIGINT,
+			agent TEXT NOT NULL DEFAULT 'cursor',
 			occurred_at TIMESTAMP NOT NULL,
 			model TEXT NOT NULL,
 			kind TEXT NOT NULL DEFAULT '',
-			input_tokens INTEGER NOT NULL DEFAULT 0,
-			output_tokens INTEGER NOT NULL DEFAULT 0,
-			cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-			cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+			input_tokens BIGINT NOT NULL DEFAULT 0,
+			output_tokens BIGINT NOT NULL DEFAULT 0,
+			cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+			cache_read_tokens BIGINT NOT NULL DEFAULT 0,
 			charged_microdollars BIGINT NOT NULL DEFAULT 0,
 			cursor_token_fee_microdollars BIGINT NOT NULL DEFAULT 0,
 			user_id TEXT NOT NULL DEFAULT '',
@@ -455,13 +483,14 @@ var mirrorTables = []tableSpec{
 		)`,
 		columns: []columnSpec{
 			{"id", "id BIGINT"},
+			{"agent", "agent TEXT NOT NULL DEFAULT 'cursor'"},
 			{"occurred_at", "occurred_at TIMESTAMP NOT NULL"},
 			{"model", "model TEXT NOT NULL DEFAULT ''"},
 			{"kind", "kind TEXT NOT NULL DEFAULT ''"},
-			{"input_tokens", "input_tokens INTEGER NOT NULL DEFAULT 0"},
-			{"output_tokens", "output_tokens INTEGER NOT NULL DEFAULT 0"},
-			{"cache_write_tokens", "cache_write_tokens INTEGER NOT NULL DEFAULT 0"},
-			{"cache_read_tokens", "cache_read_tokens INTEGER NOT NULL DEFAULT 0"},
+			{"input_tokens", "input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"output_tokens", "output_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"cache_write_tokens", "cache_write_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"cache_read_tokens", "cache_read_tokens BIGINT NOT NULL DEFAULT 0"},
 			{"charged_microdollars", "charged_microdollars BIGINT NOT NULL DEFAULT 0"},
 			{"cursor_token_fee_microdollars", "cursor_token_fee_microdollars BIGINT NOT NULL DEFAULT 0"},
 			{"user_id", "user_id TEXT NOT NULL DEFAULT ''"},

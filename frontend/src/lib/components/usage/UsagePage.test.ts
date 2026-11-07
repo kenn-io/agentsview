@@ -4,6 +4,7 @@ import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
+import { sync } from "../../stores/sync.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { UsageSummaryResponse } from "../../api/generated/index";
@@ -146,6 +147,11 @@ afterEach(() => {
   usage.excludedProjectKeys = "";
   usage.excludedModels = "";
   usage.knownProjects = [];
+  usage.knownAgents = [];
+  usage.excludedAgents = "";
+  sessions.agents = [];
+  sessions.filters.agent = "";
+  sync.stats = null;
   settings.chartPalette = "agentsview";
   sessions.projects = [];
   yokedDates.setEnabled(false);
@@ -851,6 +857,101 @@ describe("UsagePage refresh behavior", () => {
 
     expect(loadAgents).toHaveBeenCalled();
   });
+
+  it("keeps billing-only agents available after filtering and deselects them", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(usage, "fetchAllWithResult").mockResolvedValue("ok");
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    sessions.agents = [{ name: "grok", session_count: 1 }];
+    sessions.filters.agent = "";
+    const summary = usageSummaryWithUnsupported();
+    summary.agentTotals = [
+      {
+        agent: "grok-bot",
+        inputTokens: 12,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(0),
+      },
+    ];
+    usage.summary = summary;
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>('[aria-label="Agent: All"]')!.click();
+    await flushEffects();
+    const billingOption = [
+      ...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item"),
+    ].find((button) => button.textContent?.includes("grok-bot"));
+    expect(billingOption).toBeDefined();
+    usage.summary = { ...summary, agentTotals: [] };
+    await flushEffects();
+    const retainedOption = [
+      ...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item"),
+    ].find((button) => button.textContent?.includes("grok-bot"));
+    expect(retainedOption).toBeDefined();
+    retainedOption!.click();
+    expect(usage.excludedAgents).toBe("grok-bot");
+    await unmount(component);
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>('.usage-toolbar [aria-label^="Agent:"]')!.click();
+    await flushEffects();
+    expect(
+      [...document.querySelectorAll(".kit-filter-dropdown__item")].some((button) =>
+        button.textContent?.includes("grok-bot"),
+      ),
+    ).toBe(true);
+    [...document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__bulk-btn")]
+      .find((button) => button.textContent?.trim() === "Deselect all")!
+      .click();
+    expect(usage.excludedAgents.split(",").sort()).toEqual(["grok", "grok-bot"]);
+  });
+
+  it.each(["2026-01-01T00:00:00Z", null])(
+    "includes billing history older than sessions (%s) in All",
+    async (earliestSession) => {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      vi.spyOn(usage, "fetchAll").mockResolvedValue();
+      vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+      router.route = "usage";
+      sync.stats = {
+        session_count: 0,
+        message_count: 0,
+        project_count: 0,
+        machine_count: 0,
+        earliest_session: earliestSession,
+        earliest_account_usage: "2020-06-01T12:00:00Z",
+      };
+      component = mount(UsagePage, { target: document.body });
+      await flushEffects();
+      document
+        .querySelector<HTMLButtonElement>(".usage-toolbar .kit-date-range-picker__trigger")!
+        .click();
+      await flushEffects();
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "All")!
+        .click();
+      await flushEffects();
+      expect(usage.from).toBe("2020-06-01");
+    },
+  );
 
   it("ignores response-scoped project keys restored from a URL", async () => {
     vi.stubGlobal(

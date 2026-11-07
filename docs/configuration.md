@@ -250,10 +250,27 @@ cursor_secret = "base64-encoded-secret"
 require_auth = true
 cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
+sync_idle_after = "10m"
 sync_interval = "5s"
 chart_palette = "agentsview"
 zoom_level = 120
 ```
+
+`sync_idle_after` defaults to `"10m"`. After this long without a client request
+or an open event stream, local serve stops watching session files and pauses its
+local sync timers, remote-source sync, S3 imports, and attachment imports.
+Remote-host polling, Codex Cloud capture, replica push, and raw uploads keep their
+own schedules.
+The next archive request starts catch-up for files changed or added since
+collection paused. Requests share a two-second wait budget from the start of
+catch-up. After that, reads return immediately with a stale-results warning
+while catch-up continues in the
+background.
+The warning clears when catch-up finishes or fails, and failures are logged.
+Every client request except `/api/ping` counts as activity. Version and sync-status
+probes report readiness without starting catch-up.
+Desktop health probes keep the daemon alive without restarting sync.
+Set it to `"0"` to keep syncing while idle. Restart the server after changing it.
 
 | Field                               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -272,6 +289,7 @@ zoom_level = 120
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `sync_idle_after`                   | Pause local collection after this long without client activity; defaults to `"10m"`, with `"0"` disabling the pause                                                                                                                                                                                                                                                                                                                                                              |
 | `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.                                                                                                                       |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
@@ -289,6 +307,7 @@ zoom_level = 120
 | `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log)                                                                                                                                                                                                                                                                                                                                |
 | `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` — see [Kata](/docs/kata/)                                         |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview source sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                 |
+| `[agents.claude-ai]`                | Organizations Claude.ai Sync imports — see [Choose which organizations Sync imports](/docs/chat-import/#choose-which-organizations-sync-imports) |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                                                                                                                                                                                                                                           |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                                                                                                                                                                                                                                              |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/docs/token-usage/#custom-model-pricing)                                                                                                                                                                                                                                                                                                                                                                |
@@ -2446,8 +2465,8 @@ Check sync status:
 curl http://127.0.0.1:8080/api/v1/sync/status
 ```
 
-The JSON response includes `startup_pending` and `archive_stale` alongside
-sync progress.
+The JSON response includes `startup_pending`, `archive_stale`, and, starting
+with daemon API 15, `sync_pending` alongside sync progress.
 
 ## Privacy and Telemetry
 

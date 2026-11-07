@@ -42,7 +42,7 @@ type usagePriceResult struct {
 // persistence compute it on demand; provenance-only callers skip it.
 func (p usagePriceResult) rateHash() string {
 	return usageRateHash(
-		p.model, p.PricedModel, p.MatchedPattern, p.RateOK, p.lookup.Rates)
+		p.model, p.PricedModel, p.MatchedPattern, p.lookup.Adjustment, p.RateOK, p.lookup.Rates)
 }
 
 type usageRollupFact struct {
@@ -91,10 +91,16 @@ type usageExceptionRow struct {
 
 type usageRollupBuild struct {
 	SessionID, Agent, StartedAt string
+	Project, Machine, GitBranch string
+	IsAutomated                 bool
+	UserMessageCount            int
+	HasAuthoritative            bool
 	// PricingInputs encodes the lookups Daily used; PricingHash is their identity.
 	PricingInputs, PricingHash string
 	Source                     usageSourceVersion
 	FactRevision               int64
+	ChangeRevision             int64
+	SourcePricing              string
 	Daily                      []usageDailyContribution
 	Activity                   []usageActivityContribution
 	Exceptions                 []usageExceptionRow
@@ -449,7 +455,7 @@ func loadCursorUsageRollupBuild(
 		},
 		FactRevision: highWater,
 	}
-	rows, err := conn.QueryContext(ctx, `SELECT source_id, timestamp_ms,
+	rows, err := conn.QueryContext(ctx, `SELECT source_id, agent, timestamp_ms,
 		raw_timestamp, model, input_tokens, output_tokens,
 		cache_creation_tokens, cache_read_tokens, charged_microdollars,
 		is_headless, dedup_key
@@ -466,7 +472,7 @@ func loadCursorUsageRollupBuild(
 		var millis sql.NullInt64
 		var charged int64
 		var isHeadless int
-		if err := rows.Scan(&sourceID, &millis, &fact.Fact.RawTimestamp,
+		if err := rows.Scan(&sourceID, &fact.Agent, &millis, &fact.Fact.RawTimestamp,
 			&fact.Model, &fact.Fact.InputTokens, &fact.Fact.OutputTokens,
 			&fact.Fact.CacheCreationTokens, &fact.Fact.CacheReadTokens, &charged,
 			&isHeadless, &fact.Fact.UsageDedupKey); err != nil {
@@ -474,10 +480,10 @@ func loadCursorUsageRollupBuild(
 		}
 		fact.IsHeadless = isHeadless != 0
 		fact.FactIndex = int(sourceID)
-		fact.Fact.Source = "cursor"
+		fact.Fact.Source = fact.Agent
 		fact.Fact.Model = fact.Model
-		fact.Fact.CostSource = "cursor-reported"
-		fact.Fact.RequestScoped = true
+		fact.Fact.CostSource = fact.Agent + "-reported"
+		// Account totals do not establish a single request's context size.
 		fact.Fact.TokenEligible = true
 		fact.Fact.ReportedCostMicrodollars = &charged
 		if millis.Valid {
@@ -538,9 +544,18 @@ func buildUsageRollupSessions(
 		if err != nil {
 			return nil, err
 		}
+		hasAuthoritative := false
+		for _, fact := range sessionFacts {
+			if usageFactHasAuthoritativeCost(fact) {
+				hasAuthoritative = true
+			}
+		}
 		builds = append(builds, usageRollupBuild{
 			SessionID: id, Agent: sessions[id].Agent, StartedAt: sessions[id].StartedAt,
-			PricingInputs: pricingInputs, PricingHash: pricingHash,
+			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch,
+			IsAutomated: sessions[id].IsAutomated, UserMessageCount: sessions[id].UserMessageCount,
+			HasAuthoritative: hasAuthoritative,
+			PricingInputs:    pricingInputs, PricingHash: pricingHash,
 			Source: versions[id], FactRevision: fills[id].InstallRevision,
 			Daily: daily, Activity: usageRollupActivityContributions(id, sessionFacts),
 			Exceptions: usageRollupExceptionRows(exceptions),

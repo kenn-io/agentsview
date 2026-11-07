@@ -82,11 +82,17 @@ scale ever demands it.
 
 The vector phase writes changed sessions in batches of up to 500 sessions or
 about 32 MiB of document text and embeddings, whichever fills first. Each batch
-inserts its documents and chunks, deletes its sessions' older chunks and
-documents, then inserts their `vector_push_state` rows, all under one version.
-The statement count grows with the number of batches, not sessions. A crash
-before the state rows land leaves every session in the batch stale, so the next
-push repeats them.
+inserts its documents and chunks, deletes the rows its sessions no longer hold,
+then inserts their `vector_push_state` rows, all under one version. The delete
+covers documents and chunks whose key the batch did not rewrite. A rewritten key
+keeps its older row until `ReplacingMergeTree` collapses it, which every
+`final=1` read already does. Deleting those rows too would write a patch row for
+each one, and every later read of the table pays to apply patch rows until
+merges fold them in. Evictions run in batches of 500 sessions as well. The
+vector tables are not sorted by session, so each statement reads the whole
+session column; the statement count grows with the number of batches, not
+sessions. A crash before the state rows land leaves every session in the batch
+stale, so the next push repeats them.
 
 **Tables are `ReplacingMergeTree(push_version)`.** `push_version` is the push
 start time in Unix nanoseconds. Same-key rows from a retry collapse on merge and
@@ -176,19 +182,58 @@ ClickHouse. Daily usage queries deduplicate events within the requested window,
 join those prices, and return grouped totals. Request rounding, historical
 rates, token tiers, and provider adjustments still use the Go pricing rules.
 
-Price records are keyed by their normalized inputs and a digest of the shared
-pricing catalog, billing policy, and price format. A catalog change causes the
-next push to price the existing mirror again without re-exporting sessions.
-Unchanged pushes price new session batches and Cursor events. Old pricing
-generations remain available to readers and exporters using them.
+Price records are keyed by their normalized inputs and a pricing digest. The
+digest covers the price format, the provider billing policies, and, for each
+model registered in `usage_price_models`, everything the shared catalog resolves
+that model to at any time (`PricingResolver.DependencyFingerprint`, which the
+SQLite usage cache also uses). Catalog rows no registered model resolves to do
+not count. The mirrored catalog merges what every exporting machine last
+fetched, so unrelated rows change on most pushes. A digest over the whole
+catalog repriced the whole mirror each time, about nine times a day on a mirror
+fed by three machines, and kept every generation.
+
+A push prices the whole mirror when the digest changed, on a full push, and on a
+mirror no pass has covered. Otherwise it prices new session batches and Cursor
+events under the current digest. A usage row whose model the digest does not
+cover is not priced under it, because a catalog that resolves that model
+differently would map to the same digest:
+
+1. The session batch registers the model as pending and leaves its rows to
+   per-request pricing.
+1. When its batches are done, the push prices the whole mirror under the digest
+   that adds every pending model, then registers the models.
+1. Readers derive the digest from the registered models, so they move to the new
+   digest only after its records are complete.
+
+A push that stops between the first two steps leaves the models pending, and the
+next push adopts them before its batches.
+
+**Pruning.** Each digest is its own partition of `usage_event_prices` and
+`usage_price_contexts`. After pricing, every push drops the partitions of
+digests that are not the one it priced under, not the mirror's current digest,
+not the digest `prepared_usage` was built from, and have had nothing written
+under them for 24 hours. Exporters whose catalogs disagree on a priced model, or
+that run an older build, alternate between digests; the window keeps those
+switches from repricing the whole mirror each time. Listing digests reads two
+columns of the price tables (about 0.2 s at 20 million rows), and dropping a
+partition rewrites nothing. Lightweight deletes would write patch parts as large
+as the deleted rows on servers in `lightweight_update` mode.
+
+A push that revives a digest idle for 24 hours while another push drops it can
+lose part of that digest's records, or keep records whose contexts were dropped.
+Reads stay correct. They price rows without a record per request until the next
+whole pass. A read that still finds a record without its context after three
+attempts prices every row per request.
 
 Serve stays read-only. Missing prices and reader-specific custom rates are
 computed for that request using the current pricing rules while push fills the
-shared records. A response never mixes prices from different catalog digests.
+shared records. A response never mixes prices from different pricing digests.
 Copilot authoritative costs retain their per-session selection and allocation.
 
-The first push after the schema upgrade creates and fills the price tables.
-These are derived data; SQLite remains the archive.
+The price tables are derived data; SQLite remains the archive. The schema step
+drops price tables that an older version created without partitions, creates
+them partitioned, and clears the mirror's current digest, so the next push
+prices the mirror again.
 
 ## Activity report reads
 
@@ -391,14 +436,19 @@ Serve keeps the results of recent reads in memory so a repeat request between
 pushes reads no rows from ClickHouse; it still runs the small metadata queries
 that check whether its inputs changed. Each kept read has one slot per selection
 (filter, range, and similar inputs), and its key names the rows it read: the
-prepared usage stamp and the parts of the small tables it joins, the candidate
-sessions and their push versions, or the parts of the tables it scanned. A push
-that changes those replaces the slot; a push that does not leaves it in place.
-Usage reads filtered by `active`, `stale`, or `unclean` termination compare
-session times with the current time, so their rows are never kept. Kept reads
-include usage rows, analytics session listings, Activity pairing inputs per
-session version, candidate listings, project label maps, and the whole report of
-an ended range.
+prepared usage stamp and row identities for fully prepared range reads, the
+candidate sessions and their push versions, or the parts of the tables it
+scanned. Row identity probes run only for tables whose parts changed. The
+price record table keeps the records of every pricing digest, so its probe
+covers only the digest a read joins; hashing the whole table took two minutes
+on a mirror holding 534 digests. A failed probe or parts moving during it
+serves that read uncached. Raw, mixed, and
+single-session Usage reads keep parts versions. A push that changes those
+versions replaces the slot; a push that does not leaves it in place. Usage reads
+filtered by `active`, `stale`, or `unclean` termination compare session times
+with the current time, so their rows are never kept. Kept reads include usage
+rows, analytics session listings, Activity pairing inputs per session version,
+candidate listings, project label maps, and the whole report of an ended range.
 
 Nothing rebuilds kept reads in the background. The first request after a push
 that changes a read's rows pays for that read.

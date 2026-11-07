@@ -57,6 +57,7 @@
   } from "../../stores/yokedDates.svelte.js";
   import { m } from "../../i18n/index.js";
   import { usageChartStyleMaps } from "../../utils/usageChartStyles.js";
+  import { localDateStr } from "../../utils/dates.js";
 
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
@@ -111,14 +112,31 @@
       : 0,
   );
 
-  const agentItems = $derived(
-    sessions.agents.map((a) => ({
-      name: a.name,
-      count: a.session_count,
-    })),
-  );
+  $effect(() => {
+    const summaryAgents = ((usage.attributionSummary ?? usage.summary)?.agentTotals ?? [])
+      .map((agent) => ({ name: agent.agent }));
+    const sessionAgents = sessions.agents.map((agent) => ({
+      name: agent.name, count: agent.session_count,
+    }));
+    const filteredAgents = [usage.excludedAgents, sessions.filters.agent]
+      .flatMap((csv) => csv.split(",").filter(Boolean).map((name) => ({ name })));
+    untrack(() => {
+      const agents = new Map(usage.knownAgents.map((agent) => [agent.name, agent]));
+      for (const agent of [...summaryAgents, ...sessionAgents, ...filteredAgents]) {
+        agents.set(agent.name, { ...agents.get(agent.name), ...agent });
+      }
+      usage.knownAgents = [...agents.values()].sort((a, b) => a.name.localeCompare(b.name));
+    });
+  });
 
-  const earliestSession = $derived(sync.stats?.earliest_session ?? null);
+  const agentItems = $derived(usage.knownAgents);
+
+  const earliestUsage = $derived(
+    [sync.stats?.earliest_session, sync.stats?.earliest_account_usage]
+      .filter((timestamp): timestamp is string => !!timestamp)
+      .map((timestamp) => localDateStr(new Date(timestamp)))
+      .sort()[0] ?? null,
+  );
 
   const rangeSelection = $derived(
     selectionFromWindow({
@@ -126,7 +144,7 @@
       windowDays: usage.windowDays,
       from: usage.from,
       to: usage.to,
-      earliestSession,
+      earliestSession: earliestUsage,
     }),
   );
 
@@ -138,7 +156,7 @@
         windowDays: sel.days,
       }));
     } else {
-      const range = resolveRange(sel, earliestSession);
+      const range = resolveRange(sel, earliestUsage);
       usage.setDateRange(range.from, range.to);
       updateYokeFromUsage(panelDateState(range.from, range.to, {
         mode: "fixed",
@@ -514,7 +532,7 @@
       <RangePicker
         selection={rangeSelection}
         busy={usage.isQuerying}
-        {earliestSession}
+        earliestSession={earliestUsage}
         onSelect={applyRange}
       />
 

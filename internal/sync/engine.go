@@ -621,8 +621,9 @@ type Engine struct {
 	scanProtectedPaths  bool
 	homeDir             string
 	goos                string
-	subagentLinkPending bool         // protected by syncMu; retains failed global linking
-	syncMu              gosync.Mutex // serializes all sync operations
+	subagentLinkPending bool                 // protected by syncMu; retains failed global linking
+	trailerScanAttempts map[string]time.Time // protected by syncMu; includes failed scans
+	syncMu              gosync.Mutex         // serializes all sync operations
 	mu                  gosync.RWMutex
 	lastSync            time.Time
 	lastSyncStats       SyncStats
@@ -662,6 +663,9 @@ type Engine struct {
 	// archive audit sets it to catch same-stat in-place rewrites that
 	// append-trust would otherwise keep stale.
 	checkpointAudit atomic.Bool
+	// soleArchiveWriter permits a pass-start freshness snapshot while startup
+	// holds the archive write lock and no other archive writer can run.
+	soleArchiveWriter atomic.Bool
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
@@ -1702,6 +1706,10 @@ func (e *Engine) Machine() string {
 	}
 	return e.machine
 }
+
+// SetSoleArchiveWriter permits a pass-start snapshot while the startup worker
+// owns the archive write lock and the daemon has not opened the archive.
+func (e *Engine) SetSoleArchiveWriter(enabled bool) { e.soleArchiveWriter.Store(enabled) }
 
 // SetCheckpointAudit enables or disables the checkpoint-bypassing content
 // audit. When enabled, checkpointed sources are re-hashed with the provider's
@@ -3540,6 +3548,12 @@ func (e *Engine) resyncBuildLocked(
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
+	if err := newDB.CopyCommitTrailersFrom(ctx, origPath); err != nil {
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		return SyncStats{Aborted: true}, err
+	}
 	trashedCopied := 0
 	var copiedSessionIDs []string
 	if ids, err := newDB.CopyTrashedDataFrom(ctx, origPath); err != nil {
@@ -4053,6 +4067,11 @@ func (e *Engine) resyncBuildLocked(
 	}
 	stats.RecordCwdUpdated(deferredCwdUpdated)
 	e.deferredSourceCwd = nil
+
+	// Scan once every session and its cwd have been restored.
+	e.db = newDB
+	pendingLinksUpdated += e.reconcileCommitTrailersLocked(ctx)
+	e.db = origDB
 
 	// Re-link subagent sessions after orphan copy so copied
 	// tool_calls.subagent_session_id references are resolved.
@@ -8607,6 +8626,11 @@ func (e *Engine) syncAllLocked(
 	}
 
 	tWorkers := time.Now()
+	// Discovery deduplicates sources before their freshness checks and writes.
+	// Cross-source parent-inventory demotions run after the workers finish.
+	if e.soleArchiveWriter.Load() {
+		ctx = e.withSourceFreshnessSnapshot(ctx, all)
+	}
 	results := e.startWorkers(ctx, all)
 	stats = e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
@@ -8784,6 +8808,9 @@ func (e *Engine) syncAllLocked(
 		MessagesIndexed: stats.messagesIndexed,
 	})
 
+	if since.IsZero() && scope == nil && e.archiveRebuildIndex == nil {
+		stats.RecordLinksUpdated(e.reconcileCommitTrailersLocked(ctx))
+	}
 	// Store the anomaly-folded stats so LastSyncStats (UI) matches the
 	// value returned to the CLI summary. The deferred applyTo only reads
 	// the accumulator, so folding a separate copy here does not
@@ -16198,16 +16225,20 @@ func (e *Engine) providerFreshDigestSourceCurrentInDB(ctx context.Context,
 	agent parser.AgentType, lookupPath string,
 ) bool {
 	rowFound := false
+	snap := sourceFreshnessSnapshotFrom(ctx)
 	for _, owned := range parser.ProviderStoredAgents(agent) {
-		if _, _, ok := e.db.GetFileInfoByAgentPath(ctx,
-			lookupPath, string(owned),
-		); !ok {
-			continue
+		project, dataVersion, active, ok := snap.State(string(owned), lookupPath)
+		if !ok {
+			if _, _, ok := e.db.GetFileInfoByAgentPath(ctx,
+				lookupPath, string(owned),
+			); !ok {
+				continue
+			}
+			project, dataVersion, _, _, active = e.db.GetSourceRepairStateByAgentPath(ctx,
+				lookupPath, string(owned),
+			)
 		}
 		rowFound = true
-		project, dataVersion, _, _, active := e.db.GetSourceRepairStateByAgentPath(ctx,
-			lookupPath, string(owned),
-		)
 		if !active {
 			continue
 		}
@@ -16280,7 +16311,11 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		if preParseStatHash.digest == 0 {
 			return 0, false
 		}
-		stored, hasStored, hashErr := e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
+		stored, hasStored := sourceFreshnessSnapshotFrom(ctx).StatHash(string(file.Agent), lookupPath)
+		var hashErr error
+		if !hasStored {
+			stored, hasStored, hashErr = e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
+		}
 		switch {
 		case hashErr != nil:
 			// A read error must be handled before !hasStored: the DB
@@ -19945,6 +19980,19 @@ func (e *Engine) projectIdentityObservationForWrite(
 	return export.WithRecordedGitRemote(obs, pw.sess.GitRemote), true
 }
 
+// mayDiscoverLocalProject reports whether path may be probed on the local
+// filesystem. Only sessions recorded on this machine qualify: another
+// machine's cwd (e.g. /home/... from a synced Linux host) is meaningless
+// here, and on macOS merely stat'ing such paths wakes the /home automounter —
+// with tens of thousands of remote sessions and a one-minute cache TTL that
+// becomes a sustained automountd/opendirectoryd CPU storm.
+// mayProbeLocalPath also guards export.NormalizeRootPath, which resolves
+// symlinks and would reach into a protected location on its own.
+func (e *Engine) mayDiscoverLocalProject(machine, path string) bool {
+	return !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
+		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(path)
+}
+
 func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentityCacheEntry {
 	e.projectIdentityMu.Lock()
 	defer e.projectIdentityMu.Unlock()
@@ -19958,16 +20006,7 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 		return cached
 	}
 	identity := projectIdentityCacheEntry{rootPath: rootPath}
-	// Only probe the local filesystem for sessions recorded on this
-	// machine: another machine's cwd (e.g. /home/... from a synced Linux
-	// host) is meaningless here, and on macOS merely stat'ing such paths
-	// wakes the /home automounter — with tens of thousands of remote
-	// sessions and a one-minute cache TTL that becomes a sustained
-	// automountd/opendirectoryd CPU storm.
-	// mayProbeLocalPath also guards export.NormalizeRootPath below, which
-	// resolves symlinks and would reach into a protected location on its own.
-	if !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
-		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(rootPath) {
+	if e.mayDiscoverLocalProject(machine, rootPath) {
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
 		}

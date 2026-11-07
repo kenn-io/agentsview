@@ -41,8 +41,8 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 	require.Len(t, legacy, 2)
 	_, err = database.PinMessage(ctx, id, legacy[1].ID, nil)
 	require.NoError(t, err)
-	// Main's version 165 has the slash-command fixes but still lacks hook rows.
-	const previous = 165
+	// Version 166 keeps the peer-message rows but still lacks hook rows.
+	const previous = 166
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE sessions SET data_version = ?, message_count = 2, user_message_count = 1 WHERE id = ?", previous, id); err != nil {
 			return err
@@ -50,12 +50,32 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", previous))
 		return err
 	}))
+	// The upgrade from 166 covers exactly the providers whose stored output
+	// the hook rows change.
+	assert.ElementsMatch(t,
+		[]parser.AgentType{
+			parser.AgentClaude,
+			parser.AgentCowork,
+			parser.AgentQoder,
+			parser.AgentIcodemate,
+		},
+		db.ScopedDataVersionProviders(previous, db.CurrentDataVersion()),
+	)
 
 	archivePath := database.Path()
 	require.NoError(t, database.Close())
+	// A scoped upgrade must not ask for a full rebuild: the archive only
+	// needs the affected sources reparsed by an ordinary sync pass.
+	needsResync, fullRebuild, err := db.ArchiveResyncState(ctx, archivePath)
+	require.NoError(t, err)
+	assert.True(t, needsResync)
+	assert.False(t, fullRebuild)
 	reopened, err := db.OpenIsolated(ctx, archivePath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	// The writable reopen promotes the scoped upgrade instead of marking the
+	// archive stale for a rebuild.
+	assert.False(t, reopened.NeedsResync())
 	upgraded := sync.NewEngine(ctx, reopened, cfg)
 	t.Cleanup(upgraded.Close)
 	stats := upgraded.SyncAll(ctx, nil)

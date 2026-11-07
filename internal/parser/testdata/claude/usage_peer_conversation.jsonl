@@ -1,0 +1,3 @@
+{"type":"user","uuid":"usage","timestamp":"2026-11-04T12:00:00Z","message":{"role":"user","content":"/usage"}}
+{"type":"user","uuid":"peer","parentUuid":"usage","timestamp":"2026-11-04T12:00:01Z","isMeta":false,"origin":{"kind":"peer"},"message":{"role":"user","content":"Another Claude session sent a message: Please review the retry logic."}}
+{"type":"assistant","uuid":"reply","parentUuid":"peer","timestamp":"2026-11-04T12:00:02Z","message":{"role":"assistant","content":"The retry preserves the original request."}}

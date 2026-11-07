@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-04
+last_edited: 2026-11-07
 ---
 
 # Session Format Source Inventory
@@ -218,7 +218,7 @@ evidence; they do not establish whether a tool helped the task.
   In normal transcript mode, hook rows use a collapsed Hook output card and an
   independent Hooks filter. Cancelled hooks have a Hook cancelled label. Focused
   mode hides these rows without treating them as new prompts. The card preserves
-  escaped body text. Data version 166 reparses readable Claude, Cowork, Qoder,
+  escaped body text. Data version 167 reparses readable Claude, Cowork, Qoder,
   and iCodeMate CLI sources in place. The upgrade preserves session and public
   message identities, pins, notes, names, stars, and retained rows whose sources
   are gone; archive-only archives retain their pending state without source
@@ -258,7 +258,8 @@ evidence; they do not establish whether a tool helped the task.
   [#2400](https://github.com/kenn-io/agentsview/issues/2400), kept in
   `internal/parser/testdata/claude/channel_messages.jsonl`. Inbound channel
   questions are `user` entries with `isMeta: true` and `origin.kind: channel`.
-  They remain user turns; other `isMeta` entries stay hidden. Transcript text
+  They remain user turns. Peer-origin meta entries are system messages, and
+  other `isMeta` entries stay hidden. Transcript text
   retains the `<channel>` envelope, while session previews show its body.
 
 - **Dialogue projection:** Reverified 2026-10-17 against the shared block parser
@@ -386,13 +387,37 @@ fixtures retain this field; missing identities remain source-local.
   `promptSource:"system"` carrying a delivery notice. Native parsing
   classifies a prompt that starts with `<cross-session-message` as a system
   row with `source_subtype` `peer_message`, keeping the wrapper so the sender
-  stays visible; non-channel `isMeta` user records remain dropped. Task
+  stays visible. That parser version dropped non-channel `isMeta` user records. Task
   notifications in the same release are `type:"user"` records with
   `origin:{"kind":"task-notification"}` and a `<task-notification>` body,
   which the existing `task_notification` rule already covers. Checked against a
   local transcript corpus; the synthetic fixture
   `internal/parser/testdata/claude/queued_peer_messages.jsonl` mirrors these
   shapes. Data version 126 reparses existing sessions once.
+
+- **Peer user records (2026-11-06):** The Claude Code 2.1.310 transcript excerpt
+  in [#2718](https://github.com/kenn-io/agentsview/issues/2718) contains inbound
+  `type:"user"` records with `isMeta:true`, `promptSource:"system"`,
+  `turnOrigin:"peer"`, and `origin.kind:"peer"`. Their content starts with
+  `Another Claude session sent a message:` before the cross-session wrapper.
+  This is a reported artifact, not a capture made for this change. Static
+  inspection of the installed 2.1.314 producer corroborates peer-origin queue
+  entries with `isMeta:true` and preservation of `origin` in user messages.
+  Its turn-origin classifier also maps channels and other origins to `peer`,
+  so `turnOrigin` alone does not identify a cross-session message. No live
+  delivery was run. Searches for `"cross-session-message"
+  repo:anthropics/claude-code` and `"turnOrigin" repo:anthropics/claude-code`
+  returned no code hits. The public tree at
+  `90380efca7f9d73e206fac453f841b6acd664f4d` does not expose the persistence
+  implementation. The evidence class remains `no-public-source`.
+  Agentsview retains peer-origin user records as system `peer_message` rows,
+  preserving their text and excluding them from human turn counts and previews.
+  Synthetic regressions in `internal/parser/claude_peer_test.go` cover full and
+  incremental parsing, content blocks, delivery notices, and rewind identity.
+  Data version 166 reparses Claude, Cowork, Qoder, and iCodeMate sources in place.
+  The archive regression checks that unchanged sources recover the message
+  without changing session identity. Deleted sources cannot recover messages
+  omitted by the previous parser.
 
 - **Evidence:** `no-public-source`.
 
@@ -1473,6 +1498,30 @@ fixtures retain this field; missing identities remain source-local.
   state, which can contain trailing source bytes. This is an Agentsview
   storage change; the pinned producer format is unchanged.
 
+- **Commit result evidence reverified 2026-11-02:** the pinned
+  [tool result formatter](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tools/context.rs)
+  emits `session_id` beside `output` in code mode and
+  `Process running with session ID N` in text mode. A read-only archive query
+  confirmed code-mode JSON inside `input_text` blocks; that archive contained
+  only `Bash`, `bash`, and `exec` shell tool names. Native `write_stdin`
+  arguments keep `session_id` and `chars` separately from the tool name, as
+  verified against `codex/fc_stdin.jsonl` and the parser's function-call path.
+  `TestCommitLinksNativePollOwnership` writes both representations through
+  the public archive API and checks the originating commit call's location.
+  Reverified 2026-11-05 with
+  `TestCommitLinksCodeModeWithoutExecutionID` and
+  `TestCommitLinksNativePollOwnership`: scripts with exactly one tool call
+  and a fixed command literal can link commits without an output process ID.
+  `TestCommitLinksCodeModeFixedCommand` covers command decoding, workdir,
+  loops, and subjects mentioning tool names. Call syntax determines the number
+  of tool calls; bare tool names in commit subjects don't count. Command
+  literals containing `${` produce no links. A single-call `write_stdin`
+  script can poll an earlier commit execution without an output process ID.
+  Scripts with several tool calls cannot start new commit links. Their polls
+  need output process IDs matching earlier commit calls. The reused-process-ID
+  case checks that a new native commit execution owns its repository and prompt
+  after a batch poll.
+
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)
   cancels work, allows a short grace period, and emits `turn_aborted`; it
@@ -1833,6 +1882,26 @@ fixtures retain this field; missing identities remain source-local.
   Gemini CLI discovery or parsing.
 
 ## Grok Build (`grok`)
+
+- **Account CSV export (observed 2026-11-06):** A user-supplied xAI unified usage
+  export has `Billing Item ID`, `Event Time`, `Product`, `Charge Category`,
+  `Usage Type`, `Principal Type`, `Principal ID`, `Usage`, `Pricing Currency`,
+  `Pricing Contracted`, `Model`, and `User Email` columns. This is observed
+  export evidence, separate from the native session format below. Synthetic
+  examples are tested in `internal/xaiusage/csv_test.go`. `Usage` is a JSON
+  object of string-valued integer counters. Observed names include
+  `Prompt text tokens`, `Cached prompt text tokens`, `Completion text tokens`,
+  and the hyphenated forms `prompt-text-tokens`, `cached-prompt-text-tokens`,
+  `completion-text-tokens`, and `cache-write-text-tokens`. Missing counters
+  mean zero. Account counters may aggregate many requests and are preserved
+  without the native request-level plausibility cap. `Event Time` is RFC3339;
+  `Pricing Contracted` is a decimal USD amount, including authoritative zero
+  for included usage. Products observed
+  are `grok-build`, `grok-bot`, and `cursor`. Grok models can be blank. Billing
+  IDs identify account events, with no native session or request identity for
+  cross-source reconciliation. Unknown per-request context sizes keep cache
+  savings estimates at base model rates. `agentsview usage grok` imports these
+  events without reconstructing conversations or inferring models.
 
 - **Format:** Workspace-scoped session directories containing `summary.json`, a
   derived `chat_history.jsonl` model-message cache, and an authoritative
@@ -5491,7 +5560,8 @@ schemas keep their existing ordering behavior.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/vercel-labs/fx.git` at
   `b9ca60d0102cf84cea061456c41206f66149b311`. Reverified 2026-10-13. Fixtures
-  were captured with fx v0.0.13.
+  were captured with fx v0.0.13. Shell result `output_delta` reverified
+  2026-11-02 against `internal/parser/testdata/fx/parent-session/events.jsonl`.
 - **Usage and cost:**
   [Session usage](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_usage.zig)
   stores cumulative per-model totals in `usage-v2.json` under

@@ -63,6 +63,9 @@ VALUES ('model', 3, 15, 3.75, 0.3, '2026-07-21T12:00:00Z');`)
 	require.NoError(t, err)
 
 	require.NoError(t, migrateMoneyColumnsLocked(t.Context(), d.getWriter()))
+	// Normal startup applies forward column migrations after the legacy money
+	// table rebuild. Account inserts below require that final schema.
+	require.NoError(t, applySchemaColumnMigrations(t.Context(), d.getWriter(), nil))
 
 	assertSQLiteMoneyColumn(t, d, "usage_events", "cost_microdollars", "INTEGER")
 	assertSQLiteMoneyColumn(t, d, "cursor_usage_events", "charged_microdollars", "INTEGER")

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -1101,6 +1102,34 @@ const codexLegacyPageHeaderDataVersion = 134
 // codexThreadIdentityDataVersion preserves the first session_meta identity.
 const codexThreadIdentityDataVersion = 137
 
+// CopyCommitTrailersFrom preserves Git evidence before rebuild reconciliation.
+func (d *DB) CopyCommitTrailersFrom(ctx context.Context, sourcePath string) error {
+	if d.ArchiveContent().UsageOnly() {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	conn, err := d.getWriter().Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS old_db", sourcePath); err != nil {
+		return fmt.Errorf("attaching source db: %w", err)
+	}
+	defer func() { _, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db") }()
+	var hasTrailers bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='commit_trailers')`).Scan(&hasTrailers); err != nil {
+		return err
+	}
+	if hasTrailers {
+		if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_trailers SELECT * FROM old_db.commit_trailers`); err != nil {
+			return fmt.Errorf("copying commit trailers: %w", err)
+		}
+	}
+	return nil
+}
+
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
 // full DB rebuilds. The source must not have active connections.
@@ -1218,6 +1247,21 @@ func (d *DB) CopyExcludedSessionsFrom(
 			}
 		}
 	}
+	if d.ArchiveContent() == config.ArchiveContentFull {
+		var hasLinks bool
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='commit_links')`).Scan(&hasLinks); err != nil {
+			return err
+		}
+		if hasLinks {
+			if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_links
+    (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project)
+    SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,l.project
+    FROM old_db.commit_links l WHERE NOT EXISTS (SELECT 1 FROM old_db.sessions s WHERE s.id=l.session_id)`); err != nil {
+				return fmt.Errorf("copying excluded commit links: %w", err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1645,15 +1689,20 @@ func (d *DB) CopySessionMetadataFrom(
 			DELETE FROM main.cursor_usage_events`); err != nil {
 			return fmt.Errorf("clearing cursor usage events: %w", err)
 		}
+		agentColumn := "'cursor'"
+		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "agent") {
+			agentColumn = "agent"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.cursor_usage_events (
+				agent,
 				occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
 				user_id, user_email, is_headless, dedup_key
 			)
-			SELECT
+			SELECT `+agentColumn+`,
 				occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
@@ -1685,6 +1734,7 @@ func (d *DB) CopySessionMetadataFrom(
 				'project_identity_publication_revision',
 				'session_deletion_publication_revision',
 				'usage_change_revision',
+				'usage_pricing_revision',
 				'conversation_publication_revision',
 				'worktree_mapping_publication_revision'
 			)
@@ -2598,6 +2648,15 @@ func copySessionDataForIDs(
 			return fmt.Errorf(
 				"copying tool_result_events: %w", err,
 			)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "commit_links") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO commit_links
+   (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project)
+   SELECT `+sessionID+`,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project
+   FROM old_db.commit_links WHERE session_id IN (SELECT source_id FROM `+tempIDsTable+`)`); err != nil {
+			return fmt.Errorf("copying commit links: %w", err)
 		}
 	}
 

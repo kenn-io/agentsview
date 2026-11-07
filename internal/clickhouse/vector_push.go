@@ -6,8 +6,13 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"maps"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
+
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -209,12 +214,10 @@ func (s *Sync) pushVectors(
 		}
 		evict = append(evict, sessionID)
 	}
-	for _, sessionID := range evict {
-		if err := s.evictVectorSession(ctx, gen.Fingerprint, sessionID); err != nil {
-			return res, err
-		}
-		res.SessionsEvicted++
+	if err := s.evictVectorSessions(ctx, gen.Fingerprint, evict); err != nil {
+		return res, err
 	}
+	res.SessionsEvicted += len(evict)
 	if scope == nil && res.SessionsDeferred == 0 {
 		if err := insertRows(ctx, s.conn, "vector_push_state", [][]any{{
 			s.archiveID, gen.Fingerprint, vectorCompleteMarker, "", newPushVersion(),
@@ -326,8 +329,12 @@ func (s *Sync) clearUsageOnlyVectors(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	byGeneration := map[string][]string{}
 	for _, o := range evict {
-		if err := s.evictVectorSession(ctx, o.fingerprint, o.sessionID); err != nil {
+		byGeneration[o.fingerprint] = append(byGeneration[o.fingerprint], o.sessionID)
+	}
+	for fingerprint, sessionIDs := range byGeneration {
+		if err := s.evictVectorSessions(ctx, fingerprint, sessionIDs); err != nil {
 			return err
 		}
 	}
@@ -478,8 +485,12 @@ type vectorBatch struct {
 	stateHashes []string
 	docRows     [][]any
 	chunkRows   [][]any
-	docs        int
-	bytes       int
+	// docKeys and chunkKeys hold each row's key as a ClickHouse tuple
+	// literal, for the flush's vector_flushed_* query parameters.
+	docKeys   []string
+	chunkKeys []string
+	docs      int
+	bytes     int
 }
 
 func (s *Sync) newVectorBatch(fingerprint string) *vectorBatch {
@@ -506,6 +517,8 @@ func (b *vectorBatch) add(sessionID, aggHash string, docs []storage.VectorPushDo
 			int64(doc.Ordinal), int64(doc.OrdinalEnd), doc.Subordinate,
 			offsets, doc.Content, doc.ContentHash, nil,
 		})
+		b.docKeys = append(b.docKeys,
+			"("+chStringLiteral(doc.SessionID)+","+chStringLiteral(doc.DocKey)+")")
 		b.bytes += len(doc.DocKey) + len(doc.SessionID) + len(doc.SourceUUID) +
 			len(offsets) + len(doc.Content) + len(doc.ContentHash)
 		for _, chunk := range doc.Chunks {
@@ -513,6 +526,8 @@ func (b *vectorBatch) add(sessionID, aggHash string, docs []storage.VectorPushDo
 				b.fingerprint, doc.DocKey, int64(chunk.ChunkIndex), sessionID,
 				chunk.Embedding, nil,
 			})
+			b.chunkKeys = append(b.chunkKeys,
+				"("+chStringLiteral(doc.DocKey)+","+strconv.Itoa(chunk.ChunkIndex)+")")
 			b.bytes += len(doc.DocKey) + len(sessionID) + 4*len(chunk.Embedding)
 		}
 	}
@@ -527,14 +542,16 @@ func (b *vectorBatch) full() bool {
 func (b *vectorBatch) reset() {
 	b.sessions, b.stateHashes = b.sessions[:0], b.stateHashes[:0]
 	b.docRows, b.chunkRows = nil, nil
+	b.docKeys, b.chunkKeys = nil, nil
 	b.docs, b.bytes = 0, 0
 }
 
 // flushVectorBatch rewrites the batch's documents, chunks, and push state for
-// the generation under one push version. Rows are inserted first, then older
-// versions of the batch sessions' rows are deleted, then the state rows land,
-// so an interrupted flush leaves every batch session's state row behind and
-// the next push repeats those sessions instead of trusting half-written ones.
+// the generation under one push version. Rows are inserted first, then the
+// batch sessions' rows the new rows do not replace are deleted, then the
+// state rows land, so an interrupted flush leaves every batch session's state
+// row behind and the next push repeats those sessions instead of trusting
+// half-written ones.
 func (s *Sync) flushVectorBatch(ctx context.Context, b *vectorBatch) error {
 	version := newPushVersion()
 	for _, row := range b.docRows {
@@ -549,32 +566,37 @@ func (s *Sync) flushVectorBatch(ctx context.Context, b *vectorBatch) error {
 	if err := insertRows(ctx, s.conn, "vector_chunks", b.chunkRows); err != nil {
 		return err
 	}
-	placeholders, ids := inArgs(b.sessions)
-	// Older versions of these sessions' rows are now superseded: chunks for
-	// this generation, and every generation's chunks for documents that
-	// vanished locally (a document is shared across generations, so a
-	// vanished doc's rows are stale everywhere). The vanished-doc check
-	// pairs doc_key with session_id, so a doc that moved to another session
-	// still counts as vanished from its old one, and the subquery needs no
-	// second copy of the session list: rows at or above this version belong
-	// to this flush or to a later push.
-	if _, err := s.conn.ExecContext(ctx, `
+	// Older rows these sessions no longer hold are now stale: this
+	// generation's chunks whose key the flush did not rewrite, every
+	// generation's chunks for documents that vanished locally (a document is
+	// shared across generations, so a vanished doc's rows are stale
+	// everywhere), and documents whose key the flush did not rewrite. Rows
+	// the flush rewrote under the same key are left to ReplacingMergeTree,
+	// which keeps the newest version on merge and on every final=1 read.
+	// Deleting them too would write a patch row per rewritten row, and every
+	// later read of the table applies those patches until merges fold them
+	// in. The flush's keys travel as query parameters, so each DELETE reads
+	// its own table once. The vanished-doc check pairs doc_key with
+	// session_id, so a doc that moved to another session still counts as
+	// vanished from its old one. Rows at or above this version belong to
+	// this flush or to a later push and are never deleted.
+	paramCtx := withVectorFlushParams(ctx, b, version)
+	if _, err := s.conn.ExecContext(paramCtx, `
 		DELETE FROM vector_chunks
-		WHERE session_id IN (`+placeholders+`) AND generation_fingerprint = ? AND push_version < ?`,
-		slices.Concat(ids, []any{b.fingerprint, version})...); err != nil {
-		return fmt.Errorf("deleting older clickhouse vector chunks for %d session(s): %w", len(ids), err)
+		WHERE has({vector_flush_sessions:Array(String)}, session_id)
+		  AND push_version < {vector_flush_version:UInt64} AND (
+			(session_id, doc_key) NOT IN (`+vectorFlushedDocsSQL+`)
+			OR (generation_fingerprint = {vector_flush_fingerprint:String}
+			    AND (doc_key, chunk_index) NOT IN (`+vectorFlushedChunksSQL+`)))`); err != nil {
+		return fmt.Errorf("deleting stale clickhouse vector chunks for %d session(s): %w", len(b.sessions), err)
 	}
-	if _, err := s.conn.ExecContext(ctx, `
-		DELETE FROM vector_chunks
-		WHERE session_id IN (`+placeholders+`) AND (session_id, doc_key) NOT IN (
-			SELECT session_id, doc_key FROM vector_documents WHERE push_version >= ?)`,
-		slices.Concat(ids, []any{version})...); err != nil {
-		return fmt.Errorf("deleting clickhouse vector chunks of vanished docs for %d session(s): %w", len(ids), err)
-	}
-	if _, err := s.conn.ExecContext(ctx, `
-		DELETE FROM vector_documents WHERE session_id IN (`+placeholders+`) AND push_version < ?`,
-		slices.Concat(ids, []any{version})...); err != nil {
-		return fmt.Errorf("deleting older clickhouse vector documents for %d session(s): %w", len(ids), err)
+	if _, err := s.conn.ExecContext(paramCtx, `
+		DELETE FROM vector_documents
+		WHERE has({vector_flush_sessions:Array(String)}, session_id)
+		  AND push_version < {vector_flush_version:UInt64}
+		  AND doc_key NOT IN (SELECT tupleElement(k, 2) FROM (SELECT arrayJoin(
+			{vector_flushed_docs:Array(Tuple(String, String))}) AS k))`); err != nil {
+		return fmt.Errorf("deleting stale clickhouse vector documents for %d session(s): %w", len(b.sessions), err)
 	}
 	if s.hooks != nil && s.hooks.beforeVectorState != nil {
 		if err := s.hooks.beforeVectorState(b.sessions); err != nil {
@@ -588,68 +610,137 @@ func (s *Sync) flushVectorBatch(ctx context.Context, b *vectorBatch) error {
 	return insertRows(ctx, s.conn, "vector_push_state", stateRows)
 }
 
-// evictVectorSession drops this archive's push state for one session and
-// generation. The session's chunks, and its document rows once no
-// generation references them, go only when no other archive still records
-// the session for this generation: after an ownership handoff the new owner's
-// rows must survive the former owner's reconciliation. The state row goes
-// last so a failure midway leaves the session discoverable for the next
-// push to finish.
-func (s *Sync) evictVectorSession(ctx context.Context, fingerprint, sessionID string) error {
-	otherOwners, newest, err := s.vectorEvictionBound(ctx, fingerprint, sessionID)
-	if err != nil {
-		return err
-	}
-	if !otherOwners {
-		if err := s.deleteVectorChunksThrough(ctx, fingerprint, sessionID, newest); err != nil {
+// vectorFlushedDocsSQL and vectorFlushedChunksSQL select the (session_id,
+// doc_key) and (doc_key, chunk_index) keys a flush rewrote, from the query
+// parameters withVectorFlushParams attaches.
+const (
+	vectorFlushedDocsSQL   = "SELECT untuple(arrayJoin({vector_flushed_docs:Array(Tuple(String, String))}))"
+	vectorFlushedChunksSQL = "SELECT untuple(arrayJoin({vector_flushed_chunks:Array(Tuple(String, Int64))}))"
+)
+
+// withVectorFlushParams attaches the flush's sessions, generation, and
+// version, and the keys it rewrote, as query parameters: vector_flushed_docs
+// holds each document's (session_id, doc_key) and vector_flushed_chunks each
+// chunk's (doc_key, chunk_index). Under the default lightweight_delete_mode a
+// DELETE runs as a mutation, which cannot see the query's external tables;
+// ClickHouse substitutes parameters before it runs or stores a statement, so
+// a mutation sees them. A parameter is not query text, so its size does not
+// count against max_query_size. The driver skips positional binding when a statement has
+// parameters, so every value the flush DELETEs use travels here.
+func withVectorFlushParams(ctx context.Context, b *vectorBatch, version uint64) context.Context {
+	return chdriver.Context(ctx, chdriver.WithParameters(chdriver.Parameters{
+		"vector_flush_sessions":    chStringArrayLiteral(b.sessions),
+		"vector_flush_fingerprint": b.fingerprint,
+		"vector_flush_version":     strconv.FormatUint(version, 10),
+		"vector_flushed_docs":      "[" + strings.Join(b.docKeys, ",") + "]",
+		"vector_flushed_chunks":    "[" + strings.Join(b.chunkKeys, ",") + "]",
+	}))
+}
+
+// evictVectorSessions drops this archive's push state for sessionIDs in one
+// generation, a batch of up to idBatchSize sessions per statement. A
+// session's chunks, and its document rows once no generation references
+// them, go only when no other archive still records the session for this
+// generation: after an ownership handoff the new owner's rows must survive
+// the former owner's reconciliation. Each statement scans the session_id
+// column of its table, which neither vector table sorts by, so batching
+// keeps the scan count proportional to batches instead of sessions. State
+// rows go last so a failure midway leaves the batch discoverable for the
+// next push to finish.
+func (s *Sync) evictVectorSessions(ctx context.Context, fingerprint string, sessionIDs []string) error {
+	for batch := range idBatches(uniqueIDs(sessionIDs)) {
+		bounds, err := s.vectorEvictionBounds(ctx, fingerprint, batch)
+		if err != nil {
 			return err
 		}
-		if _, err := s.conn.ExecContext(ctx, `
-			DELETE FROM vector_documents
-			WHERE session_id = ? AND session_id NOT IN (
-				SELECT session_id FROM vector_chunks WHERE session_id = ?)`,
-			sessionID, sessionID); err != nil {
-			return fmt.Errorf("evicting clickhouse vector documents for %s: %w", sessionID, err)
+		if err := s.deleteVectorChunksThrough(ctx, fingerprint, bounds); err != nil {
+			return err
 		}
-	}
-	if _, err := s.conn.ExecContext(ctx, `
-		DELETE FROM vector_push_state
-		WHERE source_archive_id = ? AND generation_fingerprint = ? AND session_id = ?`,
-		s.archiveID, fingerprint, sessionID); err != nil {
-		return fmt.Errorf("evicting clickhouse vector push state for %s: %w", sessionID, err)
+		if len(bounds) > 0 {
+			placeholders, ids := inArgs(slices.Collect(maps.Keys(bounds)))
+			if _, err := s.conn.ExecContext(ctx, `
+				DELETE FROM vector_documents
+				WHERE session_id IN (`+placeholders+`) AND session_id NOT IN (
+					SELECT session_id FROM vector_chunks WHERE session_id IN (`+placeholders+`))`,
+				slices.Concat(ids, ids)...); err != nil {
+				return fmt.Errorf("evicting clickhouse vector documents for %d session(s): %w", len(ids), err)
+			}
+		}
+		placeholders, ids := inArgs(batch)
+		if _, err := s.conn.ExecContext(ctx, `
+			DELETE FROM vector_push_state
+			WHERE source_archive_id = ? AND generation_fingerprint = ? AND session_id IN (`+placeholders+`)`,
+			slices.Concat([]any{s.archiveID, fingerprint}, ids)...); err != nil {
+			return fmt.Errorf("evicting clickhouse vector push state for %d session(s): %w", len(ids), err)
+		}
 	}
 	return nil
 }
 
-// vectorEvictionBound reads whether another archive owns the pair and the
-// newest chunk version it holds. Another archive owns the pair through its
-// state row or through the session now being mirrored under it (a push
-// mirrors sessions before chunks, and chunks before its state row). The
-// caller deletes only through the version seen here so later inserts
-// survive.
-func (s *Sync) vectorEvictionBound(ctx context.Context, fingerprint, sessionID string) (otherOwners bool, newest uint64, err error) {
-	var owners uint64
-	if err := s.conn.QueryRowContext(ctx, `
-		SELECT
-			(SELECT count() FROM vector_push_state
-			  WHERE generation_fingerprint = ? AND session_id = ? AND source_archive_id <> ?)
-			+ (SELECT count() FROM sessions WHERE id = ? AND source_archive_id <> ?),
-			(SELECT coalesce(max(push_version), 0) FROM vector_chunks
-			  WHERE session_id = ? AND generation_fingerprint = ?)`,
-		fingerprint, sessionID, s.archiveID, sessionID, s.archiveID, sessionID, fingerprint,
-	).Scan(&owners, &newest); err != nil {
-		return false, 0, fmt.Errorf("reading clickhouse vector owners for %s: %w", sessionID, err)
+// vectorEvictionBounds returns, for each session in batch that no other
+// archive owns, the newest chunk version it holds in the generation (0 when
+// it holds none). Another archive owns a session through its state row or
+// through the session now being mirrored under it (a push mirrors sessions
+// before chunks, and chunks before its state row). Owners and versions come
+// from one statement, and the caller deletes only through the version seen
+// here so later inserts survive.
+func (s *Sync) vectorEvictionBounds(
+	ctx context.Context, fingerprint string, batch []string,
+) (map[string]uint64, error) {
+	placeholders, ids := inArgs(batch)
+	rows, err := s.conn.QueryContext(ctx, `
+		SELECT b.id, coalesce(max(c.push_version), 0)
+		FROM (SELECT arrayJoin([`+placeholders+`]) AS id) AS b
+		LEFT JOIN (
+			SELECT session_id, push_version FROM vector_chunks
+			WHERE generation_fingerprint = ? AND session_id IN (`+placeholders+`)
+		) AS c ON c.session_id = b.id
+		WHERE b.id NOT IN (
+			SELECT session_id FROM vector_push_state
+			WHERE generation_fingerprint = ? AND source_archive_id <> ? AND session_id IN (`+placeholders+`))
+		  AND b.id NOT IN (
+			SELECT id FROM sessions WHERE source_archive_id <> ? AND id IN (`+placeholders+`))
+		GROUP BY b.id
+		SETTINGS join_use_nulls = 1`,
+		slices.Concat(ids, []any{fingerprint}, ids, []any{fingerprint, s.archiveID}, ids,
+			[]any{s.archiveID}, ids)...)
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse vector owners for %d session(s): %w", len(batch), err)
 	}
-	return owners > 0, newest, nil
+	defer rows.Close()
+	bounds := make(map[string]uint64, len(batch))
+	for rows.Next() {
+		var id string
+		var newest uint64
+		if err := rows.Scan(&id, &newest); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse vector owner: %w", err)
+		}
+		bounds[id] = newest
+	}
+	return bounds, rows.Err()
 }
 
-// deleteVectorChunksThrough removes the pair's chunks at or below newest.
-func (s *Sync) deleteVectorChunksThrough(ctx context.Context, fingerprint, sessionID string, newest uint64) error {
+// deleteVectorChunksThrough removes each session's chunks in the generation
+// at or below its bound. Sessions bound at 0 hold no chunks and are skipped.
+func (s *Sync) deleteVectorChunksThrough(ctx context.Context, fingerprint string, bounds map[string]uint64) error {
+	var sessions []string
+	var versions []any
+	for id, newest := range bounds {
+		if newest > 0 {
+			sessions = append(sessions, id)
+			versions = append(versions, newest)
+		}
+	}
+	if len(sessions) == 0 {
+		return nil
+	}
+	placeholders, ids := inArgs(sessions)
 	if _, err := s.conn.ExecContext(ctx, `
 		DELETE FROM vector_chunks
-		WHERE session_id = ? AND generation_fingerprint = ? AND push_version <= ?`,
-		sessionID, fingerprint, newest); err != nil {
-		return fmt.Errorf("evicting clickhouse vector chunks for %s: %w", sessionID, err)
+		WHERE generation_fingerprint = ? AND session_id IN (`+placeholders+`)
+		  AND push_version <= transform(session_id, [`+placeholders+`], [`+placeholders+`], toUInt64(0))`,
+		slices.Concat([]any{fingerprint}, ids, ids, versions)...); err != nil {
+		return fmt.Errorf("evicting clickhouse vector chunks for %d session(s): %w", len(sessions), err)
 	}
 	return nil
 }

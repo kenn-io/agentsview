@@ -41,18 +41,6 @@
   let totalCalls = $derived(messages.reduce((n, message) => n + messageToolCount(message), 0));
   let label = $derived(m.tool_call_group_call_count({ count: totalCalls }));
   let displayMessages = $derived(sortNewestFirst ? [...messages].reverse() : messages);
-  let turnByMessage = $derived.by(() => {
-    const map = new Map<number, TurnTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) map.set(turn.message_id, turn);
-    return map;
-  });
-  let callByToolUseID = $derived.by(() => {
-    const map = new Map<string, CallTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) {
-      for (const call of turn.calls) map.set(call.tool_use_id, call);
-    }
-    return map;
-  });
 
   function soloDurationLabel(
     ct: CallTiming | undefined,
@@ -70,7 +58,7 @@
 
   function isRunningTurn(msg: Message): boolean {
     if (!sessionTiming.timing?.running) return false;
-    const turn = turnByMessage.get(msg.id);
+    const turn = sessionTiming.index.turnByMessage.get(msg.id);
     return turn != null && turn.duration_ms == null;
   }
 
@@ -107,7 +95,7 @@
         <div class="read-progress-divider" role="separator" aria-label={m.read_progress_boundary()}>{divider.label}</div>
       {/if}
       {@const calls = message.tool_calls ?? []}
-      {@const turn = turnByMessage.get(message.id)}
+      {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
       <div data-message-ordinal={message.ordinal}>
         {#if ui.isBlockVisible("thinking")}
           {#each collectSearchBlocks(message).filter((block) => block.kind === "thinking") as block (block.key)}
@@ -121,7 +109,7 @@
             content=""
             label={displayToolName(soloCall)}
             durationLabel={soloDurationLabel(
-              callByToolUseID.get(soloCall.tool_use_id ?? ""),
+              sessionTiming.index.callByToolUseID.get(soloCall.tool_use_id ?? ""),
               turn,
               message,
             )}
@@ -131,7 +119,7 @@
         {:else if calls.length >= 2}
           <ParallelGroup sessionId={message.session_id} ordinal={message.ordinal}
             toolCalls={calls}
-            callTimingByID={callByToolUseID}
+            callTimingByID={sessionTiming.index.callByToolUseID}
             isRunning={isRunningTurn(message)}
             searchOrdinal={searchable ? message.ordinal : undefined}
           />

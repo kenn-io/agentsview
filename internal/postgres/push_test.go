@@ -179,6 +179,11 @@ func (c *pushAliasRoutingConn) QueryContext(
 			columns: []string{"exists"},
 			values:  [][]driver.Value{{1}},
 		}, nil
+	case strings.Contains(normalized, "from information_schema.columns"):
+		return &pushAliasRoutingRows{
+			columns: []string{"wide"},
+			values:  [][]driver.Value{{true}},
+		}, nil
 	case strings.Contains(normalized, "from pg_indexes"):
 		return &pushAliasRoutingRows{
 			columns: []string{"exists"},

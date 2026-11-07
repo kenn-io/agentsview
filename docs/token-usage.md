@@ -156,6 +156,41 @@ Costs for admin rows come from Cursor's `chargedCents` field instead of
 AgentsView's model-pricing table, so they can report spend even for models that
 do not have a LiteLLM price entry.
 
+### xAI account usage CSV
+
+Import a usage CSV downloaded from xAI with:
+
+```bash
+agentsview usage grok usage.csv
+```
+
+The command validates the entire file before writing billing events to the local
+archive. Reimporting overlapping exports skips existing `Billing Item ID`
+values. It accepts `grok-build`, `grok-bot`, and `cursor` products, which appear
+under the `grok`, `grok-bot`, and `cursor` agents. Their events contribute to the
+Usage dashboard and daily reports, and follow the usual mirror push paths.
+The Agent filter includes billing-only products. The All range starts at the
+earliest session or billing event, including archives with no local sessions.
+
+Prompt, completion, cached prompt, and cache-write counters stay separate.
+Billing counters may aggregate many requests and have no per-request token cap.
+Costs come from the export's USD `Pricing Contracted` field, rounded to
+microdollars. A reported $0 stays $0 even when model pricing is available.
+Cache savings are estimates at base model rates; aggregate counters do not
+establish a single request's context size for pricing bands.
+Blank models remain blank in the archive and display as `<unknown>` in reports.
+Event timestamps retain their instant in UTC; reports use the selected timezone.
+
+These exports contain no conversations, session IDs, projects, machine names, or
+automation evidence. The import creates no sessions. Project, machine, and
+session-only filters exclude these billing events. Agent, model, and date
+filters apply. `Charge Category` and `Usage Type` are retained with the product
+in each event's kind.
+
+Billing IDs cannot be matched to native session events or Cursor Admin API
+fingerprints. Importing overlapping usage through those sources can count it
+twice. CSV reimport deduplication applies only to the same billing IDs.
+
 ## Usage Dashboard
 
 AgentsView includes a dedicated **Usage** page in the web UI, reachable from the

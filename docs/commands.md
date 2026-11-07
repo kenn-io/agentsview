@@ -402,6 +402,35 @@ upload spool.
 
 ______________________________________________________________________
 
+### `agentsview why`
+
+Find recorded sessions and prompts behind a commit or file lines:
+
+```bash
+agentsview why internal/db/messages.go:120-140
+agentsview why --commit 1a2b3c4
+agentsview why main.go --format json
+```
+
+Use `path:N` for one line, `path:N-M` for an inclusive range, or `path` for the
+whole file. Line numbers start at 1. The file is blamed in its own Git
+repository, including when you run the command from another directory.
+Whitespace changes count, and uncommitted lines appear as a separate count. A
+file name ending in `:digits` is interpreted as a line range and can't be blamed
+by that name.
+
+`--commit` accepts a SHA or prefix and works outside a checkout. Ambiguous
+prefixes return all recorded candidates. Add `--format json` or `--json` for
+scripts. Each commit keeps its own session links and the prompt before each
+commit call, even when one session made several commits.
+
+The command calls no model. Run `agentsview source sync`
+first if you need newer records. A transcript link identifies the session that
+ran the commit; it doesn't prove who wrote each line. Deleted or trashed sessions
+appear as missing records without a prompt.
+
+______________________________________________________________________
+
 ### `agentsview daemon`
 
 Manage the writable SQLite server. The daemon provides the web UI, API, session
@@ -642,6 +671,9 @@ second writer. A background daemon self-exits after the idle timeout when no
 external request or daemon-owned job is active. Periodic sync and file-watcher
 work prevent exit while they run, but do not keep the daemon alive forever by
 themselves.
+
+`sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
+pause.
 
 #### CLI daemon behavior
 
@@ -1999,6 +2031,7 @@ agentsview session get <id>              # metadata + signals
 agentsview session list [flags]          # filtered list
 agentsview session list --resume         # recently-active resume table
 agentsview session messages <id>         # paginated messages
+agentsview session commits <id>          # commits and their prompts
 agentsview session tool-calls <id>       # flat tool-call list
 agentsview session export <id>           # stream raw source file
 agentsview session sync <path-or-id>     # parse + insert
@@ -2012,6 +2045,31 @@ agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
 
+`agentsview session commits <id>` lists transcript and Git trailer commits
+linked to a session. The `SOURCE` column distinguishes `transcript` from
+`commit message`. JSON keeps `source: "trailer"` for commit message links. Use
+`--format json` for structured output. The table shows the session, exact message ordinal,
+call time, source, recorded SHA, branch, subject, and user turn, shortened to
+100 terminal columns. Transcript links use the last real prompt before the
+commit call. Trailer links use the last real prompt at or before Git's author
+time and mark the turn as estimated. They require a session message within the
+five minutes before that time; an idle session has no suggested turn. The prompt
+can be older than five minutes when later messages keep the session active.
+Trashed or permanently deleted sessions carry `missing: true` and omit the turn. See
+[commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
+retention and lookup limits. Transcript links require stored Git summaries with SHAs of 7
+to 64 characters. Quiet commits have no transcript link. Links include Codex
+poll results paired with the original call. Calls spanning repositories use the
+first directory; the last `cd` before the first commit invocation adjusts it.
+Archives retaining only transcripts keep trailer links; usage-only archives have
+no links. Hosted PostgreSQL returns HTTP 501. Sessions permanently deleted
+before this release have no transcript links. JSON output keeps `call_index`.
+Code-mode scripts with exactly one tool call and a fixed command literal can
+link commits, including output without a process ID. Command literals containing
+`${` have no links. A single-call `write_stdin` script can poll an earlier
+commit execution. Scripts with several tool calls cannot start new commit links;
+their polls need output process IDs matching an earlier commit call.
+
 `session list --label k=v` and `--pr owner/repo#123` filter by
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
@@ -2020,6 +2078,19 @@ agentsview session parent <id> <parent>  # record the launching session
 [session usage contract](/docs/session-api/#agentsview-session-usage) for
 refresh behavior, missing-session exit codes, and the `refresh_incomplete`
 JSON field.
+
+An empty first page of `session search` keeps `(no matches)` on stdout and prints
+measured hints on stderr when one-shot, automated, or child sessions contain
+matches. Each hint
+includes a command that preserves your filters and enables the required include
+flags. JSON adds `hints` entries with `code`, `message`, and a full `next` command.
+Counts use a bounded search and say `more than N` when more matches exist, or
+`at least N` for semantic and hybrid searches or when filtering or candidate
+limits prevent an exact count.
+For multi-word substring queries over messages, a hint offers `--fts` only when
+that retry finds matches. `excluded_combined` gives a retry with the remaining
+include flags for matches beyond the individual class hints. Failed diagnostic
+searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
@@ -2039,10 +2110,14 @@ exceptions: they stream raw bytes and NDJSON respectively, so they reject
 `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>` when that daemon
 requires auth, or `--pg` to read from configured PostgreSQL.
 
-`agentsview session list` excludes one-shot and automated sessions by default.
-When that hides matching sessions on the first page, it reports the counts and
-the corresponding `--include-one-shot` or `--include-automated` flags on stderr.
-Stdout, including `--format json`, keeps its existing shape for pipelines.
+`agentsview session list` excludes one-shot, automated, and child sessions by
+default. When that hides matching sessions on the first page, it reports the
+counts and the corresponding `--include-one-shot`, `--include-automated`, or
+`--include-children` flags on stderr, including when the list has visible results.
+Child counts include sessions hidden by several defaults; the notice lists
+every remaining include flag to use together. Child counts use one bounded page;
+a positive count from a partial page says `at least N`. Stdout, including
+`--format json`, keeps its existing shape for pipelines.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from
 `default_pg` plus `[pg.NAME]` are sync configuration only; they do not change
