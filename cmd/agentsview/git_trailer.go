@@ -33,7 +33,7 @@ func newGitTrailerCommand() *cobra.Command {
 func newGitTrailerPrepareCommand() *cobra.Command {
 	return &cobra.Command{
 		Use: "git-trailer-prepare <file> [source] [commit]", Hidden: true, DisableFlagParsing: true,
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) < 1 || len(args) > 3 {
 				return errors.New("usage: agentsview git-trailer-prepare <file> [source] [commit]")
 			}
@@ -41,7 +41,7 @@ func newGitTrailerPrepareCommand() *cobra.Command {
 			if len(args) >= 2 {
 				source = args[1]
 			}
-			return gittrailer.PrepareTemplate(args[0], source)
+			return gittrailer.PrepareTemplate(cmd.Context(), args[0], source)
 		},
 	}
 }
@@ -62,8 +62,9 @@ func newGitHookCommand() *cobra.Command {
 			Use: "install", Short: "Install in the current repository", Args: cobra.NoArgs,
 			Long: "Write prepare-commit-msg and commit-msg hooks into the hooks directory Git uses " +
 				"for the current repository. A core.hooksPath setting makes them apply to every " +
-				"repository sharing that path. An existing different hook is left alone, and the " +
-				"command prints the line to add to it. A missing agentsview binary or session " +
+				"repository sharing that path. If either hook already exists with other content, " +
+				"nothing is installed and the command prints the steps for both hooks. " +
+				"A missing agentsview binary or session " +
 				"leaves commit messages unchanged.",
 			Example: "  agentsview git-hook install",
 			RunE:    func(_ *cobra.Command, _ []string) error { return gittrailer.Install(".") },

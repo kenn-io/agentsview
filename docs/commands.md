@@ -97,10 +97,12 @@ and Codex accept letters, digits, dots, underscores, and hyphens, up to 128
 characters, starting with a letter or digit.
 
 Installation writes both hooks into the directory Git uses. Rerunning it
-succeeds without changing byte-identical hooks; a different existing hook needs
-manual integration. A `core.hooksPath` setting, including a global one, makes
-installation apply to every repository sharing that path. Add these lines to
-existing hooks instead:
+succeeds without changing byte-identical hooks. A `core.hooksPath` setting,
+including a global one, makes installation apply to every repository sharing
+that path. The two hooks only work as a pair. When either one already exists
+with other content, installation writes nothing and prints the steps for both:
+the line to add to each existing hook, and the file to create for a missing
+one. These are the lines:
 
 ```sh
 if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$@" || :; fi

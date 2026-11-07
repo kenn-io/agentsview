@@ -27,43 +27,81 @@ func hookPath(repoDir, name string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(repoDir, dir)
 	}
+	// Integration steps name this path, so it must not depend on the caller's directory.
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
 	return filepath.Join(dir, name), nil
 }
 
 // Install adds template tracking and session trailers without replacing hooks.
+// The hooks only work as a pair, so it writes nothing when either needs manual
+// integration and explains how to set up both.
 func Install(repoDir string) error {
 	type hookSpec struct {
 		name, line, script, path string
+		state                    hookState
 	}
 	hooks := []hookSpec{
 		{name: "prepare-commit-msg", line: prepareHookLine, script: prepareHookScript},
 		{name: "commit-msg", line: hookLine, script: hookScript},
 	}
+	conflict := false
 	for i := range hooks {
 		path, err := hookPath(repoDir, hooks[i].name)
 		if err != nil {
 			return err
 		}
 		hooks[i].path = path
-		if _, err := existingHook(path, hooks[i].name, hooks[i].script, hooks[i].line); err != nil {
+		if hooks[i].state, err = existingHook(path, hooks[i].script); err != nil {
 			return err
 		}
+		conflict = conflict || hooks[i].state == hookOther
+	}
+	if conflict {
+		var b strings.Builder
+		b.WriteString("existing Git hooks need manual integration; nothing was installed")
+		for _, hook := range hooks {
+			switch hook.state {
+			case hookOther:
+				fmt.Fprintf(&b, "\nadd this line to %s:\n%s", hook.path, hook.line)
+			case hookMissing:
+				fmt.Fprintf(&b, "\ncreate executable %s containing:\n%s", hook.path, strings.TrimSuffix(hook.script, "\n"))
+			}
+		}
+		return errors.New(b.String())
 	}
 	for _, hook := range hooks {
-		if err := installHook(hook.path, hook.name, hook.script, hook.line); err != nil {
+		if err := installHook(hook.path, hook.script); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func installHook(path, name, script, line string) error {
+type hookState int
+
+const (
+	hookMissing hookState = iota
+	hookInstalled
+	hookOther
+)
+
+func installHook(path, script string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
 	if errors.Is(err, os.ErrExist) {
-		return checkExistingHook(path, name, script, line)
+		state, err := existingHook(path, script)
+		if err != nil {
+			return err
+		}
+		if state != hookInstalled {
+			return fmt.Errorf("%s changed during installation", path)
+		}
+		return os.Chmod(path, 0o755)
 	}
 	if err != nil {
 		return err
@@ -72,24 +110,16 @@ func installHook(path, name, script, line string) error {
 	return errors.Join(writeErr, file.Close())
 }
 
-func existingHook(path, name, script, line string) (bool, error) {
+func existingHook(path, script string) (hookState, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return hookMissing, nil
 	}
 	if err != nil {
-		return false, err
+		return hookMissing, err
 	}
 	if string(data) == script {
-		return true, nil
+		return hookInstalled, nil
 	}
-	return false, fmt.Errorf("%s already exists; add this line to it:\n%s", name, line)
-}
-
-func checkExistingHook(path, name, script, line string) error {
-	exists, err := existingHook(path, name, script, line)
-	if err != nil || !exists {
-		return err
-	}
-	return os.Chmod(path, 0o755)
+	return hookOther, nil
 }

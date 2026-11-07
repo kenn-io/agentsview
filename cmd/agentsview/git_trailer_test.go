@@ -113,6 +113,8 @@ func TestGitTrailerCommits(t *testing.T) {
 		templateFlag  bool
 		abort         bool
 		abortContains string
+		staged        bool
+		prepareSuffix string
 		want          string
 	}{
 		{name: "hash-leading subject is stripped as a comment", args: []string{"-m", "#123 fix the parser"}, want: "#123 fix the parser"},
@@ -123,12 +125,24 @@ func TestGitTrailerCommits(t *testing.T) {
 		{name: "comment-only message", abort: true},
 		{name: "unchanged configured template", template: true, abort: true, abortContains: "you did not edit the message"},
 		{name: "unchanged command-line template", template: true, templateFlag: true, abort: true, abortContains: "you did not edit the message"},
+		{name: "template with comment from another hook", template: true, prepareSuffix: `printf '\n# note from another hook\n\n' >> "$1"`, abort: true, abortContains: "you did not edit the message"},
+		{name: "verbose diff below scissors", args: []string{"-v"}, staged: true, abort: true},
 		{name: "editor", editor: true, want: "from editor"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newGitTrailerFixture(t)
 			f.hook(t, "install")
 			f.setenv("GIT_EDITOR", ":")
+			if tt.prepareSuffix != "" {
+				prepare := filepath.Join(f.repo, ".git", "hooks", "prepare-commit-msg")
+				data, err := os.ReadFile(prepare)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(prepare, append(data, tt.prepareSuffix+"\n"...), 0o755))
+			}
+			if tt.staged {
+				require.NoError(t, os.WriteFile(filepath.Join(f.repo, "staged.txt"), []byte("staged change\n"), 0o600))
+				f.git(t, "add", "staged.txt")
+			}
 			if tt.name == "file" {
 				f.setenv("TMPDIR", filepath.Join(f.repo, "missing-temp"))
 			}
@@ -263,13 +277,14 @@ func TestGitHookReinstall(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n# existing hook\n"), 0o755))
 	out, err := f.run(t, f.bin, "git-hook", "install")
 	require.Error(t, err)
-	assert.Contains(t, out, `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`)
 	data, err = os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, "#!/bin/sh\n# existing hook\n", string(data))
-	_, line, ok := strings.Cut(out, "add this line to it:\n")
-	require.True(t, ok)
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+strings.TrimSpace(line)+"\nprintf 'later check\\n' >&2\nexit 42\n"), 0o755))
+	steps := hookInstructions(t, out)
+	require.Len(t, steps, 1)
+	require.Equal(t, path, steps[0].path)
+	require.False(t, steps[0].create)
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+steps[0].text+"\nprintf 'later check\\n' >&2\nexit 42\n"), 0o755))
 	require.NoError(t, os.Remove(f.bin))
 	f.setenv("PATH", filepath.Dir(f.bin))
 	out, err = f.run(t, "git", "commit", "--allow-empty", "-m", "rejected by later check")
@@ -277,18 +292,69 @@ func TestGitHookReinstall(t *testing.T) {
 	assert.Contains(t, out, "later check")
 }
 
-func TestGitHookInstallPreservesExistingPrepareHook(t *testing.T) {
-	f := newGitTrailerFixture(t)
-	path := filepath.Join(f.repo, ".git", "hooks", "prepare-commit-msg")
-	const existing = "#!/bin/sh\n# existing hook\n"
-	require.NoError(t, os.WriteFile(path, []byte(existing), 0o755))
-	out, err := f.run(t, f.bin, "git-hook", "install")
-	require.Error(t, err)
-	assert.Contains(t, out, "prepare-commit-msg already exists; add this line to it:")
-	assert.Contains(t, out, "agentsview git-trailer-prepare")
-	data, readErr := os.ReadFile(path)
-	require.NoError(t, readErr)
-	assert.Equal(t, existing, string(data))
-	_, statErr := os.Stat(filepath.Join(f.repo, ".git", "hooks", "commit-msg"))
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
+// A custom hook blocks installation of both hooks, and the printed steps must
+// produce a working pair, including Git's unchanged-template rejection.
+func TestGitHookInstallInstructions(t *testing.T) {
+	for _, existingName := range []string{"prepare-commit-msg", "commit-msg"} {
+		t.Run(existingName, func(t *testing.T) {
+			f := newGitTrailerFixture(t)
+			hooks := filepath.Join(f.repo, ".git", "hooks")
+			existing := filepath.Join(hooks, existingName)
+			const custom = "#!/bin/sh\n# existing hook\n"
+			require.NoError(t, os.WriteFile(existing, []byte(custom), 0o755))
+			out, err := f.run(t, f.bin, "git-hook", "install")
+			require.Error(t, err)
+			data, err := os.ReadFile(existing)
+			require.NoError(t, err)
+			assert.Equal(t, custom, string(data))
+			for _, name := range []string{"prepare-commit-msg", "commit-msg"} {
+				if name != existingName {
+					assert.NoFileExists(t, filepath.Join(hooks, name), "install must not write half of the pair")
+				}
+			}
+			steps := hookInstructions(t, out)
+			require.Len(t, steps, 2)
+			for _, step := range steps {
+				if step.create {
+					require.NoError(t, os.WriteFile(step.path, []byte(step.text+"\n"), 0o755))
+					continue
+				}
+				data, err := os.ReadFile(step.path)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(step.path, append(data, step.text+"\n"...), 0o755))
+			}
+			f.git(t, "commit", "--allow-empty", "-m", "integrated hooks")
+			assert.Equal(t, "integrated hooks\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
+			template := filepath.Join(f.repo, "template")
+			require.NoError(t, os.WriteFile(template, []byte("Template subject\n"), 0o600))
+			f.git(t, "config", "commit.template", template)
+			f.setenv("GIT_EDITOR", ":")
+			out, err = f.run(t, "git", "commit", "--allow-empty")
+			require.Error(t, err, out)
+			assert.Contains(t, out, "you did not edit the message")
+		})
+	}
+}
+
+type hookStep struct {
+	path, text string
+	create     bool
+}
+
+// hookInstructions reads the integration steps that git-hook install prints.
+func hookInstructions(t *testing.T, out string) []hookStep {
+	t.Helper()
+	var steps []hookStep
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		if path, ok := strings.CutPrefix(line, "add this line to "); ok {
+			require.Greater(t, len(lines), i+1, out)
+			steps = append(steps, hookStep{path: strings.TrimSuffix(path, ":"), text: lines[i+1]})
+		}
+		if rest, ok := strings.CutPrefix(line, "create executable "); ok {
+			require.Greater(t, len(lines), i+2, out)
+			steps = append(steps, hookStep{path: strings.TrimSuffix(rest, " containing:"), text: lines[i+1] + "\n" + lines[i+2], create: true})
+		}
+	}
+	return steps
 }
