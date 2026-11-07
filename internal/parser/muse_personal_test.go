@@ -242,18 +242,18 @@ func TestMusePersonalUnsupportedKeepsTypeAndSource(t *testing.T) {
 	require.Len(t, out.Results, 1)
 	require.Len(t, out.Results[0].Result.Messages, 1)
 	msg := out.Results[0].Result.Messages[0]
-	assert.Contains(t, msg.Content, "future_widget")
-	assert.NotContains(t, msg.Content, "opaque-sentinel-body")
+	assert.Equal(t, musePersonalUnsupportedContent, msg.Content)
+	assert.Equal(t, "unsupported:item:future_widget", msg.SourceSubtype)
 	assert.Equal(t, "runtime.future", msg.SourceType)
 	assert.Contains(t, msg.SourceUUID, ":item:42:1")
 }
 
 func TestMusePersonalUnknownDiscriminators(t *testing.T) {
 	for _, tc := range []struct{ name, record, want string }{
-		{"record", `{"type":"future_record","source":"runtime.future","created_at":"2026-10-05T15:04:06Z","text":"opaque-sentinel-body"}` + "\n", "future_record"},
-		{"role", musePersonalTestItem(0, `{"type":"message","role":"future_role","text":"opaque-sentinel-body"}`), "future_role"},
-		{"part", musePersonalTestItem(0, `{"type":"message_parts","role":"user","parts":[{"type":"future_part","text":"opaque-sentinel-body"}]}`), "future_part"},
-		{"delimiter", musePersonalTestItem(0, `{"type":"future_\n]body","text":"opaque-sentinel-body"}`), "future___body"},
+		{"record", `{"type":"future_record","source":"runtime.future","created_at":"2026-10-05T15:04:06Z","text":"opaque-sentinel-body"}` + "\n", "unsupported:record:future_record"},
+		{"role", musePersonalTestItem(0, `{"type":"message","role":"future_role","text":"opaque-sentinel-body"}`), "unsupported:role:future_role"},
+		{"part", musePersonalTestItem(0, `{"type":"message_parts","role":"user","parts":[{"type":"future_part","text":"opaque-sentinel-body"}]}`), "unsupported:part:future_part"},
+		{"delimiter", musePersonalTestItem(0, `{"type":"future_\n]body","text":"opaque-sentinel-body"}`), "unsupported:item:future___body"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.record)
@@ -261,10 +261,8 @@ func TestMusePersonalUnknownDiscriminators(t *testing.T) {
 			require.Len(t, out.Results, 1)
 			require.Len(t, out.Results[0].Result.Messages, 1)
 			msg := out.Results[0].Result.Messages[0]
-			assert.Contains(t, msg.Content, tc.want)
-			assert.NotContains(t, msg.Content, "opaque-sentinel-body")
-			assert.NotContains(t, msg.Content, "\n")
-			assert.LessOrEqual(t, len(msg.Content), 160)
+			assert.Equal(t, musePersonalUnsupportedContent, msg.Content)
+			assert.Equal(t, tc.want, msg.SourceSubtype)
 			assert.Equal(t, "runtime.future", msg.SourceType)
 		})
 	}
@@ -285,10 +283,10 @@ func TestMusePersonalNullTimestampsAreMalformed(t *testing.T) {
 
 func TestMusePersonalFutureBodiesStayOpaque(t *testing.T) {
 	for _, tc := range []struct{ name, record, want string }{
-		{"item", musePersonalTestItem(0, `{"type":"future_item","text":{},"role":[],"parts":false}`), "future_item"},
-		{"role", musePersonalTestItem(0, `{"type":"message","role":"future_role","text":{}}`), "future_role"},
-		{"part", musePersonalTestItem(0, `{"type":"message_parts","role":"user","parts":[{"type":"future_part","text":{},"filename":[]}]}`), "future_part"},
-		{"record", `{"type":"future_record","created_at":"2026-10-05T15:04:06Z","source":"runtime.future","item":false,"summary":{}}` + "\n", "future_record"},
+		{"item", musePersonalTestItem(0, `{"type":"future_item","text":{},"role":[],"parts":false}`), "unsupported:item:future_item"},
+		{"role", musePersonalTestItem(0, `{"type":"message","role":"future_role","text":{}}`), "unsupported:role:future_role"},
+		{"part", musePersonalTestItem(0, `{"type":"message_parts","role":"user","parts":[{"type":"future_part","text":{},"filename":[]}]}`), "unsupported:part:future_part"},
+		{"record", `{"type":"future_record","created_at":"2026-10-05T15:04:06Z","source":"runtime.future","item":false,"summary":{}}` + "\n", "unsupported:record:future_record"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.record)
@@ -297,7 +295,8 @@ func TestMusePersonalFutureBodiesStayOpaque(t *testing.T) {
 			r := out.Results[0].Result
 			assert.Zero(t, r.Session.MalformedLines)
 			require.Len(t, r.Messages, 1)
-			assert.Contains(t, r.Messages[0].Content, tc.want)
+			assert.Equal(t, musePersonalUnsupportedContent, r.Messages[0].Content)
+			assert.Equal(t, tc.want, r.Messages[0].SourceSubtype)
 			assert.Equal(t, "runtime.future", r.Messages[0].SourceType)
 		})
 	}

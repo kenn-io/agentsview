@@ -196,17 +196,23 @@ func TestMusePersonalPartialDiscoverySyncsHealthySourcesWithoutTombstones(t *tes
 	healthyPath := filepath.Join(sessionsDir, healthyID+".jsonl")
 	require.NoError(t, os.WriteFile(healthyPath, []byte(healthyHeader+musePersonalSyncItem(0, `{"type":"message","role":"user","text":"healthy"}`)), 0o600))
 
-	stats, tombstoned, err := engine.ReconcileWatchRootsWithStats(ctx, []string{root}, true, nil)
+	syncStats := engine.SyncAll(ctx, nil)
+	assert.Positive(t, syncStats.Failed, "partial discovery must report the unfinished header")
+	healthy, err := database.GetSessionFull(ctx, "muse-personal:"+healthyID)
 	require.NoError(t, err)
-	assert.Positive(t, stats.Failed, "partial discovery must report the unfinished header")
+	require.NotNil(t, healthy, "healthy sources after an incomplete header must still sync")
+
+	stats, tombstoned, err := engine.ReconcileWatchRootsWithStats(ctx, []string{root}, true, nil)
+	var incomplete *incompleteReconciliationError
+	require.ErrorAs(t, err, &incomplete, "partial discovery must leave the root for a retry")
+	assert.Positive(t, incomplete.failures)
+	assert.Contains(t, incomplete.ReconciliationRetryRoots(), root)
+	assert.Zero(t, stats.Failed)
 	assert.Zero(t, tombstoned, "partial discovery must not tombstone the removed source")
 	existingAfter, err := database.GetSessionFull(ctx, existingID)
 	require.NoError(t, err)
 	require.NotNil(t, existingAfter, "partial discovery must preserve a previously archived session")
 	assert.Nil(t, existingAfter.SourceMissingAt)
-	healthy, err := database.GetSessionFull(ctx, "muse-personal:"+healthyID)
-	require.NoError(t, err)
-	require.NotNil(t, healthy, "healthy sources after an incomplete header must still sync")
 }
 
 func TestMusePersonalSyncAllSinceIncludesIndexOnlyChanges(t *testing.T) {
