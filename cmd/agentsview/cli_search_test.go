@@ -57,17 +57,17 @@ var cliSearchTasks = []struct {
 	{"start MCP server", "agentsview mcp", 1},
 }
 
-func isolateCLISearch(t testing.TB) (string, string) {
-	t.Helper()
-	home, data := t.TempDir(), t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
-	t.Setenv("AGENTSVIEW_DATA_DIR", data)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	t.Setenv("AGENTSVIEW_MODE", "invalid-discovery-fixture")
+func isolateCLISearch(tb testing.TB) (string, string) {
+	tb.Helper()
+	home, data := tb.TempDir(), tb.TempDir()
+	tb.Setenv("HOME", home)
+	tb.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	tb.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+	tb.Setenv("AGENTSVIEW_DATA_DIR", data)
+	tb.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	tb.Setenv("AGENTSVIEW_MODE", "invalid-discovery-fixture")
 	for _, name := range []string{"CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR"} {
-		t.Setenv(name, filepath.Join(home, name))
+		tb.Setenv(name, filepath.Join(home, name))
 	}
 	return home, data
 }
@@ -250,9 +250,13 @@ func TestCLISearchFormatSelectorsAgree(t *testing.T) {
 		}
 		var responses []cliSearchResponse
 		for _, selector := range [][]string{
-			{"--json"}, {"--json=true"}, {"--format", "json"},
-			{"--format", "human", "--json"}, {"--json=true", "--format=human"},
-			{"--format=json", "--json=false"}, {"--json=false", "--format=json"},
+			{"--json"},
+			{"--json=true"},
+			{"--format", "json"},
+			{"--format", "human", "--json"},
+			{"--json=true", "--format=human"},
+			{"--format=json", "--json=false"},
+			{"--json=false", "--format=json"},
 		} {
 			args := append([]string{"--limit", strconv.Itoa(limit)}, selector...)
 			args = append(args, "--", query)
@@ -429,8 +433,6 @@ func BenchmarkCLISearch(b *testing.B) {
 	root := newRootCommand()
 	for b.Loop() {
 		_, err := executeCommand(root, "cli", "search", "show token cost for a conversation")
-		if err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, err)
 	}
 }
