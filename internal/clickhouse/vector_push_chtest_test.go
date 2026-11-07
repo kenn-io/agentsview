@@ -6,8 +6,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/vector"
 )
 
 const (
@@ -94,6 +97,14 @@ func (e *fakeVectorExport) SessionDocs(
 
 func (e *fakeVectorExport) Close() error { return nil }
 
+// fixtureDocKey is the key the local mirror gives session's document with
+// source UUID uuid. The push narrows its vector-table statements to the
+// doc_key prefixes of their sessions, so fixture keys need the shape
+// vector.DocKey builds.
+func fixtureDocKey(sessionID, uuid string) string {
+	return vector.DocKey("user", sessionID, uuid, 0, 1)
+}
+
 func vdoc(sessionID, docKey string, ordinal int, content, hash string, chunks ...[]float32) storage.VectorPushDoc {
 	d := storage.VectorPushDoc{
 		DocKey: docKey, SessionID: sessionID, Ordinal: ordinal, OrdinalEnd: ordinal,
@@ -114,11 +125,11 @@ func newFixtureVectorSource() *fakeVectorSource {
 		hashes: map[string]string{fixtureAlphaID: "alpha-v1", fixtureBetaID: "beta-v1"},
 		docs: map[string][]storage.VectorPushDoc{
 			fixtureAlphaID: {
-				vdoc(fixtureAlphaID, "alpha-d0", 0, "alpha first", "h-a0", vecAlpha0a, vecAlpha0b),
-				vdoc(fixtureAlphaID, "alpha-d1", 1, fixtureSecret, "h-a1", vecAlpha1),
+				vdoc(fixtureAlphaID, fixtureDocKey(fixtureAlphaID, "d0"), 0, "alpha first", "h-a0", vecAlpha0a, vecAlpha0b),
+				vdoc(fixtureAlphaID, fixtureDocKey(fixtureAlphaID, "d1"), 1, fixtureSecret, "h-a1", vecAlpha1),
 			},
 			fixtureBetaID: {
-				vdoc(fixtureBetaID, "beta-d0", 0, "beta first", "h-b0", vecBeta0),
+				vdoc(fixtureBetaID, fixtureDocKey(fixtureBetaID, "d0"), 0, "beta first", "h-b0", vecBeta0),
 			},
 		},
 	}
@@ -160,8 +171,8 @@ func TestVectorPushRoundTripDeltaAndEviction(t *testing.T) {
 	// must not survive alongside the new ones.
 	source.hashes[fixtureBetaID] = "beta-v2"
 	source.docs[fixtureBetaID] = []storage.VectorPushDoc{
-		vdoc(fixtureBetaID, "beta-d0", 0, "beta first", "h-b0b", vecBeta0),
-		vdoc(fixtureBetaID, "beta-d1", 1, "beta second", "h-b1", vecAlpha1),
+		vdoc(fixtureBetaID, fixtureDocKey(fixtureBetaID, "d0"), 0, "beta first", "h-b0b", vecBeta0),
+		vdoc(fixtureBetaID, fixtureDocKey(fixtureBetaID, "d1"), 1, "beta second", "h-b1", vecAlpha1),
 	}
 	third, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -181,7 +192,7 @@ func TestVectorPushRoundTripDeltaAndEviction(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, fourth.Vectors.SessionsPushed)
 	assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID))
-	assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-d1"))
+	assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", fixtureDocKey(fixtureBetaID, "d1")))
 
 	// beta leaves the local index entirely: its state, chunks, and docs are
 	// evicted while alpha is untouched.
@@ -229,20 +240,20 @@ func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
 			// Another generation embedded both alpha docs. Its chunks for a
 			// doc alpha still holds survive; those for a vanished doc go.
 			require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{
-				{"fp-other-gen", "alpha-d0", int64(0), fixtureAlphaID, vecAlpha0a, uint64(1)},
-				{"fp-other-gen", "alpha-d1", int64(0), fixtureAlphaID, vecAlpha1, uint64(1)},
+				{"fp-other-gen", fixtureDocKey(fixtureAlphaID, "d0"), int64(0), fixtureAlphaID, vecAlpha0a, uint64(1)},
+				{"fp-other-gen", fixtureDocKey(fixtureAlphaID, "d1"), int64(0), fixtureAlphaID, vecAlpha1, uint64(1)},
 			}))
 
 			// alpha drops a doc and re-embeds the survivor with one chunk;
 			// beta gains a doc.
 			source.hashes[fixtureAlphaID] = "alpha-v2"
 			source.docs[fixtureAlphaID] = []storage.VectorPushDoc{
-				vdoc(fixtureAlphaID, "alpha-d0", 0, "alpha first", "h-a0b", vecAlpha0a),
+				vdoc(fixtureAlphaID, fixtureDocKey(fixtureAlphaID, "d0"), 0, "alpha first", "h-a0b", vecAlpha0a),
 			}
 			source.hashes[fixtureBetaID] = "beta-v2"
 			source.docs[fixtureBetaID] = []storage.VectorPushDoc{
-				vdoc(fixtureBetaID, "beta-d0", 0, "beta first", "h-b0", vecBeta0),
-				vdoc(fixtureBetaID, "beta-d1", 1, "beta second", "h-b1", vecChild0),
+				vdoc(fixtureBetaID, fixtureDocKey(fixtureBetaID, "d0"), 0, "beta first", "h-b0", vecBeta0),
+				vdoc(fixtureBetaID, fixtureDocKey(fixtureBetaID, "d1"), 1, "beta second", "h-b1", vecChild0),
 			}
 			res, err := s.Push(ctx, false, nil)
 			require.NoError(t, err)
@@ -251,12 +262,12 @@ func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
 			assert.Equal(t, 3, res.Vectors.ChunksPushed)
 
 			assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureAlphaID))
-			assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "doc_key = ?", "alpha-d1"))
+			assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "doc_key = ?", fixtureDocKey(fixtureAlphaID, "d1")))
 			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks",
 				"session_id = ? AND generation_fingerprint = ?", fixtureAlphaID, vectorFixtureFP))
-			assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "alpha-d1"))
+			assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", fixtureDocKey(fixtureAlphaID, "d1")))
 			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks",
-				"doc_key = ? AND generation_fingerprint = ?", "alpha-d0", "fp-other-gen"))
+				"doc_key = ? AND generation_fingerprint = ?", fixtureDocKey(fixtureAlphaID, "d0"), "fp-other-gen"))
 			assert.Equal(t, 2, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID))
 			assert.Equal(t, 2, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureBetaID))
 			assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
@@ -265,6 +276,111 @@ func TestVectorPushBatchReplacesEachSessionsRows(t *testing.T) {
 				"session_id = ? AND doc_agg_hash = ?", fixtureBetaID, "beta-v2"))
 		})
 	}
+}
+
+// TestVectorStatementsFindSessionsWithUnusualIDs pins that the flush and
+// eviction statements still reach every row of a session whose id holds
+// characters DocKey escapes or a query parameter value would decode
+// (backslash, tab, quote, ':', '%'), and leave a session whose id is a raw
+// prefix of it alone.
+func TestVectorStatementsFindSessionsWithUnusualIDs(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	conn := chtest.Open(t, target.URL, target.Database)
+	odd := `a\b` + "\t" + `'c:%3A#`
+	neighbor := `a\b`
+	flush := func(sessionID string, docs ...storage.VectorPushDoc) {
+		t.Helper()
+		b := s.newVectorBatch(vectorFixtureFP)
+		b.add(sessionID, "hash", docs)
+		require.NoError(t, s.flushVectorBatch(ctx, b))
+	}
+	flush(odd,
+		vdoc(odd, fixtureDocKey(odd, "d0"), 0, "odd first", "h-o0", vecAlpha0a),
+		vdoc(odd, fixtureDocKey(odd, "d1"), 1, "odd second", "h-o1", vecAlpha1))
+	flush(neighbor, vdoc(neighbor, fixtureDocKey(neighbor, "d0"), 0, "neighbor", "h-n0", vecBeta0))
+
+	flush(odd, vdoc(odd, fixtureDocKey(odd, "d0"), 0, "odd first", "h-o0", vecAlpha0a))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", odd),
+		"a re-flush removes the document the session no longer holds")
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "session_id = ?", odd))
+
+	require.NoError(t, s.evictVectorSessions(ctx, vectorFixtureFP, []string{odd}))
+	assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "session_id = ?", odd))
+	assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ?", odd))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", neighbor))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "session_id = ?", neighbor))
+}
+
+// TestVectorStatementsHandleBatchSizes pins that the flush and eviction
+// statements run within the server's limits and remove exactly the batch's rows
+// at the largest batch with a doc_key condition, the smallest without one, and
+// the largest batch a push sends.
+func TestVectorStatementsHandleBatchSizes(t *testing.T) {
+	t.Parallel()
+	for _, size := range []int{vectorKeyConditionSessions, vectorKeyConditionSessions + 1, idBatchSize} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			local, target := seedFixture(t)
+			s := newTestSync(t, local, target, storage.PusherOptions{})
+			conn := chtest.Open(t, target.URL, target.Database)
+			ids := make([]string, size)
+			batch := s.newVectorBatch(vectorFixtureFP)
+			for i := range ids {
+				ids[i] = fmt.Sprintf("batch-%03d", i)
+				batch.add(ids[i], "hash", []storage.VectorPushDoc{
+					vdoc(ids[i], fixtureDocKey(ids[i], "kept"), 0, "kept", "h0", vecAlpha0a),
+				})
+			}
+			survivor := "batch-survivor"
+			batch.add(survivor, "hash", []storage.VectorPushDoc{
+				vdoc(survivor, fixtureDocKey(survivor, "kept"), 0, "kept", "h0", vecAlpha0a),
+			})
+			require.NoError(t, s.flushVectorBatch(ctx, batch))
+			require.Equal(t, size+1, chtest.Count(t, conn, "vector_chunks", ""))
+
+			require.NoError(t, s.evictVectorSessions(ctx, vectorFixtureFP, ids))
+
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", ""))
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", ""))
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "session_id = ?", survivor))
+		})
+	}
+}
+
+// TestVectorEvictionReadsOnlyTheSessionsKeyRanges pins that reading a session's
+// chunks skips the key ranges other sessions hold, the reason the vector
+// statements carry a doc_key condition on top of their session_id filter.
+func TestVectorEvictionReadsOnlyTheSessionsKeyRanges(t *testing.T) {
+	t.Parallel()
+	const rows = 200_000
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	conn := chtest.Open(t, target.URL, target.Database)
+	_, err := conn.ExecContext(t.Context(), `
+		INSERT INTO vector_chunks (generation_fingerprint, doc_key, chunk_index, session_id, embedding, push_version)
+		SELECT ?, concat('u:', sid, ':d'), 0, sid, [0.5], 1
+		FROM (SELECT concat('session-', leftPad(toString(number), 8, '0')) AS sid FROM numbers(?))`,
+		vectorFixtureFP, rows)
+	require.NoError(t, err)
+	comment := "vector-eviction-pruning-" + target.Database
+	ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
+	evicted := fmt.Sprintf("session-%08d", rows/2)
+
+	bounds, err := s.vectorEvictionBounds(ctx, vectorFixtureFP, []string{evicted})
+	require.NoError(t, err)
+	require.Equal(t, map[string]uint64{evicted: 1}, bounds)
+
+	_, err = conn.ExecContext(t.Context(), `SYSTEM FLUSH LOGS`)
+	require.NoError(t, err)
+	var read uint64
+	require.NoError(t, conn.QueryRowContext(t.Context(), `
+		SELECT read_rows FROM system.query_log
+		WHERE type = 'QueryFinish' AND log_comment = ?`, comment).Scan(&read))
+	assert.Less(t, read, uint64(rows/2))
 }
 
 // TestVectorPushFailedFlushKeepsSessionsStale pins that a flush failing
@@ -340,7 +456,7 @@ func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	source.hashes["ghost"] = "g-v1"
-	source.docs["ghost"] = []storage.VectorPushDoc{vdoc("ghost", "ghost-d0", 0, "ghost", "h-g", vecBeta0)}
+	source.docs["ghost"] = []storage.VectorPushDoc{vdoc("ghost", fixtureDocKey("ghost", "d0"), 0, "ghost", "h-g", vecBeta0)}
 	conn := chtest.Open(t, target.URL, target.Database)
 
 	all := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
@@ -469,7 +585,7 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 
 			version := newPushVersion()
 			require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
-				vectorFixtureFP, "beta-other", int64(0), fixtureBetaID, vecBeta0, version,
+				vectorFixtureFP, fixtureDocKey(fixtureBetaID, "other"), int64(0), fixtureBetaID, vecBeta0, version,
 			}}))
 			tc.claim(t, conn, version)
 
@@ -480,7 +596,7 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 			assert.Equal(t, 1, res.Vectors.SessionsEvicted)
 			assert.Equal(t, 0, chtest.Count(t, conn, "vector_push_state",
 				"source_archive_id = ? AND session_id = ?", s.archiveID, fixtureBetaID))
-			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", fixtureDocKey(fixtureBetaID, "other")),
 				"the other archive's chunk survives the former owner's eviction")
 			assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID),
 				"documents stay while any generation still holds chunks for the session")
@@ -494,11 +610,11 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 			newest := bounds[fixtureAlphaID]
 			require.NotZero(t, newest)
 			require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
-				vectorFixtureFP, "alpha-concurrent", int64(0), fixtureAlphaID, vecAlpha0a, newest + 1,
+				vectorFixtureFP, fixtureDocKey(fixtureAlphaID, "concurrent"), int64(0), fixtureAlphaID, vecAlpha0a, newest + 1,
 			}}))
 			require.NoError(t, s.deleteVectorChunksThrough(ctx, vectorFixtureFP, bounds))
 			assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ? AND push_version <= ?", fixtureAlphaID, newest))
-			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "alpha-concurrent"),
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", fixtureDocKey(fixtureAlphaID, "concurrent")),
 				"chunks newer than the observed version survive the bounded delete")
 		})
 	}
@@ -529,7 +645,7 @@ func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
 
 			version := newPushVersion()
 			require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
-				vectorFixtureFP, "beta-other", int64(0), fixtureBetaID, vecBeta0, version,
+				vectorFixtureFP, fixtureDocKey(fixtureBetaID, "other"), int64(0), fixtureBetaID, vecBeta0, version,
 			}}))
 			require.NoError(t, insertRows(ctx, conn, "vector_push_state", [][]any{{
 				"other-archive", vectorFixtureFP, fixtureBetaID, "beta-other-v1", version,
@@ -541,14 +657,14 @@ func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
 			// generation does not touch them.
 			const otherGen = "fp-second-gen"
 			require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
-				otherGen, "alpha-d0", int64(0), fixtureAlphaID, vecAlpha0a, version,
+				otherGen, fixtureDocKey(fixtureAlphaID, "d0"), int64(0), fixtureAlphaID, vecAlpha0a, version,
 			}}))
 			require.Equal(t, 0, chtest.Count(t, conn, "vector_push_state", "generation_fingerprint = ?", otherGen))
 			// A push that stopped right after inserting documents, on a session with
 			// no chunks and no state row in any generation: only transcript text is
 			// left, and only the archive-wide document sweep can remove it.
 			require.NoError(t, insertRows(ctx, conn, "vector_documents", [][]any{{
-				"child-orphan-doc", fixtureChildID, "child-uuid", int64(0), int64(0), false,
+				fixtureDocKey(fixtureChildID, "orphan"), fixtureChildID, "child-uuid", int64(0), int64(0), false,
 				"[]", "child first", "h-c0", version,
 			}}))
 			require.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureChildID))
@@ -568,7 +684,7 @@ func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
 				"chunks with no state row are swept through the session's archive")
 			assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureChildID),
 				"a document with neither chunks nor a state row is swept by archive")
-			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", fixtureDocKey(fixtureBetaID, "other")),
 				"the other archive's beta chunk survives")
 			assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state", "source_archive_id = 'other-archive'"))
 		})
@@ -586,7 +702,7 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	source := newFixtureVectorSource()
 	source.hashes[fixtureChildID] = "child-v1"
 	source.docs[fixtureChildID] = []storage.VectorPushDoc{
-		vdoc(fixtureChildID, "child-d0", 0, "child first", "h-c0", vecChild0),
+		vdoc(fixtureChildID, fixtureDocKey(fixtureChildID, "d0"), 0, "child first", "h-c0", vecChild0),
 	}
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
 	_, err := s.Push(ctx, false, nil)
@@ -642,7 +758,7 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 		{SessionID: fixtureBetaID, Ordinal: 7},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "alpha-d1", units[0].DocKey)
+	assert.Equal(t, fixtureDocKey(fixtureAlphaID, "d1"), units[0].DocKey)
 	assert.Equal(t, fixtureAlphaID, units[0].SessionID)
 	assert.Empty(t, units[1].DocKey, "a ref outside every unit resolves to zero")
 

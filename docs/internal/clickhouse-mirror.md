@@ -88,11 +88,19 @@ covers documents and chunks whose key the batch did not rewrite. A rewritten key
 keeps its older row until `ReplacingMergeTree` collapses it, which every
 `final=1` read already does. Deleting those rows too would write a patch row for
 each one, and every later read of the table pays to apply patch rows until
-merges fold them in. Evictions run in batches of 500 sessions as well. The
-vector tables are not sorted by session, so each statement reads the whole
-session column; the statement count grows with the number of batches, not
-sessions. A crash before the state rows land leaves every session in the batch
-stale, so the next push repeats them.
+merges fold them in. Evictions run in batches of 500 sessions as well, so the
+statement count grows with the number of batches, not sessions. A crash before
+the state rows land leaves every session in the batch stale, so the next push
+repeats them.
+
+The vector tables are not sorted by session, but every `doc_key` starts with one
+of four prefixes that name its session (`vector.DocKeySessionPrefixes`). In a
+batch of up to 100 sessions, the flush and eviction statements add those
+prefixes to their `session_id` filter, so the primary key skips other sessions'
+rows. Each row a statement reads pays to evaluate the prefix terms, and in a
+larger batch the sessions are scattered across most of the table. A larger
+batch therefore reads the whole table without them. This depends on the push
+writing only keys that `vector.DocKey` builds.
 
 **Tables are `ReplacingMergeTree(push_version)`.** `push_version` is the push
 start time in Unix nanoseconds. Same-key rows from a retry collapse on merge and
