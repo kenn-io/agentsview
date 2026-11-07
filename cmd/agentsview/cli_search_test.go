@@ -113,6 +113,27 @@ func TestCLISearchTasks(t *testing.T) {
 	t.Logf("task eval: hit@1 %d/%d; hit@3 %d/%d", hit1, len(cliSearchTasks), hit3, len(cliSearchTasks))
 }
 
+func TestCLISearchMCPWithoutServiceActions(t *testing.T) {
+	isolateCLISearch(t)
+	root := newRootCommand()
+	// Windows omits these service actions from discovery.
+	for _, backend := range []string{"pg", "clickhouse"} {
+		service, _, err := root.Find([]string{"replica", backend, "service"})
+		require.NoError(t, err)
+		for _, action := range []string{"uninstall", "status", "start", "stop"} {
+			cmd := directCLICommand(service, action)
+			require.NotNil(t, cmd)
+			service.RemoveCommand(cmd)
+		}
+	}
+	out, err := executeCommand(root, "cli", "search", "start MCP server", "--json", "--limit", "1")
+	require.NoError(t, err)
+	var got cliSearchResponse
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	require.Len(t, got.Results, 1)
+	assert.Equal(t, "agentsview mcp", got.Results[0].Command)
+}
+
 func TestCLISearchJSONContract(t *testing.T) {
 	isolateCLISearch(t)
 	var out, stderr bytes.Buffer
