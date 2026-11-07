@@ -228,7 +228,7 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 			return Result{}, err
 		}
 		observationRecorded = true
-		reservationBytes := sqliteSnapshotReservationBytes(snapshotBytes)
+		reservationBytes := sqliteSnapshotReservationBytes(snapshotBytes, plan.RootAliases...)
 		reservation, err = c.store.ReserveSourceCapture(ctx, identity, reservationBytes)
 		if errors.Is(err, rawcheckpoint.ErrOutboxFull) {
 			return Result{Status: StatusDegraded, Source: identity}, nil
@@ -295,7 +295,7 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 	if base.PermanentlyRejected {
 		provisional = c.fullAssessment(observed, sourceBytes)
 	}
-	reservationBytes := captureReservationBytes(provisional)
+	reservationBytes := captureReservationBytes(provisional, originalPlan.RootAliases)
 	if reservation.ID == "" {
 		reservation, err = c.store.ReserveSourceCapture(ctx, identity, reservationBytes)
 		if errors.Is(err, rawcheckpoint.ErrOutboxFull) {
@@ -349,16 +349,16 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 		return Result{}, err
 	}
 	capturedAt := c.storeNow()
-	if err := c.validateForUpload(identity, captureID, capturedAt, assessment.entries); err != nil {
+	if err := c.validateForUpload(identity, captureID, capturedAt, assessment.entries, originalPlan.RootAliases); err != nil {
 		if assessment.mode != captureAppend {
 			return Result{}, err
 		}
 		assessment = c.fullAssessment(observed, sourceBytes)
-		if err := c.validateForUpload(identity, captureID, capturedAt, assessment.entries); err != nil {
+		if err := c.validateForUpload(identity, captureID, capturedAt, assessment.entries, originalPlan.RootAliases); err != nil {
 			return Result{}, err
 		}
 	}
-	requiredBytes := captureReservationBytes(assessment)
+	requiredBytes := captureReservationBytes(assessment, originalPlan.RootAliases)
 	if requiredBytes > reservation.ReservedBytes {
 		if err := c.store.ReleaseReservation(ctx, reservation.ID); err != nil {
 			return Result{}, err
@@ -424,7 +424,7 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 			return Result{}, err
 		}
 	}
-	if err := c.validateForUpload(identity, captureID, capturedAt, entries); err != nil {
+	if err := c.validateForUpload(identity, captureID, capturedAt, entries, originalPlan.RootAliases); err != nil {
 		return Result{}, err
 	}
 	predecessor := ""
@@ -438,6 +438,7 @@ func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source
 		CapturedAt:           capturedAt,
 		Kind:                 rawsync.ManifestSnapshot,
 		Entries:              entries,
+		RootAliases:          slices.Clone(originalPlan.RootAliases),
 	}
 	var publishErr error
 	if runID == "" {
@@ -506,13 +507,13 @@ func (c *Capturer) provisionalAssessment(
 	}
 }
 
-func captureReservationBytes(assessment captureAssessment) int64 {
+func captureReservationBytes(assessment captureAssessment, rootAliases []string) int64 {
 	objectReferences := 0
 	for _, entry := range assessment.entries {
 		objectReferences += len(entry.Objects)
 	}
 	metadataBytes := rawcheckpoint.CaptureMetadataCharge(
-		len(assessment.entries), objectReferences,
+		len(assessment.entries), objectReferences, rootAliases...,
 	)
 	if assessment.objectBytes > math.MaxInt64-metadataBytes {
 		return math.MaxInt64
@@ -713,6 +714,7 @@ func (c *Capturer) validateForUpload(
 	captureID string,
 	capturedAt time.Time,
 	entries []rawcheckpoint.CapturedEntry,
+	rootAliases []string,
 ) error {
 	manifestEntries := make([]rawsync.Entry, 0, len(entries))
 	for _, entry := range entries {
@@ -731,6 +733,7 @@ func (c *Capturer) validateForUpload(
 		CapturedAt:       capturedAt,
 		Kind:             rawsync.ManifestSnapshot,
 		Entries:          manifestEntries,
+		RootAliases:      slices.Clone(rootAliases),
 	}, c.manifestLimits)
 }
 
@@ -754,7 +757,8 @@ func cloneCapturedEntry(entry rawcheckpoint.CapturedEntry) rawcheckpoint.Capture
 func sameCapturePlan(a, b parser.RawCapturePlan) bool {
 	if a.ConfiguredRoot != b.ConfiguredRoot || a.CaptureRoot != b.CaptureRoot ||
 		a.SourceKey != b.SourceKey || len(a.Entries) != len(b.Entries) ||
-		!slices.Equal(a.SidecarRoots, b.SidecarRoots) {
+		!slices.Equal(a.SidecarRoots, b.SidecarRoots) ||
+		!slices.Equal(a.RootAliases, b.RootAliases) {
 		return false
 	}
 	for i := range a.Entries {

@@ -6347,6 +6347,10 @@ components:
           type: string
         provider:
           type: string
+        root_aliases:
+          items:
+            type: string
+          type: array
         schema_version:
           format: int64
           type: integer

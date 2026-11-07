@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const schemaVersion = 10
+const schemaVersion = 11
 
 func (s *Store) init(ctx context.Context) error {
 	var version int
@@ -97,6 +97,13 @@ func (s *Store) init(ctx context.Context) error {
 		for _, statement := range versionTenMigrationStatements {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("rawcheckpoint: migrate schema to version 10: %w", err)
+			}
+		}
+	}
+	if version < 11 {
+		for _, statement := range versionElevenMigrationStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("rawcheckpoint: migrate schema to version 11: %w", err)
 			}
 		}
 	}
@@ -366,4 +373,10 @@ var versionEightMigrationStatements = []string{
 var versionTenMigrationStatements = []string{
 	`CREATE INDEX raw_source_base_objects_object_idx
 		ON raw_source_base_objects(sha256, length)`,
+}
+
+//nolint:kennlint // sqlcheck: Shipped migration constraints must remain unchanged for historical upgrades.
+var versionElevenMigrationStatements = []string{
+	`ALTER TABLE outbox_generations
+		ADD COLUMN root_aliases_json TEXT NOT NULL DEFAULT '[]'`,
 }

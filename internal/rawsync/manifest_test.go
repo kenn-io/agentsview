@@ -83,7 +83,7 @@ func TestValidateAndCanonicalizeProducesAuthenticatedStableEnvelope(t *testing.T
 	got, err := ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
 	require.NoError(t, err)
 
-	wantJSON := `{"schema_version":1,"tenant_id":"tenant-a","device_id":"device-a","provider":"codex","configured_root_id":"root-a","source_key":"sessions/demo.jsonl#main","capture_id":"capture-a","captured_at":"2026-08-13T12:34:56Z","kind":"snapshot","entries":[{"path":"a.jsonl","type":"file","length":3,"objects":[{"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","length":3}]},{"path":"z.jsonl","type":"file","length":8,"objects":[{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","length":4},{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","length":4}]}]}` + "\n"
+	wantJSON := `{"schema_version":2,"tenant_id":"tenant-a","device_id":"device-a","provider":"codex","configured_root_id":"root-a","source_key":"sessions/demo.jsonl#main","capture_id":"capture-a","captured_at":"2026-08-13T12:34:56Z","kind":"snapshot","entries":[{"path":"a.jsonl","type":"file","length":3,"objects":[{"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","length":3}]},{"path":"z.jsonl","type":"file","length":8,"objects":[{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","length":4},{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","length":4}]}]}` + "\n"
 	assert.Equal(t, wantJSON, string(got.CanonicalJSON))
 	wantSum := sha256.Sum256([]byte(wantJSON))
 	assert.Equal(t, hex.EncodeToString(wantSum[:]), got.ManifestID)
@@ -99,6 +99,53 @@ func TestValidateAndCanonicalizeProducesAuthenticatedStableEnvelope(t *testing.T
 		"repeated chunks must remain in reconstruction order")
 	assert.Equal(t, "z.jsonl", manifest.Entries[0].Path,
 		"canonicalization must not mutate the caller's manifest")
+}
+
+func TestManifestV2CanonicalizesRootAliases(t *testing.T) {
+	t.Parallel()
+	identity, err := NewAuthIdentity("tenant-a", "device-a")
+	require.NoError(t, err)
+	manifest := validManifest()
+	manifest.RootAliases = []string{"/configured/alias", "/canonical/root"}
+
+	canonical, err := ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/canonical/root", "/configured/alias"}, canonical.Manifest.RootAliases)
+	assert.Contains(t, string(canonical.CanonicalJSON), `"root_aliases":["/canonical/root","/configured/alias"]`)
+	parsed, err := ParseCanonicalManifest(
+		identity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, canonical.Manifest.RootAliases, parsed.Manifest.RootAliases)
+	require.NoError(t, ValidateCanonicalManifest(parsed))
+}
+
+func TestManifestV1RejectsRootAliases(t *testing.T) {
+	t.Parallel()
+	identity, err := NewAuthIdentity("tenant-a", "device-a")
+	require.NoError(t, err)
+	manifest := validManifest()
+	manifest.SchemaVersion = legacyManifestSchemaVersion
+	manifest.RootAliases = []string{"/canonical/root"}
+	_, err = ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
+	assert.ErrorIs(t, err, ErrInvalid)
+}
+
+func TestManifestV1WithoutRootAliasesRemainsValid(t *testing.T) {
+	t.Parallel()
+	identity, err := NewAuthIdentity("tenant-a", "device-a")
+	require.NoError(t, err)
+	manifest := validManifest()
+	manifest.SchemaVersion = legacyManifestSchemaVersion
+	canonical, err := ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
+	require.NoError(t, err)
+	assert.Equal(t, legacyManifestSchemaVersion, canonical.Manifest.SchemaVersion)
+	assert.NotContains(t, string(canonical.CanonicalJSON), `"root_aliases"`)
+	parsed, err := ParseCanonicalManifest(
+		identity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, ValidateCanonicalManifest(parsed))
 }
 
 func TestValidateAndCanonicalizeBindsAuthenticatedIdentity(t *testing.T) {
@@ -184,7 +231,7 @@ func TestValidateAndCanonicalizeRejectsMalformedManifest(t *testing.T) {
 		name   string
 		mutate func(*Manifest, *ManifestLimits)
 	}{
-		{name: "unsupported schema", mutate: func(m *Manifest, _ *ManifestLimits) { m.SchemaVersion = 2 }},
+		{name: "unsupported schema", mutate: func(m *Manifest, _ *ManifestLimits) { m.SchemaVersion = 3 }},
 		{name: "missing provider", mutate: func(m *Manifest, _ *ManifestLimits) { m.Provider = "" }},
 		{name: "unknown provider", mutate: func(m *Manifest, _ *ManifestLimits) { m.Provider = "not-an-agent" }},
 		{name: "remote sync excluded provider", mutate: func(m *Manifest, _ *ManifestLimits) { m.Provider = parser.AgentOmnigent }},

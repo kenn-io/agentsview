@@ -551,7 +551,7 @@ func manifestFromCapturePlan(
 			Objects:   []rawsync.ObjectRef{object},
 		})
 	}
-	return parserTestManifest(t, agent, plan.SourceKey, entries), objects
+	return parserTestManifest(t, agent, plan.SourceKey, entries, plan.RootAliases), objects
 }
 
 func TestProviderParserHostedParseMatchesLocalBackgroundForkLineage(t *testing.T) {
@@ -1423,8 +1423,13 @@ func parserTestManifest(
 	provider parser.AgentType,
 	sourceKey string,
 	entries []rawsync.Entry,
+	rootAliases ...[]string,
 ) rawsync.CanonicalManifest {
 	t.Helper()
+	var aliases []string
+	if len(rootAliases) != 0 {
+		aliases = rootAliases[0]
+	}
 	identity, err := rawsync.NewAuthIdentity("tenant-a", "device-a")
 	require.NoError(t, err)
 	manifest, err := rawsync.ValidateAndCanonicalize(identity, rawsync.Manifest{
@@ -1436,6 +1441,7 @@ func parserTestManifest(
 		CapturedAt:       time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC),
 		Kind:             rawsync.ManifestSnapshot,
 		Entries:          entries,
+		RootAliases:      aliases,
 	}, rawsync.DefaultManifestLimits())
 	require.NoError(t, err)
 	return manifest

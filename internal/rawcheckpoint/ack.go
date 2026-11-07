@@ -3,6 +3,7 @@ package rawcheckpoint
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"time"
@@ -173,11 +174,12 @@ func (s *Store) finalizeNextManifest(ctx context.Context, deviceID, runID string
 			args = append(args, runID)
 		}
 		args = append(args, checkpointTimestamp(s.now()))
-		var provider, capturedAt, kind, state, expectedParent string
+		var provider, capturedAt, kind, state, expectedParent, rootAliasesJSON string
 		err := conn.QueryRowContext(ctx, prefix+`SELECT generation.capture_id,
 			generation.provider, generation.configured_root_id,
 			generation.source_key, generation.captured_at, generation.kind,
-			generation.state, generation.expected_parent_receipt
+			generation.state, generation.expected_parent_receipt,
+			generation.root_aliases_json
 			FROM outbox_generations AS generation
 			LEFT JOIN outbox_generations AS predecessor
 				ON predecessor.capture_id = generation.predecessor_capture_id
@@ -189,7 +191,8 @@ func (s *Store) finalizeNextManifest(ctx context.Context, deviceID, runID string
 			ORDER BY generation.captured_at, generation.capture_id LIMIT 1`,
 			args...,
 		).Scan(&manifest.CaptureID, &provider, &manifest.ConfiguredRootID,
-			&manifest.SourceKey, &capturedAt, &kind, &state, &expectedParent)
+			&manifest.SourceKey, &capturedAt, &kind, &state, &expectedParent,
+			&rootAliasesJSON)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -200,6 +203,9 @@ func (s *Store) finalizeNextManifest(ctx context.Context, deviceID, runID string
 		manifest.Provider = parser.AgentType(provider)
 		manifest.CapturedAt, _ = time.Parse(time.RFC3339Nano, capturedAt)
 		manifest.Kind = rawsync.ManifestKind(kind)
+		if err := json.Unmarshal([]byte(rootAliasesJSON), &manifest.RootAliases); err != nil {
+			return fmt.Errorf("rawcheckpoint: finalize manifest: decode root aliases: %w", err)
+		}
 		if state == "queued" {
 			if err := conn.QueryRowContext(ctx, `SELECT head_receipt FROM raw_sources
 				WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,

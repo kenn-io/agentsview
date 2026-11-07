@@ -51,6 +51,7 @@ func TestPiRawCaptureFamily(t *testing.T) {
 			canonicalRoot, err := filepath.EvalSymlinks(root)
 			require.NoError(t, err)
 			assert.Equal(t, canonicalRoot, plan.CaptureRoot)
+			assert.Equal(t, []string{canonicalRoot}, plan.RootAliases)
 			assert.Equal(t, source.Key, plan.SourceKey)
 			paths := []string{}
 			for _, entry := range plan.Entries {
@@ -407,4 +408,44 @@ func TestPiRawCaptureKeepsCaseDistinctHardLinks(t *testing.T) {
 		"project/parent.jsonl",
 		"project/parent/task/run-0/session.jsonl",
 	}, paths)
+}
+
+func TestOMPRawCaptureDeduplicatesCaseAliasAcrossConfiguredRootSymlink(t *testing.T) {
+	canonicalRoot := t.TempDir()
+	configuredRoot := filepath.Join(t.TempDir(), "sessions")
+	if err := os.Symlink(canonicalRoot, configuredRoot); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	parent := filepath.Join(canonicalRoot, "project", "parent.jsonl")
+	child := filepath.Join(canonicalRoot, "project", "parent", "worker.jsonl")
+	writePiRawFixture(t, parent, `{"type":"session","id":"parent-header"}`+"\n")
+	writePiRawFixture(t, child, `{"type":"session","id":"child","parentSession":`+
+		strconv.Quote(filepath.Join(canonicalRoot, "project", "Parent.jsonl"))+"}\n")
+	parentInfo, err := os.Stat(parent)
+	require.NoError(t, err)
+	caseAliasInfo, err := os.Stat(filepath.Join(canonicalRoot, "project", "Parent.jsonl"))
+	if err != nil || !os.SameFile(parentInfo, caseAliasInfo) {
+		t.Skip("requires a case-insensitive filesystem")
+	}
+
+	provider, ok := NewProvider(AgentOMP, ProviderConfig{Roots: []string{configuredRoot}})
+	require.True(t, ok)
+	configuredChild := filepath.Join(configuredRoot, "project", "parent", "worker.jsonl")
+	sources, err := RawCaptureSourcesForChangedPath(
+		t.Context(), provider, ChangedPathRequest{Path: configuredChild},
+	)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, sources[0])
+	require.NoError(t, err)
+	require.True(t, supported)
+	assert.Equal(t, []string{canonicalRoot}, plan.RootAliases)
+	var paths []string
+	for _, entry := range plan.Entries {
+		paths = append(paths, entry.Path)
+	}
+	assert.ElementsMatch(t, []string{
+		"project/parent.jsonl",
+		"project/parent/worker.jsonl",
+	}, paths, "one case-insensitive directory entry must produce one manifest entry")
 }

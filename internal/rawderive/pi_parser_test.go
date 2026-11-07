@@ -252,7 +252,7 @@ func TestProviderParserHostedPiCaptureResolvesParentThroughConfiguredRootSymlink
 	if err := os.Symlink(canonicalRoot, configuredRoot); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
-	parent := filepath.Join(canonicalRoot, "project", "parent.jsonl")
+	parent := filepath.Join(canonicalRoot, "parents", "parent.jsonl")
 	child := filepath.Join(canonicalRoot, "project", "child.jsonl")
 	writePiDeriveFixture(t, parent, `{"type":"session","id":"parent-header"}`+"\n")
 	writePiDeriveFixture(t, child, `{"type":"session","id":"child","parentSession":`+strconv.Quote(parent)+"}\n")
@@ -270,6 +270,7 @@ func TestProviderParserHostedPiCaptureResolvesParentThroughConfiguredRootSymlink
 
 	manifest, objects := manifestFromCapturePlan(t, parser.AgentPi, provider, sources[0])
 	require.Len(t, manifest.Manifest.Entries, 2)
+	assert.Equal(t, []string{canonicalRoot}, manifest.Manifest.RootAliases)
 	require.NoError(t, os.RemoveAll(canonicalRoot))
 	hosted := derivePiManifest(t, manifest, objects)
 	require.Len(t, hosted.Outcome.Results, 1)
@@ -343,6 +344,46 @@ func TestProviderParserHostedOMPV1KeepsOriginalFilenameIdentity(t *testing.T) {
 	assert.Equal(t, local.Results[0].Result.Session.ParentSessionID, got.ParentSessionID)
 	assert.Equal(t, "omp:Parent", got.ParentSessionID)
 	assert.Equal(t, parser.RelSubagent, got.RelationshipType)
+}
+
+func TestProviderParserHostedPiFamilyV1ParentKeepsOriginalFilenameIdentity(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMO} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			parent := filepath.Join(root, "project", "Parent.jsonl")
+			child := filepath.Join(root, "project", "child.jsonl")
+			parentBody := []byte(`{"type":"session"}` + "\n")
+			childBody := []byte(`{"type":"session","id":"child","parentSession":` + strconv.Quote(parent) + "}\n")
+			writePiDeriveFixture(t, parent, string(parentBody))
+			writePiDeriveFixture(t, child, string(childBody))
+			provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := parser.RawCaptureSourcesForChangedPath(
+				t.Context(), provider, parser.ChangedPathRequest{Path: child},
+			)
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			local, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, local.Results, 1)
+			assert.Equal(t, provider.Definition().IDPrefix+"Parent", local.Results[0].Result.Session.ParentSessionID)
+
+			parentObject := objectRefForBytes(t, parentBody)
+			childObject := objectRefForBytes(t, childBody)
+			objects := map[rawsync.ObjectRef][]byte{
+				parentObject: parentBody,
+				childObject:  childBody,
+			}
+			manifest := parserTestManifest(t, agent, child, []rawsync.Entry{
+				{Path: "project/parent.jsonl", Type: "file", Length: int64(len(parentBody)), Objects: []rawsync.ObjectRef{parentObject}},
+				{Path: "project/child.jsonl", Type: "file", Length: int64(len(childBody)), Objects: []rawsync.ObjectRef{childObject}},
+			})
+			require.NoError(t, os.RemoveAll(root))
+			hosted := derivePiManifest(t, manifest, objects)
+			require.Len(t, hosted.Outcome.Results, 1)
+			assert.Equal(t, provider.Definition().IDPrefix+"Parent", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
+		})
+	}
 }
 
 func TestProviderParserHostedOMPCaptureResolvesCaseInsensitiveParentAlias(t *testing.T) {

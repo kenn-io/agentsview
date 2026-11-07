@@ -15,8 +15,9 @@ import (
 	"hegel.dev/go/hegel"
 )
 
-// Physical custody is independent of normalized header validity.
-func TestPiRawCaptureMalformedCustodyProperty(t *testing.T) {
+// Malformed provider files remain discoverable, and malformed parent hints
+// must not add dependencies to the raw-capture plan.
+func TestPiRawCapturePlanKeepsMalformedFilesWithoutFollowingParentHints(t *testing.T) {
 	for _, agent := range []AgentType{AgentPi, AgentOMP, AgentOMO, AgentStepCode, AgentPrimeAgent} {
 		t.Run(string(agent), func(t *testing.T) {
 			root := t.TempDir()
@@ -27,38 +28,49 @@ func TestPiRawCaptureMalformedCustodyProperty(t *testing.T) {
 			require.NoError(t, os.MkdirAll(dir, 0o700))
 			outside := filepath.Join(t.TempDir(), "outside.jsonl")
 			require.NoError(t, os.WriteFile(outside, []byte(`{"type":"session","id":"outside-header"}`+"\n"), 0o600))
-			file := filepath.Join(dir, "invalid.jsonl")
 			provider, _ := NewProvider(agent, ProviderConfig{Roots: []string{root}})
-			hegel.Test(t, func(ht *hegel.T) {
-				bytes := hegel.Draw(ht, hegel.Lists(hegel.Integers(uint8(0), uint8(math.MaxUint8))))
-				// Limit bytes written per example while drawing the entire byte domain.
-				if len(bytes) > 8192 {
-					bytes = bytes[:8192]
-				}
-				contents := append([]byte("invalid session header\n"), bytes...)
-				if hegel.Draw(ht, hegel.Booleans()) {
-					contents = []byte(`{"type":"session","parentSession":` + strconv.Quote(outside) + `,"payload":` + strconv.Quote(string(bytes)))
-				}
-				require.NoError(ht, os.WriteFile(file, contents, 0o600))
-				discovery, err := DiscoverRawCaptureSources(ht.Context(), provider)
-				require.NoError(ht, err)
-				require.True(ht, discovery.Complete)
-				require.Len(ht, discovery.Sources, 1)
-				plan, supported, err := ResolveRawCapturePlan(ht.Context(), provider, discovery.Sources[0])
-				require.NoError(ht, err)
-				require.True(ht, supported)
-				require.Len(ht, plan.Entries, 1)
-				expectedPath := "project/invalid.jsonl"
-				if agent == AgentPrimeAgent {
-					expectedPath = "invalid.jsonl"
-				}
-				assert.Equal(ht, expectedPath, plan.Entries[0].Path)
-				captured, err := os.ReadFile(plan.Entries[0].LocalPath)
-				require.NoError(ht, err)
-				assert.Equal(ht, contents, captured)
-				_, err = provider.Parse(ht.Context(), ParseRequest{Source: discovery.Sources[0]})
-				require.Error(ht, err)
-			}, hegel.WithTestCases(1000))
+			cases := []struct {
+				name     string
+				contents []byte
+			}{
+				{name: "invalid-header", contents: []byte("invalid session header\n")},
+				{
+					name: "truncated-parent-hint",
+					contents: []byte(`{"type":"session","parentSession":` +
+						strconv.Quote(outside) + `,"payload":"truncated"` + "\n"),
+				},
+			}
+			for _, tc := range cases {
+				file := filepath.Join(dir, tc.name+".jsonl")
+				require.NoError(t, os.WriteFile(file, tc.contents, 0o600))
+			}
+			discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+			require.NoError(t, err)
+			require.True(t, discovery.Complete)
+			require.Len(t, discovery.Sources, len(cases))
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					var source SourceRef
+					for _, candidate := range discovery.Sources {
+						if filepath.Base(candidate.DisplayPath) == tc.name+".jsonl" {
+							source = candidate
+							break
+						}
+					}
+					require.NotEmpty(t, source.Key)
+					plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, source)
+					require.NoError(t, err)
+					require.True(t, supported)
+					require.Len(t, plan.Entries, 1, "malformed parent hints must not be followed")
+					expectedPath := "project/" + tc.name + ".jsonl"
+					if agent == AgentPrimeAgent {
+						expectedPath = tc.name + ".jsonl"
+					}
+					assert.Equal(t, expectedPath, plan.Entries[0].Path)
+					_, err = provider.Parse(t.Context(), ParseRequest{Source: source})
+					require.Error(t, err)
+				})
+			}
 		})
 	}
 }

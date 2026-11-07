@@ -566,6 +566,7 @@ func (m *stablePathMap) bindClientAliases(
 	if root == "" {
 		return
 	}
+	clientRoots := append([]string{root}, manifest.Manifest.RootAliases...)
 	for _, entry := range manifest.Manifest.Entries {
 		local, err := materialized.EntryPath(entry.Path)
 		if err != nil {
@@ -575,16 +576,22 @@ func (m *stablePathMap) bindClientAliases(
 		if entry.Path == sourceEntry {
 			stable = manifest.Manifest.SourceKey
 		}
-		clientPath := strings.ReplaceAll(entry.Path, "/", separator)
-		for _, alias := range []string{
-			root + separator + clientPath,
-			root + "/" + entry.Path,
-		} {
-			if alias == stable {
-				continue
+		for _, clientRoot := range clientRoots {
+			rootSeparator := separator
+			if strings.Contains(clientRoot, `\`) {
+				rootSeparator = `\`
 			}
-			if _, exists := m.reverse[alias]; !exists {
-				m.reverse[alias] = local
+			clientPath := strings.ReplaceAll(entry.Path, "/", rootSeparator)
+			for _, alias := range []string{
+				clientRoot + rootSeparator + clientPath,
+				clientRoot + "/" + entry.Path,
+			} {
+				if alias == stable {
+					continue
+				}
+				if _, exists := m.reverse[alias]; !exists {
+					m.reverse[alias] = local
+				}
 			}
 		}
 	}

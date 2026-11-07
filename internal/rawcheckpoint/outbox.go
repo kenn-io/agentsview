@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -22,6 +23,7 @@ const (
 	generationMetadataBytes      int64 = 1024
 	entryMetadataBytes           int64 = 512
 	objectReferenceMetadataBytes int64 = 256
+	rootAliasMetadataBytes       int64 = 32
 )
 
 var (
@@ -95,6 +97,7 @@ type CapturedGeneration struct {
 	CapturedAt                  time.Time
 	Kind                        rawsync.ManifestKind
 	Entries                     []CapturedEntry
+	RootAliases                 []string
 	ExpectedObservationRevision *int64
 }
 
@@ -305,12 +308,19 @@ func (s *Store) CaptureTempDir() string {
 
 // CaptureMetadataCharge returns the conservative durable metadata charge for
 // one generation.
-func CaptureMetadataCharge(entries, objectReferences int) int64 {
+func CaptureMetadataCharge(entries, objectReferences int, rootAliases ...string) int64 {
 	if entries < 0 || objectReferences < 0 {
 		return 0
 	}
-	return generationMetadataBytes + int64(entries)*entryMetadataBytes +
+	metadata := generationMetadataBytes + int64(entries)*entryMetadataBytes +
 		int64(objectReferences)*objectReferenceMetadataBytes
+	for _, alias := range rootAliases {
+		if int64(len(alias)) > int64(^uint64(0)>>1)-metadata-rootAliasMetadataBytes {
+			return int64(^uint64(0) >> 1)
+		}
+		metadata += int64(len(alias)) + rootAliasMetadataBytes
+	}
+	return metadata
 }
 
 // ReserveCapture atomically reserves root-scoped capacity. A root-scoped
@@ -694,6 +704,10 @@ func (s *Store) commitCapture(ctx context.Context, reservationID string, generat
 	if err != nil {
 		return err
 	}
+	rootAliasesJSON, err := json.Marshal(validated.RootAliases)
+	if err != nil {
+		return fmt.Errorf("rawcheckpoint: encode generation root aliases: %w", err)
+	}
 	return s.withImmediateWrite(ctx, "commit capture", func(conn *sql.Conn) error {
 		var reservationProvider, reservationRoot, reservationSourceKey string
 		var reservedBytes int64
@@ -774,12 +788,12 @@ func (s *Store) commitCapture(ctx context.Context, reservationID string, generat
 		if _, err := conn.ExecContext(ctx, `INSERT INTO outbox_generations
 			(capture_id, provider, configured_root_id, source_key,
 			 predecessor_capture_id, captured_at, kind, state, metadata_bytes,
-			 created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+			 root_aliases_json, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
 			validated.CaptureID, string(validated.Source.Provider),
 			validated.Source.ConfiguredRootID, validated.Source.SourceKey,
 			predecessor, checkpointTimestamp(validated.CapturedAt),
-			string(validated.Kind), metadataBytes, now, now); err != nil {
+			string(validated.Kind), metadataBytes, string(rootAliasesJSON), now, now); err != nil {
 			return fmt.Errorf("rawcheckpoint: commit capture: insert generation: %w", err)
 		}
 		if err := insertCapturedObjectsConn(ctx, conn, s, uniqueObjects, now); err != nil {
@@ -1233,13 +1247,14 @@ func loadGeneration(
 	captureID string,
 ) (CapturedGeneration, error) {
 	var generation CapturedGeneration
-	var provider, capturedAt, kind string
+	var provider, capturedAt, kind, rootAliasesJSON string
 	var predecessor sql.NullString
 	err := queryer.QueryRowContext(ctx, `SELECT provider, configured_root_id,
-		source_key, predecessor_capture_id, captured_at, kind
+		source_key, predecessor_capture_id, captured_at, kind, root_aliases_json
 		FROM outbox_generations WHERE capture_id = ?`, captureID,
 	).Scan(&provider, &generation.Source.ConfiguredRootID,
-		&generation.Source.SourceKey, &predecessor, &capturedAt, &kind)
+		&generation.Source.SourceKey, &predecessor, &capturedAt, &kind,
+		&rootAliasesJSON)
 	if err != nil {
 		return CapturedGeneration{}, fmt.Errorf("rawcheckpoint: load generation: %w", err)
 	}
@@ -1248,6 +1263,9 @@ func loadGeneration(
 	generation.PredecessorCaptureID = predecessor.String
 	generation.CapturedAt, _ = time.Parse(time.RFC3339Nano, capturedAt)
 	generation.Kind = rawsync.ManifestKind(kind)
+	if err := json.Unmarshal([]byte(rootAliasesJSON), &generation.RootAliases); err != nil {
+		return CapturedGeneration{}, fmt.Errorf("rawcheckpoint: decode generation root aliases: %w", err)
+	}
 	entries, err := loadGenerationEntries(ctx, queryer, captureID)
 	if err != nil {
 		return CapturedGeneration{}, err
@@ -1446,10 +1464,18 @@ func validateCapturedGeneration(ctx context.Context,
 	}
 	validated := generation
 	validated.CapturedAt = generation.CapturedAt.UTC()
+	rootAliases, err := rawsync.NormalizeRootAliases(generation.RootAliases)
+	if err != nil {
+		return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid generation root aliases: %w", err)
+	}
+	validated.RootAliases = rootAliases
 	validated.Entries = make([]CapturedEntry, len(generation.Entries))
 	uniqueObjects := make(map[string]rawsync.ObjectRef)
 	byDigest := make(map[string]rawsync.ObjectRef)
 	metadataBytes := generationMetadataBytes + int64(len(generation.Entries))*entryMetadataBytes
+	for _, alias := range validated.RootAliases {
+		metadataBytes += int64(len(alias)) + rootAliasMetadataBytes
+	}
 	seenPaths := make(map[string]struct{}, len(generation.Entries))
 	for i, entry := range generation.Entries {
 		if err := rawpath.Validate(entry.Path, rawpath.DefaultMaxBytes); err != nil {

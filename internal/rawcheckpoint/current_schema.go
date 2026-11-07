@@ -78,6 +78,7 @@ CREATE TABLE outbox_generations (
 		error_class TEXT NOT NULL DEFAULT '',
 		blocked INTEGER NOT NULL DEFAULT 0,
 		attempt_count INTEGER NOT NULL DEFAULT 0,
+		root_aliases_json TEXT NOT NULL DEFAULT '[]',
 		FOREIGN KEY (configured_root_id) REFERENCES configured_roots(id),
 		FOREIGN KEY (predecessor_capture_id) REFERENCES outbox_generations(capture_id) ON DELETE CASCADE,
 		UNIQUE (provider, configured_root_id, source_key, capture_id)

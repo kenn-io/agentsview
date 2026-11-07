@@ -136,6 +136,29 @@ func TestCapturerPersistsStableGenerationWithoutParsing(t *testing.T) {
 	assert.Equal(t, []byte("one\n"), content)
 }
 
+func TestCapturerPersistsRootAliasesIntoFinalizedManifest(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	provider, source, _ := captureFileProvider(t, "one\n")
+	alias := filepath.Join(t.TempDir(), "sessions")
+	if err := os.Symlink(provider.plan.CaptureRoot, alias); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	provider.plan.RootAliases = []string{alias}
+
+	result, err := New(store).Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
+	generation, ok, err := store.NextGeneration(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, []string{alias}, generation.RootAliases)
+
+	manifest, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, []string{alias}, manifest.RootAliases)
+}
+
 func TestCapturerClaudeLineageParentGrowthReusesFork(t *testing.T) {
 	store, _ := openCapturerTestStore(t, 1<<20)
 	root := t.TempDir()

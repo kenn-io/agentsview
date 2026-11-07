@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/rawpath"
 )
 
 var (
@@ -128,17 +129,13 @@ func (p *piProvider) RawCaptureSourcesForChangedPath(ctx context.Context, req Ch
 // resolve through one directory entry at every differing component. Requiring
 // one matching entry keeps distinct POSIX names separate even when they are
 // hard links to the same file.
-func sameCaseInsensitivePathAlias(root, first, second string) bool {
-	firstRel, err := filepath.Rel(root, first)
-	if err != nil {
-		return false
-	}
-	secondRel, err := filepath.Rel(root, second)
-	if err != nil {
-		return false
-	}
+func sameCaseInsensitivePathAlias(root, firstRel, secondRel string) bool {
 	firstRel = filepath.ToSlash(firstRel)
 	secondRel = filepath.ToSlash(secondRel)
+	if rawpath.Validate(firstRel, rawpath.DefaultMaxBytes) != nil ||
+		rawpath.Validate(secondRel, rawpath.DefaultMaxBytes) != nil {
+		return false
+	}
 	if firstRel == secondRel || !strings.EqualFold(firstRel, secondRel) {
 		return false
 	}
@@ -203,6 +200,9 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 	}
 	defer directory.Close()
 	plan := RawCapturePlan{ConfiguredRoot: src.Root, CaptureRoot: src.Root, SourceKey: source.Key}
+	if root != filepath.Clean(src.Root) {
+		plan.RootAliases = []string{root}
+	}
 	seen := map[string]bool{}
 	structuralParentPath := ""
 	switch p.Def.Type {
@@ -268,9 +268,13 @@ func (p *piProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawC
 		if !seen[logical] {
 			duplicate := -1
 			for i, captured := range capturedFiles {
-				capturedPath := filepath.Join(src.Root, filepath.FromSlash(captured.path))
+				capturedRel, capturedOK := piRawCaptureRootRelativePath(
+					src.Root, root, filepath.Join(src.Root, filepath.FromSlash(captured.path)),
+				)
+				candidateRel, candidateOK := piRawCaptureRootRelativePath(src.Root, root, path)
 				if strings.EqualFold(captured.path, logical) && os.SameFile(captured.info, info) &&
-					sameCaseInsensitivePathAlias(src.Root, capturedPath, path) {
+					capturedOK && candidateOK &&
+					sameCaseInsensitivePathAlias(root, capturedRel, candidateRel) {
 					duplicate = i
 					break
 				}

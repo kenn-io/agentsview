@@ -296,8 +296,8 @@ func sqliteBackupSizeError(pages, pageBytes, maxBytes int64) error {
 	return nil
 }
 
-func sqliteSnapshotReservationBytes(snapshotBytes int64) int64 {
-	metadata := rawcheckpoint.CaptureMetadataCharge(1, 1)
+func sqliteSnapshotReservationBytes(snapshotBytes int64, rootAliases ...string) int64 {
+	metadata := rawcheckpoint.CaptureMetadataCharge(1, 1, rootAliases...)
 	if snapshotBytes > math.MaxInt64-metadata {
 		return math.MaxInt64
 	}

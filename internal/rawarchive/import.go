@@ -278,7 +278,7 @@ func (a *Archive) Import(ctx context.Context, spec ImportSpec) (Report, error) {
 				return report, err
 			}
 			originalPath := originalSourcePath(input.OriginalPath, originalRel)
-			manifest := rawsync.Manifest{SchemaVersion: rawsync.ManifestSchemaVersion, Provider: parser.AgentType(input.Provider), ConfiguredRootID: input.ID, SourceKey: sourceKey, Kind: rawsync.ManifestSnapshot, Entries: entries, CapturedAt: capturedAt}
+			manifest := rawsync.Manifest{SchemaVersion: rawsync.ManifestSchemaVersion, Provider: parser.AgentType(input.Provider), ConfiguredRootID: input.ID, SourceKey: sourceKey, Kind: rawsync.ManifestSnapshot, Entries: entries, RootAliases: slices.Clone(input.Aliases), CapturedAt: capturedAt}
 			encoded, err := json.Marshal(manifest)
 			if err != nil {
 				return report, err

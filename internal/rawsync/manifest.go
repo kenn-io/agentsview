@@ -27,9 +27,11 @@ var (
 )
 
 const (
-	ManifestSchemaVersion = 1
-	maxOpaqueIDBytes      = 128
-	maxSourceKeyBytes     = 4096
+	ManifestSchemaVersion       = 2
+	legacyManifestSchemaVersion = 1
+	maxRootAliases              = 32
+	maxOpaqueIDBytes            = 128
+	maxSourceKeyBytes           = 4096
 )
 
 // AuthIdentity is the tenant and device identity supplied by authentication.
@@ -96,6 +98,7 @@ type Manifest struct {
 	CapturedAt            time.Time        `json:"captured_at"`
 	Kind                  ManifestKind     `json:"kind"`
 	Entries               []Entry          `json:"entries,omitempty"`
+	RootAliases           []string         `json:"root_aliases,omitempty"`
 }
 
 // ManifestLimits bounds work and retained metadata before object-store access.
@@ -139,6 +142,7 @@ type canonicalEnvelope struct {
 	CapturedAt            time.Time        `json:"captured_at"`
 	Kind                  ManifestKind     `json:"kind"`
 	Entries               []Entry          `json:"entries,omitempty"`
+	RootAliases           []string         `json:"root_aliases,omitempty"`
 }
 
 // ParseCanonicalManifest reconstructs a canonical manifest only when the
@@ -175,6 +179,7 @@ func ParseCanonicalManifest(
 		CapturedAt:            envelope.CapturedAt,
 		Kind:                  envelope.Kind,
 		Entries:               envelope.Entries,
+		RootAliases:           envelope.RootAliases,
 	}, limits)
 	if err != nil {
 		return CanonicalManifest{}, err
@@ -208,6 +213,10 @@ func ValidateAndCanonicalize(
 	canonical := manifest
 	canonical.CapturedAt = manifest.CapturedAt.UTC()
 	canonical.Entries = cloneEntries(manifest.Entries)
+	canonical.RootAliases, err = normalizeRootAliases(manifest.RootAliases)
+	if err != nil {
+		return CanonicalManifest{}, err
+	}
 	slices.SortFunc(canonical.Entries, func(a, b Entry) int {
 		return strings.Compare(a.Path, b.Path)
 	})
@@ -228,6 +237,7 @@ func ValidateAndCanonicalize(
 		CapturedAt:            canonical.CapturedAt,
 		Kind:                  canonical.Kind,
 		Entries:               canonical.Entries,
+		RootAliases:           canonical.RootAliases,
 	}
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
@@ -295,6 +305,7 @@ func manifestsEqual(a, b Manifest) bool {
 		a.CapturedAt.Equal(b.CapturedAt) &&
 		a.CapturedAt.Location() == b.CapturedAt.Location() &&
 		a.Kind == b.Kind &&
+		slices.Equal(a.RootAliases, b.RootAliases) &&
 		slices.EqualFunc(a.Entries, b.Entries, entriesEqual)
 }
 
@@ -312,6 +323,9 @@ func validateManifestLimits(limits ManifestLimits) error {
 }
 
 func validateManifestCardinality(manifest Manifest, limits ManifestLimits) error {
+	if len(manifest.RootAliases) > maxRootAliases {
+		return fmt.Errorf("%w: manifest root alias limit exceeded", ErrInvalid)
+	}
 	if len(manifest.Entries) > limits.MaxEntries {
 		return fmt.Errorf("%w: manifest entry limit exceeded", ErrInvalid)
 	}
@@ -342,8 +356,12 @@ func integrityManifestLimits(manifest CanonicalManifest) ManifestLimits {
 }
 
 func validateManifestHeader(manifest Manifest) error {
-	if manifest.SchemaVersion != ManifestSchemaVersion {
+	if manifest.SchemaVersion != legacyManifestSchemaVersion &&
+		manifest.SchemaVersion != ManifestSchemaVersion {
 		return fmt.Errorf("%w: unsupported manifest schema version %d", ErrInvalid, manifest.SchemaVersion)
+	}
+	if manifest.SchemaVersion == legacyManifestSchemaVersion && len(manifest.RootAliases) != 0 {
+		return fmt.Errorf("%w: manifest schema version 1 cannot declare root aliases", ErrInvalid)
 	}
 	if err := validateProvider(manifest.Provider); err != nil {
 		return err
@@ -376,6 +394,43 @@ func validateManifestHeader(manifest Manifest) error {
 		return fmt.Errorf("%w: unsupported manifest kind %q", ErrInvalid, manifest.Kind)
 	}
 	return nil
+}
+
+// NormalizeRootAliases validates and sorts absolute client-side root aliases.
+// The aliases are lookup prefixes only; hosted replay never probes them.
+func NormalizeRootAliases(aliases []string) ([]string, error) {
+	return normalizeRootAliases(aliases)
+}
+
+func normalizeRootAliases(aliases []string) ([]string, error) {
+	if len(aliases) > maxRootAliases {
+		return nil, fmt.Errorf("%w: manifest root alias limit exceeded", ErrInvalid)
+	}
+	validated := slices.Clone(aliases)
+	seen := make(map[string]struct{}, len(validated))
+	for _, alias := range validated {
+		if err := validateSourceKey(alias); err != nil {
+			return nil, fmt.Errorf("%w: invalid manifest root alias", ErrInvalid)
+		}
+		normalized := strings.ReplaceAll(alias, `\`, "/")
+		absolute := strings.HasPrefix(normalized, "/") ||
+			len(normalized) >= 3 && ((normalized[0] >= 'A' && normalized[0] <= 'Z') ||
+				(normalized[0] >= 'a' && normalized[0] <= 'z')) && normalized[1] == ':' && normalized[2] == '/'
+		if !absolute {
+			return nil, fmt.Errorf("%w: manifest root alias must be absolute", ErrInvalid)
+		}
+		for _, part := range strings.Split(normalized, "/") {
+			if part == "." || part == ".." {
+				return nil, fmt.Errorf("%w: manifest root alias is not normalized", ErrInvalid)
+			}
+		}
+		if _, exists := seen[alias]; exists {
+			return nil, fmt.Errorf("%w: duplicate manifest root alias", ErrInvalid)
+		}
+		seen[alias] = struct{}{}
+	}
+	slices.Sort(validated)
+	return validated, nil
 }
 
 func validateSourceKey(value string) error {

@@ -11,6 +11,7 @@ export interface RawsyncManifest {
   expected_parent_receipt?: string;
   kind: string;
   provider: string;
+  root_aliases?: string[];
   schema_version: number;
   source_key: string;
 }
