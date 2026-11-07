@@ -389,9 +389,8 @@ jobs:
         id: setup_mingw
         continue-on-error: true
         uses: msys2/setup-msys2@v2.33.0
-        env:
-          ACTIONS_CACHE_MODE: read
         with:
+          cache: false
           msystem: MINGW64
           update: false
           install: ${{ env.MSYS2_PACKAGES }}
@@ -400,9 +399,8 @@ jobs:
       - name: Setup MinGW (Windows, retry on transient failure)
         if: runner.os == 'Windows' && steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
-        env:
-          ACTIONS_CACHE_MODE: read
         with:
+          cache: false
           msystem: MINGW64
           update: false
           install: ${{ env.MSYS2_PACKAGES }}
