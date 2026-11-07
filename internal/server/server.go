@@ -1080,7 +1080,7 @@ func cspMiddleware(
 // verbatim so the page stays hidden until its stylesheets and fonts load.
 // The fallback page for backend-only builds inlines the same bytes. It is the
 // base64 SHA-256 of that file's bytes.
-const holdFirstPaintScriptHash = "'sha256-wQLaMpgJbBRP7YmfiStbxXp4k39F0MoA0ronglioynI='"
+const holdFirstPaintScriptHash = "'sha256-Eym3PxQdYuGzQsfi2PA2bxFhXVJD9GuQ/Ig3m6m3of8='"
 
 // buildCSPPolicy constructs the Content-Security-Policy string.
 //

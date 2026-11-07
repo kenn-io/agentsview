@@ -71,7 +71,7 @@ runs:
         install: mingw-w64-x86_64-gcc
         path-type: inherit
 
-    - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.5
+    - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
 
     - name: Install Linux system dependencies
       if: runner.os == 'Linux'

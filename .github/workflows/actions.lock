@@ -8,7 +8,7 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-go@v7.0.0'
         - 'actions/upload-artifact@v7.0.2'
-        - 'kenn-io/kit@v0.47.5'
+        - 'kenn-io/kit@v0.48.3'
     '.github/workflows/ci-pr.yml': []
     '.github/workflows/ci.yml':
         - 'actions/cache@v6.1.0'
@@ -18,9 +18,9 @@ workflows:
         - 'actions/setup-python@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'astral-sh/setup-uv@v10.3.3'
-        - 'kenn-io/actions@b523fb403607f01de5eec5f4556c7668544c70fe'
+        - 'kenn-io/actions@98e621dcda6f5d7de8590248e353e3d55c28ecf2'
         - 'kenn-io/actions@main'
-        - 'kenn-io/kit@v0.47.5'
+        - 'kenn-io/kit@v0.48.3'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/cjk-fts.yml':
@@ -28,7 +28,7 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-go@v7.0.0'
         - 'actions/upload-artifact@v7.0.2'
-        - 'kenn-io/kit@v0.47.5'
+        - 'kenn-io/kit@v0.48.3'
     '.github/workflows/desktop-artifacts-pr.yml': []
     '.github/workflows/desktop-artifacts.yml':
         - 'actions/cache@v6.1.0'
@@ -38,7 +38,7 @@ workflows:
         - 'actions/setup-node@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'dtolnay/rust-toolchain@stable'
-        - 'kenn-io/kit@v0.47.5'
+        - 'kenn-io/kit@v0.48.3'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/desktop-macos-main.yml':
@@ -48,7 +48,7 @@ workflows:
         - 'actions/setup-node@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'dtolnay/rust-toolchain@stable'
-        - 'kenn-io/kit@v0.47.5'
+        - 'kenn-io/kit@v0.48.3'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/fuzz.yml':
@@ -56,18 +56,18 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-go@v7.0.0'
         - 'actions/upload-artifact@v7.0.2'
-        - 'kenn-io/kit@v0.47.5'
+        - 'kenn-io/kit@v0.48.3'
     '.github/workflows/msys2-update-check.yml':
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-go@v7.0.0'
-        - 'kenn-io/kit@v0.47.5'
+        - 'kenn-io/kit@v0.48.3'
         - 'msys2/setup-msys2@v2.33.0'
     '.github/workflows/sibling-pins.yml':
         - 'kenn-io/actions@main'
     '.github/workflows/workflow-validation.yml':
         - 'actions/checkout@v7.0.1'
-        - 'kenn-io/kit@v0.47.5'
+        - 'kenn-io/kit@v0.48.3'
 dependencies:
     'actions/cache@v6.1.0':
         ref: 'v6.1.0'
@@ -89,11 +89,6 @@ dependencies:
         commit: 'sha1-b7ad1dad31e06c5925ef5d2fc7ad053ef454303e'
         owner_id: 44036562
         repo_id: 192624594
-    'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1':
-        ref: 'v7.1.0'
-        commit: 'sha1-949feb2413d6458794dcd2491c4babbbce0c15c1'
-        owner_id: 44036562
-        repo_id: 189476904
     'actions/setup-node@v7.1.0':
         ref: 'v7.1.0'
         commit: 'sha1-949feb2413d6458794dcd2491c4babbbce0c15c1'
@@ -119,13 +114,13 @@ dependencies:
         commit: 'sha1-b725eda525362e7cf34af9a7243cac1e3f01a7ec'
         owner_id: 1940490
         repo_id: 260749683
-    'kenn-io/actions@b523fb403607f01de5eec5f4556c7668544c70fe':
+    'kenn-io/actions@98e621dcda6f5d7de8590248e353e3d55c28ecf2':
         ref: 'main'
-        commit: 'sha1-b523fb403607f01de5eec5f4556c7668544c70fe'
+        commit: 'sha1-98e621dcda6f5d7de8590248e353e3d55c28ecf2'
         owner_id: 259885253
         repo_id: 1427332808
         uses:
-            - 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1'
+            - 'actions/setup-node@v7.1.0'
     'kenn-io/actions@main':
         ref: 'main'
         commit: 'sha1-7ee5aec719084e1885f37b0c39a4da729f6a274f'
@@ -135,9 +130,9 @@ dependencies:
             - 'actions/checkout@v7.0.1'
             - 'actions/setup-go@v7.0.0'
             - 'step-security/paths-filter@v4.0.3'
-    'kenn-io/kit@v0.47.5':
-        ref: 'v0.47.5'
-        commit: 'sha1-b2c1b6f25ec8f521899e7cc0eb03d266fa9f44ba'
+    'kenn-io/kit@v0.48.3':
+        ref: 'v0.48.3'
+        commit: 'sha1-d69c47a1ac993386cc8390de279276bec363b6b4'
         owner_id: 259885253
         repo_id: 1238000987
     'msys2/setup-msys2@v2.33.0':
