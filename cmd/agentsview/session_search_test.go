@@ -237,6 +237,22 @@ func TestSessionSearchHybridWithToolSource(t *testing.T) {
 	assert.Contains(t, err.Error(), "messages only")
 }
 
+// TestSessionSearchScopeRequiresSemanticOrHybrid verifies --scope fails
+// fast (before any service/DB access) when set without --semantic/--hybrid.
+func TestSessionSearchScopeRequiresSemanticOrHybrid(t *testing.T) {
+	for _, args := range [][]string{
+		{"needle", "--scope", "top"},
+		{"needle", "--fts", "--scope", "all"},
+		{"needle", "--regex", "--scope", "subordinate"},
+	} {
+		cmd := newSessionSearchCommand()
+		cmd.SetArgs(args)
+		err := cmd.Execute()
+		require.Error(t, err, "args %v", args)
+		assert.Contains(t, err.Error(), "--semantic or --hybrid", "args %v", args)
+	}
+}
+
 // TestSessionSearchScopeRejectsInvalidValue verifies the value gate fires
 // at the CLI boundary rather than deep in the store.
 func TestSessionSearchScopeRejectsInvalidValue(t *testing.T) {

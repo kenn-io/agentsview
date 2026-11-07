@@ -43,16 +43,16 @@ const maxHybridKeywordBatches = 4
 func (s *Store) searchContentHybrid(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
-	searcher := s.getVectorSearcher()
-	if f.KeywordOnly {
-		searcher = nil
-	} else if searcher == nil {
-		return db.ContentSearchPage{}, s.semanticUnavailableError()
+	var searcher db.VectorSearcher
+	if !f.KeywordOnly {
+		if searcher = s.getVectorSearcher(); searcher == nil {
+			return db.ContentSearchPage{}, s.semanticUnavailableError()
+		}
 	}
 	k := max(f.Limit*4, db.SemanticOverfetchMin)
 	var vecLeg hybridLeg
 	var err error
-	if !f.KeywordOnly {
+	if searcher != nil {
 		vecLeg, err = s.hybridVectorLeg(ctx, f, searcher, k)
 		if err != nil {
 			return db.ContentSearchPage{}, err

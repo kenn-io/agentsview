@@ -808,18 +808,16 @@ and hybrid results:
 - `subordinate`: only sidechain/delegated content, e.g. to find what a subagent
   actually did.
 
-`--scope` is valid with CLI `--semantic` and `--hybrid` searches.
-CLI substring, `--regex`, and `--fts` searches reject it. An explicit scope
-supersedes `--include-children`: child sessions are visible to these modes so
-that `scope` alone governs what you see.
-Subagent/fork-typed and parent-linked sessions are also exempt from the default
-one-shot exclusion in these modes — a subagent session structurally has exactly
-one "user" message (its task prompt), so the one-shot gate would otherwise hide
-nearly all of them. Without `--scope`, CLI lexical searches keep the existing
-`--include-children` and one-shot behavior. HTTP and MCP substring/regex
-searches also accept `scope` and exempt child sessions from the one-shot
-exclusion when scope is explicit. MCP defaults scope to `all`; HTTP leaves scope
-blank unless requested.
+`--scope` is only valid with `--semantic`/`--hybrid` (other modes reject it) and
+supersedes `--include-children` there: child sessions are always visible to
+these modes so that `scope` alone governs what you see. Subagent/fork-typed and
+parent-linked sessions are also exempt from the default one-shot exclusion in
+these modes — a subagent session structurally has exactly one "user" message
+(its task prompt), so the one-shot gate would otherwise hide nearly all of them.
+CLI substring, regex, and FTS searches keep the existing `--include-children`
+and one-shot behavior. HTTP and MCP substring/regex searches also accept `scope`
+and exempt child sessions from the one-shot exclusion when scope is explicit.
+MCP defaults scope to `all`; HTTP leaves scope blank unless requested.
 
 ### MCP all-terms exchange search
 
@@ -929,7 +927,7 @@ below.
 | Only a building generation exists                                                                                               | same message, plus `: index is building: N% complete`                                                                                                                 |
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |
-| CLI `--scope` without `--semantic` or `--hybrid` | `--scope requires --semantic or --hybrid`; HTTP and MCP accept scope with substring, regex, terms, semantic, and hybrid |
+| `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                                              | CLI: `--scope requires --semantic or --hybrid`; HTTP and MCP accept scope with substring, regex, terms, semantic, and hybrid                                                        |
 | An unattended search or build needs a first local download                                                                      | `local embeddings: run agentsview index embeddings build to approve the first download`; run `agentsview index embeddings build` in the CLI and approve the download. |
 | Embeddings endpoint unreachable or timed out                                                                                    | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                                   |
 | Embeddings endpoint returned non-200                                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                           |

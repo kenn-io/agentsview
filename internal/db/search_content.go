@@ -1615,11 +1615,11 @@ func (db *DB) searchContentHybrid(
 	if err := ValidateSemanticFilter(f); err != nil {
 		return ContentSearchPage{}, err
 	}
-	searcher := db.getVectorSearcher()
-	if f.KeywordOnly {
-		searcher = nil
-	} else if searcher == nil {
-		return ContentSearchPage{}, ErrSemanticUnavailable
+	var searcher VectorSearcher
+	if !f.KeywordOnly {
+		if searcher = db.getVectorSearcher(); searcher == nil {
+			return ContentSearchPage{}, ErrSemanticUnavailable
+		}
 	}
 	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
@@ -1628,7 +1628,7 @@ func (db *DB) searchContentHybrid(
 	k := max(f.Limit*4, SemanticOverfetchMin)
 	var vecLeg hybridLeg
 	var err error
-	if !f.KeywordOnly {
+	if searcher != nil {
 		vecLeg, err = db.hybridVectorLeg(ctx, f, searcher, k)
 		if err != nil {
 			return ContentSearchPage{}, err

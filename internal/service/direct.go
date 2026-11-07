@@ -1251,9 +1251,7 @@ func (b *directBackend) SearchContent(
 			reason = unavailable.Reason
 		}
 		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
-		if _, err = db.ParseFTSExpression(req.Pattern); err == nil {
-			page, err = b.db.SearchContent(ctx, filter)
-		}
+		page, err = b.db.SearchContent(ctx, filter)
 	}
 	if err != nil {
 		return nil, err

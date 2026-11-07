@@ -30,6 +30,8 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 	}{
 		{name: "not configured", mode: "hybrid", optIn: true, reason: "not set up"},
 		{name: "building", mode: "hybrid", optIn: true, cause: fmt.Errorf("search unavailable: %w", db.NewSemanticUnavailableError("index is building: 40% complete")), reason: "index is building: 40% complete"},
+		{name: "near not configured", mode: "hybrid", optIn: true, pattern: `"needle" AND NEAR("needle" "haystack", 2)`, reason: "not set up"},
+		{name: "near building", mode: "hybrid", optIn: true, pattern: `"needle" AND NEAR("needle" "haystack", 2)`, cause: db.NewSemanticUnavailableError("index is building: 40% complete"), reason: "index is building: 40% complete"},
 		{name: "empty", mode: "hybrid", optIn: true, pattern: "absent", empty: true, reason: "not set up"},
 		{name: "no opt in", mode: "hybrid", wantErr: db.ErrSemanticUnavailable},
 		{name: "semantic", mode: "semantic", optIn: true, wantErr: db.ErrSemanticUnavailable},
@@ -40,7 +42,7 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 			if !d.HasFTS(t.Context()) {
 				t.Skip("fts5 not available")
 			}
-			seedSearchSession(t, d, "found", "project", "needle")
+			seedSearchSession(t, d, "found", "project", "needle haystack")
 			searcher := &fallbackVectorSearcher{err: tc.cause}
 			if tc.cause != nil {
 				d.SetVectorSearcher(searcher)
@@ -72,27 +74,4 @@ func TestHTTPBackendHybridKeywordFallback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hybrid_keyword", result.EffectiveMode)
 	assert.NotEmpty(t, result.Note)
-}
-
-// fallbackKeywordStore models a backend whose keyword leg accepts malformed quotes.
-type fallbackKeywordStore struct {
-	fakeContentStore
-}
-
-func (s *fallbackKeywordStore) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
-	if !f.KeywordOnly {
-		return db.ContentSearchPage{}, db.ErrSemanticUnavailable
-	}
-	return s.fakeContentStore.SearchContent(ctx, f)
-}
-
-func TestHybridKeywordFallbackRejectsMalformedQueryBeforeRetry(t *testing.T) {
-	store := &fallbackKeywordStore{}
-	result, err := service.NewReadOnlyBackend(store).SearchContent(t.Context(), service.ContentSearchRequest{
-		Pattern: `"needle`, Mode: "hybrid", KeywordFallback: true,
-	})
-	var inputErr *db.SearchInputError
-	require.ErrorAs(t, err, &inputErr)
-	assert.Nil(t, result)
-	assert.Empty(t, store.filters, "malformed input must not reach the keyword leg")
 }

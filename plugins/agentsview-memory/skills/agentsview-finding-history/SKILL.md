@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:8c12418b2198bde0d6136632a6b16d6163dbff8926a88e3c662729e18d7219f3 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:a93330b7bd15703d3b6d7e7fb319473855c2959400bac4bb39669e7c1c6f9ab9 — do not edit; re-run `agentsview skills install`
 name: agentsview-finding-history
 description: Use proactively when prior decisions, rationale, solutions, pitfalls, project context, or repeated workflows may help, when stuck, or before guessing about something learned previously — searches AgentsView conversation history for evidence.
 ---
@@ -74,7 +74,7 @@ try short `mode: substring` queries with key terms or synonyms. Preserve
 
 Disclose explicit semantic errors. Use a lexical fallback only for an
 unavailable index or transient embedding error; retry transient errors once
-when appropriate. Preserve `scope`, inclusion, and current-session flags.
+when appropriate.
 
 Do not fall back on authentication or wrong-target errors. In particular, do
 not silently search a local archive when the intended remote archive rejected
