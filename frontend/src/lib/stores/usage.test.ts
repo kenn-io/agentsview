@@ -1384,18 +1384,27 @@ describe("UsageStore session filter params", () => {
       vi.setSystemTime(new Date("2026-06-15T16:00:00Z"));
       const { usage } = await loadStore();
 
+      usage.markNewData();
+      expect(usage.hasNewData).toBe(true);
       await usage.fetchAll();
 
       expect(usage.lastUpdatedAt).toBe(new Date("2026-06-15T16:00:00Z").getTime());
+      expect(usage.hasNewData).toBe(false);
 
       usage.markNewData();
       expect(usage.hasNewData).toBe(true);
 
+      const pending = Promise.withResolvers<UsageSummaryResponse>();
+      usageServiceMocks.getApiV1UsageSummary.mockReturnValueOnce(pending.promise);
       vi.setSystemTime(new Date("2026-06-15T16:03:00Z"));
-      await usage.fetchAll();
+      const refresh = usage.fetchAll();
+      expect(usage.hasNewData).toBe(false);
+      usage.markNewData();
+      pending.resolve(usageSummary(15));
+      await refresh;
 
       expect(usage.lastUpdatedAt).toBe(new Date("2026-06-15T16:03:00Z").getTime());
-      expect(usage.hasNewData).toBe(false);
+      expect(usage.hasNewData).toBe(true);
     } finally {
       vi.useRealTimers();
     }

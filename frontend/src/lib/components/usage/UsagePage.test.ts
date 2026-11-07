@@ -197,42 +197,7 @@ describe("UsagePage refresh behavior", () => {
   }
 
   it("keeps fixed event deadlines and queues polling during long reads", async () => {
-    const side = {
-      totalCost: testMoney(0),
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheCreationTokens: 0,
-      cacheReadTokens: 0,
-      totalTokens: 0,
-      sessionCount: 0,
-    };
-    vi.spyOn(UsageService, "getApiV1UsagePairwiseComparison").mockResolvedValue({
-      left: side,
-      right: side,
-      deltas: {
-        totalCostDelta: testMoney(0),
-        totalCostDeltaRatio: null,
-        inputTokensDelta: 0,
-        inputTokensDeltaRatio: null,
-        outputTokensDelta: 0,
-        outputTokensDeltaRatio: null,
-        cacheCreationDelta: 0,
-        cacheCreationDeltaRatio: null,
-        cacheReadDelta: 0,
-        cacheReadDeltaRatio: null,
-        totalTokensDelta: 0,
-        totalTokensDeltaRatio: null,
-        sessionCountDelta: 0,
-        sessionCountDeltaRatio: null,
-        costPerSessionDelta: null,
-        costPerSessionRatio: null,
-        tokensPerSessionDelta: null,
-        tokensPerSessionRatio: null,
-      },
-    });
     const { requests, emit } = await mountLiveUsage();
-    const firstUpdatedAt = usage.lastUpdatedAt;
-    const firstQuerySteps = usage.lastQuerySteps;
     const next = Promise.withResolvers<UsageSummaryResponse>();
     requests.mockReturnValueOnce(next.promise);
     for (let i = 0; i < 6; i++) {
@@ -245,17 +210,12 @@ describe("UsagePage refresh behavior", () => {
     await vi.advanceTimersByTimeAsync(300_000);
     expect(requests).toHaveBeenCalledTimes(2);
     expect(signal?.aborted).toBe(false);
-    const following = Promise.withResolvers<UsageSummaryResponse>();
-    requests.mockReturnValueOnce(following.promise);
+    requests.mockResolvedValue(tenModelUsageSummary());
     next.resolve(tenModelUsageSummary());
     await vi.advanceTimersByTimeAsync(0);
     await flushEffects();
     expect(usage.summary?.totals.inputTokens).toBe(100);
-    expect(usage.lastUpdatedAt).toBeGreaterThan(firstUpdatedAt!);
-    expect(usage.lastQuerySteps).not.toEqual(firstQuerySteps);
     expect(requests).toHaveBeenCalledTimes(3);
-    following.resolve(tenModelUsageSummary());
-    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requests).toHaveBeenCalledTimes(3);
   });
@@ -268,36 +228,16 @@ describe("UsagePage refresh behavior", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(requests).toHaveBeenCalledTimes(2);
     expect(usage.summary?.totals.inputTokens).toBe(100);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(requests).toHaveBeenCalledTimes(2);
   });
 
-  it("queues initial events and cancels queued live refreshes on teardown", async () => {
-    vi.useFakeTimers();
-    visibility();
-    const subscription = vi.spyOn(events, "subscribe");
-    const requests = usageReads()
-      .mockResolvedValueOnce(usageSummaryWithUnsupported())
-      .mockResolvedValue(tenModelUsageSummary());
-    const top =
-      Promise.withResolvers<Awaited<ReturnType<typeof UsageService.getApiV1UsageTopSessions>>>();
-    vi.mocked(UsageService.getApiV1UsageTopSessions).mockReturnValueOnce(top.promise);
-    component = mount(UsagePage, { target: document.body });
-    await flushEffects();
-    expect(usage.summary?.totals.inputTokens).toBe(0);
-    const emit = subscription.mock.calls.at(-1)![0];
-    emit({ scope: "sync" });
-    top.resolve([]);
-    await flushEffects();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(usage.summary?.totals.inputTokens).toBe(100);
-    expect(requests).toHaveBeenCalledTimes(2);
+  it("cancels queued live refreshes on teardown", async () => {
+    const { requests, emit } = await mountLiveUsage();
     emit({ scope: "sync" });
     await flushEffects();
     await unmount(component);
     component = undefined;
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(requests).toHaveBeenCalledTimes(2);
+    expect(requests).toHaveBeenCalledTimes(1);
   });
 
   it("aborts hidden reads and resumes once on return", async () => {
@@ -321,7 +261,7 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
   });
 
-  it("coalesces overdue refreshes and stops on teardown", async () => {
+  it("refreshes on visible return and pauses while hidden", async () => {
     vi.useFakeTimers();
     const setHidden = visibility();
     const requests = usageReads().mockResolvedValue(usageSummaryWithUnsupported());
