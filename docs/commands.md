@@ -1843,15 +1843,16 @@ ______________________________________________________________________
 
 ### `agentsview source chrome setup`
 
-Install the native host and unpacked extension for Claude.ai Sync through Google
-Chrome. The command prints the extension folder. AgentsView opens its Chrome
-connection only after setup, so restart AgentsView if it is already running.
-Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
-and select that folder. Keep Chrome open during Sync. Registration is per OS
-user; the last setup wins. The first connected Chrome profile is used. Rerun
-setup and reload the extension when the executable path or data directory
-changes. After an upgrade mismatch, restart AgentsView if you upgraded it, rerun
-setup, reload the extension at `chrome://extensions`, then Sync again.
+Install the native host and unpacked extension to sync Claude.ai, ChatGPT,
+Gemini Apps, and Grok through Google Chrome. The command prints the extension folder.
+AgentsView opens its Chrome connection only after setup, so restart AgentsView
+if it is already running. Open `chrome://extensions`, enable **Developer mode**,
+choose **Load unpacked**, and select that folder. Keep Chrome open during Sync.
+Registration is per OS user; the last setup wins. The first connected Chrome
+profile is used. Rerun setup and reload the extension when the executable path
+or data directory changes. After an upgrade mismatch, restart AgentsView if you
+upgraded it, rerun setup, reload the extension at `chrome://extensions`, then
+Sync again.
 
 See
 [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
@@ -1863,22 +1864,27 @@ ______________________________________________________________________
 
 ### `agentsview source import`
 
-Import Claude.ai, ChatGPT, or Gemini Apps conversations into the local database.
+Import Claude.ai, ChatGPT, or Gemini Apps conversations into the local database,
+or sync Grok chats through Chrome.
 See [Chat Import](/docs/chat-import/) for full documentation.
 
 ```bash
 agentsview source import --type <type> <path>
 ```
 
-| Flag        | Default | Description                                                                                           |
-| ----------- | ------- | ----------------------------------------------------------------------------------------------------- |
-| `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required)                                      |
-| `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)             |
-| `--sync`    | `false` | Sync Claude.ai through Chrome; requires a running server and Chrome host, with no path or `--replace` |
+| Flag        | Default | Description                                                                                                      |
+| ----------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required)                                                 |
+| `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)                        |
+| `--sync`    | `false` | Sync Claude.ai, ChatGPT, Gemini Apps, or Grok (`grok-web`) through Chrome; requires a running server and Chrome host, with no path or `--replace` |
 
 Set up the
 [Chrome host](https://agentsview.io/docs/commands/#agentsview-chrome-setup) once
-and keep Chrome open for `agentsview source import --type claude-ai --sync`.
+and keep Chrome open for `agentsview source import --type claude-ai --sync` or
+`agentsview source import --type chatgpt --sync` or
+`agentsview source import --type gemini-apps --sync` or
+`agentsview source import --type grok-web --sync`. The desktop app also syncs ChatGPT
+through Chrome.
 
 The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a
 Gemini Apps `MyActivity.html` file, or a directory containing the extracted

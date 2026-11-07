@@ -660,16 +660,15 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
-- **Code-mode wait output (checked 2026-11-03):** A local rollout records
-  `wait` arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
+- **Code-mode wait output (checked 2026-11-03):** A local rollout records `wait`
+  arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
   `function_call_output.output` is an array of `input_text` blocks containing
   completion timing and script output; running polls return plain text.
   Agentsview treats `wait` calls with a non-empty `cell_id` and no `ids` or
   `targets` arguments as code-mode polls and stores their output as normal
   tool results. Subagent waits keep their existing `status` handling,
-  including empty timeout statuses. They add no result event when `status`
-  is absent. Synthetic coverage in
-  `TestParseCodexSession_FunctionCalls` and
+  including empty timeout statuses. They add no result event when `status` is
+  absent. Synthetic coverage in `TestParseCodexSession_FunctionCalls` and
   `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
   an in-place reparse for Codex at data version 164.
 
@@ -680,14 +679,14 @@ fixtures retain this field; missing identities remain source-local.
   [response schema](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/protocol/src/models.rs)
   stores function-call arguments as a JSON string. The
   [output formatter](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/output.rs)
-  emits text blocks with script status, wall time, and output. These polls stay
-  on the incremental parse path when they bind no agent IDs through `ids` or
-  `targets`. Subagent waits still require a full parse, including the empty
+  emits text blocks with script status, wall time, and output. These polls
+  stay on the incremental parse path when they bind no agent IDs through `ids`
+  or `targets`. Subagent waits still require a full parse, including the empty
   `status` object returned on timeout by the
   [subagent wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/handlers/multi_agents/wait.rs).
   Covered by `TestParseCodexSessionFrom_CodeModeWaitStaysIncremental` and
-  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure Code
-  share this parser. Parsed content and cursor encoding are unchanged.
+  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure
+  Code share this parser. Parsed content and cursor encoding are unchanged.
 
 - **Hosted capacity (reverified 2026-11-01):** The pinned
   [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
@@ -695,8 +694,8 @@ fixtures retain this field; missing identities remain source-local.
   [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
   persists message items. `TestSandboxCodexOutcomesAboveFormerLimit` scales
   this existing shape synthetically through native capture, materialization
-  and the isolated parser, with one large string and many smaller messages.
-  It verifies lossless outcomes above the former transport ceiling, not a
+  and the isolated parser, with one large string and many smaller messages. It
+  verifies lossless outcomes above the former transport ceiling, not a
   producer size limit or a new provider format.
 
 - **Generated images (checked 2026-10-29 at
@@ -1809,6 +1808,61 @@ fixtures retain this field; missing identities remain source-local.
 - **Agentsview:** `internal/parser/gemini_apps_takeout.go` and
   `internal/importer/gemini_apps.go`; the CLI-only import path does not affect
   Gemini CLI discovery or parsing.
+- **Chrome Sync format:** gemini.google.com answers batchexecute POSTs to
+  `/_/BardChatUi/data/batchexecute` with a `)]}'` prefix, length lines, and
+  chunks whose `["wrb.fr", <rpc>, "<payload JSON>", ...]` entry carries the
+  result. `MaZiqc` lists chats: payload `[_, cursor, [entry...]]`, entry `[0]`
+  is the `c_` chat ID, `[1]` the title, and `[5]` the `[seconds, nanos]`
+  update time. `hNvQHb` returns `[turns, cursor, ...]` with turns newest
+  first; turn `[0]` is `[chat, response]`, `[2][0][0]` the prompt, `[3][0]`
+  the reply drafts (`[id, [text, ...], ...]`), `[3][3]` the shown draft's ID,
+  and the last `[seconds, nanos]` child the turn time. Turn `[1]` names the
+  previous turn, not this one. Cursors are base64 text with `+` and `/`.
+- **Chrome Sync evidence:** `no-public-source`. A read-only probe of a signed-in
+  web app (build `boq_gemini-web-uiserver_20261020.01_p0`) on 2026-10-21
+  checked every position above, list and turn paging with real cursors, and
+  that the list update time equals the newest turn time. Sanitized captures
+  with the real array layout are `internal/importer/testdata/gemini_web/`,
+  exercised by `TestSyncGeminiCapturedPages` and `TestGeminiRPCPayload`. The
+  account had no pinned chats, so whether pinned chats appear in the default
+  list is unverified. Gemini publishes no schema; RPC names and positions can
+  change with any web app build.
+- **Chrome Sync code:** `internal/parser/gemini_apps_web.go`,
+  `internal/importer/gemini_sync.go`, and
+  `frontend/chrome-extension/gemini_fetch.js`.
+
+## Grok Web (`grok-web`)
+
+- **Format:** grok.com REST JSON read by Chrome Sync.
+  `GET /rest/app-chat/conversations?pageSize=100` lists chats newest first as
+  `{conversations, nextPageToken}`; later pages add `&pageToken=<uuid>`, an
+  empty token is rejected with HTTP 400, and the last page omits
+  `nextPageToken`. Entries carry `conversationId` (UUID), `title`, and RFC
+  3339 `createTime` and `modifyTime`.
+  `GET /rest/app-chat/conversations/{id}/responses` returns
+  `{responses, inflightResponses}` with every branch in one body. Each
+  response has `responseId`, `parentResponseId` (absent on the root), `sender`
+  (`human`, `assistant`, `ASSISTANT`, or `model`), Markdown `message`,
+  `createTime`, `model`, and `partial`. A failed regeneration is an assistant
+  response with an empty `message`.
+- **Evidence:** `no-public-source`.
+- **Upstream:** xAI publishes no schema for the grok.com web API; public
+  references were searched 2026-10-21. A read-only probe of a signed-in web
+  app checked 2026-10-21 listed 79 chats (23 with branches, up to 74 responses
+  and 287 KB in one unpaged `/responses` body) and compared two branched chats
+  with the rendered page: every rendered response lay on the path from the
+  newest non-empty leaf, and its older siblings were not shown. Earlier turns
+  were not rendered by the virtualized page, so the rule is inferred for them.
+  No reply was in progress during the probe, and signed-out responses were not
+  observed. Sanitized captures with the real keys and branch structure are
+  `internal/importer/testdata/grok_web/`, exercised by
+  `TestSyncGrokCapturedPages`.
+- **Usage and cost:** responses name a `model` but expose no token, credit, or
+  monetary-cost fields.
+- **Agentsview:** `internal/parser/grok_web.go`,
+  `internal/importer/grok_sync.go`, and
+  `frontend/chrome-extension/grok_fetch.js`. The `grok-web` type is import-only
+  and does not affect Grok Build discovery or parsing.
 
 ## Grok Build (`grok`)
 
@@ -3896,6 +3950,69 @@ schemas keep their existing ordering behavior.
   data.
 - **Agentsview:** `internal/parser/chatgpt.go`; graph ancestry is flattened for
   display and the importer does not claim billing completeness.
+- **Chrome Sync:** The contributor reports live use of the private session,
+  conversation list, and detail endpoints in
+  [agentsview#2226](https://github.com/kenn-io/agentsview/issues/2226),
+  checked 2026-10-17. Sync uses the export conversation parser; list
+  timestamps accept ISO strings or Unix seconds, and detail timestamps use
+  Unix seconds. A supplied signed-in capture has a detail timestamp 0.68 s
+  after the list timestamp and a `mapping` object. Reverified 2026-10-18 with
+  `TestSyncChatGPTEquivalentTimestampsSkipSecondDetail`: Sync allows 5 s of
+  endpoint skew and re-fetches detail 60 s newer than the list. The
+  [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
+  checked 2026-10-17, document separate active (`is_archived=false`) and
+  archived (`is_archived=true`) conversation lists. Sync pages both lists each
+  run. The
+  [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),
+  checked 2026-10-17, describe a newer flat `messages` array with
+  `page_info` pagination. Each detail without a `mapping` object or either
+  `conversation_id` or `id` counts toward the two-consecutive-failures stop. A
+  single unsupported detail reports the update error after the remaining chats
+  finish, verified by `TestSyncChatGPTSingleUnsupportedDetail` on 2026-10-18.
+  Sync does not parse the flat format or cache freshness for details without
+  an identity. Reverified against the parser and synthetic importer
+  regressions on 2026-10-18: tool nodes attach to assistant messages, and
+  browser image placeholders carry no asset identity. The parser records user
+  message and parent IDs in the archive's existing source identity fields.
+  Sync preserves uploaded images on user turns with matching ordinals, roles,
+  timestamps, and sanitized surrounding text. Saved message and parent IDs
+  must match when present in the archive; older ZIP imports have neither ID.
+  Matching turns fill empty source identities before Sync caches freshness
+  under full and transcripts storage, verified by
+  `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`. Generated
+  images use the browser snapshot. Sync keeps the previous version in Trash
+  when it replaces history with a different branch under full, transcripts,
+  and usage storage, with its pins, notes, and any archived images. Appending
+  turns makes no copy. Reverified with
+  `TestSyncChatGPTUsageArchiveAppendMakesNoTrashedCopy` and
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy` on 2026-10-18.
+  Re-syncing the same chat makes no further copy, verified by
+  `TestSyncChatGPTAppendFreshnessAndBranchChanges`,
+  `TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins`, and
+  `TestSyncChatGPTZipImageReconciliation` on 2026-10-18. Sync replaces turns
+  with conflicting nonempty source message IDs. Sync fills missing models and
+  keeps nonempty stored models under full, transcripts, and usage storage,
+  including when later replies cause the parser to infer a different model for
+  an older reply during appends or replacements. Reverified 2026-10-18 with
+  `TestSyncChatGPTArchiveUpdatesAppendedTurns` and
+  `TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness`. Usage-only sync
+  also fills missing models when turns and `update_time` match, verified by
+  `TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp`. Usage-only
+  sync keeps a Trash copy when shorter snapshots have matching retained
+  assistant turns, including when only a trailing user turn was dropped. It
+  refreshes counts and end time and fills missing models before caching
+  freshness. Reverified 2026-10-18 with
+  `TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata` and
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy`. When detail
+  `create_time` is null or absent, Sync keeps the stored start time or uses
+  the first non-zero message timestamp for a new chat, skipping undated
+  messages. Numeric `create_time` takes precedence. Reverified against the
+  parser and synthetic importer test `TestSyncChatGPTMissingCreateTime` on
+  2026-10-18; ZIP import is unchanged.
+- **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
+  disconnected host and `chrome_sync_running` reports an active browser sync.
+  Stream errors use `chatgpt_auth_required` for sign-in and
+  `chrome_host_update_required` for an incompatible native host.
 
 ## Kiro CLI (`kiro`)
 

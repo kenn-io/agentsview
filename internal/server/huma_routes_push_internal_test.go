@@ -458,14 +458,16 @@ func TestDuckDBPushSyncOptionsPassesThroughProjectFilters(t *testing.T) {
 	assert.Equal(t, []string{"beta"}, got.ExcludeProjects)
 }
 
-func TestSyncClaudeAIRouteIsSSEOnly(t *testing.T) {
+func TestBrowserSyncRoutesAreSSEOnly(t *testing.T) {
 	t.Parallel()
 	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
-	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/import/claude-ai/sync")
-	require.Contains(t, op.Responses, "200")
-	assert.Len(t, op.Responses["200"].Content, 1)
-	assert.Contains(t, op.Responses["200"].Content, "text/event-stream")
+	for _, path := range []string{"/api/v1/import/claude-ai/sync", "/api/v1/import/chatgpt/sync"} {
+		op := requireOpenAPIOperation(t, spec, "post", path)
+		require.Contains(t, op.Responses, "200")
+		assert.Len(t, op.Responses["200"].Content, 1)
+		assert.Contains(t, op.Responses["200"].Content, "text/event-stream")
+	}
 }
 
 func TestSyncRemotesRouteIsStreaming(t *testing.T) {

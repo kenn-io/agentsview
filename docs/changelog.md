@@ -9,6 +9,11 @@ The latest release is
 
 ## Unreleased
 
+**Upgrade notes**
+
+- Chrome Sync users must rerun `agentsview source chrome setup` and reload the
+  extension once because the native-host protocol moved to version 4.
+
 **New features**
 
 - Find the session and prompt behind file lines with `agentsview why path:N-M`,
@@ -52,6 +57,21 @@ The latest release is
   candidates, and child links. Use `--format json` for scripts or `--pg` to read
   a PostgreSQL archive. Transcript text and tool arguments stay out of the
   report.
+
+- Sync Grok chats from grok.com through the Chrome extension with
+  `agentsview source import --type grok-web --sync`. Each chat becomes one `grok-web`
+  session, separate from local Grok Build sessions, holding the branch Grok
+  shows; when that branch changes, the previous version stays in Trash.
+
+- Sync Gemini chats from gemini.google.com through the Chrome extension with
+  `agentsview source import --type gemini-apps --sync`. Each chat becomes one session
+  with all of its turns; regenerated or shortened chats keep the previous
+  version in Trash.
+
+- Sync ChatGPT chats through the Chrome extension from Import > ChatGPT or
+  `agentsview source import --type chatgpt --sync`. Sync pages active and archived chats
+  and keeps the previous version in Trash when it replaces a chat's history with
+  a different branch. Appending turns makes no copy.
 
 - Assistants searching your history through MCP can now ask for sessions that
   covered several ideas at once, such as an auth change and its retry policy,
