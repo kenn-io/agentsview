@@ -281,6 +281,8 @@ The latest release is
 
 **Bug fixes**
 
+- The all-history Usage page no longer fails with an internal error after
+  upgrading a large archive while prices refresh.
 - Roborev test-value reviews, look-ahead reviews, fix plans, rebase fixes, and
   non-PR review summaries are now hidden as automated sessions, like other
   roborev runs. The session list and analytics stopped counting them as your

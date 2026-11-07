@@ -156,7 +156,7 @@ func (db *DB) UsagePricingDigest(ctx context.Context) (string, error) {
 	return usagePricingIdentity(rows)
 }
 
-// RewarmUsageCache rebuilds price-stale rollups; a call during a pass queues one rerun because passes pin their catalog.
+// RewarmUsageCache rebuilds price-stale rollups; a call during a pass stops it at the next batch and reruns with the current catalog.
 func (db *DB) RewarmUsageCache() error {
 	if !db.isUsageBackfillEnabled() {
 		return nil
@@ -170,6 +170,12 @@ func (db *DB) isUsageBackfillEnabled() bool {
 	db.usageBackfillMu.Lock()
 	defer db.usageBackfillMu.Unlock()
 	return db.usageBackfillEnabled
+}
+
+func (db *DB) usageBackfillRerunQueued() bool {
+	db.usageBackfillMu.Lock()
+	defer db.usageBackfillMu.Unlock()
+	return db.usageBackfillRerun
 }
 
 // StopUsageCacheBackfill cancels and joins the active pass before cache handles
@@ -262,6 +268,9 @@ func (db *DB) runUsageCacheBackfillPass(
 	allResults := make(map[string]usageFillResult, len(snapshot.Versions))
 	var installs []map[string]usageRollupInstall
 	for start := 0; start < len(snapshot.Versions); start += usageCacheBackfillBatchSize {
+		if db.usageBackfillRerunQueued() {
+			return nil
+		}
 		end := min(start+usageCacheBackfillBatchSize, len(snapshot.Versions))
 		cursorTarget := int64(0)
 		if start == 0 {
@@ -298,6 +307,9 @@ func (db *DB) runUsageCacheBackfillPass(
 				covered++
 			}
 		}
+	}
+	if db.usageBackfillRerunQueued() {
+		return nil
 	}
 	// Filling a later batch can invalidate a rollup install from an
 	// earlier batch when the filled session adds a sibling for an
