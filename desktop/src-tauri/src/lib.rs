@@ -1118,7 +1118,7 @@ fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
     if let Some(port) = backend_port {
         return url.scheme() == "http"
             && matches!(url.host_str(), Some(HOST | "localhost" | IPV6_HOST))
-            && url.port() == Some(port);
+            && url.port_or_known_default() == Some(port);
     }
     false
 }
@@ -4392,18 +4392,6 @@ fn spawn_backend_probe(window: WebviewWindow, handle: AppHandle) {
     });
 }
 
-#[cfg(test)]
-fn wait_for_server(port: u16, timeout: Duration) -> Option<BackendHost> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if let Some(host) = backend_ready_host(port) {
-            return Some(host);
-        }
-        thread::sleep(READY_POLL_INTERVAL);
-    }
-    None
-}
-
 fn wait_for_server_at(endpoint: BackendEndpoint, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -5742,6 +5730,12 @@ agentsview running at http://127.0.0.1:18082
         let ipv6_loopback = Url::parse("http://[::1]:18080/").expect("valid IPv6 loopback url");
         assert!(is_allowed_navigation_url(&ipv6_loopback, Some(18080)));
 
+        let localhost_default = Url::parse("http://localhost:80/").expect("valid localhost URL");
+        assert!(is_allowed_navigation_url(&localhost_default, Some(80)));
+
+        let ipv6_default = Url::parse("http://[::1]:80/").expect("valid IPv6 loopback URL");
+        assert!(is_allowed_navigation_url(&ipv6_default, Some(80)));
+
         let remote_ipv6 = Url::parse("http://[2001:db8::1]:18080/").expect("valid remote IPv6 url");
         assert!(!is_allowed_navigation_url(&remote_ipv6, Some(18080)));
     }
@@ -6376,17 +6370,17 @@ agentsview running at http://127.0.0.1:18082
     }
 
     #[test]
-    fn wait_for_server_accepts_auth_challenge() {
+    fn wait_for_server_at_accepts_auth_challenge() {
         let response =
             b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 13\r\nConnection: close\r\n\r\nUnauthorized\n";
         let (port, request) = spawn_response_server(response);
-        let ready = wait_for_server(port, Duration::from_secs(1));
+        let ready = wait_for_server_at(ipv4_endpoint(port), Duration::from_secs(1));
         let request = request.join().expect("response server should finish");
 
         assert!(request.starts_with("GET /api/v1/version HTTP/1.1\r\n"));
         assert!(request.contains(&format!("Host: {HOST}:{port}\r\n")));
         assert!(!request.contains("Authorization:"));
-        assert_eq!(ready, Some(BackendHost::Ipv4));
+        assert!(ready);
     }
 
     #[test]
