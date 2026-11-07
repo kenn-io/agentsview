@@ -198,12 +198,20 @@ func TestPushHeldSpareBootstrapsRecoveredWAL(t *testing.T) {
 	appendFrustrationPrompt(t, local, "new-session")
 	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 	require.NoError(t, err)
+	assert.NoFileExists(t, sparePath(path)+".wal")
 	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
 	assert.Equal(t, 3, mirrorMessageCountViaStore(t, store, "sess-1"))
 	assert.Equal(t, 2, mirrorMessageCountViaStore(t, store, "new-session"))
+	// Reuse the retired main and recover its discarded WAL changes from SQLite.
+	appendFrustrationPrompt(t, local, "sess-1")
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
+	require.NoError(t, err)
+	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+	assert.Equal(t, 4, mirrorMessageCountViaStore(t, store, "sess-1"))
+	assert.Equal(t, 2, mirrorMessageCountViaStore(t, store, "new-session"))
 	require.NoError(t, store.Close())
 	assert.NoFileExists(t, path+".wal")
-	assertMirrorMessageCount(t, path, "sess-1", 3)
+	assertMirrorMessageCount(t, path, "sess-1", 4)
 }
 
 func TestPushHeldSpareRetriesAfterReaderReleases(t *testing.T) {
@@ -278,9 +286,10 @@ func TestPushHeldSpareRetiresWALBeforeReplacingMain(t *testing.T) {
 	defer func() { require.NoError(t, os.Chmod(dir, info.Mode().Perm())) }()
 	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 	require.ErrorIs(t, err, os.ErrPermission)
-	var renameErr *os.LinkError
-	require.ErrorAs(t, err, &renameErr)
-	assert.Equal(t, path+".wal", renameErr.Old, "WAL retirement must fail before installing the new main")
+	var removeErr *os.PathError
+	require.ErrorAs(t, err, &removeErr)
+	assert.Equal(t, "remove", removeErr.Op)
+	assert.Equal(t, path+".wal", removeErr.Path, "WAL retirement must fail before installing the new main")
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, main, after)

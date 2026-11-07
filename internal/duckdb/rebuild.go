@@ -181,22 +181,20 @@ func publishHeldMirror(
 	if err := validateMirrorProbe(ctx, spare); err != nil {
 		return result, err
 	}
-	if err := ensureReplaceableMirror(path, liveProbe); err != nil {
-		return result, err
-	}
 	retired := filepath.Join(mirrorWorkDirPath(path), fmt.Sprintf("%s.tmp-%d", filepath.Base(path), time.Now().UnixNano()))
 	if err := os.Link(path, retired); err != nil {
 		return result, err
 	}
-	// Retire the old main's WAL before installing a main it cannot replay against.
-	if err := atomicfile.Replace(path+".wal", spare+".wal"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	// Discard the old main's WAL before publication so it cannot replay against
+	// either main. The retired main's cursors replay those changes from SQLite.
+	if err := os.Remove(path + ".wal"); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return result, err
 	}
 	if err := swapMirrorFile(spare, path); err != nil {
 		return result, err
 	}
 	if err := atomicfile.Replace(retired, spare); err != nil {
-		return result, err
+		log.Printf("duckdbsync: retaining retired mirror for stale temp cleanup: %v", err)
 	}
 	return result, nil
 }
