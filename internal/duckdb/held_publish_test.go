@@ -3,17 +3,76 @@
 package duckdb
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
+
+func TestPushHeldMirrorScopeChangesAfterProbe(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	ctx := t.Context()
+	local, path := newPushFixture(t, 1)
+	opts := storage.MirrorPushOptions{Projects: []string{"alpha"}}
+	_, err := Push(ctx, path, local, "m", opts, false, nil)
+	require.NoError(t, err)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:     syncSession("beta-session", "beta", "other scope", "2026-02-02T00:00:00Z", 1),
+		Messages:    []db.Message{syncMessage("beta-session", 0, "user", "other scope", "2026-02-02T00:00:00Z")},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	appendFrustrationPrompt(t, local, "sess-1")
+
+	// Pause at the first archive read. Before the fix this follows the live
+	// probe, allowing another push to replace the mirror before it is locked.
+	reader := local.Reader().(interface {
+		Conn(context.Context) (*sql.Conn, error)
+	})
+	conn, err := reader.Conn(ctx)
+	require.NoError(t, err)
+	var replaced bool
+	var replacementErr error
+	var held *sql.DB
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(interface {
+			RegisterAuthorizer(func(int, string, string, string) int)
+		}).RegisterAuthorizer(func(op int, table, column, database string) int {
+			if op == sqlite3.SQLITE_READ && table == "archive_metadata" && !replaced {
+				replaced = true
+				_, replacementErr = Push(ctx, path, local, "m", storage.MirrorPushOptions{Projects: []string{"beta"}}, false, nil)
+				if replacementErr == nil {
+					held, replacementErr = OpenReadOnly(ctx, path)
+				}
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	t.Cleanup(func() {
+		if held != nil {
+			require.NoError(t, held.Close())
+		}
+	})
+
+	result, err := Push(ctx, path, local, "m", opts, false, nil)
+	require.NoError(t, replacementErr)
+	require.True(t, replaced, "the competing scoped push must run")
+	require.NoError(t, err)
+	assert.True(t, result.Diagnostics.Full, "a scope change requires a rebuild")
+	require.NoError(t, held.Close())
+	assert.Equal(t, map[string]bool{"sess-1": true}, mirrorSessionIDs(t, path))
+	assertMirrorMessageCount(t, path, "sess-1", 3)
+}
 
 func TestPushHeldSpareRejectsUnusableSnapshots(t *testing.T) {
 	for _, mismatch := range []string{"scope", "archive"} {
