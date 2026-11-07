@@ -3068,5 +3068,8 @@
   "docbank_bytes_not_kept": "未保留圖片位元組",
   "docbank_file": "檔案 {n} · {mediaType} · {size}",
   "docbank_file_without_size": "檔案 {n} · {mediaType}",
-  "docbank_more": "Docbank 中還有 {count} 項"
+  "docbank_more": "Docbank 中還有 {count} 項",
+  "empty_archive_title": "尚無對話",
+  "empty_archive_desc": "AgentsView 會從這些資料夾讀取對話。代理寫入其中任一資料夾後，對話就會顯示在這裡。",
+  "empty_archive_choose_folders": "選擇資料夾"
 }

@@ -3065,5 +3065,8 @@
   "docbank_bytes_not_kept": "未保留图片字节",
   "docbank_file": "文件 {n} · {mediaType} · {size}",
   "docbank_file_without_size": "文件 {n} · {mediaType}",
-  "docbank_more": "Docbank 中还有 {count} 项"
+  "docbank_more": "Docbank 中还有 {count} 项",
+  "empty_archive_title": "暂无会话",
+  "empty_archive_desc": "AgentsView 从这些文件夹读取会话。代理写入其中任一文件夹后，会话就会显示在这里。",
+  "empty_archive_choose_folders": "选择文件夹"
 }

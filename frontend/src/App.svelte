@@ -68,6 +68,7 @@
   import ConfirmDeleteModal from "./lib/components/modals/ConfirmDeleteModal.svelte";
   import PerfDebugPanel from "./lib/components/debug/PerfDebugPanel.svelte";
   import AnalyticsPage from "./lib/components/analytics/AnalyticsPage.svelte";
+  import EmptyArchivePanel from "./lib/components/content/EmptyArchivePanel.svelte";
   import UsagePage from "./lib/components/usage/UsagePage.svelte";
   import ActivityPage from "./lib/components/activity/ActivityPage.svelte";
   import TrendsPage from "./lib/components/trends/TrendsPage.svelte";
@@ -950,6 +951,8 @@
           onBack={() => sessions.deselectSession()}
         />
         <MessageList bind:this={messageListRef} />
+      {:else if sessions.archiveEmpty}
+        <EmptyArchivePanel />
       {:else}
         <AnalyticsPage
           suppressSessionDateRestore={rootDetailDateRestoreSuppressed}
