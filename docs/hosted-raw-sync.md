@@ -445,6 +445,17 @@ the same time.
 their original files, and uploads durable generations. It does not parse
 sessions or write the normal local SQLite archive. S3 roots are excluded.
 
+On `main`, Pi, Oh My Pi, OMO, StepCode, and Prime Agent support native raw
+capture and hosted parsing. This support is newer than release 0.46.1. The
+client uploads original JSONL bytes, including malformed transcripts, plus
+existing parent files needed for lineage. Parent files must stay inside the
+primary configured session root; capture fails if an existing parent escapes
+that root. Capture also rejects an ambiguous source path when a companion
+would be mistaken for the primary transcript by the raw manifest format.
+Hosted parsing uses captured files and derives project and skill names from
+paths without reading the client working directory. Periodic audits refresh
+parent dependencies as well as the primary transcript.
+
 The server URL and device ID may be flags or environment variables. The device
 credential is environment-only so it does not appear in process arguments:
 

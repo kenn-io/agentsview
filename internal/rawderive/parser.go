@@ -155,6 +155,7 @@ func (p *ProviderParser) prepareSource(
 		Machine:               p.machine,
 		StableSourceSnapshots: true,
 		PathRewriter:          paths.rewrite,
+		StoredPathResolver:    paths.resolve,
 	})
 	if provider == nil {
 		return nil, parser.SourceRef{}, nil, nil, nil, fmt.Errorf("%w: provider construction failed", rawsync.ErrInvalid)
@@ -403,6 +404,19 @@ func matchProviderSource(
 	}
 	var matches, primaryMatches []match
 	for _, source := range sources {
+		// A companion is an input to this source, not another source to plan.
+		// Its own dependencies may be absent from this manifest by design.
+		if !localArchive && !rawCaptureSourceIdentityMatches(
+			source, source.Key, manifest.Manifest.SourceKey, sourceEntry,
+		) {
+			continue
+		}
+		if !localArchive && source.Key == source.DisplayPath {
+			primaryPath, err := materialized.EntryPath(sourceEntry)
+			if err != nil || filepath.Clean(source.DisplayPath) != filepath.Clean(primaryPath) {
+				continue
+			}
+		}
 		var members []parser.SourceRef
 		var plan parser.RawCapturePlan
 		var supported bool
@@ -479,10 +493,12 @@ func rawCaptureSourceIdentityMatches(
 }
 
 type stablePathMap struct {
-	root    string
-	forward map[string]string
-	reverse map[string]string
-	prefix  string
+	root                    string
+	forward                 map[string]string
+	reverse                 map[string]string
+	windowsReverse          map[string]string
+	ambiguousWindowsReverse map[string]struct{}
+	prefix                  string
 }
 
 func newStablePathMap(
@@ -508,6 +524,7 @@ func newStablePathMap(
 		paths.bind(local, stable)
 	}
 	paths.bindClientAliases(manifest, sourceEntry, materialized)
+	paths.indexWindowsPaths()
 	return paths
 }
 
@@ -525,6 +542,7 @@ func manifestPrimaryEntry(manifest rawsync.CanonicalManifest) string {
 func (m *stablePathMap) bindSource(source parser.SourceRef, stable string) {
 	m.bind(source.DisplayPath, stable)
 	m.bind(source.FingerprintKey, stable)
+	m.indexWindowsPaths()
 }
 
 // bindClientAliases registers safe lexical aliases so an absolute client
@@ -637,8 +655,62 @@ func (m *stablePathMap) resolve(stable string) (string, bool) {
 	}
 	if base, _, hasSuffix := parser.ParseVirtualSourcePath(stable); hasSuffix {
 		local, ok = m.reverse[base]
+		if ok {
+			return local, true
+		}
+	}
+	if key, windowsPath := windowsStablePathKey(stable); windowsPath {
+		local, ok = m.windowsReverse[key]
+		if ok {
+			return local, true
+		}
+	}
+	if base, _, hasSuffix := parser.ParseVirtualSourcePath(stable); hasSuffix {
+		if key, windowsPath := windowsStablePathKey(base); windowsPath {
+			local, ok = m.windowsReverse[key]
+		}
 	}
 	return local, ok
+}
+
+func (m *stablePathMap) indexWindowsPaths() {
+	m.windowsReverse = make(map[string]string)
+	m.ambiguousWindowsReverse = make(map[string]struct{})
+	for stable, local := range m.reverse {
+		key, windowsPath := windowsStablePathKey(stable)
+		if !windowsPath {
+			continue
+		}
+		if _, ambiguous := m.ambiguousWindowsReverse[key]; ambiguous {
+			continue
+		}
+		if previous, exists := m.windowsReverse[key]; exists && previous != local {
+			delete(m.windowsReverse, key)
+			m.ambiguousWindowsReverse[key] = struct{}{}
+			continue
+		}
+		m.windowsReverse[key] = local
+	}
+}
+
+func windowsStablePathKey(value string) (string, bool) {
+	normalized := strings.ReplaceAll(value, `\`, "/")
+	if !strings.HasPrefix(value, `\\`) && !hasWindowsDrivePrefix(normalized) {
+		return "", false
+	}
+	cleaned := path.Clean(normalized)
+	if strings.HasPrefix(normalized, "//") && !strings.HasPrefix(cleaned, "//") {
+		cleaned = "/" + cleaned
+	}
+	return strings.ToLower(cleaned), true
+}
+
+func hasWindowsDrivePrefix(value string) bool {
+	if len(value) < 3 || value[1] != ':' || value[2] != '/' {
+		return false
+	}
+	first := value[0]
+	return first >= 'A' && first <= 'Z' || first >= 'a' && first <= 'z'
 }
 
 func sourceKeyEndsWithEntry(sourceKey, entry string) bool {

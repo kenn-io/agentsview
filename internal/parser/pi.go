@@ -1,11 +1,11 @@
 package parser
 
 import (
-	"bufio"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,20 +15,16 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func (p *piProvider) parseSession(
-	ctx context.Context, path, project, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	return parsePiLikeSession(
-		ctx, path, project, machine, p.Def.Type, p.Def.IDPrefix,
-	)
-}
-
 func parsePiLikeSession(
 	ctx context.Context,
 	path, project, machine string,
 	agent AgentType,
 	idPrefix string,
 ) (*ParsedSession, []ParsedMessage, error) {
+	return parsePiLikeSessionContext(ctx, path, project, machine, agent, idPrefix, piHeaderLookup(piSessionHeader), nil)
+}
+
+func parsePiLikeSessionContext(ctx context.Context, path, project, machine string, agent AgentType, idPrefix string, read piHeaderLookup, resolve func(string) (string, bool)) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -90,50 +86,9 @@ func parsePiLikeSession(
 		project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	}
 
-	// OMP's directory layout identifies subagents independently of whether
-	// their headers also carry lineage.
-	var ompParentID string
-	if agent == AgentOMP {
-		ompParentID = ompParentHeaderSessionID(path)
-	}
-	isOMPSubagent := ompParentID != ""
-
-	// branchedFrom keeps its existing filename identity and precedence.
-	// OMP parentSession may be an opaque raw ID or a transcript path;
-	// other Pi-family providers retain their existing path resolution.
-	var parentSessionID string
-	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
-		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
-	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
-		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent ||
-			agent == AgentOMO || agent == AgentStepCode) {
-		if agent == AgentOMP {
-			if parentID := ompParentSessionID(path, parentSession, sessionID, ompParentID); parentID != "" {
-				parentSessionID = idPrefix + parentID
-			}
-		} else {
-			parentSessionID = idPrefix + primeParentSessionID(path, parentSession)
-		}
-	} else if ompParentID != "" {
-		// Older OMP children omit parentSession entirely.
-		parentSessionID = idPrefix + ompParentID
-	}
-
-	// The pi-subagents extension writes a fresh child to
-	// <project>/<parent>/<runId>/run-N/session.jsonl. Older releases leave
-	// parentSession out of the header, so lineage comes from the parent
-	// transcript three levels up. Newer releases record parentSession, the same
-	// field /fork uses, so the run directory is what marks the child as a
-	// subagent. The header's parent wins when both are present.
-	var isPiSubagent bool
-	if agent == AgentPi || agent == AgentOMO {
-		if parentID := piSubagentParentSessionID(path); parentID != "" {
-			if parentSessionID == "" {
-				parentSessionID = idPrefix + parentID
-			}
-			isPiSubagent = true
-		}
-	}
+	parentSessionID, isOMPSubagent, isPiSubagent := resolvePiLineage(
+		path, headerLine, agent, idPrefix, read, resolve,
+	)
 
 	// V1 detection: if header has no id, we may need to derive from filename.
 	isV1 := sessionID == ""
@@ -410,23 +365,37 @@ func piPersistedPathBase(value string) string {
 	return filepath.Base(strings.ReplaceAll(value, `\`, "/"))
 }
 
-func primeParentSessionID(childPath, persistedPath string) string {
+func (read piHeaderLookup) primeParentIDWithStatus(childPath, persistedPath string) (string, bool) {
 	base := piPersistedPathBase(persistedPath)
+	filenameID := strings.TrimSuffix(base, filepath.Ext(base))
 	localSibling := filepath.Join(filepath.Dir(childPath), base)
+	explicitParentPath := filepath.FromSlash(strings.ReplaceAll(persistedPath, `\`, "/"))
+	if !filepath.IsAbs(explicitParentPath) {
+		explicitParentPath = filepath.Join(filepath.Dir(childPath), explicitParentPath)
+	}
+	explicitParentPath = filepath.Clean(explicitParentPath)
 	// pi-subagents names every child session.jsonl, so a nested child's parent
 	// basename can match the child's own file. A session is never its own parent.
 	if filepath.Clean(localSibling) != filepath.Clean(childPath) {
-		if headerID, ok := piSessionHeaderID(localSibling); ok && headerID != "" {
-			return headerID
+		if headerID, ok := read.id(localSibling); ok {
+			if headerID != "" {
+				return headerID, true
+			}
+			if explicitParentPath == filepath.Clean(localSibling) {
+				return filenameID, true
+			}
 		}
 	}
 	if filepath.IsAbs(persistedPath) &&
 		filepath.Clean(persistedPath) != filepath.Clean(localSibling) {
-		if headerID, ok := piSessionHeaderID(persistedPath); ok && headerID != "" {
-			return headerID
+		if headerID, ok := read.id(persistedPath); ok {
+			if headerID != "" {
+				return headerID, true
+			}
+			return filenameID, true
 		}
 	}
-	return strings.TrimSuffix(base, filepath.Ext(base))
+	return filenameID, false
 }
 
 // parsePiUserMessage parses a message entry with role="user".
@@ -820,10 +789,10 @@ func piTimestamp(line string) time.Time {
 	return time.Time{}
 }
 
-// ompParentSessionID preserves raw parent IDs and resolves path references
+// ompParentID preserves raw parent IDs and resolves path references
 // through transcript headers. A stale path can use a matching local structural
 // parent or sibling, but must not borrow an unrelated directory parent.
-func ompParentSessionID(childPath, parentReference, childID, structuralParentID string) string {
+func (read piHeaderLookup) ompParentID(childPath, parentReference, childID, structuralParentID, filenameID string) string {
 	if !strings.ContainsAny(parentReference, `/\`) &&
 		!strings.HasSuffix(parentReference, ".jsonl") {
 		return parentReference
@@ -836,61 +805,60 @@ func ompParentSessionID(childPath, parentReference, childID, structuralParentID 
 	if !filepath.IsAbs(parentPath) {
 		parentPath = filepath.Join(filepath.Dir(childPath), parentPath)
 	}
+	parentPath = filepath.Clean(parentPath)
 	structuralParentPath := filepath.Dir(childPath) + ".jsonl"
-	if filepath.Clean(parentPath) != filepath.Clean(structuralParentPath) {
-		if parentID := ompTranscriptSessionID(parentPath); parentID != "" && parentID != childID {
+	structuralParentPath = filepath.Clean(structuralParentPath)
+	if parentPath != structuralParentPath {
+		if parentID := read.transcriptIDWithFallback(parentPath, true, filenameID); parentID != "" && parentID != childID {
 			return parentID
 		}
+	} else if parentID := read.transcriptIDWithFallback(parentPath, true, filenameID); parentID != "" && parentID != childID {
+		// A captured alias may resolve to the structural path. Preserve the
+		// explicit reference's V1 filename identity when the header has no ID.
+		return parentID
+	} else if structuralParentID != "" && structuralParentID != childID {
+		// An exact structural path remains authoritative over a similarly
+		// named sibling in the child's directory.
+		return structuralParentID
 	}
 
 	base := piPersistedPathBase(parentReference)
-	if structuralParentID != "" && structuralParentID != childID &&
-		base == filepath.Base(structuralParentPath) {
-		return structuralParentID
-	}
 	localSibling := filepath.Join(filepath.Dir(childPath), base)
 	if filepath.Clean(localSibling) != filepath.Clean(parentPath) &&
 		filepath.Clean(localSibling) != filepath.Clean(structuralParentPath) {
-		if parentID := ompTranscriptSessionID(localSibling); parentID != "" && parentID != childID {
+		if parentID := read.transcriptIDWithFallback(localSibling, true, filenameID); parentID != "" && parentID != childID {
 			return parentID
 		}
+	}
+	// OMP's readable structural parent can recover a stale path with the same
+	// basename, but a readable exact sibling above takes precedence.
+	if structuralParentID != "" && structuralParentID != childID &&
+		strings.EqualFold(base, filepath.Base(structuralParentPath)) {
+		return structuralParentID
 	}
 	return ""
 }
 
-// ompParentHeaderSessionID resolves the structural parent at
-// <containing-directory>.jsonl, including legacy V1 transcript identities.
-func ompParentHeaderSessionID(childPath string) string {
-	return ompTranscriptSessionID(filepath.Dir(childPath) + ".jsonl")
-}
-
-// ompTranscriptSessionID rejects malformed parent hints without changing the
-// existing header-reading semantics of other Pi-family providers.
-func ompTranscriptSessionID(path string) string {
-	header, ok := piSessionHeader(path)
-	if !ok || !gjson.Valid(header) {
-		return ""
-	}
-	if id := gjson.Get(header, "id").Str; id != "" {
-		return id
-	}
-	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
-}
-
-// piSubagentParentSessionID returns the parent Pi session's stored raw ID for a
+// subagentParentID returns the parent Pi session's stored raw ID for a
 // pi-subagents child at <parent>/<runId>/run-N/session.jsonl, or "" when
 // childPath does not have that shape or no Pi transcript sits at
 // <parent>.jsonl. A delegated child's own children resolve to that child,
 // because the extension nests them below its session.jsonl stem.
-func piSubagentParentSessionID(childPath string) string {
-	if filepath.Base(childPath) != "session.jsonl" {
+func (read piHeaderLookup) subagentParentID(childPath string) string {
+	if !isPiSubagentPath(childPath) {
 		return ""
 	}
+	return read.transcriptID(piSubagentParentPath(childPath), false)
+}
+
+func isPiSubagentPath(childPath string) bool {
+	return filepath.Base(childPath) == "session.jsonl" &&
+		isPiSubagentRunDir(filepath.Base(filepath.Dir(childPath)))
+}
+
+func piSubagentParentPath(childPath string) string {
 	runDir := filepath.Dir(childPath)
-	if !isPiSubagentRunDir(filepath.Base(runDir)) {
-		return ""
-	}
-	return parentTranscriptSessionID(filepath.Dir(filepath.Dir(runDir)) + ".jsonl")
+	return filepath.Dir(filepath.Dir(runDir)) + ".jsonl"
 }
 
 // isPiSubagentRunDir reports whether name is a pi-subagents attempt directory
@@ -908,19 +876,6 @@ func isPiSubagentRunDir(name string) bool {
 	return true
 }
 
-// parentTranscriptSessionID returns the session ID a parent transcript at
-// parent parses to, or "" when parent is not a Pi-format transcript.
-func parentTranscriptSessionID(parent string) string {
-	parentID, ok := piSessionHeaderID(parent)
-	if !ok {
-		return ""
-	}
-	if parentID != "" {
-		return parentID
-	}
-	return strings.TrimSuffix(filepath.Base(parent), ".jsonl")
-}
-
 // piSessionHeaderID reads path's session header id, skipping a leading OMP
 // title slot line. The boolean reports whether the file has a valid pi session
 // header. os.Open intentionally follows symlinks to supported transcripts.
@@ -930,15 +885,28 @@ func piSessionHeaderID(path string) (string, bool) {
 }
 
 func piSessionHeader(path string) (string, bool) {
+	header, ok, _ := readPiSessionHeader(path)
+	return header, ok
+}
+
+func readPiSessionHeader(path string) (string, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	defer f.Close()
-	s := bufio.NewScanner(f)
-	s.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
-	for s.Scan() {
-		line := strings.TrimSpace(s.Text())
+	return scanPiSessionHeader(f)
+}
+
+func scanPiSessionHeader(reader io.Reader) (string, bool, error) {
+	lr := newLineReader(reader, maxLineSize)
+	defer releaseLineReader(lr)
+	for {
+		line, ok := lr.next()
+		if !ok {
+			return "", false, lr.Err()
+		}
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -946,9 +914,106 @@ func piSessionHeader(path string) (string, bool) {
 			continue
 		}
 		if gjson.Get(line, "type").Str != "session" {
-			return "", false
+			return "", false, nil
 		}
-		return line, true
+		return line, true, nil
 	}
-	return "", false
+}
+
+// resolvePiLineage shares the exact parent lookup order between parsing and capture.
+func resolvePiLineage(path, headerLine string, agent AgentType, idPrefix string, read piHeaderLookup, resolve func(string) (string, bool)) (string, bool, bool) {
+	sessionID := gjson.Get(headerLine, "id").Str
+	// OMP's directory layout identifies subagents independently of whether
+	// their headers also carry lineage.
+	var ompParentID string
+	if agent == AgentOMP {
+		ompParentID = read.transcriptID(filepath.Dir(path)+".jsonl", true)
+	}
+	isOMPSubagent := ompParentID != ""
+
+	// branchedFrom keeps its existing filename identity and precedence.
+	// OMP parentSession may be an opaque raw ID or a transcript path;
+	// other Pi-family providers retain their existing path resolution.
+	var parentSessionID string
+	var parentSessionResolved bool
+	var parentSessionPath bool
+	var parentSessionBase string
+	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
+		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
+	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
+		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent ||
+			agent == AgentOMO || agent == AgentStepCode) {
+		originalParentSession := parentSession
+		// Client aliases must resolve before host-specific absolute-path checks.
+		if resolve != nil {
+			if local, ok := resolvePiStoredPath(resolve, parentSession); ok {
+				parentSession = local
+			}
+		}
+		if agent == AgentOMP {
+			if parentID := read.ompParentID(
+				path, parentSession, sessionID, ompParentID,
+				piPersistedPathSessionID(originalParentSession),
+			); parentID != "" {
+				parentSessionID = idPrefix + parentID
+			}
+		} else {
+			parentSessionBase = piPersistedPathBase(parentSession)
+			parentSessionPath = strings.ContainsAny(parentSession, `/\\`) ||
+				strings.HasSuffix(parentSession, ".jsonl")
+			parentID, resolved := read.primeParentIDWithStatus(path, parentSession)
+			parentSessionID = idPrefix + parentID
+			parentSessionResolved = resolved
+		}
+	} else if ompParentID != "" {
+		// Older OMP children omit parentSession entirely.
+		parentSessionID = idPrefix + ompParentID
+	}
+
+	// The pi-subagents extension writes a fresh child to
+	// <project>/<parent>/<runId>/run-N/session.jsonl. Older releases leave
+	// parentSession out of the header, so lineage comes from the parent
+	// transcript three levels up. Newer releases record parentSession, the same
+	// field /fork uses, so the run directory is what marks the child as a
+	// subagent. The header's parent wins when both are present.
+	var isPiSubagent bool
+	if agent == AgentPi || agent == AgentOMO {
+		if parentID := read.subagentParentID(path); parentID != "" {
+			isPiSubagent = true
+			structuralParentBase := filepath.Base(piSubagentParentPath(path))
+			if parentSessionID == "" ||
+				(parentSessionPath && !parentSessionResolved &&
+					strings.EqualFold(parentSessionBase, structuralParentBase)) {
+				parentSessionID = idPrefix + parentID
+			}
+		}
+	}
+
+	return parentSessionID, isOMPSubagent, isPiSubagent
+}
+
+// piHeaderLookup can confine reads or record physical capture dependencies.
+type piHeaderLookup func(string) (string, bool)
+
+func (read piHeaderLookup) id(path string) (string, bool) {
+	header, ok := read(path)
+	return gjson.Get(header, "id").Str, ok
+}
+
+func (read piHeaderLookup) transcriptID(path string, strict bool) string {
+	return read.transcriptIDWithFallback(path, strict, "")
+}
+
+func (read piHeaderLookup) transcriptIDWithFallback(path string, strict bool, filenameFallback string) string {
+	header, ok := read(path)
+	if !ok || strict && !gjson.Valid(header) {
+		return ""
+	}
+	if id := gjson.Get(header, "id").Str; id != "" {
+		return id
+	}
+	if filenameFallback != "" {
+		return filenameFallback
+	}
+	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
 }
