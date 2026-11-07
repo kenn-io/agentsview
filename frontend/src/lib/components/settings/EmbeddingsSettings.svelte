@@ -187,20 +187,7 @@
     <p class="muted detail">{unavailableReason}</p>
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
-  {:else if status && status.setup?.enabled !== false && !status.setup?.busy}
-    {#if status.model || status.dimension}
-      <div class="status-grid">
-        {#if status.model}
-          <span class="row-label">{m.settings_embeddings_model_label()}</span>
-          <span class="row-value mono">{status.model}</span>
-        {/if}
-        {#if status.dimension}
-          <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
-          <span class="row-value">{numberFormat.format(status.dimension)}</span>
-        {/if}
-      </div>
-    {/if}
-
+  {:else if status && status.setup?.enabled !== false && status.setup?.action !== "turn-on" && !status.setup?.busy}
     {#if running}
       {#if phase === "scanning" || status.total <= 0}
         <p class="muted" aria-live="polite">
@@ -227,9 +214,24 @@
           </div>
         </div>
       {/if}
-    {:else if status.last_error}
+    {/if}
+
+    {#if status.model || status.dimension}
+      <div class="status-grid">
+        {#if status.model}
+          <span class="row-label">{m.settings_embeddings_model_label()}</span>
+          <span class="row-value mono">{status.model}</span>
+        {/if}
+        {#if status.dimension}
+          <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
+          <span class="row-value">{numberFormat.format(status.dimension)}</span>
+        {/if}
+      </div>
+    {/if}
+
+    {#if !running && status.last_error}
       <p class="msg error" role="alert">{status.last_error}</p>
-    {:else if status.last_result}
+    {:else if !running && status.last_result}
       <div class="status-grid">
         <span class="row-label">{m.settings_embeddings_last_build_label()}</span
         >
