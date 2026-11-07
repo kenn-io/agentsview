@@ -22,12 +22,8 @@
   }}
 >
   {#snippet summary()}
-    <span class="empty-summary">
-      <span class="empty-line"></span>
-      <span class="empty-label" title={m.transcript_empty_messages_title()}>
-        {m.transcript_empty_messages({ count: messages.length })}
-      </span>
-      <span class="empty-line"></span>
+    <span class="empty-label" title={m.transcript_empty_messages_title()}>
+      {m.transcript_empty_messages({ count: messages.length })}
     </span>
   {/snippet}
   {#if open}
@@ -42,10 +38,21 @@
 </Disclosure>
 
 <style>
-  /* Keep the row's divider inset, and render the hidden cards exactly like
-     the transcript's other cards rather than as indented secondary text. */
+  /* Keep the row's divider inset with the chevron beside its centered
+     label, and render the hidden cards exactly like the transcript's other
+     cards rather than as indented secondary text. */
   :global(.empty-run.kit-disclosure--plain > .kit-disclosure__summary) {
     padding: 2px 12px;
+  }
+  :global(.empty-run > .kit-disclosure__summary::before),
+  :global(.empty-run > .kit-disclosure__summary::after) {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border-muted);
+  }
+  :global(.empty-run > .kit-disclosure__summary > .kit-disclosure__title) {
+    flex: none;
   }
   :global(.empty-run.kit-disclosure--plain > .kit-disclosure__content) {
     padding: 0;
@@ -53,23 +60,13 @@
     font-size: inherit;
     line-height: inherit;
   }
-  .empty-summary {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  .empty-label {
     color: var(--text-muted);
     font-size: 11px;
-  }
-  .empty-summary:hover {
-    color: var(--text-secondary);
-  }
-  .empty-line {
-    flex: 1;
-    height: 1px;
-    background: var(--border-muted);
-  }
-  .empty-label {
     white-space: nowrap;
+  }
+  :global(.empty-run > summary:hover) .empty-label {
+    color: var(--text-secondary);
   }
   .empty-messages {
     display: flex;
