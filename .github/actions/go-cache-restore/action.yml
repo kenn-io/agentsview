@@ -86,9 +86,10 @@ runs:
         fi
         while IFS= read -r path; do
           path="${path/#\~/$HOME}"
+          if [ "$path" = "$(go env GOMODCACHE)" ]; then continue; fi
           if [ "$RUNNER_OS" = 'Windows' ]; then path="$(cygpath -u "$path")"; fi
           if [ -d "$path" ]; then
-            find "$path" -type f \( -name '*-a' -o -name '*-d' \) -exec touch -t "$aged" {} +
+            find "$path" -mindepth 2 -maxdepth 2 \( -type f -o -type d \) \( -name '*-a' -o -name '*-d' \) -exec touch -t "$aged" {} +
           fi
         done <<< "$GO_CACHE_PATHS"
         marker="$(mktemp "$RUNNER_TEMP/go-cache-tracking.XXXXXX")"
