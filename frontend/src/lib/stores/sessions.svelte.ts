@@ -1,6 +1,11 @@
 import { SvelteMap } from "svelte/reactivity";
 import type { DataChangedEvent } from "../api/client.js";
-import { MetadataService, SessionsService, SettingsService } from "../api/generated/index";
+import {
+  DataService,
+  MetadataService,
+  SessionsService,
+  SettingsService,
+} from "../api/generated/index";
 import { ApiError, isAbortError, isNotFoundError } from "../api/runtime.js";
 import type { Session } from "../api/types.js";
 import type {
@@ -323,6 +328,7 @@ class SessionsStore {
   childSessions: Map<string, Session> = $state(new Map());
   nextCursor: string | null = $state(null);
   total: number = $state(0);
+  archiveEmpty: boolean = $state(false);
   loading: boolean = $state(false);
   /** Why the server rejected the current sidebar filters, or null. */
   sidebarLoadError: string | null = $state(null);
@@ -645,6 +651,7 @@ class SessionsStore {
       }
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
+      void this.refreshArchiveEmpty(version);
       this.sidebarLoadError = null;
     } catch (error) {
       if (this.loadVersion !== version) return;
@@ -660,6 +667,18 @@ class SessionsStore {
         this.loading = false;
       }
     }
+  }
+
+  private async refreshArchiveEmpty(version: number) {
+    let empty = false;
+    if (this.total === 0) {
+      try {
+        empty = (await DataService.getApiV1DataProjects()).total_sessions === 0;
+      } catch {
+        // Keep the dashboard when inventory is unavailable.
+      }
+    }
+    if (this.loadVersion === version) this.archiveEmpty = empty;
   }
 
   sidebarIndexVersion: number = $state(0);

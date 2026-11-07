@@ -3199,5 +3199,8 @@
   "docbank_bytes_not_kept": "Octets de l'image non conservés",
   "docbank_file": "Fichier {n} · {mediaType} · {size}",
   "docbank_file_without_size": "Fichier {n} · {mediaType}",
-  "docbank_more": "+{count} dans Docbank"
+  "docbank_more": "+{count} dans Docbank",
+  "empty_archive_title": "Aucune session pour l'instant",
+  "empty_archive_desc": "AgentsView lit les sessions dans ces dossiers. Elles apparaîtront ici dès qu'un agent écrira dans l'un d'eux.",
+  "empty_archive_choose_folders": "Choisir les dossiers"
 }

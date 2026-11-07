@@ -3175,5 +3175,8 @@
   "docbank_bytes_not_kept": "Image bytes not kept",
   "docbank_file": "File {n} · {mediaType} · {size}",
   "docbank_file_without_size": "File {n} · {mediaType}",
-  "docbank_more": "+{count} more in Docbank"
+  "docbank_more": "+{count} more in Docbank",
+  "empty_archive_title": "No sessions yet",
+  "empty_archive_desc": "AgentsView reads sessions from these folders. They appear here once an agent writes to one of them.",
+  "empty_archive_choose_folders": "Choose folders"
 }

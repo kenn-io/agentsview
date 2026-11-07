@@ -3140,5 +3140,8 @@
   "docbank_bytes_not_kept": "画像のバイトは保持されていません",
   "docbank_file": "ファイル {n} · {mediaType} · {size}",
   "docbank_file_without_size": "ファイル {n} · {mediaType}",
-  "docbank_more": "Docbank にあと {count} 件"
+  "docbank_more": "Docbank にあと {count} 件",
+  "empty_archive_title": "まだセッションがありません",
+  "empty_archive_desc": "AgentsView はこれらのフォルダーからセッションを読み取ります。エージェントがいずれかに書き込むと、ここに表示されます。",
+  "empty_archive_choose_folders": "フォルダーを選択"
 }

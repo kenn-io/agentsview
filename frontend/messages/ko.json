@@ -3071,5 +3071,8 @@
   "docbank_bytes_not_kept": "이미지 바이트가 보관되지 않았습니다",
   "docbank_file": "파일 {n} · {mediaType} · {size}",
   "docbank_file_without_size": "파일 {n} · {mediaType}",
-  "docbank_more": "Docbank에 {count}개 더 있음"
+  "docbank_more": "Docbank에 {count}개 더 있음",
+  "empty_archive_title": "아직 세션이 없습니다",
+  "empty_archive_desc": "AgentsView는 이 폴더에서 세션을 읽습니다. 에이전트가 이 중 한 곳에 기록하면 여기에 표시됩니다.",
+  "empty_archive_choose_folders": "폴더 선택"
 }

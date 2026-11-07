@@ -22,6 +22,7 @@ import { rollingRange } from "../utils/dates.js";
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
   getSidebarSessionIndex: vi.fn(),
+  getDataProjects: vi.fn().mockResolvedValue({ total_sessions: 0 }),
   getSession: vi.fn(),
   getProjects: vi.fn(),
   getAgents: vi.fn(),
@@ -74,6 +75,7 @@ vi.mock("../api/runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("../api/generated/index", () => ({
+  DataService: { getApiV1DataProjects: api.getDataProjects },
   SessionsService: {
     getApiV1SessionIdsResolve: vi.fn(),
     getApiV1Sessions: vi.fn((params) => api.listSessions(params)),
@@ -226,6 +228,7 @@ describe("SessionsStore", () => {
     storageData.clear();
     mockSidebarPage();
     mockSidebarIndex();
+    api.getDataProjects.mockResolvedValue({ total_sessions: 0 });
     vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mockImplementation((params) =>
       api.getSidebarSessionIndex(params),
     );
@@ -236,6 +239,85 @@ describe("SessionsStore", () => {
     starred.ids = new Set();
     yokedDates.setEnabled(false);
     sessions = createSessionsStore();
+  });
+
+  describe("archive emptiness", () => {
+    it.each([false, true])(
+      "clears the panel after an import, hidden by filter %s",
+      async (hidden) => {
+        vi.useFakeTimers();
+        let notify!: (event: { scope: string }) => void;
+        const subscribe = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
+          notify = fn as (event: { scope: string }) => void;
+          return () => {};
+        });
+        sessions.filters.date = hidden ? "2024-01-01" : "";
+        const detach = sessions.attachSidebar();
+        try {
+          await sessions.load();
+          expect(sessions.archiveEmpty).toBe(true);
+          if (!hidden) mockSidebarIndex([makeSkinnyRow({ id: "imported" })]);
+          api.getDataProjects.mockResolvedValue({ total_sessions: 1 });
+          notify({ scope: "sessions" });
+          await vi.advanceTimersByTimeAsync(300);
+          expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+          expect(sessions.archiveEmpty).toBe(false);
+        } finally {
+          detach();
+          subscribe.mockRestore();
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it.each([
+      ["", 3, false],
+      ["2024-01-01", 0, true],
+      ["2024-01-01", 3, false],
+    ] as const)(
+      "checks the whole archive for date %s, inventory %i",
+      async (date, total, empty) => {
+        sessions.filters.date = date;
+        api.getDataProjects.mockResolvedValue({ total_sessions: total });
+        await sessions.load();
+        expect(sessions.archiveEmpty).toBe(empty);
+        expect(api.getDataProjects).toHaveBeenCalledExactlyOnceWith();
+      },
+    );
+
+    it.each(["", "2024-01-01"])(
+      "skips inventory when the sidebar has sessions, date %s",
+      async (date) => {
+        sessions.filters.date = date;
+        sessions.archiveEmpty = true;
+        mockSidebarIndex([makeSkinnyRow({ id: "present" })]);
+        await sessions.load();
+        expect(sessions.archiveEmpty).toBe(false);
+        expect(api.getDataProjects).not.toHaveBeenCalled();
+      },
+    );
+
+    it("discards inventory after a newer sidebar load", async () => {
+      let resolveOlder!: (value: { total_sessions: number }) => void;
+      api.getDataProjects.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOlder = resolve;
+        }),
+      );
+      await sessions.load();
+      await sessions.load();
+      expect(sessions.archiveEmpty).toBe(true);
+      resolveOlder({ total_sessions: 3 });
+      await Promise.resolve();
+      expect(sessions.archiveEmpty).toBe(true);
+    });
+
+    it("returns to the dashboard when inventory is unavailable", async () => {
+      sessions.archiveEmpty = true;
+      api.getDataProjects.mockRejectedValue(new Error("inventory unavailable"));
+      await sessions.load();
+      expect(sessions.archiveEmpty).toBe(false);
+    });
   });
 
   it("preserves explicit automated exclusion for annotation requests", async () => {

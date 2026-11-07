@@ -3199,5 +3199,8 @@
   "docbank_bytes_not_kept": "No se conservaron los bytes de la imagen",
   "docbank_file": "Archivo {n} · {mediaType} · {size}",
   "docbank_file_without_size": "Archivo {n} · {mediaType}",
-  "docbank_more": "+{count} más en Docbank"
+  "docbank_more": "+{count} más en Docbank",
+  "empty_archive_title": "Aún no hay sesiones",
+  "empty_archive_desc": "AgentsView lee las sesiones de estas carpetas. Aparecerán aquí cuando un agente escriba en alguna de ellas.",
+  "empty_archive_choose_folders": "Elegir carpetas"
 }

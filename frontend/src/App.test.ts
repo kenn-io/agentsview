@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
+import { events } from "./lib/stores/events.svelte.js";
 import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
 import { insights } from "./lib/stores/insights.svelte.js";
 import { messages } from "./lib/stores/messages.svelte.js";
@@ -20,7 +21,7 @@ import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
 import type { DbMessage as Message } from "./lib/api/generated/index.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
-import { SessionsService } from "./lib/api/generated/index.js";
+import { DataService, SessionsService } from "./lib/api/generated/index.js";
 import { dismissFlash } from "@kenn-io/kit-ui";
 vi.mock("./lib/feature-flags.js", () => ({
   PROJECT_MAPPING_WORKSPACE_ENABLED: true,
@@ -98,6 +99,7 @@ afterEach(() => {
   router.sessionId = null;
   router.isRootPath = false;
   sessions.activeSessionId = null;
+  sessions.archiveEmpty = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
@@ -693,6 +695,55 @@ describe("App root Sessions landing", () => {
     router.sessionId = null;
     router.isRootPath = true;
   }
+
+  it.each([
+    ["", 0, true],
+    ["2024-01-01", 0, true],
+    ["2024-01-01", 2, false],
+  ] as const)(
+    "renders archive contents with saved date %s and one-shot inventory %i",
+    async (date, total, empty) => {
+      stubAppDependencies();
+      events.setAvailable(false);
+      vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex").mockResolvedValue({
+        sessions: [],
+        total: 0,
+      } as never);
+      vi.spyOn(DataService, "getApiV1DataProjects").mockResolvedValue({
+        total_sessions: total,
+      } as never);
+      settings.loaded = true;
+      settings.sessionProviders = [
+        {
+          id: "claude",
+          display_name: "Claude Code",
+          dirs: ["/home/example/.claude/projects"],
+          homes: [],
+          homes_supported: false,
+        },
+      ];
+      settings.disabledAgents = [];
+      vi.spyOn(sessions, "loadMachines").mockResolvedValue();
+      localStorage.setItem(
+        "session-filters",
+        JSON.stringify({ version: 2, date, includeOneShot: false }),
+      );
+      sessions.restoreSavedFilters();
+      router.navigate("sessions");
+
+      component = mount(App, { target: document.body });
+      await flushEffects();
+
+      await vi.waitFor(() => {
+        expect(DataService.getApiV1DataProjects).toHaveBeenCalledWith();
+        expect(sessions.archiveEmpty).toBe(empty);
+        expect(
+          document.body.textContent?.includes("Claude Code: /home/example/.claude/projects"),
+        ).toBe(empty);
+        expect(document.body.querySelector(".analytics-page") !== null).toBe(!empty);
+      });
+    },
+  );
 
   it("resets filters without changing the bare root URL or saved value", async () => {
     stubAppDependencies();
