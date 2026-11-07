@@ -3929,7 +3929,7 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
         let deadline = Instant::now() + timeout;
         begin_update_stop_wait(&state);
         let mut waited_generation = None;
-        let detached_port = current_backend_port(app);
+        let detached_endpoint = current_backend_endpoint(app);
         let active_generation = {
             let Ok(guard) = state.child.lock() else {
                 end_update_stop_wait(&state);
@@ -3952,8 +3952,7 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
                 generation,
                 wait_for_sidecar_termination(&state, generation, remaining_timeout(deadline)),
             );
-            launcher_stopped
-                && stop_detached_backend_for_update_with_port(app, deadline, detached_port)
+            launcher_stopped && stop_detached_backend_for_update(app, deadline, detached_endpoint)
         } else if let Some(generation) = current_stopping_generation(&state) {
             waited_generation = Some(generation);
             let launcher_stopped = finish_backend_stop_wait(
@@ -3962,10 +3961,9 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
                 generation,
                 wait_for_sidecar_termination(&state, generation, remaining_timeout(deadline)),
             );
-            launcher_stopped
-                && stop_detached_backend_for_update_with_port(app, deadline, detached_port)
+            launcher_stopped && stop_detached_backend_for_update(app, deadline, detached_endpoint)
         } else {
-            stop_detached_backend_for_update_with_port(app, deadline, detached_port)
+            stop_detached_backend_for_update(app, deadline, detached_endpoint)
         };
         finish_update_stop_wait(&state, stopped);
         if let Some(generation) = waited_generation {
@@ -4028,10 +4026,10 @@ fn sidecar_port(state: &SidecarState) -> Option<u16> {
     state.backend_port.lock().ok().and_then(|guard| *guard)
 }
 
-fn stop_detached_backend_for_update_with_port(
+fn stop_detached_backend_for_update(
     app: &AppHandle,
     deadline: Instant,
-    port: Option<u16>,
+    endpoint: Option<BackendEndpoint>,
 ) -> bool {
     // serve stop exits non-zero while the daemon is still starting up
     // ("a server is starting; retry once it is ready"), so a single
@@ -4057,7 +4055,7 @@ fn stop_detached_backend_for_update_with_port(
         thread::sleep,
     );
     if result != StopLauncherResult::Success {
-        if port.is_none() {
+        if endpoint.is_none() {
             eprintln!(
                 "[agentsview] serve stop did not report success, but no detached daemon port is known"
             );
@@ -4067,8 +4065,8 @@ fn stop_detached_backend_for_update_with_port(
         }
         return false;
     }
-    if let Some(port) = port {
-        if !wait_for_server_stopped(port, remaining_timeout(deadline)) {
+    if let Some(endpoint) = endpoint {
+        if !wait_for_server_stopped(endpoint, remaining_timeout(deadline)) {
             eprintln!(
                 "[agentsview] timed out waiting for detached daemon to stop before update install"
             );
@@ -4417,17 +4415,18 @@ fn wait_for_server_at(endpoint: BackendEndpoint, timeout: Duration) -> bool {
     false
 }
 
-fn wait_for_server_stopped(port: u16, timeout: Duration) -> bool {
+fn wait_for_server_stopped(endpoint: BackendEndpoint, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if !backend_endpoint_ready(port) {
+        if !backend_endpoint_ready_at(endpoint) {
             return true;
         }
         thread::sleep(READY_POLL_INTERVAL);
     }
-    !backend_endpoint_ready(port)
+    !backend_endpoint_ready_at(endpoint)
 }
 
+#[cfg(test)]
 fn backend_endpoint_ready(port: u16) -> bool {
     backend_ready_host(port).is_some()
 }
@@ -4452,6 +4451,7 @@ fn backend_ready_on(host: BackendHost, port: u16) -> bool {
     })
 }
 
+#[cfg(test)]
 fn backend_ready_host(port: u16) -> Option<BackendHost> {
     [BackendHost::Ipv4, BackendHost::Ipv6]
         .into_iter()
@@ -6393,10 +6393,33 @@ agentsview running at http://127.0.0.1:18082
     fn wait_for_server_stopped_rejects_auth_challenge() {
         let response = b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n";
         let (port, request) = spawn_response_server(response);
-        let stopped = wait_for_server_stopped(port, Duration::ZERO);
+        let stopped = wait_for_server_stopped(ipv4_endpoint(port), Duration::ZERO);
         request.join().expect("response server should finish");
 
         assert!(!stopped);
+    }
+
+    #[test]
+    fn wait_for_server_stopped_ignores_another_address_family() {
+        let response = b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n";
+        let (port, unrelated_server) =
+            spawn_response_server_on(Ipv6Addr::LOCALHOST.into(), response);
+
+        let stopped = wait_for_server_stopped(ipv4_endpoint(port), Duration::ZERO);
+        if !unrelated_server.is_finished() {
+            let request = format!(
+                "GET /cleanup HTTP/1.1\r\nHost: {IPV6_HOST}:{port}\r\nConnection: close\r\n\r\n"
+            );
+            let _ = read_http_response(
+                SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0)),
+                request.as_str(),
+                Duration::from_secs(1),
+            );
+        }
+        let unrelated_request = unrelated_server.join().expect("join unrelated server");
+
+        assert!(stopped);
+        assert!(unrelated_request.starts_with("GET /cleanup HTTP/1.1\r\n"));
     }
 
     #[test]
