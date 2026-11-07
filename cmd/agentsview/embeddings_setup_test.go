@@ -71,6 +71,12 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			defer stub.Close()
 			cfg, err := config.Default()
 			require.NoError(t, err)
+			if recipe == "nomic" {
+				shared, err := embedlocal.DefaultDir()
+				require.NoError(t, err)
+				require.NoError(t, os.MkdirAll(filepath.Dir(shared), 0o700))
+				require.NoError(t, os.WriteFile(shared, []byte("unusable built-in installation"), 0o600))
+			}
 			cfg.DataDir, cfg.DBPath = dir, filepath.Join(dir, "sessions.db")
 			raw := map[string]string{
 				"enabled-missing":  "[vector]\nenabled = true\n",
@@ -84,7 +90,10 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				require.NoError(t, err)
 			}
 			var installed atomic.Bool
-			inspectLocalEmbeddings = func(_ context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
+			inspectLocalEmbeddings = func(ctx context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
+				if recipe == "nomic" {
+					return embedlocal.Inspect(ctx, opts)
+				}
 				if recipe == "automatic" && !opts.SkipOllama {
 					return embedlocal.Status{OllamaAvailable: true, DownloadBytes: 295_000_000}, nil
 				}

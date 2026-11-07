@@ -177,9 +177,7 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 		if u, err := url.Parse(deployment.Endpoint); (err == nil && u.Port() == "11434") || deployment.OllamaCPUFallback {
 			status.Provider = "ollama"
 		}
-		if status.Provider != "ollama" {
-			return status, nil
-		}
+		return status, nil
 	}
 	inspected, err := inspectLocalEmbeddings(ctx, embedlocal.Options{SkipOllama: deployment.Local || deployment.Endpoint != ""})
 	if err != nil {
