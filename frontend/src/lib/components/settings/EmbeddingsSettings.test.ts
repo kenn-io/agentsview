@@ -255,6 +255,7 @@ describe("EmbeddingsSettings", () => {
           expect(text).toContain("50 text sections/s");
         } else {
           expect(text).not.toContain("under a minute left");
+          expect(text).not.toContain("50 text sections/s");
         }
         const progressbars = document.body.querySelectorAll('[role="progressbar"]');
         expect(progressbars).toHaveLength(1);
