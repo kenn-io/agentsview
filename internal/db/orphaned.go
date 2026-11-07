@@ -1198,9 +1198,7 @@ func (d *DB) CopyExcludedSessionsFrom(
 	if sourceVersion < codexRevertPageDataVersion {
 		// Deleted rows no longer retain file names, so unknown page IDs cannot
 		// be enumerated. Preserve the old whole-thread deletion instead.
-		scope = `CASE WHEN id GLOB 'codex:*' OR id GLOB '*~codex:*'
-			OR id GLOB 'traex:*' OR id GLOB '*~traex:*'
-			OR id GLOB 'augure-code:*' OR id GLOB '*~augure-code:*'
+		scope = `CASE WHEN ` + codexFormatIDGlobSQL + `
 			THEN 1 ELSE ` + scope + ` END`
 	}
 	_, err = conn.ExecContext(ctx, `
@@ -1220,7 +1218,7 @@ func (d *DB) CopyExcludedSessionsFrom(
 		JOIN excluded_sessions thread
 		  ON thread.id = substr(page.id, 1, length(page.id) - 37)
 		WHERE thread.include_codex_pages = 1
-		  AND page.agent IN ('codex', 'traex', 'augure-code')
+		  AND page.agent IN (`+codexFormatAgentsSQL+`)
 		  AND substr(page.id, -37, 1) = '_'`)
 	if err != nil {
 		return fmt.Errorf("copying excluded Codex pages: %w", err)
@@ -1234,7 +1232,7 @@ func (d *DB) CopyExcludedSessionsFrom(
 			FROM main.sessions page
 			JOIN excluded_sessions legacy
 			  ON legacy.id = substr(page.id, 1, length(page.id) - 73) || substr(page.id, -36)
-			WHERE page.agent IN ('codex', 'traex', 'augure-code')
+			WHERE page.agent IN (`+codexFormatAgentsSQL+`)
 			  AND substr(page.id, -37, 1) = '_'`)
 		if err != nil {
 			return fmt.Errorf("copying excluded legacy Codex pages: %w", err)
@@ -1364,7 +1362,7 @@ func (d *DB) CopySessionMetadataFrom(
 			SET deleted_at = old_s.deleted_at
 			FROM old_db.sessions old_s
 			WHERE old_s.id = substr(page.id, 1, length(page.id) - 37)
-			  AND page.agent IN ('codex', 'traex', 'augure-code')
+			  AND page.agent IN (`+codexFormatAgentsSQL+`)
 			  AND substr(page.id, -37, 1) = '_'
 			  AND `+trashFilter); err != nil {
 			return fmt.Errorf("copying Codex revert page trash: %w", err)
@@ -1373,7 +1371,7 @@ func (d *DB) CopySessionMetadataFrom(
 			UPDATE main.sessions SET trash_includes_codex_pages = 1
 			FROM old_db.sessions old_s
 			WHERE main.sessions.id = old_s.id
-			  AND old_s.agent IN ('codex', 'traex', 'augure-code')
+			  AND old_s.agent IN (`+codexFormatAgentsSQL+`)
 			  AND `+trashFilter); err != nil {
 			return fmt.Errorf("retaining legacy Codex trash scope: %w", err)
 		}
@@ -3224,10 +3222,24 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	return version, nil
 }
 
+// codexFormatAgentsSQL is the quoted SQL IN list of agents whose sessions are
+// Codex rollout pages, and codexFormatIDGlobSQL matches their session IDs with
+// or without a host prefix. Agent names are fixed identifiers, so inlining
+// them is safe.
+var codexFormatAgentsSQL, codexFormatIDGlobSQL = func() (string, string) {
+	var in, globs []string
+	for _, agent := range parser.CodexFormatAgents() {
+		in = append(in, "'"+string(agent)+"'")
+		globs = append(globs,
+			"id GLOB '"+string(agent)+":*'", "id GLOB '*~"+string(agent)+":*'")
+	}
+	return strings.Join(in, ", "), strings.Join(globs, " OR ")
+}()
+
 func codexThreadCorrections(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
 	rows, err := conn.QueryContext(ctx, `SELECT old.id, fresh.id
 		FROM old_db.sessions old JOIN main.sessions fresh ON fresh.file_path = old.file_path
-		WHERE old.agent IN ('codex', 'traex', 'augure-code') AND fresh.agent = old.agent
+		WHERE old.agent IN (`+codexFormatAgentsSQL+`) AND fresh.agent = old.agent
 		  AND old.id != fresh.id AND fresh.deleted_at IS NULL AND old.deleted_at IS NULL
 		  AND old.id NOT IN (SELECT id FROM main.excluded_sessions)`)
 	if err != nil {
@@ -3258,10 +3270,8 @@ func isCodexThreadCorrection(threads map[string]string, targets map[string]bool,
 func codexRowsReparsedElsewhere(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
 	rows, err := conn.QueryContext(ctx, `
 		SELECT id, file_path FROM old_db.sessions
-		WHERE agent IN (?, ?, ?)
-		  AND file_path IS NOT NULL`,
-		string(parser.AgentCodex), string(parser.AgentTraeX), string(parser.AgentAugureCode),
-	)
+		WHERE agent IN (`+codexFormatAgentsSQL+`)
+		  AND file_path IS NOT NULL`)
 	if err != nil {
 		return nil, fmt.Errorf("finding stale codex rows: %w", err)
 	}
@@ -3291,9 +3301,7 @@ func excludeLegacyCodexPagesByFileName(ctx context.Context, conn *sql.Conn) erro
 	rows, err := conn.QueryContext(ctx, `
 		SELECT id, file_path, created_at FROM old_db.excluded_sessions
 		WHERE file_path IS NOT NULL
-		  AND (id GLOB 'codex:*' OR id GLOB '*~codex:*'
-		    OR id GLOB 'traex:*' OR id GLOB '*~traex:*'
-		    OR id GLOB 'augure-code:*' OR id GLOB '*~augure-code:*')`)
+		  AND (`+codexFormatIDGlobSQL+`)`)
 	if err != nil {
 		return fmt.Errorf("reading excluded Codex file names: %w", err)
 	}

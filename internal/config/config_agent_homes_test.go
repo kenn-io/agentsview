@@ -168,6 +168,34 @@ func TestResolveDirs_CodexHomeRootEnvVar(t *testing.T) {
 	assert.False(t, cfg.IsUserConfigured(parser.AgentCodex))
 }
 
+// Open Interpreter honors INTERPRETER_HOME and deliberately ignores CODEX_HOME,
+// so its roots must follow the former and never the Codex home.
+func TestResolveDirs_OpenInterpreterHomeRootEnvVar(t *testing.T) {
+	dir := setupTestEnv(t)
+	home := canonicalTempDir(t)
+	setTestHome(t, home)
+	t.Setenv("CODEX_HOME", canonicalTempDir(t))
+	t.Setenv("INTERPRETER_HOME", "")
+	writeConfig(t, dir, map[string]any{})
+
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		filepath.Join(home, ".openinterpreter", "sessions"),
+		filepath.Join(home, ".openinterpreter", "archived_sessions"),
+	}, cfg.ResolveDirs(parser.AgentInterpreter))
+
+	root := canonicalTempDir(t)
+	t.Setenv("INTERPRETER_HOME", root)
+	cfg, err = LoadMinimal()
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		filepath.Join(root, "sessions"),
+		filepath.Join(root, "archived_sessions"),
+	}, cfg.ResolveDirs(parser.AgentInterpreter))
+	assert.False(t, cfg.IsUserConfigured(parser.AgentInterpreter))
+}
+
 func TestLoadFileAgentHomesDeduplicateSymlinkedRoots(t *testing.T) {
 	f := newConfigFixture(t)
 	home := canonicalTempDir(t)

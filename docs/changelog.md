@@ -11,6 +11,11 @@ The latest release is
 
 **New features**
 
+- Track Open Interpreter sessions as their own agent. AgentsView reads them from
+  `~/.openinterpreter` (or `INTERPRETER_HOME`) and shows `interpreter resume`
+  commands. Open Interpreter is now a fork of Codex, so its sessions get the
+  same tool calls, token usage, and subagent links as Codex sessions.
+
 - Find the session and prompt behind file lines with `agentsview why path:N-M`,
   or look up a commit with `agentsview why --commit SHA`. The command uses local
   Git blame and archived commit links without calling a model. Add `--json` for

@@ -2169,8 +2169,7 @@ func (s *Sync) reconcilePGMissingSessions(
 			return fmt.Errorf("scanning owned pg session for full push reconciliation: %w", err)
 		}
 		ids = append(ids, id)
-		switch agent {
-		case "codex", "traex", "augure-code":
+		if parser.IsCodexFormatAgent(parser.AgentType(agent)) {
 			codexPaths[id] = path
 		}
 	}

@@ -52,9 +52,7 @@ func SortSessionsNewestFirst(sessions []Session) {
 // codexThreadSessionID returns the session ID of the thread a Codex revert
 // page belongs to, and the session's own ID for any other session.
 func codexThreadSessionID(sess Session) string {
-	switch parser.AgentType(sess.Agent) {
-	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode:
-	default:
+	if !parser.IsCodexFormatAgent(parser.AgentType(sess.Agent)) {
 		return sess.ID
 	}
 	prefixEnd := strings.LastIndex(sess.ID, ":") + 1

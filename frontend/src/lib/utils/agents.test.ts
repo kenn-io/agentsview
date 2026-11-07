@@ -17,6 +17,7 @@ describe("KNOWN_AGENTS", () => {
       "codex-cloud",
       "traex",
       "augure-code",
+      "open-interpreter",
       "augure-desktop",
       "copilot",
       "devin",
@@ -161,6 +162,7 @@ describe("agentLabel", () => {
     expect(agentLabel("omnigent")).toBe("Omnigent");
     expect(agentLabel("traex")).toBe("TraeX");
     expect(agentLabel("augure-code")).toBe("Augure Code");
+    expect(agentLabel("open-interpreter")).toBe("Open Interpreter");
     expect(agentLabel("augure-desktop")).toBe("Augure Desktop");
     expect(agentLabel("opencodereview")).toBe("Open Code Review");
     expect(agentLabel("crush")).toBe("Charm Crush");

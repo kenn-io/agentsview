@@ -28,13 +28,13 @@ Desktop app, pip/uvx, and Docker installs are covered in the
 A background server watches the session directories your agents already write
 and imports supported formats into a local SQLite archive. It finds the default
 directories automatically. You can configure other locations. Supported
-harnesses include Claude Code, OpenClaude, Codex, Augure Code, Augure Desktop,
-Cline CLI, Crush, CodeBuddy CN, Gemini, Copilot (CLI, VS Code, and Visual
-Studio), Cursor, Cursor IDE, IcodeMate, Qwen Code, DeepSeek TUI and Harness,
-Mistral Vibe, Zed, Warp, OpenCode, Positron, Posit Assistant, Claude Cowork,
-Aider, Antigravity, gptme, Junie, Muse Code, OMO, StepCode, Kilo, Kimi, Kiro,
-OpenHands, Goose, Grok, RooCode, Trae, Windsurf, fx, and dozens more. Every
-supported source is listed in
+harnesses include Claude Code, OpenClaude, Codex, Augure Code, Open Interpreter,
+Augure Desktop, Cline CLI, Crush, CodeBuddy CN, Gemini, Copilot (CLI, VS Code,
+and Visual Studio), Cursor, Cursor IDE, IcodeMate, Qwen Code, DeepSeek TUI and
+Harness, Mistral Vibe, Zed, Warp, OpenCode, Positron, Posit Assistant, Claude
+Cowork, Aider, Antigravity, gptme, Junie, Muse Code, OMO, StepCode, Kilo, Kimi,
+Kiro, OpenHands, Goose, Grok, RooCode, Trae, Windsurf, fx, and dozens more.
+Every supported source is listed in
 [session discovery](/docs/configuration/#session-discovery).
 
 Import [Claude.ai chats through Chrome](/docs/chat-import/#sync-claudeai-chats),

@@ -72,6 +72,16 @@ func TestResumeCommandAugureCode(t *testing.T) {
 	assert.Equal(t, "augure resume run-1 -m ossington-5", cmd)
 }
 
+func TestResumeCommandOpenInterpreter(t *testing.T) {
+	assert.True(t, resumeAgentNeedsModel("open-interpreter"))
+
+	tmpl := resumeAgents["open-interpreter"]
+	assert.Equal(t, "interpreter resume sess-1",
+		resumeCommand("open-interpreter", tmpl, "sess-1", ""))
+	assert.Equal(t, "interpreter resume run-1 -m 'glm-5.2'",
+		resumeCommand("open-interpreter", tmpl, "run-1", "glm-5.2"))
+}
+
 func TestResumeCommandAltSession(t *testing.T) {
 	assert.Equal(t, "gemini --resume abc", resumeCommand("gemini", resumeAgents["gemini"], "abc_alt-0a1b2c3d4e5f6a7b", ""))
 	assert.Equal(t, "gemini --resume abc_alt-notahash", resumeCommand("gemini", resumeAgents["gemini"], "abc_alt-notahash", ""))
@@ -92,6 +102,7 @@ func TestResumeCommandCodexRevertPage(t *testing.T) {
 		{"codex page resumes its thread", "codex", page, "codex resume " + thread},
 		{"traex page resumes its thread", "traex", page, "traex resume " + thread},
 		{"augure page resumes its thread", "augure-code", page, "augure resume " + thread},
+		{"open interpreter page resumes its thread", "open-interpreter", page, "interpreter resume " + thread},
 		{"plain codex thread", "codex", thread, "codex resume " + thread},
 		{"augure underscore id", "augure-code", "run_1", "augure resume run_1"},
 		{"other agent keeps page-shaped id", "claude", page, "claude --resume " + page},

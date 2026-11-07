@@ -1177,7 +1177,7 @@ can copy the session directory and open it in detected editors or file browsers.
 Pi sessions use `pi --session` with the transcript path when available, or the
 native session ID. For Pi, **Copy command** includes the working directory so
 you can paste the complete command into a shell. Augure Code sessions use
-`augure resume`. Copying a session's directory path also works when that
+`augure resume`, and Open Interpreter sessions use `interpreter resume`. Copying a session's directory path also works when that
 directory has been deleted.
 
 Local Codex sessions add **Open in Codex Desktop**, which deep-links to the

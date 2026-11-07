@@ -188,8 +188,8 @@ evidence; they do not establish whether a tool helped the task.
   `internal/parser/testdata/claude/channel_messages.jsonl`. Inbound channel
   questions are `user` entries with `isMeta: true` and `origin.kind: channel`.
   They remain user turns. Peer-origin meta entries are system messages, and
-  other `isMeta` entries stay hidden. Transcript text
-  retains the `<channel>` envelope, while session previews show its body.
+  other `isMeta` entries stay hidden. Transcript text retains the `<channel>`
+  envelope, while session previews show its body.
 
 - **Dialogue projection:** Reverified 2026-10-17 against the shared block parser
   and ingest fixtures. Text blocks retain literal thinking and tool markers;
@@ -316,17 +316,17 @@ fixtures retain this field; missing identities remain source-local.
   `promptSource:"system"` carrying a delivery notice. Native parsing
   classifies a prompt that starts with `<cross-session-message` as a system
   row with `source_subtype` `peer_message`, keeping the wrapper so the sender
-  stays visible. That parser version dropped non-channel `isMeta` user records. Task
-  notifications in the same release are `type:"user"` records with
-  `origin:{"kind":"task-notification"}` and a `<task-notification>` body,
-  which the existing `task_notification` rule already covers. Checked against a
-  local transcript corpus; the synthetic fixture
+  stays visible. That parser version dropped non-channel `isMeta` user
+  records. Task notifications in the same release are `type:"user"` records
+  with `origin:{"kind":"task-notification"}` and a `<task-notification>` body,
+  which the existing `task_notification` rule already covers. Checked against
+  a local transcript corpus; the synthetic fixture
   `internal/parser/testdata/claude/queued_peer_messages.jsonl` mirrors these
   shapes. Data version 126 reparses existing sessions once.
 
 - **Peer user records (2026-11-06):** The Claude Code 2.1.310 transcript excerpt
-  in [#2718](https://github.com/kenn-io/agentsview/issues/2718) contains inbound
-  `type:"user"` records with `isMeta:true`, `promptSource:"system"`,
+  in [#2718](https://github.com/kenn-io/agentsview/issues/2718) contains
+  inbound `type:"user"` records with `isMeta:true`, `promptSource:"system"`,
   `turnOrigin:"peer"`, and `origin.kind:"peer"`. Their content starts with
   `Another Claude session sent a message:` before the cross-session wrapper.
   This is a reported artifact, not a capture made for this change. Static
@@ -334,19 +334,19 @@ fixtures retain this field; missing identities remain source-local.
   entries with `isMeta:true` and preservation of `origin` in user messages.
   Its turn-origin classifier also maps channels and other origins to `peer`,
   so `turnOrigin` alone does not identify a cross-session message. No live
-  delivery was run. Searches for `"cross-session-message"
-  repo:anthropics/claude-code` and `"turnOrigin" repo:anthropics/claude-code`
-  returned no code hits. The public tree at
-  `90380efca7f9d73e206fac453f841b6acd664f4d` does not expose the persistence
-  implementation. The evidence class remains `no-public-source`.
+  delivery was run. Searches for
+  `"cross-session-message" repo:anthropics/claude-code` and
+  `"turnOrigin" repo:anthropics/claude-code` returned no code hits. The public
+  tree at `90380efca7f9d73e206fac453f841b6acd664f4d` does not expose the
+  persistence implementation. The evidence class remains `no-public-source`.
   Agentsview retains peer-origin user records as system `peer_message` rows,
-  preserving their text and excluding them from human turn counts and previews.
-  Synthetic regressions in `internal/parser/claude_peer_test.go` cover full and
-  incremental parsing, content blocks, delivery notices, and rewind identity.
-  Data version 166 reparses Claude, Cowork, Qoder, and iCodeMate sources in place.
-  The archive regression checks that unchanged sources recover the message
-  without changing session identity. Deleted sources cannot recover messages
-  omitted by the previous parser.
+  preserving their text and excluding them from human turn counts and
+  previews. Synthetic regressions in `internal/parser/claude_peer_test.go`
+  cover full and incremental parsing, content blocks, delivery notices, and
+  rewind identity. Data version 166 reparses Claude, Cowork, Qoder, and
+  iCodeMate sources in place. The archive regression checks that unchanged
+  sources recover the message without changing session identity. Deleted sources
+  cannot recover messages omitted by the previous parser.
 
 - **Evidence:** `no-public-source`.
 
@@ -660,16 +660,15 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
-- **Code-mode wait output (checked 2026-11-03):** A local rollout records
-  `wait` arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
+- **Code-mode wait output (checked 2026-11-03):** A local rollout records `wait`
+  arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
   `function_call_output.output` is an array of `input_text` blocks containing
   completion timing and script output; running polls return plain text.
   Agentsview treats `wait` calls with a non-empty `cell_id` and no `ids` or
   `targets` arguments as code-mode polls and stores their output as normal
   tool results. Subagent waits keep their existing `status` handling,
-  including empty timeout statuses. They add no result event when `status`
-  is absent. Synthetic coverage in
-  `TestParseCodexSession_FunctionCalls` and
+  including empty timeout statuses. They add no result event when `status` is
+  absent. Synthetic coverage in `TestParseCodexSession_FunctionCalls` and
   `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
   an in-place reparse for Codex at data version 164.
 
@@ -680,14 +679,14 @@ fixtures retain this field; missing identities remain source-local.
   [response schema](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/protocol/src/models.rs)
   stores function-call arguments as a JSON string. The
   [output formatter](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/output.rs)
-  emits text blocks with script status, wall time, and output. These polls stay
-  on the incremental parse path when they bind no agent IDs through `ids` or
-  `targets`. Subagent waits still require a full parse, including the empty
+  emits text blocks with script status, wall time, and output. These polls
+  stay on the incremental parse path when they bind no agent IDs through `ids`
+  or `targets`. Subagent waits still require a full parse, including the empty
   `status` object returned on timeout by the
   [subagent wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/handlers/multi_agents/wait.rs).
   Covered by `TestParseCodexSessionFrom_CodeModeWaitStaysIncremental` and
-  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure Code
-  share this parser. Parsed content and cursor encoding are unchanged.
+  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure
+  Code share this parser. Parsed content and cursor encoding are unchanged.
 
 - **Hosted capacity (reverified 2026-11-01):** The pinned
   [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
@@ -695,8 +694,8 @@ fixtures retain this field; missing identities remain source-local.
   [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
   persists message items. `TestSandboxCodexOutcomesAboveFormerLimit` scales
   this existing shape synthetically through native capture, materialization
-  and the isolated parser, with one large string and many smaller messages.
-  It verifies lossless outcomes above the former transport ceiling, not a
+  and the isolated parser, with one large string and many smaller messages. It
+  verifies lossless outcomes above the former transport ceiling, not a
   producer size limit or a new provider format.
 
 - **Generated images (checked 2026-10-29 at
@@ -798,78 +797,80 @@ fixtures retain this field; missing identities remain source-local.
   `TestParseCodexSessionForkLineage` and
   `TestCodexOrdinaryForkLinkSurvivesSyncAndUpgrade` cover the link and the
   upgrade, using the shape reported in
-  [issue #2468](https://github.com/kenn-io/agentsview/issues/2468).
-  Rechecked the pinned fork writer and subagent snapshot path on 2026-11-05:
-  copied forks retain their inherited prefix. Synthetic fixtures reproduce
-  frozen appends and copied usage after PR #2698. Fork writes now commit
-  replay membership and message origins with the transcript. Available messages
-  keep updating when the parent is missing. Previously observed parent turns
-  filter replay; otherwise sync warns about possible inherited messages and
-  withholds unverified token usage. Parent recovery removes confirmed replay and
+  [issue #2468](https://github.com/kenn-io/agentsview/issues/2468). Rechecked
+  the pinned fork writer and subagent snapshot path on 2026-11-05: copied
+  forks retain their inherited prefix. Synthetic fixtures reproduce frozen
+  appends and copied usage after PR #2698. Fork writes now commit replay
+  membership and message origins with the transcript. Available messages keep
+  updating when the parent is missing. Previously observed parent turns filter
+  replay; otherwise sync warns about possible inherited messages and withholds
+  unverified token usage. Parent recovery removes confirmed replay and
   restores child usage. `TestRebuildMissingParentRemainsRetryableAcrossRestart`,
   `TestMissingParentForkPreservesShortenedHistoryAcrossReopen`, and
   `TestCodexForkProvenanceFailureRollsBackContent` cover delayed recovery,
   permanently unresolved retries, real database reopen, source truncation,
   retained tool results and usage, staged publication, and atomic rollback.
   `TestMissingParentForkPreservesLegacySourceHistory` also retains history
-  stored under the pre-version-40 source identity.
-  Follow-up synthetic fixtures in `TestCodexForkReview*` verify content-checked
-  occurrence matching, shared TraeX record origins, idless child turns, restored
-  result events, category filtering, retained activity bounds and previews,
-  usage ownership and ordinals, and provenance after archive policy projection.
+  stored under the pre-version-40 source identity. Follow-up synthetic
+  fixtures in `TestCodexForkReview*` verify content-checked occurrence
+  matching, shared TraeX record origins, idless child turns, restored result
+  events, category filtering, retained activity bounds and previews, usage
+  ownership and ordinals, and provenance after archive policy projection.
   These shortened-source fixtures exercise AgentsView's preservation policy;
   they do not establish that Codex rewrites a rollout in that shape.
   `TestCodexForkRetainsSpawnLinkWithoutOutput` covers the spawn output's link
-  metadata without result events. `TestCodexForkStagedRetryKeepsPayloadsInScratch`
-  checks the staged retry's bounded payload representation, including when the
-  source shrinks below the staging threshold. Result-order and
-  summary-participation fixtures cover restored prefixes and sanitized empty
-  updates. The accounting fixtures exercise independently imported usage accepted
-  by `ApplyArtifactImportedSession`; current native Codex rollouts still provide
+  metadata without result events.
+  `TestCodexForkStagedRetryKeepsPayloadsInScratch` checks the staged retry's
+  bounded payload representation, including when the source shrinks below the
+  staging threshold. Result-order and summary-participation fixtures cover
+  restored prefixes and sanitized empty updates. The accounting fixtures
+  exercise independently imported usage accepted by
+  `ApplyArtifactImportedSession`; current native Codex rollouts still provide
   message usage rather than these archive event rows.
   `TestCodexForkRetainsSummaryWithoutOutput` covers summary-only archived output
   and blocked length retention with the call present or absent.
   `TestCodexForkArchivedIdlessAfterChildBoundary` and
-  `TestCodexForkArchivedPreTurnReplayRecovery` cover saved replay boundaries and
-  the resulting transcript and preview.
-  `TestCodexForkLegacyDuplicateUsageOwnership` seeds pre-provenance rows through
-  the real parser, row preparation, and archive writer. Identical parent and
-  child occurrences retain unknown usage until source evidence identifies it;
-  complete occurrence sets, distinct timestamps, and current usage are controls.
-  `TestCodexForkMessageFreeChildBoundary` distinguishes the parser's correct
-  boundary from reconciliation, with named-parent and message-bearing controls.
-  `TestCodexForkReorderedArchivedReplay` covers child-only then replay-only
-  snapshots. `TestCodexForkMessageFreeBoundarySurvivesShortening` preserves that
-  source context through a shortened source and archive rebuild.
+  `TestCodexForkArchivedPreTurnReplayRecovery` cover saved replay boundaries
+  and the resulting transcript and preview.
+  `TestCodexForkLegacyDuplicateUsageOwnership` seeds pre-provenance rows
+  through the real parser, row preparation, and archive writer. Identical
+  parent and child occurrences retain unknown usage until source evidence
+  identifies it; complete occurrence sets, distinct timestamps, and current
+  usage are controls. `TestCodexForkMessageFreeChildBoundary` distinguishes
+  the parser's correct boundary from reconciliation, with named-parent and
+  message-bearing controls. `TestCodexForkReorderedArchivedReplay` covers
+  child-only then replay-only snapshots.
+  `TestCodexForkMessageFreeBoundarySurvivesShortening` preserves that source
+  context through a shortened source and archive rebuild.
   `TestCodexForkRestoredOrderKeepsUsage` exercises descending match indices in
   unresolved and resolved writes. `TestCodexForkImportedResultOccurrences`
   reaches nullable raw event metadata through `ApplyArtifactImportedSession`;
   repeated blocked retries retain summary lengths, image projection preserves
   unknown identities, and archived calls without IDs retain output. Native
   digests remain a separate control in `TestCodexForkNativeResultIdentity`.
-  `TestCodexForkMatchedMessageKeepsSourceBoundary` covers a matching child whose
-  earlier message-free boundary disappears, followed by parent recovery.
+  `TestCodexForkMatchedMessageKeepsSourceBoundary` covers a matching child
+  whose earlier message-free boundary disappears, followed by parent recovery.
   `TestCodexForkMatchedContextSurvivesResolvedRefreshes` retains context-only
   evidence through resolved refreshes before a delayed idless parent page.
   `TestCodexForkReplayCannotClaimIdlessChild` distinguishes identical pre-turn
   or idless parent replay and idless child messages through unresolved
-  shortened-source retries;
-  their separate 40- and 5-token fixtures recover only the child's five tokens.
-  `TestCodexForkImportedMultiAgentSummaryLength` preserves imported participant
-  evidence through blocked retries, an orphan archive copy, database reopen, a
-  partial agent update, and parent recovery, without changing raw NULL metadata.
-  Reordered, length-only, and participation-only artifact replacements clear
-  saved contributor hints atomically while preserving other fork provenance.
+  shortened-source retries; their separate 40- and 5-token fixtures recover
+  only the child's five tokens. `TestCodexForkImportedMultiAgentSummaryLength`
+  preserves imported participant evidence through blocked retries, an orphan
+  archive copy, database reopen, a partial agent update, and parent recovery,
+  without changing raw NULL metadata. Reordered, length-only, and
+  participation-only artifact replacements clear saved contributor hints
+  atomically while preserving other fork provenance.
   `TestCodexForkNativeResultIdentity` also verifies that archive copies retain
   known raw metadata and deduplicate returning source events after a rebuild.
   `TestCodexForkRebuildBeforeProvenanceSchema` covers older archives without
   local fork provenance, orphan preservation, and delayed parent recovery.
   `TestCodexForkIdlessResultSignalsKeepOccurrences` preserves distinct result
   outcomes for calls without provider IDs.
-  `TestCodexForkImportedOrdinalUsageSurvivesResolvedShortening` retains a message
-  referenced by imported usage after resolved refreshes and source shortening.
-  These synthetic archive cases were rechecked on 2026-11-05 in both publication
-  paths; they do not describe additional producer fields.
+  `TestCodexForkImportedOrdinalUsageSurvivesResolvedShortening` retains a
+  message referenced by imported usage after resolved refreshes and source
+  shortening. These synthetic archive cases were rechecked on 2026-11-05 in
+  both publication paths; they do not describe additional producer fields.
 
 - **Compressed rollouts (checked 2026-10-16, source at commit
   `6b991972c5b539198dcea9bac4fc14e57559c3af`):** A background worker started
@@ -1018,18 +1019,18 @@ fixtures retain this field; missing identities remain source-local.
   eligible for retry, and raw capture rejects an incomplete parent inventory.
   Reverified cold and warm inventories through denied and restored directory
   access on 2026-10-09. If the original exists but an archived parent page is
-  missing, copied turns from that page can still be imported and counted
-  again if those turns were never observed. Fork provenance now retains
-  previously observed parent turn IDs across source removal. When
-  upgrading an archive older than data version 131, newly split pages inherit
-  the thread's permanent deletion or trash state. Permanent deletions and
-  trash retain their whole-thread scope, including pages whose files return at
-  another path after the upgrade. Restoring a thread or one of its pages
-  clears the inherited trash scope; purging the thread transfers it to
-  permanent exclusions. New deletions affect only the selected file. Pins
-  follow the page named by the old row's file. PostgreSQL also moves remote-only
-  pins and notes before replacing the thread's messages. When the original
-  rollout is absent, PostgreSQL retires its duplicate transcript and usage after
+  missing, copied turns from that page can still be imported and counted again
+  if those turns were never observed. Fork provenance now retains previously
+  observed parent turn IDs across source removal. When upgrading an archive
+  older than data version 131, newly split pages inherit the thread's
+  permanent deletion or trash state. Permanent deletions and trash retain
+  their whole-thread scope, including pages whose files return at another path
+  after the upgrade. Restoring a thread or one of its pages clears the
+  inherited trash scope; purging the thread transfers it to permanent
+  exclusions. New deletions affect only the selected file. Pins follow the
+  page named by the old row's file. PostgreSQL also moves remote-only pins and
+  notes before replacing the thread's messages. When the original rollout is
+  absent, PostgreSQL retires its duplicate transcript and usage after
   preserving page curation; an empty thread row retains any inherited trash
   scope. Empty thread rows preserve page curation across push batch
   boundaries, including when a local restore has already cleared their trash
@@ -1435,12 +1436,11 @@ fixtures retain this field; missing identities remain source-local.
   only `Bash`, `bash`, and `exec` shell tool names. Native `write_stdin`
   arguments keep `session_id` and `chars` separately from the tool name, as
   verified against `codex/fc_stdin.jsonl` and the parser's function-call path.
-  `TestCommitLinksNativePollOwnership` writes both representations through
-  the public archive API and checks the originating commit call's location.
-  Reverified 2026-11-05 with
-  `TestCommitLinksCodeModeWithoutExecutionID` and
-  `TestCommitLinksNativePollOwnership`: scripts with exactly one tool call
-  and a fixed command literal can link commits without an output process ID.
+  `TestCommitLinksNativePollOwnership` writes both representations through the
+  public archive API and checks the originating commit call's location.
+  Reverified 2026-11-05 with `TestCommitLinksCodeModeWithoutExecutionID` and
+  `TestCommitLinksNativePollOwnership`: scripts with exactly one tool call and
+  a fixed command literal can link commits without an output process ID.
   `TestCommitLinksCodeModeFixedCommand` covers command decoding, workdir,
   loops, and subjects mentioning tool names. Call syntax determines the number
   of tool calls; bare tool names in commit subjects don't count. Command
@@ -1448,8 +1448,8 @@ fixtures retain this field; missing identities remain source-local.
   script can poll an earlier commit execution without an output process ID.
   Scripts with several tool calls cannot start new commit links. Their polls
   need output process IDs matching earlier commit calls. The reused-process-ID
-  case checks that a new native commit execution owns its repository and prompt
-  after a batch poll.
+  case checks that a new native commit execution owns its repository and
+  prompt after a batch poll.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)
@@ -1562,6 +1562,47 @@ fixtures retain this field; missing identities remain source-local.
 - **Archive projection (2026-09-13):** Augure Code sessions share the Codex
   unmarked-notification shape, so the archive curation user-row removal that
   covers Codex and TraeX also covers `augure-code`.
+
+## Open Interpreter (`open-interpreter`)
+
+- **Format:** Codex rollout JSONL under a dated `YYYY/MM/DD` tree at
+  `~/.openinterpreter/sessions`, plus the flat `archived_sessions` directory.
+  `INTERPRETER_HOME` replaces `~/.openinterpreter`; the fork deliberately
+  ignores `CODEX_HOME`. Records carry a top-level `ordinal`, and rollouts add
+  `world_state` snapshots, `event_msg:item_completed` items, and
+  `session_meta` fields such as `session_id`, `runtime_workspace_roots`, and
+  `history_mode: "paginated"`. The parser reads the same `session_meta`,
+  `turn_context`, `response_item`, and `event_msg` records as Codex and skips
+  the rest without counting them as malformed. A failed turn ends in
+  `task_complete` with an `error` object and no assistant message.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/openinterpreter/openinterpreter.git`
+  at `771f9ef1e8a04db21f3c0925aa6df24f32339916` (checked 2026-11-07). The
+  [home directory resolver](https://github.com/openinterpreter/openinterpreter/blob/771f9ef1e8a04db21f3c0925aa6df24f32339916/codex-rs/utils/home-dir/src/lib.rs#L25)
+  picks `INTERPRETER_HOME` or `~/.openinterpreter`, the
+  [rollout crate](https://github.com/openinterpreter/openinterpreter/blob/771f9ef1e8a04db21f3c0925aa6df24f32339916/codex-rs/rollout/src/lib.rs#L84)
+  names the `sessions` and `archived_sessions` subdirectories, the
+  [rollout line](https://github.com/openinterpreter/openinterpreter/blob/771f9ef1e8a04db21f3c0925aa6df24f32339916/codex-rs/history/src/lib.rs#L277)
+  adds the optional `ordinal`, and the
+  [rollout item enum](https://github.com/openinterpreter/openinterpreter/blob/771f9ef1e8a04db21f3c0925aa6df24f32339916/codex-rs/history/src/rollout_payload.rs#L48)
+  defines `world_state`. The
+  [product identity](https://github.com/openinterpreter/openinterpreter/blob/771f9ef1e8a04db21f3c0925aa6df24f32339916/codex-rs/product-info/src/lib.rs#L3)
+  names the `interpreter` command used for resume. A rollout from Open
+  Interpreter 0.0.59 attached to agentsview issue 2745 has
+  `originator: "codex-tui"` and the Codex record shapes.
+- **Usage and cost:** `token_count` and `token_usage_record` records carry the
+  Codex fields, so normalization follows the Codex entry. Open Interpreter
+  targets open models through third-party providers (the sample used
+  `glm-5.2`); slugs absent from the pricing catalog price as unpriced.
+- **Agentsview:** `internal/parser/openinterpreter.go` relabels the shared Codex
+  parser (`internal/parser/codex.go`, `internal/parser/codex_provider.go`)
+  onto the `open-interpreter:` ID namespace, and `parser.IsCodexFormatAgent`
+  gates the Codex-format branches in sync, archive rebuilds, and the
+  PostgreSQL mirror. The fork writes `session_index.jsonl`, but thread titles
+  from it are read for Codex only, so Open Interpreter sessions are titled by
+  their first prompt. S3 import and raw capture also stay Codex-only. Fixture:
+  `internal/parser/testdata/openinterpreter/rollout_session.jsonl`, covered by
+  `TestOpenInterpreterProviderParsesRollout`.
 
 ## Augure Desktop v3 (`augure-desktop`)
 
@@ -1812,25 +1853,26 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Grok Build (`grok`)
 
-- **Account CSV export (observed 2026-11-06):** A user-supplied xAI unified usage
-  export has `Billing Item ID`, `Event Time`, `Product`, `Charge Category`,
-  `Usage Type`, `Principal Type`, `Principal ID`, `Usage`, `Pricing Currency`,
-  `Pricing Contracted`, `Model`, and `User Email` columns. This is observed
-  export evidence, separate from the native session format below. Synthetic
-  examples are tested in `internal/xaiusage/csv_test.go`. `Usage` is a JSON
-  object of string-valued integer counters. Observed names include
-  `Prompt text tokens`, `Cached prompt text tokens`, `Completion text tokens`,
-  and the hyphenated forms `prompt-text-tokens`, `cached-prompt-text-tokens`,
-  `completion-text-tokens`, and `cache-write-text-tokens`. Missing counters
-  mean zero. Account counters may aggregate many requests and are preserved
-  without the native request-level plausibility cap. `Event Time` is RFC3339;
-  `Pricing Contracted` is a decimal USD amount, including authoritative zero
-  for included usage. Products observed
-  are `grok-build`, `grok-bot`, and `cursor`. Grok models can be blank. Billing
-  IDs identify account events, with no native session or request identity for
-  cross-source reconciliation. Unknown per-request context sizes keep cache
-  savings estimates at base model rates. `agentsview usage grok` imports these
-  events without reconstructing conversations or inferring models.
+- **Account CSV export (observed 2026-11-06):** A user-supplied xAI unified
+  usage export has `Billing Item ID`, `Event Time`, `Product`,
+  `Charge Category`, `Usage Type`, `Principal Type`, `Principal ID`, `Usage`,
+  `Pricing Currency`, `Pricing Contracted`, `Model`, and `User Email` columns.
+  This is observed export evidence, separate from the native session format
+  below. Synthetic examples are tested in `internal/xaiusage/csv_test.go`.
+  `Usage` is a JSON object of string-valued integer counters. Observed names
+  include `Prompt text tokens`, `Cached prompt text tokens`,
+  `Completion text tokens`, and the hyphenated forms `prompt-text-tokens`,
+  `cached-prompt-text-tokens`, `completion-text-tokens`, and
+  `cache-write-text-tokens`. Missing counters mean zero. Account counters may
+  aggregate many requests and are preserved without the native request-level
+  plausibility cap. `Event Time` is RFC3339; `Pricing Contracted` is a decimal
+  USD amount, including authoritative zero for included usage. Products
+  observed are `grok-build`, `grok-bot`, and `cursor`. Grok models can be
+  blank. Billing IDs identify account events, with no native session or
+  request identity for cross-source reconciliation. Unknown per-request
+  context sizes keep cache savings estimates at base model rates.
+  `agentsview usage grok` imports these events without reconstructing
+  conversations or inferring models.
 
 - **Format:** Workspace-scoped session directories containing `summary.json`, a
   derived `chat_history.jsonl` model-message cache, and an authoritative
@@ -5491,7 +5533,8 @@ schemas keep their existing ordering behavior.
 - **Upstream:** Clone `https://github.com/vercel-labs/fx.git` at
   `b9ca60d0102cf84cea061456c41206f66149b311`. Reverified 2026-10-13. Fixtures
   were captured with fx v0.0.13. Shell result `output_delta` reverified
-  2026-11-02 against `internal/parser/testdata/fx/parent-session/events.jsonl`.
+  2026-11-02 against
+  `internal/parser/testdata/fx/parent-session/events.jsonl`.
 - **Usage and cost:**
   [Session usage](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_usage.zig)
   stores cumulative per-model totals in `usage-v2.json` under

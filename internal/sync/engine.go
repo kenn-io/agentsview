@@ -7095,13 +7095,12 @@ func isOpenCodeFormatAgent(agent parser.AgentType) bool {
 // rollout-JSONL layout: UUID-bearing filenames, a dated year/month/day tree
 // with an optional flat archive, and JSONL-tail incremental appends. It gates
 // the format-shaped branches (duplicate resolution, layout preference,
-// reconciliation identity, parse-diff mtime) so the Codex forks TraeX and
-// Augure Code get the same handling. Branches that depend on Codex's
-// session_index.jsonl sidecar or its S3 archive layout stay keyed to
-// parser.AgentCodex alone: those forks write no index file and have no S3
-// path convention.
+// reconciliation identity, parse-diff mtime) so the Codex forks get the same
+// handling. Branches that depend on Codex's session_index.jsonl sidecar or its
+// S3 archive layout stay keyed to parser.AgentCodex alone: agentsview reads
+// neither for the forks.
 func isCodexFormatAgent(agent parser.AgentType) bool {
-	return ingest.IsCodexFormatAgent(agent)
+	return parser.IsCodexFormatAgent(agent)
 }
 
 func reconciliationWatchRoot(
@@ -7494,8 +7493,8 @@ func reconciliationReplacementIdentity(
 		}
 		return ""
 	}
-	switch agent {
-	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode:
+	switch {
+	case isCodexFormatAgent(agent):
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(storedPath))
 		if uuid == "" {
 			return ""

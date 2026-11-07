@@ -620,6 +620,7 @@ keeps its default directories.
 | OpenClaw              | `~/.openclaw/agents/` and `~/.kimi_openclaw/agents/`                                                                                                             | JSONL per session or SQLite per agent (`agent/openclaw-agent.sqlite`)                                                                                        |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Open Code Review      | `~/.opencodereview/sessions/`                                                                                                                                    | One JSONL file per review under an encoded project directory                                                                                                  |
+| Open Interpreter      | `~/.openinterpreter/sessions/`, `archived_sessions/`                                                                                                             | Codex-format JSONL per session                                                                                                                                |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                                                          |
 | Omnigent              | `~/.omnigent/`                                                                                                                                                   | SQLite `chat.db`, one session per conversation                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
@@ -664,6 +665,15 @@ reads it without writing or migrating the database.
 under the separate `augure-code` agent ID. Set `AUGURE_CODE_SESSIONS_DIR` or
 `agents.augure-code.dirs` for another sessions root. Resume these sessions with
 `augure resume`, not `codex resume`.
+
+**Open Interpreter** reads Codex-format JSONL from
+`~/.openinterpreter/sessions/` and `~/.openinterpreter/archived_sessions/` and
+appears under the separate `open-interpreter` agent ID. Set `INTERPRETER_HOME`
+to move both defaults, as Open Interpreter itself does, or set
+`OPEN_INTERPRETER_SESSIONS_DIR` or `agents.open-interpreter.dirs` for other
+sessions roots. `CODEX_HOME` does not affect these paths. Resume these sessions
+with `interpreter resume`. Sessions are titled by their first prompt; names
+set with Open Interpreter's rename command are not read.
 
 **Augure Desktop 3 beta** reads `state.db` and its `sessions/` sibling from
 `~/.augure-desktop/` on macOS and Linux, or `~/AppData/Local/augure-desktop/` on
@@ -1175,6 +1185,7 @@ export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp
 export OPENCLAW_DIR=~/custom/openclaw
 export OPENCODE_DIR=~/custom/opencode
+export OPEN_INTERPRETER_SESSIONS_DIR=~/custom/openinterpreter/sessions
 export OPENCODEREVIEW_DIR=~/custom/opencodereview/sessions
 export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi

@@ -21,6 +21,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentCodex:          ProviderMigrationProviderAuthoritative,
 	AgentTraeX:          ProviderMigrationProviderAuthoritative,
 	AgentAugureCode:     ProviderMigrationProviderAuthoritative,
+	AgentInterpreter:    ProviderMigrationProviderAuthoritative,
 	AgentCopilot:        ProviderMigrationProviderAuthoritative,
 	AgentGemini:         ProviderMigrationProviderAuthoritative,
 	AgentGeminiApps:     ProviderMigrationImportOnly,

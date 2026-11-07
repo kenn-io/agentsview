@@ -24,11 +24,9 @@ func AssistantText(
 	// The Codex parser emits every tool call as its own message whose content
 	// is only the call's rendering, so these messages carry no prose. Headers
 	// can show a summary or raw input that cannot be rebuilt from stored rows.
-	switch parser.AgentType(agent) {
-	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode:
+	// Other parsers inline renderings beside prose.
+	if parser.IsCodexFormatAgent(parser.AgentType(agent)) {
 		return ""
-	default:
-		// Other parsers inline renderings beside prose.
 	}
 	if agent == "openhands" && len(calls) == 1 {
 		if at := openHandsSummaryStart(text, calls[0].ToolName); at >= 0 {
