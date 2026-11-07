@@ -472,6 +472,29 @@ func TestAnalyzeHeuristics_RunawayToolLoop(t *testing.T) {
 		got := AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
 		assert.Equal(t, 0, got.RunawayToolLoopCount)
 	})
+
+	t.Run("shell calls without retained input share no command class", func(t *testing.T) {
+		calls := make([]ToolCallRow, 12)
+		for i := range calls {
+			calls[i] = ToolCallRow{
+				Category: "Bash", ToolName: "Bash",
+				MessageOrdinal: i, EventStatus: "completed",
+			}
+		}
+		for _, i := range []int{2, 5, 9} {
+			calls[i].EventStatus = "errored"
+		}
+		got := AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
+		assert.Equal(t, 0, got.RunawayToolLoopCount,
+			"three failures need a provably dominant command")
+
+		for _, i := range []int{0, 7, 11} {
+			calls[i].EventStatus = "errored"
+		}
+		got = AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
+		assert.Equal(t, 1, got.RunawayToolLoopCount,
+			"six failures in a window stay a runaway loop")
+	})
 }
 
 func TestNormalizePromptRemovesCodeFences(t *testing.T) {

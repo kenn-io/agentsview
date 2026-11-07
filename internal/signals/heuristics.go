@@ -755,6 +755,11 @@ func commandClass(c ToolCallRow) string {
 	if c.Category != "Bash" {
 		return c.Category + ":" + c.ToolName
 	}
+	if c.InputJSON == "" {
+		// Without the command, shell calls cannot be shown to run the
+		// same program.
+		return unretainedInputKey(c)
+	}
 	fields := strings.Fields(CommandText(c.InputJSON))
 	if len(fields) == 0 {
 		return c.Category + ":" + c.ToolName
@@ -764,11 +769,16 @@ func commandClass(c ToolCallRow) string {
 
 func toolSignature(c ToolCallRow) string {
 	if c.InputJSON == "" {
-		// Without retained input no two calls are provably identical, so
-		// the call's position stands in for its input.
-		return fmt.Sprintf("\x01%d:%d", c.MessageOrdinal, c.CallIndex)
+		return unretainedInputKey(c)
 	}
 	return c.ToolName + "\x00" + c.Category + "\x00" + c.InputJSON
+}
+
+// unretainedInputKey stands in for a call whose input the archive did not
+// keep. The key is unique to the call's position, so it matches no other
+// call.
+func unretainedInputKey(c ToolCallRow) string {
+	return fmt.Sprintf("\x01%d:%d", c.MessageOrdinal, c.CallIndex)
 }
 
 // CommandText extracts a shell script from stored tool input.
