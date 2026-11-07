@@ -72,6 +72,10 @@ type WatchBatch struct {
 	lifecycleTokens []backendLifecycleToken
 }
 
+// RequiresAcknowledgement reports work whose downstream completion must be
+// observed before the watcher releases lifecycle or scanner progress.
+func (b WatchBatch) RequiresAcknowledgement() bool { return len(b.lifecycleTokens) > 0 }
+
 type WatchCallback func(context.Context, WatchBatch) error
 
 // PollingScope identifies one configured provider root within a polling obligation.
@@ -718,6 +722,8 @@ type Watcher struct {
 	callbackCtx        context.Context
 	callbackCancel     context.CancelFunc
 	backend            watchBackend
+	scanner            *sourceScanner
+	excludes           []string
 	eventSink          *watchEventSink
 	batchDelay         time.Duration
 	minInterval        time.Duration
@@ -791,11 +797,15 @@ func NewWatcherWithCallback(
 	if err != nil {
 		return nil, err
 	}
-	return newWatcherWithBackendOptions(
+	w, err := newWatcherWithBackendOptions(
 		batchDelay, minInterval, onChange, backend,
 		defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
 		options,
 	)
+	if w != nil {
+		w.excludes = append([]string(nil), excludes...)
+	}
+	return w, err
 }
 
 func newWatcherWithLimits(
@@ -1185,6 +1195,10 @@ func (w *Watcher) finish() {
 }
 
 func (w *Watcher) loop() {
+	var scanWorker sync.WaitGroup
+	if w.scanner != nil && len(w.scanner.roots) > 0 {
+		scanWorker.Go(func() { w.scanner.run(w.callbackCtx, w.emitSourceScan) })
+	}
 	batches := make(chan WatchBatch)
 	type callbackResult struct {
 		batch     WatchBatch
@@ -1234,6 +1248,8 @@ func (w *Watcher) loop() {
 		timerC = nil
 	}
 	defer func() {
+		w.callbackCancel()
+		scanWorker.Wait()
 		stopTimer()
 		close(batches)
 		worker.Wait()
@@ -1255,7 +1271,7 @@ func (w *Watcher) loop() {
 		if deadline.IsZero() {
 			return
 		}
-		if !lastDispatch.IsZero() {
+		if !lastDispatch.IsZero() && !w.eventSink.sourceScanPending() {
 			floor := lastDispatch.Add(w.minInterval)
 			if floor.After(deadline) {
 				deadline = floor
@@ -1409,6 +1425,13 @@ func (w *Watcher) loop() {
 				flushErr = errors.Join(flushErr, result.err)
 			}
 			if result.err != nil {
+				result.batch.lifecycleTokens = slices.DeleteFunc(result.batch.lifecycleTokens, func(token backendLifecycleToken) bool {
+					if rejected, ok := token.gate.(interface{ rejectLifecycle(error) }); ok {
+						rejected.rejectLifecycle(result.err)
+						return true
+					}
+					return false
+				})
 				lastDispatch = time.Now()
 				consecutiveFailures++
 				log.Printf("watcher callback: %v", result.err)
