@@ -118,8 +118,8 @@ func openFrictionParityStores(t *testing.T) (*db.DB, *Store) {
 		require.NoError(t, local.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{Friction: &db.SessionFrictionUpdate{Findings: []db.FrictionFinding{{
 			SessionID: id, Kind: "deferral", Detector: "deferral", MessageOrdinal: new(0),
 			Label: "next session", Title: "[friction/deferral] " + id + ": next session",
-			Fingerprint: "fl1:" + id, OccurredAt: &occurred, Seq: 0, RulesVersion: "friction-v1",
-		}}, RulesVersion: "friction-v1", Hash: "h-" + id}}))
+			Fingerprint: "fl1:" + id, OccurredAt: &occurred, Seq: 0, RulesVersion: friction.RulesVersion,
+		}}, RulesVersion: friction.RulesVersion, Hash: "h-" + id}}))
 	}
 	seed("a", "2026-09-15T01:00:00Z", nil)
 	root := "a"
@@ -151,7 +151,7 @@ func TestFrictionReviewStoreParity(t *testing.T) {
 				if sub.SubjectID == "b" {
 					assert.True(t, sub.IsSubAgent)
 				}
-				assert.Equal(t, "friction-v1", sub.RulesVersion)
+				assert.Equal(t, friction.RulesVersion, sub.RulesVersion)
 			}
 			assert.ElementsMatch(t, []string{"a", "b"}, ids)
 

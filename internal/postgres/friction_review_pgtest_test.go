@@ -171,8 +171,8 @@ func TestFrictionHubCatchesUpAfterLatePush(t *testing.T) {
 	_, err := r.CatchUp(t.Context())
 	require.NoError(t, err)
 	for _, s := range []struct{ id, version string }{
-		{"late-old", "friction-v0"}, {"late-new", "friction-v2"}, {"disabled", ""},
-		{"skipped-old", "friction-v0:skipped"}, {"skipped-new", "friction-v2:skipped"},
+		{"late-old", "friction-v0"}, {"late-new", "friction-v3"}, {"disabled", ""},
+		{"skipped-old", "friction-v0:skipped"}, {"skipped-new", "friction-v3:skipped"},
 	} {
 		ended := "2026-09-15T12:00:00Z"
 		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
