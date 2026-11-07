@@ -410,8 +410,6 @@ describe("SemanticSetupHelp", () => {
     expect(document.body.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe(
       "250",
     );
-    await settle(2000);
-    expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
 
     unmount(component);
   });

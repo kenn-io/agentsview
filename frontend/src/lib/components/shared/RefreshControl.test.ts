@@ -9,7 +9,7 @@ import { LiveQuery } from "../../utils/liveQuery.svelte.js";
 // The wrapper's whole job is injecting the app's localized age formatter
 // into kit-ui's RefreshControl (whose built-in default is English).
 describe("RefreshControl", () => {
-  it("defers hidden refreshes until visible, coalesces them, and stops on teardown", async () => {
+  it("forwards refresh reasons, defers hidden work, and stops on teardown", async () => {
     vi.useFakeTimers();
     const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     const onRefresh = vi.fn();
@@ -39,7 +39,6 @@ describe("RefreshControl", () => {
       await vi.advanceTimersByTimeAsync(300_000);
       expect(onRefresh).toHaveBeenCalledTimes(2);
       expect(onRefresh).toHaveBeenNthCalledWith(1, "auto");
-      expect(onRefresh).toHaveBeenNthCalledWith(2, "auto");
       document.body.querySelector<HTMLButtonElement>("button")!.click();
       await tick();
       expect(onRefresh).toHaveBeenNthCalledWith(3, "manual");

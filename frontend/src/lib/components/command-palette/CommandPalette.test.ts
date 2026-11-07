@@ -753,7 +753,7 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("shows the keyword footer for the setup action", async () => {
+  it("fetches setup once across keyword queries and passes it to the footer", async () => {
     mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
       running: false,
       done: 0,
