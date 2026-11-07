@@ -519,27 +519,6 @@ func TestPushFailsClosedWhenWriterHoldsMirror(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
-// Explicit pushes use the same incremental standby publication as watch mode.
-func TestPushExplicitPublishesIncrementallyWhileMirrorHeldByReaders(t *testing.T) {
-	ctx := t.Context()
-	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-
-	held, err := OpenReadOnly(ctx, path)
-	require.NoError(t, err)
-
-	appendMessage(t, local, "sess-1")
-	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	assert.False(t, res.Diagnostics.Full)
-	assert.Empty(t, res.Diagnostics.RebuildReason)
-	assert.Equal(t, 1, res.SessionsPushed)
-
-	require.NoError(t, held.Close())
-	assertMirrorMessageCount(t, path, "sess-1", 3)
-}
-
 // TestPushIncrementalMirrorsSubagentLinkBackfill is the FINDING 4
 // regression: LinkSubagentSessions rewrites a session's parent_session_id
 // and relationship_type without any session file changing, so unless it
@@ -610,25 +589,48 @@ func assertMirrorSessionRelationship(
 	assert.Equal(t, wantRelationship, relationship, "mirror relationship_type")
 }
 
-func TestPushPublishesHeldMirrorForAutomaticPushes(t *testing.T) {
+// While readers hold the mirror, explicit and watched pushes catch up a
+// standby and swap it in. Later publications reuse the retired file.
+func TestPushPublishesWhileMirrorHeldByReaders(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
+	original, err := os.Stat(path)
+	require.NoError(t, err)
 	store, err := NewStore(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
 	appendFrustrationPrompt(t, local, "sess-1")
-	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Empty(t, res.Diagnostics.RebuildReason)
+	assert.Equal(t, 1, res.SessionsPushed)
+	first, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.False(t, os.SameFile(original, first))
+	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+
+	// Alias opens in the same process don't enforce DuckDB's inode lock.
+	// Keep a read-only handle at the live path to model a separate server.
+	held, err := OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, held.Close()) })
+	appendFrustrationPrompt(t, local, "sess-1")
+	res, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Deferred)
-	assert.False(t, res.Diagnostics.Full)
 	assert.Equal(t, 1, res.SessionsPushed)
+	second, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(original, second), "the second publication must reuse the original inode")
 	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
 	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	assert.Equal(t, 2, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 // TestAutomaticIncrementalPushSkipsScopeCount pins the bounded-cost side of

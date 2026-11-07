@@ -292,11 +292,9 @@ Environment variables override the config file:
   catch it up through its own push cursors. A rebuild removes the standby;
   ordinary in-place pushes keep it for reuse. If readers still hold the
   standby, the push returns an error. Watch mode retries the pending batch;
-  a manual push can be rerun once readers release it. Quiet watched pushes
-  also swap the files, preserving Signals counts for unchanged sessions while
-  clearing the Activity report cache. A push that finds the mirror held
-  READ-WRITE fails with an error naming the holder: that is either
-  another push in flight or a serve process built before serve went
+  a manual push can be rerun once readers release it. A push that finds the
+  mirror held READ-WRITE fails with an error naming the holder: that is
+  either another push in flight or a serve process built before serve went
   read-only — upgrading such a serve process needs a one-time restart.
   Leftover `<mirror-path>.agentsview-mirror` sidecar files from older
   development builds are inert and can be deleted. On POSIX platforms,

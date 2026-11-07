@@ -188,7 +188,6 @@ func publishHeldMirror(
 	if err := os.Link(path, retired); err != nil {
 		return result, err
 	}
-	defer func() { err = errors.Join(err, removeRebuildFile(retired)) }()
 	if err := swapMirrorFile(spare, path); err != nil {
 		return result, err
 	}

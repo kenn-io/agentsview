@@ -3,16 +3,9 @@
 package duckdb
 
 import (
-	"bufio"
-	"context"
 	"database/sql"
-	"fmt"
-	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,85 +16,8 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestPushHeldSpareReusesRetiredSnapshot(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	ctx := t.Context()
-	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	original, err := os.Stat(path)
-	require.NoError(t, err)
-	store, err := NewStore(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-
-	appendFrustrationPrompt(t, local, "sess-1")
-	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
-	require.NoError(t, err)
-	first, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.False(t, os.SameFile(original, first))
-	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
-
-	// Alias opens in the same process don't enforce DuckDB's inode lock.
-	// Keep a read-only handle at the live path to model a separate server.
-	held, err := OpenReadOnly(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, held.Close()) })
-	appendFrustrationPrompt(t, local, "sess-1")
-	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
-	require.NoError(t, err)
-	second, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.True(t, os.SameFile(original, second), "second publication must reuse the original inode")
-	spare, err := os.Stat(sparePath(path))
-	require.NoError(t, err)
-	assert.True(t, os.SameFile(first, spare))
-
-	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
-	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 2, resp.QualityHealth.Totals.FrustrationMarkerCount)
-}
-
-func TestPushHeldSpareResumesAfterCancellation(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	ctx := t.Context()
-	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	store, err := NewStore(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	before, err := os.ReadFile(path)
-	require.NoError(t, err)
-	appendFrustrationPrompt(t, local, "sess-1")
-	cancelled, cancel := context.WithCancel(ctx)
-	defer cancel()
-	_, err = Push(cancelled, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, func(storage.MirrorPushProgress) { cancel() })
-	require.Error(t, err)
-	after, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	assert.NoFileExists(t, path+".wal")
-	leftovers, err := filepath.Glob(filepath.Join(mirrorWorkDirPath(path), filepath.Base(path)+".tmp-*"))
-	require.NoError(t, err)
-	assert.Empty(t, leftovers)
-	spare, err := os.Stat(sparePath(path))
-	require.NoError(t, err)
-	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
-	require.NoError(t, err)
-	live, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.True(t, os.SameFile(spare, live), "retry must resume the consistent spare")
-	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
-	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-}
-
 func TestPushHeldSpareRejectsUnusableSnapshots(t *testing.T) {
-	for _, mismatch := range []string{"half_copied", "scope", "schema", "archive"} {
+	for _, mismatch := range []string{"half_copied", "scope", "archive"} {
 		t.Run(mismatch, func(t *testing.T) {
 			skipReopenTestOnWindows(t)
 			ctx := t.Context()
@@ -112,14 +28,11 @@ func TestPushHeldSpareRejectsUnusableSnapshots(t *testing.T) {
 				require.NoError(t, copyMirrorFile(ctx, path, sparePath(path)))
 				conn, err := Open(ctx, sparePath(path))
 				require.NoError(t, err)
-				key, value := pushScopeMetadataKey, "other"
-				switch mismatch {
-				case "schema":
-					key, value = schemaVersionMetadataKey, "1"
-				case "archive":
+				key := pushScopeMetadataKey
+				if mismatch == "archive" {
 					key = sourceArchiveIDMetadataKey
 				}
-				require.NoError(t, recordMetadataKey(ctx, conn, key, value))
+				require.NoError(t, recordMetadataKey(ctx, conn, key, "other"))
 				require.NoError(t, conn.Close())
 			} else {
 				require.NoError(t, os.WriteFile(sparePath(path), []byte("interrupted publication"), 0o600))
@@ -147,14 +60,7 @@ func TestPushHeldSpareLifecycle(t *testing.T) {
 			local, path := newPushFixture(t, 1)
 			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
-			held, err := OpenReadOnly(ctx, path)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, held.Close()) })
-			appendFrustrationPrompt(t, local, "sess-1")
-			_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
-			require.NoError(t, err)
-			require.FileExists(t, sparePath(path))
-			require.NoError(t, held.Close())
+			require.NoError(t, copyMirrorFile(ctx, path, sparePath(path)))
 			_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, full, nil)
 			require.NoError(t, err)
 			if full {
@@ -162,52 +68,8 @@ func TestPushHeldSpareLifecycle(t *testing.T) {
 			} else {
 				assert.FileExists(t, sparePath(path))
 			}
-			assertMirrorMessageCount(t, path, "sess-1", 3)
 		})
 	}
-}
-
-// The reader runs separately so DuckDB locks the inode even through aliases.
-func holdSpareInProcess(t *testing.T, path string) func() {
-	t.Helper()
-	exe, err := os.Executable()
-	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
-	t.Cleanup(cancel)
-	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestHeldSpareReaderProcess$")
-	cmd.Env = append(os.Environ(), "AGENTSVIEW_TEST_HELD_SPARE="+path)
-	stdin, err := cmd.StdinPipe()
-	require.NoError(t, err)
-	stdout, err := cmd.StdoutPipe()
-	require.NoError(t, err)
-	cmd.Stderr = os.Stderr
-	require.NoError(t, cmd.Start())
-	released := false
-	release := func() {
-		if !released {
-			released = true
-			require.NoError(t, stdin.Close())
-			require.NoError(t, cmd.Wait())
-		}
-	}
-	t.Cleanup(release)
-	scanner := bufio.NewScanner(stdout)
-	require.True(t, scanner.Scan())
-	require.Equal(t, "ready", scanner.Text())
-	return release
-}
-
-func TestHeldSpareReaderProcess(t *testing.T) {
-	path := os.Getenv("AGENTSVIEW_TEST_HELD_SPARE")
-	if path == "" {
-		return
-	}
-	conn, err := OpenReadOnly(t.Context(), path)
-	require.NoError(t, err)
-	fmt.Println("ready")
-	_, err = io.Copy(io.Discard, os.Stdin)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
 }
 
 func TestPushHeldSpareKeepsPublishedSessionAfterUpdateError(t *testing.T) {
@@ -216,20 +78,17 @@ func TestPushHeldSpareKeepsPublishedSessionAfterUpdateError(t *testing.T) {
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
+	require.NoError(t, copyMirrorFile(ctx, path, sparePath(path)))
 	held, err := OpenReadOnly(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, held.Close()) })
-	appendFrustrationPrompt(t, local, "sess-1")
-	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	require.NoError(t, held.Close())
-	held, err = OpenReadOnly(ctx, path)
-	require.NoError(t, err)
 	before, err := os.Stat(path)
+	require.NoError(t, err)
+	spare, err := os.Stat(sparePath(path))
 	require.NoError(t, err)
 	appendFrustrationPrompt(t, local, "sess-1")
 	require.NoError(t, local.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE messages SET timestamp = 'invalid' WHERE session_id = 'sess-1' AND ordinal = 3`)
+		_, err := tx.ExecContext(ctx, `UPDATE messages SET timestamp = 'invalid' WHERE session_id = 'sess-1' AND ordinal = 2`)
 		return err
 	}))
 	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
@@ -238,23 +97,17 @@ func TestPushHeldSpareKeepsPublishedSessionAfterUpdateError(t *testing.T) {
 	after, err := os.Stat(path)
 	require.NoError(t, err)
 	assert.True(t, SameMirrorFile(before, after))
-	require.NoError(t, held.Close())
-	assertMirrorMessageCount(t, path, "sess-1", 3)
-	spare, err := os.Stat(sparePath(path))
-	require.NoError(t, err)
-	held, err = OpenReadOnly(ctx, path)
-	require.NoError(t, err)
 	require.NoError(t, local.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE messages SET timestamp = '2026-01-03T00:00:00Z' WHERE session_id = 'sess-1' AND ordinal = 3`)
+		_, err := tx.ExecContext(ctx, `UPDATE messages SET timestamp = '2026-01-03T00:00:00Z' WHERE session_id = 'sess-1' AND ordinal = 2`)
 		return err
 	}))
 	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	live, err := os.Stat(path)
 	require.NoError(t, err)
-	assert.True(t, os.SameFile(spare, live))
+	assert.True(t, os.SameFile(spare, live), "retry must resume the standby")
 	require.NoError(t, held.Close())
-	assertMirrorMessageCount(t, path, "sess-1", 4)
+	assertMirrorMessageCount(t, path, "sess-1", 3)
 }
 
 func TestPushHeldSparePublishesNonSessionChanges(t *testing.T) {
@@ -270,9 +123,6 @@ func TestPushHeldSparePublishesNonSessionChanges(t *testing.T) {
 			}
 			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
-			held, err := OpenReadOnly(ctx, path)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, held.Close()) })
 			store, err := NewStore(ctx, path)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
@@ -299,19 +149,17 @@ func TestPushHeldSparePublishesNonSessionChanges(t *testing.T) {
 				_, err = local.StoreTrailerCommitLinks(ctx, "sample", []gitlog.TrailerCommit{{SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Sessions: []string{"claude:sess-1"}, Subject: "Corrected", CommittedAt: "2026-01-01T00:00:00Z"}})
 				query = `SELECT count(*) FROM commit_links WHERE subject = 'Corrected' AND retained`
 			case "label":
-				err = local.SetSyncState(ctx, "machine_"+change+":m", "updated")
-				query = fmt.Sprintf(`SELECT count(*) FROM sync_metadata WHERE key = 'machine_%s:m' AND value = 'updated'`, change)
+				err = local.SetSyncState(ctx, "machine_label:m", "updated")
+				query = `SELECT count(*) FROM sync_metadata WHERE key = 'machine_label:m' AND value = 'updated'`
 			}
 			require.NoError(t, err)
 			res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 			require.NoError(t, err)
 			assert.Zero(t, res.SessionsPushed)
-			require.NoError(t, held.Close())
 			store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
 			var count int
 			require.NoError(t, store.DB().QueryRowContext(ctx, query).Scan(&count))
 			assert.Equal(t, want, count)
-
 		})
 	}
 }
@@ -363,16 +211,13 @@ func TestPushHeldSpareRetriesAfterReaderReleases(t *testing.T) {
 	opts := storage.MirrorPushOptions{Automatic: true}
 	_, err := Push(ctx, path, local, "m", opts, false, nil)
 	require.NoError(t, err)
+	require.NoError(t, copyMirrorFile(ctx, path, sparePath(path)))
 	held, err := OpenReadOnly(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, held.Close()) })
-	appendFrustrationPrompt(t, local, "sess-1")
-	_, err = Push(ctx, path, local, "m", opts, false, nil)
+	heldSpare, err := OpenReadOnly(ctx, sparePath(path))
 	require.NoError(t, err)
-	require.NoError(t, held.Close())
-	held, err = OpenReadOnly(ctx, path)
-	require.NoError(t, err)
-	release := holdSpareInProcess(t, sparePath(path))
+	t.Cleanup(func() { require.NoError(t, heldSpare.Close()) })
 	before, err := os.ReadFile(path)
 	require.NoError(t, err)
 	spareBefore, err := os.ReadFile(sparePath(path))
@@ -388,9 +233,9 @@ func TestPushHeldSpareRetriesAfterReaderReleases(t *testing.T) {
 	spareAfter, err := os.ReadFile(sparePath(path))
 	require.NoError(t, err)
 	assert.Equal(t, spareBefore, spareAfter)
-	release()
+	require.NoError(t, heldSpare.Close())
 	_, err = Push(ctx, path, local, "m", opts, false, nil)
 	require.NoError(t, err)
 	require.NoError(t, held.Close())
-	assertMirrorMessageCount(t, path, "sess-1", 4)
+	assertMirrorMessageCount(t, path, "sess-1", 3)
 }

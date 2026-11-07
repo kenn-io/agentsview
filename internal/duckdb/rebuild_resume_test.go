@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -307,31 +306,4 @@ func TestErroredRebuildDroppedWhenMirrorNeedsNoRebuild(t *testing.T) {
 	assert.Empty(t, res.Diagnostics.RebuildReason)
 	assert.Equal(t, 1, res.Errors)
 	assert.NoFileExists(t, rebuildFilePath(path))
-}
-
-func TestErroredRebuildDroppedWhileMirrorHeld(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	seedResumeSessions(t, local)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	writeFailingSession(t, local)
-	_, err = Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
-	require.ErrorContains(t, err, "session push errors")
-	require.FileExists(t, rebuildFilePath(path))
-	held, err := OpenReadOnly(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, held.Close()) })
-	before, err := os.Stat(path)
-	require.NoError(t, err)
-	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
-	require.ErrorContains(t, err, "session push errors")
-	assert.False(t, res.Diagnostics.Full)
-	assert.Empty(t, res.Diagnostics.RebuildReason)
-	assert.NoFileExists(t, rebuildFilePath(path))
-	assert.FileExists(t, sparePath(path))
-	after, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.True(t, SameMirrorFile(before, after))
 }

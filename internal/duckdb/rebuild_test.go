@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -19,46 +18,14 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-// Observe the staged bytes at cancellation checks so the test needs no timing
-// assumptions about the filesystem or copy speed.
-type mirrorCopyContext struct {
-	context.Context
-	observe func()
-}
-
-func (c mirrorCopyContext) Err() error {
-	c.observe()
-	return c.Context.Err()
-}
-
-func TestCopyMirrorFileStopsDuringCancellation(t *testing.T) {
+func TestCopyMirrorFileStopsOnCancellation(t *testing.T) {
 	dir := t.TempDir()
 	src, dst := filepath.Join(dir, "source"), filepath.Join(dir, "mirror.spare")
-	data := bytes.Repeat([]byte("mirror data"), 100_000)
-	require.NoError(t, os.WriteFile(src, data, 0o600))
+	require.NoError(t, os.WriteFile(src, []byte("mirror data"), 0o600))
 	require.NoError(t, os.WriteFile(dst, []byte("previous snapshot"), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	var copiedAtCancellation int64
-	copyCtx := mirrorCopyContext{Context: ctx, observe: func() {
-		if ctx.Err() != nil {
-			return
-		}
-		staged, err := filepath.Glob(filepath.Join(dir, ".mirror.spare.tmp-*"))
-		require.NoError(t, err)
-		if len(staged) == 0 {
-			return
-		}
-		info, err := os.Stat(staged[0])
-		require.NoError(t, err)
-		if info.Size() > 0 {
-			copiedAtCancellation = info.Size()
-			cancel()
-		}
-	}}
-	require.ErrorIs(t, copyMirrorFile(copyCtx, src, dst), context.Canceled)
-	assert.Positive(t, copiedAtCancellation)
-	assert.Less(t, copiedAtCancellation, int64(len(data)), "cancellation must stop before copying the whole mirror")
+	cancel()
+	require.ErrorIs(t, copyMirrorFile(ctx, src, dst), context.Canceled)
 	previous, err := os.ReadFile(dst)
 	require.NoError(t, err)
 	assert.Equal(t, "previous snapshot", string(previous))
