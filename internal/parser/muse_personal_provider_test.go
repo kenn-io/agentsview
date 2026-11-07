@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,8 +96,21 @@ func TestMusePersonalCompositeFingerprintAndDigest(t *testing.T) {
 	require.NotZero(t, digest)
 	info, err := os.Stat(index)
 	require.NoError(t, err)
+	beforeChangeTime, hasChangeTime := codexIndexChangeTime(index, info)
 	writeSourceFile(t, index, `{"version":2}`)
 	require.NoError(t, os.Chtimes(index, info.ModTime(), info.ModTime()))
+	if hasChangeTime {
+		// Preserve size and mtime, but establish a distinct ctime before
+		// checking the stat digest. Rapid writes can share a timestamp tick.
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			require.NoError(c, os.Chtimes(index, info.ModTime(), info.ModTime()))
+			changed, err := os.Stat(index)
+			require.NoError(c, err)
+			changeTime, ok := codexIndexChangeTime(index, changed)
+			require.True(c, ok)
+			assert.NotEqual(c, beforeChangeTime, changeTime)
+		}, 2*time.Second, time.Millisecond)
+	}
 	second, err := p.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.Equal(t, first.Size, second.Size)

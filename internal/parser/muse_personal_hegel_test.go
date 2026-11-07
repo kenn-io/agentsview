@@ -354,8 +354,8 @@ func TestMusePersonalHegelMixedAccounting(t *testing.T) {
 				assert.Equal(ht, RoleTool, m.Role)
 				assert.Equal(ht, w.label, m.Content)
 			case 3:
-				assert.Contains(ht, m.Content, "future_mix")
-				assert.NotContains(ht, m.Content, "opaque-mixed-body")
+				assert.Equal(ht, musePersonalUnsupportedContent, m.Content)
+				assert.Contains(ht, m.SourceSubtype, "future_mix")
 			case 4:
 				assert.True(ht, m.IsCompactBoundary)
 				assert.Equal(ht, w.label, m.Content)
@@ -404,10 +404,11 @@ func TestMusePersonalHegelFutureBodyShapes(t *testing.T) {
 		require.NoError(ht, err)
 		assert.Zero(ht, sess.MalformedLines)
 		require.Len(ht, msgs, 1)
-		assert.Contains(ht, msgs[0].Content, "future_")
-		assert.NotContains(ht, msgs[0].Content, "sentinel-body")
+		assert.Equal(ht, musePersonalUnsupportedContent, msgs[0].Content)
+		assert.True(ht, strings.HasPrefix(msgs[0].SourceSubtype, "unsupported:"), msgs[0].SourceSubtype)
+		assert.Contains(ht, msgs[0].SourceSubtype, ":future_")
+		assert.LessOrEqual(ht, len(msgs[0].SourceSubtype), len("unsupported:record:")+64)
 		assert.Equal(ht, source, msgs[0].SourceType)
-		assert.LessOrEqual(ht, len(msgs[0].Content), 160)
 	}, hegel.WithTestCases(2000), hegel.WithDatabase(""))
 }
 
