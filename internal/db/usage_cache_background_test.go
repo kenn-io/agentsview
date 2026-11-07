@@ -578,7 +578,10 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			database := testDB(t)
-			seedUsageBatchSessions(t, database, 5*usageCacheBackfillBatchSize+1,
+			const sessionCount = 5*usageCacheBackfillBatchSize + 1
+			const refreshedPrice = int64(2_000_000)
+			const costPerSession = refreshedPrice / 1_000_000 // Each seeded session has one input token.
+			seedUsageBatchSessions(t, database, sessionCount,
 				time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 			setUsageModelPrice(t, database, "model", 1_000_000)
 			require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
@@ -613,17 +616,9 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 				case <-ctx.Done():
 				}
 			}
-			waitForBatch := func() {
-				t.Helper()
-				select {
-				case <-arrived:
-				case <-ctx.Done():
-					require.NoError(t, ctx.Err(), "waiting for the background install batch")
-				}
-			}
 			require.NoError(t, database.StartUsageCacheBackfill(ctx))
-			waitForBatch()
-			setUsageModelPrice(t, database, "model", 2_000_000)
+			waitUsageNotification(t, arrived)
+			setUsageModelPrice(t, database, "model", refreshedPrice)
 			if test.rewarm {
 				require.NoError(t, database.RewarmUsageCache())
 			}
@@ -637,17 +632,17 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 				case <-ctx.Done():
 					require.NoError(t, ctx.Err())
 				}
-				waitForBatch()
+				waitUsageNotification(t, arrived)
 			}})
 			openGate()
 			require.NoError(t, err)
-			assert.Equal(t, int64(2562), daily.Totals.TotalCost.Microdollars)
+			assert.Equal(t, sessionCount*costPerSession, daily.Totals.TotalCost.Microdollars)
 			require.NoError(t, database.WaitUsageCacheBackfill(ctx))
 			var rows, stale int
 			require.NoError(t, cache.db.QueryRowContext(ctx, `SELECT count(*),
-				count(CASE WHEN estimated_cost_microdollars != 2 THEN 1 END)
-				FROM usage_daily_rollups`).Scan(&rows, &stale))
-			assert.Equal(t, 1281, rows)
+				count(CASE WHEN estimated_cost_microdollars != ? THEN 1 END)
+				FROM usage_daily_rollups`, costPerSession).Scan(&rows, &stale))
+			assert.Equal(t, sessionCount, rows)
 			assert.Zero(t, stale, "every daily rollup must use the refreshed price")
 		})
 	}

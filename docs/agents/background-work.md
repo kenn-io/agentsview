@@ -101,7 +101,7 @@ Codex data-loss bug or a merge blocker.
   an error. It starts the same coverage pass, which rebuilds only rollups whose
   pricing lookups now resolve differently. A pass resolves prices from the
   catalog it captured at start. The pass checks the committed pricing revision
-  before each batch and once before its final recheck and completion work. A
+  between batches and once before its final recheck and completion work. A
   change stops the pass and queues a new pass with the current catalog, even
   before re-warm is called. The final recheck uses one rollup call across the
   whole snapshot to repair installs invalidated by later batches.
