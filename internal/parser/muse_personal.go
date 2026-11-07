@@ -319,8 +319,8 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 		case rec.Type != "item":
 			msg.Role = RoleSystem
 			msg.IsSystem = true
-			msg.SourceSubtype = "unsupported"
-			msg.Content = musePersonalUnsupportedMarker("record", rec.Type)
+			msg.SourceSubtype = musePersonalUnsupportedSubtype("record", rec.Type)
+			msg.Content = musePersonalUnsupportedContent
 		default:
 			switch item.Type {
 			case "message", "message_parts":
@@ -335,10 +335,10 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 				default:
 					msg.Role = RoleSystem
 					msg.IsSystem = true
-					msg.SourceSubtype = "unsupported"
-					msg.Content = musePersonalUnsupportedMarker("role", item.Role)
+					msg.SourceSubtype = musePersonalUnsupportedSubtype("role", item.Role)
+					msg.Content = musePersonalUnsupportedContent
 				}
-				if msg.SourceSubtype != "unsupported" {
+				if !strings.HasPrefix(msg.SourceSubtype, "unsupported:") {
 					msg.Content = item.Text
 					if item.Type == "message_parts" {
 						var parts []string
@@ -349,7 +349,8 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 							case "file_ref":
 								parts = append(parts, fmt.Sprintf("[File: %s (%s), path: %s]", part.Filename, part.MimeType, part.Path))
 							default:
-								parts = append(parts, musePersonalUnsupportedMarker("part", part.Type))
+								parts = append(parts, musePersonalUnsupportedContent)
+								msg.SourceSubtype = musePersonalUnsupportedSubtype("part", part.Type)
 							}
 						}
 						msg.Content = strings.Join(parts, "\n")
@@ -388,8 +389,8 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 			default:
 				msg.Role = RoleSystem
 				msg.IsSystem = true
-				msg.SourceSubtype = "unsupported"
-				msg.Content = musePersonalUnsupportedMarker("item", item.Type)
+				msg.SourceSubtype = musePersonalUnsupportedSubtype("item", item.Type)
+				msg.Content = musePersonalUnsupportedContent
 			}
 		}
 		msg.ContentLength = len(msg.Content)
@@ -449,9 +450,12 @@ func musePersonalApplyIndex(ctx context.Context, path string, h musePersonalHead
 	}
 }
 
-// musePersonalUnsupportedMarker retains only a bounded type discriminator.
-// Payload fields remain available in raw custody rather than rendered content.
-func musePersonalUnsupportedMarker(scope, kind string) string {
+const musePersonalUnsupportedContent = "[Unsupported Muse Personal content]"
+
+// musePersonalUnsupportedSubtype retains only a bounded type discriminator
+// in message metadata. Payload fields remain available in raw custody rather
+// than rendered content.
+func musePersonalUnsupportedSubtype(scope, kind string) string {
 	var token strings.Builder
 	for _, r := range kind {
 		if token.Len() == 64 {
@@ -463,5 +467,5 @@ func musePersonalUnsupportedMarker(scope, kind string) string {
 			token.WriteByte('_')
 		}
 	}
-	return "[Unsupported Muse Personal " + scope + ": " + token.String() + "]"
+	return "unsupported:" + scope + ":" + token.String()
 }
