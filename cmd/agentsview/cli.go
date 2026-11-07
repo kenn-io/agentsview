@@ -149,6 +149,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newAgentsCommand())
 	root.AddCommand(newOpenAPICommand())
 	root.AddCommand(newRemoteSyncCommand())
+	root.AddCommand(newGitHookCommand())
 	groupCommands(root)
 
 	defaultHelp := root.HelpFunc()

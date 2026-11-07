@@ -113,6 +113,77 @@ launch paths.
 inherited `--server`, `--server-token-file`, `--pg`, `--json`, and `--format`
 flags before accessing storage. Use `--dry-run` to inspect the selection.
 
+### `agentsview git-hook`
+
+Add the current agent session to commits in a repository:
+
+```sh
+agentsview git-hook install
+```
+
+The `prepare-commit-msg` and `commit-msg` hooks work together. The first records
+the message Git prepared; the second adds `Agent-Session:
+<agent>:<session-id>` to commits made without an editor, including `-m`, `-F`,
+`-C`, `--amend --no-edit`, and `merge --no-edit`. An unchanged commit template
+stays untouched so Git can reject it. A conflicted cherry-pick finished with
+`--no-edit` or `--continue` also carries the current session. Editor commits
+keep their original messages. Git doesn't run `commit-msg` for
+`git revert --no-edit` or rebase picks, so they get no new trailer. Rebase picks
+keep their existing trailers. Amending from a different session adds a second
+`Agent-Session` line.
+
+The hook skips messages containing only blank lines, Git comments, or signoffs.
+Git still rejects empty messages. A comment-only message such as `-m '#123 fix'`
+can still commit when Git retains comments, but gets no trailer. Git doesn't
+tell hooks whether `-s` added a signoff, so when a commit template already ends
+with your own signoff and another hook changes that line, the commit gets no
+trailer.
+
+AgentsView must be on `PATH`. A missing or failing binary, or a missing,
+invalid, or ambiguous session, leaves the commit message unchanged.
+
+Discovery reads the session variable each supported harness sets for the
+commands its agent runs:
+
+| Agent | Variable |
+| --- | --- |
+| Claude Code | `CLAUDE_CODE_SESSION_ID` |
+| Codex | `CODEX_THREAD_ID`, or `CODEX_SESSION_ID` when that is unset or empty |
+| Cursor CLI | `CURSOR_CONVERSATION_ID` |
+| OpenCode 2.0.19 and later | `OPENCODE_SESSION_ID` |
+| Pi | `PI_SESSION_ID` |
+| Oh My Pi | `PI_SESSION_ID` with `OMPCODE=1` |
+| Qwen Code | `QWEN_CODE_SESSION_ID` |
+| Goose | `AGENT_SESSION_ID`, only in Goose's `YYYYMMDD_N` form |
+| Hermes | `HERMES_SESSION_ID` |
+
+Claude and Codex IDs must be UUIDs. Commits from unlisted harnesses get no
+trailer unless you set the override pair. When an agent runs inside another
+agent's shell, such as Pi started from Claude Code, both variables are set. The
+hook then leaves the message unchanged and prints a warning. Set both
+`AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to resolve this
+ambiguity or override discovery.
+Override agent names accept lowercase letters, digits, and hyphens, up to 32
+characters, starting with a letter or digit. IDs for agents other than Claude
+and Codex accept letters, digits, dots, underscores, and hyphens, up to 128
+characters, starting with a letter or digit.
+
+Installation writes both hooks into the directory Git uses. Rerunning it
+succeeds without changing byte-identical hooks. A `core.hooksPath` setting,
+including a global one, makes installation apply to every repository sharing
+that path. The two hooks only work as a pair. When either one already exists
+with other content, installation writes nothing and prints the steps for both:
+the line to add to each existing hook, and the file to create for a missing
+one. These are the lines:
+
+```sh
+if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$@" || :; fi
+if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi
+```
+
+To remove the hooks, delete the installed `prepare-commit-msg` and `commit-msg`
+files. For shared hooks, remove the added lines.
+
 ### `agentsview archive`
 
 Available in 0.46.0 and later, these commands retain captures from several
