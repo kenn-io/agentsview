@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -386,4 +388,45 @@ func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
 		require.NotEqual(t, vectorGeneration(cfg.Vector.Embeddings).Fingerprint(), got.Fingerprint)
 		assert.Nil(t, got.Params)
 	})
+}
+
+func TestVectorPushSourceConcurrentSetupReloadSnapshot(t *testing.T) {
+	cfg := enabledVectorConfig(t)
+	buildTestVectorsDB(t, cfg)
+	src := &vectorPushSource{cfg: cfg}
+	defer func() { require.NoError(t, src.Close()) }()
+	// A browser setup retry reloads configuration while a replica push asks
+	// the running daemon to create an export snapshot.
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var firstErr error
+	wg.Go(func() {
+		<-start
+		for range 250 {
+			exp, ok, err := src.BeginExport(t.Context(), nil)
+			if err != nil {
+				firstErr = err
+				return
+			}
+			if !ok {
+				firstErr = fmt.Errorf("active index disappeared")
+				return
+			}
+			if _, err := exp.SessionDocHashes(t.Context(), nil); err != nil {
+				firstErr = err
+				exp.Close()
+				return
+			}
+			exp.Close()
+		}
+	})
+	wg.Go(func() {
+		<-start
+		for range 250 {
+			src.reconfigure(cfg)
+		}
+	})
+	close(start)
+	wg.Wait()
+	require.NoError(t, firstErr, "a config reload must preserve replica pushes already using the live source")
 }

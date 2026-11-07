@@ -65,10 +65,8 @@ func closeVectorPushSource(src storage.VectorPushSource) {
 // call — a daemon push that starts before embeddings exist — reopens and picks
 // up a build that lands afterward. A nil index without error means the file is
 // absent ("nothing to push"); the pointer's own nil checks gate every
-// dereference.
+// dereference. The caller must hold s.mu.
 func (s *vectorPushSource) openIndex(ctx context.Context) (*vector.Index, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if !s.cfg.Vector.Enabled {
 		return nil, nil
 	}
@@ -105,7 +103,8 @@ func (s *vectorPushSource) Close() error {
 }
 
 // reconfigure points later exports at cfg's vectors.db by dropping the
-// memoized handle. An export already running keeps its own read transaction.
+// memoized handle. BeginExport holds s.mu until its snapshot exists; an export
+// already running keeps its own read transaction.
 func (s *vectorPushSource) reconfigure(cfg config.Config) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -122,11 +121,14 @@ func (s *vectorPushSource) reconfigure(cfg config.Config) {
 func (s *vectorPushSource) BeginExport(
 	ctx context.Context, sessionIDs []string,
 ) (storage.VectorExport, bool, error) {
+	s.mu.Lock()
 	ix, err := s.openIndex(ctx)
 	if err != nil || ix == nil {
+		s.mu.Unlock()
 		return nil, false, err
 	}
 	exp, ok, err := ix.BeginExport(ctx, sessionIDs)
+	s.mu.Unlock()
 	if err != nil {
 		if errors.Is(err, vector.ErrExportNotReady) {
 			return nil, false, fmt.Errorf("%w: %w", storage.ErrVectorSourceNotReady, err)

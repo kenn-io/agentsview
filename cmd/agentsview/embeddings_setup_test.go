@@ -392,7 +392,7 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 }
 
 func TestLiveEmbeddingsSetupFailures(t *testing.T) {
-	for _, failure := range []string{"configured provider", "invalid endpoint", "model inspection", "config read"} {
+	for _, failure := range []string{"configured provider", "invalid endpoint", "invalid TOML", "model inspection", "config read"} {
 		t.Run(failure, func(t *testing.T) {
 			dir := testDataDir(t)
 			cfg, err := config.Default()
@@ -418,6 +418,16 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				cfg.DeploymentEmbeddings = &config.VectorEmbeddingsServerConfig{Endpoint: "https://embeddings.example/v1"}
 			}
 			owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
+			if failure == "invalid TOML" {
+				writeTestConfig(t, dir, "[vector\n")
+				ln, port := listenLoopback(t)
+				cfg.Host, cfg.Port = "127.0.0.1", port
+				ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+				body := embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), http.StatusBadRequest)
+				assert.Contains(t, string(body), "existing config invalid")
+				assert.Contains(t, string(body), "expected '.' or ']' to end table name")
+				return
+			}
 			if failure == "model inspection" {
 				err := owner.Setup(0)
 				require.ErrorIs(t, err, inspectionError)

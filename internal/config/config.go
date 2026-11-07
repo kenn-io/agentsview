@@ -4097,9 +4097,6 @@ func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 		_, candidate, err := c.vectorSetupCandidate()
 		if err == nil {
 			embeddings = candidate.Vector.Embeddings
-			if _, _, err = embeddings.Server(""); err != nil {
-				err = invalidVectorSetupError{err}
-			}
 		}
 		return err
 	})
@@ -4119,6 +4116,9 @@ func (c *Config) SaveVectorSetup() error {
 
 func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 	existing, err := c.readConfigMap()
+	if _, ok := errors.AsType[toml.ParseError](err); ok {
+		err = invalidVectorSetupError{err}
+	}
 	if err != nil {
 		return nil, Config{}, err
 	}
