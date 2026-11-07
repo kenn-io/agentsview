@@ -1250,7 +1250,7 @@ func (b *directBackend) SearchContent(
 		if unavailable, ok := errors.AsType[*db.SemanticUnavailableError](err); ok {
 			reason = unavailable.Reason
 		}
-		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
+		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms. To enable search by meaning, use Settings → Embeddings → Turn on or run `agentsview index embeddings build`."
 		page, err = b.db.SearchContent(ctx, filter)
 	}
 	if err != nil {

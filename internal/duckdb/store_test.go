@@ -4834,16 +4834,23 @@ func TestTrendsTermsSessionWindowParity(t *testing.T) {
 
 func TestSearchContentHybridKeywordFallback(t *testing.T) {
 	const ts = "2026-03-22T10:00:00.000Z"
+	const childTS = "2026-03-23T10:00:00.000Z"
 	local := newLocalDB(t)
-	child := syncSession("child", "alpha", "first", ts, 4)
+	parent := syncSession("parent", "alpha", "first", ts, 3)
+	parent.UserMessageCount = 2
+	child := syncSession("child", "alpha", "first", childTS, 4)
 	child.ParentSessionID, child.RelationshipType, child.UserMessageCount = new("parent"), "subagent", 1
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{
-		{Session: syncSession("parent", "alpha", "first", ts, 0), DataVersion: 1, ReplaceMessages: true},
+		{Session: parent, Messages: []db.Message{
+			syncMessage("parent", 0, "user", "question", ts),
+			syncMessage("parent", 1, "assistant", "rankneedle reply", ts),
+			syncMessage("parent", 2, "user", "follow-up", ts),
+		}, DataVersion: 1, ReplaceMessages: true},
 		{Session: child, Messages: []db.Message{
-			syncMessage("child", 0, "user", "question", ts),
-			syncMessage("child", 1, "tool", "childneedle tool output", ts),
-			syncMessage("child", 2, "assistant", "childneedle reply", ts),
-			syncMessage("child", 3, "assistant", "childneedle follow-up", ts),
+			syncMessage("child", 0, "user", "question", childTS),
+			syncMessage("child", 1, "tool", "childneedle tool output", childTS),
+			syncMessage("child", 2, "assistant", "childneedle rankneedle reply", childTS),
+			syncMessage("child", 3, "assistant", "childneedle follow-up", childTS),
 		}, DataVersion: 1, ReplaceMessages: true},
 	})
 	require.NoError(t, err)
@@ -4858,4 +4865,11 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 	assert.Zero(t, page.NextCursor)
 	assert.Equal(t, "assistant", page.Matches[0].Role)
 	assert.Equal(t, 2, page.Matches[0].Ordinal)
+
+	page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "rankneedle", Mode: "hybrid", KeywordOnly: true, Scope: "all", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "parent", page.Matches[0].SessionID)
+	assert.False(t, page.Matches[0].Subordinate)
+	assert.Zero(t, page.NextCursor)
 }

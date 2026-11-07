@@ -90,6 +90,7 @@ func TestRenderRecallWorkflowContract(t *testing.T) {
 	skill := rendered[0].Content
 
 	assert.Contains(t, skill, "Search before guessing")
+	assert.Contains(t, skill, "For `effective_mode: hybrid_keyword`, disclose keyword-only")
 	assert.Contains(t, skill, "inspect the current code first")
 	assert.Contains(t, skill, "already answered in this conversation")
 	assert.Contains(t, skill, "search_content")
@@ -142,6 +143,7 @@ func TestRenderClaudeSearchAgentContract(t *testing.T) {
 	require.NoError(t, err)
 	agent := artifactByBase(t, rendered, "agentsview-search-conversations.md").Content
 
+	assert.Contains(t, agent, "For `effective_mode: hybrid_keyword`, disclose keyword-only")
 	assert.Contains(t, agent, "name: agentsview-search-conversations")
 	assert.Contains(t, agent, "model: haiku")
 	// The subagent reads untrusted archived transcripts. Claude Code treats

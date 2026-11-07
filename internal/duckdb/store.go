@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -978,6 +977,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		return db.ContentSearchPage{},
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}
 	}
+	limit := f.Limit
+	if f.KeywordOnly {
+		f.Limit = max(limit*4, db.SemanticOverfetchMin)
+	}
 	matches, err := s.collectContentMatches(ctx, f)
 	if err != nil {
 		return db.ContentSearchPage{}, err
@@ -990,6 +993,19 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		return db.ContentSearchPage{}, err
 	}
 	if f.KeywordOnly {
+		leg := make([]db.RankedUnit, 0, len(page.Matches))
+		byKey := make(map[string]db.ContentMatch, len(page.Matches))
+		for _, match := range page.Matches {
+			key := db.MessageFusionKey(match.SessionID, match.Ordinal)
+			leg = append(leg, db.RankedUnit{Key: key, Subordinate: match.Subordinate})
+			byKey[key] = match
+		}
+		page.Matches = page.Matches[:0]
+		for _, fused := range db.RRFMerge([][]db.RankedUnit{leg}, limit) {
+			match := byKey[fused.Unit.Key]
+			match.Score = new(fused.Score)
+			page.Matches = append(page.Matches, match)
+		}
 		page.NextCursor = 0
 	}
 	return page, nil
@@ -1072,6 +1088,9 @@ func (s *Store) collectContentSubstringMatches(
 			if f.ExcludeSystem {
 				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 			}
+			if f.KeywordOnly {
+				sysPred += " AND m.role IN ('user', 'assistant')"
+			}
 			contentPred := addSearchArgs("COALESCE(m.dialogue_text, m.content)")
 			branches = append(branches, `
 				SELECT m.session_id, s.project, s.agent, 'message' AS location,
@@ -1083,7 +1102,7 @@ func (s *Store) collectContentSubstringMatches(
 					0 AS call_index, 0 AS event_index
 				FROM messages m JOIN sessions s ON s.id = m.session_id
 				WHERE `+contentPred+`
-					AND `+sysPred+` AND (`+strconv.FormatBool(!f.KeywordOnly)+` OR m.role IN ('user', 'assistant'))
+					AND `+sysPred+`
 					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()))
 		case "thinking":
 			sysPred := "TRUE"

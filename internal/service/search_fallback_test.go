@@ -58,7 +58,7 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, "hybrid_keyword", result.EffectiveMode)
-			assert.Equal(t, "Search by meaning is unavailable: "+tc.reason+". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms.", result.Note)
+			assert.Equal(t, "Search by meaning is unavailable: "+tc.reason+". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms. To enable search by meaning, use Settings → Embeddings → Turn on or run `agentsview index embeddings build`.", result.Note)
 			if tc.empty {
 				assert.Empty(t, result.Matches)
 			} else {
