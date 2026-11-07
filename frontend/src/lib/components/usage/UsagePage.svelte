@@ -62,12 +62,14 @@
   let unsubEvents: (() => void) | undefined;
   let pendingRefresh = false;
   let visible = $state(!document.hidden);
+  let urlInitRan = $state(false);
+  let urlWritebackReady = $state(false);
   const refreshReady = $derived(
     visible && urlInitRan && urlWritebackReady && !sessions.machineFilterPending,
   );
 
   function refreshUsage(): void {
-    if (document.hidden || !refreshReady) {
+    if (!refreshReady) {
       pendingRefresh = true;
       return;
     }
@@ -261,8 +263,6 @@
     return supported;
   }
 
-  let urlInitRan = $state(false);
-  let urlWritebackReady = $state(false);
   let initialFetchDone = $state(false);
 
   function selectUsageMode(mode: UsageMode): void {

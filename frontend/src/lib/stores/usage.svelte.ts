@@ -996,6 +996,7 @@ class UsageStore {
   }
 
   private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
+    // A failed read waits for another event or poll; events during this read mark pending again.
     this.hasNewData = false;
     this.dropExcludedSelection();
     const startedAt = performance.now();
