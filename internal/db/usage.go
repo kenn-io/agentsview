@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1777,6 +1779,18 @@ type DailyUsageResult struct {
 	Daily         []DailyUsageEntry                 `json:"daily"`
 	Totals        UsageTotals                       `json:"totals"`
 	SessionCounts UsageSessionCounts                `json:"sessionCounts,omitempty"`
+}
+
+// Clone copies the slices and maps that usage response builders mutate.
+func (r DailyUsageResult) Clone() DailyUsageResult {
+	r.Daily = slices.Clone(r.Daily)
+	for i := range r.Daily {
+		r.Daily[i].ProjectBreakdowns = slices.Clone(r.Daily[i].ProjectBreakdowns)
+	}
+	r.Projects = maps.Clone(r.Projects)
+	r.SessionCounts.ByProject = maps.Clone(r.SessionCounts.ByProject)
+	r.SessionCounts.ByAgent = maps.Clone(r.SessionCounts.ByAgent)
+	return r
 }
 
 func SanitizeDailyUsageProjectLabelsWithCatalog(

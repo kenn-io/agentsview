@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 const (
@@ -232,9 +233,9 @@ func (s *Server) buildActivityArtifacts(
 		return activity.CandidateArtifacts{}, err
 	}
 	if s.activityReportFlights == nil {
-		s.activityReportFlights = newActivityReportBuildGroup()
+		s.activityReportFlights = &kept.Flights[activity.CandidateArtifacts]{}
 	}
-	return s.activityReportFlights.do(ctx, string(keyPayload), build)
+	return s.activityReportFlights.Do(ctx, string(keyPayload), build)
 }
 
 // prepareActivityReport signs a report over artifacts and fills its first
