@@ -50,16 +50,13 @@ func (s *Store) searchContentHybridPG(
 	k := max(f.Limit*4, db.SemanticOverfetchMin)
 	var vecLeg pgHybridLeg
 	var err error
-	var resolver db.UnitResolver = searcher
-	if f.KeywordOnly {
-		resolver = db.ArchiveUnitResolver(s.deriveLexicalUnitsPG)
-	} else {
+	if !f.KeywordOnly {
 		vecLeg, err = s.hybridVectorLegPG(ctx, f, searcher, k)
 		if err != nil {
 			return db.ContentSearchPage{}, err
 		}
 	}
-	kwLeg, err := s.hybridKeywordLegPG(ctx, f, resolver, k)
+	kwLeg, err := s.hybridKeywordLegPG(ctx, f, searcher, k)
 	if err != nil {
 		return db.ContentSearchPage{}, err
 	}
@@ -123,7 +120,7 @@ const maxHybridKeywordBatches = 4
 // filtering can discard most of a batch, so the leg keeps fetching until it
 // holds k entries, the stream is exhausted, or maxHybridKeywordBatches is hit.
 func (s *Store) hybridKeywordLegPG(
-	ctx context.Context, f db.ContentSearchFilter, searcher db.UnitResolver, k int,
+	ctx context.Context, f db.ContentSearchFilter, searcher db.VectorSearcher, k int,
 ) (pgHybridLeg, error) {
 	leg := pgHybridLeg{display: make(map[string]pgHybridDisplay, k)}
 	for batch := range maxHybridKeywordBatches {
@@ -224,7 +221,7 @@ func pgKeywordApproxSnippet(content, pattern string) string {
 // scope are dropped, and a unit already seen (within or across batches) keeps
 // its earlier, better-ranked entry.
 func (s *Store) appendHybridKeywordHitsPG(
-	ctx context.Context, searcher db.UnitResolver, f db.ContentSearchFilter,
+	ctx context.Context, searcher db.VectorSearcher, f db.ContentSearchFilter,
 	hits []pgHybridDisplay, leg *pgHybridLeg,
 ) error {
 	if len(hits) == 0 {
@@ -234,9 +231,13 @@ func (s *Store) appendHybridKeywordHitsPG(
 	for i, hit := range hits {
 		refs[i] = db.MessageRef{SessionID: hit.sessionID, Ordinal: hit.ordinal}
 	}
-	units, err := searcher.ResolveMessageUnits(ctx, refs)
-	if err != nil {
-		return fmt.Errorf("resolving keyword hits to units: %w", err)
+	units := make([]db.UnitRef, len(refs))
+	if searcher != nil {
+		var err error
+		units, err = searcher.ResolveMessageUnits(ctx, refs)
+		if err != nil {
+			return fmt.Errorf("resolving keyword hits to units: %w", err)
+		}
 	}
 	if len(units) != len(refs) {
 		return fmt.Errorf(

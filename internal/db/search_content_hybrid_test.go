@@ -1,6 +1,8 @@
 package db
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -716,7 +718,7 @@ func TestSearchContentHybridKeywordOnly(t *testing.T) {
 		name     string
 		searcher *fakeVectorSearcher
 	}{
-		{name: "unwired"}, {name: "wired", searcher: &fakeVectorSearcher{err: ErrSemanticTransient}},
+		{name: "unwired"}, {name: "wired", searcher: &fakeVectorSearcher{err: ErrSemanticTransient, units: []UnitRef{{DocKey: "piece0", SessionID: "run", OrdinalStart: 0, OrdinalEnd: 0, Subordinate: false}, {DocKey: "piece1", SessionID: "run", OrdinalStart: 1, OrdinalEnd: 1, Subordinate: false}, {DocKey: "piece2", SessionID: "run", OrdinalStart: 2, OrdinalEnd: 2, Subordinate: false}, {DocKey: "piece3", SessionID: "run", OrdinalStart: 3, OrdinalEnd: 3, Subordinate: true}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -734,12 +736,36 @@ func TestSearchContentHybridKeywordOnly(t *testing.T) {
 
 			page, err := d.SearchContent(t.Context(), f)
 			require.NoError(t, err)
-			require.Len(t, page.Matches, 2)
-			assert.ElementsMatch(t, [][2]int{{0, 0}, {1, 2}}, [][2]int{page.Matches[0].OrdinalRange, page.Matches[1].OrdinalRange})
+			require.Len(t, page.Matches, 3)
+			assert.ElementsMatch(t, []int{0, 1, 2}, []int{page.Matches[0].Ordinal, page.Matches[1].Ordinal, page.Matches[2].Ordinal})
+			if tc.searcher == nil {
+				assert.ElementsMatch(t, [][2]int{{0, 0}, {1, 2}, {1, 2}}, [][2]int{page.Matches[0].OrdinalRange, page.Matches[1].OrdinalRange, page.Matches[2].OrdinalRange})
+			} else {
+				assert.ElementsMatch(t, [][2]int{{0, 0}, {1, 1}, {2, 2}}, [][2]int{page.Matches[0].OrdinalRange, page.Matches[1].OrdinalRange, page.Matches[2].OrdinalRange})
+			}
 			page, err = d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "subordinate"})
 			require.NoError(t, err)
 			require.Len(t, page.Matches, 1)
 			assert.True(t, page.Matches[0].Subordinate)
 		})
+	}
+}
+
+func TestSearchContentHybridKeywordResolutionErrors(t *testing.T) {
+	for _, keywordOnly := range []bool{false, true} {
+		for _, cause := range []error{ErrSemanticUnavailable, ErrSemanticTransient} {
+			t.Run(fmt.Sprintf("keywordOnly=%t/%v", keywordOnly, cause), func(t *testing.T) {
+				d := testDB(t)
+				seedSearchSession(t, d, "found", "project", [][2]string{{"user", "needle"}})
+				d.SetVectorSearcher(&fakeVectorSearcher{resolveErr: cause})
+				page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: keywordOnly})
+				if keywordOnly && errors.Is(cause, ErrSemanticUnavailable) {
+					require.NoError(t, err)
+					require.Len(t, page.Matches, 1)
+				} else {
+					require.ErrorIs(t, err, cause)
+				}
+			})
+		}
 	}
 }

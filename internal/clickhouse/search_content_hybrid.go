@@ -50,16 +50,13 @@ func (s *Store) searchContentHybrid(
 	k := max(f.Limit*4, db.SemanticOverfetchMin)
 	var vecLeg hybridLeg
 	var err error
-	var resolver db.UnitResolver = searcher
-	if f.KeywordOnly {
-		resolver = db.ArchiveUnitResolver(s.deriveLexicalUnits)
-	} else {
+	if !f.KeywordOnly {
 		vecLeg, err = s.hybridVectorLeg(ctx, f, searcher, k)
 		if err != nil {
 			return db.ContentSearchPage{}, err
 		}
 	}
-	kwLeg, err := s.hybridKeywordLeg(ctx, f, resolver, k)
+	kwLeg, err := s.hybridKeywordLeg(ctx, f, searcher, k)
 	if err != nil {
 		return db.ContentSearchPage{}, err
 	}
@@ -103,7 +100,7 @@ func (s *Store) hybridVectorLeg(
 // k with OFFSET continuation until the leg holds k entries, the stream is
 // exhausted, or maxHybridKeywordBatches is reached.
 func (s *Store) hybridKeywordLeg(
-	ctx context.Context, f db.ContentSearchFilter, searcher db.UnitResolver, k int,
+	ctx context.Context, f db.ContentSearchFilter, searcher db.VectorSearcher, k int,
 ) (hybridLeg, error) {
 	leg := hybridLeg{display: make(map[string]hybridDisplay, k)}
 	for batch := range maxHybridKeywordBatches {
@@ -173,7 +170,7 @@ func (s *Store) fetchHybridKeywordBatch(
 // filter and fusion penalty treat them like lexical mode, and accumulates
 // the survivors into leg; a unit already seen keeps its earlier entry.
 func (s *Store) appendHybridKeywordHits(
-	ctx context.Context, searcher db.UnitResolver, f db.ContentSearchFilter,
+	ctx context.Context, searcher db.VectorSearcher, f db.ContentSearchFilter,
 	hits []hybridDisplay, leg *hybridLeg,
 ) error {
 	if len(hits) == 0 {
@@ -183,9 +180,13 @@ func (s *Store) appendHybridKeywordHits(
 	for i, hit := range hits {
 		refs[i] = db.MessageRef{SessionID: hit.sessionID, Ordinal: hit.ordinal}
 	}
-	units, err := searcher.ResolveMessageUnits(ctx, refs)
-	if err != nil {
-		return fmt.Errorf("resolving keyword hits to units: %w", err)
+	units := make([]db.UnitRef, len(refs))
+	if searcher != nil {
+		var err error
+		units, err = searcher.ResolveMessageUnits(ctx, refs)
+		if err != nil {
+			return fmt.Errorf("resolving keyword hits to units: %w", err)
+		}
 	}
 	if len(units) != len(refs) {
 		return fmt.Errorf(

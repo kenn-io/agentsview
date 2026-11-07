@@ -948,11 +948,13 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 			return db.ContentSearchPage{}, err
 		}
 		if f.Mode == "hybrid" && f.KeywordOnly {
-			return s.searchContentHybridKeyword(ctx, f)
+			f.Mode, f.Sources, f.ExcludeSystem = "fts", []string{"messages"}, true
+			f.Scope = cmp.Or(f.Scope, "all")
+		} else {
+			return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
+				"semantic search is not supported by the DuckDB backend",
+			)
 		}
-		return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
-			"semantic search is not supported by the DuckDB backend",
-		)
 	}
 
 	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
@@ -984,6 +986,9 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		return db.ContentSearchPage{}, err
 	}
 	page := f.Page(matches)
+	if f.KeywordOnly {
+		page.NextCursor = 0
+	}
 	// Post-truncation derivation, O(page): every lexical match gets its
 	// conversation-unit OrdinalRange and lineage fields via the shared
 	// batched pass, matching the SQLite and PG backends.
@@ -993,51 +998,9 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	return page, nil
 }
 
-// searchContentHybridKeyword groups archive units before the one-page merge.
-func (s *Store) searchContentHybridKeyword(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
-	expr, err := db.ParseFTSExpression(f.Pattern)
-	if err != nil {
-		return db.ContentSearchPage{}, err
-	}
-	limit, k := f.Limit, max(f.Limit*4, db.SemanticOverfetchMin)
-	f.Sources, f.ExcludeSystem = []string{"messages"}, true
-	f.Scope = cmp.Or(f.Scope, "all")
-	leg := make([]db.RankedUnit, 0, k)
-	display := make(map[string]db.ContentMatch, k)
-	for batch := range 4 {
-		f.Limit, f.Cursor = k, batch*k
-		matches, err := s.collectContentSubstringMatches(ctx, f, expr, "m.role IN ('user', 'assistant')")
-		if err != nil {
-			return db.ContentSearchPage{}, err
-		}
-		page := f.Page(matches)
-		if err := s.deriveLexicalUnitsDuck(ctx, page.Matches); err != nil {
-			return db.ContentSearchPage{}, err
-		}
-		for _, match := range page.Matches {
-			key := db.UnitFusionKey(match.SessionID, match.OrdinalRange[0])
-			if _, seen := display[key]; seen {
-				continue
-			}
-			leg = append(leg, db.RankedUnit{Key: key, Subordinate: match.Subordinate})
-			display[key] = match
-		}
-		if len(leg) >= k || page.NextCursor == 0 {
-			break
-		}
-	}
-	var page db.ContentSearchPage
-	for _, hit := range db.RRFMerge([][]db.RankedUnit{leg}, limit) {
-		match := display[hit.Unit.Key]
-		match.Score = new(hit.Score)
-		page.Matches = append(page.Matches, match)
-	}
-	return page, nil
-}
-
 func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFilter) ([]db.ContentMatch, error) {
 	if f.Mode != "regex" {
-		return s.collectContentSubstringMatches(ctx, f, nil, "TRUE")
+		return s.collectContentSubstringMatches(ctx, f)
 	}
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.DuckDBQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
@@ -1088,17 +1051,20 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 }
 
 func (s *Store) collectContentSubstringMatches(
-	ctx context.Context, f db.ContentSearchFilter, expr *db.FTSExpr, messageRoleFilter string,
+	ctx context.Context, f db.ContentSearchFilter,
 ) ([]db.ContentMatch, error) {
 	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.DuckDBQueryDialect())
+	if f.KeywordOnly {
+		scopeWhere, scopeArgs = db.BuildSessionBaseFilterSQL(db.SemanticContentSessionFilter(f), db.DuckDBQueryDialect())
+	}
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	var branches []string
 	var args []any
 	addSearchArgs := func(column string) string {
-		predicate := duckContentSearchPredicate(column, f, expr, &args)
+		predicate := duckContentSearchPredicate(column, f, &args)
 		args = append(args, scopeArgs...)
 		return predicate
 	}
@@ -1109,7 +1075,9 @@ func (s *Store) collectContentSubstringMatches(
 			if f.ExcludeSystem {
 				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 			}
-			sysPred += " AND " + messageRoleFilter
+			if f.KeywordOnly {
+				sysPred += " AND m.role IN ('user', 'assistant')"
+			}
 			contentPred := addSearchArgs("COALESCE(m.dialogue_text, m.content)")
 			branches = append(branches, `
 				SELECT m.session_id, s.project, s.agent, 'message' AS location,
@@ -1128,9 +1096,9 @@ func (s *Store) collectContentSubstringMatches(
 			if f.ExcludeSystem {
 				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 			}
-			contentPred := duckContentSearchPredicate("m.thinking_text", f, expr, &args)
+			contentPred := duckContentSearchPredicate("m.thinking_text", f, &args)
 			if slices.Contains(f.Sources, "messages") {
-				legacyPred := duckContentSearchPredicate("m.content", f, expr, &args)
+				legacyPred := duckContentSearchPredicate("m.content", f, &args)
 				contentPred += " AND (m.dialogue_text IS NOT NULL OR NOT (" + legacyPred + "))"
 			}
 			args = append(args, scopeArgs...)
@@ -1213,7 +1181,7 @@ func (s *Store) collectContentSubstringMatches(
 		LIMIT ? OFFSET ?`
 	args = append(args, f.Limit+1, f.Cursor)
 	return s.scanContentMatches(ctx, query, args, func(body string) string {
-		if f.Mode == "fts" || f.KeywordOnly {
+		if f.Mode == "fts" {
 			start, end := db.FTSSnippetRange(f.Pattern, body)
 			return f.BuildSnippet(body, start, end)
 		}
@@ -1223,14 +1191,8 @@ func (s *Store) collectContentSubstringMatches(
 }
 
 func duckContentSearchPredicate(
-	column string, f db.ContentSearchFilter, expr *db.FTSExpr, args *[]any,
+	column string, f db.ContentSearchFilter, args *[]any,
 ) string {
-	if f.KeywordOnly {
-		return db.RenderFTSExpression(expr, func(term string) string {
-			*args = append(*args, "%"+db.EscapeLikePattern(term)+"%")
-			return column + ` ILIKE ? ESCAPE '\'`
-		})
-	}
 	if f.Mode != "fts" {
 		*args = append(*args, "%"+db.EscapeLikePattern(f.Pattern)+"%")
 		return column + ` ILIKE ? ESCAPE '\'`

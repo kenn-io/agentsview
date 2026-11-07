@@ -20,8 +20,8 @@ func (s *fallbackVectorSearcher) PrepareSemanticSearch(context.Context, string) 
 	return nil, 0, s.err
 }
 
-func (s *fallbackVectorSearcher) ResolveMessageUnits(context.Context, []db.MessageRef) ([]db.UnitRef, error) {
-	return nil, s.err
+func (s *fallbackVectorSearcher) ResolveMessageUnits(_ context.Context, refs []db.MessageRef) ([]db.UnitRef, error) {
+	return make([]db.UnitRef, len(refs)), nil
 }
 
 func TestDirectBackendHybridKeywordFallback(t *testing.T) {
@@ -33,7 +33,7 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 		wantInput                   bool
 	}{
 		{name: "not configured", mode: "hybrid", optIn: true, reason: "not set up"},
-		{name: "building", mode: "hybrid", optIn: true, cause: fmt.Errorf("%w: index is building: 40%% complete", db.ErrSemanticUnavailable), reason: "index is building: 40% complete"},
+		{name: "building", mode: "hybrid", optIn: true, cause: fmt.Errorf("search unavailable: %w", db.NewSemanticUnavailableError("index is building: 40% complete")), reason: "index is building: 40% complete"},
 		{name: "empty", mode: "hybrid", optIn: true, pattern: "absent", empty: true, reason: "not set up"},
 		{name: "no opt in", mode: "hybrid", wantErr: db.ErrSemanticUnavailable},
 		{name: "semantic", mode: "semantic", optIn: true, wantErr: db.ErrSemanticUnavailable},

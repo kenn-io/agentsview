@@ -468,9 +468,8 @@ func (a recallSearcherAdapter) SearchRecall(
 		return nil, false, db.RecallVectorSnapshot{}, translateRecallSearchError(err)
 	}
 	if stale {
-		return nil, false, db.RecallVectorSnapshot{}, fmt.Errorf(
-			"%w: recall index is stale: run 'agentsview index embeddings build --store recall'",
-			db.ErrSemanticUnavailable,
+		return nil, false, db.RecallVectorSnapshot{}, db.NewSemanticUnavailableError(
+			"recall index is stale: run 'agentsview index embeddings build --store recall'",
 		)
 	}
 	hits, exhausted, err := a.ix.SearchPage(ctx, a.enc, query, limit)
@@ -599,10 +598,9 @@ func (a searcherAdapter) PrepareSemanticSearch(
 			fmt.Errorf("checking embedding index staleness: %w", err))
 	}
 	if stale {
-		return nil, 0, fmt.Errorf(
-			"%w: index is stale (embedding config changed): run "+
-				"'agentsview index embeddings build --full-rebuild'",
-			db.ErrSemanticUnavailable)
+		return nil, 0, db.NewSemanticUnavailableError(
+			"index is stale (embedding config changed): run " +
+				"'agentsview index embeddings build --full-rebuild'")
 	}
 
 	search, err := a.ix.PrepareSearch(ctx, a.enc, query)
@@ -634,8 +632,8 @@ func (a searcherAdapter) PrepareSemanticSearch(
 // index's resolver, translating its error taxonomy (notably
 // vector.ErrMirrorVersionMismatch from a version-mismatched read-only
 // vectors.db) the same way PrepareSemanticSearch does. It needs no staleness
-// gate of its own: the hybrid path always calls PrepareSemanticSearch, which
-// enforces the gate, before resolving FTS hits.
+// gate of its own: keyword-only hybrid can resolve mirror units while the
+// first embedding build is still incomplete.
 func (a searcherAdapter) ResolveMessageUnits(
 	ctx context.Context, refs []db.MessageRef,
 ) ([]db.UnitRef, error) {
@@ -664,10 +662,9 @@ func translateSearchError(err error) error {
 	queryEncErr, hasQueryEncErr := errors.AsType[*vector.QueryEncodeError](err)
 	switch {
 	case hasBuildingErr:
-		return fmt.Errorf("%w: index is building: %d%% complete",
-			db.ErrSemanticUnavailable, buildingErr.Percent)
+		return db.NewSemanticUnavailableError(fmt.Sprintf("index is building: %d%% complete", buildingErr.Percent))
 	case errors.Is(err, vector.ErrMirrorVersionMismatch):
-		return fmt.Errorf("%w: %w", db.ErrSemanticUnavailable, err)
+		return db.NewSemanticUnavailableError(err.Error())
 	case errors.Is(err, vector.ErrNoActiveGeneration):
 		return db.ErrSemanticUnavailable
 	case hasQueryEncErr:

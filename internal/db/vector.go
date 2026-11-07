@@ -99,32 +99,6 @@ type VectorSearcher interface {
 	ResolveMessageUnits(ctx context.Context, refs []MessageRef) ([]UnitRef, error)
 }
 
-// UnitResolver maps message anchors to their current conversation units.
-type UnitResolver interface {
-	ResolveMessageUnits(context.Context, []MessageRef) ([]UnitRef, error)
-}
-
-// ArchiveUnitResolver derives units from archive metadata without an index.
-type ArchiveUnitResolver func(context.Context, []ContentMatch) error
-
-func (derive ArchiveUnitResolver) ResolveMessageUnits(ctx context.Context, refs []MessageRef) ([]UnitRef, error) {
-	matches := make([]ContentMatch, len(refs))
-	for i, ref := range refs {
-		matches[i] = ContentMatch{SessionID: ref.SessionID, Ordinal: ref.Ordinal}
-	}
-	if err := derive(ctx, matches); err != nil {
-		return nil, err
-	}
-	units := make([]UnitRef, len(refs))
-	for i, m := range matches {
-		units[i] = UnitRef{
-			DocKey: UnitFusionKey(m.SessionID, m.OrdinalRange[0]), SessionID: m.SessionID,
-			OrdinalStart: m.OrdinalRange[0], OrdinalEnd: m.OrdinalRange[1], Subordinate: m.Subordinate,
-		}
-	}
-	return units, nil
-}
-
 // VectorSearchPage returns exhaustion measured before chunk rollup and hydration.
 type VectorSearchPage func(context.Context, int) ([]VectorHit, bool, error)
 

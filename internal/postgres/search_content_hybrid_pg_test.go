@@ -355,12 +355,17 @@ func TestPGHybridKeywordOnly(t *testing.T) {
 			insertCSUnitMessage(t, store, "run", 2, "assistant", "needle second", false, false)
 			insertCSUnitMessage(t, store, "run", 3, "assistant", "needle side", false, true)
 			if wired {
-				store.SetVectorSearcher(&hybridFakeSearcher{})
+				store.SetVectorSearcher(&hybridFakeSearcher{units: []db.UnitRef{{DocKey: "piece0", SessionID: "run", OrdinalStart: 0, OrdinalEnd: 0, Subordinate: false}, {DocKey: "piece1", SessionID: "run", OrdinalStart: 1, OrdinalEnd: 1, Subordinate: false}, {DocKey: "piece2", SessionID: "run", OrdinalStart: 2, OrdinalEnd: 2, Subordinate: false}, {DocKey: "piece3", SessionID: "run", OrdinalStart: 3, OrdinalEnd: 3, Subordinate: true}}})
 			}
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "top"})
 			require.NoError(t, err)
-			require.Len(t, page.Matches, 2)
-			assert.ElementsMatch(t, [][2]int{{0, 0}, {1, 2}}, [][2]int{page.Matches[0].OrdinalRange, page.Matches[1].OrdinalRange})
+			require.Len(t, page.Matches, 3)
+			assert.ElementsMatch(t, []int{0, 1, 2}, []int{page.Matches[0].Ordinal, page.Matches[1].Ordinal, page.Matches[2].Ordinal})
+			if !wired {
+				assert.ElementsMatch(t, [][2]int{{0, 0}, {1, 2}, {1, 2}}, [][2]int{page.Matches[0].OrdinalRange, page.Matches[1].OrdinalRange, page.Matches[2].OrdinalRange})
+			} else {
+				assert.ElementsMatch(t, [][2]int{{0, 0}, {1, 1}, {2, 2}}, [][2]int{page.Matches[0].OrdinalRange, page.Matches[1].OrdinalRange, page.Matches[2].OrdinalRange})
+			}
 			page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "subordinate"})
 			require.NoError(t, err)
 			require.Len(t, page.Matches, 1)

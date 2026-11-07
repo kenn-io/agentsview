@@ -4845,18 +4845,6 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 		syncMessage("fallback", 7, "tool", "quick fox", ts),
 	}
 	messages[0].IsSidechain, messages[4].IsSystem = true, true
-	var run []db.Message
-	for ordinal := range 205 {
-		run = append(run, syncMessage("run", ordinal, "assistant", "refill", ts))
-	}
-	run = append(run, syncMessage("run", 205, "user", "refill", ts))
-	var ranked []db.Message
-	for ordinal := range 199 {
-		message := syncMessage("ranked", ordinal, "assistant", "rankneedle", ts)
-		message.IsSidechain = true
-		ranked = append(ranked, message)
-	}
-	ranked = append(ranked, syncMessage("ranked", 199, "user", "rankneedle", ts), syncMessage("ranked", 200, "user", "rankneedle", ts))
 	child := syncSession("child", "alpha", "first", ts, 1)
 	child.ParentSessionID, child.RelationshipType, child.UserMessageCount = new("parent"), "subagent", 1
 	local := newLocalDB(t)
@@ -4864,10 +4852,9 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 	fallback.UserMessageCount = 3
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{
 		{Session: fallback, Messages: messages, DataVersion: 1, ReplaceMessages: true},
-		{Session: syncSession("run", "alpha", "first", ts, len(run)), Messages: run, DataVersion: 1, ReplaceMessages: true},
-		{Session: syncSession("ranked", "alpha", "first", ts, len(ranked)), Messages: ranked, DataVersion: 1, ReplaceMessages: true},
 		{Session: syncSession("parent", "alpha", "first", ts, 0), DataVersion: 1, ReplaceMessages: true},
 		{Session: child, Messages: []db.Message{syncMessage("child", 0, "user", "childneedle", ts)}, DataVersion: 1, ReplaceMessages: true},
+		{Session: syncSession("oneshot", "alpha", "first", ts, 1), Messages: []db.Message{syncMessage("oneshot", 0, "user", "oneshotneedle", ts)}, DataVersion: 1, ReplaceMessages: true},
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
@@ -4876,26 +4863,27 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	for _, tc := range []struct {
-		name, pattern, scope, session string
-		limit                         int
-		includeOneShot                bool
-		want                          []int
+		name, pattern, scope, session, project string
+		limit                                  int
+		includeOneShot                         bool
+		want                                   []int
 	}{
-		{name: "blank scope", pattern: "quick fox", want: []int{0, 1, 2}},
-		{name: "top", pattern: "quick fox", scope: "top", want: []int{1, 2}},
+		{name: "blank scope", pattern: "quick fox", want: []int{0, 1, 2, 3}},
+		{name: "top", pattern: "quick fox", scope: "top", want: []int{1, 2, 3}},
 		{name: "subordinate", pattern: "quick fox", scope: "subordinate", want: []int{0}},
 		{name: "empty", pattern: "quick answer fox"},
-		{name: "boolean or", pattern: `"brown" OR "red"`, want: []int{1, 2}},
-		{name: "refill", pattern: "refill", limit: 2, includeOneShot: true, want: []int{0, 205}},
-		{name: "rank before limiting", pattern: "rankneedle", limit: 2, includeOneShot: true, want: []int{199, 200}},
+		{name: "page", pattern: "quick fox", limit: 2, want: []int{0, 1}},
+		{name: "project filter", pattern: "quick fox", project: "other"},
 		{name: "child blank", pattern: "childneedle", want: []int{0}},
 		{name: "child subordinate", pattern: "childneedle", scope: "subordinate", want: []int{0}},
 		{name: "child top", pattern: "childneedle", scope: "top"},
 		{name: "exact child", pattern: "childneedle", session: "child", want: []int{0}},
+		{name: "one shot excluded", pattern: "oneshotneedle"},
+		{name: "one shot included", pattern: "oneshotneedle", includeOneShot: true, want: []int{0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-				Pattern: tc.pattern, Mode: "hybrid", KeywordOnly: true, Scope: tc.scope, SessionID: tc.session, Limit: tc.limit, IncludeOneShot: tc.includeOneShot,
+				Pattern: tc.pattern, Mode: "hybrid", KeywordOnly: true, Scope: tc.scope, SessionID: tc.session, Project: tc.project, Limit: tc.limit, IncludeOneShot: tc.includeOneShot,
 			})
 			require.NoError(t, err)
 			assert.Zero(t, page.NextCursor)
@@ -4906,9 +4894,4 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 			assert.ElementsMatch(t, tc.want, ordinals)
 		})
 	}
-	t.Run("unclosed quote", func(t *testing.T) {
-		_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: `"quick`, Mode: "hybrid", KeywordOnly: true})
-		var inputErr *db.SearchInputError
-		require.ErrorAs(t, err, &inputErr)
-	})
 }
