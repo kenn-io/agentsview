@@ -4835,11 +4835,16 @@ func TestTrendsTermsSessionWindowParity(t *testing.T) {
 func TestSearchContentHybridKeywordFallback(t *testing.T) {
 	const ts = "2026-03-22T10:00:00.000Z"
 	local := newLocalDB(t)
-	child := syncSession("child", "alpha", "first", ts, 2)
+	child := syncSession("child", "alpha", "first", ts, 4)
 	child.ParentSessionID, child.RelationshipType, child.UserMessageCount = new("parent"), "subagent", 1
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{
 		{Session: syncSession("parent", "alpha", "first", ts, 0), DataVersion: 1, ReplaceMessages: true},
-		{Session: child, Messages: []db.Message{syncMessage("child", 0, "user", "childneedle", ts), syncMessage("child", 1, "assistant", "childneedle reply", ts)}, DataVersion: 1, ReplaceMessages: true},
+		{Session: child, Messages: []db.Message{
+			syncMessage("child", 0, "user", "question", ts),
+			syncMessage("child", 1, "tool", "childneedle tool output", ts),
+			syncMessage("child", 2, "assistant", "childneedle reply", ts),
+			syncMessage("child", 3, "assistant", "childneedle follow-up", ts),
+		}, DataVersion: 1, ReplaceMessages: true},
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
@@ -4857,6 +4862,8 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 			} else {
 				require.Len(t, page.Matches, 1)
 				assert.Equal(t, "child", page.Matches[0].SessionID)
+				assert.Equal(t, "assistant", page.Matches[0].Role)
+				assert.Equal(t, 2, page.Matches[0].Ordinal)
 				assert.True(t, page.Matches[0].Subordinate)
 			}
 		})

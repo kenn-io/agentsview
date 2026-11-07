@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1082,7 +1083,7 @@ func (s *Store) collectContentSubstringMatches(
 					0 AS call_index, 0 AS event_index
 				FROM messages m JOIN sessions s ON s.id = m.session_id
 				WHERE `+contentPred+`
-					AND `+sysPred+`
+					AND `+sysPred+` AND (`+strconv.FormatBool(!f.KeywordOnly)+` OR m.role IN ('user', 'assistant'))
 					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()))
 		case "thinking":
 			sysPred := "TRUE"

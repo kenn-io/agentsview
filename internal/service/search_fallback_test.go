@@ -80,3 +80,26 @@ func TestHTTPBackendHybridKeywordFallback(t *testing.T) {
 	assert.Equal(t, "hybrid_keyword", result.EffectiveMode)
 	assert.NotEmpty(t, result.Note)
 }
+
+// fallbackKeywordStore models a backend whose keyword leg accepts malformed quotes.
+type fallbackKeywordStore struct {
+	fakeContentStore
+}
+
+func (s *fallbackKeywordStore) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
+	if !f.KeywordOnly {
+		return db.ContentSearchPage{}, db.ErrSemanticUnavailable
+	}
+	return s.fakeContentStore.SearchContent(ctx, f)
+}
+
+func TestHybridKeywordFallbackRejectsMalformedQueryBeforeRetry(t *testing.T) {
+	store := &fallbackKeywordStore{}
+	result, err := service.NewReadOnlyBackend(store).SearchContent(t.Context(), service.ContentSearchRequest{
+		Pattern: `"needle`, Mode: "hybrid", KeywordFallback: true,
+	})
+	var inputErr *db.SearchInputError
+	require.ErrorAs(t, err, &inputErr)
+	assert.Nil(t, result)
+	assert.Empty(t, store.filters, "malformed input must not reach the keyword leg")
+}

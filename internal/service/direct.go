@@ -1250,10 +1250,10 @@ func (b *directBackend) SearchContent(
 		if unavailable, ok := errors.AsType[*db.SemanticUnavailableError](err); ok {
 			reason = unavailable.Reason
 		}
-		filter.KeywordOnly = true
-		page, err = b.db.SearchContent(ctx, filter)
-		effectiveMode = "hybrid_keyword"
-		note = "Search by meaning is unavailable: " + reason + ". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
+		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
+		if _, err = db.ParseFTSExpression(req.Pattern); err == nil {
+			page, err = b.db.SearchContent(ctx, filter)
+		}
 	}
 	if err != nil {
 		return nil, err

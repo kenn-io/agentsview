@@ -724,7 +724,7 @@ agentsview session search "flaky test" --hybrid --project myapp
   `coverage`. The note gives the readiness reason (`not set up` or indexing
   progress) and explains that keyword terms must appear. When keyword results are
   empty or few, try short substring queries with key terms or synonyms,
-  retaining scope and other filters.
+  retaining scope in MCP and HTTP requests and other supported filters.
 - Both modes are restricted to the `messages` source — the same restriction
   `--fts` already has — since only user/assistant message content is embedded
   (never raw tool_input/tool_result rows or system messages). Passing `--in`
@@ -808,10 +808,10 @@ and hybrid results:
 - `subordinate`: only sidechain/delegated content, e.g. to find what a subagent
   actually did.
 
-`--scope` is valid with substring, `--semantic`, and `--hybrid` searches;
-`--regex` and `--fts` reject it. An explicit scope supersedes
-`--include-children`: child
-sessions are visible to these modes so that `scope` alone governs what you see.
+`--scope` is valid with CLI `--semantic` and `--hybrid` searches.
+CLI substring, `--regex`, and `--fts` searches reject it. An explicit scope
+supersedes `--include-children`: child sessions are visible to these modes so
+that `scope` alone governs what you see.
 Subagent/fork-typed and parent-linked sessions are also exempt from the default
 one-shot exclusion in these modes — a subagent session structurally has exactly
 one "user" message (its task prompt), so the one-shot gate would otherwise hide
@@ -929,7 +929,7 @@ below.
 | Only a building generation exists                                                                                               | same message, plus `: index is building: N% complete`                                                                                                                 |
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |
-| `--scope` with `--regex` or `--fts`                                                              | CLI: `--scope is not supported with --regex` or `--fts`; HTTP and MCP accept scope with substring, regex, terms, semantic, and hybrid                                                        |
+| CLI `--scope` without `--semantic` or `--hybrid` | `--scope requires --semantic or --hybrid`; HTTP and MCP accept scope with substring, regex, terms, semantic, and hybrid |
 | An unattended search or build needs a first local download                                                                      | `local embeddings: run agentsview index embeddings build to approve the first download`; run `agentsview index embeddings build` in the CLI and approve the download. |
 | Embeddings endpoint unreachable or timed out                                                                                    | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                                   |
 | Embeddings endpoint returned non-200                                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                           |
