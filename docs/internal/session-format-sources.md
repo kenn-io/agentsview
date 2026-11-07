@@ -4093,7 +4093,8 @@ schemas keep their existing ordering behavior.
   example was reverified on 2026-10-09. The `home scopes` subtest of
   `TestHermesCronStateGroups` verifies that rewritten Windows paths keep
   distinct homes separate by accepting both path separators. Names derive from
-  the recorded `session_name` at read time; usage-only archives show job IDs
+  the recorded `session_name`; the usage cache stores the derived label and
+  journals name changes on grouped runs. Usage-only archives show job IDs
   because their titles are discarded. Resync copies preserve stored job IDs,
   including imported sessions. Archived runs whose sources were gone before
   upgrading stay individual sessions unless they already have a stored job ID.
