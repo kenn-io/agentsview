@@ -40,9 +40,7 @@
 {#if preview}
   {#if hasMore}
     <Disclosure variant="plain" class="boundary-details">
-      {#snippet summary()}
-        <span class="boundary-summary">{preview}</span>
-      {/snippet}
+      {#snippet summary()}{preview}{/snippet}
       {#snippet meta()}{m.compact_boundary_show_full_summary()}{/snippet}
       <pre class="boundary-full">{content}</pre>
     </Disclosure>
@@ -100,15 +98,6 @@
     line-height: 1.5;
     border-radius: 0 var(--radius-sm, 4px)
       var(--radius-sm, 4px) 0;
-  }
-  /* The shared summary row adds 4px above and below, so the card keeps
-     the short preview's height. */
-  :global(.boundary-details) {
-    padding-block: 2px;
-  }
-  .boundary-summary {
-    color: var(--text-secondary);
-    font-weight: 400;
   }
   .boundary-full {
     white-space: pre-wrap;

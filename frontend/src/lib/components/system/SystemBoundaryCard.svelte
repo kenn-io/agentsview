@@ -41,10 +41,7 @@
     </span>
   {/if}
   {#if preview}
-    <Disclosure variant="plain">
-      {#snippet summary()}
-        <span class="show-content">{m.system_boundary_show_content()}</span>
-      {/snippet}
+    <Disclosure variant="plain" title={m.system_boundary_show_content()}>
       <pre>{content}</pre>
     </Disclosure>
   {/if}
@@ -75,11 +72,6 @@
   }
   .timestamp {
     font-size: 11px;
-    color: var(--text-muted);
-  }
-  .show-content {
-    font-size: 11px;
-    font-weight: 400;
     color: var(--text-muted);
   }
   pre {
