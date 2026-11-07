@@ -233,13 +233,9 @@ func (s *Store) appendHybridKeywordHitsPG(
 	for i, hit := range hits {
 		refs[i] = db.MessageRef{SessionID: hit.sessionID, Ordinal: hit.ordinal}
 	}
-	units := make([]db.UnitRef, len(refs))
-	if searcher != nil {
-		var err error
-		units, err = searcher.ResolveMessageUnits(ctx, refs)
-		if err != nil {
-			return fmt.Errorf("resolving keyword hits to units: %w", err)
-		}
+	units, err := db.ResolveHybridMessageUnits(ctx, searcher, refs)
+	if err != nil {
+		return fmt.Errorf("resolving keyword hits to units: %w", err)
 	}
 	if len(units) != len(refs) {
 		return fmt.Errorf(

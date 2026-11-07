@@ -1769,6 +1769,15 @@ func (db *DB) fetchHybridFTSBatch(
 	return hits, nil
 }
 
+// ResolveHybridMessageUnits returns empty unit refs without a searcher so
+// keyword-only callers derive ranges from the archive.
+func ResolveHybridMessageUnits(ctx context.Context, searcher VectorSearcher, refs []MessageRef) ([]UnitRef, error) {
+	if searcher == nil {
+		return make([]UnitRef, len(refs)), nil
+	}
+	return searcher.ResolveMessageUnits(ctx, refs)
+}
+
 // appendHybridFTSHits resolves one batch of FTS message hits to their
 // containing units, classifies unit-less hits structurally (range and
 // subordinate flag, so the scope filter and the fusion penalty treat them
@@ -1786,13 +1795,9 @@ func (db *DB) appendHybridFTSHits(
 	for i, hit := range hits {
 		refs[i] = MessageRef{SessionID: hit.sessionID, Ordinal: hit.ordinal}
 	}
-	units := make([]UnitRef, len(refs))
-	if searcher != nil {
-		var err error
-		units, err = searcher.ResolveMessageUnits(ctx, refs)
-		if err != nil {
-			return fmt.Errorf("resolving fts hits to units: %w", err)
-		}
+	units, err := ResolveHybridMessageUnits(ctx, searcher, refs)
+	if err != nil {
+		return fmt.Errorf("resolving fts hits to units: %w", err)
 	}
 	if len(units) != len(refs) {
 		return fmt.Errorf(
