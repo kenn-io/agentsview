@@ -133,7 +133,8 @@ func TestMusePersonalReplayAndSequenceOrder(t *testing.T) {
 	assert.NotEqual(t, msgs[1].SourceUUID, msgs[3].SourceUUID)
 	assert.Contains(t, msgs[1].SourceUUID, "item:9:")
 	assert.Equal(t, "runtime.future", msgs[0].SourceType)
-	assert.Equal(t, "unsupported", msgs[0].SourceSubtype)
+	assert.Equal(t, "unsupported:item:future", msgs[0].SourceSubtype)
+	assert.Equal(t, musePersonalUnsupportedContent, msgs[0].Content)
 	assert.NotContains(t, msgs[0].Content, "SECRET")
 	assert.NotContains(t, msgs[2].Content, "hidden replacement")
 }
