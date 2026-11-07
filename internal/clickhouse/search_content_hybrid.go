@@ -44,7 +44,9 @@ func (s *Store) searchContentHybrid(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
 	searcher := s.getVectorSearcher()
-	if searcher == nil && !f.KeywordOnly {
+	if f.KeywordOnly {
+		searcher = nil
+	} else if searcher == nil {
 		return db.ContentSearchPage{}, s.semanticUnavailableError()
 	}
 	k := max(f.Limit*4, db.SemanticOverfetchMin)

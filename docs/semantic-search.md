@@ -938,9 +938,12 @@ below.
 | `--in` names a source other than `messages` with `--semantic`/`--hybrid`                                                        | CLI: `--semantic searches messages only; drop --in` (or `--hybrid ...`); HTTP/MCP: `search: semantic search only supports the messages source (got "...")`            |
 | `--cursor` with `--semantic`/`--hybrid`                                                                                         | `semantic search returns a single ranked page; cursor pagination is not supported`                                                                                    |
 
-Over HTTP (`GET /api/v1/search/content`) and MCP (`search_content`), the "not
-available" family of errors maps to HTTP `501 Not Implemented` and the matching
-MCP tool error, carrying the same remediation text.
+MCP `search_content` in hybrid mode and CLI `session search --hybrid` return
+keyword matches when semantic search is unavailable. The response includes
+`effective_mode: hybrid_keyword` and a `note` explaining why. Semantic-only
+requests and HTTP requests without `allow_keyword_fallback=true` still return
+HTTP `501 Not Implemented` or the corresponding MCP tool error with remediation
+text.
 
 ## PostgreSQL
 

@@ -1616,7 +1616,9 @@ func (db *DB) searchContentHybrid(
 		return ContentSearchPage{}, err
 	}
 	searcher := db.getVectorSearcher()
-	if searcher == nil && !f.KeywordOnly {
+	if f.KeywordOnly {
+		searcher = nil
+	} else if searcher == nil {
 		return ContentSearchPage{}, ErrSemanticUnavailable
 	}
 	if !db.HasFTS(ctx) {
@@ -1710,7 +1712,7 @@ func (db *DB) hybridFTSLeg(
 		if err != nil {
 			return hybridLeg{}, err
 		}
-		if err := db.appendHybridFTSHits(ctx, searcher, f, hits, &leg); err != nil {
+		if err := db.appendHybridFTSHits(ctx, searcher, f.Scope, hits, &leg); err != nil {
 			return hybridLeg{}, err
 		}
 		if len(hits) < k || len(leg.ranked) >= k {
@@ -1774,7 +1776,7 @@ func (db *DB) fetchHybridFTSBatch(
 // outside scope are dropped, and a unit already seen (within or across
 // batches) keeps its earlier, better-ranked entry.
 func (db *DB) appendHybridFTSHits(
-	ctx context.Context, searcher VectorSearcher, f ContentSearchFilter,
+	ctx context.Context, searcher VectorSearcher, scope string,
 	hits []hybridDisplay, leg *hybridLeg,
 ) error {
 	if len(hits) == 0 {
@@ -1788,9 +1790,6 @@ func (db *DB) appendHybridFTSHits(
 	if searcher != nil {
 		var err error
 		units, err = searcher.ResolveMessageUnits(ctx, refs)
-		if f.KeywordOnly && errors.Is(err, ErrSemanticUnavailable) {
-			units, err = make([]UnitRef, len(refs)), nil
-		}
 		if err != nil {
 			return fmt.Errorf("resolving fts hits to units: %w", err)
 		}
@@ -1820,7 +1819,7 @@ func (db *DB) appendHybridFTSHits(
 	}
 
 	for i, hit := range hits {
-		if ScopeExcludes(f.Scope, hit.subordinate) {
+		if ScopeExcludes(scope, hit.subordinate) {
 			continue
 		}
 		if _, seen := leg.display[keys[i]]; seen {

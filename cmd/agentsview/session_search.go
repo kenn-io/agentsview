@@ -62,7 +62,7 @@ func newSessionSearchCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validateScopeFlag(scope, mode); err != nil {
+			if err := validateScopeFlag(scope, useSemantic, useHybrid); err != nil {
 				return err
 			}
 			activeSince, err = resolveSinceFlag(since, activeSince)
@@ -150,7 +150,7 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.StringVar(&since, "since", "",
 		"Only sessions active since a relative duration (12h, 14d, 2w, 3m = 3 months, 1y) or YYYY-MM-DD")
 	flags.StringVar(&scope, "scope", "",
-		"Result scope: top, all, or subordinate (unsupported with --regex or --fts)")
+		"Semantic/hybrid result scope: top, all, or subordinate (default all)")
 	flags.BoolVar(&includeChildren, "include-children", false, "Include subagent sessions")
 	flags.BoolVar(&includeAutomated, "include-automated", false, "Include automated sessions")
 	flags.BoolVar(&includeOneShot, "include-one-shot", false, "Include one-shot sessions")
@@ -163,19 +163,20 @@ func newSessionSearchCommand() *cobra.Command {
 	return cmd
 }
 
-// validateScopeFlag checks mode support and known scope values at the CLI boundary.
-func validateScopeFlag(scope, mode string) error {
+// validateScopeFlag gates --scope at the CLI boundary: it is only
+// meaningful for --semantic/--hybrid and must name a known scope.
+func validateScopeFlag(scope string, useSemantic, useHybrid bool) error {
 	if scope == "" {
 		return nil
 	}
-	if mode == "regex" || !db.ContentSearchModeSupportsScope(mode) {
-		return cliUsageError(fmt.Errorf("--scope is not supported with --%s", mode), "drop --scope or choose substring, --semantic, or --hybrid")
+	if !useSemantic && !useHybrid {
+		return cliUsageError(errors.New("--scope requires --semantic or --hybrid"), "choose one search mode and check --in / --scope with `agentsview session search --help`")
 	}
 	switch scope {
 	case "top", "all", "subordinate":
 		return nil
 	}
-	return cliValidationError(fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope), "use --scope top, all, or subordinate")
+	return cliValidationError(fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope), "use --scope top, all, or subordinate with --semantic or --hybrid")
 }
 
 // resolveContentSearchMode picks the search mode from the mutually exclusive
@@ -555,7 +556,7 @@ func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]a
 func contentSearchHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest, res *service.ContentSearchResult) []contentSearchCLIHint {
 	hints := service.SearchContentHints(ctx, svc, req, res, true, nil)
 	messagesOnly := len(req.Sources) == 0 || len(req.Sources) == 1 && req.Sources[0] == "messages"
-	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && req.Scope == "" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly {
+	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly {
 		retry := req
 		retry.Mode = "fts"
 		if page, err := svc.SearchContent(ctx, retry); err == nil && len(page.Matches) > 0 {

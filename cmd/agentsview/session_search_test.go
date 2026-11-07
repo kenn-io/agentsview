@@ -249,25 +249,27 @@ func TestSessionSearchScopeRejectsInvalidValue(t *testing.T) {
 
 func TestValidateScopeFlag(t *testing.T) {
 	tests := []struct {
-		name, scope, mode, wantErr string
+		name                   string
+		scope                  string
+		useSemantic, useHybrid bool
+		wantErr                string
 	}{
 		{name: "empty scope always valid"},
-		{name: "top with semantic", scope: "top", mode: "semantic"},
-		{name: "all with hybrid", scope: "all", mode: "hybrid"},
-		{name: "scope with regex", scope: "subordinate", mode: "regex", wantErr: "--scope is not supported with --regex"},
-		{name: "top with substring", scope: "top", mode: "substring"},
+		{name: "top with semantic", scope: "top", useSemantic: true},
+		{name: "all with hybrid", scope: "all", useHybrid: true},
+		{name: "subordinate with semantic", scope: "subordinate", useSemantic: true},
 		{
-			name: "scope with fts", scope: "top", mode: "fts",
-			wantErr: "--scope is not supported with --fts",
+			name: "scope without mode flag", scope: "top",
+			wantErr: "--semantic or --hybrid",
 		},
 		{
-			name: "invalid value", scope: "bogus", mode: "semantic",
+			name: "invalid value", scope: "bogus", useSemantic: true,
 			wantErr: "top, all, or subordinate",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateScopeFlag(tt.scope, tt.mode)
+			err := validateScopeFlag(tt.scope, tt.useSemantic, tt.useHybrid)
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return
@@ -907,10 +909,6 @@ func TestSessionSearchHintPreservesServer(t *testing.T) {
 	require.Len(t, got.Hints, 1)
 	assert.Contains(t, got.Hints[0].Next, "--server="+ts.URL)
 	assert.Contains(t, got.Hints[0].Next, "--server-token-file="+tokenFile)
-	ftsCalls = 0
-	_, err = executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "decode error", "--scope", "top", "--json")
-	require.NoError(t, err)
-	assert.Zero(t, ftsCalls)
 }
 
 func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {

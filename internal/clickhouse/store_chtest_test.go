@@ -432,8 +432,7 @@ func TestStoreMessageWindowReportsRevisionWithRows(t *testing.T) {
 }
 
 type activityVectorSearcher struct {
-	units []db.UnitRef
-	hits  []db.VectorHit
+	hits []db.VectorHit
 }
 
 func (s *activityVectorSearcher) PrepareSemanticSearch(context.Context, string) (db.VectorSearchPage, int, error) {
@@ -443,16 +442,7 @@ func (s *activityVectorSearcher) PrepareSemanticSearch(context.Context, string) 
 }
 
 func (s *activityVectorSearcher) ResolveMessageUnits(_ context.Context, refs []db.MessageRef) ([]db.UnitRef, error) {
-	out := make([]db.UnitRef, len(refs))
-	for i, ref := range refs {
-		for _, unit := range s.units {
-			if unit.SessionID == ref.SessionID && ref.Ordinal >= unit.OrdinalStart && ref.Ordinal <= unit.OrdinalEnd {
-				out[i] = unit
-				break
-			}
-		}
-	}
-	return out, nil
+	return make([]db.UnitRef, len(refs)), nil
 }
 
 func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {

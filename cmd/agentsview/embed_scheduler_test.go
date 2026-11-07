@@ -2023,7 +2023,7 @@ func TestMessageSchedulerAutomaticBuildSettings(t *testing.T) {
 	}
 }
 
-func TestHybridFallbackPreservesCappedMirrorDuringFirstBuild(t *testing.T) {
+func TestHybridFallbackUsesArchiveRangesDuringFirstBuild(t *testing.T) {
 	cfg := enabledVectorConfig(t)
 	cfg.Vector.Embeddings.MaxInputChars = 32
 	database := dbtest.OpenTestDB(t)
@@ -2048,20 +2048,9 @@ func TestHybridFallbackPreservesCappedMirrorDuringFirstBuild(t *testing.T) {
 	require.Len(t, result.Matches, 2)
 	assert.Equal(t, "hybrid_keyword", result.EffectiveMode)
 	assert.Contains(t, result.Note, "index is building: 0% complete")
-	assert.ElementsMatch(t, [][2]int{{1, 1}, {2, 2}}, [][2]int{result.Matches[0].OrdinalRange, result.Matches[1].OrdinalRange})
+	assert.ElementsMatch(t, [][2]int{{1, 2}, {1, 2}}, [][2]int{result.Matches[0].OrdinalRange, result.Matches[1].OrdinalRange})
 	assert.ElementsMatch(t, []int{1, 2}, []int{result.Matches[0].Ordinal, result.Matches[1].Ordinal})
 	for _, match := range result.Matches {
 		assert.Contains(t, match.Snippet, map[int]string{1: "needle first", 2: "needle second"}[match.Ordinal])
 	}
-	_, err = ix.Build(t.Context(), database, fakePushEncoder(), gen, vector.BuildOptions{})
-	require.NoError(t, err)
-	ready, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "needle", Mode: "hybrid"})
-	require.NoError(t, err)
-	var keywordRanges [][2]int
-	for _, match := range ready.Matches {
-		if strings.Contains(match.Snippet, "needle") {
-			keywordRanges = append(keywordRanges, match.OrdinalRange)
-		}
-	}
-	assert.ElementsMatch(t, [][2]int{{1, 1}, {2, 2}}, keywordRanges)
 }

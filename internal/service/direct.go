@@ -1253,7 +1253,7 @@ func (b *directBackend) SearchContent(
 		filter.KeywordOnly = true
 		page, err = b.db.SearchContent(ctx, filter)
 		effectiveMode = "hybrid_keyword"
-		note = "Search by meaning is unavailable: " + reason + ". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms, keeping scope and other filters."
+		note = "Search by meaning is unavailable: " + reason + ". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
 	}
 	if err != nil {
 		return nil, err

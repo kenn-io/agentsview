@@ -20,4 +20,5 @@ func TestLexicalScope(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertLexicalScope(t, store)
+	dbtest.AssertHybridKeywordOnlyScope(t, store)
 }

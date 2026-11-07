@@ -126,3 +126,33 @@ func AssertLexicalScope(t *testing.T, store db.Store) {
 	_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "scopeanchor", Scope: "bogus"})
 	require.Error(t, err)
 }
+
+// AssertHybridKeywordOnlyScope checks archive scope and citations without a vector index.
+func AssertHybridKeywordOnlyScope(t *testing.T, store db.Store) {
+	t.Helper()
+	for _, tc := range []struct {
+		scope string
+		want  []string
+	}{
+		{"all", []string{"a-child", "b-fork", "c-sidechain", "d-continuation", "e-parent", "f-one-shot"}},
+		{"top", []string{"d-continuation", "e-parent", "f-one-shot"}},
+		{"subordinate", []string{"a-child", "b-fork", "c-sidechain"}},
+	} {
+		t.Run("hybrid_keyword/"+tc.scope, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+				Pattern: "scopeanchor", Mode: "hybrid", KeywordOnly: true, Scope: tc.scope,
+				Project: "lexical-scope", IncludeOneShot: true, Limit: 50,
+			})
+			require.NoError(t, err)
+			var ids []string
+			for _, match := range page.Matches {
+				ids = append(ids, match.SessionID)
+				assert.Equal(t, [2]int{1, 2}, match.OrdinalRange)
+				assert.Equal(t, 1, match.Ordinal)
+				assert.Equal(t, match.SessionID <= "c-sidechain", match.Subordinate)
+			}
+			assert.ElementsMatch(t, tc.want, ids)
+			assert.Zero(t, page.NextCursor)
+		})
+	}
+}

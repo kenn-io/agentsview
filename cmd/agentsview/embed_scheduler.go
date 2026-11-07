@@ -468,8 +468,9 @@ func (a recallSearcherAdapter) SearchRecall(
 		return nil, false, db.RecallVectorSnapshot{}, translateRecallSearchError(err)
 	}
 	if stale {
-		return nil, false, db.RecallVectorSnapshot{}, db.NewSemanticUnavailableError(
-			"recall index is stale: run 'agentsview index embeddings build --store recall'",
+		return nil, false, db.RecallVectorSnapshot{}, fmt.Errorf(
+			"%w: recall index is stale: run 'agentsview index embeddings build --store recall'",
+			db.ErrSemanticUnavailable,
 		)
 	}
 	hits, exhausted, err := a.ix.SearchPage(ctx, a.enc, query, limit)
@@ -632,8 +633,8 @@ func (a searcherAdapter) PrepareSemanticSearch(
 // index's resolver, translating its error taxonomy (notably
 // vector.ErrMirrorVersionMismatch from a version-mismatched read-only
 // vectors.db) the same way PrepareSemanticSearch does. It needs no staleness
-// gate of its own: keyword-only hybrid can resolve mirror units while the
-// first embedding build is still incomplete.
+// gate of its own: the hybrid path always calls PrepareSemanticSearch, which
+// enforces the gate, before resolving FTS hits.
 func (a searcherAdapter) ResolveMessageUnits(
 	ctx context.Context, refs []db.MessageRef,
 ) ([]db.UnitRef, error) {
