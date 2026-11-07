@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"slices"
 	"sort"
 	"strconv"
@@ -16,7 +17,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -84,6 +85,8 @@ type tableSpec struct {
 	name    string
 	columns []columnSpec
 	orderBy []string
+	// partitionBy is the partition key expression, empty for none.
+	partitionBy string
 }
 
 func (t tableSpec) createSQL() string {
@@ -94,7 +97,14 @@ func (t tableSpec) createSQL() string {
 	cols = append(cols, pushVersionCol+" "+tVersion)
 	return "CREATE TABLE IF NOT EXISTS " + t.name + " (\n\t" +
 		strings.Join(cols, ",\n\t") + "\n) ENGINE = ReplacingMergeTree(" +
-		pushVersionCol + ") ORDER BY (" + strings.Join(t.orderBy, ", ") + ")"
+		pushVersionCol + ")" + t.partitionSQL() + " ORDER BY (" + strings.Join(t.orderBy, ", ") + ")"
+}
+
+func (t tableSpec) partitionSQL() string {
+	if t.partitionBy == "" {
+		return ""
+	}
+	return " PARTITION BY " + t.partitionBy
 }
 
 func (t tableSpec) addColumnSQL(c columnSpec) string {
@@ -369,9 +379,10 @@ var mirrorTables = []tableSpec{
 	},
 	{
 		// usage_event_prices holds what Go priced for one distinct set of
-		// normalized usage inputs under one catalog digest. price_key is
+		// normalized usage inputs under one pricing digest. price_key is
 		// computed by chUsagePriceKeySQL, never in Go, so the usage reader's
-		// join matches by construction.
+		// join matches by construction. Each digest is its own partition,
+		// so a push drops a digest no one uses without rewriting the rest.
 		name: "usage_event_prices",
 		columns: []columnSpec{
 			col("pricing_digest", tString),
@@ -385,7 +396,8 @@ var mirrorTables = []tableSpec{
 			col("price_error", tString),
 			col("priced", tInt),
 		},
-		orderBy: []string{"pricing_digest", "price_key"},
+		orderBy:     []string{"pricing_digest", "price_key"},
+		partitionBy: "pricing_digest",
 	},
 	{
 		name: "usage_price_contexts",
@@ -394,7 +406,23 @@ var mirrorTables = []tableSpec{
 			col("context_id", tString),
 			col("context_json", tString),
 		},
-		orderBy: []string{"pricing_digest", "context_id"},
+		orderBy:     []string{"pricing_digest", "context_id"},
+		partitionBy: "pricing_digest",
+	},
+	{
+		// usage_price_models lists the model identities the pricing digest
+		// covers. A push registers a model only after pricing the whole
+		// mirror under the digest that includes it. Until then the model
+		// is pending, which tells the next push to adopt it if this one
+		// stops first.
+		name: "usage_price_models",
+		columns: []columnSpec{
+			col("provider_id", tString),
+			col("model", tString),
+			col("price_model", tString),
+			col("pending", tBool),
+		},
+		orderBy: []string{"provider_id", "model", "price_model"},
 	},
 	{
 		name: "source_project_identity_observations",
@@ -614,6 +642,9 @@ func EnsureSchema(ctx context.Context, t Target) error {
 // EnsureSchemaOn creates missing tables and columns on an open mirror
 // connection and records SchemaVersion.
 func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
+	if err := repartitionCacheTables(ctx, conn); err != nil {
+		return err
+	}
 	existing, err := readColumns(ctx, conn)
 	if err != nil {
 		return err
@@ -648,6 +679,57 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 		schemaVersionKey:     strconv.Itoa(SchemaVersion),
 		sourceDataVersionKey: strconv.Itoa(db.CurrentDataVersion()),
 	})
+}
+
+// repartitionCacheTables drops a partitioned table that an older version
+// created without its partition key, so the loop that follows creates it
+// again. Only the price record tables are partitioned, and they hold
+// nothing a push cannot derive again. Clearing the digest the mirror was
+// priced under makes the next push price the whole mirror.
+func repartitionCacheTables(ctx context.Context, conn *sql.DB) error {
+	keys, err := readPartitionKeys(ctx, conn)
+	if err != nil {
+		return err
+	}
+	dropped := false
+	for _, t := range mirrorTables {
+		key, ok := keys[t.name]
+		if t.partitionBy == "" || !ok || key == t.partitionBy {
+			continue
+		}
+		if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS "+t.name); err != nil {
+			return fmt.Errorf("dropping clickhouse table %s to partition it: %w", t.name, err)
+		}
+		log.Printf("clickhouse schema: recreating %s partitioned by %s", t.name, t.partitionBy)
+		dropped = true
+	}
+	if !dropped {
+		return nil
+	}
+	return writeMetadata(ctx, conn, map[string]string{usagePricedDigestKey: ""})
+}
+
+// readPartitionKeys maps table name to its partition key expression in the
+// current database.
+func readPartitionKeys(ctx context.Context, conn *sql.DB) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx,
+		`SELECT name, partition_key FROM system.tables WHERE database = currentDatabase()`)
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse partition keys: %w", err)
+	}
+	defer rows.Close()
+	keys := map[string]string{}
+	for rows.Next() {
+		var name, key string
+		if err := rows.Scan(&name, &key); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse partition key: %w", err)
+		}
+		keys[name] = key
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating clickhouse partition keys: %w", err)
+	}
+	return keys, nil
 }
 
 // readColumns maps table name to the set of column names in the current

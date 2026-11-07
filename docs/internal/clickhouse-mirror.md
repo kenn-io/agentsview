@@ -182,19 +182,58 @@ ClickHouse. Daily usage queries deduplicate events within the requested window,
 join those prices, and return grouped totals. Request rounding, historical
 rates, token tiers, and provider adjustments still use the Go pricing rules.
 
-Price records are keyed by their normalized inputs and a digest of the shared
-pricing catalog, billing policy, and price format. A catalog change causes the
-next push to price the existing mirror again without re-exporting sessions.
-Unchanged pushes price new session batches and Cursor events. Old pricing
-generations remain available to readers and exporters using them.
+Price records are keyed by their normalized inputs and a pricing digest. The
+digest covers the price format, the provider billing policies, and, for each
+model registered in `usage_price_models`, everything the shared catalog resolves
+that model to at any time (`PricingResolver.DependencyFingerprint`, which the
+SQLite usage cache also uses). Catalog rows no registered model resolves to do
+not count. The mirrored catalog merges what every exporting machine last
+fetched, so unrelated rows change on most pushes. A digest over the whole
+catalog repriced the whole mirror each time, about nine times a day on a mirror
+fed by three machines, and kept every generation.
+
+A push prices the whole mirror when the digest changed, on a full push, and on a
+mirror no pass has covered. Otherwise it prices new session batches and Cursor
+events under the current digest. A usage row whose model the digest does not
+cover is not priced under it, because a catalog that resolves that model
+differently would map to the same digest:
+
+1. The session batch registers the model as pending and leaves its rows to
+   per-request pricing.
+1. When its batches are done, the push prices the whole mirror under the digest
+   that adds every pending model, then registers the models.
+1. Readers derive the digest from the registered models, so they move to the new
+   digest only after its records are complete.
+
+A push that stops between the first two steps leaves the models pending, and the
+next push adopts them before its batches.
+
+**Pruning.** Each digest is its own partition of `usage_event_prices` and
+`usage_price_contexts`. After pricing, every push drops the partitions of
+digests that are not the one it priced under, not the mirror's current digest,
+not the digest `prepared_usage` was built from, and have had nothing written
+under them for 24 hours. Exporters whose catalogs disagree on a priced model, or
+that run an older build, alternate between digests; the window keeps those
+switches from repricing the whole mirror each time. Listing digests reads two
+columns of the price tables (about 0.2 s at 20 million rows), and dropping a
+partition rewrites nothing. Lightweight deletes would write patch parts as large
+as the deleted rows on servers in `lightweight_update` mode.
+
+A push that revives a digest idle for 24 hours while another push drops it can
+lose part of that digest's records, or keep records whose contexts were dropped.
+Reads stay correct. They price rows without a record per request until the next
+whole pass. A read that still finds a record without its context after three
+attempts prices every row per request.
 
 Serve stays read-only. Missing prices and reader-specific custom rates are
 computed for that request using the current pricing rules while push fills the
-shared records. A response never mixes prices from different catalog digests.
+shared records. A response never mixes prices from different pricing digests.
 Copilot authoritative costs retain their per-session selection and allocation.
 
-The first push after the schema upgrade creates and fills the price tables.
-These are derived data; SQLite remains the archive.
+The price tables are derived data; SQLite remains the archive. The schema step
+drops price tables that an older version created without partitions, creates
+them partitioned, and clears the mirror's current digest, so the next push
+prices the mirror again.
 
 ## Activity report reads
 

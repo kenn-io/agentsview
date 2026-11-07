@@ -501,11 +501,12 @@ create tables to finish it.
 If `clickhouse serve` runs with a read-only role, upgrade the machine that
 pushes first, run `agentsview replica clickhouse push` once, then upgrade the
 machines that serve. This release adds the `session_plan_usage` table, which
-holds Codex Cloud plan usage, and a read-only role cannot create it. Until a
-push creates it, an upgraded `clickhouse serve` with that role fails to start
-with "clickhouse mirror schema is missing session_plan_usage". A serve role that
-can create tables adds the table itself at startup, so the order does not matter
-for it.
+holds Codex Cloud plan usage, and the `usage_price_models` table, which lists
+the models stored usage prices cover. A read-only role cannot create them. Until
+a push creates them, an upgraded `clickhouse serve` with that role fails to
+start with "clickhouse mirror schema is missing session_plan_usage". A serve
+role that can create tables adds the tables itself at startup, so the order does
+not matter for it.
 
 #### Required system-table permissions
 
