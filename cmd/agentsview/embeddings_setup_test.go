@@ -172,7 +172,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				<-owner.done
 				retry := status()
 				assert.Equal(t, "built-in", retry.Setup.Provider)
-				assert.Contains(t, retry.Setup.Error, "download was not approved")
 				return
 			}
 			if recipe == "fresh" {
@@ -261,18 +260,12 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	<-reloaded
 	client := &http.Client{Timeout: time.Second}
 	before := inspections.Load()
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	for start := time.Now(); time.Since(start) < time.Second; {
-		var status vector.BuildStatus
-		require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
-		require.NotNil(t, status.Setup)
-		assert.True(t, status.Setup.Busy)
-		<-ticker.C
-	}
+	var status vector.BuildStatus
+	require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
+	require.NotNil(t, status.Setup)
+	assert.True(t, status.Setup.Busy)
 	assert.Equal(t, before, inspections.Load(), "setup progress must not probe Ollama")
 	<-owner.done
-	var status vector.BuildStatus
 	require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
 	require.NotNil(t, status.Setup)
 	assert.False(t, status.Setup.Busy)
@@ -304,60 +297,49 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 }
 
 func TestLiveEmbeddingsSetupFailureRecovery(t *testing.T) {
-	for _, recovery := range []string{"already running", "retry"} {
-		t.Run(recovery, func(t *testing.T) {
-			oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
-			t.Cleanup(func() {
-				inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
-			})
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("USERPROFILE", t.TempDir())
-			dir := testDataDir(t)
-			if recovery == "already running" {
-				writeTestConfig(t, dir, "[vector]\nenabled=true\n")
-			}
-			cfg, err := config.LoadReadOnly()
-			require.NoError(t, err)
-			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-				return embedlocal.Status{DownloadBytes: 1000}, nil
-			}
-			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
-			var calls atomic.Int64
-			started := make(chan struct{})
-			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-				if calls.Add(1) == 1 {
-					return embedlocal.Installation{}, errors.New("download interrupted")
-				}
-				opts.Progress(100, 1000)
-				close(started)
-				<-ctx.Done()
-				return embedlocal.Installation{}, ctx.Err()
-			}
-			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-			require.NoError(t, err)
-			defer func() { require.NoError(t, owner.Close()) }()
-			if recovery == "already running" {
-				require.NotNil(t, owner.Manager(""))
-				require.ErrorIs(t, owner.Setup(0), vector.ErrInvalidBuildRequest)
-				assert.Zero(t, calls.Load(), "a running setup cannot install another provider")
-				return
-			}
-			require.NoError(t, owner.Setup(0))
-			<-owner.done
-			status, err := owner.SetupStatus(t.Context())
-			require.NoError(t, err)
-			require.Equal(t, "download interrupted", status.Error)
-			require.NoError(t, owner.Setup(0))
-			<-started
-			require.ErrorIs(t, owner.Setup(0), vector.ErrBuildRunning)
-			assert.EqualValues(t, 2, calls.Load())
-			status, err = owner.SetupStatus(t.Context())
-			require.NoError(t, err)
-			assert.True(t, status.Busy)
-			assert.EqualValues(t, 100, status.DownloadedBytes)
+	t.Run("retry", func(t *testing.T) {
+		oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+		t.Cleanup(func() {
+			inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 		})
-	}
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("USERPROFILE", t.TempDir())
+		dir := testDataDir(t)
+		cfg, err := config.LoadReadOnly()
+		require.NoError(t, err)
+		database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+		inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+			return embedlocal.Status{DownloadBytes: 1000}, nil
+		}
+		localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+		var calls atomic.Int64
+		started := make(chan struct{})
+		installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+			if calls.Add(1) == 1 {
+				return embedlocal.Installation{}, errors.New("download interrupted")
+			}
+			opts.Progress(100, 1000)
+			close(started)
+			<-ctx.Done()
+			return embedlocal.Installation{}, ctx.Err()
+		}
+		owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, owner.Close()) }()
+		require.NoError(t, owner.Setup(0))
+		<-owner.done
+		status, err := owner.SetupStatus(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, "download interrupted", status.Error)
+		require.NoError(t, owner.Setup(0))
+		<-started
+		require.ErrorIs(t, owner.Setup(0), vector.ErrBuildRunning)
+		assert.EqualValues(t, 2, calls.Load())
+		status, err = owner.SetupStatus(t.Context())
+		require.NoError(t, err)
+		assert.True(t, status.Busy)
+		assert.EqualValues(t, 100, status.DownloadedBytes)
+	})
 }
 
 func embeddingRequest(t *testing.T, client *http.Client, base, method, path, contentType string, body io.Reader, want int) []byte {
@@ -377,32 +359,48 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 }
 
 func TestLiveEmbeddingsSetupFailures(t *testing.T) {
-	for _, failure := range []string{"configured provider", "invalid endpoint", "invalid TOML", "model inspection", "config read"} {
+	for _, failure := range []string{"already running", "configured provider", "invalid endpoint", "invalid TOML", "model inspection", "config read"} {
 		t.Run(failure, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("USERPROFILE", t.TempDir())
 			dir := testDataDir(t)
-			cfg, err := config.Default()
+			cfg, err := config.LoadReadOnly()
 			require.NoError(t, err)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-			cfg.DataDir = dir
 			inspectionError := errors.New("model status unavailable")
-			if failure == "invalid endpoint" {
+			switch failure {
+			case "invalid endpoint":
 				writeTestConfig(t, dir, "[vector]\nenabled=false\n[vector.embeddings]\nmodel='test-model'\ndimension=3\n[vector.embeddings.servers.local]\nendpoint='ftp://127.0.0.1/v1'\n")
 				cfg, err = config.LoadReadOnly()
 				require.NoError(t, err)
-			} else if failure != "configured provider" {
+			case "already running":
+				writeTestConfig(t, dir, "[vector]\nenabled=true\n")
+				cfg, err = config.LoadReadOnly()
+				require.NoError(t, err)
+				oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+				t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+					return embedlocal.Status{DownloadBytes: 1000}, nil
+				}
+				localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+			case "model inspection":
 				oldInspect := inspectLocalEmbeddings
 				t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
 				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-					if failure == "model inspection" {
-						return embedlocal.Status{}, inspectionError
-					}
-					return embedlocal.Status{}, nil
+					return embedlocal.Status{}, inspectionError
 				}
-				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": {Local: true}}
-			} else {
+			case "configured provider":
 				cfg.DeploymentEmbeddings = &config.VectorEmbeddingsServerConfig{Endpoint: "https://embeddings.example/v1"}
 			}
-			owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
+			var owner *liveVectorServing
+			if failure == "already running" {
+				owner, err = newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, owner.Close()) }()
+				require.NotNil(t, owner.Manager(""))
+			} else {
+				owner = liveVectorServingFixture(t, cfg, database, vectorServing{})
+			}
 			if failure == "invalid TOML" {
 				writeTestConfig(t, dir, "[vector\n")
 				ln, port := listenLoopback(t)

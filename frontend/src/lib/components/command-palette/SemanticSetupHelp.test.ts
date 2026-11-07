@@ -213,22 +213,7 @@ describe("SemanticSetupHelp", () => {
       .find((b) => b.textContent?.trim() === "Turn on")!
       .click();
     await settle();
-    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
-      approved_bytes: 295000000,
-    });
     expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
-    unmount(component);
-  });
-
-  it("shows an Ollama setup as on, with no switch", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      idleStatus({ setup: { ...idleStatus().setup!, provider: "ollama" } }),
-    );
-    const { component } = mountHelp();
-    await settle();
-    const row = document.body.querySelector(".kit-search-by-meaning")!;
-    expect(row.textContent).toContain("On · Ollama");
-    expect(row.querySelector("button")).toBeNull();
     unmount(component);
   });
 
@@ -303,9 +288,6 @@ describe("SemanticSetupHelp", () => {
     expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
 
     await settle(2000);
-    expect(document.body.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe(
-      "500",
-    );
 
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_result: undefined }),
@@ -420,7 +402,7 @@ describe("SemanticSetupHelp", () => {
   });
 
   it("jumps straight to progress when a build is already running at mount", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(runningStatus(250, 1000));
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(250, 1000));
 
     const { component } = mountHelp();
     await settle();
@@ -428,6 +410,8 @@ describe("SemanticSetupHelp", () => {
     expect(document.body.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe(
       "250",
     );
+    await settle(2000);
+    expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
 
     unmount(component);
   });

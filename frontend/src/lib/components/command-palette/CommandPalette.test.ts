@@ -753,7 +753,7 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it.each(["turn-on", ""])("shows the keyword footer for the setup action (%s)", async (action) => {
+  it("shows the keyword footer for the setup action", async () => {
     mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
       running: false,
       done: 0,
@@ -761,9 +761,9 @@ describe("CommandPalette", () => {
       eta_milliseconds: 0,
       setup: {
         enabled: true,
-        action,
+        action: "turn-on",
         provider: "built-in",
-        missing_bytes: action === "turn-on" ? 295000000 : 0,
+        missing_bytes: 295000000,
         busy: false,
         installing: false,
       },
@@ -771,9 +771,7 @@ describe("CommandPalette", () => {
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
     for (let i = 0; i < 10; i++) await tick();
-    expect(document.body.textContent?.includes("Search by meaning is off")).toBe(
-      action === "turn-on",
-    );
+    expect(document.body.textContent).toContain("Search by meaning is off");
     await enterSearchQuery("another query");
     for (let i = 0; i < 10; i++) await tick();
     expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);

@@ -714,10 +714,9 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 				wantErr: "ollama_cpu_fallback requires an endpoint ending in /v1",
 			},
 			{
-				name: "Ollama CPU fallback with relative endpoint",
+				name: "relative endpoint",
 				server: map[string]any{
-					"endpoint":            "/v1",
-					"ollama_cpu_fallback": true,
+					"endpoint": "/v1",
 				},
 				wantErr: "[vector.embeddings.servers.local] embed endpoint must use http or https",
 			},

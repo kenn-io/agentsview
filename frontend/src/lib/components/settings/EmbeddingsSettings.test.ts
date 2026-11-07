@@ -95,10 +95,10 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
-  it("approves only the disclosed download when retrying after Ollama stops", async () => {
+  it.each([false, true])("handles Ollama setup with enabled=%s", async (enabled) => {
     const setup = {
-      enabled: false,
-      action: "turn-on",
+      enabled,
+      action: enabled ? "" : "turn-on",
       provider: "ollama",
       missing_bytes: 295000000,
       busy: false,
@@ -111,6 +111,12 @@ describe("EmbeddingsSettings", () => {
     const component = mount(EmbeddingsSettings, { target: document.body });
     try {
       await settle();
+      if (enabled) {
+        const row = document.body.querySelector(".kit-search-by-meaning")!;
+        expect(row.textContent).toContain("On · Ollama");
+        expect(row.querySelector("button")).toBeNull();
+        return;
+      }
       expect(document.body.textContent).toContain("Uses Ollama");
       expect(document.body.textContent).not.toContain("Downloads 295 MB");
       embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
