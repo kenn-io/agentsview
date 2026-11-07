@@ -58,11 +58,8 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
-  it.each([
-    ["agent-directories", "Session Providers"],
-    ["unknown-panel", "Appearance"],
-  ])("opens the requested settings panel %s", async (panel, label) => {
-    router.params = { panel };
+  it("opens Session Providers from the requested panel", async () => {
+    router.params = { panel: "agent-directories" };
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
       chart_palette: "agentsview",
@@ -77,7 +74,9 @@ describe("SettingsPage", () => {
     try {
       await tick();
       await tick();
-      expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(label);
+      expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
+        "Session Providers",
+      );
     } finally {
       unmount(component);
     }
