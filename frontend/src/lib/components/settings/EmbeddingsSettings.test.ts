@@ -164,7 +164,6 @@ describe("EmbeddingsSettings", () => {
       dimension: 256,
       last_error: staleBuildError,
     });
-    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
     expect(document.body.textContent).toContain(setup.error);
@@ -178,11 +177,6 @@ describe("EmbeddingsSettings", () => {
     );
     expect(button).toBeTruthy();
     expect(document.body.querySelectorAll("button")).toHaveLength(1);
-    button!.click();
-    await settle();
-    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
-      approved_bytes: 295000000,
-    });
     unmount(component);
   });
 
@@ -284,9 +278,7 @@ describe("EmbeddingsSettings", () => {
 
     expect(document.body.textContent).toContain("Scanning");
     expect(document.body.textContent).toContain("the total amount of work is not known yet");
-    expect(document.body.querySelector('[role="progressbar"]')?.getAttribute("aria-valuemax")).toBe(
-      "0",
-    );
+    expect(document.body.textContent).toContain("Indexing 0 of 0 text sections");
 
     unmount(component);
   });

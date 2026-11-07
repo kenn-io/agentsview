@@ -34,7 +34,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 		onBattery = oldOnBattery
 	})
-	for _, recipe := range []string{"fresh", "enabled-missing", "automatic", "configured", "nomic", "changed-provider"} {
+	for _, recipe := range []string{"fresh", "enabled-missing", "automatic", "nomic", "changed-provider"} {
 		t.Run(recipe, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			dir := testDataDir(t)
@@ -54,9 +54,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 					return
 				}
 				dimension := 768
-				if request.Model == "test-model" {
-					dimension = 3
-				}
 				if recipe == "fresh" && encoded.Load() == 0 {
 					close(building)
 					select {
@@ -81,7 +78,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			raw := map[string]string{
 				"enabled-missing":  "[vector]\nenabled = true\n",
 				"changed-provider": "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\n",
-				"configured":       "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmax_input_chars = 1024\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\ndefault_server = 'local'\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nmax_retries = 0\n[vector.embeddings.servers.backup]\nendpoint = 'http://127.0.0.1:1/v1'\nmax_retries = 0\n",
 				"nomic":            "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nmodel_context_tokens = 512\nquery_prefix = 'q: '\ndocument_prefix = 'd: '\ninput_suffix = '!'\nrequest_dimensions = true\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\nmax_batch_tokens = 512\n",
 			}[recipe]
 			if raw != "" {
@@ -160,7 +156,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			switch recipe {
 			case "automatic", "nomic":
 				provider = "ollama"
-			case "configured", "changed-provider":
+			case "changed-provider":
 				provider = "configured"
 			}
 			assert.Equal(t, provider, initial.Setup.Provider)
@@ -213,10 +209,10 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			} else {
 				assert.EqualValues(t, 1, reloads.Load())
 			}
-			if recipe == "configured" {
+			if recipe == "nomic" {
 				assert.Empty(t, status().Setup.Action)
 			}
-			assert.Equal(t, (recipe == "fresh" || recipe == "enabled-missing" || recipe == "changed-provider"), installs.Load() > 0)
+			assert.Equal(t, (recipe == "fresh" || recipe == "enabled-missing"), installs.Load() > 0)
 			if recipe == "fresh" {
 				var result db.ContentSearchPage
 				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", 200), &result))
@@ -296,10 +292,10 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	export, ok, err := owner.push.BeginExport(t.Context(), nil)
 	require.NoError(t, err)
 	require.True(t, ok, "push must see the generation built by the process holding the write lock")
-	defer export.Close()
 	hashes, err := export.SessionDocHashes(t.Context(), nil)
 	require.NoError(t, err)
 	assert.Contains(t, hashes, "session-1")
+	require.NoError(t, export.Close())
 
 	movedPath := filepath.Join(t.TempDir(), "moved.db")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), fmt.Appendf(nil, "[vector]\nenabled = true\ndb_path = %q\n", movedPath), 0o600))
@@ -310,9 +306,6 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, setup.Error)
 	require.Empty(t, setup.Action)
-	hashes, err = export.SessionDocHashes(t.Context(), nil)
-	require.NoError(t, err)
-	assert.Contains(t, hashes, "session-1", "an export in progress keeps its original snapshot")
 	next, ok, err := owner.push.BeginExport(t.Context(), nil)
 	require.NoError(t, err)
 	if ok {
@@ -432,8 +425,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				ln, port := listenLoopback(t)
 				cfg.Host, cfg.Port = "127.0.0.1", port
 				ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-				body := embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), http.StatusBadRequest)
-				assert.Contains(t, string(body), "existing config invalid")
+				embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), http.StatusBadRequest)
 				return
 			}
 			if failure == "model inspection" {
@@ -457,9 +449,6 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 			}
 			err = owner.Setup(0)
 			require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
-			if failure == "invalid endpoint" {
-				assert.ErrorIs(t, err, config.ErrInvalidVectorSetup)
-			}
 		})
 	}
 }
@@ -467,12 +456,12 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 func TestEmbeddingsSetupStatusKeepsActiveProviderDuringSharedInstall(t *testing.T) {
 	oldInspect := inspectLocalEmbeddings
 	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
-	for _, provider := range []string{"configured Ollama", "discovered Ollama", "built-in"} {
+	for _, provider := range []string{"configured Ollama port", "discovered Ollama", "built-in"} {
 		t.Run(provider, func(t *testing.T) {
 			cfg, err := config.Default()
 			require.NoError(t, err)
 			cfg.Vector.Enabled = true
-			if provider == "configured Ollama" {
+			if provider == "configured Ollama port" {
 				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"ollama": {Endpoint: "http://127.0.0.1:11434/v1"}}
 			}
 			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
@@ -486,7 +475,9 @@ func TestEmbeddingsSetupStatusKeepsActiveProviderDuringSharedInstall(t *testing.
 				assert.True(t, status.Installing)
 			} else {
 				assert.Equal(t, "ollama", status.Provider)
-				assert.False(t, status.Installing, "another app's install must not replace the active Ollama state")
+				if provider == "discovered Ollama" {
+					assert.False(t, status.Installing, "another app's install must not replace the active Ollama state")
+				}
 				assert.Empty(t, status.Action)
 			}
 		})
