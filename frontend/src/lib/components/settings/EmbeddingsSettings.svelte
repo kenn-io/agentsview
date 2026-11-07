@@ -190,7 +190,7 @@
   {:else if status && status.setup?.enabled !== false && status.setup?.action !== "turn-on" && !status.setup?.busy}
     {#if running}
       {#if phase === "scanning" || status.total <= 0}
-        <p class="muted" aria-live="polite">
+        <p class="muted scanning-hint" aria-live="polite">
           {m.settings_embeddings_scanning_hint()}
         </p>
       {:else if (estimateReady && ratePerSecond !== null) || elapsedMs !== null}
@@ -337,6 +337,11 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+
+  .progress-block:not(:first-child),
+  .scanning-hint:not(:first-child) {
+    margin-top: calc(var(--space-3) - var(--space-5));
   }
 
   .progress-stats {
