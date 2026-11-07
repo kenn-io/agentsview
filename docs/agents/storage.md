@@ -1086,6 +1086,9 @@ column and must join the events table to recover the text.
 - Replace whole sessions during incremental updates and gate them with
   per-session fingerprints. Do not add per-table, per-column, or diff-based
   updates.
+- When readers hold the mirror, catch up and swap a reusable standby using
+  its own cursors. Bootstrap it from the main file and WAL, retry while it
+  is held, and discard it after a full rebuild.
 - Keep Quack read-only. `duckdb push` writes the local mirror; it never writes
   to a remote DuckDB service.
 - Replace a file only after identifying it as an agentsview DuckDB mirror. Fail

@@ -242,7 +242,8 @@ func Push(
 			return result, err
 		}
 		if lock == nil {
-			if err := claim(false); err != nil {
+			lock, _, _, err = claimRebuild(ctx, path, run, false)
+			if err != nil {
 				return rebuildClaimFailed(path, opts, err)
 			}
 		}

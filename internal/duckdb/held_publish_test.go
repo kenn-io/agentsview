@@ -5,6 +5,7 @@ package duckdb
 import (
 	"database/sql"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -236,6 +237,56 @@ func TestPushHeldSpareRetriesAfterReaderReleases(t *testing.T) {
 	require.NoError(t, heldSpare.Close())
 	_, err = Push(ctx, path, local, "m", opts, false, nil)
 	require.NoError(t, err)
+	require.NoError(t, held.Close())
+	assertMirrorMessageCount(t, path, "sess-1", 3)
+}
+
+func TestPushHeldSpareRetiresWALBeforeReplacingMain(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	ctx := t.Context()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	appendFrustrationPrompt(t, local, "sess-1")
+	probe, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	s := newTestSync(t, path, local, storage.MirrorPushOptions{})
+	s.machine = "m"
+	s.maintenance = &checkpointSpy{}
+	_, err = s.runIncrementalPush(ctx, storage.MirrorPushOptions{}, probe, nil)
+	require.NoError(t, err)
+	main, err := os.ReadFile(path)
+	require.NoError(t, err)
+	wal, err := os.ReadFile(path + ".wal")
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+	require.NoError(t, os.WriteFile(path, main, 0o600))
+	require.NoError(t, os.WriteFile(path+".wal", wal, 0o600))
+	held, err := OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, held.Close()) })
+
+	// Leave the work directory writable, but prevent retiring the live WAL.
+	// Linking the old main into the work directory can still succeed.
+	dir := filepath.Dir(path)
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	defer func() { require.NoError(t, os.Chmod(dir, info.Mode().Perm())) }()
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
+	require.ErrorIs(t, err, os.ErrPermission)
+	var renameErr *os.LinkError
+	require.ErrorAs(t, err, &renameErr)
+	assert.Equal(t, path+".wal", renameErr.Old, "WAL retirement must fail before installing the new main")
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, main, after)
+	afterWAL, err := os.ReadFile(path + ".wal")
+	require.NoError(t, err)
+	assert.Equal(t, wal, afterWAL)
 	require.NoError(t, held.Close())
 	assertMirrorMessageCount(t, path, "sess-1", 3)
 }

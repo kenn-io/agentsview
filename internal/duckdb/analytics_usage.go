@@ -203,6 +203,9 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db
 	return readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
 }
 
+// Mirror replacements preserve the memo generation; fingerprints version entries.
+const frustrationMemoGeneration uint64 = 0
+
 func (s *Store) duckPopulateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
@@ -217,7 +220,7 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	args := make([]any, 0, len(rows))
 	for i := range rows {
 		if version := versions[rows[i].ID]; cache && version != "" {
-			if count, ok := s.frustrationMemo.Lookup(0, rows[i].ID, version); ok {
+			if count, ok := s.frustrationMemo.Lookup(frustrationMemoGeneration, rows[i].ID, version); ok {
 				rows[i].FrustrationMarkerCount = count
 				continue
 			}
@@ -260,7 +263,7 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	if cache {
 		for id, i := range idx {
 			if version := versions[id]; version != "" {
-				s.frustrationMemo.Store(0, id, version, rows[i].FrustrationMarkerCount)
+				s.frustrationMemo.Store(frustrationMemoGeneration, id, version, rows[i].FrustrationMarkerCount)
 			}
 		}
 	}
