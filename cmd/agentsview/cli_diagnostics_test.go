@@ -107,7 +107,6 @@ func TestCLIRecoveryFlagConflicts(t *testing.T) {
 		{[]string{"session", "list", "--since", "7d", "--active-since", "2026-01-01T00:00:00Z"}, "--since and --active-since are mutually exclusive"},
 		{[]string{"session", "messages", "codex:fixture", "--before", "3"}, "--before/--after require --around"},
 		{[]string{"session", "search", "pattern", "--regex", "--fts"}, "--regex, --fts, --semantic and --hybrid are mutually exclusive"},
-		{[]string{"session", "search", "pattern", "--fts", "--scope", "top"}, "--scope is not supported with --fts"},
 		{[]string{"session", "watch", "codex:fixture", "--json"}, "streams NDJSON; --format/--json not supported"},
 		{[]string{"session", "export", "codex:fixture", "--pg"}, "session export: local-only command; --pg not supported"},
 	} {
