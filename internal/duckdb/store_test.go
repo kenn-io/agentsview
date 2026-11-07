@@ -3809,6 +3809,11 @@ func TestPushAccountUsagePreservesAgentsAndReportedCost(t *testing.T) {
 	assert.Empty(t, storedModel, "model normalization must not rewrite the source row")
 
 	store := NewStoreFromDB(syncer.DB())
+	stats, err := store.GetStats(ctx, false, false)
+	require.NoError(t, err)
+	assert.Nil(t, stats.EarliestSession)
+	require.NotNil(t, stats.EarliestAccountUsage)
+	assert.Equal(t, "2026-05-14T02:30:00Z", *stats.EarliestAccountUsage)
 	for _, tc := range []struct {
 		name   string
 		filter db.UsageFilter

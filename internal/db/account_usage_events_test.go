@@ -24,6 +24,11 @@ func TestAccountUsageEventsKeepAgentsDatesAndReportedZero(t *testing.T) {
 	stored, err := d.GetCursorUsageEvents(ctx, 0)
 	require.NoError(t, err)
 	require.Len(t, stored, 3, "reimport must not duplicate billing items")
+	stats, err := d.GetStats(ctx, false, false)
+	require.NoError(t, err)
+	assert.Nil(t, stats.EarliestSession)
+	require.NotNil(t, stats.EarliestAccountUsage)
+	assert.Equal(t, "2026-11-04T13:00:00Z", *stats.EarliestAccountUsage)
 	for _, tc := range []struct {
 		agent                    string
 		input, output, cacheRead int

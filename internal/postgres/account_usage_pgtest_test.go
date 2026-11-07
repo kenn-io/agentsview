@@ -35,6 +35,10 @@ func TestAccountUsageAgentsPostgresParity(t *testing.T) {
 	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
+	stats, err := remote.GetStats(t.Context(), false, false)
+	require.NoError(t, err)
+	require.NotNil(t, stats.EarliestAccountUsage)
+	assert.Equal(t, "2026-08-12T13:00:00Z", *stats.EarliestAccountUsage)
 
 	for _, tc := range []struct {
 		name, agent, excludeAgent, model, excludeModel string

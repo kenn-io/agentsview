@@ -199,19 +199,24 @@ func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated b
 			toInt64(COALESCE(SUM(message_count), 0)),
 			toInt64(COUNT(DISTINCT project)),
 			toInt64(COUNT(DISTINCT machine)),
-			MIN(COALESCE(started_at, created_at))
+			MIN(COALESCE(started_at, created_at)),
+			(SELECT MIN(occurred_at) FROM cursor_usage_events)
 		FROM sessions
 		WHERE ` + rootSessionWhere(excludeOneShot, excludeAutomated)
 	var stats db.Stats
 	var earliest any
+	var earliestAccount any
 	if err := s.queryRowContext(ctx, query).Scan(
 		&stats.SessionCount, &stats.MessageCount,
-		&stats.ProjectCount, &stats.MachineCount, &earliest,
+		&stats.ProjectCount, &stats.MachineCount, &earliest, &earliestAccount,
 	); err != nil {
 		return db.Stats{}, fmt.Errorf("fetching clickhouse stats: %w", err)
 	}
 	if v := formatDBTime(earliest); v != "" {
 		stats.EarliestSession = &v
+	}
+	if v := formatDBTime(earliestAccount); v != "" {
+		stats.EarliestAccountUsage = &v
 	}
 	return stats, nil
 }

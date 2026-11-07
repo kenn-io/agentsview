@@ -169,6 +169,8 @@ archive. Reimporting overlapping exports skips existing `Billing Item ID`
 values. It accepts `grok-build`, `grok-bot`, and `cursor` products, which appear
 under the `grok`, `grok-bot`, and `cursor` agents. Their events contribute to the
 Usage dashboard and daily reports, and follow the usual mirror push paths.
+The Agent filter includes billing-only products. The All range starts at the
+earliest session or billing event, including archives with no local sessions.
 
 Prompt, completion, cached prompt, and cache-write counters stay separate.
 Billing counters may aggregate many requests and have no per-request token cap.

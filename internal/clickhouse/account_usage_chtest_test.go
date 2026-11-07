@@ -74,6 +74,11 @@ func TestAccountUsagePushKeepsAgentsUnknownModelsAndReportedCosts(t *testing.T) 
 	assert.Equal(t, 3, chtest.Count(t, store.conn, "cursor_usage_events", ""))
 	assert.Equal(t, 2, chtest.Count(t, store.conn, "cursor_usage_events", "model = ''"))
 	assert.Zero(t, chtest.Count(t, store.conn, "sessions", ""))
+	stats, err := store.GetStats(t.Context(), false, false)
+	require.NoError(t, err)
+	assert.Nil(t, stats.EarliestSession)
+	require.NotNil(t, stats.EarliestAccountUsage)
+	assert.Equal(t, "2026-11-04T13:00:00Z", *stats.EarliestAccountUsage)
 
 	for _, tc := range []struct {
 		name                       string
