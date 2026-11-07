@@ -79,6 +79,7 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	s.runtimeState().pricingMu.Lock()
 	defer s.runtimeState().pricingMu.Unlock()
 	s.runtimeState().customPricing = p
+	s.runtimeState().pricingGeneration++
 	s.forgetPricingLoad()
 }
 

@@ -12,15 +12,8 @@ import (
 // as plan-only and the sessions it undercounts as partly captured, with
 // the same rules as the SQLite query (db.GetPlanUsageSessionCounts).
 func (s *Store) GetPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (db.PlanUsageSessionCounts, error) {
-	tally, err := s.planUsage.Do(ctx, db.UsageSlot(f, false), s.keptVersion(), func(ctx context.Context) (*db.PlanUsageCountSummary, error) {
-		raw := f
-		raw.ModelAliases = nil
-		return s.readPlanUsageSessionCounts(ctx, raw)
-	})
-	if err != nil {
-		return db.PlanUsageSessionCounts{}, err
-	}
-	return tally.CountsFor(f.ModelAliases), nil
+	slot := db.UsageSlot(f, false)
+	return db.PlanUsageCounts(ctx, &s.planUsage, slot, s.keptVersion(), f, s.readPlanUsageSessionCounts)
 }
 
 func (s *Store) readPlanUsageSessionCounts(

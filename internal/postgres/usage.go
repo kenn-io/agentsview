@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1561,6 +1562,18 @@ func (s *Store) querySessionUsageRows(
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
+	slot := db.UsageSlot(f, true)
+	version := s.keptUsageVersion(ctx, slot)
+	if version == "" {
+		return s.readDailyUsage(ctx, f)
+	}
+	return db.DailyUsage(ctx, &s.runtimeState().dailyUsage, slot, version, f, func(ctx context.Context, full db.UsageFilter) (db.DailyUsageResult, error) {
+		s.forgetPricingLoad()
+		return s.readDailyUsage(ctx, full)
+	})
+}
+
+func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
 	loc := f.Location()
 
 	pricing, err := s.loadPricingMap(ctx)
@@ -2150,7 +2163,56 @@ func (s *Store) GetTopSessionsByCost(
 	if limit > 100 {
 		limit = 100
 	}
+	slot := db.UsageSlot(f, false)
+	if slot != "" {
+		slot += fmt.Sprintf("|%t", f.TopSessionsByGroup)
+	}
+	version := s.keptUsageVersion(ctx, slot)
+	out, err := s.runtimeState().topUsage.Do(ctx, slot, version, func(ctx context.Context) ([]db.TopSessionEntry, error) {
+		if slot != "" && version != "" {
+			s.forgetPricingLoad()
+		}
+		return s.readTopSessions(ctx, f)
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := slices.Clone(out)
+	if f.TopSessionsByGroup {
+		result, err = db.GroupTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		result = db.SortAndLimitTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	}
 
+	sessionIDs := make([]string, 0, len(result))
+	for _, entry := range result {
+		if entry.SessionID != "" {
+			sessionIDs = append(sessionIDs, entry.SessionID)
+		}
+	}
+	metadata, err := s.loadPGTopSessionMetadata(ctx, sessionIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range result {
+		if meta, ok := metadata[result[i].SessionID]; ok {
+			result[i].DisplayName = meta.displayName
+			result[i].Agent = meta.agent
+			result[i].Project = meta.project
+			result[i].StartedAt = meta.startedAt
+			result[i].Machine = meta.machine
+			result[i].GroupKey = meta.groupKey
+			result[i].SessionName = meta.sessionName
+		}
+	}
+
+	return result, nil
+}
+
+func (s *Store) readTopSessions(ctx context.Context, f db.UsageFilter) ([]db.TopSessionEntry, error) {
 	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading pg pricing: %w", err)
@@ -2263,37 +2325,6 @@ func (s *Store) GetTopSessionsByCost(
 				return sa.cost
 			}(),
 		})
-	}
-
-	if f.TopSessionsByGroup {
-		result, err = db.GroupTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		result = db.SortAndLimitTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
-	}
-
-	sessionIDs := make([]string, 0, len(result))
-	for _, entry := range result {
-		if entry.SessionID != "" {
-			sessionIDs = append(sessionIDs, entry.SessionID)
-		}
-	}
-	metadata, err := s.loadPGTopSessionMetadata(ctx, sessionIDs)
-	if err != nil {
-		return nil, err
-	}
-	for i := range result {
-		if meta, ok := metadata[result[i].SessionID]; ok {
-			result[i].DisplayName = meta.displayName
-			result[i].Agent = meta.agent
-			result[i].Project = meta.project
-			result[i].StartedAt = meta.startedAt
-			result[i].Machine = meta.machine
-			result[i].GroupKey = meta.groupKey
-			result[i].SessionName = meta.sessionName
-		}
 	}
 
 	return result, nil

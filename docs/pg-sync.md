@@ -19,12 +19,17 @@ writes. In addition to normal table access, installation requires `CREATE` on
 the schema and `TRIGGER` on the watched tables. Installation takes a
 `SHARE ROW EXCLUSIVE` lock on those tables until it commits: reads continue, and
 writes wait. CockroachDB skips this journal.
-`pg serve` roles granted access after installation also need `SELECT` on
-`usage_session_changes`.
+Activity reuse needs `SELECT` on `usage_session_changes` for `pg serve`
+roles given access later.
 
 On `pg serve`, ended Activity ranges are reused in memory until a push touches
 their sessions or range, pricing changes, or project identity changes.
 Hosted PostgreSQL and archives without the journal rebuild every time.
+
+`pg serve` keeps finished Usage results in memory, up to 64 selections and
+64 MiB per read kind, until the journal revision or custom pricing changes.
+Hosted PostgreSQL, archives without the journal, and filters that compare against
+the current time read every time.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes

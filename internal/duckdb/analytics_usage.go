@@ -1346,16 +1346,7 @@ func (s *Store) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUs
 	if slot == "" {
 		return s.readDailyUsage(ctx, f)
 	}
-	result, err := s.dailyUsage.Do(ctx, slot, version, func(ctx context.Context) (db.DailyUsageResult, error) {
-		full := f
-		full.SkipSessionCounts = false
-		return s.readDailyUsage(ctx, full)
-	})
-	result = result.Clone()
-	if f.SkipSessionCounts {
-		result.SessionCounts = db.UsageSessionCounts{}
-	}
-	return result, err
+	return db.DailyUsage(ctx, &s.dailyUsage, slot, version, f, s.readDailyUsage)
 }
 
 func (s *Store) readDailyUsage(

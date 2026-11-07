@@ -101,13 +101,7 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 	}
 	return &Store{
 		path: path, duck: conn, fileInfo: info, walStamp: walStamp,
-		topUsage: kept.Reads[[]db.TopSessionEntry]{Size: func(entries []db.TopSessionEntry) int64 {
-			var n int64
-			for _, entry := range entries {
-				n += db.TopSessionBytes(entry)
-			}
-			return n
-		}},
+		topUsage: kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
 	}, nil
 }
 

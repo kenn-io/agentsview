@@ -52,10 +52,14 @@ type storeRuntime struct {
 	// write friction_issue_links.
 	frictionIssueLinksWritable atomic.Bool
 
-	pricingMu     sync.Mutex
-	pricingLoadMu sync.Mutex
-	pricingLoad   *pricingLoad
-	customPricing map[string]config.CustomModelRate
+	pricingMu         sync.Mutex
+	pricingLoadMu     sync.Mutex
+	pricingLoad       *pricingLoad
+	customPricing     map[string]config.CustomModelRate
+	pricingGeneration uint64
+	dailyUsage        kept.Reads[db.DailyUsageResult]
+	planUsage         kept.Reads[*db.PlanUsageCountSummary]
+	topUsage          kept.Reads[[]db.TopSessionEntry]
 
 	// vectorMu guards the semantic-search seam. vectorSearcher is the PG
 	// vector searcher wired at pg serve startup when a generation matches

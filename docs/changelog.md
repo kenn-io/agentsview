@@ -227,6 +227,10 @@ The latest release is
   parent links when counting roots and loading child trees, including pages
   filtered by labels or pull requests.
 
+- On `pg serve`, reopening Usage between pushes and loading the Pairwise ranking
+  after Summary reuse finished results instead of repricing every usage event.
+  The next push or custom pricing change rebuilds them.
+
 - The Recall corpus pane uses the shared page header for its title, description,
   entry count, and refresh control. The title stays a second-level heading under
   the Recall page title.
