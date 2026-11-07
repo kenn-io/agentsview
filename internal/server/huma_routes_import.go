@@ -150,8 +150,8 @@ type claudeAISyncResult struct {
 func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
 	return s.syncBrowser(ctx, in.Browser == "chrome", browserSyncConfig{
 		platform: chromehost.ClaudeAI, sync: func(ctx context.Context, store importer.BrowserSyncStore, fetch func(context.Context, string) (importer.ClaudeAIResponse, error), cb *importer.ImportCallbacks, machine ...string) (importer.ImportStats, error) {
- return importer.SyncClaudeAI(ctx, store, fetch, s.cfg.ClaudeAI.Organizations, cb, machine...)
- }, authError: importer.ErrClaudeAIAuthRequired, label: "Claude.ai", desktopResults: results,
+			return importer.SyncClaudeAI(ctx, store, fetch, s.cfg.ClaudeAI.Organizations, cb, machine...)
+		}, authError: importer.ErrClaudeAIAuthRequired, label: "Claude.ai", desktopResults: results,
 		hostRequired: "claude_ai_chrome_host_required", running: "claude_ai_sync_running",
 		authRequired: "claude_ai_auth_required", updateRequired: "claude_ai_chrome_host_update_required",
 	})
