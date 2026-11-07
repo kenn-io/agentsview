@@ -156,7 +156,14 @@ describe("EmbeddingsSettings", () => {
       downloaded_bytes: 0,
       total_bytes: 0,
     };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    const staleBuildError = "local embeddings: approve the download in Settings > Embeddings";
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+      running: false,
+      setup,
+      model: "test-embed-model",
+      dimension: 256,
+      last_error: staleBuildError,
+    });
     embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(
       new ApiError(501, "semantic search is disabled"),
     );
@@ -164,6 +171,11 @@ describe("EmbeddingsSettings", () => {
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
     expect(document.body.textContent).toContain(setup.error);
+    expect(embeddingsService.getApiV1EmbeddingsGenerations).not.toHaveBeenCalled();
+    expect.soft(document.body.textContent).not.toContain("No embedding generations exist yet.");
+    expect.soft(document.body.textContent).not.toContain(staleBuildError);
+    expect.soft(document.body.textContent).not.toContain("test-embed-model");
+    expect.soft(document.body.textContent).not.toContain("Dimensions");
     const calls = embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
     await settle(60_000);
     expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBeGreaterThan(calls);
