@@ -4116,10 +4116,10 @@ func (c *Config) SaveVectorSetup() error {
 
 func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 	existing, err := c.readConfigMap()
-	if _, ok := errors.AsType[toml.ParseError](err); ok {
-		err = invalidVectorSetupError{err}
-	}
 	if err != nil {
+		if _, ok := errors.AsType[toml.ParseError](err); ok {
+			err = invalidVectorSetupError{err}
+		}
 		return nil, Config{}, err
 	}
 	section, _ := existing["vector"].(map[string]any)

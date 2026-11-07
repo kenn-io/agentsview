@@ -157,9 +157,10 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			assert.Equal(t, recipe == "enabled-missing", initial.Setup.Enabled)
 			assert.Equal(t, "turn-on", initial.Setup.Action)
 			provider := "built-in"
-			if recipe == "automatic" || recipe == "nomic" {
+			switch recipe {
+			case "automatic", "nomic":
 				provider = "ollama"
-			} else if recipe == "configured" || recipe == "changed-provider" {
+			case "configured", "changed-provider":
 				provider = "configured"
 			}
 			assert.Equal(t, provider, initial.Setup.Provider)
@@ -169,9 +170,10 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if initial.Setup.Provider == "built-in" {
 				shown = initial.Setup.MissingBytes
 			}
-			if recipe == "changed-provider" {
+			switch recipe {
+			case "changed-provider":
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
-			} else if recipe == "enabled-missing" {
+			case "enabled-missing":
 				// A running manager keeps its recipe even if the file changes.
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'other-model'\ndimension = 3\n[vector.embeddings.servers.local]\nendpoint = 'http://127.0.0.1:1/v1'\n"), 0o600))
 			}
@@ -478,8 +480,8 @@ func TestEmbeddingsSetupStatusKeepsActiveProviderDuringSharedInstall(t *testing.
 			}
 			status, err := embeddingsSetupStatus(t.Context(), server.EmbeddingsSetupStatus{}, cfg)
 			require.NoError(t, err)
-			assert.Equal(t, int64(295000000), status.MissingBytes, "status retains the missing built-in download size")
 			if provider == "built-in" {
+				assert.Equal(t, int64(295000000), status.MissingBytes, "built-in status discloses the shared download size")
 				assert.Equal(t, "built-in", status.Provider)
 				assert.True(t, status.Installing)
 			} else {

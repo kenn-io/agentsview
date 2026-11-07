@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 
@@ -409,7 +408,7 @@ func TestVectorPushSourceConcurrentSetupReloadSnapshot(t *testing.T) {
 				return
 			}
 			if !ok {
-				firstErr = fmt.Errorf("active index disappeared")
+				firstErr = errors.New("active index disappeared")
 				return
 			}
 			if _, err := exp.SessionDocHashes(t.Context(), nil); err != nil {
