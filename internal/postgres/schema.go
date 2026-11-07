@@ -1036,7 +1036,7 @@ func lockSyncMetadataRow(ctx context.Context, tx *sql.Tx, key string) error {
 	return nil
 }
 
-func accountUsageTokensWidePG(ctx context.Context, db *sql.DB) bool {
+func accountUsageTokensWidePG(ctx context.Context, db pgProjectIdentityExecer) bool {
 	var wide bool
 	err := db.QueryRowContext(ctx, `
 		SELECT COUNT(*) = 4 FROM information_schema.columns
@@ -1046,6 +1046,20 @@ func accountUsageTokensWidePG(ctx context.Context, db *sql.DB) bool {
 		                      'cache_write_tokens', 'cache_read_tokens')
 		  AND data_type = 'bigint'`).Scan(&wide)
 	return err == nil && wide
+}
+
+func migrateAccountUsageCountersPG(ctx context.Context, db pgProjectIdentityExecer) error {
+	if accountUsageTokensWidePG(ctx, db) {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE cursor_usage_events
+		ALTER COLUMN input_tokens TYPE BIGINT,
+		ALTER COLUMN output_tokens TYPE BIGINT,
+		ALTER COLUMN cache_write_tokens TYPE BIGINT,
+		ALTER COLUMN cache_read_tokens TYPE BIGINT`); err != nil {
+		return fmt.Errorf("widening PG account usage counters: %w", err)
+	}
+	return nil
 }
 
 // EnsureSchema creates the schema (if needed), then runs
@@ -1119,14 +1133,8 @@ func EnsureSchema(
 	if err := migrateMoneyColumnsPG(ctx, db, existingColumns); err != nil {
 		return err
 	}
-	if !accountUsageTokensWidePG(ctx, db) {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE cursor_usage_events
-			ALTER COLUMN input_tokens TYPE BIGINT,
-			ALTER COLUMN output_tokens TYPE BIGINT,
-			ALTER COLUMN cache_write_tokens TYPE BIGINT,
-			ALTER COLUMN cache_read_tokens TYPE BIGINT`); err != nil {
-			return fmt.Errorf("widening PG account usage counters: %w", err)
-		}
+	if err := migrateAccountUsageCountersPG(ctx, db); err != nil {
+		return err
 	}
 	step = time.Now()
 	tokenCoverageColumnsAdded := false

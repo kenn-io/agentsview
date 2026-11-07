@@ -145,3 +145,45 @@ func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 		[]int64{input, output, cacheWrite, cacheRead})
 	assert.True(t, pushSchemaCurrent(t.Context(), store.DB()))
 }
+
+func TestHostedTenantUpgradePreservesAccountUsage(t *testing.T) {
+	f := newHostedFixture(t, "tenant-a")
+	_, err := f.runtime.ExecContext(t.Context(), `
+		INSERT INTO cursor_usage_events (occurred_at, model, input_tokens,
+			charged_microdollars, dedup_key)
+		VALUES ('2026-08-12T13:00:00Z', '', 12, 30000, 'cursor:legacy')`)
+	require.NoError(t, err)
+	_, err = f.admin.ExecContext(t.Context(), `ALTER TABLE cursor_usage_events
+		DROP COLUMN agent,
+		ALTER COLUMN input_tokens TYPE INT,
+		ALTER COLUMN output_tokens TYPE INT,
+		ALTER COLUMN cache_write_tokens TYPE INT,
+		ALTER COLUMN cache_read_tokens TYPE INT`)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+	filter := db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"}
+	got, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 12, got.Totals.InputTokens)
+	assert.Equal(t, money.MustParseDollars("0.03"), got.Totals.TotalCost)
+
+	_, err = f.runtime.ExecContext(t.Context(), `
+		INSERT INTO cursor_usage_events (agent, occurred_at, model, input_tokens,
+			output_tokens, cache_write_tokens, cache_read_tokens, dedup_key)
+		VALUES ('grok', '2026-08-12T13:00:00Z', '', 3000000001,
+			3000000002, 3000000003, 3000000004, 'xai:aggregate')`)
+	require.NoError(t, err)
+	filter.Agent = "grok"
+	got, err = store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 3_000_000_001, got.Totals.InputTokens)
+	assert.Equal(t, 3_000_000_002, got.Totals.OutputTokens)
+	assert.Equal(t, 3_000_000_003, got.Totals.CacheCreationTokens)
+	assert.Equal(t, 3_000_000_004, got.Totals.CacheReadTokens)
+	assert.Zero(t, got.Totals.TotalCost.Microdollars)
+}
