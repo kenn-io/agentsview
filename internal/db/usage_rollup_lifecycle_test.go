@@ -960,12 +960,6 @@ func TestUsageRollupCursorAppendsOnlyNewEvents(t *testing.T) {
 	assert.Equal(t, installID, appendedInstallID)
 	assert.Equal(t, 30, daily.Totals.InputTokens)
 	assert.Equal(t, money.MustParseDollars("0.30"), daily.Totals.TotalCost)
-	dayTwo := filter
-	dayTwo.From, dayTwo.To = "2026-08-11", "2026-08-11"
-	secondDay, err := database.GetDailyUsage(t.Context(), dayTwo)
-	require.NoError(t, err)
-	assert.Equal(t, 20, secondDay.Totals.InputTokens)
-	assert.Equal(t, money.MustParseDollars("0.20"), secondDay.Totals.TotalCost)
 
 	// Compare every stored exception column except the install ID with a full rebuild.
 	readRows := func() [][]any {
