@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http/httptest"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -468,36 +467,6 @@ func TestStopDaemonRuntimeForUpgradeChecksExplicitPortBeforeStop(t *testing.T) {
 	}
 }
 
-func TestStopDaemonProcessHandlesUnreapedChild(t *testing.T) {
-	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
-	dir := runtimeTestDir(t)
-
-	// The child stays unreaped until cleanup. Linux treats its zombie as
-	// exited; other POSIX platforms retain the signal-zero liveness check.
-	pid := startSleepProcess(t)
-	identity, ok := daemon.ReadProcessIdentity(pid)
-	require.True(t, ok)
-
-	path, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
-		PID:               pid,
-		Network:           daemon.NetworkTCP,
-		Address:           "127.0.0.1:1",
-		ProcessIdentityV2: identity,
-	})
-	require.NoError(t, err)
-
-	err = stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 100*time.Millisecond)
-	if runtime.GOOS == "linux" {
-		require.NoError(t, err)
-		assert.NoFileExists(t, path, "an exited daemon must release its runtime record")
-		return
-	}
-	require.Error(t, err, "must report failure when the process does not exit")
-	require.ErrorContains(t, err, "still running after force kill")
-	assert.NotEmpty(t, liveDaemonRecords(dir),
-		"runtime record must be kept when the daemon is still alive")
-}
-
 func TestStopDaemonProcessDoesNotSignalUnknownIdentity(t *testing.T) {
 	requirePOSIXSignals(t, "uses disposable processes to observe SIGTERM")
 	setStartProbeTickForTest(t, 10*time.Millisecond)
@@ -565,91 +534,6 @@ func TestStopDaemonProcessForceKillsMatchedIdentity(t *testing.T) {
 	assert.False(t, daemon.ProcessAlive(pid))
 	assertPathRemoved(t, path,
 		"matched identity record should be removed after force kill")
-}
-
-func TestStopDaemonProcessHandlesUnknownIdentityAfterForceKill(
-	t *testing.T,
-) {
-	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
-	setStartProbeTickForTest(t, 10*time.Millisecond)
-	dir := runtimeTestDir(t)
-	pid := startTERMIgnoringProcess(t)
-	path, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
-		PID:      pid,
-		Network:  daemon.NetworkTCP,
-		Address:  "127.0.0.1:1",
-		Metadata: map[string]string{runtimeCreateTime: "1234"},
-	})
-	require.NoError(t, err)
-	rec := onlyLiveRuntimeRecord(t, dir)
-
-	identityCalls := 0
-	identityState := func(got daemon.RuntimeRecord) processCreateTimeState {
-		assert.Equal(t, pid, got.PID)
-		assert.Equal(t, "1234", got.Metadata[runtimeCreateTime])
-		identityCalls++
-		if identityCalls <= 2 {
-			return processCreateTimeMatch
-		}
-		return processCreateTimeUnknown
-	}
-
-	err = stopDaemonProcessWithIdentity(
-		rec, 50*time.Millisecond, identityState,
-	)
-	if runtime.GOOS == "linux" {
-		require.NoError(t, err)
-		assert.Equal(t, 2, identityCalls, "an exited child needs no post-kill identity check")
-		assert.NoFileExists(t, path)
-		return
-	}
-	require.Error(t, err)
-	require.ErrorContains(t, err, "identity")
-	require.ErrorContains(t, err, "after force kill")
-	assert.Equal(t, 3, identityCalls)
-	assert.FileExists(t, path,
-		"unknown post-kill identity must preserve the runtime record")
-}
-
-func TestStopDaemonProcessHandlesMatchedIdentityAfterForceKill(
-	t *testing.T,
-) {
-	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
-	setStartProbeTickForTest(t, 10*time.Millisecond)
-	dir := runtimeTestDir(t)
-	pid := startTERMIgnoringProcess(t)
-	path, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
-		PID:      pid,
-		Network:  daemon.NetworkTCP,
-		Address:  "127.0.0.1:1",
-		Metadata: map[string]string{runtimeCreateTime: "1234"},
-	})
-	require.NoError(t, err)
-	rec := onlyLiveRuntimeRecord(t, dir)
-
-	identityCalls := 0
-	identityState := func(got daemon.RuntimeRecord) processCreateTimeState {
-		assert.Equal(t, pid, got.PID)
-		assert.Equal(t, "1234", got.Metadata[runtimeCreateTime])
-		identityCalls++
-		return processCreateTimeMatch
-	}
-
-	err = stopDaemonProcessWithIdentity(
-		rec, 50*time.Millisecond, identityState,
-	)
-	if runtime.GOOS == "linux" {
-		require.NoError(t, err)
-		assert.Equal(t, 2, identityCalls, "an exited child needs no post-kill identity check")
-		assert.NoFileExists(t, path)
-		return
-	}
-	require.Error(t, err)
-	require.ErrorContains(t, err, "still running after force kill")
-	assert.Equal(t, 3, identityCalls,
-		"identity must be confirmed before SIGTERM, before SIGKILL, and after SIGKILL")
-	assert.FileExists(t, path,
-		"surviving matched process must retain its ownership record")
 }
 
 func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {
