@@ -15,6 +15,8 @@ func newCLISearchCommand(root *cobra.Command) *cobra.Command {
 	clisearch.SetKeywords(directCLICommand(directCLICommand(root, "source"), "sync"), "scan ingest local agent sources")
 	clisearch.SetKeywords(directCLICommand(directCLICommand(root, "session"), "sync"), "parse reparse session file")
 	clisearch.SetKeywords(directCLICommand(directCLICommand(root, "session"), "export"), "raw source JSONL")
+	// Prioritize explicit MCP queries over generic daemon startup.
+	clisearch.SetKeywords(directCLICommand(root, "mcp"), "MCP")
 	cmd := clisearch.NewCommand(root, clisearch.Options{
 		Synonyms: map[string][]string{
 			"conversation": {"session"}, "chat": {"session"}, "transcript": {"session"},
