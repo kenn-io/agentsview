@@ -1245,7 +1245,7 @@ func (b *directBackend) SearchContent(
 		page, err = b.db.SearchContent(ctx, filter)
 	}
 	var effectiveMode, note string
-	if err != nil && req.Mode == "hybrid" && req.KeywordFallback && len(req.Concepts) == 0 && errors.Is(err, db.ErrSemanticUnavailable) {
+	if err != nil && req.Mode == "hybrid" && req.KeywordFallback && errors.Is(err, db.ErrSemanticUnavailable) {
 		reason := strings.TrimPrefix(err.Error(), db.ErrSemanticUnavailable.Error())
 		reason = strings.TrimPrefix(strings.TrimPrefix(reason, ": "), "semantic search not available: ")
 		if reason == "" {

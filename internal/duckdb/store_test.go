@@ -4850,6 +4850,13 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 		run = append(run, syncMessage("run", ordinal, "assistant", "refill", ts))
 	}
 	run = append(run, syncMessage("run", 205, "user", "refill", ts))
+	var ranked []db.Message
+	for ordinal := range 199 {
+		message := syncMessage("ranked", ordinal, "assistant", "rankneedle", ts)
+		message.IsSidechain = true
+		ranked = append(ranked, message)
+	}
+	ranked = append(ranked, syncMessage("ranked", 199, "user", "rankneedle", ts), syncMessage("ranked", 200, "user", "rankneedle", ts))
 	child := syncSession("child", "alpha", "first", ts, 1)
 	child.ParentSessionID, child.RelationshipType, child.UserMessageCount = new("parent"), "subagent", 1
 	local := newLocalDB(t)
@@ -4858,6 +4865,7 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{
 		{Session: fallback, Messages: messages, DataVersion: 1, ReplaceMessages: true},
 		{Session: syncSession("run", "alpha", "first", ts, len(run)), Messages: run, DataVersion: 1, ReplaceMessages: true},
+		{Session: syncSession("ranked", "alpha", "first", ts, len(ranked)), Messages: ranked, DataVersion: 1, ReplaceMessages: true},
 		{Session: syncSession("parent", "alpha", "first", ts, 0), DataVersion: 1, ReplaceMessages: true},
 		{Session: child, Messages: []db.Message{syncMessage("child", 0, "user", "childneedle", ts)}, DataVersion: 1, ReplaceMessages: true},
 	})
@@ -4879,6 +4887,7 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 		{name: "empty", pattern: "quick answer fox"},
 		{name: "boolean or", pattern: `"brown" OR "red"`, want: []int{1, 2}},
 		{name: "refill", pattern: "refill", limit: 2, includeOneShot: true, want: []int{0, 205}},
+		{name: "rank before limiting", pattern: "rankneedle", limit: 2, includeOneShot: true, want: []int{199, 200}},
 		{name: "child blank", pattern: "childneedle", want: []int{0}},
 		{name: "child all", pattern: "childneedle", scope: "all", want: []int{0}},
 		{name: "child subordinate", pattern: "childneedle", scope: "subordinate", want: []int{0}},

@@ -1022,7 +1022,7 @@ func (s *Store) searchContentHybridKeyword(ctx context.Context, f db.ContentSear
 			leg = append(leg, db.RankedUnit{Key: key, Subordinate: match.Subordinate})
 			display[key] = match
 		}
-		if len(leg) >= limit || page.NextCursor == 0 {
+		if len(leg) >= k || page.NextCursor == 0 {
 			break
 		}
 	}
