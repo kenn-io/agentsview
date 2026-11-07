@@ -1212,6 +1212,7 @@
         </span>
       {/if}
       {#if sessionUsageBreakdownCount > 0}
+        <!-- kit-ui-check-ignore: usage statistics open in a floating panel; kit-ui Disclosure expands inline and has no click popover equivalent. -->
         <details class="usage-breakdown" bind:open={usageBreakdownOpen}>
           <summary
             class="usage-breakdown-trigger"
@@ -1268,6 +1269,7 @@
         </span>
       {/if}
       {#if planUsageDisplay}
+        <!-- kit-ui-check-ignore: plan statistics open in a floating panel with a table and session link; kit-ui Disclosure expands inline and has no click popover equivalent. -->
         <details class="plan-usage" bind:open={planUsageOpen}>
           <summary
             class="usage-breakdown-trigger plan-usage-trigger"

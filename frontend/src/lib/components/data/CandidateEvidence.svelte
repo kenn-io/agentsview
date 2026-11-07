@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Disclosure } from "@kenn-io/kit-ui";
   import type { DbWorktreeReclassificationCandidate } from "../../api/generated/index";
   import { m } from "../../i18n/index.js";
 
@@ -7,20 +8,22 @@
 </script>
 
 {#if paths.length > 0}
-  <details>
-    <summary>{m.data_candidate_observed_paths({ count: candidate.distinct_cwds })}</summary>
+  <Disclosure variant="plain">
+    {#snippet summary()}
+      <span class="paths-summary">{m.data_candidate_observed_paths({ count: candidate.distinct_cwds })}</span>
+    {/snippet}
     <ul>
       {#each paths as path}<li>{path}</li>{/each}
     </ul>
     {#if candidate.distinct_cwds > paths.length}
       <p>{m.data_candidate_paths_sample()}</p>
     {/if}
-  </details>
+  </Disclosure>
 {/if}
 
 <style>
-  details { color: var(--text-muted); font-size: var(--font-size-xs); }
-  summary { cursor: pointer; padding-block: var(--space-2); }
+  .paths-summary, ul, p { color: var(--text-muted); font-size: var(--font-size-xs); }
+  .paths-summary { font-weight: 400; }
   ul { margin: var(--space-2) 0; padding-left: var(--space-7); }
   li { font-family: var(--font-mono); overflow-wrap: anywhere; }
   p { margin: var(--space-2) 0; }
