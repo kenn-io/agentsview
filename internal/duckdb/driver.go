@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
-	"fmt"
 
 	// Registers the "duckdb" database/sql driver, which statically links
 	// the prebuilt DuckDB library from duckdb-go-bindings.
@@ -38,11 +37,7 @@ func newDuckAppendBatch(ctx context.Context, raw any, columns map[string][]strin
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	conn, ok := raw.(driver.QueryerContext)
-	if !ok {
-		return nil, fmt.Errorf("unexpected DuckDB connection %T", raw)
-	}
-	b := &duckAppendBatch{dirty: make(map[string]bool), conn: conn, appenders: make(map[string]*duckdbdriver.Appender), columns: columns}
+	b := &duckAppendBatch{dirty: make(map[string]bool), conn: raw.(driver.QueryerContext), appenders: make(map[string]*duckdbdriver.Appender), columns: columns}
 	for table, names := range columns {
 		a, err := duckdbdriver.NewAppenderWithColumns(raw.(driver.Conn), "", "", table, names)
 		if err != nil {

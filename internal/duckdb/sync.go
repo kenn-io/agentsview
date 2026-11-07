@@ -949,7 +949,7 @@ func (s *Sync) tryPushSessionBatch(
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("pushing duckdb sessions %v: %w", sessionIDs(sessions), err)
+		return nil, fmt.Errorf("pushing duckdb batch of %d sessions starting with %s: %w", len(sessions), sessions[0].ID, err)
 	}
 	for _, sess := range sessions {
 		if err := s.replacePlanUsage(ctx, tx, sess.ID); err != nil {

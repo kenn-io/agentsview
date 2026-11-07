@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -57,11 +58,6 @@ func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	}
 }
 
-func TestDuckAppenderRejectsConnectionWithoutQueryContext(t *testing.T) {
-	_, err := newDuckAppendBatch(t.Context(), struct{}{}, duckAppendColumns)
-	require.ErrorContains(t, err, "unexpected DuckDB connection")
-}
-
 func TestPushBatchCloseErrorIncludesSessionContext(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
@@ -75,7 +71,7 @@ func TestPushBatchCloseErrorIncludesSessionContext(t *testing.T) {
 	require.NotNil(t, sess)
 	// Duplicate session keys are accepted by AppendRow and rejected on close.
 	_, err = syncer.tryPushSessionBatch(ctx, []db.Session{*sess, *sess}, nil)
-	require.ErrorContains(t, err, "close-error")
+	require.ErrorContains(t, err, "batch of 2 sessions starting with close-error")
 	assert.ErrorContains(t, err, "PRIMARY KEY")
 	assertDuckDBCount(t, syncer.DB(), "sessions", 0)
 	_, err = syncer.pushSingleSession(ctx, *sess, "retry")
@@ -97,40 +93,46 @@ func TestDuckAppenderPayloadBounds(t *testing.T) {
 		wantSmallRows[i] = sql.NullString{String: "s\u03bb", Valid: true}
 	}
 	for _, tc := range []struct {
-		name         string
-		values       []any
-		wantValues   []sql.NullString
-		wantRows     []int
-		wantPayloads []int
+		name        string
+		values      []any
+		wantValues  []sql.NullString
+		tables      []string
+		wantVisible [][2]int
 	}{
 		{name: "empty"},
 		{
+			name: "shared-table-budget", values: []any{first, "edge", second},
+			tables:      []string{"batch_bounds", "other_bounds", "other_bounds"},
+			wantValues:  []sql.NullString{{String: first, Valid: true}, {String: "edge", Valid: true}, {String: second, Valid: true}},
+			wantVisible: [][2]int{{0, 0}, {0, 0}, {1, 1}},
+		},
+		{
 			name: "100-small-rows", values: smallRows[:100], wantValues: wantSmallRows[:100],
-			wantRows: []int{100}, wantPayloads: []int{300},
+			wantVisible: make([][2]int, 100),
 		},
 		{
 			name: "101-small-rows", values: smallRows, wantValues: wantSmallRows,
-			wantRows: []int{101}, wantPayloads: []int{303},
+			wantVisible: make([][2]int, 101),
 		},
 		{
 			name: "combined-byte-overflow", values: []any{first, second},
-			wantValues: []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}},
-			wantRows:   []int{1, 1}, wantPayloads: []int{614400, 614400},
+			wantValues:  []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}},
+			wantVisible: [][2]int{{0, 0}, {1, 0}},
 		},
 		{
 			name: "exact-byte-limit-and-tail", values: []any{exactPrefix, "edge", "tail"},
-			wantValues: []sql.NullString{{String: exactPrefix, Valid: true}, {String: "edge", Valid: true}, {String: "tail", Valid: true}},
-			wantRows:   []int{2, 1}, wantPayloads: []int{byteLimit, 4},
+			wantValues:  []sql.NullString{{String: exactPrefix, Valid: true}, {String: "edge", Valid: true}, {String: "tail", Valid: true}},
+			wantVisible: [][2]int{{0, 0}, {2, 0}, {2, 0}},
 		},
 		{
 			name: "small-oversized-small", values: []any{"a", oversized, "b"},
-			wantValues: []sql.NullString{{String: "a", Valid: true}, {String: oversized, Valid: true}, {String: "b", Valid: true}},
-			wantRows:   []int{1, 1, 1}, wantPayloads: []int{1, byteLimit + 1, 1},
+			wantValues:  []sql.NullString{{String: "a", Valid: true}, {String: oversized, Valid: true}, {String: "b", Valid: true}},
+			wantVisible: [][2]int{{0, 0}, {2, 0}, {2, 0}},
 		},
 		{
 			name: "nullable-pointer-payload", values: []any{&first, &second, null, &empty, nil, ""},
-			wantValues: []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}, {}, {Valid: true}, {}, {Valid: true}},
-			wantRows:   []int{1, 5}, wantPayloads: []int{614400, 614400},
+			wantValues:  []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}, {}, {Valid: true}, {}, {Valid: true}},
+			wantVisible: [][2]int{{0, 0}, {1, 0}, {1, 0}, {1, 0}, {1, 0}, {1, 0}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,60 +142,72 @@ func TestDuckAppenderPayloadBounds(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, conn.Close()) })
 			_, err = conn.ExecContext(ctx, `CREATE TABLE batch_bounds (id INTEGER PRIMARY KEY, payload VARCHAR)`)
 			require.NoError(t, err)
-			var statementRows, statementPayloads []int
-			err = func() error {
+			_, err = conn.ExecContext(ctx, `CREATE TABLE other_bounds (id INTEGER PRIMARY KEY, payload VARCHAR)`)
+			require.NoError(t, err)
+			err = func() (err error) {
 				sqlConn, err := conn.Conn(ctx)
 				if err != nil {
 					return err
 				}
 				defer sqlConn.Close()
-				return sqlConn.Raw(func(raw any) (err error) {
-					count, payload, nextPayload := 0, 0, 0
-					previousHook := duckAppendHook
-					t.Cleanup(func() { duckAppendHook = previousHook })
-					duckAppendHook = func(_ string, flushed bool) error {
-						if flushed && count > 0 {
-							statementRows = append(statementRows, count)
-							statementPayloads = append(statementPayloads, payload)
-							count, payload = 0, 0
-						}
-						if !flushed {
-							count++
-							payload += nextPayload
-						}
-						return nil
+				tx, err := sqlConn.BeginTx(ctx, nil)
+				if err != nil {
+					return err
+				}
+				defer func() { _ = tx.Rollback() }()
+				var batch *duckAppendBatch
+				err = sqlConn.Raw(func(raw any) error {
+					batch, err = newDuckAppendBatch(ctx, raw, map[string][]string{
+						"batch_bounds": {"id", "payload"},
+						"other_bounds": {"id", "payload"},
+					})
+					return err
+				})
+				if err != nil {
+					return err
+				}
+				defer func() {
+					err = errors.Join(err, sqlConn.Raw(func(any) error { return batch.close(ctx) }))
+				}()
+				for i, value := range tc.values {
+					table := "batch_bounds"
+					if tc.tables != nil {
+						table = tc.tables[i]
 					}
-					batch, err := newDuckAppendBatch(ctx, raw, map[string][]string{"batch_bounds": {"id", "payload"}})
-					if err != nil {
+					if err := sqlConn.Raw(func(any) error { return batch.add(ctx, table, i, value) }); err != nil {
 						return err
 					}
-					defer func() { err = errors.Join(err, batch.close(ctx)) }()
-					for i, value := range tc.values {
-						nextPayload = len(tc.wantValues[i].String)
-						if err := batch.add(ctx, "batch_bounds", i, value); err != nil {
+					// Inspect the transaction before any explicit flush or close.
+					for j, table := range []string{"batch_bounds", "other_bounds"} {
+						var visible int
+						if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&visible); err != nil {
 							return err
 						}
+						assert.Equal(t, tc.wantVisible[i][j], visible, "row %d, table %s", i, table)
 					}
-					return batch.flush(ctx)
-				})
+				}
+				if err := sqlConn.Raw(func(any) error { return batch.flush(ctx) }); err != nil {
+					return err
+				}
+				rows, err := tx.QueryContext(ctx, `SELECT id, payload FROM batch_bounds UNION ALL SELECT id, payload FROM other_bounds ORDER BY id`)
+				if err != nil {
+					return err
+				}
+				defer rows.Close()
+				var stored []sql.NullString
+				for rows.Next() {
+					var id int
+					var value sql.NullString
+					if err := rows.Scan(&id, &value); err != nil {
+						return err
+					}
+					assert.Equal(t, len(stored), id)
+					stored = append(stored, value)
+				}
+				assert.Equal(t, tc.wantValues, stored)
+				return rows.Err()
 			}()
 			require.NoError(t, err)
-			assert.Equal(t, tc.wantRows, statementRows)
-			assert.Equal(t, tc.wantPayloads, statementPayloads)
-
-			rows, err := conn.QueryContext(ctx, `SELECT id, payload FROM batch_bounds ORDER BY id`)
-			require.NoError(t, err)
-			defer func() { require.NoError(t, rows.Close()) }()
-			var stored []sql.NullString
-			for rows.Next() {
-				var id int
-				var value sql.NullString
-				require.NoError(t, rows.Scan(&id, &value))
-				assert.Equal(t, len(stored), id)
-				stored = append(stored, value)
-			}
-			require.NoError(t, rows.Err())
-			assert.Equal(t, tc.wantValues, stored)
 		})
 	}
 }
@@ -441,9 +455,13 @@ func TestPushReplacementClearsAllSessionRows(t *testing.T) {
 	write.Messages[1].SourceType = ""
 	write.Messages[1].SourceSubtype = ""
 	write.Messages[0].Role = "user"
-	write.Messages[1].ToolCalls = []db.ToolCall{{ResultContent: "[main abc1234567890123456789012345678901234567] Save the change", ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: `{"command":"git commit -m change"}`, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: "[main abc1234567890123456789012345678901234567] Save the change"}}}}
+	dbtest.SeedCommitLinks(t, local)
+	commitMessages, err := local.GetAllMessages(ctx, "commit-live")
+	require.NoError(t, err)
+	require.Len(t, commitMessages, 2)
+	write.Messages[1].ToolCalls = commitMessages[1].ToolCalls
 
-	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
 	require.NoError(t, err)
 	msgs, err := local.GetAllMessages(ctx, write.Session.ID)
 	require.NoError(t, err)
