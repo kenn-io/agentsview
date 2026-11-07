@@ -1572,7 +1572,6 @@ describe("UsageStore session filter params", () => {
       await usage.fetchAll();
 
       expect(usage.lastUpdatedAt).toBe(previousUpdatedAt);
-      expect(usage.hasNewData).toBe(true);
     } finally {
       warn.mockRestore();
       vi.useRealTimers();

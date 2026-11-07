@@ -61,12 +61,15 @@
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
   let pendingRefresh = false;
+  let visible = $state(!document.hidden);
+  let urlInitRan = $state(false);
+  let urlWritebackReady = $state(false);
+  const refreshReady = $derived(
+    visible && urlInitRan && urlWritebackReady && !sessions.machineFilterPending,
+  );
 
   function refreshUsage(): void {
-    if (
-      document.hidden || !urlInitRan || !urlWritebackReady ||
-      sessions.machineFilterPending
-    ) {
+    if (!refreshReady) {
       pendingRefresh = true;
       return;
     }
@@ -75,15 +78,25 @@
   }
 
   function onVisibilityChange(): void {
+    visible = !document.hidden;
     if (document.hidden) {
       if (usage.isQuerying) {
         pendingRefresh = true;
         usage.cancelInFlightReads();
       }
-    } else if (pendingRefresh) {
-      refreshUsage();
+    } else {
+      if (pendingRefresh) refreshUsage();
+      else usage.markNewData();
     }
   }
+
+  $effect(() => {
+    if (!usage.hasNewData || !refreshReady || usage.isQuerying) return;
+    const timer = setTimeout(() => {
+      if (!usage.isQuerying) refreshUsage();
+    }, Math.max(0, usage.lastFetchStartedAt + 60_000 - performance.now()));
+    return () => clearTimeout(timer);
+  });
 
   const chartStyleMaps = $derived(
     usageChartStyleMaps(
@@ -250,8 +263,6 @@
     return supported;
   }
 
-  let urlInitRan = $state(false);
-  let urlWritebackReady = $state(false);
   let initialFetchDone = $state(false);
 
   function selectUsageMode(mode: UsageMode): void {
@@ -466,9 +477,6 @@
     // The Agent dropdown reads sessions.agents, which is otherwise loaded
     // lazily by the sidebar filter control; a direct /usage visit needs it too.
     sessions.loadAgents();
-    // SSE events only flag new data; RefreshControl owns the periodic refresh
-    // and the manual button. The initial and filter-change fetches run from the
-    // effects above once URL/filter state is hydrated.
     unsubEvents = events.subscribe(() => usage.markNewData());
     tick().then(() => {
       urlWritebackReady = true;
@@ -558,7 +566,7 @@
         querySteps={usage.lastQuerySteps}
         liveQuery={usage.liveQuery}
         busy={usage.isQuerying}
-        onRefresh={refreshUsage}
+        onRefresh={(reason) => reason === "manual" ? refreshUsage() : usage.markNewData()}
         label={m.usage_refresh()}
         title={m.shared_refresh()}
       />

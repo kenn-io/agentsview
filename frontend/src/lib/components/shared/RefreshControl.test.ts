@@ -33,11 +33,12 @@ describe("RefreshControl", () => {
       expect(onRefresh).not.toHaveBeenCalled();
       hidden.mockReturnValue(false);
       document.dispatchEvent(new Event("visibilitychange"));
-      expect(onRefresh).toHaveBeenCalledTimes(1);
+      expect(onRefresh).toHaveBeenLastCalledWith("auto");
       document.dispatchEvent(new Event("visibilitychange"));
       expect(onRefresh).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(300_000);
       expect(onRefresh).toHaveBeenCalledTimes(2);
+      expect(onRefresh).toHaveBeenLastCalledWith("auto");
 
       hidden.mockReturnValue(true);
       document.dispatchEvent(new Event("visibilitychange"));
