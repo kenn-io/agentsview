@@ -227,7 +227,8 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 	held, err := tryAcquireNamedLock(dir, vectorsWriteLockFile)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, held.Close()) }()
+	releaseHeld := sync.OnceFunc(func() { require.NoError(t, held.Close()) })
+	defer releaseHeld()
 	var inspections atomic.Int64
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 		inspections.Add(1)
@@ -235,9 +236,10 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	}
 	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:1/v1", nil }
 	reloaded := make(chan struct{})
+	notifyReload := sync.OnceFunc(func() { close(reloaded) })
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, func() (config.Config, error) {
 		cfg, err := config.LoadReadOnly()
-		close(reloaded)
+		notifyReload()
 		return cfg, err
 	})
 	require.NoError(t, err)
@@ -273,6 +275,27 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	hashes, err := export.SessionDocHashes(t.Context(), nil)
 	require.NoError(t, err)
 	assert.Contains(t, hashes, "session-1")
+
+	movedPath := filepath.Join(t.TempDir(), "moved.db")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), fmt.Appendf(nil, "[vector]\nenabled = true\ndb_path = %q\n", movedPath), 0o600))
+	releaseHeld()
+	require.NoError(t, owner.Setup(0))
+	<-owner.done
+	setup, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, setup.Error)
+	require.Empty(t, setup.Action)
+	hashes, err = export.SessionDocHashes(t.Context(), nil)
+	require.NoError(t, err)
+	assert.Contains(t, hashes, "session-1", "an export in progress keeps its original snapshot")
+	next, ok, err := owner.push.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	if ok {
+		defer next.Close()
+		hashes, err = next.SessionDocHashes(t.Context(), nil)
+		require.NoError(t, err)
+		assert.NotContains(t, hashes, "session-1", "new exports must follow the reloaded database path")
+	}
 }
 
 func TestLiveEmbeddingsSetupFailureRecovery(t *testing.T) {
