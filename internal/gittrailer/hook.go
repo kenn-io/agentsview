@@ -70,6 +70,7 @@ func Install(repoDir string) error {
 			case hookMissing:
 				fmt.Fprintf(&b, "\ncreate executable %s containing:\n%s", hook.path, strings.TrimSuffix(hook.script, "\n"))
 				continue
+			case hookInstalled:
 			}
 			if !hook.executable {
 				fmt.Fprintf(&b, "\nmake %s executable", hook.path)

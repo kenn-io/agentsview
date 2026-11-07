@@ -322,21 +322,26 @@ func TestGitHookInstallInstructions(t *testing.T) {
 		steps int
 	}{
 		{name: "custom prepare-commit-msg", steps: 2, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "prepare-commit-msg"), []byte(custom), 0o755))
 		}},
 		{name: "custom commit-msg", steps: 2, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte(custom), 0o755))
 		}},
 		{name: "custom non-executable prepare-commit-msg", steps: 3, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "prepare-commit-msg"), []byte(custom), 0o644))
 		}},
 		// Git checks execute access for the current user, so only the outcome is fixed.
 		{name: "prepare-commit-msg executable only by others", setup: func(t *testing.T, f *gitTrailerFixture, hooks string) {
+			t.Helper()
 			f.hook(t, "install")
 			require.NoError(t, os.Chmod(filepath.Join(hooks, "prepare-commit-msg"), 0o655))
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte(custom), 0o755))
 		}},
 		{name: "non-executable prepare-commit-msg", steps: 2, setup: func(t *testing.T, f *gitTrailerFixture, hooks string) {
+			t.Helper()
 			f.hook(t, "install")
 			require.NoError(t, os.Chmod(filepath.Join(hooks, "prepare-commit-msg"), 0o644))
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte(custom), 0o755))
