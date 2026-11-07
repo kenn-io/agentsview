@@ -302,7 +302,12 @@ func TestGitHookReinstall(t *testing.T) {
 	assert.Equal(t, "#!/bin/sh\n# existing hook\n", string(data))
 	steps := hookInstructions(t, out)
 	require.Len(t, steps, 1)
-	require.Equal(t, path, steps[0].path)
+	// macOS temp directories sit behind a symlink, and install prints the real path.
+	want, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	got, err := filepath.EvalSymlinks(steps[0].path)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 	require.Equal(t, "add", steps[0].action)
 	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+steps[0].text+"\nprintf 'later check\\n' >&2\nexit 42\n"), 0o755))
 	require.NoError(t, os.Remove(f.bin))
