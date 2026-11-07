@@ -28,7 +28,7 @@
     turningOn: m.meaning_turning_on(), turnOn: m.meaning_turn_on(),
     download: m.meaning_download({ size: "{size}" }), downloaded: setup?.provider === "ollama" ? m.meaning_uses_ollama() : setup?.provider === "configured" ? m.meaning_configured() : m.meaning_downloaded(),
     // An Ollama setup prints no line: nothing switches providers.
-    keepsIndex: "", downloading: setup?.total_bytes ? m.meaning_downloading({ done: "{done}", total: "{total}" }) : m.meaning_turning_on(),
+    keepsIndex: "", downloading: m.meaning_downloading({ done: "{done}", total: "{total}" }),
     indexing: m.meaning_indexing({ done: "{done}", total: "{total}", items: "{items}" }), timeLeft: m.meaning_time_left({ time: "{time}" }), meanwhile: m.meaning_meanwhile(),
     underMinute: m.meaning_under_minute(), aboutTime: m.meaning_about_time({ time: "{time}" }), progress: m.meaning_progress(), hint: setup?.provider === "built-in" && setup.missing_bytes > 0 ? `${m.meaning_hint()} · ${downloadLabel}` : m.meaning_hint(),
   });

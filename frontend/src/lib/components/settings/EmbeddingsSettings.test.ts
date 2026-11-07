@@ -278,7 +278,9 @@ describe("EmbeddingsSettings", () => {
 
     expect(document.body.textContent).toContain("Scanning");
     expect(document.body.textContent).toContain("the total amount of work is not known yet");
-    expect(document.body.textContent).toContain("Indexing 0 of 0 text sections");
+    expect(document.body.textContent).not.toContain("of 0");
+    expect(document.body.querySelector('[role="progressbar"]')).toBeNull();
+    expect(document.body.querySelector('[role="status"][aria-label="Search by meaning setup"]')).not.toBeNull();
 
     unmount(component);
   });
