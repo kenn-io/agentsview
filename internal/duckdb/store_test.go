@@ -4872,7 +4872,10 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 		{name: "top", pattern: "quick fox", scope: "top", want: []int{1, 2, 3}},
 		{name: "subordinate", pattern: "quick fox", scope: "subordinate", want: []int{0}},
 		{name: "empty", pattern: "quick answer fox"},
-		{name: "page", pattern: "quick fox", limit: 2, want: []int{0, 1}},
+		{name: "page ranks sidechain last", pattern: "quick fox", limit: 2, want: []int{1, 2}},
+		{name: "rank before limit", pattern: "quick fox", limit: 1, want: []int{1}},
+		{name: "boolean or", pattern: `"brown" OR "again"`, want: []int{1, 3}},
+		{name: "boolean not", pattern: `"quick" "fox" NOT "red"`, want: []int{0, 1}},
 		{name: "project filter", pattern: "quick fox", project: "other"},
 		{name: "child blank", pattern: "childneedle", want: []int{0}},
 		{name: "child subordinate", pattern: "childneedle", scope: "subordinate", want: []int{0}},
@@ -4894,4 +4897,9 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 			assert.ElementsMatch(t, tc.want, ordinals)
 		})
 	}
+	_, err = store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: `"quick fox`, Mode: "hybrid", KeywordOnly: true,
+	})
+	var inputErr *db.SearchInputError
+	assert.ErrorAs(t, err, &inputErr)
 }

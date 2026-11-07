@@ -1,7 +1,6 @@
 package duckdb
 
 import (
-	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -948,16 +947,16 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 			return db.ContentSearchPage{}, err
 		}
 		if f.Mode == "hybrid" && f.KeywordOnly {
+			if _, err := db.ParseFTSExpression(f.Pattern); err != nil {
+				return db.ContentSearchPage{}, err
+			}
 			f.Mode, f.Sources, f.ExcludeSystem = "fts", []string{"messages"}, true
-			f.Scope = cmp.Or(f.Scope, "all")
 		} else {
 			return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
 				"semantic search is not supported by the DuckDB backend",
 			)
 		}
-	}
-
-	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
+	} else if err := db.ValidateContentSearchScope(f.Scope); err != nil {
 		return db.ContentSearchPage{}, err
 	}
 
@@ -981,21 +980,47 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		return db.ContentSearchPage{},
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}
 	}
+	limit := f.Limit
+	if f.KeywordOnly {
+		// Over-fetch so the subordinate penalty ranks candidates before
+		// the limit, as the other backends' hybrid keyword leg does.
+		f.Limit = max(f.Limit*4, db.SemanticOverfetchMin)
+	}
 	matches, err := s.collectContentMatches(ctx, f)
 	if err != nil {
 		return db.ContentSearchPage{}, err
 	}
 	page := f.Page(matches)
-	if f.KeywordOnly {
-		page.NextCursor = 0
-	}
 	// Post-truncation derivation, O(page): every lexical match gets its
 	// conversation-unit OrdinalRange and lineage fields via the shared
 	// batched pass, matching the SQLite and PG backends.
 	if err := s.deriveLexicalUnitsDuck(ctx, page.Matches); err != nil {
 		return db.ContentSearchPage{}, err
 	}
+	if f.KeywordOnly {
+		return rankKeywordFallback(page.Matches, limit), nil
+	}
 	return page, nil
+}
+
+// rankKeywordFallback orders keyword-only hybrid hits through db.RRFMerge
+// as a one-leg fusion keyed by message, so subordinate hits take the same
+// penalty as in hybrid mode, then truncates to limit.
+func rankKeywordFallback(matches []db.ContentMatch, limit int) db.ContentSearchPage {
+	leg := make([]db.RankedUnit, len(matches))
+	byKey := make(map[string]db.ContentMatch, len(matches))
+	for i, m := range matches {
+		key := db.MessageFusionKey(m.SessionID, m.Ordinal)
+		leg[i] = db.RankedUnit{Key: key, Subordinate: m.Subordinate}
+		byKey[key] = m
+	}
+	var page db.ContentSearchPage
+	for _, hit := range db.RRFMerge([][]db.RankedUnit{leg}, limit) {
+		m := byKey[hit.Unit.Key]
+		m.Score = new(hit.Score)
+		page.Matches = append(page.Matches, m)
+	}
+	return page
 }
 
 func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFilter) ([]db.ContentMatch, error) {
@@ -1198,6 +1223,14 @@ func duckContentSearchPredicate(
 		return column + ` ILIKE ? ESCAPE '\'`
 	}
 
+	if f.KeywordOnly {
+		// SearchContent has already rejected a malformed expression.
+		expr, _ := db.ParseFTSExpression(f.Pattern)
+		if expr == nil {
+			return "FALSE"
+		}
+		return duckFTSExprSQL(column, expr, args)
+	}
 	terms := db.FTSTerms(db.PrepareFTSQuery(f.Pattern))
 	clauses := make([]string, 0, len(terms))
 	for _, term := range terms {
@@ -1211,6 +1244,21 @@ func duckContentSearchPredicate(
 		return "FALSE"
 	}
 	return strings.Join(clauses, " AND ")
+}
+
+// duckFTSExprSQL renders expr as ILIKE substring tests on column, keeping
+// its AND, OR, and NOT structure.
+func duckFTSExprSQL(column string, expr *db.FTSExpr, args *[]any) string {
+	if expr.Op == "term" {
+		*args = append(*args, "%"+db.EscapeLikePattern(expr.Term)+"%")
+		return column + ` ILIKE ? ESCAPE '\'`
+	}
+	left := duckFTSExprSQL(column, expr.Left, args)
+	right := duckFTSExprSQL(column, expr.Right, args)
+	if expr.Op == "NOT" {
+		return "(" + left + " AND NOT (" + right + "))"
+	}
+	return "(" + left + " " + expr.Op + " " + right + ")"
 }
 
 type duckContentCandidate struct {

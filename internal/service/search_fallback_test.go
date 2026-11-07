@@ -13,15 +13,12 @@ import (
 )
 
 type fallbackVectorSearcher struct {
+	conceptVectorSearcher
 	err error
 }
 
 func (s *fallbackVectorSearcher) PrepareSemanticSearch(context.Context, string) (db.VectorSearchPage, int, error) {
 	return nil, 0, s.err
-}
-
-func (s *fallbackVectorSearcher) ResolveMessageUnits(_ context.Context, refs []db.MessageRef) ([]db.UnitRef, error) {
-	return make([]db.UnitRef, len(refs)), nil
 }
 
 func TestDirectBackendHybridKeywordFallback(t *testing.T) {
