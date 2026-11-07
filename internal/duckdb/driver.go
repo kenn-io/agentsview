@@ -32,20 +32,19 @@ type duckAppendBatch struct {
 	columns   map[string][]string
 	dirty     map[string]bool
 	bytes     int
-	hook      duckAppendHook
 }
 
-func newDuckAppendBatch(ctx context.Context, raw any, columns map[string][]string, hook duckAppendHook) (*duckAppendBatch, error) {
+func newDuckAppendBatch(ctx context.Context, raw any, columns map[string][]string) (*duckAppendBatch, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	conn, ok := raw.(driver.Conn)
+	conn, ok := raw.(driver.QueryerContext)
 	if !ok {
 		return nil, fmt.Errorf("unexpected DuckDB connection %T", raw)
 	}
-	b := &duckAppendBatch{dirty: make(map[string]bool), conn: raw.(driver.QueryerContext), appenders: make(map[string]*duckdbdriver.Appender), columns: columns, hook: hook}
+	b := &duckAppendBatch{dirty: make(map[string]bool), conn: conn, appenders: make(map[string]*duckdbdriver.Appender), columns: columns}
 	for table, names := range columns {
-		a, err := duckdbdriver.NewAppenderWithColumns(conn, "", "", table, names)
+		a, err := duckdbdriver.NewAppenderWithColumns(raw.(driver.Conn), "", "", table, names)
 		if err != nil {
 			return nil, errors.Join(err, b.close(ctx))
 		}
@@ -102,8 +101,8 @@ func (b *duckAppendBatch) add(ctx context.Context, table string, values ...any) 
 			return err
 		}
 	}
-	if b.hook != nil {
-		if err := b.hook(table, false); err != nil {
+	if duckAppendHook != nil {
+		if err := duckAppendHook(table, false); err != nil {
 			return err
 		}
 	}
@@ -129,8 +128,8 @@ func (b *duckAppendBatch) flush(ctx context.Context) error {
 		if err := appender.FlushWithCancel(ctx); err != nil {
 			return err
 		}
-		if b.hook != nil {
-			if err := b.hook(table, true); err != nil {
+		if duckAppendHook != nil {
+			if err := duckAppendHook(table, true); err != nil {
 				return err
 			}
 		}

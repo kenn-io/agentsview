@@ -29,7 +29,7 @@ func TestReasoningEffortDuckDBInsertMessagePath(t *testing.T) {
 	conn, err := store.duck.Conn(ctx)
 	require.NoError(t, err)
 	err = conn.Raw(func(raw any) (err error) {
-		batch, err := newDuckAppendBatch(ctx, raw, map[string][]string{"messages": duckAppendColumns["messages"]}, nil)
+		batch, err := newDuckAppendBatch(ctx, raw, map[string][]string{"messages": duckAppendColumns["messages"]})
 		if err != nil {
 			return err
 		}

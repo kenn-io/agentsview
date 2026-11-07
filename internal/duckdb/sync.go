@@ -905,18 +905,10 @@ func reportDuckPushProgress(
 	})
 }
 
+// tryPushSessionBatch keeps native appenders and SQL on the transaction's connection.
 func (s *Sync) tryPushSessionBatch(
 	ctx context.Context, sessions []db.Session, fingerprints map[string]string,
 ) ([]int, error) {
-	return s.writeSessionBatch(ctx, sessions, fingerprints, nil)
-}
-
-// writeSessionBatch keeps native appenders and SQL on the transaction's connection.
-// The hook lets tests interrupt a write after a real flush.
-func (s *Sync) writeSessionBatch(ctx context.Context, sessions []db.Session, fingerprints map[string]string, hook duckAppendHook) ([]int, error) {
-	if len(sessions) == 0 {
-		return nil, nil
-	}
 	conn, err := s.duck.Conn(ctx)
 	if err != nil {
 		return nil, err
@@ -943,7 +935,7 @@ func (s *Sync) writeSessionBatch(ctx context.Context, sessions []db.Session, fin
 	}
 	counts := make([]int, len(sessions))
 	err = conn.Raw(func(raw any) (err error) {
-		batch, err := newDuckAppendBatch(ctx, raw, duckAppendColumns, hook)
+		batch, err := newDuckAppendBatch(ctx, raw, duckAppendColumns)
 		if err != nil {
 			return err
 		}
@@ -957,7 +949,7 @@ func (s *Sync) writeSessionBatch(ctx context.Context, sessions []db.Session, fin
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pushing duckdb sessions %v: %w", sessionIDs(sessions), err)
 	}
 	for _, sess := range sessions {
 		if err := s.replacePlanUsage(ctx, tx, sess.ID); err != nil {

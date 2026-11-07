@@ -1454,4 +1454,4 @@ func (s *Sync) appendSession(ctx context.Context, batch *duckAppendBatch, sess d
 }
 
 // duckAppendHook runs before a row or after a successful explicit flush.
-type duckAppendHook func(table string, flushed bool) error
+var duckAppendHook func(table string, flushed bool) error

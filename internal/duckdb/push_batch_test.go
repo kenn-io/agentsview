@@ -57,6 +57,32 @@ func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	}
 }
 
+func TestDuckAppenderRejectsConnectionWithoutQueryContext(t *testing.T) {
+	_, err := newDuckAppendBatch(t.Context(), struct{}{}, duckAppendColumns)
+	require.ErrorContains(t, err, "unexpected DuckDB connection")
+}
+
+func TestPushBatchCloseErrorIncludesSessionContext(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	write := duckBatchFixture("close-error", 0)
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	sess, err := local.GetSession(ctx, write.Session.ID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	// Duplicate session keys are accepted by AppendRow and rejected on close.
+	_, err = syncer.tryPushSessionBatch(ctx, []db.Session{*sess, *sess}, nil)
+	require.ErrorContains(t, err, "close-error")
+	assert.ErrorContains(t, err, "PRIMARY KEY")
+	assertDuckDBCount(t, syncer.DB(), "sessions", 0)
+	_, err = syncer.pushSingleSession(ctx, *sess, "retry")
+	require.NoError(t, err)
+	assertDuckDBCount(t, syncer.DB(), "sessions", 1)
+}
+
 func TestDuckAppenderPayloadBounds(t *testing.T) {
 	const byteLimit = 1 << 20
 	first, second := strings.Repeat("a", 614400), strings.Repeat("b", 614400)
@@ -123,7 +149,9 @@ func TestDuckAppenderPayloadBounds(t *testing.T) {
 				defer sqlConn.Close()
 				return sqlConn.Raw(func(raw any) (err error) {
 					count, payload, nextPayload := 0, 0, 0
-					batch, err := newDuckAppendBatch(ctx, raw, map[string][]string{"batch_bounds": {"id", "payload"}}, func(_ string, flushed bool) error {
+					previousHook := duckAppendHook
+					t.Cleanup(func() { duckAppendHook = previousHook })
+					duckAppendHook = func(_ string, flushed bool) error {
 						if flushed && count > 0 {
 							statementRows = append(statementRows, count)
 							statementPayloads = append(statementPayloads, payload)
@@ -134,7 +162,8 @@ func TestDuckAppenderPayloadBounds(t *testing.T) {
 							payload += nextPayload
 						}
 						return nil
-					})
+					}
+					batch, err := newDuckAppendBatch(ctx, raw, map[string][]string{"batch_bounds": {"id", "payload"}})
 					if err != nil {
 						return err
 					}
@@ -198,7 +227,9 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 				failure := errors.New("injected dependent write failure")
 				var injected bool
 				flushed := false
-				_, err = syncer.writeSessionBatch(attemptCtx, []db.Session{*sess}, map[string]string{sess.ID: "after"}, func(name string, flush bool) error {
+				previousHook := duckAppendHook
+				t.Cleanup(func() { duckAppendHook = previousHook })
+				duckAppendHook = func(name string, flush bool) error {
 					if name != table {
 						return nil
 					}
@@ -215,7 +246,8 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 						return failure
 					}
 					return nil
-				})
+				}
+				_, err = syncer.tryPushSessionBatch(attemptCtx, []db.Session{*sess}, map[string]string{sess.ID: "after"})
 				require.True(t, injected, "the failure must follow one real inserted chunk: %v", err)
 				if canceled {
 					require.ErrorIs(t, err, context.Canceled)
@@ -229,6 +261,7 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 				).Scan(&fingerprint))
 				assert.Equal(t, "before", fingerprint)
 
+				duckAppendHook = previousHook
 				_, err = syncer.pushSingleSession(ctx, *sess, "after")
 				require.NoError(t, err)
 				assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
