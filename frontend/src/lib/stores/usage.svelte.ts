@@ -996,21 +996,15 @@ class UsageStore {
   }
 
   private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
-    const wasPending = this.hasNewData;
     this.hasNewData = false;
-    const version = this.fetchAllVersion + 1;
-    let completed = false;
     this.dropExcludedSelection();
     const startedAt = performance.now();
     this.lastFetchStartedAt = startedAt;
     this.stepTimings.clear();
     const live = this.liveQuery.begin(startedAt);
     try {
-      const result = await this.fetchAllSteps(startedAt, options);
-      completed = result === "ok";
-      return result;
+      return await this.fetchAllSteps(startedAt, options);
     } finally {
-      if (!completed && wasPending && version === this.fetchAllVersion) this.hasNewData = true;
       this.liveQuery.end(live);
     }
   }

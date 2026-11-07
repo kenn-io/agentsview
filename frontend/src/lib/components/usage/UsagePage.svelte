@@ -560,14 +560,13 @@
           usage.deselectAllModels(modelItems.map((m) => m.name))}
       />
 
-      <!-- kit-ui shares one callback between button clicks and automatic ticks. -->
       <RefreshControl
         lastUpdatedAt={usage.lastUpdatedAt}
         queryDurationMs={usage.lastQueryDurationMs}
         querySteps={usage.lastQuerySteps}
         liveQuery={usage.liveQuery}
         busy={usage.isQuerying}
-        onRefresh={() => window.event?.type === "click" ? refreshUsage() : usage.markNewData()}
+        onRefresh={(reason) => reason === "manual" ? refreshUsage() : usage.markNewData()}
         label={m.usage_refresh()}
         title={m.shared_refresh()}
       />
