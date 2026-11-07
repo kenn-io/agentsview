@@ -13,15 +13,12 @@ afterEach(() => {
   analytics.summary = null;
   analytics.summaryFilterParams = null;
   analytics.from = "";
-  analytics.to = "";
   analytics.querying.summary = false;
 });
 
 describe("SummaryCards", () => {
   it("keeps the caption on the last accepted summary", async () => {
     analytics.summary = null;
-    analytics.from = "2025-11-07";
-    analytics.to = "2026-11-06";
     const data = {
       total_sessions: 29,
       total_messages: 100,

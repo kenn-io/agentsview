@@ -172,7 +172,7 @@ func TestHostedSourceMachinesFilterCoalescedSessions(t *testing.T) {
 	assert.Equal(t, "codex:portable", httpPage.Sessions[0].ID)
 }
 
-func TestHostedSourceMachinesStats(t *testing.T) {
+func TestHostedStatsMachineAndSessionCounts(t *testing.T) {
 	f, h := newHostedCoalescedMachinesFixture(t)
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions
 		(id, project, machine, agent, message_count, user_message_count, relationship_type, parent_session_id, started_at)

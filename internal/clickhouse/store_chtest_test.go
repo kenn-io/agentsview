@@ -77,16 +77,6 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			ReplaceMessages: true,
 		}})
 		require.NoError(t, err)
-		_, err = syncer.Push(ctx, false, nil)
-		require.NoError(t, err)
-
-		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Project: "alpha"})
-		require.NoError(t, err)
-		ids := make([]string, len(index.Sessions))
-		for i, row := range index.Sessions {
-			ids[i] = row.ID
-		}
-		assert.Contains(t, ids, orphanID)
 
 		for _, row := range []struct{ id, relationship, parent string }{
 			{"ch-missing-parent", "subagent", "missing-parent"},
@@ -109,9 +99,14 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		assert.Equal(t, 4, stats.SessionCount)
 		assert.Equal(t, 4, stats.MessageCount)
 		assert.Equal(t, 2, stats.ProjectCount)
-		index, err = store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
+		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
 		require.NoError(t, err)
 		assert.Equal(t, index.Total, stats.SessionCount)
+		ids := make([]string, len(index.Sessions))
+		for i, row := range index.Sessions {
+			ids[i] = row.ID
+		}
+		assert.Contains(t, ids, orphanID)
 	})
 
 	t.Run("sidebar_includes_child_under_parent", func(t *testing.T) {

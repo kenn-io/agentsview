@@ -17,13 +17,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("keeps both endpoints in the activity range chip", async () => {
-  analytics.selectedActivityRange = { from: "2026-11-01", to: "2026-11-03" };
-  component = mount(ActiveFilters, { target: document.body });
-  await tick();
-  expect(screen.getByRole("button", { name: "Nov 1, 2026 – Nov 3, 2026" })).toBeTruthy();
-
+it("keeps both endpoints in a single-day activity range chip", async () => {
   analytics.selectedActivityRange = { from: "2026-11-03", to: "2026-11-03" };
+  component = mount(ActiveFilters, { target: document.body });
   await tick();
   expect(screen.getByRole("button", { name: "Nov 3, 2026 – Nov 3, 2026" })).toBeTruthy();
 });

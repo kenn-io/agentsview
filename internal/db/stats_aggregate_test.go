@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStatsAllTotalsUseSameFilter(t *testing.T) {
+func TestStatsCanonicalSessionCountPreservesOtherTotals(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	stats, err := d.GetStats(ctx, false, false)
