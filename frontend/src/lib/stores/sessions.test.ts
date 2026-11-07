@@ -272,17 +272,14 @@ describe("SessionsStore", () => {
     it.each([
       [3, false],
       [0, true],
-    ] as const)(
-      "checks the whole archive for inventory %i",
-      async (total, empty) => {
-        sessions.filters.date = "2024-01-01";
-        sessions.archiveEmpty = !empty;
-        api.getDataProjects.mockResolvedValue({ total_sessions: total });
-        await sessions.load();
-        expect(sessions.archiveEmpty).toBe(empty);
-        expect(api.getDataProjects).toHaveBeenCalledExactlyOnceWith();
-      },
-    );
+    ] as const)("checks the whole archive for inventory %i", async (total, empty) => {
+      sessions.filters.date = "2024-01-01";
+      sessions.archiveEmpty = !empty;
+      api.getDataProjects.mockResolvedValue({ total_sessions: total });
+      await sessions.load();
+      expect(sessions.archiveEmpty).toBe(empty);
+      expect(api.getDataProjects).toHaveBeenCalledExactlyOnceWith();
+    });
 
     it("skips inventory when the sidebar has sessions", async () => {
       sessions.filters.date = "2024-01-01";

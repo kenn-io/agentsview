@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
-import { events } from "./lib/stores/events.svelte.js";
 import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
 import { insights } from "./lib/stores/insights.svelte.js";
 import { messages } from "./lib/stores/messages.svelte.js";
@@ -696,21 +695,18 @@ describe("App root Sessions landing", () => {
     router.isRootPath = true;
   }
 
-  it.each([true, false])(
-    "renders the landing view for archive empty %s",
-    async (empty) => {
-      stubAppDependencies();
-      vi.spyOn(sessions, "load").mockResolvedValue();
-      sessions.archiveEmpty = empty;
-      router.navigate("sessions");
+  it.each([true, false])("renders the landing view for archive empty %s", async (empty) => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    sessions.archiveEmpty = empty;
+    router.navigate("sessions");
 
-      component = mount(App, { target: document.body });
-      await flushEffects();
+    component = mount(App, { target: document.body });
+    await flushEffects();
 
-      expect(document.body.querySelector(".empty-archive-panel") !== null).toBe(empty);
-      expect(document.body.querySelector(".analytics-page") !== null).toBe(!empty);
-    },
-  );
+    expect(document.body.querySelector(".empty-archive-panel") !== null).toBe(empty);
+    expect(document.body.querySelector(".analytics-page") !== null).toBe(!empty);
+  });
 
   it("resets filters without changing the bare root URL or saved value", async () => {
     stubAppDependencies();

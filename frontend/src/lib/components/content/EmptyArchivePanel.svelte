@@ -4,6 +4,8 @@
   import { FolderIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
+  import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
 
   const folders = $derived(
     settings.sessionProviders
@@ -15,6 +17,11 @@
 </script>
 
 <div class="empty-archive-panel">
+  {#if !ui.isMobileViewport && !ui.sidebarOpen}
+    <div class="empty-archive-toolbar" data-sidebar-focus-region="content">
+      <SidebarToggleButton placement="content" />
+    </div>
+  {/if}
   <EmptyState title={m.empty_archive_title()} description={m.empty_archive_desc()}>
     {#snippet icon()}
       <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
@@ -44,8 +51,16 @@
 <style>
   .empty-archive-panel {
     display: flex;
+    flex-direction: column;
     height: 100%;
     overflow-y: auto;
+  }
+
+  .empty-archive-toolbar {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    flex-shrink: 0;
   }
 
   .empty-archive-folders {
