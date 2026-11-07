@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
@@ -99,6 +100,11 @@ func TestFinalizeNextManifestCarriesEntryModTime(t *testing.T) {
 	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
 	require.NoError(t, err)
 	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	var storedSchemaVersion int
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT manifest_schema_version
+		FROM outbox_generations WHERE capture_id = ?`, generation.CaptureID,
+	).Scan(&storedSchemaVersion))
+	assert.Equal(t, rawsync.ManifestSchemaVersion, storedSchemaVersion)
 
 	manifest, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
 
@@ -107,6 +113,37 @@ func TestFinalizeNextManifestCarriesEntryModTime(t *testing.T) {
 	require.Len(t, manifest.Entries, 1)
 	assert.Equal(t, int64(4), manifest.Entries[0].ModTimeNS,
 		"finalized manifests must retain each captured file's mod time")
+}
+
+func TestVersionElevenGenerationKeepsLegacyManifestVersionAcrossRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.db")
+	store := openCheckpointForTest(t, path)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	root, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, t.TempDir())
+	require.NoError(t, err)
+	ref := rawsync.ObjectRef{SHA256: validCheckpointDigest(22), Length: 1}
+	installOutboxTestObject(t, store, ref, []byte("x"))
+	generation := testCapturedGeneration(1, root, "", ref)
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1793)
+	require.NoError(t, err)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE outbox_generations
+		DROP COLUMN manifest_schema_version`)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(t.Context(), `PRAGMA user_version = 11`)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	store = openCheckpointForTest(t, path)
+
+	legacy, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, legacy.SchemaVersion)
+	retry, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, legacy, retry)
+	assert.Equal(t, 1, retry.SchemaVersion)
 }
 
 func TestFinalizeNextManifestOrdersExactSecondBeforeLaterFraction(t *testing.T) {

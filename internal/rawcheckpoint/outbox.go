@@ -788,12 +788,13 @@ func (s *Store) commitCapture(ctx context.Context, reservationID string, generat
 		if _, err := conn.ExecContext(ctx, `INSERT INTO outbox_generations
 			(capture_id, provider, configured_root_id, source_key,
 			 predecessor_capture_id, captured_at, kind, state, metadata_bytes,
-			 root_aliases_json, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+			 root_aliases_json, manifest_schema_version, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
 			validated.CaptureID, string(validated.Source.Provider),
 			validated.Source.ConfiguredRootID, validated.Source.SourceKey,
 			predecessor, checkpointTimestamp(validated.CapturedAt),
-			string(validated.Kind), metadataBytes, string(rootAliasesJSON), now, now); err != nil {
+			string(validated.Kind), metadataBytes, string(rootAliasesJSON),
+			rawsync.ManifestSchemaVersion, now, now); err != nil {
 			return fmt.Errorf("rawcheckpoint: commit capture: insert generation: %w", err)
 		}
 		if err := insertCapturedObjectsConn(ctx, conn, s, uniqueObjects, now); err != nil {

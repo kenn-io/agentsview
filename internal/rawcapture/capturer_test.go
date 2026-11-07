@@ -138,6 +138,7 @@ func TestCapturerPersistsStableGenerationWithoutParsing(t *testing.T) {
 
 func TestCapturerPersistsRootAliasesIntoFinalizedManifest(t *testing.T) {
 	store, _ := openCapturerTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 	provider, source, _ := captureFileProvider(t, "one\n")
 	alias := filepath.Join(t.TempDir(), "sessions")
 	if err := os.Symlink(provider.plan.CaptureRoot, alias); err != nil {

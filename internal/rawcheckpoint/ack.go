@@ -175,11 +175,12 @@ func (s *Store) finalizeNextManifest(ctx context.Context, deviceID, runID string
 		}
 		args = append(args, checkpointTimestamp(s.now()))
 		var provider, capturedAt, kind, state, expectedParent, rootAliasesJSON string
+		var manifestSchemaVersion int
 		err := conn.QueryRowContext(ctx, prefix+`SELECT generation.capture_id,
 			generation.provider, generation.configured_root_id,
 			generation.source_key, generation.captured_at, generation.kind,
 			generation.state, generation.expected_parent_receipt,
-			generation.root_aliases_json
+			generation.root_aliases_json, generation.manifest_schema_version
 			FROM outbox_generations AS generation
 			LEFT JOIN outbox_generations AS predecessor
 				ON predecessor.capture_id = generation.predecessor_capture_id
@@ -192,14 +193,14 @@ func (s *Store) finalizeNextManifest(ctx context.Context, deviceID, runID string
 			args...,
 		).Scan(&manifest.CaptureID, &provider, &manifest.ConfiguredRootID,
 			&manifest.SourceKey, &capturedAt, &kind, &state, &expectedParent,
-			&rootAliasesJSON)
+			&rootAliasesJSON, &manifestSchemaVersion)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: finalize manifest: select generation: %w", err)
 		}
-		manifest.SchemaVersion = rawsync.ManifestSchemaVersion
+		manifest.SchemaVersion = manifestSchemaVersion
 		manifest.Provider = parser.AgentType(provider)
 		manifest.CapturedAt, _ = time.Parse(time.RFC3339Nano, capturedAt)
 		manifest.Kind = rawsync.ManifestKind(kind)

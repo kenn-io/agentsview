@@ -51,7 +51,11 @@ func TestPiRawCaptureFamily(t *testing.T) {
 			canonicalRoot, err := filepath.EvalSymlinks(root)
 			require.NoError(t, err)
 			assert.Equal(t, canonicalRoot, plan.CaptureRoot)
-			assert.Equal(t, []string{canonicalRoot}, plan.RootAliases)
+			var expectedAliases []string
+			if canonicalRoot != filepath.Clean(root) {
+				expectedAliases = []string{canonicalRoot}
+			}
+			assert.Equal(t, expectedAliases, plan.RootAliases)
 			assert.Equal(t, source.Key, plan.SourceKey)
 			paths := []string{}
 			for _, entry := range plan.Entries {

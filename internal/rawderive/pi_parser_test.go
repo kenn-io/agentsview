@@ -351,7 +351,7 @@ func TestProviderParserHostedPiFamilyV1ParentKeepsOriginalFilenameIdentity(t *te
 		t.Run(string(agent), func(t *testing.T) {
 			root := t.TempDir()
 			parent := filepath.Join(root, "project", "Parent.jsonl")
-			child := filepath.Join(root, "project", "child.jsonl")
+			child := filepath.Join(root, "project", "parent", "task", "run-0", "session.jsonl")
 			parentBody := []byte(`{"type":"session"}` + "\n")
 			childBody := []byte(`{"type":"session","id":"child","parentSession":` + strconv.Quote(parent) + "}\n")
 			writePiDeriveFixture(t, parent, string(parentBody))
@@ -376,7 +376,7 @@ func TestProviderParserHostedPiFamilyV1ParentKeepsOriginalFilenameIdentity(t *te
 			}
 			manifest := parserTestManifest(t, agent, child, []rawsync.Entry{
 				{Path: "project/parent.jsonl", Type: "file", Length: int64(len(parentBody)), Objects: []rawsync.ObjectRef{parentObject}},
-				{Path: "project/child.jsonl", Type: "file", Length: int64(len(childBody)), Objects: []rawsync.ObjectRef{childObject}},
+				{Path: "project/parent/task/run-0/session.jsonl", Type: "file", Length: int64(len(childBody)), Objects: []rawsync.ObjectRef{childObject}},
 			})
 			require.NoError(t, os.RemoveAll(root))
 			hosted := derivePiManifest(t, manifest, objects)
