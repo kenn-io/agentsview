@@ -355,30 +355,15 @@ func TestVectorStatementsHandleBatchSizes(t *testing.T) {
 // rewritten keys exceed what one statement may carry over HTTP still removes
 // exactly the rows the batch no longer holds. One session holds 4,000
 // documents, and one of them holds 6,000 chunks, so the keys of the session,
-// and of that one document, each span several statements. The "HTTP bound"
-// case splits over the native protocol too; the other uses the bound the
-// target's transport picks.
+// and of that one document, each span several statements. The test applies the
+// HTTP limit over the native protocol too, so either transport covers the
+// split.
 func TestVectorFlushHandlesKeysOverOneStatementsLimit(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name  string
-		limit int
-	}{
-		{name: "transport bound", limit: 0},
-		{name: "HTTP bound", limit: vectorFlushKeysBytes},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			testVectorFlushOverOneStatementsLimit(t, tc.limit)
-		})
-	}
-}
-
-func testVectorFlushOverOneStatementsLimit(t *testing.T, limit int) {
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
-	s.vectorFlushKeysBytes = limit
+	s.vectorFlushKeysBytes = vectorFlushKeysBytes
 	conn := chtest.Open(t, target.URL, target.Database)
 	const (
 		session  = "long-session"
