@@ -146,6 +146,13 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			require.NotNil(t, initial.Setup)
 			assert.Equal(t, recipe == "enabled-missing", initial.Setup.Enabled)
 			assert.Equal(t, "turn-on", initial.Setup.Action)
+			provider := "built-in"
+			if recipe == "automatic" || recipe == "nomic" {
+				provider = "ollama"
+			} else if recipe == "configured" {
+				provider = "configured"
+			}
+			assert.Equal(t, provider, initial.Setup.Provider)
 			assert.Zero(t, installs.Load())
 			// The row discloses a download only for the built-in provider.
 			var shown int64
@@ -402,62 +409,6 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 	}
 }
 
-func TestLiveEmbeddingsSetupRequiresConsentAfterOllamaStops(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", t.TempDir())
-	dir := testDataDir(t)
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
-	t.Cleanup(func() {
-		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
-	})
-	var ollama, approved atomic.Bool
-	ollama.Store(true)
-	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-		return embedlocal.Status{OllamaAvailable: ollama.Load(), DownloadBytes: 295_000_000}, nil
-	}
-	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
-		return "", embedlocal.ErrNotFound
-	}
-	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-		consent, err := opts.Confirm(ctx, 295_000_000)
-		approved.Store(consent)
-		if err != nil {
-			return embedlocal.Installation{}, err
-		}
-		if consent {
-			return embedlocal.Installation{}, errors.New("test stops before download")
-		}
-		return embedlocal.Installation{}, errors.New("download was not approved")
-	}
-	owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
-	ln, port := listenLoopback(t)
-	cfg.Host, cfg.Port = "127.0.0.1", port
-	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-	status := func() vector.BuildStatus {
-		var result vector.BuildStatus
-		body := embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/embeddings/status", "", nil, http.StatusOK)
-		require.NoError(t, json.Unmarshal(body, &result))
-		require.NotNil(t, result.Setup)
-		return result
-	}
-	initial := status()
-	require.Equal(t, "ollama", initial.Setup.Provider)
-	require.Equal(t, "turn-on", initial.Setup.Action)
-	// The Ollama row shows no download disclosure. Its server can stop after
-	// that status response, before the user's Turn on request is admitted.
-	ollama.Store(false)
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), http.StatusAccepted)
-	<-owner.done
-	assert.False(t, approved.Load(), "Turn on after an Ollama status must not approve an undisclosed 295 MB download")
-	recovery := status()
-	assert.Equal(t, "built-in", recovery.Setup.Provider)
-	assert.Equal(t, "turn-on", recovery.Setup.Action)
-	assert.Contains(t, recovery.Setup.Error, "download")
-}
-
 func TestEmbeddingsSetupStatusKeepsActiveProviderDuringSharedInstall(t *testing.T) {
 	oldInspect := inspectLocalEmbeddings
 	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
@@ -488,52 +439,68 @@ func TestEmbeddingsSetupStatusKeepsActiveProviderDuringSharedInstall(t *testing.
 }
 
 func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", t.TempDir())
-	dir := testDataDir(t)
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	shared, err := embedlocal.DefaultDir()
-	require.NoError(t, err)
-	modelDir := filepath.Join(shared, "nomic-embed-text-v1.5", "e9b6763023c676ca8431644204f50c2b100d9aab")
-	require.NoError(t, os.MkdirAll(modelDir, 0o700))
-	// Correct metadata hides corrupt content from Inspect's inexpensive probe.
-	require.NoError(t, os.WriteFile(filepath.Join(modelDir, "tokenizer.json"), make([]byte, 711396), 0o600))
-	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
-	t.Cleanup(func() {
-		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
-	})
-	inspectLocalEmbeddings = func(ctx context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
-		opts.SkipOllama = true
-		return embedlocal.Inspect(ctx, opts)
-	}
-	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
-	var approved atomic.Bool
-	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-		confirm := opts.Confirm
-		opts.Confirm = func(ctx context.Context, size int64) (bool, error) {
-			consent, err := confirm(ctx, size)
-			approved.Store(consent)
-			if consent {
-				return false, errors.New("test stops before approved download")
+	for _, scenario := range []string{"repair", "ollama-stopped"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("USERPROFILE", t.TempDir())
+			dir := testDataDir(t)
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			shared, err := embedlocal.DefaultDir()
+			require.NoError(t, err)
+			modelDir := filepath.Join(shared, "nomic-embed-text-v1.5", "e9b6763023c676ca8431644204f50c2b100d9aab")
+			require.NoError(t, os.MkdirAll(modelDir, 0o700))
+			// Correct metadata hides corrupt content from Inspect's inexpensive probe.
+			require.NoError(t, os.WriteFile(filepath.Join(modelDir, "tokenizer.json"), make([]byte, 711396), 0o600))
+			oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+			t.Cleanup(func() {
+				inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+			})
+			ollama := scenario == "ollama-stopped"
+			inspectLocalEmbeddings = func(ctx context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
+				opts.SkipOllama = true
+				status, err := embedlocal.Inspect(ctx, opts)
+				status.OllamaAvailable = ollama
+				return status, err
 			}
-			return false, err
-		}
-		return embedlocal.Install(ctx, opts)
+			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+			var approved atomic.Bool
+			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+				confirm := opts.Confirm
+				opts.Confirm = func(ctx context.Context, size int64) (bool, error) {
+					consent, err := confirm(ctx, size)
+					approved.Store(consent)
+					if consent {
+						return false, errors.New("test stops before approved download")
+					}
+					return false, err
+				}
+				return embedlocal.Install(ctx, opts)
+			}
+			owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
+			initial, err := owner.SetupStatus(t.Context())
+			require.NoError(t, err)
+			require.EqualValues(t, 293859028, initial.MissingBytes)
+			approvedBytes := initial.MissingBytes
+			if ollama {
+				require.Equal(t, "ollama", initial.Provider)
+				require.Equal(t, "turn-on", initial.Action)
+				ollama = false
+				approvedBytes = 0 // The Ollama row disclosed no download.
+			}
+			require.NoError(t, owner.Setup(approvedBytes))
+			<-owner.done
+			assert.False(t, approved.Load())
+			retry, err := owner.SetupStatus(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, "built-in", retry.Provider)
+			assert.Equal(t, "turn-on", retry.Action)
+			assert.Contains(t, retry.Error, "declined")
+			assert.EqualValues(t, 294570424, retry.MissingBytes)
+			require.NoError(t, owner.Setup(retry.MissingBytes))
+			<-owner.done
+			assert.True(t, approved.Load(), "Retry must approve the verified size disclosed after repair was refused")
+		})
 	}
-	owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
-	initial, err := owner.SetupStatus(t.Context())
-	require.NoError(t, err)
-	require.EqualValues(t, 293859028, initial.MissingBytes)
-	require.NoError(t, owner.Setup(initial.MissingBytes))
-	<-owner.done
-	assert.False(t, approved.Load())
-	retry, err := owner.SetupStatus(t.Context())
-	require.NoError(t, err)
-	assert.Contains(t, retry.Error, "declined")
-	assert.EqualValues(t, 294570424, retry.MissingBytes)
-	require.NoError(t, owner.Setup(retry.MissingBytes))
-	<-owner.done
-	assert.True(t, approved.Load(), "Retry must approve the verified size disclosed after repair was refused")
 }

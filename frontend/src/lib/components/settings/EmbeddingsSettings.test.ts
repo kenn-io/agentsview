@@ -149,10 +149,10 @@ describe("EmbeddingsSettings", () => {
       enabled: true,
       action: "turn-on",
       provider: "built-in",
-      error: "Another process may be using search. Close it and retry.",
+      error: "local embeddings: download interrupted",
       busy: false,
       installing: false,
-      missing_bytes: 0,
+      missing_bytes: 295000000,
       downloaded_bytes: 0,
       total_bytes: 0,
     };
@@ -164,9 +164,6 @@ describe("EmbeddingsSettings", () => {
       dimension: 256,
       last_error: staleBuildError,
     });
-    embeddingsService.getApiV1EmbeddingsGenerations.mockRejectedValue(
-      new ApiError(501, "semantic search is disabled"),
-    );
     embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
@@ -183,7 +180,7 @@ describe("EmbeddingsSettings", () => {
     expect(document.body.querySelectorAll("button")).toHaveLength(1);
     button!.click();
     await settle();
-    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ approved_bytes: 0 });
+    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ approved_bytes: 295000000 });
     unmount(component);
   });
 
