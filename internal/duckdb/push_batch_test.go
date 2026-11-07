@@ -226,7 +226,7 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 				} else {
 					require.ErrorIs(t, err, failure)
 				}
-				assert.ErrorContains(t, err, "batch of 1 sessions starting with batch-rollback")
+				require.ErrorContains(t, err, "batch of 1 sessions starting with batch-rollback")
 				assert.Equal(t, before, duckBatchSnapshot(t, syncer.DB(), sess.ID))
 				var fingerprint string
 				require.NoError(t, syncer.DB().QueryRowContext(ctx,
