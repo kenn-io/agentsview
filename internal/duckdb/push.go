@@ -1369,62 +1369,31 @@ func parseTimestamp(value string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-var duckAppendColumns = map[string][]string{
-	"messages": strings.Fields(strings.ReplaceAll(`
-			id, session_id, ordinal, role, content, thinking_text, dialogue_text,
-			timestamp, has_thinking, has_tool_use, content_length,
-			is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
-			provider_id,
-			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain, is_compact_boundary
-		`, ",", " ")),
-	"tool_calls": strings.Fields(strings.ReplaceAll(`
+var duckAppendColumns = func() map[string][]string {
+	columns := map[string][]string{
+		"tool_calls": strings.Fields(strings.ReplaceAll(`
 			message_id, session_id, tool_name, category,
 			call_index, tool_use_id, input_json, skill_name,
 			result_content_length, result_content,
 			subagent_session_id, file_path, observed_outcome, observed_repeat, sequence_ending
 		`, ",", " ")),
-	"tool_result_events": strings.Fields(strings.ReplaceAll(`
+		"tool_result_events": strings.Fields(strings.ReplaceAll(`
 			session_id, tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id,
 			source, status, content, content_length,
 			timestamp, event_index
 		`, ",", " ")),
-	"usage_events": strings.Fields(strings.ReplaceAll(`
-			id, session_id, message_ordinal, source, model,
-			provider_id, input_tokens, output_tokens,
-			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_microdollars, cost_status, cost_source,
-			occurred_at, dedup_key
-		`, ",", " ")),
-	"sessions": strings.Fields(strings.ReplaceAll(`
-			id, project, project_assigned, machine, agent,
-			agent_label, entrypoint, session_kind,
-			first_message, display_name, session_name, started_at, ended_at,
-			message_count, user_message_count,
-			file_path, file_size, file_mtime, file_inode, file_device,
-			file_hash, local_modified_at, transcript_revision,
-			parent_session_id,
-			relationship_type, total_output_tokens, peak_context_tokens,
-			has_total_output_tokens, has_peak_context_tokens, is_automated,
-			tool_failure_signal_count, tool_retry_count, edit_churn_count,
-			consecutive_failure_max, outcome, outcome_confidence,
-			ended_with_role, final_failure_streak, signals_pending_since,
-			compaction_count, mid_task_compaction_count,
-			context_pressure_max, health_score, health_grade,
-			has_tool_calls, has_context_data,
-			quality_signal_version, short_prompt_count, unstructured_start,
-			missing_success_criteria_count, missing_verification_count,
-			duplicate_prompt_count, no_code_context_count,
-			runaway_tool_loop_count, data_version,
-			cwd, git_branch, source_session_id, source_version, group_key, transcript_fidelity,
-			parser_malformed_lines, is_truncated, deleted_at, deletion_cause, created_at,
-			termination_status, secret_leak_count, secrets_rules_version,
-			pr_links, labels,
-			agentsview_push_fingerprint, source_archive_id
-		`, ",", " ")),
-}
+	}
+	for _, table := range mirrorTables {
+		switch table.name {
+		case "sessions", "messages", "usage_events":
+			for _, column := range table.columns {
+				columns[table.name] = append(columns[table.name], column.name)
+			}
+		}
+	}
+	return columns
+}()
 
 func (s *Sync) appendSession(ctx context.Context, batch *duckAppendBatch, sess db.Session, fingerprint string) (int, error) {
 	if err := batch.add(ctx, "sessions", sessionInsertArgs(sess, s.machine, s.archiveID, fingerprint)...); err != nil {

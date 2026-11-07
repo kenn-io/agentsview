@@ -7,6 +7,9 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
+	"math"
+	"strings"
 
 	// Registers the "duckdb" database/sql driver, which statically links
 	// the prebuilt DuckDB library from duckdb-go-bindings.
@@ -28,7 +31,7 @@ func isMirrorOpenInSameProcessError(err error) bool {
 type duckAppendBatch struct {
 	conn      driver.QueryerContext
 	appenders map[string]*duckdbdriver.Appender
-	columns   map[string][]string
+	columns   map[string][]columnSpec
 	dirty     map[string]bool
 	bytes     int
 }
@@ -37,8 +40,24 @@ func newDuckAppendBatch(ctx context.Context, raw any, columns map[string][]strin
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	b := &duckAppendBatch{dirty: make(map[string]bool), conn: raw.(driver.QueryerContext), appenders: make(map[string]*duckdbdriver.Appender), columns: columns}
+	b := &duckAppendBatch{dirty: make(map[string]bool), conn: raw.(driver.QueryerContext), appenders: make(map[string]*duckdbdriver.Appender), columns: make(map[string][]columnSpec)}
 	for table, names := range columns {
+		for _, name := range names {
+			column := columnSpec{name: name}
+			for _, spec := range mirrorTables {
+				if spec.name != table {
+					continue
+				}
+				for _, candidate := range spec.columns {
+					if candidate.name == name {
+						column = candidate
+						break
+					}
+				}
+				break
+			}
+			b.columns[table] = append(b.columns[table], column)
+		}
 		a, err := duckdbdriver.NewAppenderWithColumns(raw.(driver.Conn), "", "", table, names)
 		if err != nil {
 			return nil, errors.Join(err, b.close(ctx))
@@ -72,9 +91,13 @@ func (b *duckAppendBatch) add(ctx context.Context, table string, values ...any) 
 			return err
 		}
 		switch v := converted.(type) {
+		case int64:
+			if strings.Contains(" "+columns[i].def+" ", " INTEGER ") && (v < math.MinInt32 || v > math.MaxInt32) {
+				return fmt.Errorf("%s.%s: value %d out of range for INTEGER", table, columns[i].name, v)
+			}
 		case string:
 			payload += len(v)
-			switch columns[i] {
+			switch columns[i].name {
 			case "started_at", "ended_at", "local_modified_at", "deleted_at", "created_at", "timestamp", "occurred_at":
 				// timeValue leaves DuckDB-only timestamp formats as strings. Preserve
 				// the SQL cast on this same transaction connection before appending.

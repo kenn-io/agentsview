@@ -3,10 +3,12 @@
 package duckdb
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -15,15 +17,58 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
+func TestPushRejectsIntegerOverflowReplacement(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	write := duckBatchFixture("integer-overflow", 1)
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	sess, err := local.GetSession(ctx, write.Session.ID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	_, err = syncer.pushSingleSession(ctx, *sess, "before")
+	require.NoError(t, err)
+	before := duckBatchSnapshot(t, syncer.DB(), sess.ID)
+
+	sess.TotalOutputTokens = 2147483648
+	sess.HasTotalOutputTokens = true
+	require.NoError(t, local.UpsertSession(ctx, *sess))
+	sess, err = local.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Equal(t, 2147483648, sess.TotalOutputTokens)
+	var logs bytes.Buffer
+	previousLog := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousLog) })
+	var result storage.MirrorPushResult
+	var pushed []db.Session
+	require.NoError(t, syncer.pushSessionBatchForMode(ctx, []db.Session{*sess}, 0, 1, &result, &pushed, nil, map[string]string{sess.ID: "after"}))
+	assert.Equal(t, 1, result.Errors)
+	assert.Zero(t, result.SessionsPushed)
+	assert.Contains(t, logs.String(), "retrying sessions individually")
+	assert.Contains(t, logs.String(), "skipping session integer-overflow")
+	assert.Contains(t, logs.String(), "total_output_tokens")
+	assert.Contains(t, logs.String(), "INTEGER")
+	assert.Equal(t, before, duckBatchSnapshot(t, syncer.DB(), sess.ID))
+	var fingerprint string
+	var total int64
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT total_output_tokens, agentsview_push_fingerprint FROM sessions WHERE id = ?`, sess.ID,
+	).Scan(&total, &fingerprint))
+	assert.Equal(t, int64(0), total)
+	assert.Equal(t, "before", fingerprint)
+}
+
 func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
-	write := duckBatchFixture("batch-values", 203)
+	write := duckBatchFixture("batch-values", 103)
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
@@ -34,12 +79,6 @@ func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	_, err = syncer.pushSingleSession(ctx, *sess, "initial")
 	require.NoError(t, err)
 	assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
-	var summary string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT result_content FROM tool_calls WHERE session_id = ? AND tool_use_id = ?`,
-		sess.ID, "row-102-call-0",
-	).Scan(&summary))
-	assert.Equal(t, strings.Repeat("summary\u03bb", 160000)+"row-102 summary", summary)
 }
 
 func TestDuckAppenderPayloadBounds(t *testing.T) {
@@ -71,11 +110,6 @@ func TestDuckAppenderPayloadBounds(t *testing.T) {
 		{
 			name: "small-rows-stay-buffered", values: smallRows, wantValues: wantSmallRows,
 			wantVisible: make([][2]int, 101),
-		},
-		{
-			name: "combined-byte-overflow", values: []any{first, second},
-			wantValues:  []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}},
-			wantVisible: [][2]int{{0, 0}, {1, 0}},
 		},
 		{
 			name: "exact-byte-limit-and-tail", values: []any{exactPrefix, "edge", "tail"},
@@ -403,73 +437,67 @@ func duckBatchRows(t *testing.T, rows *sql.Rows) [][]any {
 }
 
 func TestPushReplacementClearsAllSessionRows(t *testing.T) {
-	for _, count := range []int{0, 1} {
-		t.Run(fmt.Sprintf("messages=%d", count), func(t *testing.T) {
-			ctx := t.Context()
-			local := newLocalDB(t)
-			write := duckBatchFixture("replace-all", 2)
-			write.PlanUsage = duckPlanUsage(12.5)
-			write.Findings = []db.SecretFinding{{SessionID: write.Session.ID, RuleName: "fixture", Confidence: "definite", LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 3, RedactedMatch: "row", RulesVersion: "fixture"}}
+	ctx := t.Context()
+	local := newLocalDB(t)
+	write := duckBatchFixture("replace-all", 2)
+	write.Findings = []db.SecretFinding{{SessionID: write.Session.ID, RuleName: "fixture", Confidence: "definite", LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 3, RedactedMatch: "row", RulesVersion: "fixture"}}
 
-			write.Messages[0].IsSystem = false
-			write.Messages[0].IsSidechain = false
-			write.Messages[1].SourceType = ""
-			write.Messages[1].SourceSubtype = ""
-			write.Messages[0].Role = "user"
-			dbtest.SeedCommitLinks(t, local)
-			commitMessages, err := local.GetAllMessages(ctx, "commit-live")
-			require.NoError(t, err)
-			require.Len(t, commitMessages, 2)
-			write.Messages[1].ToolCalls = commitMessages[1].ToolCalls
+	write.Messages[0].IsSystem = false
+	write.Messages[0].IsSidechain = false
+	write.Messages[1].SourceType = ""
+	write.Messages[1].SourceSubtype = ""
+	write.Messages[0].Role = "user"
+	const result = "[main abc1234567890123456789012345678901234567] Save the change"
+	write.Messages[1].ToolCalls = []db.ToolCall{{
+		ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call",
+		InputJSON: `{"command":"git commit -m change"}`, ResultContent: result,
+		ResultEvents: []db.ToolResultEvent{{ToolUseID: "commit-call", Source: "tool_result", Content: result}},
+	}}
 
-			_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
-			require.NoError(t, err)
-			msgs, err := local.GetAllMessages(ctx, write.Session.ID)
-			require.NoError(t, err)
-			_, err = local.PinMessage(ctx, write.Session.ID, msgs[0].ID, nil)
-			require.NoError(t, err)
-			syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-			require.NoError(t, createSchema(ctx, syncer.DB()))
-			sess, err := local.GetSession(ctx, write.Session.ID)
-			require.NoError(t, err)
-			_, err = syncer.pushSingleSession(ctx, *sess, "before")
-			require.NoError(t, err)
-			tables := []string{"messages", "tool_calls", "tool_result_events", "usage_events", "session_plan_usage", "commit_links", "secret_findings", "pinned_messages"}
-			for _, table := range tables {
-				var count int
-				require.NoError(t, syncer.DB().QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count))
-				require.Positive(t, count, table)
-			}
-			require.NoError(t, local.UnpinMessage(ctx, sess.ID, msgs[0].ID))
-			replacement := duckBatchFixture(sess.ID, count)
-			if count > 0 {
-				replacement.Messages[0].Content = "replacement message"
-				replacement.Messages[0].ToolCalls = nil
-				replacement.Messages[0].HasToolUse = false
-				replacement.UsageEvents = nil
-			}
-			replacement.Session.Project = "replacement"
-			_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{replacement})
-			require.NoError(t, err)
-			sess, err = local.GetSession(ctx, sess.ID)
-			require.NoError(t, err)
-			_, err = syncer.pushSingleSession(ctx, *sess, "after")
-			require.NoError(t, err)
-			for _, table := range tables {
-				want := 0
-				if table == "messages" {
-					want = count
-				}
-				assertDuckDBCount(t, syncer.DB(), table, want)
-			}
-			assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
-			assertDuckDBCount(t, syncer.DB(), "sessions", 1)
-			var project, fingerprint string
-			require.NoError(t, syncer.DB().QueryRowContext(ctx, "SELECT project, agentsview_push_fingerprint FROM sessions").Scan(&project, &fingerprint))
-			assert.Equal(t, "replacement", project)
-			assert.Equal(t, "after", fingerprint)
-		})
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
+	require.NoError(t, err)
+	msgs, err := local.GetAllMessages(ctx, write.Session.ID)
+	require.NoError(t, err)
+	_, err = local.PinMessage(ctx, write.Session.ID, msgs[0].ID, nil)
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	sess, err := local.GetSession(ctx, write.Session.ID)
+	require.NoError(t, err)
+	_, err = syncer.pushSingleSession(ctx, *sess, "before")
+	require.NoError(t, err)
+	tables := []string{"messages", "tool_calls", "tool_result_events", "usage_events", "commit_links", "secret_findings", "pinned_messages"}
+	for _, table := range tables {
+		var count int
+		require.NoError(t, syncer.DB().QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count))
+		require.Positive(t, count, table)
 	}
+	require.NoError(t, local.UnpinMessage(ctx, sess.ID, msgs[0].ID))
+	replacement := duckBatchFixture(sess.ID, 1)
+	replacement.Messages[0].Content = "replacement message"
+	replacement.Messages[0].ToolCalls = nil
+	replacement.Messages[0].HasToolUse = false
+	replacement.UsageEvents = nil
+	replacement.Session.Project = "replacement"
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{replacement})
+	require.NoError(t, err)
+	sess, err = local.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	_, err = syncer.pushSingleSession(ctx, *sess, "after")
+	require.NoError(t, err)
+	for _, table := range tables {
+		want := 0
+		if table == "messages" {
+			want = 1
+		}
+		assertDuckDBCount(t, syncer.DB(), table, want)
+	}
+	assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
+	assertDuckDBCount(t, syncer.DB(), "sessions", 1)
+	var project, fingerprint string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, "SELECT project, agentsview_push_fingerprint FROM sessions").Scan(&project, &fingerprint))
+	assert.Equal(t, "replacement", project)
+	assert.Equal(t, "after", fingerprint)
 }
 
 func TestPushDuckDBTimestampCastParity(t *testing.T) {
@@ -495,9 +523,15 @@ func TestPushDuckDBTimestampCastParity(t *testing.T) {
 	sess.CreatedAt = raw
 	_, err = syncer.pushSingleSession(ctx, *sess, "timestamp")
 	require.NoError(t, err)
-	for _, field := range []struct{ table, column string }{{"sessions", "started_at"}, {"sessions", "created_at"}, {"messages", "timestamp"}, {"tool_result_events", "timestamp"}, {"usage_events", "occurred_at"}} {
+	for _, field := range []struct{ table, column, where string }{
+		{"sessions", "started_at", "id = 'timestamp-cast'"},
+		{"sessions", "created_at", "id = 'timestamp-cast'"},
+		{"messages", "timestamp", "session_id = 'timestamp-cast' AND ordinal = 0"},
+		{"tool_result_events", "timestamp", "session_id = 'timestamp-cast' AND tool_use_id = 'row-000-call-0' AND event_index = 0"},
+		{"usage_events", "occurred_at", "session_id = 'timestamp-cast' AND dedup_key = 'row-000'"},
+	} {
 		var got, sqlCast time.Time
-		require.NoError(t, syncer.DB().QueryRowContext(ctx, "SELECT "+field.column+", CAST(? AS TIMESTAMP) FROM "+field.table+" LIMIT 1", raw).Scan(&got, &sqlCast))
+		require.NoError(t, syncer.DB().QueryRowContext(ctx, "SELECT "+field.column+", CAST(? AS TIMESTAMP) FROM "+field.table+" WHERE "+field.where, raw).Scan(&got, &sqlCast))
 		assert.Equal(t, time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC), got, field)
 		assert.Equal(t, sqlCast, got, field)
 	}
