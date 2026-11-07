@@ -150,6 +150,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newOpenAPICommand())
 	root.AddCommand(newRemoteSyncCommand())
 	groupCommands(root)
+	root.AddCommand(newCLISearchCommand(root))
 
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
@@ -933,6 +934,7 @@ func printVersion(w io.Writer) {
 }
 
 func writeRootHelp(w io.Writer, root *cobra.Command) {
+	fmt.Fprintln(w, `Agents: find the right command with: agentsview cli search "<what you want to do>"`)
 	fmt.Fprintf(w, "agentsview %s - local web viewer for AI agent sessions\n\n", version)
 	fmt.Fprintln(w, "Syncs session data from supported AI coding agents into SQLite,")
 	fmt.Fprintln(w, "serves analytics, and exposes a session browser via local web UI.")

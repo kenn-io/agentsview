@@ -43,7 +43,7 @@ require (
 	github.com/yuin/goldmark/v2 v2.1.11
 	go.kenn.io/docbank v0.16.0
 	go.kenn.io/kata v0.20.0
-	go.kenn.io/kit v0.48.1
+	go.kenn.io/kit v0.48.2-0.20261105033532-aaab6a3899c6
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
 	golang.org/x/mod v0.42.0
@@ -52,7 +52,7 @@ require (
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
-	hegel.dev/go/hegel v0.9.28
+	hegel.dev/go/hegel v0.9.29
 	modernc.org/libc v1.79.1
 	modernc.org/sqlite v1.61.0
 )
