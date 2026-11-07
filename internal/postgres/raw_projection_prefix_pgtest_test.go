@@ -106,3 +106,21 @@ func TestRawProjectionPrefixDoesNotChooseDivergentContinuation(t *testing.T) {
 		assert.True(t, exists)
 	}
 }
+
+// A counted-under report belongs to its capture. Selecting a longer transcript
+// without that plan row must not attach the shorter owner's root to it.
+func TestRawProjectionPrefixKeepsAccountingOwners(t *testing.T) {
+	f := newProjectionFixture(t)
+	short := projectionOutcome("same prompt")
+	short.Outcome.Results[0].Result.Messages = short.Outcome.Results[0].Result.Messages[:1]
+	short.Outcome.Results[0].Result.Session.PlanUsage = &parser.ParsedPlanUsage{CountedUnder: "codex:root"}
+	long := projectionOutcome("same prompt")
+	for i, outcome := range []rawderive.ParsedManifest{short, long} {
+		m, _ := f.accept(t, fmt.Sprintf("device-%d", i), fmt.Sprintf("accounting-%d", i), "")
+		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	}
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityAmbiguous, resolved.State)
+	require.Len(t, resolved.Variants, 2)
+}

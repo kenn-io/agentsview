@@ -84,6 +84,17 @@ func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
 	if len(short.Messages) == 0 || len(short.Messages) >= len(long.Messages) || len(short.UsageEvents) > len(long.UsageEvents) {
 		return false, nil
 	}
+	root := func(p ingest.PreparedSession) string {
+		if p.PlanUsage == nil {
+			return ""
+		}
+		return p.PlanUsage.CountedUnder
+	}
+	// A counted-under edge cannot be transferred to a capture that owns its
+	// accounting or attributes it to another root. Keep those as variants.
+	if root(short) != root(long) {
+		return false, nil
+	}
 	long.Messages = long.Messages[:len(short.Messages)]
 	long.UsageEvents = long.UsageEvents[:len(short.UsageEvents)]
 	key := func(p ingest.PreparedSession) (string, error) {
