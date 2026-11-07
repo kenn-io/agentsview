@@ -519,15 +519,8 @@ func TestPushFailsClosedWhenWriterHoldsMirror(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
-// TestPushExplicitRebuildsWhileMirrorHeldByReaders covers the explicit-push
-// side of the push-under-serve flow: a serving process holds the mirror
-// read-only, so the probe still inspects it (same-DSN read-only opens share
-// the in-process instance; across processes read-only locks coexist), the
-// incremental path is chosen, and only the incremental write open fails.
-// An explicit push then falls back to a full rebuild — which never
-// write-opens the destination (temp file plus atomic rename) — and records
-// the reader-hold reason.
-func TestPushExplicitRebuildsWhileMirrorHeldByReaders(t *testing.T) {
+// Explicit pushes use the same incremental standby publication as watch mode.
+func TestPushExplicitPublishesIncrementallyWhileMirrorHeldByReaders(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
@@ -539,9 +532,9 @@ func TestPushExplicitRebuildsWhileMirrorHeldByReaders(t *testing.T) {
 	appendMessage(t, local, "sess-1")
 	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
-	assert.True(t, res.Diagnostics.Full,
-		"a reader-held mirror cannot be updated incrementally; an explicit push must rebuild")
-	assert.Contains(t, res.Diagnostics.RebuildReason, "held open by reader processes")
+	assert.False(t, res.Diagnostics.Full)
+	assert.Empty(t, res.Diagnostics.RebuildReason)
+	assert.Equal(t, 1, res.SessionsPushed)
 
 	require.NoError(t, held.Close())
 	assertMirrorMessageCount(t, path, "sess-1", 3)
@@ -617,53 +610,25 @@ func assertMirrorSessionRelationship(
 	assert.Equal(t, wantRelationship, relationship, "mirror relationship_type")
 }
 
-// TestPushDefersHeldMirrorForAutomaticPushes is the bounded-watch-cost
-// contract: a watch-mode (automatic) incremental push whose write open is
-// blocked by a read-only serve handle must return a successful deferred
-// no-op — not rebuild the whole archive on every changed batch — and must
-// not advance the mirror's push cutoff, so the next unheld push catches up
-// on everything that changed while the mirror was held. The probe itself
-// still succeeds while the reader holds the file (read-only opens coexist),
-// which is also asserted here via the mid-hold ProbeMirror call.
-func TestPushDefersHeldMirrorForAutomaticPushes(t *testing.T) {
+func TestPushPublishesHeldMirrorForAutomaticPushes(t *testing.T) {
+	skipReopenTestOnWindows(t)
 	ctx := t.Context()
-	watchOpts := storage.MirrorPushOptions{Automatic: true}
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", watchOpts, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
-	baseline, err := ProbeMirror(ctx, path)
+	store, err := NewStore(ctx, path)
 	require.NoError(t, err)
-	require.True(t, baseline.ShapeOK)
-
-	appendMessage(t, local, "sess-1")
-	held, err := OpenReadOnly(ctx, path)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	appendFrustrationPrompt(t, local, "sess-1")
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 	require.NoError(t, err)
-
-	res, err := Push(ctx, path, local, "m", watchOpts, false, nil)
+	assert.False(t, res.Diagnostics.Deferred)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Equal(t, 1, res.SessionsPushed)
+	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	assert.True(t, res.Diagnostics.Deferred, "the held push must defer")
-	assert.Contains(t, res.Diagnostics.DeferredReason, "held open by reader processes")
-	assert.False(t, res.Diagnostics.Full, "a deferred push must not rebuild")
-	assert.Zero(t, res.SessionsPushed, "a deferred push must not write sessions")
-
-	midHold, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
-	assert.True(t, midHold.ShapeOK,
-		"a probe must still inspect a mirror held read-only by a serve handle")
-	assert.Equal(t, baseline.LastPushCutoff, midHold.LastPushCutoff,
-		"a deferred push must not advance the mirror's push cutoff")
-
-	require.NoError(t, held.Close())
-	assertMirrorMessageCount(t, path, "sess-1", 2)
-
-	catchUp, err := Push(ctx, path, local, "m", watchOpts, false, nil)
-	require.NoError(t, err)
-	assert.False(t, catchUp.Diagnostics.Deferred)
-	assert.False(t, catchUp.Diagnostics.Full,
-		"the unheld catch-up push must be incremental, not a rebuild")
-	assert.Equal(t, 1, catchUp.SessionsPushed,
-		"the catch-up push must pick up the change made while the mirror was held")
-	assertMirrorMessageCount(t, path, "sess-1", 3)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 // TestAutomaticIncrementalPushSkipsScopeCount pins the bounded-cost side of
@@ -2290,6 +2255,13 @@ func newPushFixture(t *testing.T, n int) (*db.DB, string) {
 // next Push selects it as a candidate.
 func appendMessage(t *testing.T, local *db.DB, sessionID string) {
 	t.Helper()
+	appendSessionMessage(t, local, sessionID, "assistant", "appended", db.SessionSignalUpdate{})
+}
+
+func appendSessionMessage(
+	t *testing.T, local *db.DB, sessionID, role, content string, signals db.SessionSignalUpdate,
+) {
+	t.Helper()
 
 	ctx := t.Context()
 	sess, err := local.GetSession(ctx, sessionID)
@@ -2304,8 +2276,9 @@ func appendMessage(t *testing.T, local *db.DB, sessionID string) {
 	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: *sess,
 		Messages: []db.Message{
-			syncMessage(sessionID, ordinal, "assistant", "appended", modifiedAt),
+			syncMessage(sessionID, ordinal, role, content, modifiedAt),
 		},
+		Signals: signals,
 	}})
 	require.NoError(t, err)
 }
