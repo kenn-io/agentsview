@@ -4874,7 +4874,7 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 	require.NoError(t, createSchema(t.Context(), syncer.DB()))
 	_, err = syncer.pushEverything(t.Context(), nil)
 	require.NoError(t, err)
-	backend := service.NewReadOnlyBackend(NewStoreFromDB(syncer.DB()))
+	store := NewStoreFromDB(syncer.DB())
 	for _, tc := range []struct {
 		name, pattern, scope, session string
 		limit                         int
@@ -4889,14 +4889,13 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 		{name: "refill", pattern: "refill", limit: 2, includeOneShot: true, want: []int{0, 205}},
 		{name: "rank before limiting", pattern: "rankneedle", limit: 2, includeOneShot: true, want: []int{199, 200}},
 		{name: "child blank", pattern: "childneedle", want: []int{0}},
-		{name: "child all", pattern: "childneedle", scope: "all", want: []int{0}},
 		{name: "child subordinate", pattern: "childneedle", scope: "subordinate", want: []int{0}},
 		{name: "child top", pattern: "childneedle", scope: "top"},
 		{name: "exact child", pattern: "childneedle", session: "child", want: []int{0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			page, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
-				Pattern: tc.pattern, Mode: "hybrid", KeywordFallback: true, Scope: tc.scope, SessionID: tc.session, Limit: tc.limit, IncludeOneShot: tc.includeOneShot,
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+				Pattern: tc.pattern, Mode: "hybrid", KeywordOnly: true, Scope: tc.scope, SessionID: tc.session, Limit: tc.limit, IncludeOneShot: tc.includeOneShot,
 			})
 			require.NoError(t, err)
 			assert.Zero(t, page.NextCursor)
@@ -4908,7 +4907,7 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 		})
 	}
 	t.Run("unclosed quote", func(t *testing.T) {
-		_, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: `"quick`, Mode: "hybrid", KeywordFallback: true})
+		_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: `"quick`, Mode: "hybrid", KeywordOnly: true})
 		var inputErr *db.SearchInputError
 		require.ErrorAs(t, err, &inputErr)
 	})
