@@ -14,7 +14,7 @@ import (
 )
 
 func TestAccountUsageAgentsPostgresParity(t *testing.T) {
-	const billingScale = 10_000_000
+	const billingScale = 1_000_000_000
 	const schema = "agentsview_account_usage_parity_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -107,19 +107,41 @@ func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 	const schema = "agentsview_account_usage_migration_test"
 	_, store := prepareUsageSchema(t, schema)
 	_, err := store.DB().ExecContext(t.Context(), `
-		INSERT INTO cursor_usage_events (occurred_at, model, charged_microdollars, dedup_key)
-		VALUES ('2026-08-12T13:00:00Z', 'model-priced', 30000, 'cursor:legacy');
-		ALTER TABLE cursor_usage_events DROP COLUMN agent`)
+		INSERT INTO cursor_usage_events (occurred_at, model, input_tokens,
+			output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key)
+		VALUES ('2026-08-12T13:00:00Z', 'model-priced', 12, 7, 32, 64, 30000, 'cursor:legacy');
+		ALTER TABLE cursor_usage_events
+			ALTER COLUMN input_tokens TYPE INT,
+			ALTER COLUMN output_tokens TYPE INT,
+			ALTER COLUMN cache_write_tokens TYPE INT,
+			ALTER COLUMN cache_read_tokens TYPE INT`)
+	require.NoError(t, err)
+	assert.False(t, pushSchemaCurrent(t.Context(), store.DB()), "32-bit billing counters need migration")
+	_, err = store.DB().ExecContext(t.Context(), `ALTER TABLE cursor_usage_events DROP COLUMN agent`)
 	require.NoError(t, err)
 	assert.False(t, pushSchemaCurrent(t.Context(), store.DB()))
 	require.NoError(t, EnsureSchema(t.Context(), store.DB(), schema))
 	require.NoError(t, EnsureSchema(t.Context(), store.DB(), schema))
 	var agent string
 	var cost int64
+	var input, output, cacheWrite, cacheRead int64
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
-		SELECT agent, charged_microdollars FROM cursor_usage_events
-		WHERE dedup_key = 'cursor:legacy'`).Scan(&agent, &cost))
+		SELECT agent, charged_microdollars, input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens FROM cursor_usage_events
+		WHERE dedup_key = 'cursor:legacy'`).Scan(&agent, &cost, &input, &output, &cacheWrite, &cacheRead))
 	assert.Equal(t, "cursor", agent)
 	assert.Equal(t, int64(30_000), cost)
+	assert.Equal(t, []int64{12, 7, 32, 64}, []int64{input, output, cacheWrite, cacheRead})
+	_, err = store.DB().ExecContext(t.Context(), `
+		INSERT INTO cursor_usage_events (occurred_at, model, input_tokens,
+			output_tokens, cache_write_tokens, cache_read_tokens, dedup_key)
+		VALUES ('2026-08-12T13:00:00Z', '', 3000000001, 3000000002,
+			3000000003, 3000000004, 'xai:aggregate')`)
+	require.NoError(t, err)
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
+		SELECT input_tokens, output_tokens, cache_write_tokens, cache_read_tokens
+		FROM cursor_usage_events WHERE dedup_key = 'xai:aggregate'`).Scan(&input, &output, &cacheWrite, &cacheRead))
+	assert.Equal(t, []int64{3_000_000_001, 3_000_000_002, 3_000_000_003, 3_000_000_004},
+		[]int64{input, output, cacheWrite, cacheRead})
 	assert.True(t, pushSchemaCurrent(t.Context(), store.DB()))
 }

@@ -324,10 +324,10 @@ CREATE TABLE IF NOT EXISTS cursor_usage_events (
     occurred_at TIMESTAMPTZ NOT NULL,
     model TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT '',
-    input_tokens INT NOT NULL DEFAULT 0,
-    output_tokens INT NOT NULL DEFAULT 0,
-    cache_write_tokens INT NOT NULL DEFAULT 0,
-    cache_read_tokens INT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens BIGINT NOT NULL DEFAULT 0,
     charged_microdollars BIGINT NOT NULL DEFAULT 0,
     cursor_token_fee_microdollars BIGINT NOT NULL DEFAULT 0,
     user_id TEXT NOT NULL DEFAULT '',
@@ -1036,6 +1036,18 @@ func lockSyncMetadataRow(ctx context.Context, tx *sql.Tx, key string) error {
 	return nil
 }
 
+func accountUsageTokensWidePG(ctx context.Context, db *sql.DB) bool {
+	var wide bool
+	err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) = 4 FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = 'cursor_usage_events'
+		  AND column_name IN ('input_tokens', 'output_tokens',
+		                      'cache_write_tokens', 'cache_read_tokens')
+		  AND data_type = 'bigint'`).Scan(&wide)
+	return err == nil && wide
+}
+
 // EnsureSchema creates the schema (if needed), then runs
 // idempotent CREATE TABLE / ALTER TABLE statements. The schema
 // parameter is the unquoted schema name (e.g. "agentsview").
@@ -1106,6 +1118,15 @@ func EnsureSchema(
 	)
 	if err := migrateMoneyColumnsPG(ctx, db, existingColumns); err != nil {
 		return err
+	}
+	if !accountUsageTokensWidePG(ctx, db) {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE cursor_usage_events
+			ALTER COLUMN input_tokens TYPE BIGINT,
+			ALTER COLUMN output_tokens TYPE BIGINT,
+			ALTER COLUMN cache_write_tokens TYPE BIGINT,
+			ALTER COLUMN cache_read_tokens TYPE BIGINT`); err != nil {
+			return fmt.Errorf("widening PG account usage counters: %w", err)
+		}
 	}
 	step = time.Now()
 	tokenCoverageColumnsAdded := false
@@ -2532,7 +2553,8 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	// so repeated pushes cannot duplicate cursor usage rows.
 	// A push may provision the schema for a read-only serve role. Include
 	// the Activity index so that upgrading through push installs it too.
-	return pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup") &&
+	return accountUsageTokensWidePG(ctx, db) &&
+		pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup") &&
 		pgHasIndex(ctx, db, "idx_tool_result_events_terminal")
 }
 

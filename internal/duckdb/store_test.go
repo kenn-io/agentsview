@@ -3728,10 +3728,10 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 		OccurredAt:       "2026-05-14T10:05:00Z",
 		Model:            "claude-4.6-opus-high-thinking",
 		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
-		InputTokens:      1234,
-		OutputTokens:     567,
-		CacheWriteTokens: 300_000_012,
-		CacheReadTokens:  400_000_034,
+		InputTokens:      3_000_001_234,
+		OutputTokens:     3_000_000_567,
+		CacheWriteTokens: 3_300_000_012,
+		CacheReadTokens:  4_400_000_034,
 		Charged:          money.MustParseDollars("0.1566"),
 		CursorTokenFee:   money.MustParseDollars("0.0332"),
 		UserID:           "152683922",
@@ -3754,10 +3754,10 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Daily, 1)
-	assert.Equal(t, 1234, result.Daily[0].InputTokens)
-	assert.Equal(t, 567, result.Daily[0].OutputTokens)
-	assert.Equal(t, 300_000_012, result.Daily[0].CacheCreationTokens)
-	assert.Equal(t, 400_000_034, result.Daily[0].CacheReadTokens)
+	assert.Equal(t, 3_000_001_234, result.Daily[0].InputTokens)
+	assert.Equal(t, 3_000_000_567, result.Daily[0].OutputTokens)
+	assert.Equal(t, 3_300_000_012, result.Daily[0].CacheCreationTokens)
+	assert.Equal(t, 4_400_000_034, result.Daily[0].CacheReadTokens)
 	assert.Equal(t, money.MustParseDollars("0.1566"), result.Daily[0].TotalCost)
 	assert.Empty(t, result.Projects, "cursor-only usage should not emit project identities")
 	assert.NotContains(t, result.Projects, "")
