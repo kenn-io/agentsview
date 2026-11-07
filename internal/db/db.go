@@ -653,7 +653,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // and session identities are unchanged.)
 // (166: retain inbound Claude peer user records as system messages. Re-parse
 // Claude-format sources in place; source and session identities are unchanged.)
-const dataVersion = 166
+// (167: repair Pi-family parent lineage and subagent relationships. Re-parse
+// Pi, OMP, OMO, Prime Agent, and StepCode sources in place; source and session
+// identities are unchanged.)
+const dataVersion = 167
 
 const archiveOnlyVersionBase = 1 << 20
 
