@@ -98,10 +98,11 @@ Codex data-loss bug or a merge blocker.
   the pending set, overflow and in-flight batch are empty.
 - A scheduled pricing refresh calls `RewarmUsageCache` once it returns, when the
   stored catalog digest changed, including a partial refresh that also reports
-  an error. It starts the same coverage pass, which rebuilds only rollups
-  whose pricing lookups now resolve differently. A pass resolves prices from
-  the catalog it captured at start. A re-warm during a pass stops it at the
-  next install batch and starts a new pass with the current catalog.
+  an error. It starts the same coverage pass, which rebuilds only rollups whose
+  pricing lookups now resolve differently. A pass resolves prices from the
+  catalog it captured at start. Each batch, including the final rollup recheck,
+  checks the committed pricing revision. A change stops the pass and queues a
+  new pass with the current catalog, even before re-warm is called.
 - Sweep the archive deletion journal before and after the pass and between
   install batches. Queries also inner-join current archive sessions before
   ranking, so tombstone processing is hygiene rather than a correctness

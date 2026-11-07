@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"runtime"
 	"slices"
 	"sort"
@@ -156,7 +157,8 @@ func (db *DB) UsagePricingDigest(ctx context.Context) (string, error) {
 	return usagePricingIdentity(rows)
 }
 
-// RewarmUsageCache rebuilds price-stale rollups; a call during a pass stops it at the next batch and reruns with the current catalog.
+// RewarmUsageCache starts or queues a pass to rebuild price-stale rollups.
+// Active passes detect committed pricing changes between batches and restart with the current catalog.
 func (db *DB) RewarmUsageCache() error {
 	if !db.isUsageBackfillEnabled() {
 		return nil
@@ -172,10 +174,15 @@ func (db *DB) isUsageBackfillEnabled() bool {
 	return db.usageBackfillEnabled
 }
 
-func (db *DB) usageBackfillRerunQueued() bool {
+func (db *DB) usageBackfillPricingChanged(ctx context.Context, revision int64) (bool, error) {
+	_, current, err := db.databaseIDAndUsagePricingRevision(ctx)
+	if err != nil || current == revision {
+		return false, err
+	}
 	db.usageBackfillMu.Lock()
 	defer db.usageBackfillMu.Unlock()
-	return db.usageBackfillRerun
+	db.usageBackfillRerun = true
+	return true, nil
 }
 
 // StopUsageCacheBackfill cancels and joins the active pass before cache handles
@@ -268,8 +275,8 @@ func (db *DB) runUsageCacheBackfillPass(
 	allResults := make(map[string]usageFillResult, len(snapshot.Versions))
 	var installs []map[string]usageRollupInstall
 	for start := 0; start < len(snapshot.Versions); start += usageCacheBackfillBatchSize {
-		if db.usageBackfillRerunQueued() {
-			return nil
+		if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.PricingRevision); err != nil || changed {
+			return err
 		}
 		end := min(start+usageCacheBackfillBatchSize, len(snapshot.Versions))
 		cursorTarget := int64(0)
@@ -308,8 +315,8 @@ func (db *DB) runUsageCacheBackfillPass(
 			}
 		}
 	}
-	if db.usageBackfillRerunQueued() {
-		return nil
+	if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.PricingRevision); err != nil || changed {
+		return err
 	}
 	// Filling a later batch can invalidate a rollup install from an
 	// earlier batch when the filled session adds a sibling for an
@@ -317,14 +324,35 @@ func (db *DB) runUsageCacheBackfillPass(
 	// snapshot once after every fact is filled, so the pass never
 	// completes with rollups it deleted itself.
 	if len(snapshot.Versions) > usageCacheBackfillBatchSize {
-		built, metrics, err := ensureUsageRollupsAcross(ctx, cache, snapshot, allResults, resolver, locations)
-		if err != nil {
-			return fmt.Errorf("rebuilding invalidated usage rollups during backfill: %w", err)
+		installs = make([]map[string]usageRollupInstall, len(locations))
+		for i := range installs {
+			installs[i] = make(map[string]usageRollupInstall)
 		}
-		installs = built
-		dailyRows += metrics.DailyRows
-		exceptionGroups += metrics.ExceptionGroups
-		exceptionRows += metrics.ExceptionRows
+		for start := 0; start < len(snapshot.Versions); start += usageCacheBackfillBatchSize {
+			if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.PricingRevision); err != nil || changed {
+				return err
+			}
+			end := min(start+usageCacheBackfillBatchSize, len(snapshot.Versions))
+			batch := snapshot
+			batch.Sessions = snapshot.Sessions[start:end]
+			batch.Versions = snapshot.Versions[start:end]
+			if start > 0 {
+				batch.CursorHighWater = 0
+			}
+			built, metrics, err := ensureUsageRollupsAcross(ctx, cache, batch, allResults, resolver, locations)
+			if err != nil {
+				return fmt.Errorf("rebuilding invalidated usage rollups during backfill: %w", err)
+			}
+			for i := range built {
+				maps.Copy(installs[i], built[i])
+			}
+			dailyRows += metrics.DailyRows
+			exceptionGroups += metrics.ExceptionGroups
+			exceptionRows += metrics.ExceptionRows
+			if end < len(snapshot.Versions) {
+				cache.fill.maintainBetweenInstallBatches(ctx)
+			}
+		}
 	}
 	if len(snapshot.Versions) == 0 {
 		results, err := cache.fill.FillBackground(ctx, nil, snapshot.CursorHighWater)
@@ -339,6 +367,9 @@ func (db *DB) runUsageCacheBackfillPass(
 		dailyRows += metrics.DailyRows
 		exceptionGroups += metrics.ExceptionGroups
 		exceptionRows += metrics.ExceptionRows
+	}
+	if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.PricingRevision); err != nil || changed {
+		return err
 	}
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err

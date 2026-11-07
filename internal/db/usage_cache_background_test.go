@@ -560,83 +560,104 @@ func TestReopenRestartsUsageBackfillOnlyWhenPreviouslyStarted(t *testing.T) {
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 }
 
-func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
-	database := testDB(t)
-	seedUsageBatchSessions(t, database, 5*usageCacheBackfillBatchSize+1,
-		time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
-	setPrice := func(microdollars int64) {
-		require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
-			ModelPattern: "model",
-			InputPerMTok: money.Money{Microdollars: microdollars},
-		}}))
-	}
-	setPrice(1_000_000)
-	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
-	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
-	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
-	require.NoError(t, err)
-	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
-	require.NoError(t, err)
+func setUsageBackfillPrice(t *testing.T, database *DB, model string, microdollars int64) {
+	t.Helper()
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: model,
+		InputPerMTok: money.Money{Microdollars: microdollars},
+	}}))
+}
 
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	arrived := make(chan struct{}, 1)
-	release := make(chan struct{})
-	open := make(chan struct{})
-	var once sync.Once
-	openGate := func() { once.Do(func() { close(open) }) }
-	t.Cleanup(func() {
-		openGate()
-		database.StopUsageCacheBackfill()
-	})
-	cache.fill.observer.afterMaintenance = func() {
-		select {
-		case arrived <- struct{}{}:
-		case <-open:
-			return
-		case <-ctx.Done():
-			return
-		}
-		select {
-		case <-release:
-		case <-open:
-		case <-ctx.Done():
-		}
+func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		rewarm          bool
+		skipMaintenance int
+	}{
+		{name: "rewarm", rewarm: true},
+		{name: "commit-before-rewarm"},
+		{name: "commit-during-recheck", skipMaintenance: 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database := testDB(t)
+			seedUsageBatchSessions(t, database, 5*usageCacheBackfillBatchSize+1,
+				time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+			setUsageBackfillPrice(t, database, "model", 1_000_000)
+			require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
+			require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+			snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+			require.NoError(t, err)
+			cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			arrived := make(chan struct{}, 1)
+			release := make(chan struct{})
+			open := make(chan struct{})
+			var once sync.Once
+			openGate := func() { once.Do(func() { close(open) }) }
+			t.Cleanup(func() {
+				openGate()
+				database.StopUsageCacheBackfill()
+			})
+			cache.fill.observer.afterMaintenance = func() {
+				// The six initial batches yield five times before the final recheck.
+				if test.skipMaintenance > 0 {
+					test.skipMaintenance--
+					return
+				}
+				select {
+				case arrived <- struct{}{}:
+				case <-open:
+					return
+				case <-ctx.Done():
+					return
+				}
+				select {
+				case <-release:
+				case <-open:
+				case <-ctx.Done():
+				}
+			}
+			waitForBatch := func() {
+				t.Helper()
+				select {
+				case <-arrived:
+				case <-ctx.Done():
+					require.NoError(t, ctx.Err(), "waiting for the background install batch")
+				}
+			}
+			require.NoError(t, database.StartUsageCacheBackfill(ctx))
+			waitForBatch()
+			setUsageBackfillPrice(t, database, "model", 2_000_000)
+			if test.rewarm {
+				require.NoError(t, database.RewarmUsageCache())
+			}
+			daily, err := database.GetDailyUsage(ctx, UsageFilter{Progress: func(phase string) {
+				if phase != "Reading cached daily totals" {
+					return
+				}
+				// Let one pinned-price batch install after each foreground preparation.
+				select {
+				case release <- struct{}{}:
+				case <-ctx.Done():
+					require.NoError(t, ctx.Err())
+				}
+				waitForBatch()
+			}})
+			openGate()
+			require.NoError(t, err)
+			assert.Equal(t, int64(2562), daily.Totals.TotalCost.Microdollars)
+			require.NoError(t, database.WaitUsageCacheBackfill(ctx))
+			var rows, stale int
+			require.NoError(t, cache.db.QueryRowContext(ctx, `SELECT count(*),
+				count(CASE WHEN estimated_cost_microdollars != 2 THEN 1 END)
+				FROM usage_daily_rollups`).Scan(&rows, &stale))
+			assert.Equal(t, 1281, rows)
+			assert.Zero(t, stale, "every daily rollup must use the refreshed price")
+		})
 	}
-	waitForBatch := func() {
-		t.Helper()
-		select {
-		case <-arrived:
-		case <-ctx.Done():
-			require.NoError(t, ctx.Err(), "waiting for the background install batch")
-		}
-	}
-	require.NoError(t, database.StartUsageCacheBackfill(ctx))
-	waitForBatch()
-	setPrice(2_000_000)
-	require.NoError(t, database.RewarmUsageCache())
-	daily, err := database.GetDailyUsage(ctx, UsageFilter{Progress: func(phase string) {
-		if phase != "Reading cached daily totals" {
-			return
-		}
-		// Let one pinned-price batch install after each foreground preparation.
-		select {
-		case release <- struct{}{}:
-		case <-ctx.Done():
-			require.NoError(t, ctx.Err())
-		}
-		waitForBatch()
-	}})
-	openGate()
-	require.NoError(t, err)
-	assert.Equal(t, int64(2562), daily.Totals.TotalCost.Microdollars)
-	require.NoError(t, database.WaitUsageCacheBackfill(ctx))
-	var rows, stale int
-	require.NoError(t, cache.db.QueryRowContext(ctx, `SELECT count(*),
-		count(CASE WHEN estimated_cost_microdollars != 2 THEN 1 END)
-		FROM usage_daily_rollups`).Scan(&rows, &stale))
-	assert.Equal(t, 1281, rows)
-	assert.Zero(t, stale, "every daily rollup must use the refreshed price")
 }
 
 func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
@@ -650,13 +671,7 @@ func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
 		Timestamp: "2026-08-10T09:00:00Z", Model: "rewarm-model",
 		TokenUsage: json.RawMessage(`{"input_tokens":1000000}`),
 	}}))
-	setPrice := func(microdollars int64) {
-		require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
-			ModelPattern: "rewarm-model",
-			InputPerMTok: money.Money{Microdollars: microdollars},
-		}}))
-	}
-	setPrice(1_000_000)
+	setUsageBackfillPrice(t, database, "rewarm-model", 1_000_000)
 
 	require.NoError(t, database.RewarmUsageCache())
 	database.usageBackfillMu.Lock()
@@ -673,7 +688,7 @@ func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give the first re-warm stale prices so it reaches the build hook.
-	setPrice(2_000_000)
+	setUsageBackfillPrice(t, database, "rewarm-model", 2_000_000)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
@@ -685,7 +700,7 @@ func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
 	}
 	require.NoError(t, database.RewarmUsageCache())
 	<-entered
-	setPrice(3_000_000)
+	setUsageBackfillPrice(t, database, "rewarm-model", 3_000_000)
 	require.NoError(t, database.RewarmUsageCache())
 	close(release)
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))

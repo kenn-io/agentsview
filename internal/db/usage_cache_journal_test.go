@@ -836,11 +836,11 @@ func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
 			require.NoError(t, err)
 			snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
 			require.NoError(t, err)
-			// The archive now has different prices before the pass starts building.
-			require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 2_000_000}}}))
 			var once atomic.Bool
 			cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
 				if once.CompareAndSwap(false, true) {
+					// The in-flight batch finishes with its captured prices.
+					require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 2_000_000}}}))
 					if revert {
 						require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 1_000_000}}}))
 					}

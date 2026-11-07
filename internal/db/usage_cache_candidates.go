@@ -84,6 +84,7 @@ type usageQuerySnapshot struct {
 	PricingRows     []export.EffectivePricingRow
 	PricingDigest   string
 	PricingIdentity string
+	PricingRevision int64
 	location        *time.Location
 }
 
@@ -192,6 +193,10 @@ func (db *DB) captureUsageSnapshot(ctx context.Context, filter UsageFilter, capt
 		archiveMetadataDatabaseIDKey,
 	).Scan(&snapshot.DatabaseID); err != nil {
 		return usageQuerySnapshot{}, fmt.Errorf("reading usage snapshot database id: %w", err)
+	}
+	snapshot.PricingRevision, err = archiveJournalRevision(ctx, tx, archiveMetadataUsagePricingRevisionKey, "usage pricing")
+	if err != nil {
+		return usageQuerySnapshot{}, err
 	}
 	pricingRows, err := db.loadPricingMapFrom(ctx, tx)
 	if err != nil {
