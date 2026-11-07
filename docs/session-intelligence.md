@@ -121,7 +121,8 @@ results, and tool-result status events:
   heuristics such as shell errors and `FAILED` write/edit results.
 - **Retries** — counts repeated identical tool calls when the same
   tool name and identical input are invoked 3 or more times in a
-  row.
+  row. Calls without a stored input, such as every call in a
+  `transcripts` archive, never count as retries.
 - **Edit churn** — counts files that were edited or written 3 or
   more times within a tight ordinal window, which usually signals
   rework.

@@ -2,6 +2,7 @@ package signals
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -762,6 +763,11 @@ func commandClass(c ToolCallRow) string {
 }
 
 func toolSignature(c ToolCallRow) string {
+	if c.InputJSON == "" {
+		// Without retained input no two calls are provably identical, so
+		// the call's position stands in for its input.
+		return fmt.Sprintf("\x01%d:%d", c.MessageOrdinal, c.CallIndex)
+	}
 	return c.ToolName + "\x00" + c.Category + "\x00" + c.InputJSON
 }
 

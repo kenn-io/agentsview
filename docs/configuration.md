@@ -115,9 +115,10 @@ Limits of the narrower policies:
     be present in the archive, use `"usage"`, which stores no transcript text.
 - `"transcripts"` keeps session search, transcript viewing, and tool analytics
     working, but signals and secret findings that read tool inputs or results
-    (tool failure detection, repeated identical calls, secrets inside tool
-    output) see empty payloads. `result_content_blocked_categories` has no
-    additional effect under this policy. Archived RooCode, Kilo Legacy, gptme,
+    see empty payloads. Content-based tool failure detection and secrets inside
+    tool output find nothing, and no calls count as repeated identical calls.
+    `result_content_blocked_categories` has no additional effect under this
+    policy. Archived RooCode, Kilo Legacy, gptme,
     OpenHands, Aider, Codex, TraeX, and Zencoder sessions parsed before data
     version 105 and whose source files are gone cannot be re-parsed, so a
     rebuild drops every row shape those parsers once used for tool output. This
