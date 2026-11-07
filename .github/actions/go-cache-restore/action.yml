@@ -3,6 +3,10 @@ description: >-
   Restore the newest main-saved Go build and module caches for one job group.
   Pair with go-cache-save in the job that owns the group.
 inputs:
+  owner:
+    description: Track entries used by the job that saves this group
+    required: false
+    default: "false"
   group:
     description: Cache group, such as linux-cgo or windows-amd64
     required: true
@@ -27,6 +31,7 @@ runs:
       run: |
         # One key per group and day: main refreshes it daily instead of freezing on go.sum.
         {
+          echo "GO_CACHE_TRACKING="
           echo "GO_CACHE_KEY=go-${GROUP}-${GO_SUM}-$(date -u +%Y-%m-%d)"
           echo "GO_CACHE_PREFIX=go-${GROUP}-${GO_SUM}-"
           echo "GO_CACHE_GROUP_PREFIX=go-${GROUP}-"
@@ -35,6 +40,10 @@ runs:
             go env GOCACHE
             go env GOMODCACHE
           fi
+          if [ -n "$EXTRA_PATH" ]; then echo "$EXTRA_PATH"; fi
+          echo "EOF"
+          echo "GO_CACHE_PRUNE_PATHS<<EOF"
+          if [ "$INCLUDE_GO_CACHE" = 'true' ]; then go env GOCACHE; fi
           if [ -n "$EXTRA_PATH" ]; then echo "$EXTRA_PATH"; fi
           echo "EOF"
         } >> "$GITHUB_ENV"
@@ -52,3 +61,41 @@ runs:
     - name: Record exact cache hit
       shell: bash
       run: echo "GO_CACHE_HIT=${{ steps.restore.outputs.cache-hit }}" >> "$GITHUB_ENV"
+
+    - name: Track cache use
+      if: >-
+        inputs.owner == 'true' && github.event_name == 'push'
+        && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        INCLUDE_GO_CACHE: ${{ inputs.include-go-cache }}
+      run: |
+        if [ "$INCLUDE_GO_CACHE" = 'true' ]; then
+          modules="$(go env GOMODCACHE)"
+          if [ "$RUNNER_OS" = 'Windows' ]; then modules="$(cygpath -u "$modules")"; fi
+          previous="$(mktemp -d "$RUNNER_TEMP/go-cache-modules.XXXXXX")/modules"
+          if [ -d "$modules" ]; then mv "$modules" "$previous"; fi
+          mkdir -p "$modules/cache/download"
+          if [ -d "$previous/cache/download/sumdb" ]; then
+            cp -R "$previous/cache/download/sumdb" "$modules/cache/download/"
+          fi
+          proxy="$previous/cache/download"
+          if [ "$RUNNER_OS" = 'Windows' ]; then proxy="$(cygpath -w "$proxy")"; fi
+          proxy="$(node -e 'console.log(require("node:url").pathToFileURL(process.argv[1]).href)' "$proxy")"
+          echo "GOPROXY=$proxy,${GOPROXY:-https://proxy.golang.org,direct}" >> "$GITHUB_ENV"
+        fi
+        # Go refreshes cache mtimes at most once an hour, so force used entries to refresh.
+        if [ "$RUNNER_OS" = 'macOS' ]; then
+          aged="$(date -v-2H +%Y%m%d%H%M.%S)"
+        else
+          aged="$(date -d '2 hours ago' +%Y%m%d%H%M.%S)"
+        fi
+        while IFS= read -r path; do
+          path="${path/#\~/$HOME}"
+          if [ "$RUNNER_OS" = 'Windows' ]; then path="$(cygpath -u "$path")"; fi
+          if [ -d "$path" ]; then
+            find "$path" -type f \( -name '*-a' -o -name '*-d' \) -exec touch -t "$aged" {} +
+          fi
+        done <<< "$GO_CACHE_PRUNE_PATHS"
+        marker="$(mktemp "$RUNNER_TEMP/go-cache-tracking.XXXXXX")"
+        echo "GO_CACHE_TRACKING=$marker" >> "$GITHUB_ENV"

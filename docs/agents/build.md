@@ -24,8 +24,9 @@ disable the built-in cache in `actions/setup-go`. Use npm caching in
 packages the job installs. Desktop jobs cache Rust dependencies through
 `Swatinem/rust-cache` with the GitHub cache backend. Pull-request workflow
 callers set `cache-mode: read` so jobs can restore caches without saving copies.
-Playwright jobs run browsers in Microsoft's public MCR image through a remote
-server.
+Cache owners opt in with `owner: true` to save only modules and build entries
+used during the run when refreshing a daily cache. Playwright jobs run browsers
+in Microsoft's public MCR image through a remote server.
 
 `desktop-artifacts.yml` builds the frontend once on Linux and packages those
 assets in its Windows, Linux, and Linux ARM64 desktop builds.
