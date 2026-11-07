@@ -923,6 +923,83 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 	assert.Equal(t, int64(20), result.Groups[0].OutputTokens)
 }
 
+func TestUsageRollupCursorAppendsOnlyNewEvents(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
+		OccurredAt: "2026-08-11T02:00:00Z", Model: "cursor-model",
+		InputTokens: 10, Charged: money.MustParseDollars("0.10"), DedupKey: "cursor-one",
+	}}))
+	filter := UsageFilter{Timezone: "America/New_York", SkipSessionCounts: true}
+	_, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	var installID int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT id FROM usage_rollup_installs
+		WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&installID))
+	var builtRows []int
+	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+		for _, build := range builds {
+			if build.SessionID == usageRollupCursorSessionID {
+				builtRows = append(builtRows, len(build.Exceptions))
+			}
+		}
+	}
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
+		OccurredAt: "2026-08-12T02:00:00Z", Model: "cursor-model",
+		InputTokens: 20, Charged: money.MustParseDollars("0.20"), DedupKey: "cursor-two",
+	}}))
+	daily, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, builtRows, "only the new event should be built")
+	var appendedInstallID int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT id FROM usage_rollup_installs
+		WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&appendedInstallID))
+	assert.Equal(t, installID, appendedInstallID)
+	assert.Equal(t, 30, daily.Totals.InputTokens)
+	assert.Equal(t, money.MustParseDollars("0.30"), daily.Totals.TotalCost)
+	dayTwo := filter
+	dayTwo.From, dayTwo.To = "2026-08-11", "2026-08-11"
+	secondDay, err := database.GetDailyUsage(t.Context(), dayTwo)
+	require.NoError(t, err)
+	assert.Equal(t, 20, secondDay.Totals.InputTokens)
+	assert.Equal(t, money.MustParseDollars("0.20"), secondDay.Totals.TotalCost)
+
+	// Compare every stored exception column except the install ID with a full rebuild.
+	readRows := func() [][]any {
+		rows, err := cache.db.QueryContext(t.Context(), `SELECT e.* FROM usage_rollup_exceptions e
+			JOIN usage_rollup_installs i ON i.id = e.rollup_install_id
+			WHERE i.session_id = ? ORDER BY e.fact_index, e.group_kind, e.group_key`, usageRollupCursorSessionID)
+		require.NoError(t, err)
+		defer rows.Close()
+		columns, err := rows.Columns()
+		require.NoError(t, err)
+		var result [][]any
+		for rows.Next() {
+			values := make([]any, len(columns))
+			targets := make([]any, len(columns))
+			for index := range targets {
+				targets[index] = &values[index]
+			}
+			require.NoError(t, rows.Scan(targets...))
+			result = append(result, values[1:])
+		}
+		require.NoError(t, rows.Err())
+		return result
+	}
+	appendedRows := readRows()
+	require.Len(t, appendedRows, 2)
+	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE id = ?`, installID)
+	require.NoError(t, err)
+	rebuilt, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 2}, builtRows)
+	assert.Equal(t, appendedRows, readRows())
+	assert.Equal(t, daily, rebuilt)
+}
+
 func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
@@ -943,7 +1020,7 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 	defer conn.Close()
 	pricing := newUsagePricingIdentities(export.NewPricingResolver(oldSnapshot.PricingRows))
 	oldBuild, err := loadCursorUsageRollupBuild(
-		t.Context(), conn, oldSnapshot.CursorHighWater, oldSnapshot.location, pricing)
+		t.Context(), conn, 0, oldSnapshot.CursorHighWater, oldSnapshot.location, pricing)
 	require.NoError(t, err)
 	// Prepare the empty session scope used by Cursor-only rollup installs.
 	_, err = loadUsageRollupFacts(t.Context(), conn, nil)
@@ -961,7 +1038,7 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 		t.Context(), nil, newSnapshot.CursorHighWater)
 	require.NoError(t, err)
 	newBuild, err := loadCursorUsageRollupBuild(
-		t.Context(), conn, newSnapshot.CursorHighWater, newSnapshot.location, pricing)
+		t.Context(), conn, 0, newSnapshot.CursorHighWater, newSnapshot.location, pricing)
 	require.NoError(t, err)
 	identity := usageTimezoneIdentityFor(newSnapshot.location, newSnapshot.Intervals)
 	require.NoError(t, installUsageRollupBuilds(t.Context(), conn, identity, newSnapshot.location,
@@ -972,6 +1049,10 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 	assert.Empty(t, stale)
 	assert.Equal(t, newSnapshot.CursorHighWater,
 		newInstalls[usageRollupCursorSessionID].FactRevision)
+
+	err = installUsageRollupBuilds(t.Context(), conn, identity, newSnapshot.location,
+		[]usageRollupBuild{newBuild}, cross)
+	require.ErrorIs(t, err, errUsageCacheSourceChanged, "a competing build already installed this range")
 
 	err = installUsageRollupBuilds(t.Context(), conn, identity, oldSnapshot.location,
 		[]usageRollupBuild{oldBuild}, cross)
