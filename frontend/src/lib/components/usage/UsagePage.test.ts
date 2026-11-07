@@ -191,13 +191,13 @@ describe("UsagePage refresh behavior", () => {
 
   async function mountLiveUsage() {
     vi.useFakeTimers();
-    visibility();
+    const setHidden = visibility();
     const subscription = vi.spyOn(events, "subscribe");
     const requests = usageReads().mockResolvedValue(usageSummaryWithUnsupported());
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
     await vi.advanceTimersByTimeAsync(0);
-    return { requests, emit: subscription.mock.calls.at(-1)![0] };
+    return { requests, emit: subscription.mock.calls.at(-1)![0], setHidden };
   }
 
   it("keeps fixed event deadlines and queues polling during long reads", async () => {
@@ -297,22 +297,39 @@ describe("UsagePage refresh behavior", () => {
     expect(requests).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["range", "agent"])(
-    "retains an event during a %s change until that load's deadline",
+  it.each(["range", "agent", "visibility"])(
+    "retains events when a %s change replaces a running load",
     async (filter) => {
-      const { requests, emit } = await mountLiveUsage();
+      const { requests, emit, setHidden } = await mountLiveUsage();
+      const replaced = Promise.withResolvers<UsageSummaryResponse>();
+      const replacement = Promise.withResolvers<UsageSummaryResponse>();
+      requests
+        .mockResolvedValue(tenModelUsageSummary())
+        .mockReturnValueOnce(replaced.promise)
+        .mockReturnValueOnce(replacement.promise);
       await vi.advanceTimersByTimeAsync(50_000);
-      if (filter === "range") usage.setRollingWindow(14);
-      else usage.toggleAgent("claude");
+      void usage.fetchAll();
       emit({ scope: "messages" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      if (filter === "range") usage.setRollingWindow(14);
+      else if (filter === "agent") usage.toggleAgent("claude");
+      else {
+        await setHidden(true);
+        await setHidden(false);
+      }
+      emit({ scope: "messages" });
+      replaced.resolve(usageSummaryWithUnsupported());
+      replacement.resolve(tenModelUsageSummary());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(usage.summary?.totals.inputTokens).toBe(100);
       await vi.advanceTimersByTimeAsync(59_999);
-      expect(requests).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
       expect(requests).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(requests).toHaveBeenCalledTimes(4);
     },
   );
 
-  it("retries a failed event refresh after its minute", async () => {
+  it("waits for the next event after a failed refresh", async () => {
     const { requests, emit } = await mountLiveUsage();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     requests.mockRejectedValueOnce(new Error("read failed"));
@@ -320,6 +337,9 @@ describe("UsagePage refresh behavior", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requests).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(60_000);
+    expect(requests).toHaveBeenCalledTimes(2);
+    emit({ scope: "messages" });
+    await vi.advanceTimersByTimeAsync(0);
     expect(requests).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requests).toHaveBeenCalledTimes(3);
