@@ -52,9 +52,7 @@ func setStartProbeTickForTest(t *testing.T, tick time.Duration) {
 }
 
 // startSleepProcess starts a long-lived child process and reaps it during
-// cleanup. The returned PID is alive for the duration of the test, and once
-// signalled the child becomes a zombie that daemon.ProcessAlive still reports
-// as alive until cleanup reaps it.
+// cleanup. Once signalled, the child becomes a zombie until cleanup reaps it.
 func startSleepProcess(t *testing.T) int {
 	t.Helper()
 	return startProcessKilledOnCleanup(t, exec.CommandContext(t.Context(), "sleep", "60"))

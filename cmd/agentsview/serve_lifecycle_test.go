@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -467,18 +468,17 @@ func TestStopDaemonRuntimeForUpgradeChecksExplicitPortBeforeStop(t *testing.T) {
 	}
 }
 
-func TestStopDaemonProcessKeepsRecordWhenProcessSurvives(t *testing.T) {
+func TestStopDaemonProcessHandlesUnreapedChild(t *testing.T) {
 	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
 	dir := runtimeTestDir(t)
 
-	// startSleepProcess does not reap until cleanup: once signalled, the child
-	// becomes a zombie, which daemon.ProcessAlive reports as still alive. That
-	// drives stopDaemonProcess down its "survived the kill" path.
+	// The child stays unreaped until cleanup. Linux treats its zombie as
+	// exited; other POSIX platforms retain the signal-zero liveness check.
 	pid := startSleepProcess(t)
 	identity, ok := daemon.ReadProcessIdentity(pid)
 	require.True(t, ok)
 
-	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+	path, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
 		PID:               pid,
 		Network:           daemon.NetworkTCP,
 		Address:           "127.0.0.1:1",
@@ -487,6 +487,11 @@ func TestStopDaemonProcessKeepsRecordWhenProcessSurvives(t *testing.T) {
 	require.NoError(t, err)
 
 	err = stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 100*time.Millisecond)
+	if runtime.GOOS == "linux" {
+		require.NoError(t, err)
+		assert.NoFileExists(t, path, "an exited daemon must release its runtime record")
+		return
+	}
 	require.Error(t, err, "must report failure when the process does not exit")
 	require.ErrorContains(t, err, "still running after force kill")
 	assert.NotEmpty(t, liveDaemonRecords(dir),
@@ -562,7 +567,7 @@ func TestStopDaemonProcessForceKillsMatchedIdentity(t *testing.T) {
 		"matched identity record should be removed after force kill")
 }
 
-func TestStopDaemonProcessKeepsRecordWhenIdentityBecomesUnknownAfterForceKill(
+func TestStopDaemonProcessHandlesUnknownIdentityAfterForceKill(
 	t *testing.T,
 ) {
 	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
@@ -592,6 +597,12 @@ func TestStopDaemonProcessKeepsRecordWhenIdentityBecomesUnknownAfterForceKill(
 	err = stopDaemonProcessWithIdentity(
 		rec, 50*time.Millisecond, identityState,
 	)
+	if runtime.GOOS == "linux" {
+		require.NoError(t, err)
+		assert.Equal(t, 2, identityCalls, "an exited child needs no post-kill identity check")
+		assert.NoFileExists(t, path)
+		return
+	}
 	require.Error(t, err)
 	require.ErrorContains(t, err, "identity")
 	require.ErrorContains(t, err, "after force kill")
@@ -600,7 +611,7 @@ func TestStopDaemonProcessKeepsRecordWhenIdentityBecomesUnknownAfterForceKill(
 		"unknown post-kill identity must preserve the runtime record")
 }
 
-func TestStopDaemonProcessKeepsRecordWhenMatchedProcessSurvivesForceKill(
+func TestStopDaemonProcessHandlesMatchedIdentityAfterForceKill(
 	t *testing.T,
 ) {
 	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
@@ -627,6 +638,12 @@ func TestStopDaemonProcessKeepsRecordWhenMatchedProcessSurvivesForceKill(
 	err = stopDaemonProcessWithIdentity(
 		rec, 50*time.Millisecond, identityState,
 	)
+	if runtime.GOOS == "linux" {
+		require.NoError(t, err)
+		assert.Equal(t, 2, identityCalls, "an exited child needs no post-kill identity check")
+		assert.NoFileExists(t, path)
+		return
+	}
 	require.Error(t, err)
 	require.ErrorContains(t, err, "still running after force kill")
 	assert.Equal(t, 3, identityCalls,
