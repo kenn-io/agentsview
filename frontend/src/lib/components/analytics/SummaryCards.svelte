@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Card } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
-  import { m } from "../../i18n/index.js";
+  import { formatDayRange, m } from "../../i18n/index.js";
 
   function formatNum(n: number): string {
     return n.toLocaleString();
@@ -22,6 +22,13 @@
       label: () => m.analytics_summary_sessions(),
       value: () =>
         formatNum(analytics.summary?.total_sessions ?? 0),
+      sub: () => {
+        const params = analytics.summaryFilterParams;
+        if (!analytics.summary || !params?.from || !params.to) return "";
+        return m.analytics_summary_sessions_scope({
+          range: formatDayRange(params.from, params.to),
+        });
+      },
     },
     {
       label: () => m.analytics_summary_messages(),

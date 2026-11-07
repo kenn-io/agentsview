@@ -597,6 +597,7 @@
   "analytics_export_csv": "Exportar CSV",
   "analytics_activity_by_day_hour": "Actividad por día y hora",
   "analytics_summary_sessions": "Sesiones",
+  "analytics_summary_sessions_scope": "{range} · incl. subagentes",
   "analytics_summary_messages": "Mensajes",
   "analytics_summary_projects": "Proyectos",
   "analytics_summary_active_days": "Días activos",

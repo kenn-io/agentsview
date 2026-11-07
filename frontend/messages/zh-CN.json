@@ -580,6 +580,7 @@
   "analytics_export_csv": "导出 CSV",
   "analytics_activity_by_day_hour": "按日期和小时查看活动",
   "analytics_summary_sessions": "会话",
+  "analytics_summary_sessions_scope": "{range} · 含 Subagent",
   "analytics_summary_messages": "消息",
   "analytics_summary_projects": "项目",
   "analytics_summary_active_days": "活跃天数",

@@ -580,6 +580,7 @@
   "analytics_export_csv": "匯出 CSV",
   "analytics_activity_by_day_hour": "按日期和小時查看活動",
   "analytics_summary_sessions": "對話",
+  "analytics_summary_sessions_scope": "{range} · 含 Subagent",
   "analytics_summary_messages": "訊息",
   "analytics_summary_projects": "專案",
   "analytics_summary_active_days": "活躍天數",

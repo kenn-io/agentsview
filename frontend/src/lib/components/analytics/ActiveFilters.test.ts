@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { mount, unmount } from "svelte";
+import { mount, tick, unmount } from "svelte";
 import { fireEvent, screen } from "@testing-library/svelte";
 import ActiveFilters from "./ActiveFilters.svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
@@ -12,8 +12,16 @@ afterEach(() => {
   if (component) unmount(component);
   document.body.innerHTML = "";
   analytics.machine = "";
+  analytics.selectedActivityRange = null;
   sessions.filters.machine = "";
   vi.restoreAllMocks();
+});
+
+it("keeps both endpoints in a single-day activity range chip", async () => {
+  analytics.selectedActivityRange = { from: "2026-11-03", to: "2026-11-03" };
+  component = mount(ActiveFilters, { target: document.body });
+  await tick();
+  expect(screen.getByRole("button", { name: "Nov 3, 2026 – Nov 3, 2026" })).toBeTruthy();
 });
 
 it("keeps an unresolved comma-containing machine as one removable chip", async () => {

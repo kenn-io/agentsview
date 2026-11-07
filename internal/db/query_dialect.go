@@ -708,6 +708,16 @@ func BuildSessionBaseFilterSQL(
 	return strings.Join(preds, " AND "), b.Args()
 }
 
+// StatsRootCountSQL counts the same canonical roots as an unfiltered sidebar.
+// Its separate scan preserves the existing filters for the other stats totals.
+func StatsRootCountSQL(dialect QueryDialect, excludeOneShot, excludeAutomated bool) (string, []any) {
+	where, args := BuildSessionBaseFilterSQL(SessionFilter{
+		ExcludeOneShot: excludeOneShot, ExcludeAutomated: excludeAutomated,
+	}, dialect)
+	where += " AND " + BuildCanonicalRootWhere(dialect, "sessions", true)
+	return "(SELECT " + dialect.SignedAggregate("COUNT(*)") + " FROM sessions WHERE " + where + ")", args
+}
+
 func (d QueryDialect) SidebarChildRelationshipsSQL() string {
 	quoted := make([]string, 0, len(d.sidebarChildRelationships))
 	for _, rel := range d.sidebarChildRelationships {
