@@ -326,6 +326,7 @@ CREATE TABLE IF NOT EXISTS session_plan_usage (
 
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
     id INTEGER PRIMARY KEY,
+    agent TEXT NOT NULL DEFAULT 'cursor',
     occurred_at TEXT NOT NULL,
     model TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT '',

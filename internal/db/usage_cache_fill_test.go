@@ -1505,17 +1505,17 @@ func TestUsageCursorFactsRejectChangedArchiveGeneration(t *testing.T) {
 	assert.Zero(t, usageCacheCount(t, cache, "cursor_usage_facts"))
 }
 
-func TestUsageCursorFactsNormalizeRequestCounters(t *testing.T) {
+func TestUsageCursorFactsPreserveBillingCounters(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt: "2026-08-11T00:00:00Z", Model: "cursor-model",
-		InputTokens: -1, OutputTokens: usagefacts.MaxPlausibleTokens + 1,
+		InputTokens: -1, OutputTokens: 300_000_001,
 		DedupKey: "cursor-normalized",
 	}}))
 	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{})
 	require.NoError(t, err)
 	assert.Zero(t, daily.Totals.InputTokens)
-	assert.Equal(t, usagefacts.MaxPlausibleTokens, daily.Totals.OutputTokens)
+	assert.Equal(t, 300_000_001, daily.Totals.OutputTokens)
 }
 
 func TestUsageCacheNotificationIsNonblocking(t *testing.T) {

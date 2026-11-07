@@ -3695,6 +3695,8 @@ components:
     DbStats:
       additionalProperties: false
       properties:
+        earliest_account_usage:
+          type: string
         earliest_session:
           type:
             - string

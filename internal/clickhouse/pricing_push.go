@@ -320,7 +320,7 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 	return out, nil
 }
 
-// syncCursorUsageEvents appends the cursor admin usage rows the mirror has
+// syncCursorUsageEvents appends the account usage rows the mirror has
 // not consumed yet, tracked by a high-water id in mirror sync_metadata.
 // Project-filtered pushes skip these rows: they are global and unattributed.
 func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
@@ -358,8 +358,13 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 			return fmt.Errorf("parsing cursor usage occurred_at %q", ev.OccurredAt)
 		}
 		ts := occurredAt
+		agent := ev.Agent
+		if agent == "" {
+			agent = "cursor"
+		}
 		rows = append(rows, []any{
 			ev.ID,
+			db.SanitizeUTF8(agent),
 			&ts,
 			db.SanitizeUTF8(ev.Model),
 			db.SanitizeUTF8(ev.Kind),

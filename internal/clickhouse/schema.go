@@ -336,6 +336,7 @@ var mirrorTables = []tableSpec{
 		name: "cursor_usage_events",
 		columns: []columnSpec{
 			col("id", tInt),
+			colDefault("agent", tString, "'cursor'"),
 			col("occurred_at", tNullTime),
 			col("model", tString),
 			col("kind", tString),
