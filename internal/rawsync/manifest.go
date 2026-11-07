@@ -419,7 +419,7 @@ func normalizeRootAliases(aliases []string) ([]string, error) {
 		if !absolute {
 			return nil, fmt.Errorf("%w: manifest root alias must be absolute", ErrInvalid)
 		}
-		for _, part := range strings.Split(normalized, "/") {
+		for part := range strings.SplitSeq(normalized, "/") {
 			if part == "." || part == ".." {
 				return nil, fmt.Errorf("%w: manifest root alias is not normalized", ErrInvalid)
 			}
