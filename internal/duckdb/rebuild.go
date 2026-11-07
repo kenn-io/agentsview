@@ -378,7 +378,7 @@ func pendingRebuild(ctx context.Context, path string, current rebuildRun) (*rebu
 
 func rebuildInProgressError(path string, err error) error {
 	return fmt.Errorf(
-		"another push is already writing the duckdb mirror %s (%w); "+
+		"another push is already rebuilding the duckdb mirror %s (%w); "+
 			"wait for it to finish, then retry", path, err,
 	)
 }

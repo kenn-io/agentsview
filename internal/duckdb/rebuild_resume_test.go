@@ -179,7 +179,7 @@ func TestPushFailsWhileRebuildFileIsHeld(t *testing.T) {
 	defer func() { require.NoError(t, holder.Close()) }()
 
 	_, err = Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
-	require.ErrorContains(t, err, "another push is already writing")
+	require.ErrorContains(t, err, "another push is already rebuilding")
 	assert.FileExists(t, rebuildFilePath(path), "the running rebuild's file survives")
 }
 
@@ -198,7 +198,7 @@ func TestPushWaitsForRebuildLock(t *testing.T) {
 	defer func() { require.NoError(t, holder.Unlock()) }()
 
 	_, err = Push(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
-	require.ErrorContains(t, err, "another push is already writing")
+	require.ErrorContains(t, err, "another push is already rebuilding")
 
 	res, err := Push(t.Context(), path, local, "test-machine",
 		storage.MirrorPushOptions{Automatic: true}, false, nil)
