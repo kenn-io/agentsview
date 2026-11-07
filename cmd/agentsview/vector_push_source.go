@@ -104,6 +104,21 @@ func (s *vectorPushSource) Close() error {
 	return err
 }
 
+// reconfigure points later exports at cfg's vectors.db by dropping the
+// memoized handle. An export already running keeps its own read transaction.
+func (s *vectorPushSource) reconfigure(cfg config.Config) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg = cfg
+	if s.ix == nil {
+		return
+	}
+	if err := s.ix.Close(); err != nil {
+		log.Printf("closing vectors.db push source: %v", err)
+	}
+	s.ix = nil
+}
+
 func (s *vectorPushSource) BeginExport(
 	ctx context.Context, sessionIDs []string,
 ) (storage.VectorExport, bool, error) {

@@ -282,9 +282,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		}
 		v.mu.Lock()
 		v.serving, v.cfg = serving, cfg
-		v.push.mu.Lock()
-		v.push.cfg = cfg
-		v.push.mu.Unlock()
+		v.push.reconfigure(cfg)
 		if serving.manager == nil {
 			v.mu.Unlock()
 			return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.
