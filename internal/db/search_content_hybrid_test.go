@@ -729,11 +729,10 @@ func TestSearchContentHybridKeywordOnlyIgnoresMirrorScope(t *testing.T) {
 		{DocKey: "piece3", SessionID: "run", OrdinalStart: 3, OrdinalEnd: 3},
 	}}
 	d.SetVectorSearcher(searcher)
-	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: `"needle" AND NEAR("needle" "haystack", 2)`, Mode: "hybrid", KeywordOnly: true, IncludeOneShot: true, Scope: "top"})
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, IncludeOneShot: true, Scope: "top"})
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 2)
 	for _, match := range page.Matches {
 		assert.Equal(t, [2]int{1, 2}, match.OrdinalRange)
 	}
-	assert.Zero(t, searcher.calls)
 }

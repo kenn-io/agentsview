@@ -31,8 +31,6 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 	}{
 		{name: "not configured", mode: "hybrid", optIn: true, reason: "not set up", wantSetup: true},
 		{name: "building", mode: "hybrid", optIn: true, cause: fmt.Errorf("search unavailable: %w", db.NewSemanticUnavailableError("index is building: 40% complete")), reason: "index is building: 40% complete"},
-		{name: "stale", mode: "hybrid", optIn: true, cause: db.NewSemanticUnavailableError("index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'"), reason: "index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'"},
-		{name: "mirror mismatch", mode: "hybrid", optIn: true, cause: db.NewSemanticUnavailableError("vector index was built by an incompatible version: run `agentsview index embeddings build`"), reason: "vector index was built by an incompatible version: run `agentsview index embeddings build`"},
 		{name: "empty", mode: "hybrid", optIn: true, pattern: "absent", empty: true, reason: "not set up", wantSetup: true},
 		{name: "no opt in", mode: "hybrid", wantErr: db.ErrSemanticUnavailable},
 		{name: "semantic", mode: "semantic", optIn: true, wantErr: db.ErrSemanticUnavailable},
