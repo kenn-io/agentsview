@@ -52,6 +52,10 @@ func (b *duckAppendBatch) add(ctx context.Context, table string, values ...any) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	columns, ok := b.columns[table]
+	if !ok {
+		return errors.New("missing appender columns for " + table)
+	}
 	row := make([]driver.Value, len(values))
 	payload := 0
 	for i, value := range values {
@@ -70,7 +74,7 @@ func (b *duckAppendBatch) add(ctx context.Context, table string, values ...any) 
 		switch v := converted.(type) {
 		case string:
 			payload += len(v)
-			switch b.columns[table][i] {
+			switch columns[i] {
 			case "started_at", "ended_at", "local_modified_at", "deleted_at", "created_at", "timestamp", "occurred_at":
 				// timeValue leaves DuckDB-only timestamp formats as strings. Preserve
 				// the SQL cast on this same transaction connection before appending.

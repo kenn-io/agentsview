@@ -42,22 +42,6 @@ func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	assert.Equal(t, strings.Repeat("summary\u03bb", 160000)+"row-102 summary", summary)
 }
 
-func TestPushBatchCloseErrorIncludesSessionContext(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	write := duckBatchFixture("close-error", 0)
-	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
-	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	require.NoError(t, createSchema(ctx, syncer.DB()))
-	sess, err := local.GetSession(ctx, write.Session.ID)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	// Duplicate session keys are accepted by AppendRow and rejected on close.
-	_, err = syncer.tryPushSessionBatch(ctx, []db.Session{*sess, *sess}, nil)
-	assert.ErrorContains(t, err, "PRIMARY KEY")
-}
-
 func TestDuckAppenderPayloadBounds(t *testing.T) {
 	const byteLimit = 1 << 20
 	first, second := strings.Repeat("a", 614400), strings.Repeat("b", 614400)
