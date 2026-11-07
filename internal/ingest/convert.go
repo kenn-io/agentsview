@@ -287,10 +287,18 @@ func NextParsedOrdinal(current int, messages []parser.ParsedMessage) int {
 }
 
 // LastParsedSourceUUID returns the last available source UUID for resumption.
+//
+// A deferred hook record keeps its native source UUID on the
+// stored message, but that identity is not part of the ordinary entry chain,
+// so it never becomes the resume cursor. A batch without another source UUID
+// keeps the current cursor.
 func LastParsedSourceUUID(
 	current string, messages []parser.ParsedMessage,
 ) string {
 	for _, message := range slices.Backward(messages) {
+		if parser.IsClaudeHookSubtype(message.SourceSubtype) {
+			continue
+		}
 		if message.SourceUUID != "" {
 			return message.SourceUUID
 		}

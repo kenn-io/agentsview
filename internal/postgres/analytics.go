@@ -1952,7 +1952,7 @@ func (s *Store) queryVelocityMsgs(
 		timestamp,
 		content_length
 		FROM messages
-		WHERE session_id IN ` + ph + `
+		WHERE ` + db.ExcludeClaudeHooksSQL("source_subtype") + ` AND session_id IN ` + ph + `
 		ORDER BY session_id, ordinal`
 
 	rows, err := s.pg.QueryContext(ctx, q, pb.args...)
@@ -2451,8 +2451,9 @@ func (s *Store) GetAnalyticsTopSessions(
 				AS BIGINT) AS delta_ms
 				FROM messages m2
 				WHERE m2.session_id = sessions.id
+					AND %[2]s
 			) inner2
-		), 0)`, db.ActiveGapCapMs)
+		), 0)`, db.ActiveGapCapMs, db.ExcludeClaudeHooksSQL("m2.source_subtype"))
 
 	query := `SELECT id, ` + pgDateCol + `, project,
 		first_message,

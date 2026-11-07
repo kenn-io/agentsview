@@ -816,7 +816,7 @@ so matches can be highlighted.
 ### Block-Type Filtering
 
 Click the filter icon in the message viewer header to open a dropdown that
-toggles visibility of six content categories:
+toggles visibility of seven content categories:
 
 | Category  | What It Controls          |
 | --------- | ------------------------- |
@@ -826,6 +826,7 @@ toggles visibility of six content categories:
 | Tool      | Tool call blocks          |
 | Code      | Code blocks               |
 | System    | System boundary cards     |
+| Hooks     | Hook output cards         |
 
 Turning off **Code** collapses each fenced block into an inline placeholder
 showing its language and an **Expand** button. Expand or collapse individual

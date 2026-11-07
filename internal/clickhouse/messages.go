@@ -75,6 +75,7 @@ func (s *Store) queryTurnRows(ctx context.Context, sess *db.Session) ([]db.TurnR
 			COALESCE(source_subtype, ''), content_length
 		FROM messages
 		WHERE session_id = ?
+			AND `+db.ExcludeClaudeHooksSQL("source_subtype")+`
 		ORDER BY ordinal`, sess.ID)
 	if err != nil {
 		return nil, fmt.Errorf("querying clickhouse timing turns: %w", err)

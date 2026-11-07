@@ -2317,6 +2317,46 @@ func TestGetSessionStats_Temporal_IgnoresAssistantMessages(t *testing.T) {
 		"hourly_utc should be empty when only assistant msgs")
 }
 
+// Hooks don't create an hour of their own.
+// Ordinary queued prompts still count as user activity.
+func TestGetSessionStats_Temporal_HookRowsExcluded(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	now := time.Now()
+
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s1", userMsgs: 2, startedAt: hoursAgo(6),
+	})
+
+	realPrompt := userMsgAt("s1", 0, "real prompt", hoursAgoAt(now, 5, 5, 0))
+	queued := userMsgAt("s1", 1, "queued prompt", hoursAgoAt(now, 5, 45, 0))
+	queued.SourceType = "user"
+	queued.SourceSubtype = "queued_command"
+	queued.IsSystem = false
+
+	hookOtherHour := userMsgAt("s1", 2, "hook context", hoursAgoAt(now, 4, 10, 0))
+	hookOtherHour.SourceType = "attachment"
+	hookOtherHour.SourceSubtype = "hook_additional_context"
+	hookOtherHour.IsSystem = true
+	notification := userMsgAt("s1", 3, "task finished", hoursAgoAt(now, 5, 50, 0))
+	notification.SourceSubtype = "task_notification"
+	notification.IsSystem = true
+
+	insertMessages(t, d,
+		realPrompt, queued, hookOtherHour, notification,
+	)
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	require.NoError(t, err, "GetSessionStats")
+	require.Len(t, stats.Temporal.HourlyUTC, 1,
+		"hourly_utc want 1 entry: %+v", stats.Temporal.HourlyUTC)
+	got := stats.Temporal.HourlyUTC[0]
+	assert.Equal(t, utcHourBoundary(now, 5), got.TS, "hourly_utc TS")
+	assert.Equal(t, 3, got.UserMessages,
+		"real prompt, queued command, and non-hook system row still count")
+	assert.Equal(t, 1, got.Sessions, "sessions want 1")
+}
+
 func TestGetSessionStats_Temporal_SkipsEmptyTimestamps(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

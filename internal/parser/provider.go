@@ -1141,6 +1141,8 @@ type IncrementalRequest struct {
 	// the appended assistant head continues exactly this message id.
 	// nil keeps the conservative fallback.
 	StoredLastClaudeMessageID *string
+	// StoredTailTimestamp is the last stored row's timestamp for hook ordering.
+	StoredTailTimestamp time.Time
 	// StoredSessionName is the session_name already persisted for this
 	// session ("" when the row carries none), or nil when the call site
 	// cannot supply it. Claude adopts a generated ai-title only when no

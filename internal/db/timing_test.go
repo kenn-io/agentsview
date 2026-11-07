@@ -42,7 +42,7 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	ctx := t.Context()
 
 	timingInsertSession(t, d, "solo",
-		"2026-04-26T10:00:00Z", "2026-04-26T10:00:30Z")
+		"2026-04-26T10:00:00Z", "2026-04-26T10:00:31Z")
 	timingInsertMessage(t, d, "solo", 0, "user",
 		"go", "2026-04-26T10:00:00Z", false)
 	timingInsertMessage(t, d, "solo", 1, "assistant",
@@ -50,7 +50,12 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	timingInsertToolCall(t, d, "solo", timingMsgID(t, d, "solo", 1),
 		"tu_1", "Bash", "Bash", "")
 	timingInsertMessage(t, d, "solo", 2, "user",
-		"ok", "2026-04-26T10:00:30Z", false)
+		"PreToolUse hook output", "2026-04-26T10:00:02Z", false)
+	_, err := d.getWriter().ExecContext(ctx,
+		`UPDATE messages SET is_system = 1, source_type = 'attachment', source_subtype = 'hook_success' WHERE session_id = 'solo' AND ordinal = 2`)
+	require.NoError(t, err)
+	timingInsertMessage(t, d, "solo", 3, "user",
+		"ok", "2026-04-26T10:00:31Z", false)
 
 	timingInsertSession(t, d, "completed-call",
 		"2026-04-26T10:00:00Z", "2026-04-26T22:38:05Z")
@@ -150,7 +155,7 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 		assert.False(t, got.Running, "Running")
 		require.Len(t, got.Turns, 1, "len(Turns)")
 		require.NotNil(t, got.Turns[0].DurationMs, "turn duration")
-		assert.Equal(t, int64(29_000), *got.Turns[0].DurationMs, "turn duration")
+		assert.Equal(t, int64(30_000), *got.Turns[0].DurationMs, "hook output must not end the tool turn")
 		assert.Nil(t, got.Turns[0].Calls[0].DurationMs, "execution was not measured")
 		assert.Zero(t, got.ToolDurationMs)
 	})

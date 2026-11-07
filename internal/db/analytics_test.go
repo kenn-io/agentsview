@@ -3394,6 +3394,11 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 				"done",
 				"2024-06-02T11:00:00Z",
 			),
+			Message{
+				SessionID: "wall-dominant", Ordinal: 3, Role: "user",
+				Content: "hook output", Timestamp: "2024-06-02T11:10:00Z",
+				IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success",
+			},
 		)
 
 		insertSession(t, d, "actively-working", "project-gamma", func(s *Session) {
@@ -5277,6 +5282,25 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	assert.Equal(t, BuildToolsAnalytics(all), resp)
 	assert.Equal(t, 501, resp.TotalCalls)
 	t.Log("chunked and unchunked responses match; TotalCalls == 501")
+}
+
+func TestGetAnalyticsVelocityIgnoresHookRows(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{
+		ID: "hooks", Project: "proj", Agent: "claude", Machine: "local",
+		StartedAt: new("2024-06-01T09:00:00Z"), MessageCount: 4, UserMessageCount: 1,
+	}))
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "hooks", []Message{
+		{SessionID: "hooks", Ordinal: 0, Role: "user", IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success", Timestamp: "2024-06-01T09:00:00Z", Content: "startup output"},
+		{SessionID: "hooks", Ordinal: 1, Role: "user", Timestamp: "2024-06-01T09:01:00Z", Content: "question"},
+		{SessionID: "hooks", Ordinal: 2, Role: "user", IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_additional_context", Timestamp: "2024-06-01T09:01:09Z", Content: "prompt context"},
+		{SessionID: "hooks", Ordinal: 3, Role: "assistant", Timestamp: "2024-06-01T09:01:10Z", Content: "answer"},
+	}))
+	resp, err := d.GetAnalyticsVelocity(ctx, baseFilter())
+	require.NoError(t, err)
+	assert.InDelta(t, 10.0, resp.Overall.FirstResponseSec.P50, 0.001)
+	assert.InDelta(t, 10.0, resp.Overall.TurnCycleSec.P50, 0.001)
 }
 
 func TestAnalyticsDateWindowPlan(t *testing.T) {

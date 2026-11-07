@@ -1,5 +1,6 @@
 import type { DisplayItem, MessageItem } from "./display-items.js";
 import type { DbMessage as Message } from "../api/generated/index.js";
+import { HOOK_SUBTYPES } from "./messages.js";
 
 // System rows that arrive while the assistant is still working on the
 // current prompt. The Claude parser keeps them on role "user" so analytics
@@ -8,7 +9,7 @@ import type { DbMessage as Message } from "../api/generated/index.js";
 // is injected by tooling. Treating them as turn boundaries split one
 // exchange into many and promoted every "still waiting" status line before
 // them to a final answer.
-const MID_TURN_SYSTEM_SUBTYPES = new Set(["task_notification", "stop_hook"]);
+const MID_TURN_SYSTEM_SUBTYPES = new Set(["task_notification", "stop_hook", ...HOOK_SUBTYPES]);
 
 function isMidTurnSystemMessage(m: Message): boolean {
   return (

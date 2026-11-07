@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json/jsontext"
@@ -16663,11 +16664,24 @@ func (e *Engine) tryProviderIncrementalAppend(
 		// same-message.id continuation; without it, every routine queued
 		// command followed by a fresh response would force a full parse.
 		var storedLastClaudeMessageID *string
+		var storedTailTimestamp time.Time
 		var storedSessionName *string
 		var storedPRLinks map[string]struct{}
 		if provider.Definition().Type == parser.AgentClaude {
 			id := e.db.LastClaudeMessageID(ctx, inc.ID)
 			storedLastClaudeMessageID = &id
+			var tailTimestamp string
+			terr := e.db.Reader().QueryRow(ctx, `
+				SELECT COALESCE(timestamp, '') FROM messages
+				WHERE session_id = ? AND ordinal < ?
+				ORDER BY ordinal DESC LIMIT 1`,
+				inc.ID, inc.NextOrdinal,
+			).Scan(&tailTimestamp)
+			if terr != nil && !errors.Is(terr, sql.ErrNoRows) {
+				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
+					parser.ErrIncrementalNeedsFullParse
+			}
+			storedTailTimestamp, _ = db.ParseStoredTimestamp(tailTimestamp)
 			links, lerr := e.db.GetSessionPRLinkURLs(ctx, inc.ID)
 			if lerr != nil {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
@@ -16702,6 +16716,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredUserMessageCount:    inc.UserMsgCount,
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
+				StoredTailTimestamp:       storedTailTimestamp,
 				StoredSessionName:         storedSessionName,
 				StoredPRLinks:             storedPRLinks,
 				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,
@@ -17282,6 +17297,26 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 	runOrdinal, ok := e.db.LastClaudeAssistantOrdinal(ctx, inc.ID)
 	if !ok {
 		return nil, nil
+	}
+	// Timestamp ordering can place a hook after this assistant even
+	// when its source bytes precede the run. Replacing the stored suffix
+	// would then delete a row the re-parse cannot reread. Only trailing
+	// hooks require a full parse; ordinary rows keep the bounded path.
+	if inc.NextOrdinal > runOrdinal+1 {
+		var hasHook bool
+		err := e.db.Reader().QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM messages
+			WHERE session_id = ? AND ordinal >= ? AND ordinal < ?
+			  AND is_system = 1 AND source_type IN ('attachment', 'system')
+			  AND NOT (`+db.ExcludeClaudeHooksSQL("source_subtype")+`))`,
+			inc.ID, runOrdinal+1, inc.NextOrdinal,
+		).Scan(&hasHook)
+		if err != nil {
+			return nil, fmt.Errorf("read trailing Claude hook rows: %w", err)
+		}
+		if hasHook {
+			return nil, nil
+		}
 	}
 	scanInc := *inc
 	scanInc.FileSize = runStart
