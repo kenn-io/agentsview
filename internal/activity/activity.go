@@ -675,7 +675,10 @@ func claudeSnapshotSelectionContext(
 	type snapshotSelection struct {
 		best, earliest, maximumWebSearchRequests int
 	}
-	selection := make(map[claudeUsageSnapshotToken]snapshotSelection)
+	// Each snapshot's selection lives in a slice so a row costs one map lookup.
+	groupOf := make(map[claudeUsageSnapshotToken]int)
+	groups := []snapshotSelection{}
+	rowGroup := make([]int, len(usage))
 	for i, u := range usage {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, nil, err
@@ -694,18 +697,24 @@ func claudeSnapshotSelectionContext(
 			messageID: u.ClaudeMessageID,
 			requestID: u.ClaudeRequestID,
 		}
-		selected, ok := selection[key]
-		if !ok || earlierClaudeSnapshotAttribution(u, usage[selected.earliest]) {
+		g, ok := groupOf[key]
+		if !ok {
+			g = len(groups)
+			groupOf[key] = g
+			groups = append(groups, snapshotSelection{best: i, earliest: i})
+		}
+		selected := &groups[g]
+		if ok && earlierClaudeSnapshotAttribution(u, usage[selected.earliest]) {
 			selected.earliest = i
 		}
-		if !ok || laterClaudeSnapshot(u, usage[selected.best]) {
+		if ok && laterClaudeSnapshot(u, usage[selected.best]) {
 			selected.best = i
 		}
 		selected.maximumWebSearchRequests = max(
 			selected.maximumWebSearchRequests, u.WebSearchRequests)
-		selection[key] = selected
+		rowGroup[i] = g
 	}
-	for _, selected := range selection {
+	for _, selected := range groups {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -724,10 +733,7 @@ func claudeSnapshotSelectionContext(
 		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
 			continue
 		}
-		canonical[i] = selection[claudeUsageSnapshotToken{
-			messageID: u.ClaudeMessageID,
-			requestID: u.ClaudeRequestID,
-		}].best
+		canonical[i] = groups[rowGroup[i]].best
 	}
 	return mask, attribution, webSearchRequests, canonical, nil
 }

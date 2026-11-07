@@ -170,6 +170,30 @@ func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot,
 	timings := usageRollupRequestTimings{candidates: len(snapshot.Versions)}
 	fillStarted := time.Now()
 	report(fmt.Sprintf("Preparing usage data for %d sessions in this report", timings.candidates))
+	fills, err := cache.fillUsageWindow(ctx, snapshot)
+	if err != nil {
+		return nil, timings, err
+	}
+	timings.fill = time.Since(fillStarted)
+	// A journal refresh builds only changed sessions, but deletions also
+	// remove those sessions from the report's complete window.
+	if window != snapshot {
+		window.dropDeleted(maps.Clone(fills))
+	}
+	snapshot.dropDeleted(fills)
+	resolver := export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
+	report(fmt.Sprintf("Calculating daily totals for %d sessions in this report", timings.candidates))
+	installs, metrics, err := cache.rollup.Ensure(ctx, *snapshot, fills, resolver)
+	if err != nil {
+		return nil, timings, err
+	}
+	timings.rollup = metrics
+	return installs, timings, nil
+}
+
+// fillUsageWindow brings the facts of every snapshot session up to date,
+// splitting large windows across the bulk-read slots.
+func (cache *usageCache) fillUsageWindow(ctx context.Context, snapshot *usageQuerySnapshot) (map[string]usageFillResult, error) {
 	shards := max(1, min(bulkReadSlots, len(snapshot.Versions)/usageFillShardMinSessions))
 	var fills map[string]usageFillResult
 	var err error
@@ -202,24 +226,7 @@ func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot,
 			err = cache.fill.ensureCursor(ctx, snapshot.CursorHighWater)
 		}
 	}
-	if err != nil {
-		return nil, timings, err
-	}
-	timings.fill = time.Since(fillStarted)
-	// A journal refresh builds only changed sessions, but deletions also
-	// remove those sessions from the report's complete window.
-	if window != snapshot {
-		window.dropDeleted(maps.Clone(fills))
-	}
-	snapshot.dropDeleted(fills)
-	resolver := export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
-	report(fmt.Sprintf("Calculating daily totals for %d sessions in this report", timings.candidates))
-	installs, metrics, err := cache.rollup.Ensure(ctx, *snapshot, fills, resolver)
-	if err != nil {
-		return nil, timings, err
-	}
-	timings.rollup = metrics
-	return installs, timings, nil
+	return fills, err
 }
 
 func (db *DB) queryUsageRollups(

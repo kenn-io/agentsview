@@ -756,6 +756,15 @@ persistent cache storage is unavailable or the current generation is
 incompatible, use the same schema and query path in a process-owned temporary
 file and warn that the cache will rebuild after restart.
 
+SQLite Activity reports read usage from `usage_facts`. Their hourly buckets and
+Copilot session-cost allocation need each row, which daily rollups drop. Before
+taking its bulk read, a report captures every live session with usage inside
+its padded usage bounds and fills their facts, the way the Usage page does. It
+then reads the candidate sessions' token facts, plus Claude snapshot peers from
+other captured sessions, through parallel cache reads, and runs the shared
+survivor selection and pricing on them. `activityReportUsage`, the raw archive
+row path, stays as the tests' oracle; reports must match it exactly.
+
 Usage reads are exact. A cold aggregate request fills facts, builds the required
 timezone rollups, then reads them in one pinned cache transaction. Without a
 trusted timezone claim, verify every candidate session's facts fingerprint,
@@ -900,9 +909,9 @@ The usage cache discovers bounded-window candidates through
 `idx_messages_usage_timestamp` and `idx_messages_activity_timestamp`, then
 extracts each selected session through the index-only
 `idx_messages_usage_session_covering` scan. The global activity index is for
-usage-cache candidate discovery, not the Activity report; that report continues
-to avoid a global timestamp scan. Keep these indexes narrow except for the
-single session-keyed covering index that carries `token_usage`.
+usage-cache candidate discovery, not the Activity report; Activity pairing
+continues to avoid a global timestamp scan. Keep these indexes narrow except
+for the single session-keyed covering index that carries `token_usage`.
 
 Discovery collects distinct session IDs per bounded timestamp range before
 checking `sessions`, so each session is looked up once per range.
