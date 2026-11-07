@@ -174,6 +174,39 @@ describe("UsagePage refresh behavior", () => {
 
   function usageReads() {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    const side = {
+      totalCost: testMoney(0),
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 0,
+      sessionCount: 0,
+    };
+    vi.spyOn(UsageService, "getApiV1UsagePairwiseComparison").mockResolvedValue({
+      left: side,
+      right: side,
+      deltas: {
+        totalCostDelta: testMoney(0),
+        totalCostDeltaRatio: null,
+        inputTokensDelta: 0,
+        inputTokensDeltaRatio: null,
+        outputTokensDelta: 0,
+        outputTokensDeltaRatio: null,
+        cacheCreationDelta: 0,
+        cacheCreationDeltaRatio: null,
+        cacheReadDelta: 0,
+        cacheReadDeltaRatio: null,
+        totalTokensDelta: 0,
+        totalTokensDeltaRatio: null,
+        sessionCountDelta: 0,
+        sessionCountDeltaRatio: null,
+        costPerSessionDelta: null,
+        costPerSessionRatio: null,
+        tokensPerSessionDelta: null,
+        tokensPerSessionRatio: null,
+      },
+    });
     vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
     vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({
       priorFrom: "2024-05-01",
@@ -198,6 +231,8 @@ describe("UsagePage refresh behavior", () => {
 
   it("keeps fixed event deadlines and queues polling during long reads", async () => {
     const { requests, emit } = await mountLiveUsage();
+    const firstUpdatedAt = usage.lastUpdatedAt;
+    const firstQuerySteps = usage.lastQuerySteps;
     const next = Promise.withResolvers<UsageSummaryResponse>();
     requests.mockReturnValueOnce(next.promise);
     for (let i = 0; i < 6; i++) {
@@ -210,12 +245,17 @@ describe("UsagePage refresh behavior", () => {
     await vi.advanceTimersByTimeAsync(300_000);
     expect(requests).toHaveBeenCalledTimes(2);
     expect(signal?.aborted).toBe(false);
-    requests.mockResolvedValue(tenModelUsageSummary());
+    const following = Promise.withResolvers<UsageSummaryResponse>();
+    requests.mockReturnValueOnce(following.promise);
     next.resolve(tenModelUsageSummary());
     await vi.advanceTimersByTimeAsync(0);
     await flushEffects();
     expect(usage.summary?.totals.inputTokens).toBe(100);
+    expect(usage.lastUpdatedAt).toBeGreaterThan(firstUpdatedAt!);
+    expect(usage.lastQuerySteps).not.toEqual(firstQuerySteps);
     expect(requests).toHaveBeenCalledTimes(3);
+    following.resolve(tenModelUsageSummary());
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requests).toHaveBeenCalledTimes(3);
   });
@@ -264,6 +304,7 @@ describe("UsagePage refresh behavior", () => {
   it("refreshes on visible return and pauses while hidden", async () => {
     vi.useFakeTimers();
     const setHidden = visibility();
+    const subscription = vi.spyOn(events, "subscribe");
     const requests = usageReads().mockResolvedValue(usageSummaryWithUnsupported());
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
@@ -275,7 +316,12 @@ describe("UsagePage refresh behavior", () => {
     await setHidden(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(requests).toHaveBeenCalledTimes(2);
+    const emit = subscription.mock.calls.at(-1)![0];
+    emit({ scope: "sync" });
+    await flushEffects();
     await setHidden(true);
+    emit({ scope: "messages" });
+    await flushEffects();
     await vi.advanceTimersByTimeAsync(600_000);
     expect(requests).toHaveBeenCalledTimes(2);
     await setHidden(false);

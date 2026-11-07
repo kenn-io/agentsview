@@ -41,7 +41,8 @@ on every sync event — each pairs a manual refresh button with a relative
 "Updated…" timestamp, and the Analytics dashboard also refreshes periodically on
 its own. Use refresh or change the date range for an immediate update.
 
-Usage automatically refreshes at most once a minute when session data changes.
+Usage refreshes after session data changes and on its five-minute timer,
+at most once a minute while visible.
 It pauses while hidden and catches up when you return.
 
 For range-based concurrency and agent-minutes reporting, use the top-level
