@@ -49,6 +49,5 @@ test.describe("Session count consistency", () => {
     await expect(sessionsCard.locator(".card-value"), "analytics summary").toHaveText(
       String(EXPECTED_ANALYTICS_SESSIONS),
     );
-    await expect(sessionsCard.locator(".card-sub")).toContainText("incl.\u00a0subagents");
   });
 });

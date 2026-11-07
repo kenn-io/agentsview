@@ -62,7 +62,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		assert.Equal(t, 2, next.Total)
 	})
 
-	t.Run("orphan_subagent_with_null_parent_is_sidebar_root", func(t *testing.T) {
+	t.Run("stats_orphans_and_nested_continuation", func(t *testing.T) {
 		store, syncer, local := newPushedStore(t)
 		orphanID := "ch-orphan-child"
 		orphan := fixtureSession(orphanID, "alpha", "orphan first", "2026-01-10T00:06:00.000Z", 1)
@@ -88,15 +88,6 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		}
 		assert.Contains(t, ids, orphanID)
 
-		stats, err := store.GetStats(ctx, false, false)
-		require.NoError(t, err)
-		assert.Equal(t, 3, stats.SessionCount)
-		assert.Equal(t, 3, stats.MessageCount)
-	})
-
-	t.Run("stats_missing_parent_and_nested_continuation", func(t *testing.T) {
-		store, syncer, local := newPushedStore(t)
-
 		for _, row := range []struct{ id, relationship, parent string }{
 			{"ch-missing-parent", "subagent", "missing-parent"},
 			{"ch-continuation", "continuation", fixtureAlphaID},
@@ -111,14 +102,14 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			}})
 			require.NoError(t, err)
 		}
-		_, err := syncer.Push(ctx, false, nil)
+		_, err = syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
 		stats, err := store.GetStats(ctx, false, false)
 		require.NoError(t, err)
-		assert.Equal(t, 3, stats.SessionCount)
+		assert.Equal(t, 4, stats.SessionCount)
 		assert.Equal(t, 4, stats.MessageCount)
 		assert.Equal(t, 2, stats.ProjectCount)
-		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
+		index, err = store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
 		require.NoError(t, err)
 		assert.Equal(t, index.Total, stats.SessionCount)
 	})

@@ -15,22 +15,22 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 	assert.Equal(t, Stats{}, stats)
 
 	for _, row := range []struct {
-		id, project, machine, started, relationship, parent string
-		messages, users                                     int
-		automated                                           bool
-		deleted                                             *string
+		id, project, machine, started, relationship string
+		parent                                      *string
+		messages, users                             int
+		automated                                   bool
+		deleted                                     *string
 	}{
-		{"human", "project-a", "machine-a", "2026-01-04T00:00:00Z", "", "", 10, 5, false, nil},
-		{"one-shot", "project-a", "machine-b", "2026-01-03T00:00:00Z", "", "", 3, 1, false, nil},
-		{"automated", "project-b", "machine-b", "2026-01-02T00:00:00Z", "", "", 4, 1, true, nil},
-		{"automated-multi", "project-b", "machine-c", "2026-01-01T00:00:00Z", "", "", 6, 3, true, nil},
-		{"empty", "excluded", "excluded", "2025-01-01T00:00:00Z", "", "", 0, 0, false, nil},
-		{"blank-parent", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", "", 100, 50, false, nil},
-		{"fork", "excluded", "excluded", "2025-01-01T00:00:00Z", "fork", "", 100, 50, false, nil},
-		{"orphan", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", "missing-parent", 100, 50, false, nil},
-		{"parented-child", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", "human", 100, 50, false, nil},
-		{"continuation", "project-a", "machine-a", "2026-01-05T00:00:00Z", "continuation", "human", 2, 2, false, nil},
-		{"deleted", "excluded", "excluded", "2025-01-01T00:00:00Z", "", "", 100, 50, false, new("2026-02-01T00:00:00Z")},
+		{"human", "project-a", "machine-a", "2026-01-04T00:00:00Z", "", nil, 10, 5, false, nil},
+		{"one-shot", "project-a", "machine-b", "2026-01-03T00:00:00Z", "", nil, 3, 1, false, nil},
+		{"automated", "project-b", "machine-b", "2026-01-02T00:00:00Z", "", nil, 4, 1, true, nil},
+		{"automated-multi", "project-b", "machine-c", "2026-01-01T00:00:00Z", "", nil, 6, 3, true, nil},
+		{"empty", "excluded", "excluded", "2025-01-01T00:00:00Z", "", nil, 0, 0, false, nil},
+		{"fork", "excluded", "excluded", "2025-01-01T00:00:00Z", "fork", nil, 100, 50, false, nil},
+		{"orphan", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", new("missing-parent"), 100, 50, false, nil},
+		{"parented-child", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", new("human"), 100, 50, false, nil},
+		{"continuation", "project-a", "machine-a", "2026-01-05T00:00:00Z", "continuation", new("human"), 2, 2, false, nil},
+		{"deleted", "excluded", "excluded", "2025-01-01T00:00:00Z", "", nil, 100, 50, false, new("2026-02-01T00:00:00Z")},
 	} {
 		_, err := d.getWriter().ExecContext(ctx, `INSERT INTO sessions
 			(id, project, machine, agent, started_at, relationship_type,
@@ -45,22 +45,22 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 		want               Stats
 	}{
 		{"all", false, false, Stats{
-			SessionCount: 7, MessageCount: 25,
+			SessionCount: 6, MessageCount: 25,
 			ProjectCount: 2, MachineCount: 3,
 			EarliestSession: new("2026-01-01T00:00:00Z"),
 		}},
 		{"exclude one-shot", true, false, Stats{
-			SessionCount: 6, MessageCount: 22,
+			SessionCount: 5, MessageCount: 22,
 			ProjectCount: 2, MachineCount: 3,
 			EarliestSession: new("2026-01-01T00:00:00Z"),
 		}},
 		{"exclude automated", false, true, Stats{
-			SessionCount: 5, MessageCount: 15,
+			SessionCount: 4, MessageCount: 15,
 			ProjectCount: 1, MachineCount: 2,
 			EarliestSession: new("2026-01-03T00:00:00Z"),
 		}},
 		{"exclude both", true, true, Stats{
-			SessionCount: 4, MessageCount: 12,
+			SessionCount: 3, MessageCount: 12,
 			ProjectCount: 1, MachineCount: 1,
 			EarliestSession: new("2026-01-04T00:00:00Z"),
 		}},

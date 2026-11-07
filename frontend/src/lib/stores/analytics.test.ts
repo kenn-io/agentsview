@@ -1144,7 +1144,7 @@ describe("executeFetch concurrency and error handling", () => {
     expect(analytics.errors.summary).toBe("Failed to load");
   });
 
-  it("should ignore stale success from superseded request", async () => {
+  it("keeps accepted summary params after stale success and a failed refetch", async () => {
     let resolveFirst!: (v: AnalyticsSummary) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
       new Promise((r) => {
@@ -1171,6 +1171,17 @@ describe("executeFetch concurrency and error handling", () => {
     await firstFetch;
 
     expect(analytics.summary?.total_sessions).toBe(99);
+    expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
+
+    analytics.from = "2026-02-01";
+    let reject!: (reason: Error) => void;
+    vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
+      new Promise((_resolve, rej) => { reject = rej; }),
+    );
+    const pending = analytics.fetchSummary();
+    expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
+    reject(new Error("summary unavailable"));
+    await pending;
     expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
   });
 

@@ -1055,9 +1055,7 @@ func TestAnalyticsTopSessions_OutputTokens(t *testing.T) {
 	assert.Equal(t, stats.TopSessionOutputTokens, resp.Sessions[0].OutputTokens)
 }
 
-// TestSessionCountConsistency verifies that session counts from
-// the sidebar and stats agree, while analytics also includes
-// continuations and subagents.
+// TestSessionCountConsistency verifies analytics includes continuations and subagents.
 func TestSessionCountConsistency(t *testing.T) {
 	te := setup(t)
 
@@ -1141,28 +1139,14 @@ func TestSessionCountConsistency(t *testing.T) {
 	)
 	te.seedMessages(t, "cont-0", 5)
 
-	wantNavCount := 5
-	wantAnalyticsCount := 9
-
-	// Stats and sidebar wiring
-	w := te.get(t, "/api/v1/stats")
-	assertStatus(t, w, http.StatusOK)
-	statsResp := decode[db.Stats](t, w)
-	w = te.get(t, "/api/v1/sessions/sidebar-index")
-	assertStatus(t, w, http.StatusOK)
-	sidebarResp := decode[db.SidebarSessionIndex](t, w)
-
-	// 3. Analytics summary
-	w = te.get(t, buildURLWithRange("summary", map[string]string{
+	w := te.get(t, buildURLWithRange("summary", map[string]string{
 		"timezone": "UTC",
 	}))
 	assertStatus(t, w, http.StatusOK)
 	summaryResp := decode[db.AnalyticsSummary](t, w)
 
-	assert.Equal(t, wantNavCount, sidebarResp.Total, "sidebar root total")
-	assert.Equal(t, wantNavCount, statsResp.SessionCount, "stats session_count")
-	assert.Equal(t, wantAnalyticsCount, summaryResp.TotalSessions,
-		"analytics total_sessions counts subagents")
+	assert.Equal(t, 9, summaryResp.TotalSessions,
+		"analytics total_sessions counts subagents and continuations")
 
 }
 

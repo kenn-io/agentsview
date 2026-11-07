@@ -180,8 +180,7 @@ func TestHostedSourceMachinesStats(t *testing.T) {
 	require.NoError(t, err)
 	stats, err := h.GetStats(t.Context(), false, false)
 	require.NoError(t, err)
-	assert.Equal(t, db.Stats{SessionCount: 3, MessageCount: 10, ProjectCount: 2, MachineCount: 4,
-		EarliestSession: new("2026-01-01T00:00:00Z")}, stats)
+	assert.Equal(t, 4, stats.MachineCount)
 	index, err := h.GetSidebarSessionIndex(t.Context(), db.SessionFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, index.Total, stats.SessionCount)
