@@ -660,16 +660,15 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
-- **Code-mode wait output (checked 2026-11-03):** A local rollout records
-  `wait` arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
+- **Code-mode wait output (checked 2026-11-03):** A local rollout records `wait`
+  arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
   `function_call_output.output` is an array of `input_text` blocks containing
   completion timing and script output; running polls return plain text.
   Agentsview treats `wait` calls with a non-empty `cell_id` and no `ids` or
   `targets` arguments as code-mode polls and stores their output as normal
   tool results. Subagent waits keep their existing `status` handling,
-  including empty timeout statuses. They add no result event when `status`
-  is absent. Synthetic coverage in
-  `TestParseCodexSession_FunctionCalls` and
+  including empty timeout statuses. They add no result event when `status` is
+  absent. Synthetic coverage in `TestParseCodexSession_FunctionCalls` and
   `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
   an in-place reparse for Codex at data version 164.
 
@@ -695,8 +694,8 @@ fixtures retain this field; missing identities remain source-local.
   [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
   persists message items. `TestSandboxCodexOutcomesAboveFormerLimit` scales
   this existing shape synthetically through native capture, materialization
-  and the isolated parser, with one large string and many smaller messages.
-  It verifies lossless outcomes above the former transport ceiling, not a
+  and the isolated parser, with one large string and many smaller messages. It
+  verifies lossless outcomes above the former transport ceiling, not a
   producer size limit or a new provider format.
 
 - **Generated images (checked 2026-10-29 at
@@ -4524,6 +4523,58 @@ schemas keep their existing ordering behavior.
   archived session's working-directory filter during sync and rebuilds,
   rechecked with synthetic stores on 2026-10-13.
 
+- **Workspace and parent evidence (checked 2026-10-26):** The summary store also
+  records each conversation's `workspace_uris`, a JSON array of folder URIs,
+  and `parent_conversation_id`, the conversation that started a sub-agent
+  conversation. Verified against conversations Antigravity CLI 1.4.7 wrote on
+  Linux, whose store has the same `conversation_summaries` table: every row
+  held `["file:///<folder>"]`, and a `research` sub-agent the main
+  conversation invoked wrote its own `conversations/<uuid>.db` and a row
+  naming the main conversation, with `nesting_depth` 1. Top-level rows hold
+  `''`. The Antigravity app and IDE read the same table for titles, but their
+  values for these columns remain unconfirmed.
+
+- **Workspace and parent handling:** Agentsview takes the first `file:` URI as
+  the session CWD and derives the project from it. Windows drive URIs become
+  backslash paths, and a URI with a host becomes a UNC path. A non-`file:`
+  URI, such as a remote development folder, leaves CWD empty; a remote root
+  keeps the folder only as a project hint, as for the CLI. A parent that is a
+  conversation UUID other than the conversation itself links the session as a
+  sub-agent. A missing row or column changes nothing.
+
+- **Keeping archived sessions current:** Both values are part of each source's
+  fingerprint, and both providers require the fingerprint hash for freshness,
+  so a full sync reparses exactly the conversations whose store values
+  changed. Data version 167 reparses existing `antigravity` and
+  `antigravity-cli` sources once in place, which also reaches remote mirrors
+  that are otherwise unchanged. A store write routes only the sessions whose
+  archived working directory or parent differs from what the store says,
+  including CLI `implicit/` sessions, and only sessions archived from the same
+  root; a title-only write routes none. Parents are compared both ways. A CLI
+  reader sidecar's parent wins when the sidecar parses and names one, as in
+  parsing, and it is read only when the store's parent disagrees with the
+  archive. An app or IDE row with no workspace folder clears the archived cwd. A
+  session whose archived row is stale, such as one whose cwd a failed parse
+  reconciled, routes until a parse succeeds. With a cwd allow-list, a session
+  not archived yet is routed once the store gives it an allowed workspace. The
+  comparison uses the archive, so it holds after a restart, on a retry after
+  failed processing, and for remote imports that plan without discovery. A
+  remote session's workspace change alone is not routed; the next full import
+  applies it.
+
+- **Unavailable store:** While a store that was read before cannot be read or
+  has disappeared, its last good read stands in, so the outage neither changes
+  fingerprints nor clears stored values. Without a good read in this process,
+  an unreadable store fails each source's fingerprint, so the root's archived
+  sessions stay as they are and are retried. A missing app or IDE store,
+  remote roots included, likewise leaves alone any archived session holding a
+  store-supplied working directory, parent, or project; a project the user
+  assigned does not count. A CLI root without a store is normal for older
+  builds, so CLI sessions do not wait for one; remote archives snapshot both
+  providers' stores so a checkpoint during transfer cannot mix versions; a CLI
+  conversation whose working directory came only from a removed store loses it
+  on its next reparse.
+
 - **Change detection (checked 2026-10-20):** Parsing opens conversation
   databases and the title store read-only, which rewrites their `-shm` WAL
   index. Those `-shm` events, including removals, are non-data, matching the
@@ -4594,11 +4645,16 @@ schemas keep their existing ordering behavior.
   `workspace` value and the current CLI's `cache/last_conversations.json`
   workspace-to-conversation mapping are authoritative session CWD sources when
   the workspace is an absolute path. Agentsview prefers the first valid
-  current-cache folder for an exact conversation ID, retains the strict
-  prompt/time fallback for older untagged history rows, and leaves CWD empty
-  when the value is missing or relative. The exact absolute workspace remains
-  the CWD. The project label is derived from the path text without probing the
-  recorded folder when filesystem discovery is disabled.
+  current-cache folder for an exact conversation ID. The cache keeps only each
+  folder's latest conversation, and CLI 1.4.7 `history.jsonl` rows carry no
+  `conversationId` (checked 2026-10-26), so conversations neither maps take
+  their folder from the root's `conversation_summaries.db`, as described in
+  the `antigravity` entry. Its `parent_conversation_id` links a sub-agent
+  conversation when the reader sidecar names no `parentCascadeId`. Agentsview
+  retains the strict prompt/time fallback for older untagged history rows, and
+  leaves CWD empty when the value is missing or relative. The exact absolute
+  workspace remains the CWD. The project label is derived from the path text
+  without probing the recorded folder when filesystem discovery is disabled.
 - **Change detection (checked 2026-10-20):** SQLite's
   [WAL-index format](https://sqlite.org/walformat.html#the_wal_index_or_shm_file)
   describes `-shm` as a transient index rather than database content.

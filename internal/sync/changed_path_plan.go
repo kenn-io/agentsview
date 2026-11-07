@@ -120,9 +120,25 @@ func (e *Engine) planOneChangedPath(
 			)
 			continue
 		}
-		if agent == parser.AgentAntigravity &&
-			strings.TrimSuffix(filepath.Base(path), "-wal") == parser.AntigravitySummariesDBName {
-			// The title store holds no transcripts; titles reconcile after the plan runs.
+		if (agent == parser.AgentAntigravity || agent == parser.AgentAntigravityCLI) &&
+			parser.IsAntigravitySummariesStore(path) {
+			// The summary store holds titles, which reconcile after the plan
+			// runs, and each conversation's workspace and parent. Only sessions
+			// whose archived values differ from the store reparse, so a
+			// title-only write reparses nothing.
+			sources, err := e.summaryStoreChangedSources(ctx, provider, path)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return changedPathAttribution{}, false, err
+				}
+				attribution.addFallback(agent)
+				continue
+			}
+			for _, source := range sources {
+				if file, ok := e.changedPathDiscoveredFile(provider, source); ok {
+					attribution.files = append(attribution.files, file)
+				}
+			}
 			continue
 		}
 		matchingWatchRoots := matchingChangedPathRoots(path, watchRoots)
