@@ -88,7 +88,11 @@ covers documents and chunks whose key the batch did not rewrite. A rewritten key
 keeps its older row until `ReplacingMergeTree` collapses it, which every
 `final=1` read already does. Deleting those rows too would write a patch row for
 each one, and every later read of the table pays to apply patch rows until
-merges fold them in. Evictions run in batches of 500 sessions as well, so the
+merges fold them in. The batch sends its rewritten keys as query parameters.
+Over HTTP each parameter is a URL field, which the server limits to 128 KiB after
+URL encoding, so a batch whose keys pass 96 KiB splits them into sorted key
+ranges and runs one pair of deletes per range. One long session can need several
+ranges. Evictions run in batches of 500 sessions as well, so the
 statement count grows with the number of batches, not sessions. A crash before
 the state rows land leaves every session in the batch stale, so the next push
 repeats them.
