@@ -171,6 +171,7 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 
 		raw := rawUsageActivityBackend{activityReportBackend{
 			DB: d, lowerBound: lower, upperBound: upper,
+			counted: &activityReportCounted{},
 		}}
 		artifacts, _, err := activity.BuildReportArtifacts(
 			ctx, raw, sessions, ids, q, nil, "raw activity report")
