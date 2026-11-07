@@ -197,29 +197,41 @@ func (s *RawProjectionStore) refreshStaleRawFriction(
 func syncRawDialogue(ctx context.Context, tx *sql.Tx, id string, messages []db.Message) (bool, error) {
 	ordinals := make([]int, 0, len(messages))
 	dialogue := make([]string, 0, len(messages))
+	isContent := make([]bool, 0, len(messages))
 	for _, m := range messages {
-		if m.DialogueText != nil {
-			ordinals = append(ordinals, m.Ordinal)
-			dialogue = append(dialogue, sanitizePG(*m.DialogueText))
+		if m.DialogueText == nil {
+			continue
 		}
+		// A copy of content is stored as an empty marked row, which
+		// loadRawPayloadBytes restores from the payload's content.
+		stored, copied := db.StoredDialogue(m.Content, m.ThinkingText, m.DialogueText)
+		text := ""
+		if stored != nil {
+			text = sanitizePG(*stored)
+		}
+		ordinals = append(ordinals, m.Ordinal)
+		dialogue = append(dialogue, text)
+		isContent = append(isContent, copied)
 	}
 	var retained, materialized int
 	err := tx.QueryRowContext(ctx, `WITH input AS (
- SELECT * FROM unnest($2::int[],$3::text[]) AS u(ordinal,dialogue)
+ SELECT u.ordinal, u.dialogue, u.is_content,
+  CASE WHEN u.is_content THEN NULL ELSE u.dialogue END AS materialized
+ FROM unnest($2::int[],$3::text[],$5::bool[]) AS u(ordinal,dialogue,is_content)
 ), upserted AS (
- INSERT INTO raw_message_dialogue(session_id,ordinal,dialogue_text)
- SELECT $1,i.ordinal,i.dialogue FROM input i
+ INSERT INTO raw_message_dialogue(session_id,ordinal,dialogue_text,is_content)
+ SELECT $1,i.ordinal,i.dialogue,i.is_content FROM input i
  LEFT JOIN raw_message_dialogue r ON r.session_id=$1 AND r.ordinal=i.ordinal
- WHERE r.dialogue_text IS DISTINCT FROM i.dialogue
- ON CONFLICT(tenant_id,session_id,ordinal) DO UPDATE SET dialogue_text=EXCLUDED.dialogue_text
+ WHERE r.dialogue_text IS DISTINCT FROM i.dialogue OR r.is_content IS DISTINCT FROM i.is_content
+ ON CONFLICT(tenant_id,session_id,ordinal) DO UPDATE SET dialogue_text=EXCLUDED.dialogue_text, is_content=EXCLUDED.is_content
  RETURNING 1
 ), pruned AS (
  DELETE FROM raw_message_dialogue WHERE session_id=$1 AND ordinal <> ALL($2::int[]) RETURNING 1
 ), updated AS (
- UPDATE messages AS m SET dialogue_text=i.dialogue
+ UPDATE messages AS m SET dialogue_text=i.materialized
  FROM messages cur LEFT JOIN input i ON i.ordinal=cur.ordinal
  WHERE cur.session_id=$1 AND m.session_id=$1 AND m.ordinal=cur.ordinal
-  AND m.dialogue_text IS DISTINCT FROM i.dialogue
+  AND m.dialogue_text IS DISTINCT FROM i.materialized
  RETURNING 1
 ), versioned AS (
  UPDATE sessions SET data_version=$4
@@ -227,7 +239,7 @@ func syncRawDialogue(ctx context.Context, tx *sql.Tx, id string, messages []db.M
 )
 SELECT (SELECT count(*) FROM upserted)+(SELECT count(*) FROM pruned),
  (SELECT count(*) FROM updated)`,
-		id, ordinals, dialogue, db.CurrentDataVersion()).Scan(&retained, &materialized)
+		id, ordinals, dialogue, db.CurrentDataVersion(), isContent).Scan(&retained, &materialized)
 	if err != nil {
 		return false, err
 	}

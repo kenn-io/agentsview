@@ -2493,7 +2493,7 @@ func copySessionDataForIDs(
 		"source_type", "source_subtype", "prompt_source",
 		"source_uuid", "source_parent_uuid",
 		"is_sidechain", "is_compact_boundary",
-		"thinking_text", "dialogue_text",
+		"thinking_text", "dialogue_text", "dialogue_is_content",
 	} {
 		if oldDBHasColumn(ctx, tx, "messages", c) {
 			msgCols.WriteString(", " + c)

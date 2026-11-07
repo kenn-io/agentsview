@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -137,4 +138,62 @@ func TestDialogueReparseClickHouseRepushesSession(t *testing.T) {
 	var dialogue string
 	require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT dialogue_text FROM messages WHERE session_id = ? AND ordinal = 0", fixtureAlphaID).Scan(&dialogue))
 	assert.Equal(t, "answerneedle", dialogue)
+}
+
+// storedDialogueBytes reports whether a row's dialogue_text is NULL and how
+// many bytes its column still holds. ClickHouse keeps a nested value under
+// the null mask, so a NULL can still occupy the old copy's bytes.
+func storedDialogueBytes(t *testing.T, store *Store, sessionID string, ordinal int) (bool, int64) {
+	t.Helper()
+	var isNull bool
+	var size int64
+	require.NoError(t, store.DB().QueryRowContext(t.Context(),
+		"SELECT dialogue_text IS NULL, length(assumeNotNull(dialogue_text)) FROM messages FINAL WHERE session_id = ? AND ordinal = ?",
+		sessionID, ordinal).Scan(&isNull, &size))
+	return isNull, size
+}
+
+func TestDialogueClickHouseStoresContentCopyOnce(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store, syncer, local := newPushedStore(t)
+	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Equal(t, "alpha first", messages[0].Content)
+	messages[0].DialogueText = new("alpha first")
+	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureAlphaID, messages))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	isNull, size := storedDialogueBytes(t, store, fixtureAlphaID, 0)
+	assert.True(t, isNull)
+	assert.Zero(t, size)
+
+	// Model a mirror an older release pushed: the copy in dialogue_text and
+	// no record of the one-time rewrite.
+	_, err = store.DB().ExecContext(ctx, "ALTER TABLE messages UPDATE dialogue_text = content WHERE session_id = ? AND ordinal = 0 SETTINGS mutations_sync=2", fixtureAlphaID)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, "DELETE FROM sync_metadata WHERE key = ? SETTINGS mutations_sync=2", dialogueDedupedKey)
+	require.NoError(t, err)
+	isNull, _ = storedDialogueBytes(t, store, fixtureAlphaID, 0)
+	require.False(t, isNull)
+
+	require.NoError(t, EnsureSchemaOn(ctx, store.DB()))
+	require.Eventually(t, func() bool {
+		var pending uint64
+		require.NoError(t, store.DB().QueryRowContext(ctx,
+			"SELECT count() FROM system.mutations WHERE database = currentDatabase() AND table = 'messages' AND NOT is_done").Scan(&pending))
+		return pending == 0
+	}, 30*time.Second, 100*time.Millisecond)
+
+	isNull, size = storedDialogueBytes(t, store, fixtureAlphaID, 0)
+	assert.True(t, isNull)
+	assert.Zero(t, size, "the rewrite must drop the copy's bytes, not only mask them")
+	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern: "alpha first", Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "alpha first", got.Matches[0].Snippet)
 }

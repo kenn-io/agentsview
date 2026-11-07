@@ -676,6 +676,9 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 	if err := ensureUsageSessionSnapshots(ctx, conn); err != nil {
 		return err
 	}
+	if err := dedupeStoredDialogue(ctx, conn); err != nil {
+		return err
+	}
 	return writeMetadata(ctx, conn, map[string]string{
 		schemaVersionKey:     strconv.Itoa(SchemaVersion),
 		sourceDataVersionKey: strconv.Itoa(db.CurrentDataVersion()),

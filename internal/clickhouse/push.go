@@ -1041,8 +1041,9 @@ func lastMessageAt(msgs []db.Message) *time.Time {
 }
 
 func messageRow(m db.Message, version uint64) []any {
+	dialogue, _ := db.StoredDialogue(m.Content, m.ThinkingText, m.DialogueText)
 	return []any{
-		m.ID, m.SessionID, int64(m.Ordinal), m.Role, m.Content, m.ThinkingText, m.DialogueText,
+		m.ID, m.SessionID, int64(m.Ordinal), m.Role, m.Content, m.ThinkingText, dialogue,
 		timeValue(m.Timestamp), m.HasThinking, m.HasToolUse, int64(m.ContentLength),
 		m.IsSystem, m.Model, m.ReasoningEffort, string(m.TokenUsage),
 		int64(m.ContextTokens), int64(m.OutputTokens), m.ProviderID,
