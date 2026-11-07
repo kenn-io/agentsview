@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	gitcmd "go.kenn.io/kit/git/cmd"
@@ -43,6 +42,7 @@ func Install(repoDir string) error {
 	type hookSpec struct {
 		name, line, script, path string
 		state                    hookState
+		executable               bool
 	}
 	hooks := []hookSpec{
 		{name: "prepare-commit-msg", line: prepareHookLine, script: prepareHookScript},
@@ -55,7 +55,7 @@ func Install(repoDir string) error {
 			return err
 		}
 		hooks[i].path = path
-		if hooks[i].state, err = existingHook(path, hooks[i].script); err != nil {
+		if hooks[i].state, hooks[i].executable, err = existingHook(path, hooks[i].script); err != nil {
 			return err
 		}
 		conflict = conflict || hooks[i].state == hookOther
@@ -67,10 +67,12 @@ func Install(repoDir string) error {
 			switch hook.state {
 			case hookOther:
 				fmt.Fprintf(&b, "\nadd this line to %s:\n%s", hook.path, hook.line)
-			case hookNotExecutable:
-				fmt.Fprintf(&b, "\nmake %s executable", hook.path)
 			case hookMissing:
 				fmt.Fprintf(&b, "\ncreate executable %s containing:\n%s", hook.path, strings.TrimSuffix(hook.script, "\n"))
+				continue
+			}
+			if !hook.executable {
+				fmt.Fprintf(&b, "\nmake %s executable", hook.path)
 			}
 		}
 		return errors.New(b.String())
@@ -88,7 +90,6 @@ type hookState int
 const (
 	hookMissing hookState = iota
 	hookInstalled
-	hookNotExecutable
 	hookOther
 )
 
@@ -98,11 +99,11 @@ func installHook(path, script string) error {
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
 	if errors.Is(err, os.ErrExist) {
-		state, err := existingHook(path, script)
+		state, _, err := existingHook(path, script)
 		if err != nil {
 			return err
 		}
-		if state != hookInstalled && state != hookNotExecutable {
+		if state != hookInstalled {
 			return fmt.Errorf("%s changed during installation", path)
 		}
 		return os.Chmod(path, 0o755)
@@ -114,24 +115,18 @@ func installHook(path, script string) error {
 	return errors.Join(writeErr, file.Close())
 }
 
-func existingHook(path, script string) (hookState, error) {
+// existingHook reports whether the hook matches script and whether Git can run it.
+func existingHook(path, script string) (hookState, bool, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return hookMissing, nil
+		return hookMissing, false, nil
 	}
 	if err != nil {
-		return hookMissing, err
+		return hookMissing, false, err
 	}
-	if string(data) != script {
-		return hookOther, nil
+	state := hookOther
+	if string(data) == script {
+		state = hookInstalled
 	}
-	// Git skips hooks without execute permission, except on Windows.
-	info, err := os.Stat(path)
-	if err != nil {
-		return hookMissing, err
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
-		return hookNotExecutable, nil
-	}
-	return hookInstalled, nil
+	return state, executable(path), nil
 }

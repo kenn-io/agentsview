@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	gitcmd "go.kenn.io/kit/git/cmd"
@@ -32,11 +33,29 @@ func PrepareTemplate(ctx context.Context, file, source string) error {
 	}
 	// Git compares against the template file, which lacks the signoff -s adds
 	// before this hook runs; a later hook may rewrite that signoff.
-	lines := strings.SplitAfter(message, "\n")
-	for len(lines) > 0 && !hasContent(lines[len(lines)-1]) {
-		lines = lines[:len(lines)-1]
+	if signoff, err := generatedSignoff(ctx); err == nil {
+		switch trimmed := strings.TrimRight(message, "\n"); {
+		case trimmed == signoff:
+			message = ""
+		case strings.HasSuffix(trimmed, "\n"+signoff):
+			message = strings.TrimRight(strings.TrimSuffix(trimmed, signoff), "\n") + "\n"
+		}
 	}
-	return os.WriteFile(marker, []byte(strings.Join(lines, "")), 0o600)
+	return os.WriteFile(marker, []byte(message), 0o600)
+}
+
+// generatedSignoff returns the line git commit -s adds for the committer.
+func generatedSignoff(ctx context.Context) (string, error) {
+	out, _, err := (gitcmd.Runner{}).Run(ctx, "", nil, "var", "GIT_COMMITTER_IDENT")
+	if err != nil {
+		return "", err
+	}
+	ident := string(out)
+	end := strings.LastIndex(ident, ">")
+	if end < 0 {
+		return "", errors.New("unexpected committer identity")
+	}
+	return "Signed-off-by: " + ident[:end+1], nil
 }
 
 // Stamp adds session provenance only when Git has disabled the editor.
@@ -70,21 +89,37 @@ func cleanMessage(ctx context.Context, file string) (string, error) {
 		return "", err
 	}
 	message := string(data)
-	markers := map[string]bool{}
-	for _, comment := range commentStrings(ctx) {
-		markers[comment+" "+cutLine] = true
-	}
-	offset := 0
-	for line := range strings.Lines(message) {
-		if markers[strings.TrimRight(line, "\r\n")] {
-			message = message[:offset]
-			break
-		}
-		offset += len(line)
+	if cut := scissorsOffset(message, commentStrings(ctx)); cut >= 0 {
+		message = message[:cut]
 	}
 	// Keep the hook's repository environment and the user's Git configuration.
 	out, _, err := (gitcmd.Runner{}).Run(ctx, "", strings.NewReader(message), "stripspace", "--strip-comments")
 	return string(out), err
+}
+
+// scissorsOffset returns where Git cuts the message, or -1. Git cuts at the
+// first scissors line for its comment string. With core.commentChar=auto, Git
+// picks one of several characters and records nowhere which, so only a
+// scissors line followed by a comment with the same prefix counts, and the
+// last one wins: Git writes its own after all message text.
+func scissorsOffset(message string, comments []string) int {
+	lines := slices.Collect(strings.Lines(message))
+	cut, offset := -1, 0
+	for i, line := range lines {
+		for _, comment := range comments {
+			if strings.TrimRight(line, "\r\n") != comment+" "+cutLine {
+				continue
+			}
+			if len(comments) == 1 {
+				return offset
+			}
+			if i+1 < len(lines) && strings.HasPrefix(lines[i+1], comment) {
+				cut = offset
+			}
+		}
+		offset += len(line)
+	}
+	return cut
 }
 
 // commentStrings returns the strings Git may put before the scissors line. The

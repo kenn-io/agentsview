@@ -19,6 +19,8 @@ const (
 	trailerID   = "12345678-1234-1234-1234-1234567890ab"
 	trailerLine = "Agent-Session: codex:" + trailerID
 	scissors    = "------------------------ >8 ------------------------"
+	// rewriteSignoff is a prepare-commit-msg step standing in for another hook.
+	rewriteSignoff = `tmp="$1.tmp" && sed 's/^Signed-off-by: .*/Signed-off-by: Other <other@example.com>/' "$1" > "$tmp" && mv "$tmp" "$1"`
 )
 
 // Reuse the test executable, as main_test.go does, rather than building in tests.
@@ -117,7 +119,8 @@ func TestGitTrailerCommits(t *testing.T) {
 		abortContains string
 		staged        bool
 		prepareSuffix string
-		commentString string
+		comment       [2]string
+		templateText  string
 		want          string
 	}{
 		{name: "hash-leading subject is stripped as a comment", args: []string{"-m", "#123 fix the parser"}, want: "#123 fix the parser"},
@@ -129,9 +132,12 @@ func TestGitTrailerCommits(t *testing.T) {
 		{name: "unchanged configured template", template: true, abort: true, abortContains: "you did not edit the message"},
 		{name: "unchanged command-line template", template: true, templateFlag: true, abort: true, abortContains: "you did not edit the message"},
 		{name: "template with comment from another hook", template: true, prepareSuffix: `printf '\n# note from another hook\n\n' >> "$1"`, abort: true, abortContains: "you did not edit the message"},
-		{name: "template signoff rewritten by another hook", args: []string{"-s"}, template: true, prepareSuffix: `tmp="$1.tmp" && sed 's/^Signed-off-by: .*/Signed-off-by: Other <other@example.com>/' "$1" > "$tmp" && mv "$tmp" "$1"`, abort: true, abortContains: "you did not edit the message"},
+		{name: "generated signoff rewritten by another hook", args: []string{"-s"}, template: true, prepareSuffix: rewriteSignoff, abort: true, abortContains: "you did not edit the message"},
 		{name: "verbose diff below scissors", args: []string{"-v"}, staged: true, abort: true},
-		{name: "verbose diff below scissors with spaced comment string", args: []string{"-v"}, staged: true, commentString: "// x", abort: true},
+		{name: "verbose diff below scissors with spaced comment string", args: []string{"-v"}, staged: true, comment: [2]string{"core.commentString", "// x"}, abort: true},
+		{name: "verbose diff below scissors with automatic comment character", args: []string{"-v"}, staged: true, comment: [2]string{"core.commentChar", "auto"}, abort: true},
+		{name: "scissors-like line with unselected automatic comment character", args: []string{"-m", "; " + scissors}, comment: [2]string{"core.commentChar", "auto"}, want: "; " + scissors + "\n\n" + trailerLine},
+		{name: "template signoff changed by another hook", template: true, templateText: "Template subject\n\nSigned-off-by: Template Author <author@example.com>\n", prepareSuffix: rewriteSignoff, want: "Template subject\n\nSigned-off-by: Other <other@example.com>\n" + trailerLine},
 		{name: "scissors-like message line", args: []string{"-m", "foo " + scissors}, want: "foo " + scissors + "\n\n" + trailerLine},
 		{name: "editor", editor: true, want: "from editor"},
 	} {
@@ -145,8 +151,8 @@ func TestGitTrailerCommits(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, os.WriteFile(prepare, append(data, tt.prepareSuffix+"\n"...), 0o755))
 			}
-			if tt.commentString != "" {
-				f.git(t, "config", "core.commentString", tt.commentString)
+			if tt.comment[0] != "" {
+				f.git(t, "config", tt.comment[0], tt.comment[1])
 			}
 			if tt.staged {
 				require.NoError(t, os.WriteFile(filepath.Join(f.repo, "staged.txt"), []byte("staged change\n"), 0o600))
@@ -158,7 +164,11 @@ func TestGitTrailerCommits(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(f.repo, "message"), []byte("from file\n"), 0o600))
 			if tt.template {
 				template := filepath.Join(f.repo, "template")
-				require.NoError(t, os.WriteFile(template, []byte("Template subject\n\nTemplate body\n"), 0o600))
+				text := tt.templateText
+				if text == "" {
+					text = "Template subject\n\nTemplate body\n"
+				}
+				require.NoError(t, os.WriteFile(template, []byte(text), 0o600))
 				if tt.templateFlag {
 					tt.args = append(tt.args, "-t", "template")
 				} else {
@@ -316,6 +326,15 @@ func TestGitHookInstallInstructions(t *testing.T) {
 		{name: "custom commit-msg", steps: 2, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte(custom), 0o755))
 		}},
+		{name: "custom non-executable prepare-commit-msg", steps: 3, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			require.NoError(t, os.WriteFile(filepath.Join(hooks, "prepare-commit-msg"), []byte(custom), 0o644))
+		}},
+		// Git checks execute access for the current user, so only the outcome is fixed.
+		{name: "prepare-commit-msg executable only by others", setup: func(t *testing.T, f *gitTrailerFixture, hooks string) {
+			f.hook(t, "install")
+			require.NoError(t, os.Chmod(filepath.Join(hooks, "prepare-commit-msg"), 0o655))
+			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte(custom), 0o755))
+		}},
 		{name: "non-executable prepare-commit-msg", steps: 2, setup: func(t *testing.T, f *gitTrailerFixture, hooks string) {
 			f.hook(t, "install")
 			require.NoError(t, os.Chmod(filepath.Join(hooks, "prepare-commit-msg"), 0o644))
@@ -331,7 +350,9 @@ func TestGitHookInstallInstructions(t *testing.T) {
 			require.Error(t, err)
 			assert.Equal(t, before, hookFiles(t, hooks), "install must not write half of the pair")
 			steps := hookInstructions(t, out)
-			require.Len(t, steps, tt.steps, out)
+			if tt.steps > 0 {
+				require.Len(t, steps, tt.steps, out)
+			}
 			for _, step := range steps {
 				switch step.action {
 				case "create":
