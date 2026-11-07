@@ -2206,6 +2206,7 @@ seat_patterns = [] # Optional path globs with one whole-segment {seat} capture.
 [friction.kata]
 auto_file = false # The hub files recent patterns to Kata every hour.
 kinds = [] # Kinds to file automatically; empty means all that can be filed.
+min_sessions = 2 # File only patterns seen in at least this many sessions.
 ```
 
 Restart the daemon after changing this setting. When enabled:

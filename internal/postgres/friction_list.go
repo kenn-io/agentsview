@@ -140,6 +140,9 @@ func (s *Store) ListFrictionPatterns(
 	if f.Since != "" {
 		preds = append(preds, "p.last_seen_date >= "+pb.add(f.Since))
 	}
+	if f.MinSessions > 0 {
+		preds = append(preds, "p.session_count >= "+pb.add(f.MinSessions))
+	}
 	issueColumns, issueJoin := s.frictionIssueSelect(ctx)
 	if f.FilingState != "" {
 		if !strings.Contains(issueJoin, "friction_filing_state") {

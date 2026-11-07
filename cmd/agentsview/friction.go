@@ -421,11 +421,18 @@ func printFrictionFindings(w io.Writer, page *service.FrictionFindingPage) error
 }
 
 // frictionFilingLabel says why automatic filing has not linked a pattern.
+// A pause only records that a person unlinked the pattern, which matters
+// only where automatic filing runs, so the table leaves it out; --json
+// keeps it.
 func frictionFilingLabel(state string) string {
-	if state == db.FrictionFilingNeedsPerson {
+	switch state {
+	case db.FrictionFilingNeedsPerson:
 		return "(file or link)"
+	case db.FrictionFilingPaused:
+		return "-"
+	default:
+		return "(" + state + ")"
 	}
-	return "(" + state + ")"
 }
 
 func printFrictionPatterns(w io.Writer, page *service.FrictionPatternPage) error {

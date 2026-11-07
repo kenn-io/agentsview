@@ -63,6 +63,8 @@ type FrictionPatternFilter struct {
 	Fingerprints []string
 	// FilingState keeps patterns in this automatic filing state.
 	FilingState string
+	// MinSessions keeps patterns seen in at least this many sessions.
+	MinSessions int
 	Limit       int
 	Cursor      string
 }
@@ -256,6 +258,10 @@ func (db *DB) ListFrictionPatterns(
 	if f.FilingState != "" {
 		preds = append(preds, "f.state = ?")
 		args = append(args, f.FilingState)
+	}
+	if f.MinSessions > 0 {
+		preds = append(preds, "p.session_count >= ?")
+		args = append(args, f.MinSessions)
 	}
 	if f.Fingerprints != nil {
 		if len(f.Fingerprints) == 0 {

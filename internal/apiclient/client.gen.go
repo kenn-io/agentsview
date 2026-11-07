@@ -30010,6 +30010,7 @@ type VersionInfo struct {
 	Commit                     string `json:"commit" validate:"required"`
 	DataVersion                int64  `json:"data_version"`
 	DocbankEnabled             *bool  `json:"docbank_enabled,omitempty"`
+	FrictionAutoFile           *bool  `json:"friction_auto_file,omitempty"`
 	FrictionAvailable          bool   `json:"friction_available"`
 	FrictionBuildAllowed       bool   `json:"friction_build_allowed"`
 	FrictionReadable           *bool  `json:"friction_readable,omitempty"`

@@ -41,6 +41,10 @@ func TestFrictionConfigValidate(t *testing.T) {
 			name: "repeated kind", config: FrictionConfig{BackfillDays: 7, Kata: FrictionKataConfig{Kinds: []string{"error", "error"}}},
 			wantErr: `[friction.kata] kinds entry "error" repeats`,
 		},
+		{
+			name: "negative min sessions", config: FrictionConfig{BackfillDays: 7, Kata: FrictionKataConfig{MinSessions: -1}},
+			wantErr: "[friction.kata] min_sessions must be at least 1, got -1",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -89,10 +93,10 @@ func TestFrictionConfigTOMLLoadAndFinalize(t *testing.T) {
 		{
 			name: "automatic filing",
 			data: map[string]any{"friction": map[string]any{"kata": map[string]any{
-				"auto_file": true, "kinds": []any{" correction ", "error"},
+				"auto_file": true, "kinds": []any{" correction ", "error"}, "min_sessions": 3,
 			}}},
 			want: FrictionConfig{BackfillDays: DefaultFrictionBackfillDays, Kata: FrictionKataConfig{
-				AutoFile: true, Kinds: []string{"correction", "error"},
+				AutoFile: true, Kinds: []string{"correction", "error"}, MinSessions: 3,
 			}},
 		},
 	}
@@ -119,4 +123,6 @@ func TestFrictionConfigTOMLLoadAndFinalize(t *testing.T) {
 func TestFrictionKataFileKinds(t *testing.T) {
 	assert.Equal(t, friction.FileableKinds, FrictionKataConfig{}.FileKinds(), "no kinds means every fileable kind")
 	assert.Equal(t, []friction.Kind{friction.KindError}, FrictionKataConfig{Kinds: []string{"error"}}.FileKinds())
+	assert.Equal(t, 2, FrictionKataConfig{}.FileMinSessions(), "unset files only patterns seen in two sessions")
+	assert.Equal(t, 1, FrictionKataConfig{MinSessions: 1}.FileMinSessions())
 }

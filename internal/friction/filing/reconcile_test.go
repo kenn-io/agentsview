@@ -366,3 +366,61 @@ func TestReconcileSkipsAQueuedPatternPausedMeanwhile(t *testing.T) {
 	assert.Equal(t, filing.ReconcileReport{Created: 1}, rep)
 	assert.Len(t, s.RequestsMatching(http.MethodPost, "/issues"), 1, "no issue is created for the paused pattern")
 }
+
+// toolError is an error signal; error fingerprints span sessions.
+func toolError(text, subject string) friction.Signal {
+	return friction.Signal{
+		Kind: friction.KindError, SubjectID: subject, SubjectKind: friction.SubjectSession,
+		Detector: "error", ToolName: "Bash", Text: text, Ordinal: new(4),
+	}
+}
+
+func TestReconcileFilesOnlyPatternsSeenInEnoughSessions(t *testing.T) {
+	recurring := toolError("go: cannot find main module", "claude:s1")
+	again := toolError("go: cannot find main module", "claude:s2")
+	once := toolError("permission denied", "claude:s1")
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, recurring, again, once)
+	require.Equal(t, 2, patternRow(t, d, recurring.Fingerprint()).SessionCount)
+
+	rep, err := f.Reconcile(t.Context(), filing.Policy{Kinds: friction.FileableKinds, Since: digestDate, MinSessions: 2})
+	require.NoError(t, err)
+	assert.Equal(t, filing.ReconcileReport{Created: 1}, rep)
+	assert.NotNil(t, patternRow(t, d, recurring.Fingerprint()).Issue)
+	assert.Nil(t, patternRow(t, d, once.Fingerprint()).Issue, "a one-session pattern waits for a person")
+}
+
+func TestReconcileCapsNewFilingsPerPassMostFrequentFirst(t *testing.T) {
+	// Three recurring errors seen in 3, 2 and 2 sessions, and a correction
+	// already waiting to retry.
+	var sigs []friction.Signal
+	for i, sessions := range []int{3, 2, 2} {
+		for j := range sessions {
+			sigs = append(sigs, toolError(fmt.Sprintf("failure %d", i), fmt.Sprintf("claude:s%d", j)))
+		}
+	}
+	sigs = append(sigs, correction)
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, sigs...)
+	now := f.Now()
+	next := now.Add(-time.Minute)
+	require.NoError(t, d.SaveFrictionFilingState(t.Context(), db.FrictionFilingState{
+		Fingerprint: correction.Fingerprint(), State: db.FrictionFilingRetry, Attempts: 1,
+		FirstFailedAt: &next, NextAttemptAt: &next, UpdatedAt: next,
+	}))
+
+	rep, err := f.Reconcile(t.Context(), filing.Policy{
+		Kinds: friction.FileableKinds, Since: digestDate, MinSessions: 2, MaxNew: 1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, filing.ReconcileReport{Created: 2}, rep, "the retry plus one new pattern")
+	assert.NotNil(t, patternRow(t, d, correction.Fingerprint()).Issue, "a retry does not count against the cap")
+	assert.NotNil(t, patternRow(t, d, toolError("failure 0", "claude:s0").Fingerprint()).Issue, "the most frequent goes first")
+	assert.Nil(t, patternRow(t, d, toolError("failure 1", "claude:s0").Fingerprint()).Issue)
+
+	rep, err = f.Reconcile(t.Context(), filing.Policy{
+		Kinds: friction.FileableKinds, Since: digestDate, MinSessions: 2, MaxNew: 1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, filing.ReconcileReport{Created: 1}, rep, "the next pass takes the next one")
+}

@@ -110,13 +110,21 @@ Turn on automatic filing in the hub's configuration, then restart the daemon:
 ```toml
 [friction.kata]
 auto_file = true
-kinds = ["correction", "pattern"] # Optional; empty means every kind that can be filed.
+kinds = ["error", "workaround"] # Optional; empty means every kind that can be filed.
+min_sessions = 2 # Optional; file only patterns seen in at least this many sessions.
 ```
 
-- Each hour, after it builds digests, the Friction Log job files every unlinked
-  pattern of a chosen kind last seen within `[friction] backfill_days`. It
-  uses the same lookup as `friction file`, so it links an issue Kata already
-  holds instead of filing a duplicate.
+- Each hour, after it builds digests, the Friction Log job files unlinked
+  patterns of a chosen kind last seen within `[friction] backfill_days` and
+  seen in at least `min_sessions` sessions (default 2). It uses the same
+  lookup as `friction file`, so it links an issue Kata already holds instead
+  of filing a duplicate.
+- Corrections, `pattern` findings, and deferrals are tracked per session, so
+  each appears in one session only. At the default `min_sessions` they are
+  never filed automatically; set `min_sessions = 1` to file every one of them.
+- One pass files at most 20 new patterns, most frequent first, so turning
+  automatic filing on spreads the backlog over several hours. Patterns waiting
+  to retry do not count toward that limit.
 - While Kata is not ready, the job files nothing and records no failures.
 - After a failed request, the job tries again in 1 hour, then doubles the wait
   up to 24 hours, even once the pattern is older than `backfill_days`. After
@@ -124,10 +132,14 @@ kinds = ["correction", "pattern"] # Optional; empty means every kind that can be
   candidate issues, the pattern waits for you to file or link it.
 - Unlinking a pattern stops automatic filing for it. Filing or linking it by
   hand starts it again.
+- If you link a pattern by hand while the job is creating an issue for it, your
+  link wins, and the issue the job created stays in Kata without a link.
 
-A pattern without an issue shows why: a note on the Friction Log page,
-`(retry)`, `(file or link)`, or `(paused)` in the `ISSUE` column of
-`friction patterns`, and the `filing` field in API and MCP results.
+A pattern without an issue shows why: a note on the Friction Log page, `(retry)`
+or `(file or link)` in the `ISSUE` column of `friction patterns`, and the
+`filing` field in API and MCP results. An unlinked pattern is shown as paused
+only on the page of a hub that files automatically; `--json` output always
+includes the `filing` state.
 
 ## Limits
 

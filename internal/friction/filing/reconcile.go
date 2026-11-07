@@ -1,10 +1,12 @@
 package filing
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -21,10 +23,15 @@ const (
 )
 
 // Policy is what automatic filing considers: patterns of these kinds last
-// seen on or after Since.
+// seen on or after Since in at least MinSessions sessions. MaxNew, when
+// positive, caps how many such patterns one pass tries, so turning
+// automatic filing on spreads a backlog over several passes. Patterns
+// already waiting to retry are always tried and do not count.
 type Policy struct {
-	Kinds []friction.Kind
-	Since string
+	Kinds       []friction.Kind
+	Since       string
+	MinSessions int
+	MaxNew      int
 }
 
 // ReconcileReport counts one automatic filing pass.
@@ -32,62 +39,39 @@ type ReconcileReport struct {
 	Created, Linked, Retry, NeedsPerson int
 }
 
-// Reconcile files each recent unlinked pattern the policy covers, and
-// retries patterns waiting to retry whatever their age, so a retry ends in
-// a link or in needs_person. It skips patterns a person paused or must
-// settle and those not yet due, and records why a pattern stays unlinked.
-// While Kata is not ready it does nothing, so an outage costs no attempts.
-// Because each pass looks at the stored patterns afresh, a restart, an
-// outage, or turning automatic filing on later needs no catch-up of its own.
+// Reconcile retries patterns waiting to retry, whatever their age, so a
+// retry ends in a link or in needs_person, then files recent unlinked
+// patterns the policy covers, most frequent first. It skips patterns a
+// person paused or must settle and those not yet due, and records why a
+// pattern stays unlinked. While Kata is not ready it does nothing, so an
+// outage costs no attempts. Because each pass looks at the stored patterns
+// afresh, a restart, an outage, or turning automatic filing on later needs
+// no catch-up of its own.
 func (f *Filer) Reconcile(ctx context.Context, p Policy) (ReconcileReport, error) {
 	var rep ReconcileReport
 	if f.Kata.Status(ctx, false).State != kata.StateReady {
 		return rep, nil
 	}
+	// Read every candidate before filing any: filing takes a pattern out of
+	// the retry state, which would shift the offset-based pages.
 	seen := map[string]bool{}
-	for _, kind := range p.Kinds {
-		for _, filter := range []db.FrictionPatternFilter{
-			{Kind: string(kind), Since: p.Since},
-			{Kind: string(kind), FilingState: db.FrictionFilingRetry},
-		} {
-			stop, err := f.reconcilePages(ctx, filter, seen, &rep)
-			if err != nil || stop {
-				return rep, err
-			}
-		}
+	retries, err := f.candidates(ctx, p.Kinds, db.FrictionPatternFilter{FilingState: db.FrictionFilingRetry}, seen)
+	if err != nil {
+		return rep, err
 	}
-	return rep, nil
-}
-
-// reconcilePages files the due patterns filter selects, skipping those in
-// seen. It reads every page before filing any pattern: filing takes a
-// pattern out of the retry state, which would shift the offset-based pages
-// and skip patterns. It reports stop when Kata went away mid-pass; the next
-// pass starts over.
-func (f *Filer) reconcilePages(
-	ctx context.Context, filter db.FrictionPatternFilter, seen map[string]bool, rep *ReconcileReport,
-) (bool, error) {
-	filter.Limit = db.MaxFrictionListLimit
-	var due []db.FrictionPattern
-	for {
-		rows, next, err := f.Store.ListFrictionPatterns(ctx, filter)
-		if err != nil {
-			return false, err
-		}
-		for _, pat := range rows {
-			if !seen[pat.Fingerprint] && isDue(pat, f.now()) {
-				seen[pat.Fingerprint] = true
-				due = append(due, pat)
-			}
-		}
-		if next == "" {
-			break
-		}
-		filter.Cursor = next
+	fresh, err := f.candidates(ctx, p.Kinds, db.FrictionPatternFilter{Since: p.Since, MinSessions: p.MinSessions}, seen)
+	if err != nil {
+		return rep, err
 	}
-	for _, pat := range due {
+	slices.SortStableFunc(fresh, func(a, b db.FrictionPattern) int {
+		return cmp.Or(cmp.Compare(b.OccurrenceCount, a.OccurrenceCount), cmp.Compare(b.SessionCount, a.SessionCount))
+	})
+	if p.MaxNew > 0 && len(fresh) > p.MaxNew {
+		fresh = fresh[:p.MaxNew]
+	}
+	for _, pat := range append(retries, fresh...) {
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return rep, err
 		}
 		res, err := f.file(ctx, pat.Fingerprint, true)
 		switch {
@@ -98,11 +82,12 @@ func (f *Filer) reconcilePages(
 		case err == nil:
 			rep.Linked++
 		case errors.Is(err, ErrKataNotReady):
-			return true, nil
+			// Kata went away mid-pass; the next pass starts over.
+			return rep, nil
 		default:
 			state, rerr := f.recordFailure(ctx, pat, err)
 			if rerr != nil {
-				return false, rerr
+				return rep, rerr
 			}
 			if state == db.FrictionFilingRetry {
 				rep.Retry++
@@ -111,7 +96,36 @@ func (f *Filer) reconcilePages(
 			}
 		}
 	}
-	return false, nil
+	return rep, nil
+}
+
+// candidates returns the due patterns of each kind that filter selects,
+// skipping and then recording those in seen.
+func (f *Filer) candidates(
+	ctx context.Context, kinds []friction.Kind, filter db.FrictionPatternFilter, seen map[string]bool,
+) ([]db.FrictionPattern, error) {
+	var due []db.FrictionPattern
+	filter.Limit = db.MaxFrictionListLimit
+	for _, kind := range kinds {
+		filter.Kind, filter.Cursor = string(kind), ""
+		for {
+			rows, next, err := f.Store.ListFrictionPatterns(ctx, filter)
+			if err != nil {
+				return nil, err
+			}
+			for _, pat := range rows {
+				if !seen[pat.Fingerprint] && isDue(pat, f.now()) {
+					seen[pat.Fingerprint] = true
+					due = append(due, pat)
+				}
+			}
+			if next == "" {
+				break
+			}
+			filter.Cursor = next
+		}
+	}
+	return due, nil
 }
 
 func isDue(p db.FrictionPattern, now time.Time) bool {

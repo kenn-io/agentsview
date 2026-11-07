@@ -8859,6 +8859,8 @@ components:
           type: integer
         docbank_enabled:
           type: boolean
+        friction_auto_file:
+          type: boolean
         friction_available:
           type: boolean
         friction_build_allowed:

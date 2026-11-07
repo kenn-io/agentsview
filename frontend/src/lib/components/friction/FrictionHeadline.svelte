@@ -25,9 +25,18 @@
     sessions: FrictionSessions | null | undefined;
     // This page may file to Kata: writes are allowed and Kata is ready.
     canFile?: boolean;
+    autoFile?: boolean;
   }
 
-  let { date, p0Alerts, signals, patterns, sessions, canFile = false }: Props = $props();
+  let {
+    date,
+    p0Alerts,
+    signals,
+    patterns,
+    sessions,
+    canFile = false,
+    autoFile = false,
+  }: Props = $props();
 
   const KIND_LABELS: Record<FrictionKind, () => string> = {
     correction: m.friction_kind_correction,
@@ -115,6 +124,7 @@
                     issue={p.issue}
                     filing={p.filing}
                     {canFile}
+                    {autoFile}
                   />
                 {/if}
               </li>

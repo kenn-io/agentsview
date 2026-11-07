@@ -476,6 +476,21 @@ describe("FrictionPage", () => {
       expect(finding.querySelector(".row-issue")?.textContent?.trim()).toBe("agentsview#f001");
     });
 
+    it.each([
+      ["automatic filing on", true, "Auto-filing paused"],
+      ["automatic filing off", false, undefined],
+    ])("shows a pause only where it matters: %s", async (_name, autoFile, want) => {
+      sync.serverVersion = version({ friction_build_allowed: false, friction_auto_file: autoFile });
+      friction.digest!.patterns = friction.digest!.patterns!.map((p) =>
+        p.fingerprint === toolError.fingerprint
+          ? { ...p, filing: { state: "paused", attempts: 0 } }
+          : p,
+      );
+      await render();
+      const note = headlineRow("command not found").querySelector<HTMLElement>(".filing-note");
+      expect(note?.textContent?.trim()).toBe(want);
+    });
+
     it("says why automatic filing has not linked a pattern", async () => {
       sync.serverVersion = version({ friction_build_allowed: false });
       friction.digest!.patterns = friction.digest!.patterns!.map((p) =>

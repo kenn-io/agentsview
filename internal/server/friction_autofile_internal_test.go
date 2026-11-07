@@ -60,6 +60,7 @@ func TestAutomaticFilingHoldsAWorkLease(t *testing.T) {
 				})))
 			s.mu.Lock()
 			s.cfg.Friction.Kata.AutoFile = true
+			s.cfg.Friction.Kata.MinSessions = 1
 			s.cfg.Friction.BackfillDays = 7
 			s.mu.Unlock()
 			d, ok := s.db.(*db.DB)

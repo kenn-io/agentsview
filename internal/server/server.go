@@ -61,9 +61,12 @@ type VersionInfo struct {
 	// FrictionBuildAllowed reports that this request may start a build:
 	// the server has a friction runner and accepts runs from this caller.
 	FrictionBuildAllowed bool `json:"friction_build_allowed"`
-	KataAvailable        bool `json:"kata_available"`
-	APIVersion           int  `json:"api_version"`
-	DataVersion          int  `json:"data_version"`
+	// FrictionAutoFile reports that this hub files Friction Log patterns to
+	// Kata automatically.
+	FrictionAutoFile bool `json:"friction_auto_file,omitempty"`
+	KataAvailable    bool `json:"kata_available"`
+	APIVersion       int  `json:"api_version"`
+	DataVersion      int  `json:"data_version"`
 }
 
 // APIVersion is shared by HTTP version reporting and local daemon discovery.

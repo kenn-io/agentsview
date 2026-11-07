@@ -22,11 +22,15 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 		name     string
 		autoFile bool
 		hub      bool
-		filed    bool
+		// minSessions overrides the default of 2; the fixture's patterns
+		// were each seen in one session.
+		minSessions int
+		filed       bool
 	}{
-		{name: "auto_file_on_hub", autoFile: true, hub: true, filed: true},
-		{name: "auto_file_off", hub: true},
-		{name: "not_the_hub", autoFile: true},
+		{name: "auto_file_on_hub", autoFile: true, hub: true, minSessions: 1, filed: true},
+		{name: "single_session_patterns_wait_by_default", autoFile: true, hub: true},
+		{name: "auto_file_off", hub: true, minSessions: 1},
+		{name: "not_the_hub", autoFile: true, minSessions: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -41,11 +45,19 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 			}, func(c *config.Config) {
 				c.Friction.BackfillDays = 7
 				c.Friction.Kata.AutoFile = tt.autoFile
+				c.Friction.Kata.MinSessions = tt.minSessions
 			})
 			runner.Store = te.db
 			const date = "2026-09-14"
 			seedFrictionDigest(t, te.db, date)
 			fp := frictionTestSnapshot(date).Signals[0].Fingerprint()
+
+			w := te.get(t, "/api/v1/version")
+			assertStatus(t, w, http.StatusOK)
+			version := decode[struct {
+				FrictionAutoFile bool `json:"friction_auto_file"`
+			}](t, w)
+			assert.Equal(t, tt.autoFile && tt.hub, version.FrictionAutoFile, "the page learns whether a pause matters")
 
 			require.NoError(t, review.Job(runner, nil).Run(t.Context()))
 			if !tt.filed {
@@ -68,6 +80,7 @@ func TestFrictionJobDoesNotFileWhereLinksCannotBeSaved(t *testing.T) {
 	}
 	cfg.Friction.BackfillDays = 7
 	cfg.Friction.Kata.AutoFile = true
+	cfg.Friction.Kata.MinSessions = 1
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	seedFrictionDigest(t, database, "2026-09-14")
 	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
@@ -95,6 +108,7 @@ func TestFrictionJobFilesWhenInstalledAfterTheServer(t *testing.T) {
 	}, func(c *config.Config) {
 		c.Friction.BackfillDays = 7
 		c.Friction.Kata.AutoFile = true
+		c.Friction.Kata.MinSessions = 1
 	})
 	runner.Store = te.db
 	const date = "2026-09-14"

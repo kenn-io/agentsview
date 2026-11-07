@@ -208,6 +208,7 @@ func TestFrictionListParity(t *testing.T) {
 		"page":            {Limit: 1},
 		"fingerprints":    {Fingerprints: []string{"fl1:ccc", "fl1:aaa", "fl1:missing"}},
 		"no_fingerprints": {Fingerprints: []string{}},
+		"min_sessions":    {MinSessions: 2},
 	}
 	for name, f := range patternFilters {
 		t.Run("patterns_"+name, func(t *testing.T) {

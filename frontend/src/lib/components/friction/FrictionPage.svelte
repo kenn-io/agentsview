@@ -37,6 +37,8 @@
   // Filing needs the same write access as Build now, and a ready Kata. The
   // page checks Kata once per visit when it may write.
   const canFile = $derived(buildAllowed && friction.kataReady);
+  // A pause only matters where the server files patterns automatically.
+  const autoFile = $derived(sync.serverVersion?.friction_auto_file === true);
   let kataChecked = false;
   $effect(() => {
     if (buildAllowed && !kataChecked) {
@@ -223,6 +225,7 @@
           patterns={digest.patterns ?? []}
           sessions={digest.sessions}
           {canFile}
+          {autoFile}
         />
 
         <FrictionReviewSummaryPanel date={digest.date} revision={digest.revision} />

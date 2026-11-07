@@ -704,6 +704,22 @@ type FrictionKataConfig struct {
 	// Kinds limits automatic filing to these kinds; empty means every kind
 	// that can be filed.
 	Kinds []string `json:"kinds,omitempty" toml:"kinds"`
+	// MinSessions is how many sessions a pattern must appear in before it
+	// is filed automatically; 0 means DefaultFrictionAutoFileMinSessions.
+	MinSessions int `json:"min_sessions,omitempty" toml:"min_sessions"`
+}
+
+// DefaultFrictionAutoFileMinSessions files only patterns that recur across
+// sessions. Correction, pattern and deferral fingerprints include the
+// session, so at this default they are filed only by hand.
+const DefaultFrictionAutoFileMinSessions = 2
+
+// FileMinSessions returns the session count automatic filing requires.
+func (c FrictionKataConfig) FileMinSessions() int {
+	if c.MinSessions == 0 {
+		return DefaultFrictionAutoFileMinSessions
+	}
+	return c.MinSessions
 }
 
 // FileKinds returns the kinds automatic filing considers.
@@ -748,6 +764,9 @@ func (c FrictionConfig) Validate() error {
 			return fmt.Errorf("[friction.kata] kinds entry %q repeats", k)
 		}
 		seen[k] = true
+	}
+	if c.Kata.MinSessions < 0 {
+		return fmt.Errorf("[friction.kata] min_sessions must be at least 1, got %d", c.Kata.MinSessions)
 	}
 	return nil
 }
@@ -2238,6 +2257,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("friction", "kata", "auto_file") {
 		c.Friction.Kata.AutoFile = file.Friction.Kata.AutoFile
+	}
+	if meta.IsDefined("friction", "kata", "min_sessions") {
+		c.Friction.Kata.MinSessions = file.Friction.Kata.MinSessions
 	}
 	if meta.IsDefined("friction", "kata", "kinds") {
 		c.Friction.Kata.Kinds = make([]string, 0, len(file.Friction.Kata.Kinds))

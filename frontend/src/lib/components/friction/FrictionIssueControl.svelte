@@ -13,9 +13,11 @@
     filing?: FrictionFilingItem | null;
     // The server accepts filing from this page and Kata is ready.
     canFile: boolean;
+    // The server files patterns automatically, so a pause means something.
+    autoFile?: boolean;
   }
 
-  let { fingerprint, kind, issue = null, filing = null, canFile }: Props = $props();
+  let { fingerprint, kind, issue = null, filing = null, canFile, autoFile = false }: Props = $props();
 
   let linking = $state(false);
   let ref = $state("");
@@ -28,6 +30,7 @@
       case "needs_person":
         return { label: m.friction_filing_needs_person(), title: filing.last_error };
       case "paused":
+        if (!autoFile) return null;
         return { label: m.friction_filing_paused(), title: m.friction_filing_paused_title() };
       default:
         return null;

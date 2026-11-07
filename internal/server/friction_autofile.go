@@ -8,16 +8,32 @@ import (
 	"go.kenn.io/agentsview/internal/friction/filing"
 )
 
+// frictionAutoFilePerPass caps the new patterns one hourly pass files, so
+// turning automatic filing on spreads a backlog over several hours instead
+// of filing it to Kata at once.
+const frictionAutoFilePerPass = 20
+
+// frictionAutoFileOn reports whether this server files patterns
+// automatically: a hub with [kata] enabled, a friction job, and
+// [friction.kata] auto_file.
+func (s *Server) frictionAutoFileOn() bool {
+	s.mu.RLock()
+	autoFile := s.cfg.Friction.Kata.AutoFile
+	s.mu.RUnlock()
+	kataCfg := s.kataConn().Config()
+	return autoFile && s.frictionRunner != nil && kataCfg.Enabled && kataCfg.Hub
+}
+
 // autoFileFriction is the friction job's automatic filing pass. It does
-// nothing unless this hub has [friction.kata] auto_file and [kata] enabled.
+// nothing unless frictionAutoFileOn.
 func (s *Server) autoFileFriction(ctx context.Context) error {
+	if !s.frictionAutoFileOn() {
+		return nil
+	}
 	s.mu.RLock()
 	policy, backfill := s.cfg.Friction.Kata, s.cfg.Friction.BackfillDays
 	s.mu.RUnlock()
 	runner := s.frictionRunner
-	if kataCfg := s.kataConn().Config(); !policy.AutoFile || runner == nil || !kataCfg.Enabled || !kataCfg.Hub {
-		return nil
-	}
 	store, ok := s.db.(filing.Store)
 	if !ok || !frictionLinksWritable(store) {
 		return nil
@@ -38,8 +54,10 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 		Exclusive: func(work func() error) error { return s.SerializeArchiveWrite(ctx, work) },
 	}
 	rep, err := f.Reconcile(ctx, filing.Policy{
-		Kinds: policy.FileKinds(),
-		Since: latest.AddDate(0, 0, 1-max(backfill, 1)).Format(time.DateOnly),
+		Kinds:       policy.FileKinds(),
+		Since:       latest.AddDate(0, 0, 1-max(backfill, 1)).Format(time.DateOnly),
+		MinSessions: policy.FileMinSessions(),
+		MaxNew:      frictionAutoFilePerPass,
 	})
 	if rep != (filing.ReconcileReport{}) {
 		log.Printf("friction: automatic filing created %d, linked %d, will retry %d, needs a person %d",
