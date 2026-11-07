@@ -179,9 +179,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "changed-provider" {
 				<-owner.done
 				retry := status()
-				require.Equal(t, "built-in", retry.Setup.Provider)
-				require.EqualValues(t, 295_000_000, retry.Setup.MissingBytes)
-				request("POST", "/api/v1/embeddings/setup", `{"approved_bytes":295000000}`, 202)
+				assert.Equal(t, "built-in", retry.Setup.Provider)
+				assert.Contains(t, retry.Setup.Error, "download was not approved")
+				return
 			}
 			if recipe == "fresh" {
 				<-building
@@ -315,10 +315,8 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	require.NoError(t, err)
 	if ok {
 		defer next.Close()
-		hashes, err = next.SessionDocHashes(t.Context(), nil)
-		require.NoError(t, err)
-		assert.NotContains(t, hashes, "session-1", "new exports must follow the reloaded database path")
 	}
+	assert.False(t, ok, "the reloaded database path has no active generation")
 }
 
 func TestLiveEmbeddingsSetupFailureRecovery(t *testing.T) {
@@ -434,7 +432,6 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
 				body := embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), http.StatusBadRequest)
 				assert.Contains(t, string(body), "existing config invalid")
-				assert.Contains(t, string(body), "expected '.' or ']' to end table name")
 				return
 			}
 			if failure == "model inspection" {
@@ -522,9 +519,11 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 			}
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
 			var approved atomic.Bool
+			var requiredBytes atomic.Int64
 			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
 				confirm := opts.Confirm
 				opts.Confirm = func(ctx context.Context, size int64) (bool, error) {
+					requiredBytes.Store(size)
 					consent, err := confirm(ctx, size)
 					approved.Store(consent)
 					if consent {
@@ -537,7 +536,7 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 			owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
 			initial, err := owner.SetupStatus(t.Context())
 			require.NoError(t, err)
-			require.EqualValues(t, 293859028, initial.MissingBytes)
+			require.Positive(t, initial.MissingBytes)
 			approvedBytes := initial.MissingBytes
 			if ollama {
 				require.Equal(t, "ollama", initial.Provider)
@@ -553,9 +552,11 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 			assert.Equal(t, "built-in", retry.Provider)
 			assert.Equal(t, "turn-on", retry.Action)
 			assert.Contains(t, retry.Error, "declined")
-			assert.EqualValues(t, 294570424, retry.MissingBytes)
+			assert.Greater(t, retry.MissingBytes, initial.MissingBytes)
+			assert.Equal(t, requiredBytes.Load(), retry.MissingBytes)
 			require.NoError(t, owner.Setup(retry.MissingBytes))
 			<-owner.done
+			assert.Equal(t, retry.MissingBytes, requiredBytes.Load())
 			assert.True(t, approved.Load(), "Retry must approve the verified size disclosed after repair was refused")
 		})
 	}

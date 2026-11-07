@@ -180,7 +180,9 @@ describe("EmbeddingsSettings", () => {
     expect(document.body.querySelectorAll("button")).toHaveLength(1);
     button!.click();
     await settle();
-    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ approved_bytes: 295000000 });
+    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
+      approved_bytes: 295000000,
+    });
     unmount(component);
   });
 
@@ -219,43 +221,40 @@ describe("EmbeddingsSettings", () => {
     unmount(component);
   });
 
-  it("shows indexing progress with throughput and remaining time", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      runningStatus(200, {
-        estimate_ready: true,
-        rate_per_second: 50,
-        eta_milliseconds: 16_000,
-        setup: {
-          enabled: true,
-          action: "",
-          provider: "built-in",
-          busy: false,
-          installing: false,
-          missing_bytes: 0,
-          downloaded_bytes: 0,
-          total_bytes: 0,
-        },
-      }),
-    );
+  it.each([true, false])(
+    "shows indexing progress with estimate_ready %s",
+    async (estimateReady) => {
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+        runningStatus(200, {
+          estimate_ready: estimateReady,
+          rate_per_second: 50,
+          eta_milliseconds: 16_000,
+        }),
+      );
 
-    const component = mount(EmbeddingsSettings, { target: document.body });
-    await settle();
-
-    const text = () => document.body.textContent ?? "";
-    expect(text()).toContain("test-embed-model");
-    expect(text()).toContain("256");
-    expect(text()).toContain("Indexing 200 of 1,000 text sections");
-    expect(text()).toContain("under a minute left");
-    expect(text()).toContain("50 text sections/s");
-    expect(text()).toContain("Elapsed 5s");
-
-    expect(document.body.querySelectorAll('[role="progressbar"]')).toHaveLength(1);
-    const progressbar = document.body.querySelector('[role="progressbar"]');
-    expect(progressbar?.getAttribute("aria-valuenow")).toBe("200");
-    expect(progressbar?.getAttribute("aria-valuemax")).toBe("1000");
-
-    unmount(component);
-  });
+      const component = mount(EmbeddingsSettings, { target: document.body });
+      try {
+        await settle();
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("test-embed-model");
+        expect(text).toContain("256");
+        expect(text).toContain("Indexing 200 of 1,000 text sections");
+        expect(text).toContain("Elapsed 5s");
+        if (estimateReady) {
+          expect(text).toContain("under a minute left");
+          expect(text).toContain("50 text sections/s");
+        } else {
+          expect(text).not.toContain("under a minute left");
+        }
+        const progressbars = document.body.querySelectorAll('[role="progressbar"]');
+        expect(progressbars).toHaveLength(1);
+        expect(progressbars[0]?.getAttribute("aria-valuenow")).toBe("200");
+        expect(progressbars[0]?.getAttribute("aria-valuemax")).toBe("1000");
+      } finally {
+        unmount(component);
+      }
+    },
+  );
 
   it("formats indexing numbers and time in the selected language, not the browser's", async () => {
     vi.spyOn(navigator, "language", "get").mockReturnValue("en-US");
@@ -272,21 +271,6 @@ describe("EmbeddingsSettings", () => {
     } finally {
       unmount(component);
       setLocale("en");
-    }
-  });
-
-  it("shows indexing while the daemon warms its estimate", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      runningStatus(100, { estimate_ready: false, eta_milliseconds: 16_000 }),
-    );
-
-    const component = mount(EmbeddingsSettings, { target: document.body });
-    try {
-      await settle();
-      expect(document.body.textContent).toContain("Indexing 100 of 1,000 text sections");
-      expect(document.body.textContent).not.toContain("under a minute left");
-    } finally {
-      unmount(component);
     }
   });
 
