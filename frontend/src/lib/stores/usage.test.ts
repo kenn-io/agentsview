@@ -1378,7 +1378,7 @@ describe("UsageStore session filter params", () => {
     expect(usage.querying.pairwise).toBe(false);
   });
 
-  it("records full refresh time and clears new-data hints", async () => {
+  it("records refresh time and preserves data marked during a read", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-06-15T16:00:00Z"));
@@ -1571,7 +1571,6 @@ describe("UsageStore session filter params", () => {
       await usage.fetchAll();
       const previousUpdatedAt = usage.lastUpdatedAt;
 
-      usage.markNewData();
       usageServiceMocks.getApiV1UsageTopSessions.mockRejectedValueOnce(
         new Error("top sessions failed"),
       );

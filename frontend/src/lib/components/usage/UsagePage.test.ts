@@ -260,7 +260,7 @@ describe("UsagePage refresh behavior", () => {
     expect(requests).toHaveBeenCalledTimes(3);
   });
 
-  it("refreshes the visible totals immediately when the button is clicked", async () => {
+  it("starts a refresh immediately when the button is clicked", async () => {
     const { requests } = await mountLiveUsage();
     await vi.advanceTimersByTimeAsync(30_000);
     document.querySelector<HTMLButtonElement>('button[aria-label="Refresh usage data"]')!.click();
@@ -299,7 +299,7 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
   });
 
-  it("refreshes on visible return and pauses while hidden", async () => {
+  it("refreshes when returning to a visible tab", async () => {
     vi.useFakeTimers();
     const setHidden = visibility();
     const subscription = vi.spyOn(events, "subscribe");
