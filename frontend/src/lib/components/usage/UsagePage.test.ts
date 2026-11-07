@@ -272,7 +272,7 @@ describe("UsagePage refresh behavior", () => {
     const { requests, emit } = await mountLiveUsage();
     emit({ scope: "sync" });
     await flushEffects();
-    await unmount(component);
+    await unmount(component!);
     component = undefined;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requests).toHaveBeenCalledTimes(1);
