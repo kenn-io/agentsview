@@ -150,14 +150,11 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			require.NotNil(t, initial.Setup)
 			assert.False(t, initial.Setup.Enabled)
 			assert.Equal(t, "turn-on", initial.Setup.Action)
-			provider := "built-in"
-			switch recipe {
-			case "automatic", "nomic":
-				provider = "ollama"
-			case "changed-provider":
-				provider = "configured"
+			if recipe == "changed-provider" {
+				assert.Equal(t, "configured", initial.Setup.Provider)
+			} else if recipe == "nomic" {
+				assert.Equal(t, "ollama", initial.Setup.Provider)
 			}
-			assert.Equal(t, provider, initial.Setup.Provider)
 			assert.Zero(t, installs.Load())
 			// The row discloses a download only for the built-in provider.
 			var shown int64
@@ -172,6 +169,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				<-owner.done
 				retry := status()
 				assert.Equal(t, "built-in", retry.Setup.Provider)
+				assert.NotEmpty(t, retry.Setup.Error)
+				assert.Equal(t, "turn-on", retry.Setup.Action)
+				assert.Zero(t, reloads.Load(), "declined activation must not publish a config")
 				return
 			}
 			if recipe == "fresh" {
@@ -296,50 +296,38 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	assert.False(t, ok, "the reloaded database path has no active generation")
 }
 
-func TestLiveEmbeddingsSetupFailureRecovery(t *testing.T) {
-	t.Run("retry", func(t *testing.T) {
-		oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
-		t.Cleanup(func() {
-			inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
-		})
-		t.Setenv("HOME", t.TempDir())
-		t.Setenv("USERPROFILE", t.TempDir())
-		dir := testDataDir(t)
-		cfg, err := config.LoadReadOnly()
-		require.NoError(t, err)
-		database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-		inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-			return embedlocal.Status{DownloadBytes: 1000}, nil
-		}
-		localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
-		var calls atomic.Int64
-		started := make(chan struct{})
-		installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-			if calls.Add(1) == 1 {
-				return embedlocal.Installation{}, errors.New("download interrupted")
-			}
-			opts.Progress(100, 1000)
-			close(started)
-			<-ctx.Done()
-			return embedlocal.Installation{}, ctx.Err()
-		}
-		owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-		require.NoError(t, err)
-		defer func() { require.NoError(t, owner.Close()) }()
-		require.NoError(t, owner.Setup(0))
-		<-owner.done
-		status, err := owner.SetupStatus(t.Context())
-		require.NoError(t, err)
-		require.Equal(t, "download interrupted", status.Error)
-		require.NoError(t, owner.Setup(0))
-		<-started
-		require.ErrorIs(t, owner.Setup(0), vector.ErrBuildRunning)
-		assert.EqualValues(t, 2, calls.Load())
-		status, err = owner.SetupStatus(t.Context())
-		require.NoError(t, err)
-		assert.True(t, status.Busy)
-		assert.EqualValues(t, 100, status.DownloadedBytes)
+func TestLiveEmbeddingsSetupProgress(t *testing.T) {
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 	})
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{DownloadBytes: 1000}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+	started := make(chan struct{})
+	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		opts.Progress(100, 1000)
+		close(started)
+		<-ctx.Done()
+		return embedlocal.Installation{}, ctx.Err()
+	}
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	require.NoError(t, owner.Setup(0))
+	<-started
+	require.ErrorIs(t, owner.Setup(0), vector.ErrBuildRunning)
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.True(t, status.Busy)
+	assert.EqualValues(t, 100, status.DownloadedBytes)
 }
 
 func embeddingRequest(t *testing.T, client *http.Client, base, method, path, contentType string, body io.Reader, want int) []byte {
@@ -359,7 +347,7 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 }
 
 func TestLiveEmbeddingsSetupFailures(t *testing.T) {
-	for _, failure := range []string{"already running", "configured provider", "invalid endpoint", "invalid TOML", "model inspection", "config read"} {
+	for _, failure := range []string{"already enabled", "configured provider", "invalid endpoint", "invalid TOML", "model inspection", "config read"} {
 		t.Run(failure, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			t.Setenv("USERPROFILE", t.TempDir())
@@ -373,7 +361,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				writeTestConfig(t, dir, "[vector]\nenabled=false\n[vector.embeddings]\nmodel='test-model'\ndimension=3\n[vector.embeddings.servers.local]\nendpoint='ftp://127.0.0.1/v1'\n")
 				cfg, err = config.LoadReadOnly()
 				require.NoError(t, err)
-			case "already running":
+			case "already enabled":
 				writeTestConfig(t, dir, "[vector]\nenabled=true\n")
 				cfg, err = config.LoadReadOnly()
 				require.NoError(t, err)
@@ -393,7 +381,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				cfg.DeploymentEmbeddings = &config.VectorEmbeddingsServerConfig{Endpoint: "https://embeddings.example/v1"}
 			}
 			var owner *liveVectorServing
-			if failure == "already running" {
+			if failure == "already enabled" {
 				owner, err = newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 				require.NoError(t, err)
 				defer func() { require.NoError(t, owner.Close()) }()

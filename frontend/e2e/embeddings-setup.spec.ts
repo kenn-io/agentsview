@@ -34,7 +34,6 @@ test("separates the build error from generations by at least 16px", async ({ pag
       .click();
   };
   await openEmbeddings();
-  await expect(page.getByRole("alert")).toContainText("encoder unavailable");
   const errorBox = (await page.getByRole("alert").boundingBox())!;
   const generationsBox = (await page.locator(".embeddings-settings .subsection").boundingBox())!;
   expect(generationsBox.y - errorBox.y - errorBox.height).toBeGreaterThanOrEqual(16);

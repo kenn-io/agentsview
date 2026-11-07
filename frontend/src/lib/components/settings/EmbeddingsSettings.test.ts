@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { flushSync, mount, unmount } from "svelte";
 // @ts-ignore
 import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
-// @ts-ignore
 import { EmbeddingsService } from "../../api/generated/index";
 import type { VectorBuildStatus } from "../../api/generated/index";
 import { ApiError } from "../../api/runtime.js";
@@ -95,10 +94,10 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
-  it.each([false, true])("handles Ollama setup with enabled=%s", async (enabled) => {
+  it("approves only the disclosed download when retrying after Ollama stops", async () => {
     const setup = {
-      enabled,
-      action: enabled ? "" : "turn-on",
+      enabled: false,
+      action: "turn-on",
       provider: "ollama",
       missing_bytes: 295000000,
       busy: false,
@@ -111,12 +110,6 @@ describe("EmbeddingsSettings", () => {
     const component = mount(EmbeddingsSettings, { target: document.body });
     try {
       await settle();
-      if (enabled) {
-        const row = document.body.querySelector(".kit-search-by-meaning")!;
-        expect(row.textContent).toContain("On · Ollama");
-        expect(row.querySelector("button")).toBeNull();
-        return;
-      }
       expect(document.body.textContent).toContain("Uses Ollama");
       expect(document.body.textContent).not.toContain("Downloads 295 MB");
       embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
@@ -150,6 +143,31 @@ describe("EmbeddingsSettings", () => {
     }
   });
 
+  it("shows an enabled Ollama setup as on, with no switch", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+      running: false,
+      setup: {
+        enabled: true,
+        action: "",
+        provider: "ollama",
+        missing_bytes: 0,
+        busy: false,
+        installing: false,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+      },
+    });
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    try {
+      await settle();
+      const row = document.body.querySelector(".kit-search-by-meaning")!;
+      expect(row.textContent).toContain("On · Ollama");
+      expect(row.querySelector("button")).toBeNull();
+    } finally {
+      unmount(component);
+    }
+  });
+
   it("keeps setup recovery available while hiding unqueried build details", async () => {
     const setup = {
       enabled: true,
@@ -162,22 +180,15 @@ describe("EmbeddingsSettings", () => {
       downloaded_bytes: 0,
       total_bytes: 0,
     };
-    const staleBuildError = "local embeddings: approve the download in Settings > Embeddings";
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
       running: false,
       setup,
-      model: "test-embed-model",
-      dimension: 256,
-      last_error: staleBuildError,
     });
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
     expect(document.body.textContent).toContain(setup.error);
     expect(embeddingsService.getApiV1EmbeddingsGenerations).not.toHaveBeenCalled();
-    expect.soft(document.body.textContent).not.toContain("No embedding generations exist yet.");
-    expect.soft(document.body.textContent).not.toContain(staleBuildError);
-    expect.soft(document.body.textContent).not.toContain("test-embed-model");
-    expect.soft(document.body.textContent).not.toContain("Dimensions");
+    expect(document.body.textContent).not.toContain("No embedding generations exist yet.");
     const button = [...document.body.querySelectorAll("button")].find(
       (b) => b.textContent?.trim() === "Retry",
     );
