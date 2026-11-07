@@ -158,6 +158,10 @@ func Push(
 		log.Printf("duckdbsync: sweeping stale rebuild temp files: %v", err)
 	}
 	scope := db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects)
+	localDeletionRevision, err := local.SessionDeletionPublicationRevision(ctx)
+	if err != nil {
+		return storage.MirrorPushResult{}, err
+	}
 	localDatabaseID, err := local.GetDatabaseID(ctx)
 	if err != nil {
 		return storage.MirrorPushResult{}, fmt.Errorf("reading local archive database id: %w", err)
@@ -190,10 +194,6 @@ func Push(
 			return err
 		}
 		lock = claimed
-		localDeletionRevision, err := local.SessionDeletionPublicationRevision(ctx)
-		if err != nil {
-			return err
-		}
 		probe, err = ProbeMirror(ctx, path)
 		if err != nil {
 			return err
