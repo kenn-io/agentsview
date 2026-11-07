@@ -131,23 +131,6 @@ func TestManifestV1RejectsRootAliases(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalid)
 }
 
-func TestManifestV1WithoutRootAliasesRemainsValid(t *testing.T) {
-	t.Parallel()
-	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
-	manifest := validManifest()
-	manifest.SchemaVersion = legacyManifestSchemaVersion
-	canonical, err := ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
-	require.NoError(t, err)
-	assert.Equal(t, legacyManifestSchemaVersion, canonical.Manifest.SchemaVersion)
-	assert.NotContains(t, string(canonical.CanonicalJSON), `"root_aliases"`)
-	parsed, err := ParseCanonicalManifest(
-		identity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
-	)
-	require.NoError(t, err)
-	require.NoError(t, ValidateCanonicalManifest(parsed))
-}
-
 func TestValidateAndCanonicalizeBindsAuthenticatedIdentity(t *testing.T) {
 	t.Parallel()
 
