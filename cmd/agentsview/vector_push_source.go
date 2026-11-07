@@ -122,13 +122,12 @@ func (s *vectorPushSource) BeginExport(
 	ctx context.Context, sessionIDs []string,
 ) (storage.VectorExport, bool, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	ix, err := s.openIndex(ctx)
 	if err != nil || ix == nil {
-		s.mu.Unlock()
 		return nil, false, err
 	}
 	exp, ok, err := ix.BeginExport(ctx, sessionIDs)
-	s.mu.Unlock()
 	if err != nil {
 		if errors.Is(err, vector.ErrExportNotReady) {
 			return nil, false, fmt.Errorf("%w: %w", storage.ErrVectorSourceNotReady, err)
@@ -150,10 +149,8 @@ func (s *vectorPushSource) BeginExport(
 
 // configuredGeneration is the generation the configured recipe builds. It
 // carries the recipe for publication unless the recipe was adopted from the
-// replica.
+// replica. Callers hold s.mu when the source can be reconfigured.
 func (s *vectorPushSource) configuredGeneration() storage.VectorGenerationInfo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	gen := vectorGeneration(s.cfg.Vector.Embeddings)
 	info := storage.VectorGenerationInfo{
 		Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: gen.Dimensions,

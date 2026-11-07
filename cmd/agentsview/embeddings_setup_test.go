@@ -150,9 +150,10 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			require.NotNil(t, initial.Setup)
 			assert.False(t, initial.Setup.Enabled)
 			assert.Equal(t, "turn-on", initial.Setup.Action)
-			if recipe == "changed-provider" {
+			switch recipe {
+			case "changed-provider":
 				assert.Equal(t, "configured", initial.Setup.Provider)
-			} else if recipe == "nomic" {
+			case "nomic":
 				assert.Equal(t, "ollama", initial.Setup.Provider)
 			}
 			assert.Zero(t, installs.Load())

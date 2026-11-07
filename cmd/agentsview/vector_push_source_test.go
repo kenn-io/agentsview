@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"maps"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -391,17 +393,30 @@ func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
 
 func TestVectorPushSourceConcurrentSetupReloadSnapshot(t *testing.T) {
 	cfg := enabledVectorConfig(t)
-	buildTestVectorsDB(t, cfg)
+	cfg.Vector.Embeddings.QueryPrefix = "old query: "
+	next := cfg
+	next.DataDir = t.TempDir()
+	next.Vector.Embeddings.QueryPrefix = "new query: "
+	recipes := make(map[string]map[string]string)
+	for _, candidate := range []config.Config{cfg, next} {
+		gen := vectorGeneration(candidate.Vector.Embeddings)
+		recipes[gen.Fingerprint()] = gen.Params
+		ix, err := vector.Open(t.Context(), candidate.Vector.ResolvedDBPath(candidate.DataDir), false, candidate.Vector.Embeddings.MaxInputChars)
+		require.NoError(t, err)
+		result, err := ix.Build(t.Context(), testPushUnitSource(), fakePushEncoder(), gen, vector.BuildOptions{})
+		require.NoError(t, err)
+		require.True(t, result.Activated)
+		require.NoError(t, ix.Close())
+	}
+	require.Len(t, recipes, 2, "the reload must change the actual recipe fingerprint")
 	src := &vectorPushSource{cfg: cfg}
 	defer func() { require.NoError(t, src.Close()) }()
-	// A browser setup retry reloads configuration while a replica push asks
-	// the running daemon to create an export snapshot.
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	var firstErr error
 	wg.Go(func() {
 		<-start
-		for range 250 {
+		for range 10000 {
 			exp, ok, err := src.BeginExport(t.Context(), nil)
 			if err != nil {
 				firstErr = err
@@ -411,20 +426,32 @@ func TestVectorPushSourceConcurrentSetupReloadSnapshot(t *testing.T) {
 				firstErr = errors.New("active index disappeared")
 				return
 			}
+			gen := exp.Generation()
+			want := recipes[gen.Fingerprint]
+			if len(want) == 0 || !maps.Equal(want, gen.Params) {
+				firstErr = errors.New("exported fingerprint " + gen.Fingerprint + " without its matching recipe")
+			}
 			_, err = exp.SessionDocHashes(t.Context(), nil)
 			if err := errors.Join(err, exp.Close()); err != nil {
 				firstErr = err
+			}
+			if firstErr != nil {
 				return
 			}
 		}
 	})
 	wg.Go(func() {
 		<-start
-		for range 250 {
-			src.reconfigure(cfg)
+		for i := range 100000 {
+			if i%2 == 0 {
+				src.reconfigure(next)
+			} else {
+				src.reconfigure(cfg)
+			}
+			runtime.Gosched()
 		}
 	})
 	close(start)
 	wg.Wait()
-	require.NoError(t, firstErr, "a config reload must preserve replica pushes already using the live source")
+	require.NoError(t, firstErr, "each real snapshot must retain the recipe captured with its index")
 }
