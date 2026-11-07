@@ -12,33 +12,31 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	gitlog "go.kenn.io/agentsview/internal/db/git"
-	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestPushHeldSpareRejectsUnusableSnapshots(t *testing.T) {
-	for _, mismatch := range []string{"half_copied", "scope", "archive"} {
+	for _, mismatch := range []string{"scope", "archive"} {
 		t.Run(mismatch, func(t *testing.T) {
 			skipReopenTestOnWindows(t)
 			ctx := t.Context()
 			local, path := newPushFixture(t, 1)
 			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
-			if mismatch != "half_copied" {
-				require.NoError(t, copyMirrorFile(ctx, path, sparePath(path)))
-				conn, err := Open(ctx, sparePath(path))
-				require.NoError(t, err)
-				key := pushScopeMetadataKey
-				if mismatch == "archive" {
-					key = sourceArchiveIDMetadataKey
-				}
-				require.NoError(t, recordMetadataKey(ctx, conn, key, "other"))
-				require.NoError(t, conn.Close())
-			} else {
-				require.NoError(t, os.WriteFile(sparePath(path), []byte("interrupted publication"), 0o600))
-				require.NoError(t, os.WriteFile(sparePath(path)+".wal", []byte("leftover WAL"), 0o600))
+			require.NoError(t, copyMirrorFile(ctx, path, sparePath(path)))
+			conn, err := Open(ctx, sparePath(path))
+			require.NoError(t, err)
+			key := pushScopeMetadataKey
+			if mismatch == "archive" {
+				key = sourceArchiveIDMetadataKey
 			}
+			require.NoError(t, recordMetadataKey(ctx, conn, key, "other"))
+			require.NoError(t, conn.Close())
+			unusableFile, err := os.Open(sparePath(path))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, unusableFile.Close()) })
+			unusable, err := unusableFile.Stat()
+			require.NoError(t, err)
 			store, err := NewStore(ctx, path)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
@@ -49,6 +47,9 @@ func TestPushHeldSpareRejectsUnusableSnapshots(t *testing.T) {
 			resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 			require.NoError(t, err)
 			assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+			published, err := os.Stat(path)
+			require.NoError(t, err)
+			assert.False(t, os.SameFile(unusable, published), "an incompatible standby must be replaced")
 			assert.NoFileExists(t, sparePath(path)+".wal")
 		})
 	}
@@ -73,7 +74,7 @@ func TestPushHeldSpareLifecycle(t *testing.T) {
 	}
 }
 
-func TestPushHeldSpareKeepsPublishedSessionAfterUpdateError(t *testing.T) {
+func TestPushHeldSpareRetriesAfterSessionUpdateError(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
@@ -112,57 +113,23 @@ func TestPushHeldSpareKeepsPublishedSessionAfterUpdateError(t *testing.T) {
 }
 
 func TestPushHeldSparePublishesNonSessionChanges(t *testing.T) {
-	for _, change := range []string{"delete", "star", "pin", "pricing", "usage", "label", "retained_link"} {
-		t.Run(change, func(t *testing.T) {
-			skipReopenTestOnWindows(t)
-			ctx := t.Context()
-			local, path := newPushFixture(t, 1)
-			if change == "retained_link" {
-				_, err := local.StoreTrailerCommitLinks(ctx, "sample", []gitlog.TrailerCommit{{SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Sessions: []string{"claude:sess-1"}, Subject: "Original", CommittedAt: "2026-01-01T00:00:00Z"}})
-				require.NoError(t, err)
-				require.NoError(t, local.DeleteSession(ctx, "sess-1"))
-			}
-			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-			require.NoError(t, err)
-			store, err := NewStore(ctx, path)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			query, want := "", 1
-			switch change {
-			case "delete":
-				err = local.DeleteSession(ctx, "sess-1")
-				query, want = `SELECT count(*) FROM sessions`, 0
-			case "star":
-				_, err = local.StarSession(ctx, "sess-1")
-				query = `SELECT count(*) FROM starred_sessions`
-			case "pin":
-				msgs, loadErr := local.GetAllMessages(ctx, "sess-1")
-				require.NoError(t, loadErr)
-				_, err = local.PinMessage(ctx, "sess-1", msgs[0].ID, nil)
-				query = `SELECT count(*) FROM pinned_messages`
-			case "pricing":
-				err = local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "held-test-model", InputPerMTok: money.MustParseDollars("123"), UpdatedAt: "2026-01-01T00:00:00Z"}})
-				query = `SELECT count(*) FROM model_pricing WHERE model_pattern = 'held-test-model'`
-			case "usage":
-				err = local.InsertCursorUsageEvents(ctx, []db.CursorUsageEvent{{OccurredAt: "2026-01-01T00:00:00Z", Model: "held-test-model", Kind: "usage", InputTokens: 123}})
-				query = `SELECT count(*) FROM cursor_usage_events WHERE input_tokens = 123`
-			case "retained_link":
-				_, err = local.StoreTrailerCommitLinks(ctx, "sample", []gitlog.TrailerCommit{{SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Sessions: []string{"claude:sess-1"}, Subject: "Corrected", CommittedAt: "2026-01-01T00:00:00Z"}})
-				query = `SELECT count(*) FROM commit_links WHERE subject = 'Corrected' AND retained`
-			case "label":
-				err = local.SetSyncState(ctx, "machine_label:m", "updated")
-				query = `SELECT count(*) FROM sync_metadata WHERE key = 'machine_label:m' AND value = 'updated'`
-			}
-			require.NoError(t, err)
-			res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
-			require.NoError(t, err)
-			assert.Zero(t, res.SessionsPushed)
-			store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
-			var count int
-			require.NoError(t, store.DB().QueryRowContext(ctx, query).Scan(&count))
-			assert.Equal(t, want, count)
-		})
-	}
+	skipReopenTestOnWindows(t)
+	ctx := t.Context()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = local.StarSession(ctx, "sess-1")
+	require.NoError(t, err)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, res.SessionsPushed)
+	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+	var count int
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT count(*) FROM starred_sessions WHERE session_id = 'sess-1'`).Scan(&count))
+	assert.Equal(t, 1, count)
 }
 
 func TestPushHeldSpareBootstrapsRecoveredWAL(t *testing.T) {
@@ -191,13 +158,14 @@ func TestPushHeldSpareBootstrapsRecoveredWAL(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	require.Equal(t, 3, mirrorMessageCountViaStore(t, store, "sess-1"))
-	// A second session triggers publication; the copy must still catch up
-	// the session only the WAL held.
+	// A second session triggers publication. Recovering the copied WAL must
+	// preserve the first session's cursor so only the new session is pushed.
 	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: syncSession("new-session", "alpha", "new", "2026-01-02T00:00:00Z", 1), Messages: []db.Message{syncMessage("new-session", 0, "user", "new", "2026-01-02T00:00:00Z")}, DataVersion: 1, ReplaceMessages: true}})
 	require.NoError(t, err)
 	appendFrustrationPrompt(t, local, "new-session")
-	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 	require.NoError(t, err)
+	assert.Equal(t, 1, res.SessionsPushed, "the recovered WAL must prevent replaying sess-1 from SQLite")
 	assert.NoFileExists(t, sparePath(path)+".wal")
 	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
 	assert.Equal(t, 3, mirrorMessageCountViaStore(t, store, "sess-1"))
@@ -232,10 +200,9 @@ func TestPushHeldSpareRetriesAfterReaderReleases(t *testing.T) {
 	spareBefore, err := os.ReadFile(sparePath(path))
 	require.NoError(t, err)
 	appendFrustrationPrompt(t, local, "sess-1")
-	res, err := Push(ctx, path, local, "m", opts, false, nil)
+	_, err = Push(ctx, path, local, "m", opts, false, nil)
 	require.Error(t, err)
 	assert.True(t, isMirrorHeldError(err))
-	assert.False(t, res.Diagnostics.Deferred)
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)

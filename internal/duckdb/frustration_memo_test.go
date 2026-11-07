@@ -20,6 +20,7 @@ func TestDuckDBFrustrationMemoFollowsMirrorReplacement(t *testing.T) {
 	for _, id := range []string{"sess-1", "sess-2"} {
 		require.NoError(t, local.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
 	}
+	appendFrustrationPrompt(t, local, "sess-1")
 	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	store, err := NewStore(ctx, path)
@@ -28,24 +29,26 @@ func TestDuckDBFrustrationMemoFollowsMirrorReplacement(t *testing.T) {
 
 	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	assert.Zero(t, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	var fingerprint string
 	require.NoError(t, store.DB().QueryRowContext(ctx,
 		`SELECT agentsview_push_fingerprint FROM sessions WHERE id = 'sess-1'`).Scan(&fingerprint))
 	require.NotEmpty(t, fingerprint)
-	store.frustrationMemo.Store(store.frustrationMemo.Generation(), "sess-1", fingerprint, 7)
-	resp, err = store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 7, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	count, cached := store.frustrationMemo.Lookup(store.frustrationMemo.Generation(), "sess-1", fingerprint)
+	require.True(t, cached)
+	assert.Equal(t, 1, count)
 
 	appendFrustrationPrompt(t, local, "sess-2")
 	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.SessionsPushed)
 	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+	count, cached = store.frustrationMemo.Lookup(store.frustrationMemo.Generation(), "sess-1", fingerprint)
+	assert.True(t, cached, "replacement must retain unchanged transcript counts")
+	assert.Equal(t, 1, count)
 	resp, err = store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	assert.Equal(t, 8, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	assert.Equal(t, 2, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestDuckDBFrustrationMemoSkipsUnwatchedStores(t *testing.T) {

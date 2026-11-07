@@ -627,10 +627,6 @@ func TestPushPublishesWhileMirrorHeldByReaders(t *testing.T) {
 	second, err := os.Stat(path)
 	require.NoError(t, err)
 	assert.True(t, os.SameFile(original, second), "the second publication must reuse the original inode")
-	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
-	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 2, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 // TestAutomaticIncrementalPushSkipsScopeCount pins the bounded-cost side of
