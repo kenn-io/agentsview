@@ -74,6 +74,49 @@ func TestPushHeldMirrorScopeChangesAfterProbe(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 3)
 }
 
+func TestPushConcurrentDeletionDoesNotRebuild(t *testing.T) {
+	ctx := t.Context()
+	local, path := newPushFixture(t, 2)
+	opts := storage.MirrorPushOptions{Automatic: true}
+	_, err := Push(ctx, path, local, "m", opts, false, nil)
+	require.NoError(t, err)
+
+	// Publish a deletion during the database ID read, before this push takes
+	// the rebuild lock. Its earlier deletion revision would now be stale.
+	reader := local.Reader().(interface {
+		Conn(context.Context) (*sql.Conn, error)
+	})
+	conn, err := reader.Conn(ctx)
+	require.NoError(t, err)
+	var published bool
+	var publicationErr error
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(interface {
+			RegisterAuthorizer(func(int, string, string, string) int)
+		}).RegisterAuthorizer(func(op int, table, column, database string) int {
+			if op == sqlite3.SQLITE_FUNCTION && column == "coalesce" && !published {
+				published = true
+				publicationErr = local.DeleteSession(ctx, "sess-2")
+				if publicationErr == nil {
+					_, publicationErr = Push(ctx, path, local, "m", opts, false, nil)
+				}
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+
+	result, err := Push(ctx, path, local, "m", opts, false, nil)
+	require.True(t, published, "the competing deletion push must run")
+	require.NoError(t, publicationErr)
+	require.NoError(t, err)
+	assert.False(t, result.Diagnostics.Deferred)
+	assert.False(t, result.Diagnostics.Full, "a published deletion must keep this push incremental")
+	assert.Empty(t, result.Diagnostics.RebuildReason)
+	assert.Equal(t, map[string]bool{"sess-1": true}, mirrorSessionIDs(t, path))
+}
+
 func TestPushHeldSpareRejectsUnusableSnapshots(t *testing.T) {
 	for _, mismatch := range []string{"scope", "archive"} {
 		t.Run(mismatch, func(t *testing.T) {
