@@ -3735,10 +3735,10 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 		OccurredAt:       "2026-05-14T10:05:00Z",
 		Model:            "claude-4.6-opus-high-thinking",
 		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
-		InputTokens:      1234,
-		OutputTokens:     567,
-		CacheWriteTokens: 12,
-		CacheReadTokens:  34,
+		InputTokens:      3_000_001_234,
+		OutputTokens:     3_000_000_567,
+		CacheWriteTokens: 3_300_000_012,
+		CacheReadTokens:  4_400_000_034,
 		Charged:          money.MustParseDollars("0.1566"),
 		CursorTokenFee:   money.MustParseDollars("0.0332"),
 		UserID:           "152683922",
@@ -3761,10 +3761,10 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Daily, 1)
-	assert.Equal(t, 1234, result.Daily[0].InputTokens)
-	assert.Equal(t, 567, result.Daily[0].OutputTokens)
-	assert.Equal(t, 12, result.Daily[0].CacheCreationTokens)
-	assert.Equal(t, 34, result.Daily[0].CacheReadTokens)
+	assert.Equal(t, 3_000_001_234, result.Daily[0].InputTokens)
+	assert.Equal(t, 3_000_000_567, result.Daily[0].OutputTokens)
+	assert.Equal(t, 3_300_000_012, result.Daily[0].CacheCreationTokens)
+	assert.Equal(t, 4_400_000_034, result.Daily[0].CacheReadTokens)
 	assert.Equal(t, money.MustParseDollars("0.1566"), result.Daily[0].TotalCost)
 	assert.Empty(t, result.Projects, "cursor-only usage should not emit project identities")
 	assert.NotContains(t, result.Projects, "")
@@ -3773,6 +3773,97 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 	assert.Empty(t, result.SessionCounts.ByProject)
 	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
 	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
+}
+
+func TestPushAccountUsagePreservesAgentsAndReportedCost(t *testing.T) {
+	const billingScale = 10_000_000
+	ctx := t.Context()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "claude-test", InputPerMTok: money.MustParseDollars("100"),
+	}}))
+	require.NoError(t, local.InsertCursorUsageEvents(ctx, []db.CursorUsageEvent{
+		{
+			OccurredAt: "2026-05-14T12:00:00Z", Model: "claude-test",
+			InputTokens: 11 * billingScale, Charged: money.MustParseDollars("0.25"),
+		},
+		{
+			Agent: "grok", OccurredAt: "2026-05-15T00:30:00Z",
+			InputTokens: 22 * billingScale, OutputTokens: 2 * billingScale, Charged: money.MustParseDollars("0.50"),
+		},
+		{
+			Agent: "grok-bot", OccurredAt: "2026-05-15T01:30:00Z", Model: "claude-test",
+			InputTokens: 33 * billingScale, OutputTokens: 3 * billingScale, IsHeadless: true,
+		},
+		{
+			Agent: "grok", OccurredAt: "2026-05-14T02:30:00Z", Model: "outside",
+			InputTokens: 1000, Charged: money.MustParseDollars("100"),
+		},
+		{
+			Agent: "grok", OccurredAt: "2026-05-15T04:30:00Z", Model: "outside",
+			InputTokens: 2000, Charged: money.MustParseDollars("200"),
+		},
+	}))
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+
+	var storedModel string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT model FROM cursor_usage_events WHERE agent = 'grok' AND input_tokens = ?`, 22*billingScale,
+	).Scan(&storedModel))
+	assert.Empty(t, storedModel, "model normalization must not rewrite the source row")
+
+	store := NewStoreFromDB(syncer.DB())
+	stats, err := store.GetStats(ctx, false, false)
+	require.NoError(t, err)
+	assert.Nil(t, stats.EarliestSession)
+	require.NotNil(t, stats.EarliestAccountUsage)
+	assert.Equal(t, "2026-05-14T02:30:00Z", *stats.EarliestAccountUsage)
+	for _, tc := range []struct {
+		name   string
+		filter db.UsageFilter
+		input  int
+		output int
+		cost   string
+		models []string
+		agents []string
+	}{
+		{"all", db.UsageFilter{}, 66, 5, "0.75", []string{"<unknown>", "claude-test"}, []string{"cursor", "grok", "grok-bot"}},
+		{"cursor default", db.UsageFilter{Agent: "cursor"}, 11, 0, "0.25", []string{"claude-test"}, []string{"cursor"}},
+		{"grok", db.UsageFilter{Agent: "grok"}, 22, 2, "0.50", []string{"<unknown>"}, []string{"grok"}},
+		{"reported zero", db.UsageFilter{Agent: "grok-bot"}, 33, 3, "0", []string{"claude-test"}, []string{"grok-bot"}},
+		{"multiple agents", db.UsageFilter{Agent: " grok, grok-bot "}, 55, 5, "0.50", []string{"<unknown>", "claude-test"}, []string{"grok", "grok-bot"}},
+		{"exclude agent", db.UsageFilter{ExcludeAgent: "grok,cursor"}, 33, 3, "0", []string{"claude-test"}, []string{"grok-bot"}},
+		{"unknown model", db.UsageFilter{Model: "<unknown>"}, 22, 2, "0.50", []string{"<unknown>"}, []string{"grok"}},
+		{"exclude unknown model", db.UsageFilter{ExcludeModel: "<unknown>"}, 44, 3, "0.25", []string{"claude-test"}, []string{"cursor", "grok-bot"}},
+		{"human usage", db.UsageFilter{AutomatedScope: "human"}, 33, 2, "0.75", []string{"<unknown>", "claude-test"}, []string{"cursor", "grok"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := tc.filter
+			f.From, f.To, f.Timezone = "2026-05-14", "2026-05-14", "America/New_York"
+			f.Breakdowns = true
+			got, err := store.GetDailyUsage(ctx, f)
+			require.NoError(t, err)
+			require.Len(t, got.Daily, 1)
+			assert.Equal(t, "2026-05-14", got.Daily[0].Date)
+			assert.Equal(t, tc.input*billingScale, got.Totals.InputTokens)
+			assert.Equal(t, tc.output*billingScale, got.Totals.OutputTokens)
+			assert.Equal(t, money.MustParseDollars(tc.cost), got.Totals.TotalCost)
+			assert.ElementsMatch(t, tc.models, got.Daily[0].ModelsUsed)
+			agents := make([]string, 0, len(got.Daily[0].AgentBreakdowns))
+			for _, agent := range got.Daily[0].AgentBreakdowns {
+				agents = append(agents, agent.Agent)
+			}
+			assert.ElementsMatch(t, tc.agents, agents)
+			require.NotNil(t, got.Pricing)
+			assert.Equal(t, export.CostSourceReported, got.Pricing.CostSource)
+			assert.Zero(t, got.SessionCounts.Total)
+			assert.Empty(t, got.SessionCounts.ByAgent)
+			assert.Empty(t, got.Projects)
+		})
+	}
 }
 
 func TestTrendsTermsWordBoundaryAndOverlapParity(t *testing.T) {

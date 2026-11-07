@@ -455,7 +455,7 @@ func loadCursorUsageRollupBuild(
 		},
 		FactRevision: highWater,
 	}
-	rows, err := conn.QueryContext(ctx, `SELECT source_id, timestamp_ms,
+	rows, err := conn.QueryContext(ctx, `SELECT source_id, agent, timestamp_ms,
 		raw_timestamp, model, input_tokens, output_tokens,
 		cache_creation_tokens, cache_read_tokens, charged_microdollars,
 		is_headless, dedup_key
@@ -472,7 +472,7 @@ func loadCursorUsageRollupBuild(
 		var millis sql.NullInt64
 		var charged int64
 		var isHeadless int
-		if err := rows.Scan(&sourceID, &millis, &fact.Fact.RawTimestamp,
+		if err := rows.Scan(&sourceID, &fact.Agent, &millis, &fact.Fact.RawTimestamp,
 			&fact.Model, &fact.Fact.InputTokens, &fact.Fact.OutputTokens,
 			&fact.Fact.CacheCreationTokens, &fact.Fact.CacheReadTokens, &charged,
 			&isHeadless, &fact.Fact.UsageDedupKey); err != nil {
@@ -480,10 +480,10 @@ func loadCursorUsageRollupBuild(
 		}
 		fact.IsHeadless = isHeadless != 0
 		fact.FactIndex = int(sourceID)
-		fact.Fact.Source = "cursor"
+		fact.Fact.Source = fact.Agent
 		fact.Fact.Model = fact.Model
-		fact.Fact.CostSource = "cursor-reported"
-		fact.Fact.RequestScoped = true
+		fact.Fact.CostSource = fact.Agent + "-reported"
+		// Account totals do not establish a single request's context size.
 		fact.Fact.TokenEligible = true
 		fact.Fact.ReportedCostMicrodollars = &charged
 		if millis.Valid {

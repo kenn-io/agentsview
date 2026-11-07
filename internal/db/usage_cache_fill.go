@@ -1474,6 +1474,7 @@ func (c *usageFillCoordinator) fillCursor() {
 
 type usageCursorInstall struct {
 	id, charged int64
+	agent       string
 	timestamp   string
 	model       string
 	dedup       string
@@ -1532,7 +1533,7 @@ func (c *usageFillCoordinator) readCursorBatch(
 			fmt.Errorf("%w while copying Cursor usage", errUsageCacheSourceChanged)
 	}
 	rows, err := archiveTx.QueryContext(ctx, `
-		SELECT id, occurred_at, model, input_tokens, output_tokens,
+		SELECT id, agent, occurred_at, model, input_tokens, output_tokens,
 		       cache_write_tokens, cache_read_tokens, charged_microdollars,
 		       is_headless, dedup_key
 		FROM cursor_usage_events WHERE id > ? AND id <= ?
@@ -1546,15 +1547,19 @@ func (c *usageFillCoordinator) readCursorBatch(
 		var install usageCursorInstall
 		var input, output, cacheWrite, cacheRead int64
 		if err := rows.Scan(
-			&install.id, &install.timestamp, &install.model,
+			&install.id, &install.agent, &install.timestamp, &install.model,
 			&input, &output, &cacheWrite, &cacheRead, &install.charged,
 			&install.headless, &install.dedup,
 		); err != nil {
 			_ = rows.Close()
 			return nil, false, err
 		}
+		if install.model == "" {
+			install.model = "<unknown>"
+		}
 		install.fact, _ = usagefacts.FromEvent(usagefacts.EventInput{
-			Source: "cursor", Timestamp: install.timestamp, Model: install.model,
+			AccountBilling: true,
+			Source:         install.agent, Timestamp: install.timestamp, Model: install.model,
 			InputTokens: input, OutputTokens: output,
 			CacheCreationTokens: cacheWrite, CacheReadTokens: cacheRead,
 		})
@@ -1584,11 +1589,11 @@ func (c *usageFillCoordinator) installCursorBatch(
 	for _, install := range installs {
 		arrived.add("", "", "", install.dedup)
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO cursor_usage_facts(
-			source_id, timestamp_ms, raw_timestamp, model,
+			source_id, agent, timestamp_ms, raw_timestamp, model,
 			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
 			charged_microdollars, is_headless, dedup_key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			install.id, install.fact.TimestampMillis,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			install.id, install.agent, install.fact.TimestampMillis,
 			install.timestamp, install.model,
 			install.fact.InputTokens, install.fact.OutputTokens,
 			install.fact.CacheCreationTokens, install.fact.CacheReadTokens,

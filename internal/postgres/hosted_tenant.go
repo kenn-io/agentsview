@@ -71,6 +71,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = installRawProjectionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = migrateAccountUsageCountersPG(ctx, tx); err != nil {
+			return err
+		}
 		if err = installHostedFrictionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
@@ -108,6 +111,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		return err
 	}
 	if _, err = ensureColumns(ctx, tx, columns, migrations); err != nil {
+		return err
+	}
+	if err = migrateAccountUsageCountersPG(ctx, tx); err != nil {
 		return err
 	}
 	if err = checkDataVersionCompat(ctx, tx); err != nil {

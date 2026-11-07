@@ -26,7 +26,8 @@ import (
 // (session_plan_usage).
 // v21 adds messages.dialogue_text.
 // v22 adds commit provenance and copied prompts.
-const SchemaVersion = 22
+// v23 adds the agent identity and 64-bit counters to imported account usage rows.
+const SchemaVersion = 23
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -465,13 +466,14 @@ var mirrorTables = []tableSpec{
 		name: "cursor_usage_events",
 		create: `CREATE TABLE IF NOT EXISTS cursor_usage_events (
 			id BIGINT,
+			agent TEXT NOT NULL DEFAULT 'cursor',
 			occurred_at TIMESTAMP NOT NULL,
 			model TEXT NOT NULL,
 			kind TEXT NOT NULL DEFAULT '',
-			input_tokens INTEGER NOT NULL DEFAULT 0,
-			output_tokens INTEGER NOT NULL DEFAULT 0,
-			cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-			cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+			input_tokens BIGINT NOT NULL DEFAULT 0,
+			output_tokens BIGINT NOT NULL DEFAULT 0,
+			cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+			cache_read_tokens BIGINT NOT NULL DEFAULT 0,
 			charged_microdollars BIGINT NOT NULL DEFAULT 0,
 			cursor_token_fee_microdollars BIGINT NOT NULL DEFAULT 0,
 			user_id TEXT NOT NULL DEFAULT '',
@@ -481,13 +483,14 @@ var mirrorTables = []tableSpec{
 		)`,
 		columns: []columnSpec{
 			{"id", "id BIGINT"},
+			{"agent", "agent TEXT NOT NULL DEFAULT 'cursor'"},
 			{"occurred_at", "occurred_at TIMESTAMP NOT NULL"},
 			{"model", "model TEXT NOT NULL DEFAULT ''"},
 			{"kind", "kind TEXT NOT NULL DEFAULT ''"},
-			{"input_tokens", "input_tokens INTEGER NOT NULL DEFAULT 0"},
-			{"output_tokens", "output_tokens INTEGER NOT NULL DEFAULT 0"},
-			{"cache_write_tokens", "cache_write_tokens INTEGER NOT NULL DEFAULT 0"},
-			{"cache_read_tokens", "cache_read_tokens INTEGER NOT NULL DEFAULT 0"},
+			{"input_tokens", "input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"output_tokens", "output_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"cache_write_tokens", "cache_write_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"cache_read_tokens", "cache_read_tokens BIGINT NOT NULL DEFAULT 0"},
 			{"charged_microdollars", "charged_microdollars BIGINT NOT NULL DEFAULT 0"},
 			{"cursor_token_fee_microdollars", "cursor_token_fee_microdollars BIGINT NOT NULL DEFAULT 0"},
 			{"user_id", "user_id TEXT NOT NULL DEFAULT ''"},

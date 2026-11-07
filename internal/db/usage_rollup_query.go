@@ -368,6 +368,9 @@ func readUsageRollupExceptions(
 			session = &usageQuerySession{}
 		}
 		fact.Agent = session.Agent
+		if fact.SourceSessionID == "" {
+			fact.Agent = fact.Fact.Source
+		}
 		fact.AttributionSessionID = fact.SourceSessionID
 		if fact.Fact.UsesSessionStart {
 			fact.EffectiveMillis, fact.EffectiveNanos =
@@ -459,9 +462,9 @@ func aggregateUsageRollupExceptions(
 	general = deduplicateUsageRollupGeneral(general)
 	survivors := slices.Concat(plain, general)
 	type key struct {
-		session, date, model, providerID, priced, pattern, rateHash string
-		rateOK                                                      bool
-		band                                                        int
+		session, agent, date, model, providerID, priced, pattern, rateHash string
+		rateOK                                                             bool
+		band                                                               int
 	}
 	groups := make(map[key]*usageFactsGroup)
 	type authoritativeCandidate struct {
@@ -484,7 +487,7 @@ func aggregateUsageRollupExceptions(
 			band = *priced.BandThreshold
 		}
 		itemKey := key{
-			fact.AttributionSessionID, fact.LocalDate, fact.Model,
+			fact.AttributionSessionID, fact.Agent, fact.LocalDate, fact.Model,
 			fact.Fact.ProviderID,
 			priced.PricedModel, priced.MatchedPattern, priced.rateHash(),
 			priced.RateOK, band,
@@ -496,7 +499,7 @@ func aggregateUsageRollupExceptions(
 				session = *captured
 			}
 			if fact.AttributionSessionID == "" {
-				session.Agent = "cursor"
+				session.Agent = fact.Agent
 			}
 			group = &usageFactsGroup{
 				SessionID: fact.AttributionSessionID, Date: fact.LocalDate,
@@ -670,12 +673,14 @@ func filterUsageRollupOwners(
 	filter UsageFilter,
 ) []usageRollupFact {
 	result := facts[:0]
+	agents, excludedAgents := CSVFilterValues(filter.Agent), CSVFilterValues(filter.ExcludeAgent)
 	for _, fact := range facts {
 		if fact.AttributionSessionID == "" {
 			if usageCursorIncluded(filter) &&
+				(len(agents) == 0 || slices.Contains(agents, fact.Agent)) &&
+				!slices.Contains(excludedAgents, fact.Agent) &&
 				usageCursorAutomatedScopePasses(filter, fact.IsHeadless) &&
 				usageRollupModelPasses(filter, fact.Model) {
-				fact.Agent = "cursor"
 				result = append(result, fact)
 			}
 			continue

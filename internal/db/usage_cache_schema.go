@@ -59,7 +59,9 @@ const (
 	// Version 18 adds stored per-day totals. Main builds already wrote version
 	// 17 caches without them, so keeping 17 would fail their schema check and
 	// leave those archives on a temporary cache after every restart.
-	usageCacheFormatVersion             = 18
+	// Version 19 preserves account agents and uncapped billing counters.
+	// Version 20 rebuilds account billing rollups without request pricing bands.
+	usageCacheFormatVersion             = 20
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -216,6 +218,7 @@ CREATE INDEX usage_facts_usage_dedup_key
     ON usage_facts (usage_dedup_key) WHERE usage_dedup_key != '';
 CREATE TABLE cursor_usage_facts (
     source_id INTEGER PRIMARY KEY,
+    agent TEXT NOT NULL,
     timestamp_ms INTEGER,
     raw_timestamp TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL,
@@ -916,7 +919,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        claude_message_id, claude_request_id, source_uuid,
 		        usage_dedup_key, token_eligible, activity_eligible
 		 FROM usage_facts LIMIT 0`,
-		`SELECT source_id, timestamp_ms, raw_timestamp, model,
+		`SELECT source_id, agent, timestamp_ms, raw_timestamp, model,
 		        input_tokens, output_tokens, cache_creation_tokens,
 		        cache_read_tokens, charged_microdollars,
 		        is_headless, dedup_key

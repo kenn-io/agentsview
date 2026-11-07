@@ -552,17 +552,21 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
 	filter := rootSessionWhere(excludeOneShot, excludeAutomated)
 	count, args := db.StatsRootCountSQL(db.DuckDBQueryDialect(), excludeOneShot, excludeAutomated)
-	query := "\n\t\tSELECT\n\t\t\t" + count + ",\n\t\t\tCOALESCE(SUM(message_count), 0),\n\t\t\tCOUNT(DISTINCT project),\n\t\t\tCOUNT(DISTINCT machine),\n\t\t\tMIN(COALESCE(started_at, created_at))\n\t\tFROM sessions\n\t\tWHERE " + filter
+	query := "\n\t\tSELECT\n\t\t\t" + count + ",\n\t\t\tCOALESCE(SUM(message_count), 0),\n\t\t\tCOUNT(DISTINCT project),\n\t\t\tCOUNT(DISTINCT machine),\n\t\t\tMIN(COALESCE(started_at, created_at)),\n\t\t\t(SELECT MIN(occurred_at) FROM cursor_usage_events)\n\t\tFROM sessions\n\t\tWHERE " + filter
 	var stats db.Stats
 	var earliest any
+	var earliestAccount any
 	if err := s.queryRowContext(ctx, query, args...).Scan(
 		&stats.SessionCount, &stats.MessageCount,
-		&stats.ProjectCount, &stats.MachineCount, &earliest,
+		&stats.ProjectCount, &stats.MachineCount, &earliest, &earliestAccount,
 	); err != nil {
 		return db.Stats{}, fmt.Errorf("fetching duckdb stats: %w", err)
 	}
 	if v := formatDBTime(earliest); v != "" {
 		stats.EarliestSession = &v
+	}
+	if v := formatDBTime(earliestAccount); v != "" {
+		stats.EarliestAccountUsage = &v
 	}
 	return stats, nil
 }

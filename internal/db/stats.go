@@ -10,11 +10,12 @@ import (
 
 // Stats holds database-wide statistics.
 type Stats struct {
-	SessionCount    int     `json:"session_count"`
-	MessageCount    int     `json:"message_count"`
-	ProjectCount    int     `json:"project_count"`
-	MachineCount    int     `json:"machine_count"`
-	EarliestSession *string `json:"earliest_session"`
+	SessionCount         int     `json:"session_count"`
+	MessageCount         int     `json:"message_count"`
+	ProjectCount         int     `json:"project_count"`
+	MachineCount         int     `json:"machine_count"`
+	EarliestSession      *string `json:"earliest_session"`
+	EarliestAccountUsage *string `json:"earliest_account_usage,omitempty"`
 }
 
 // rootSessionFilter is the WHERE clause shared by session list
@@ -226,10 +227,14 @@ func (db *DB) GetStats(
 	if excludeAutomated {
 		filter += " AND is_automated = 0"
 	}
+	billingStart := "NULL"
+	if db.hasCursorUsageTable(ctx) {
+		billingStart = "(SELECT MIN(occurred_at) FROM cursor_usage_events)"
+	}
 	count, args := StatsRootCountSQL(SQLiteQueryDialect(), excludeOneShot, excludeAutomated)
 	query := `SELECT ` + count + `, COALESCE(SUM(message_count), 0),
 		COUNT(DISTINCT project), COUNT(DISTINCT machine),
-		MIN(COALESCE(NULLIF(started_at, ''), created_at))
+		MIN(COALESCE(NULLIF(started_at, ''), created_at)), ` + billingStart + `
 		FROM sessions WHERE ` + filter
 
 	var s Stats
@@ -239,6 +244,7 @@ func (db *DB) GetStats(
 		&s.ProjectCount,
 		&s.MachineCount,
 		&s.EarliestSession,
+		&s.EarliestAccountUsage,
 	)
 	if err != nil {
 		return Stats{}, fmt.Errorf("fetching stats: %w", err)
