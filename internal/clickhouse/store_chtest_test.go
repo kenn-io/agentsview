@@ -87,6 +87,36 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			ids[i] = row.ID
 		}
 		assert.Contains(t, ids, orphanID)
+
+		stats, err := store.GetStats(ctx, false, false)
+		require.NoError(t, err)
+		assert.Equal(t, 3, stats.SessionCount)
+		assert.Equal(t, 3, stats.MessageCount)
+
+		for _, row := range []struct{ id, relationship, parent string }{
+			{"ch-missing-parent", "subagent", "missing-parent"},
+			{"ch-continuation", "continuation", fixtureAlphaID},
+		} {
+			session := fixtureSession(row.id, "alpha", "child first", "2026-01-10T00:07:00.000Z", 1)
+			session.RelationshipType = row.relationship
+			session.ParentSessionID = &row.parent
+			_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+				Session:     session,
+				Messages:    []db.Message{fixtureMessage(row.id, 0, "user", "child first", "2026-01-10T00:07:00.000Z")},
+				DataVersion: 1, ReplaceMessages: true,
+			}})
+			require.NoError(t, err)
+		}
+		_, err = syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+		stats, err = store.GetStats(ctx, false, false)
+		require.NoError(t, err)
+		assert.Equal(t, 4, stats.SessionCount)
+		assert.Equal(t, 4, stats.MessageCount)
+		assert.Equal(t, 2, stats.ProjectCount)
+		index, err = store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
+		require.NoError(t, err)
+		assert.Equal(t, index.Total, stats.SessionCount)
 	})
 
 	t.Run("sidebar_includes_child_under_parent", func(t *testing.T) {

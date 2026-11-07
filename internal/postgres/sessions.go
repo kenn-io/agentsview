@@ -930,8 +930,8 @@ func (s *Store) GetChildSessions(
 	return scanPGSessionRows(rows)
 }
 
-// GetStats returns database statistics, counting only root
-// sessions with messages.
+// GetStats counts sessions with the sidebar's canonical root rule.
+// Other totals exclude subagents and forks, and include continuations.
 func (s *Store) GetStats(
 	ctx context.Context,
 	excludeOneShot, excludeAutomated bool,
@@ -947,9 +947,8 @@ func (s *Store) GetStats(
 	if excludeAutomated {
 		filter += " AND is_automated = FALSE"
 	}
-	// Sidebar polling needs all totals for the same rows. Aggregate them
-	// together so each refresh visits the filtered sessions only once.
-	query := `SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+	count, args := db.StatsRootCountSQL(s.sessionDialect(), excludeOneShot, excludeAutomated)
+	query := `SELECT ` + count + `, COALESCE(SUM(message_count), 0),
 		COUNT(DISTINCT project), COUNT(DISTINCT machine),
 		MIN(COALESCE(started_at, created_at))
 		FROM sessions WHERE ` + filter
@@ -959,7 +958,7 @@ func (s *Store) GetStats(
 			       message_count,started_at,created_at
 			FROM sessions WHERE ` + filter + `
 		)` + hostedFilteredMachinesCTESQL + `
-		SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+		SELECT ` + count + `, COALESCE(SUM(message_count), 0),
 		       COUNT(DISTINCT project),
 		       (SELECT COUNT(DISTINCT machine) FROM filtered_source_machines),
 		       MIN(COALESCE(started_at, created_at))
@@ -968,7 +967,7 @@ func (s *Store) GetStats(
 
 	var st db.Stats
 	var earliest *time.Time
-	err := s.pg.QueryRowContext(ctx, query).Scan(
+	err := s.pg.QueryRowContext(ctx, query, args...).Scan(
 		&st.SessionCount,
 		&st.MessageCount,
 		&st.ProjectCount,

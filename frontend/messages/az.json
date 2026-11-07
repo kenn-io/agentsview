@@ -597,6 +597,7 @@
   "analytics_export_csv": "CSV formatında ixrac et",
   "analytics_activity_by_day_hour": "Gün və saat üzrə fəaliyyət",
   "analytics_summary_sessions": "Sessiyalar",
+  "analytics_summary_sessions_scope": "{range} · alt agentlər daxil",
   "analytics_summary_messages": "Mesajlar",
   "analytics_summary_projects": "Layihələr",
   "analytics_summary_active_days": "Aktiv günlər",

@@ -88,6 +88,7 @@ class AnalyticsStore {
   selectedHour: number | null = $state(null);
 
   summary = $state<AnalyticsSummary | null>(null);
+  summaryFilterParams = $state<AnalyticsParams | null>(null);
   activity = $state<ActivityResponse | null>(null);
   heatmap = $state<DbHeatmapResponse | null>(null);
   projects = $state<ProjectsAnalyticsResponse | null>(null);
@@ -640,6 +641,7 @@ class AnalyticsStore {
       (options) => AnalyticsService.getApiV1AnalyticsSummary(params, options),
       (data) => {
         this.summary = data;
+        this.summaryFilterParams = params;
       },
       () => this.summary !== null,
     );

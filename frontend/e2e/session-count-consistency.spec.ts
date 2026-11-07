@@ -10,10 +10,13 @@ const EXPECTED_ANALYTICS_SESSIONS = 16; // 13 root + 3 subagents
 
 test.describe("Session count consistency", () => {
   let sp: SessionsPage;
+  let summaryUrl: URL;
 
   test.beforeEach(async ({ page }) => {
     sp = new SessionsPage(page);
+    const summary = page.waitForResponse((response) => response.url().includes("/analytics/summary?") && response.ok());
     await sp.goto();
+    summaryUrl = new URL((await summary).url());
   });
 
   test("navigation counts agree and analytics counts subagents on top", async ({ page }) => {
@@ -49,5 +52,7 @@ test.describe("Session count consistency", () => {
     await expect(sessionsCard.locator(".card-value"), "analytics summary").toHaveText(
       String(EXPECTED_ANALYTICS_SESSIONS),
     );
+    const dates = ["from", "to"].map((key) => new Date(`${summaryUrl.searchParams.get(key)}T00:00:00`).toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" }));
+    await expect(sessionsCard.locator(".card-sub")).toHaveText(`${dates[0]} – ${dates[1]}\u00a0· incl.\u00a0subagents`);
   });
 });

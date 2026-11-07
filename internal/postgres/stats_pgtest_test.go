@@ -31,6 +31,8 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 		{"empty", "excluded", "excluded", "2025-01-01T00:00:00Z", "", 0, 0, false, nil},
 		{"child", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", 100, 50, false, nil},
 		{"fork", "excluded", "excluded", "2025-01-01T00:00:00Z", "fork", 100, 50, false, nil},
+		{"blank-parent", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", 2, 2, false, nil},
+		{"continuation", "project-a", "machine-a", "2026-01-04T00:00:00Z", "continuation", 4, 2, false, nil},
 		{"deleted", "excluded", "excluded", "2025-01-01T00:00:00Z", "", 100, 50, false, new("2026-02-01T00:00:00Z")},
 	} {
 		_, err := d.DB().ExecContext(ctx, `INSERT INTO sessions
@@ -40,28 +42,30 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 			row.started, row.relationship, row.messages, row.users, row.automated, row.deleted)
 		require.NoError(t, err)
 	}
+	_, err = d.DB().ExecContext(ctx, `UPDATE sessions SET parent_session_id='human' WHERE id='continuation'`)
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		name               string
 		oneShot, automated bool
 		want               db.Stats
 	}{
 		{"all", false, false, db.Stats{
-			SessionCount: 4, MessageCount: 23,
+			SessionCount: 7, MessageCount: 27,
 			ProjectCount: 2, MachineCount: 3,
 			EarliestSession: new("2026-01-01T00:00:00Z"),
 		}},
 		{"exclude one-shot", true, false, db.Stats{
-			SessionCount: 3, MessageCount: 20,
+			SessionCount: 6, MessageCount: 24,
 			ProjectCount: 2, MachineCount: 3,
 			EarliestSession: new("2026-01-01T00:00:00Z"),
 		}},
 		{"exclude automated", false, true, db.Stats{
-			SessionCount: 2, MessageCount: 13,
+			SessionCount: 5, MessageCount: 17,
 			ProjectCount: 1, MachineCount: 2,
 			EarliestSession: new("2026-01-03T00:00:00Z"),
 		}},
 		{"exclude both", true, true, db.Stats{
-			SessionCount: 1, MessageCount: 10,
+			SessionCount: 4, MessageCount: 14,
 			ProjectCount: 1, MachineCount: 1,
 			EarliestSession: new("2026-01-04T00:00:00Z"),
 		}},
@@ -70,6 +74,31 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 			got, err := d.GetStats(ctx, tc.oneShot, tc.automated)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
+			index, err := d.GetSidebarSessionIndex(ctx, db.SessionFilter{ExcludeOneShot: tc.oneShot, ExcludeAutomated: tc.automated})
+			require.NoError(t, err)
+			assert.Equal(t, index.Total, got.SessionCount)
 		})
 	}
+}
+
+func TestStatsHostedRootsPreserveOtherTotals(t *testing.T) {
+	f, h := newHostedCoalescedMachinesFixture(t)
+	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions
+		(id, project, machine, agent, message_count, user_message_count, relationship_type, parent_session_id, started_at)
+		VALUES ('orphan', 'orphan-project', 'orphan-machine', 'claude', 2, 2, 'subagent', '', '2025-01-01T00:00:00Z')`)
+	require.NoError(t, err)
+	stats, err := h.GetStats(t.Context(), false, false)
+	require.NoError(t, err)
+	assert.Equal(t, 4, stats.SessionCount)
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions
+		(id, project, machine, agent, message_count, user_message_count, relationship_type, parent_session_id, started_at)
+		VALUES ('continuation', 'legacy', 'legacy-machine', 'claude', 4, 2, 'continuation', 'legacy-session', '2026-01-01T00:00:00Z')`)
+	require.NoError(t, err)
+	stats, err = h.GetStats(t.Context(), false, false)
+	require.NoError(t, err)
+	assert.Equal(t, db.Stats{SessionCount: 4, MessageCount: 10, ProjectCount: 2, MachineCount: 4,
+		EarliestSession: new("2026-01-01T00:00:00Z")}, stats)
+	index, err := h.GetSidebarSessionIndex(t.Context(), db.SessionFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, index.Total, stats.SessionCount)
 }

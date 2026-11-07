@@ -285,7 +285,12 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 		"stats-human", "alpha", "root", "2026-01-01 00:00:00",
 		2, 2, false,
 	)
-	_, err := duck.ExecContext(ctx,
+	insertSession("stats-blank-parent", "child", "subagent", "2025-12-27 00:00:00", 1, 2, false)
+	insertSession("stats-continuation", "alpha", "continuation", "2026-01-01 00:00:00", 3, 2, false)
+	_, err := duck.ExecContext(ctx, `UPDATE sessions SET parent_session_id='stats-human'
+		WHERE id='stats-continuation'`)
+	require.NoError(t, err)
+	_, err = duck.ExecContext(ctx,
 		`UPDATE sessions SET deleted_at = CAST(? AS TIMESTAMP) WHERE id = ?`,
 		"2026-01-02 00:00:00", "stats-deleted",
 	)
@@ -307,22 +312,25 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 		assert.Equal(t, 1, stats.MachineCount, name)
 		require.NotNil(t, stats.EarliestSession, name)
 		assert.Equal(t, wantEarliest, *stats.EarliestSession, name)
+		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{ExcludeOneShot: excludeOneShot, ExcludeAutomated: excludeAutomated})
+		require.NoError(t, err)
+		assert.Equal(t, index.Total, stats.SessionCount, name)
 	}
 
 	assertStats(
-		"include all root sessions", false, false, 3, 4, 3,
+		"include all root sessions", false, false, 6, 7, 3,
 		"2025-12-30T00:00:00Z",
 	)
 	assertStats(
-		"exclude one-shot keeps automated", true, false, 2, 3, 2,
+		"exclude one-shot keeps automated", true, false, 5, 6, 2,
 		"2025-12-31T00:00:00Z",
 	)
 	assertStats(
-		"exclude automated keeps human one-shot", false, true, 2, 3, 2,
+		"exclude automated keeps human one-shot", false, true, 5, 6, 2,
 		"2025-12-30T00:00:00Z",
 	)
 	assertStats(
-		"exclude one-shot and automated", true, true, 1, 2, 1,
+		"exclude one-shot and automated", true, true, 4, 5, 1,
 		"2026-01-01T00:00:00Z",
 	)
 

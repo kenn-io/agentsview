@@ -237,6 +237,7 @@ function resetStore() {
   // now that loading is only flipped on first-load (no existing
   // data) rather than every refetch.
   analytics.summary = null;
+  analytics.summaryFilterParams = null;
   analytics.activity = null;
   analytics.heatmap = null;
   analytics.projects = null;
@@ -1151,8 +1152,11 @@ describe("executeFetch concurrency and error handling", () => {
       }),
     );
 
+    analytics.from = "2025-01-01";
     const firstFetch = analytics.fetchSummary();
 
+    analytics.from = "2026-01-01";
+    analytics.to = "2026-01-31";
     const secondData = makeSummary();
     secondData.total_sessions = 99;
     vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockResolvedValueOnce(secondData);
@@ -1167,6 +1171,7 @@ describe("executeFetch concurrency and error handling", () => {
     await firstFetch;
 
     expect(analytics.summary?.total_sessions).toBe(99);
+    expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
   });
 
   it("should ignore stale error from superseded request", async () => {
