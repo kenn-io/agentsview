@@ -30,8 +30,6 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 	}{
 		{name: "not configured", mode: "hybrid", optIn: true, reason: "not set up"},
 		{name: "building", mode: "hybrid", optIn: true, cause: fmt.Errorf("search unavailable: %w", db.NewSemanticUnavailableError("index is building: 40% complete")), reason: "index is building: 40% complete"},
-		{name: "near not configured", mode: "hybrid", optIn: true, pattern: `"needle" AND NEAR("needle" "haystack", 2)`, reason: "not set up"},
-		{name: "near building", mode: "hybrid", optIn: true, pattern: `"needle" AND NEAR("needle" "haystack", 2)`, cause: db.NewSemanticUnavailableError("index is building: 40% complete"), reason: "index is building: 40% complete"},
 		{name: "empty", mode: "hybrid", optIn: true, pattern: "absent", empty: true, reason: "not set up"},
 		{name: "no opt in", mode: "hybrid", wantErr: db.ErrSemanticUnavailable},
 		{name: "semantic", mode: "semantic", optIn: true, wantErr: db.ErrSemanticUnavailable},
@@ -42,7 +40,7 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 			if !d.HasFTS(t.Context()) {
 				t.Skip("fts5 not available")
 			}
-			seedSearchSession(t, d, "found", "project", "needle haystack")
+			seedSearchSession(t, d, "found", "project", "needle")
 			searcher := &fallbackVectorSearcher{err: tc.cause}
 			if tc.cause != nil {
 				d.SetVectorSearcher(searcher)

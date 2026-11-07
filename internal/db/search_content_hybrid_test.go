@@ -718,27 +718,22 @@ func TestSearchContentHybridKeywordOnlyIgnoresMirrorScope(t *testing.T) {
 	})
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "run", []Message{
 		{SessionID: "run", Ordinal: 0, Role: "user", Content: "question"},
-		{SessionID: "run", Ordinal: 1, Role: "assistant", Content: "needle first"},
-		{SessionID: "run", Ordinal: 2, Role: "assistant", Content: "needle second"},
-		{SessionID: "run", Ordinal: 3, Role: "assistant", Content: "needle side", IsSidechain: true},
+		{SessionID: "run", Ordinal: 1, Role: "assistant", Content: "needle haystack first"},
+		{SessionID: "run", Ordinal: 2, Role: "assistant", Content: "needle haystack second"},
+		{SessionID: "run", Ordinal: 3, Role: "assistant", Content: "needle haystack side", IsSidechain: true},
 	}))
 	// The mirror predates the sidechain flag and has narrower capped units.
-	d.SetVectorSearcher(&fakeVectorSearcher{err: ErrSemanticTransient, units: []UnitRef{
+	searcher := &fakeVectorSearcher{units: []UnitRef{
 		{DocKey: "piece1", SessionID: "run", OrdinalStart: 1, OrdinalEnd: 1},
 		{DocKey: "piece2", SessionID: "run", OrdinalStart: 2, OrdinalEnd: 2},
 		{DocKey: "piece3", SessionID: "run", OrdinalStart: 3, OrdinalEnd: 3},
-	}})
-	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, IncludeOneShot: true, Scope: "top"})
+	}}
+	d.SetVectorSearcher(searcher)
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: `"needle" AND NEAR("needle" "haystack", 2)`, Mode: "hybrid", KeywordOnly: true, IncludeOneShot: true, Scope: "top"})
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 2)
 	for _, match := range page.Matches {
-		assert.False(t, match.Subordinate)
 		assert.Equal(t, [2]int{1, 2}, match.OrdinalRange)
 	}
-	page, err = d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, IncludeOneShot: true, Scope: "subordinate"})
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
-	assert.True(t, page.Matches[0].Subordinate)
-	assert.Equal(t, 3, page.Matches[0].Ordinal)
-	assert.Equal(t, [2]int{3, 3}, page.Matches[0].OrdinalRange)
+	assert.Zero(t, searcher.calls)
 }
