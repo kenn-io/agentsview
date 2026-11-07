@@ -133,7 +133,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 		ReadOnlyHint: true, DestructiveHint: &nonDestructive,
 		IdempotentHint: true, OpenWorldHint: &closedWorld,
 	}
-	// Semantic content search can contact an embedding provider, and file
+	// Semantic content and Recall search can contact an embedding provider; file
 	// references query an independently configured Docbank service.
 	externalRead := &mcp.ToolAnnotations{
 		ReadOnlyHint: true, DestructiveHint: &nonDestructive,
@@ -167,7 +167,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 					"Use lexical mode for exact terms, vector mode for semantic similarity, " +
 					"or hybrid mode to fuse both rankings. Returns recall entries with their " +
 					"source-session evidence and retrieval scores.",
-				Annotations: readOnly,
+				Annotations: externalRead,
 			}, t.queryRecall)
 		}
 

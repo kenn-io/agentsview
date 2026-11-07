@@ -36,10 +36,11 @@ The tools are read-only. They expose session history and usage data, but they do
 not mutate the archive or resync files directly.
 
 Every tool explicitly declares read-only, non-destructive, and idempotent
-hints. `search_content` is open-world because semantic and hybrid modes can
-send the query to the configured embedding provider. `get_session_file_references`
-is also open-world because it queries the configured Docbank service. The other
-tools advertise a closed environment of archived data and bundled guides.
+hints. `search_content` and `query_recall` are open-world because their semantic
+search modes can send queries to the configured embedding provider.
+`get_session_file_references` is also open-world because it queries the configured
+Docbank service. The other tools advertise a closed environment of archived data
+and bundled guides.
 These hints help clients classify calls; they do not authorize access.
 
 ### Discover running HTTP listeners

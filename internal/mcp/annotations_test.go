@@ -35,9 +35,10 @@ func TestToolAnnotations(t *testing.T) {
 					assert.True(annotations.ReadOnlyHint)
 					assert.False(*annotations.DestructiveHint)
 					assert.True(annotations.IdempotentHint)
-					// Semantic search can contact an embedding provider; file
+					// Semantic searches can contact an embedding provider; file
 					// references query an independently configured Docbank.
-					assert.Equal(tool.Name == ToolSearchContent || tool.Name == ToolGetSessionFileReferences,
+					assert.Equal(tool.Name == ToolSearchContent || tool.Name == ToolQueryRecall ||
+						tool.Name == ToolGetSessionFileReferences,
 						*annotations.OpenWorldHint)
 				})
 			}
