@@ -908,42 +908,83 @@ func reportDuckPushProgress(
 func (s *Sync) tryPushSessionBatch(
 	ctx context.Context, sessions []db.Session, fingerprints map[string]string,
 ) ([]int, error) {
-	tx, err := s.duck.BeginTx(ctx, nil)
+	return s.writeSessionBatch(ctx, sessions, fingerprints, nil)
+}
+
+// writeSessionBatch keeps native appenders and SQL on the transaction's connection.
+// The hook lets tests interrupt a write after a real flush.
+func (s *Sync) writeSessionBatch(ctx context.Context, sessions []db.Session, fingerprints map[string]string, hook duckAppendHook) ([]int, error) {
+	if len(sessions) == 0 {
+		return nil, nil
+	}
+	conn, err := s.duck.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin duckdb session batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	messagesBySession := make([]int, len(sessions))
-
+	args := make([]any, len(sessions))
 	for i, sess := range sessions {
-		messages, err := s.pushSession(ctx, tx, sess, fingerprints[sess.ID])
-		if err != nil {
-			return nil, fmt.Errorf("pushing duckdb session %s: %w", sess.ID, err)
+		args[i] = sess.ID
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")
+	for _, table := range []string{"commit_links", "pinned_messages", "secret_findings", "tool_result_events", "tool_calls", "usage_events", "session_plan_usage", "messages", "sessions"} {
+		key := "session_id"
+		if table == "sessions" {
+			key = "id"
 		}
-		messagesBySession[i] = messages
+		if err := s.execMutation(ctx, tx, "DELETE FROM "+table+" WHERE "+key+" IN ("+placeholders+")", args...); err != nil {
+			return nil, err
+		}
+	}
+	counts := make([]int, len(sessions))
+	err = conn.Raw(func(raw any) (err error) {
+		batch, err := newDuckAppendBatch(ctx, raw, duckAppendColumns, hook)
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, batch.close(ctx)) }()
+		for i, sess := range sessions {
+			counts[i], err = s.appendSession(ctx, batch, sess, fingerprints[sess.ID])
+			if err != nil {
+				return fmt.Errorf("appending duckdb session %s: %w", sess.ID, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, sess := range sessions {
+		if err := s.replacePlanUsage(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
+		if err := s.replaceCommitLinks(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
+		if err := s.replaceSecretFindings(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
+		if err := s.replacePinnedMessages(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit duckdb session batch: %w", err)
 	}
-	return messagesBySession, nil
+	return counts, nil
 }
 
-func (s *Sync) pushSingleSession(
-	ctx context.Context, sess db.Session, fingerprint string,
-) (int, error) {
-	tx, err := s.duck.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin duckdb session tx %s: %w", sess.ID, err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	messages, err := s.pushSession(ctx, tx, sess, fingerprint)
+func (s *Sync) pushSingleSession(ctx context.Context, sess db.Session, fingerprint string) (int, error) {
+	counts, err := s.tryPushSessionBatch(ctx, []db.Session{sess}, map[string]string{sess.ID: fingerprint})
 	if err != nil {
 		return 0, err
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit duckdb session %s: %w", sess.ID, err)
-	}
-	return messages, nil
+	return counts[0], nil
 }
 
 func countPushSessions(sessions []db.Session) storage.MirrorSessionCounts {

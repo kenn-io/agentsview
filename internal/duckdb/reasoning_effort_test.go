@@ -3,6 +3,7 @@
 package duckdb
 
 import (
+	"errors"
 	"strconv"
 	"testing"
 
@@ -25,7 +26,18 @@ func TestReasoningEffortDuckDBInsertMessagePath(t *testing.T) {
 		Model:           "model-test",
 		ReasoningEffort: "high",
 	}
-	require.NoError(t, insertMessages(ctx, store.duck, []db.Message{message}))
+	conn, err := store.duck.Conn(ctx)
+	require.NoError(t, err)
+	err = conn.Raw(func(raw any) (err error) {
+		batch, err := newDuckAppendBatch(ctx, raw, map[string][]string{"messages": duckAppendColumns["messages"]}, nil)
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, batch.close(ctx)) }()
+		return insertMessages(ctx, batch, []db.Message{message})
+	})
+	require.NoError(t, conn.Close())
+	require.NoError(t, err)
 
 	messages, err := store.GetAllMessages(ctx, fixture.alphaID)
 	require.NoError(t, err)

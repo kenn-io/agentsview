@@ -996,68 +996,6 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// pushSession fully replaces one mirror session row and all of its
-// dependent rows (messages, tool calls/results, usage events, plan usage,
-// secret findings, pins) with the current local content, then writes the
-// fingerprint used to detect future changes. buildMirror and
-// incrementalPush share this single write path: on a freshly created
-// rebuild file the pre-delete below is simply a no-op.
-func (s *Sync) pushSession(
-	ctx context.Context, exec duckMutationExecutor, sess db.Session, fingerprint string,
-) (int, error) {
-	if err := s.upsertSession(ctx, exec, sess, fingerprint); err != nil {
-		return 0, err
-	}
-	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
-	if err != nil {
-		return 0, fmt.Errorf("reading local messages for %s: %w", sess.ID, err)
-	}
-
-	if err := s.replaceSessionDependents(ctx, exec, sess.ID); err != nil {
-		return 0, err
-	}
-	if err := s.replaceUsageEvents(ctx, exec, sess.ID); err != nil {
-		return 0, err
-	}
-	if err := s.replacePlanUsage(ctx, exec, sess.ID); err != nil {
-		return 0, err
-	}
-	if err := insertMessages(ctx, exec, msgs); err != nil {
-		return 0, err
-	}
-	if err := s.replaceToolRows(ctx, exec, sess.ID, msgs); err != nil {
-		return 0, err
-	}
-	if err := s.replaceCommitLinks(ctx, exec, sess.ID); err != nil {
-		return 0, err
-	}
-	if err := s.replaceSecretFindings(ctx, exec, sess.ID); err != nil {
-		return 0, err
-	}
-	if err := s.replacePinnedMessages(ctx, exec, sess.ID); err != nil {
-		return 0, err
-	}
-	return len(msgs), nil
-}
-
-func (s *Sync) replaceSessionDependents(
-	ctx context.Context, exec duckMutationExecutor, sessionID string,
-) error {
-	// usage_events is deliberately absent here: replaceUsageEvents owns that
-	// delete+reinsert so the row is cleared exactly once per push.
-	for _, stmt := range []string{
-		`DELETE FROM commit_links WHERE session_id = ?`,
-		`DELETE FROM pinned_messages WHERE session_id = ?`,
-		`DELETE FROM secret_findings WHERE session_id = ?`,
-		`DELETE FROM messages WHERE session_id = ?`,
-	} {
-		if err := s.execMutation(ctx, exec, stmt, sessionID); err != nil {
-			return fmt.Errorf("clearing duckdb session dependents: %w", err)
-		}
-	}
-	return nil
-}
-
 // Keep commit_links project evidence until replaceRetainedCommitLinks refreshes it.
 func (s *Sync) deleteMirrorSession(
 	ctx context.Context, tx *sql.Tx, sessionID string,
@@ -1091,190 +1029,7 @@ type duckMutationExecutor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-const (
-	duckInsertBatchRows  = 100
-	duckInsertBatchBytes = 1 << 20
-)
-
-type duckInsertBatch struct {
-	exec   duckMutationExecutor
-	prefix string
-	rowSQL string
-	args   []any
-	rows   int
-	bytes  int
-}
-
-func newDuckInsertBatch(
-	exec duckMutationExecutor, prefix string, columns int,
-) *duckInsertBatch {
-	return &duckInsertBatch{
-		exec:   exec,
-		prefix: prefix,
-		rowSQL: "(" + strings.TrimSuffix(strings.Repeat("?,", columns), ",") + ")",
-	}
-}
-
-func (b *duckInsertBatch) add(ctx context.Context, values ...any) error {
-	payloadBytes := 0
-	for _, value := range values {
-		switch value := value.(type) {
-		case string:
-			payloadBytes += len(value)
-		case []byte:
-			payloadBytes += len(value)
-		case *string:
-			if value != nil {
-				payloadBytes += len(*value)
-			}
-		}
-	}
-	if b.rows > 0 && (b.rows == duckInsertBatchRows || b.bytes+payloadBytes > duckInsertBatchBytes) {
-		if err := b.flush(ctx); err != nil {
-			return err
-		}
-	}
-	b.args = append(b.args, values...)
-	b.rows++
-	b.bytes += payloadBytes
-	if b.bytes >= duckInsertBatchBytes {
-		return b.flush(ctx)
-	}
-	return nil
-}
-
-func (b *duckInsertBatch) flush(ctx context.Context) error {
-	if b.rows == 0 {
-		return nil
-	}
-	query := b.prefix + strings.TrimSuffix(strings.Repeat(b.rowSQL+",", b.rows), ",")
-	if _, err := b.exec.ExecContext(ctx, query, b.args...); err != nil {
-		return err
-	}
-	clear(b.args)
-	b.args = b.args[:0]
-	b.rows, b.bytes = 0, 0
-	return nil
-}
-
-func (s *Sync) upsertSession(
-	ctx context.Context, exec duckMutationExecutor, sess db.Session, fingerprint string,
-) error {
-	query := `
-		INSERT INTO sessions (
-			id, project, project_assigned, machine, agent,
-			agent_label, entrypoint, session_kind,
-			first_message, display_name, session_name, started_at, ended_at,
-			message_count, user_message_count,
-			file_path, file_size, file_mtime, file_inode, file_device,
-			file_hash, local_modified_at, transcript_revision,
-			parent_session_id,
-			relationship_type, total_output_tokens, peak_context_tokens,
-			has_total_output_tokens, has_peak_context_tokens, is_automated,
-			tool_failure_signal_count, tool_retry_count, edit_churn_count,
-			consecutive_failure_max, outcome, outcome_confidence,
-			ended_with_role, final_failure_streak, signals_pending_since,
-			compaction_count, mid_task_compaction_count,
-			context_pressure_max, health_score, health_grade,
-			has_tool_calls, has_context_data,
-			quality_signal_version, short_prompt_count, unstructured_start,
-			missing_success_criteria_count, missing_verification_count,
-			duplicate_prompt_count, no_code_context_count,
-			runaway_tool_loop_count, data_version,
-			cwd, git_branch, source_session_id, source_version, group_key, transcript_fidelity,
-			parser_malformed_lines, is_truncated, deleted_at, deletion_cause, created_at,
-			termination_status, secret_leak_count, secrets_rules_version,
-			pr_links, labels,
-			agentsview_push_fingerprint, source_archive_id
-		) VALUES (?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-		)`
-	query += `
-		ON CONFLICT(id) DO UPDATE SET
-			project = excluded.project,
-			project_assigned = excluded.project_assigned,
-			machine = excluded.machine,
-			agent = excluded.agent,
-			agent_label = excluded.agent_label,
-			entrypoint = excluded.entrypoint,
-			session_kind = excluded.session_kind,
-			first_message = excluded.first_message,
-			display_name = excluded.display_name,
-			session_name = excluded.session_name,
-			started_at = excluded.started_at,
-			ended_at = excluded.ended_at,
-			message_count = excluded.message_count,
-			user_message_count = excluded.user_message_count,
-			file_path = excluded.file_path,
-			file_size = excluded.file_size,
-			file_mtime = excluded.file_mtime,
-			file_inode = excluded.file_inode,
-			file_device = excluded.file_device,
-			file_hash = excluded.file_hash,
-			local_modified_at = excluded.local_modified_at,
-			transcript_revision = excluded.transcript_revision,
-			parent_session_id = excluded.parent_session_id,
-			relationship_type = excluded.relationship_type,
-			total_output_tokens = excluded.total_output_tokens,
-			peak_context_tokens = excluded.peak_context_tokens,
-			has_total_output_tokens = excluded.has_total_output_tokens,
-			has_peak_context_tokens = excluded.has_peak_context_tokens,
-			is_automated = excluded.is_automated,
-			tool_failure_signal_count = excluded.tool_failure_signal_count,
-			tool_retry_count = excluded.tool_retry_count,
-			edit_churn_count = excluded.edit_churn_count,
-			consecutive_failure_max = excluded.consecutive_failure_max,
-			outcome = excluded.outcome,
-			outcome_confidence = excluded.outcome_confidence,
-			ended_with_role = excluded.ended_with_role,
-			final_failure_streak = excluded.final_failure_streak,
-			signals_pending_since = excluded.signals_pending_since,
-			compaction_count = excluded.compaction_count,
-			mid_task_compaction_count = excluded.mid_task_compaction_count,
-			context_pressure_max = excluded.context_pressure_max,
-			health_score = excluded.health_score,
-			health_grade = excluded.health_grade,
-			has_tool_calls = excluded.has_tool_calls,
-			has_context_data = excluded.has_context_data,
-			quality_signal_version = excluded.quality_signal_version,
-			short_prompt_count = excluded.short_prompt_count,
-			unstructured_start = excluded.unstructured_start,
-			missing_success_criteria_count = excluded.missing_success_criteria_count,
-			missing_verification_count = excluded.missing_verification_count,
-			duplicate_prompt_count = excluded.duplicate_prompt_count,
-			no_code_context_count = excluded.no_code_context_count,
-			runaway_tool_loop_count = excluded.runaway_tool_loop_count,
-			data_version = excluded.data_version,
-			cwd = excluded.cwd,
-			git_branch = excluded.git_branch,
-			source_session_id = excluded.source_session_id,
-			source_version = excluded.source_version,
-			group_key = excluded.group_key,
-			transcript_fidelity = excluded.transcript_fidelity,
-			parser_malformed_lines = excluded.parser_malformed_lines,
-			is_truncated = excluded.is_truncated,
-			deleted_at = excluded.deleted_at,
-			deletion_cause = excluded.deletion_cause,
-			created_at = excluded.created_at,
-			termination_status = excluded.termination_status,
-			secret_leak_count = excluded.secret_leak_count,
-			secrets_rules_version = excluded.secrets_rules_version,
-			pr_links = excluded.pr_links,
-			labels = excluded.labels,
-			agentsview_push_fingerprint = excluded.agentsview_push_fingerprint,
-			source_archive_id = excluded.source_archive_id`
-
-	args := sessionInsertArgs(
-		sess, s.machine, s.archiveID, fingerprint,
-	)
-	if err := s.execMutation(ctx, exec, query, args...); err != nil {
-		return fmt.Errorf("writing duckdb session %s: %w", sess.ID, err)
-	}
-	return nil
-}
+const duckInsertBatchBytes = 1 << 20
 
 func sessionInsertArgs(
 	sess db.Session,
@@ -1322,20 +1077,10 @@ func sessionInsertArgs(
 }
 
 func insertMessages(
-	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
+	ctx context.Context, batch *duckAppendBatch, msgs []db.Message,
 ) error {
-	batch := newDuckInsertBatch(exec, `
-		INSERT INTO messages (
-			id, session_id, ordinal, role, content, thinking_text, dialogue_text,
-			timestamp, has_thinking, has_tool_use, content_length,
-			is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
-			provider_id,
-			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain, is_compact_boundary
-		) VALUES `, 29)
 	for _, m := range msgs {
-		if err := batch.add(ctx,
+		if err := batch.add(ctx, "messages",
 			m.ID, m.SessionID, m.Ordinal, m.Role, m.Content,
 			m.ThinkingText, m.DialogueText, timeValue(m.Timestamp),
 			m.HasThinking, m.HasToolUse, m.ContentLength,
@@ -1349,49 +1094,15 @@ func insertMessages(
 			return fmt.Errorf("inserting duckdb messages: %w", err)
 		}
 	}
-	if err := batch.flush(ctx); err != nil {
-		return fmt.Errorf("inserting duckdb messages: %w", err)
-	}
-	return nil
-}
-
-func (s *Sync) replaceToolRows(
-	ctx context.Context, exec duckMutationExecutor, sessionID string, msgs []db.Message,
-) error {
-	if err := s.execMutation(ctx, exec,
-		`DELETE FROM tool_result_events WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing duckdb tool_result_events for %s: %w", sessionID, err)
-	}
-	if err := s.execMutation(ctx, exec,
-		`DELETE FROM tool_calls WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing duckdb tool_calls for %s: %w", sessionID, err)
-	}
-	if err := insertToolCalls(ctx, exec, msgs); err != nil {
-		return err
-	}
-	if err := insertToolResultEvents(ctx, exec, msgs); err != nil {
-		return err
-	}
 	return nil
 }
 
 func insertToolCalls(
-	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
+	ctx context.Context, batch *duckAppendBatch, msgs []db.Message,
 ) error {
-	batch := newDuckInsertBatch(exec, `
-		INSERT INTO tool_calls (
-			message_id, session_id, tool_name, category,
-			call_index, tool_use_id, input_json, skill_name,
-			result_content_length, result_content,
-			subagent_session_id, file_path, observed_outcome, observed_repeat, sequence_ending
-		) VALUES `, 15)
 	for _, m := range msgs {
 		for i, tc := range m.ToolCalls {
-			if err := batch.add(ctx,
+			if err := batch.add(ctx, "tool_calls",
 				m.ID, m.SessionID, tc.ToolName, tc.Category,
 				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
 				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
@@ -1405,26 +1116,16 @@ func insertToolCalls(
 			}
 		}
 	}
-	if err := batch.flush(ctx); err != nil {
-		return fmt.Errorf("inserting duckdb tool calls: %w", err)
-	}
 	return nil
 }
 
 func insertToolResultEvents(
-	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
+	ctx context.Context, batch *duckAppendBatch, msgs []db.Message,
 ) error {
-	batch := newDuckInsertBatch(exec, `
-		INSERT INTO tool_result_events (
-			session_id, tool_call_message_ordinal, call_index,
-			tool_use_id, agent_id, subagent_session_id,
-			source, status, content, content_length,
-			timestamp, event_index
-		) VALUES `, 12)
 	for _, m := range msgs {
 		for i, tc := range m.ToolCalls {
 			for _, ev := range tc.ResultEvents {
-				if err := batch.add(ctx,
+				if err := batch.add(ctx, "tool_result_events",
 					m.SessionID, m.Ordinal, i,
 					nilEmpty(ev.ToolUseID), nilEmpty(ev.AgentID),
 					nilEmpty(ev.SubagentSessionID), ev.Source, ev.Status,
@@ -1436,28 +1137,6 @@ func insertToolResultEvents(
 			}
 		}
 	}
-	if err := batch.flush(ctx); err != nil {
-		return fmt.Errorf("inserting duckdb tool result events: %w", err)
-	}
-	return nil
-}
-
-func (s *Sync) replaceUsageEvents(
-	ctx context.Context, exec duckMutationExecutor, sessionID string,
-) error {
-	events, err := s.local.GetUsageEvents(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	if err := s.execMutation(ctx, exec,
-		`DELETE FROM usage_events WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing duckdb usage_events for %s: %w", sessionID, err)
-	}
-	if err := insertUsageEvents(ctx, exec, events); err != nil {
-		return fmt.Errorf("inserting duckdb usage events for %s: %w", sessionID, err)
-	}
 	return nil
 }
 
@@ -1467,12 +1146,6 @@ func (s *Sync) replacePlanUsage(
 	p, err := s.local.GetSessionPlanUsage(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("reading local plan usage for %s: %w", sessionID, err)
-	}
-	if err := s.execMutation(ctx, exec,
-		`DELETE FROM session_plan_usage WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing duckdb plan usage for %s: %w", sessionID, err)
 	}
 	if p == nil {
 		return nil
@@ -1492,19 +1165,11 @@ func (s *Sync) replacePlanUsage(
 }
 
 func insertUsageEvents(
-	ctx context.Context, exec duckMutationExecutor, events []db.UsageEvent,
+	ctx context.Context, batch *duckAppendBatch, events []db.UsageEvent,
 ) error {
-	batch := newDuckInsertBatch(exec, `
-		INSERT INTO usage_events (
-			id, session_id, message_ordinal, source, model,
-			provider_id, input_tokens, output_tokens,
-			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_microdollars, cost_status, cost_source,
-			occurred_at, dedup_key
-		) VALUES `, 16)
 	for _, ev := range events {
 		ordinal, cost, occurredAt := usageEventNullableValues(ev)
-		if err := batch.add(ctx,
+		if err := batch.add(ctx, "usage_events",
 			ev.ID, ev.SessionID, ordinal, ev.Source, ev.Model,
 			ev.ProviderID, ev.InputTokens, ev.OutputTokens,
 			ev.CacheCreationInputTokens, ev.CacheReadInputTokens,
@@ -1514,7 +1179,7 @@ func insertUsageEvents(
 			return err
 		}
 	}
-	return batch.flush(ctx)
+	return nil
 }
 
 func (s *Sync) bulkInsertCursorUsageEvents(
@@ -1703,3 +1368,90 @@ func parseTimestamp(value string) (time.Time, bool) {
 	}
 	return time.Time{}, false
 }
+
+var duckAppendColumns = map[string][]string{
+	"messages": strings.Fields(strings.ReplaceAll(`
+			id, session_id, ordinal, role, content, thinking_text, dialogue_text,
+			timestamp, has_thinking, has_tool_use, content_length,
+			is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
+			provider_id,
+			has_context_tokens, has_output_tokens, claude_message_id,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
+			source_parent_uuid, is_sidechain, is_compact_boundary
+		`, ",", " ")),
+	"tool_calls": strings.Fields(strings.ReplaceAll(`
+			message_id, session_id, tool_name, category,
+			call_index, tool_use_id, input_json, skill_name,
+			result_content_length, result_content,
+			subagent_session_id, file_path, observed_outcome, observed_repeat, sequence_ending
+		`, ",", " ")),
+	"tool_result_events": strings.Fields(strings.ReplaceAll(`
+			session_id, tool_call_message_ordinal, call_index,
+			tool_use_id, agent_id, subagent_session_id,
+			source, status, content, content_length,
+			timestamp, event_index
+		`, ",", " ")),
+	"usage_events": strings.Fields(strings.ReplaceAll(`
+			id, session_id, message_ordinal, source, model,
+			provider_id, input_tokens, output_tokens,
+			cache_creation_input_tokens, cache_read_input_tokens,
+			reasoning_tokens, cost_microdollars, cost_status, cost_source,
+			occurred_at, dedup_key
+		`, ",", " ")),
+	"sessions": strings.Fields(strings.ReplaceAll(`
+			id, project, project_assigned, machine, agent,
+			agent_label, entrypoint, session_kind,
+			first_message, display_name, session_name, started_at, ended_at,
+			message_count, user_message_count,
+			file_path, file_size, file_mtime, file_inode, file_device,
+			file_hash, local_modified_at, transcript_revision,
+			parent_session_id,
+			relationship_type, total_output_tokens, peak_context_tokens,
+			has_total_output_tokens, has_peak_context_tokens, is_automated,
+			tool_failure_signal_count, tool_retry_count, edit_churn_count,
+			consecutive_failure_max, outcome, outcome_confidence,
+			ended_with_role, final_failure_streak, signals_pending_since,
+			compaction_count, mid_task_compaction_count,
+			context_pressure_max, health_score, health_grade,
+			has_tool_calls, has_context_data,
+			quality_signal_version, short_prompt_count, unstructured_start,
+			missing_success_criteria_count, missing_verification_count,
+			duplicate_prompt_count, no_code_context_count,
+			runaway_tool_loop_count, data_version,
+			cwd, git_branch, source_session_id, source_version, group_key, transcript_fidelity,
+			parser_malformed_lines, is_truncated, deleted_at, deletion_cause, created_at,
+			termination_status, secret_leak_count, secrets_rules_version,
+			pr_links, labels,
+			agentsview_push_fingerprint, source_archive_id
+		`, ",", " ")),
+}
+
+func (s *Sync) appendSession(ctx context.Context, batch *duckAppendBatch, sess db.Session, fingerprint string) (int, error) {
+	if err := batch.add(ctx, "sessions", sessionInsertArgs(sess, s.machine, s.archiveID, fingerprint)...); err != nil {
+		return 0, err
+	}
+	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
+	if err != nil {
+		return 0, err
+	}
+	if err := insertMessages(ctx, batch, msgs); err != nil {
+		return 0, err
+	}
+	if err := insertToolCalls(ctx, batch, msgs); err != nil {
+		return 0, err
+	}
+	if err := insertToolResultEvents(ctx, batch, msgs); err != nil {
+		return 0, err
+	}
+	events, err := s.local.GetUsageEvents(ctx, sess.ID)
+	if err != nil {
+		return 0, err
+	}
+	if err := insertUsageEvents(ctx, batch, events); err != nil {
+		return 0, err
+	}
+	return len(msgs), nil
+}
+
+// duckAppendHook runs before a row or after a successful explicit flush.
+type duckAppendHook func(table string, flushed bool) error

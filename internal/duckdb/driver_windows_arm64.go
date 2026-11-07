@@ -3,6 +3,7 @@
 package duckdb
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 )
@@ -22,3 +23,11 @@ func openDuckDB(string) (*sql.DB, error) {
 }
 
 func isMirrorOpenInSameProcessError(error) bool { return false }
+
+type duckAppendBatch struct{}
+
+func newDuckAppendBatch(context.Context, any, map[string][]string, duckAppendHook) (*duckAppendBatch, error) {
+	return nil, errUnsupportedPlatform
+}
+func (*duckAppendBatch) add(context.Context, string, ...any) error { return errUnsupportedPlatform }
+func (*duckAppendBatch) close(context.Context) error               { return errUnsupportedPlatform }

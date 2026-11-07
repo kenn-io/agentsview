@@ -24,10 +24,10 @@ is not an in-place production migration path.
 ## Mirror writes
 
 Full and incremental pushes replace complete sessions in the existing
-session-batch transactions. Messages, tool calls, result events, and usage
-events use multi-row inserts capped at 100 rows or 1 MiB of variable-sized
-payload per statement. An oversized row is inserted alone, without truncation.
-These limits do not bound the existing whole-session source load.
+session-batch transactions. Sessions, messages, tool calls, result events, and
+usage events use native appenders with a shared 1 MiB payload flush bound. An
+oversized row is flushed alone, without truncation. These limits do not bound
+the existing whole-session source load.
 
 Errors and cancellation roll back the whole transaction; chunks never commit
 independently.
