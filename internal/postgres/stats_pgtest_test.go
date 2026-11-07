@@ -29,7 +29,7 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 		{"automated", "project-b", "machine-b", "2026-01-02T00:00:00Z", "", 4, 1, true, nil},
 		{"automated-multi", "project-b", "machine-c", "2026-01-01T00:00:00Z", "", 6, 3, true, nil},
 		{"empty", "excluded", "excluded", "2025-01-01T00:00:00Z", "", 0, 0, false, nil},
-		{"null-parent-subagent", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", 100, 50, false, nil},
+		{"missing-parent-subagent", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", 100, 50, false, nil},
 		{"null-parent-fork", "excluded", "excluded", "2025-01-01T00:00:00Z", "fork", 100, 50, false, nil},
 		{"continuation", "project-a", "machine-a", "2026-01-04T00:00:00Z", "continuation", 4, 2, false, nil},
 		{"deleted", "excluded", "excluded", "2025-01-01T00:00:00Z", "", 100, 50, false, new("2026-02-01T00:00:00Z")},
@@ -41,6 +41,8 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 			row.started, row.relationship, row.messages, row.users, row.automated, row.deleted)
 		require.NoError(t, err)
 	}
+	_, err = d.DB().ExecContext(ctx, `UPDATE sessions SET parent_session_id='missing-parent' WHERE id='missing-parent-subagent'`)
+	require.NoError(t, err)
 	_, err = d.DB().ExecContext(ctx, `UPDATE sessions SET parent_session_id='human' WHERE id='continuation'`)
 	require.NoError(t, err)
 	for _, tc := range []struct {

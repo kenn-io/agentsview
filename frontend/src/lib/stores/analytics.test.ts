@@ -1144,7 +1144,7 @@ describe("executeFetch concurrency and error handling", () => {
     expect(analytics.errors.summary).toBe("Failed to load");
   });
 
-  it("keeps accepted summary params after stale success and a failed refetch", async () => {
+  it("ignores stale summary data and keeps accepted params after a failed refetch", async () => {
     let resolveFirst!: (v: AnalyticsSummary) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
       new Promise((r) => {

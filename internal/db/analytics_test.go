@@ -323,6 +323,13 @@ func TestAnalyticsSubagentScope(t *testing.T) {
 	shape, err := d.GetAnalyticsSessionShape(ctx, f)
 	require.NoError(t, err, "GetAnalyticsSessionShape")
 	assert.Equal(t, 1, shape.Count, "session-shape stays root-only")
+
+	insertSession(t, d, "continuation", "project-alpha", func(s *Session) {
+		withTokens("continuation", 5, 2, 200)(s)
+		s.ParentSessionID = new("root")
+	})
+	assert.Equal(t, 3, mustSummary(t, d, ctx, f).TotalSessions,
+		"summary also counts the parented continuation")
 }
 
 func TestAnalyticsModelFilter(t *testing.T) {
