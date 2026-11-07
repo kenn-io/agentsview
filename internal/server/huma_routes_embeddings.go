@@ -61,24 +61,6 @@ type EmbeddingsManager interface {
 	Retire(ctx context.Context, id int64, force bool) error
 }
 
-// WithEmbeddingsManager wires the implementation behind the embeddings build
-// lifecycle routes (/api/v1/embeddings/...). The routes are registered even
-// when no manager is present so OpenAPI and generated clients expose the full
-// API surface; handlers return 501 until vector serving is configured.
-func WithEmbeddingsManager(m EmbeddingsManager) Option {
-	return func(s *Server) { s.embeddingsManager = m }
-}
-
-// WithEmbeddingsStoreManager registers a non-default embedding store manager.
-func WithEmbeddingsStoreManager(name string, m EmbeddingsManager) Option {
-	return func(s *Server) {
-		if s.embeddingsStores == nil {
-			s.embeddingsStores = make(map[string]EmbeddingsManager)
-		}
-		s.embeddingsStores[name] = m
-	}
-}
-
 // WithEmbeddingsUnavailableReason records why the embeddings routes are
 // unavailable, so their 501 responses carry an actionable message instead of
 // the generic "embeddings manager not available" — e.g. when the daemon
@@ -86,15 +68,6 @@ func WithEmbeddingsStoreManager(name string, m EmbeddingsManager) Option {
 // vectors.write.lock.
 func WithEmbeddingsUnavailableReason(reason string) Option {
 	return func(s *Server) { s.embeddingsUnavailableReason = reason }
-}
-
-// WithEmbeddingsIncludeAutomatedDefault records the daemon's configured
-// [vector].include_automated scope, applied to build requests that leave
-// include_automated unset. Scheduler and CLI builds resolve the same config
-// value themselves; without this, an HTTP build request omitting the field
-// would silently build with include_automated=false regardless of config.
-func WithEmbeddingsIncludeAutomatedDefault(includeAutomated bool) Option {
-	return func(s *Server) { s.embeddingsIncludeAutomatedDefault = includeAutomated }
 }
 
 // embeddingsUnavailableError is the 501 every embeddings route returns while
@@ -168,13 +141,10 @@ type embeddingsGenerationActionInput struct {
 }
 
 func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
-	if s.embeddingsRuntime != nil {
-		return s.embeddingsRuntime.Manager(store)
+	if s.embeddingsRuntime == nil {
+		return nil
 	}
-	if store == "" || store == vector.MessageIndexSpec().Name {
-		return s.embeddingsManager
-	}
-	return s.embeddingsStores[store]
+	return s.embeddingsRuntime.Manager(store)
 }
 
 func (s *Server) humaEmbeddingsBuild(
@@ -184,10 +154,7 @@ func (s *Server) humaEmbeddingsBuild(
 	if manager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	includeAutomated := s.embeddingsIncludeAutomatedDefault
-	if s.embeddingsRuntime != nil {
-		includeAutomated = s.embeddingsRuntime.IncludeAutomated()
-	}
+	includeAutomated := s.embeddingsRuntime.IncludeAutomated()
 	if in.Body.IncludeAutomated != nil {
 		includeAutomated = *in.Body.IncludeAutomated
 	}

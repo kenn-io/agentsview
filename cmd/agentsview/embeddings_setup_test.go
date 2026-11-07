@@ -453,7 +453,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 	}
 }
 
-func TestEmbeddingsSetupStatusKeepsActiveProviderDuringSharedInstall(t *testing.T) {
+func TestEmbeddingsSetupStatusIdentifiesProviders(t *testing.T) {
 	oldInspect := inspectLocalEmbeddings
 	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
 	for _, provider := range []string{"configured Ollama port", "discovered Ollama", "built-in"} {

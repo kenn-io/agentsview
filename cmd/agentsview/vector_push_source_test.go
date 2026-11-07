@@ -411,12 +411,11 @@ func TestVectorPushSourceConcurrentSetupReloadSnapshot(t *testing.T) {
 				firstErr = errors.New("active index disappeared")
 				return
 			}
-			if _, err := exp.SessionDocHashes(t.Context(), nil); err != nil {
+			_, err = exp.SessionDocHashes(t.Context(), nil)
+			if err := errors.Join(err, exp.Close()); err != nil {
 				firstErr = err
-				exp.Close()
 				return
 			}
-			exp.Close()
 		}
 	})
 	wg.Go(func() {

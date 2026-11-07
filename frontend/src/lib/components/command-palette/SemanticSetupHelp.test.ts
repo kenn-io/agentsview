@@ -213,6 +213,9 @@ describe("SemanticSetupHelp", () => {
       .find((b) => b.textContent?.trim() === "Turn on")!
       .click();
     await settle();
+    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
+      approved_bytes: 295000000,
+    });
     expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
     unmount(component);
   });

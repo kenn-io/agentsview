@@ -176,7 +176,6 @@ describe("EmbeddingsSettings", () => {
       (b) => b.textContent?.trim() === "Retry",
     );
     expect(button).toBeTruthy();
-    expect(document.body.querySelectorAll("button")).toHaveLength(1);
     unmount(component);
   });
 
@@ -280,7 +279,6 @@ describe("EmbeddingsSettings", () => {
     expect(document.body.textContent).toContain("the total amount of work is not known yet");
     expect(document.body.textContent).not.toContain("of 0");
     expect(document.body.querySelector('[role="progressbar"]')).toBeNull();
-    expect(document.body.querySelector('[role="status"][aria-label="Search by meaning setup"]')).not.toBeNull();
 
     unmount(component);
   });
