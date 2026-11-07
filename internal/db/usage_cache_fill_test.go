@@ -711,10 +711,10 @@ func usageSpoolExtractionFixture(tb testing.TB, count int) (*DB, *usageCache) {
 	return database, cache
 }
 
-// Both stores put the session key first; compare every remaining fact value.
-func usageSpoolFactValues(t *testing.T, database *sql.DB, query string) [][]any {
+// Compare every fact value except the first key column.
+func usageSpoolFactValues(t *testing.T, database *sql.DB, query string, args ...any) [][]any {
 	t.Helper()
-	rows, err := database.QueryContext(t.Context(), query)
+	rows, err := database.QueryContext(t.Context(), query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 	columns, err := rows.Columns()

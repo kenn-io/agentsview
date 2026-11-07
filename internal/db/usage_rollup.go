@@ -562,7 +562,8 @@ func (c *usageRollupCoordinator) ensureAttempt(
 	}
 	if installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
 		cursorBuild, cursorErr := loadCursorUsageRollupBuild(
-			ctx, conn, snapshot.CursorHighWater, snapshot.location, pricing)
+			ctx, conn, installs[usageRollupCursorSessionID].FactRevision,
+			snapshot.CursorHighWater, snapshot.location, pricing)
 		if cursorErr != nil {
 			return nil, false, usageRollupMetrics{}, cursorErr
 		}
@@ -818,22 +819,24 @@ func installUsageRollupBuilds(
 			SET change_revision=MIN(change_revision, ?) WHERE id=?`, build.ChangeRevision, timezoneID); err != nil {
 			return err
 		}
-		if err == nil && build.SessionID == usageRollupCursorSessionID &&
-			installedFactRevision > build.FactRevision {
+		if build.SessionID == usageRollupCursorSessionID &&
+			installedFactRevision != build.CursorAfter {
 			return fmt.Errorf(
-				"%w: Cursor usage advanced during rollup build",
+				"%w: Cursor usage base changed during rollup build",
 				errUsageCacheSourceChanged)
 		}
 		if err == nil {
-			if _, err := stmts.ExecContext(ctx, `DELETE FROM usage_daily_rollups WHERE rollup_install_id = ?`, installID); err != nil {
-				return err
-			}
-			for _, table := range []string{
-				"usage_activity_rollups", "usage_rollup_exceptions",
-			} {
-				if _, err := stmts.ExecContext(ctx, `DELETE FROM `+table+
-					` WHERE rollup_install_id = ?`, installID); err != nil {
+			if build.SessionID != usageRollupCursorSessionID {
+				if _, err := stmts.ExecContext(ctx, `DELETE FROM usage_daily_rollups WHERE rollup_install_id = ?`, installID); err != nil {
 					return err
+				}
+				for _, table := range []string{
+					"usage_activity_rollups", "usage_rollup_exceptions",
+				} {
+					if _, err := stmts.ExecContext(ctx, `DELETE FROM `+table+
+						` WHERE rollup_install_id = ?`, installID); err != nil {
+						return err
+					}
 				}
 			}
 			_, err = stmts.ExecContext(ctx, `UPDATE usage_rollup_installs SET
