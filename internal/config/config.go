@@ -614,18 +614,13 @@ func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens i
 	if c.Endpoint == "" && !c.Local {
 		return fmt.Errorf("%s endpoint is required", section)
 	}
-	if c.OllamaCPUFallback {
-		u, err := url.Parse(c.Endpoint)
-		if err != nil || u.Scheme == "" || u.Host == "" ||
-			(u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf(
-				"%s ollama_cpu_fallback requires an absolute HTTP(S) endpoint", section)
-		}
-		endpointPath := strings.TrimSuffix(u.Path, "/")
-		if !strings.HasSuffix(endpointPath, "/v1") {
-			return fmt.Errorf(
-				"%s ollama_cpu_fallback requires an endpoint ending in /v1", section)
-		}
+	endpoint, err := c.EmbedDeployment().Canonical()
+	if err != nil && !c.Local {
+		return fmt.Errorf("%s %w", section, err)
+	}
+	if c.OllamaCPUFallback && !strings.HasSuffix(endpoint, "/v1") {
+		return fmt.Errorf(
+			"%s ollama_cpu_fallback requires an endpoint ending in /v1", section)
 	}
 	if c.BatchSize <= 0 {
 		return fmt.Errorf("%s batch_size must be greater than 0, got %d", section, c.BatchSize)
@@ -4086,4 +4081,74 @@ func (c *Config) SaveGithubToken(token string) error {
 		c.GithubToken = token
 		return nil
 	})
+}
+
+// ErrInvalidVectorSetup marks settings a vector setup would reject, as
+// opposed to failures reading or locking the config file.
+var ErrInvalidVectorSetup = errors.New("invalid vector setup")
+
+type invalidVectorSetupError struct{ error }
+
+func (e invalidVectorSetupError) Unwrap() error { return e.error }
+
+func (invalidVectorSetupError) Is(target error) bool { return target == ErrInvalidVectorSetup }
+
+// VectorSetupEmbeddings returns the validated embeddings recipe SaveVectorSetup
+// would save now, so status and activation select the same provider.
+func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
+	var embeddings VectorEmbeddingsConfig
+	err := c.withConfigLock(func() error {
+		_, candidate, err := c.vectorSetupCandidate()
+		if err == nil {
+			embeddings = candidate.Vector.Embeddings
+		}
+		return err
+	})
+	return embeddings, err
+}
+
+// SaveVectorSetup records the selected action while keeping omitted defaults omitted.
+func (c *Config) SaveVectorSetup() error {
+	return c.withConfigLock(func() error {
+		existing, _, err := c.vectorSetupCandidate()
+		if err != nil {
+			return err
+		}
+		return c.writeConfigMap(existing)
+	})
+}
+
+func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
+	existing, err := c.readConfigMap()
+	if err != nil {
+		if _, ok := errors.AsType[toml.ParseError](err); ok {
+			err = invalidVectorSetupError{err}
+		}
+		return nil, Config{}, err
+	}
+	section, ok := existing["vector"].(map[string]any)
+	if !ok && existing["vector"] != nil {
+		return nil, Config{}, invalidVectorSetupError{errors.New("vector must be a table")}
+	}
+	if section == nil {
+		section = make(map[string]any)
+	}
+	section["enabled"] = true
+	existing["vector"] = section
+	encoded, err := toml.Marshal(existing)
+	if err != nil {
+		return nil, Config{}, err
+	}
+	candidate, err := Default()
+	if err != nil {
+		return nil, Config{}, err
+	}
+	candidate.DataDir = c.DataDir
+	if err := candidate.applyConfigTOML(string(encoded)); err != nil {
+		return nil, Config{}, invalidVectorSetupError{err}
+	}
+	if err := candidate.Vector.Validate(); err != nil {
+		return nil, Config{}, invalidVectorSetupError{err}
+	}
+	return existing, candidate, nil
 }

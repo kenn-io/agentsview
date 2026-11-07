@@ -23,7 +23,9 @@ concurrency, and the search path — see
 
 ## Enabling `[vector]`
 
-Semantic search is disabled by default. Add a `[vector]` section to
+Semantic search is disabled by default. Open **Settings → Embeddings** and choose **Turn on**, or choose it from the search palette. AgentsView asks for the required download through that button, shows download and indexing progress, and starts semantic search without a restart. Full-text search remains available during indexing.
+
+For CLI setup, add a `[vector]` section to
 `~/.agentsview/config.toml`:
 
 ```toml
@@ -688,7 +690,7 @@ session that overlaps the range can contain an earlier or later message.
 
 Semantic and Hybrid depend on the same enabled `[vector]` configuration and
 active embeddings index described above. If `[vector]` is not configured, the
-palette shows a copyable configuration example plus the build and restart steps.
+palette shows **Turn on** with download and indexing progress. Full-text results offer the same action while semantic search is off.
 If vector search is configured but no active index exists, **Build embeddings**
 starts the build through the local daemon and reports scanning, progress,
 throughput, and completion in place. The palette follows an already running
@@ -914,6 +916,21 @@ anchor — the member the matched text belongs to — so centering `--around` on
 lands in the right part of the run; widen `--before`/`--after` toward the ends
 of `ordinal_range` to read the whole stretch.
 
+## Browser setup
+
+On a local SQLite daemon, Turn on in Settings → Embeddings or the search
+palette enables semantic search, installs missing shared server files, and
+starts indexing. Replica and DuckDB servers have no local setup control.
+
+`GET /api/v1/embeddings/status` includes `setup` when browser setup is
+available. `POST /api/v1/embeddings/setup` accepts `approved_bytes`, the
+download size disclosed to the user. It returns `202` with `{"started":true}`
+when setup is accepted. A concurrent setup returns `409`.
+
+Approval covers at most `approved_bytes`. If installation verifies that a
+larger download is required, it declines the download and reports the verified
+size in `setup.missing_bytes`. Retry must disclose and approve that amount.
+
 ## Error taxonomy
 
 CLI and MCP hybrid searches turn unavailable-index errors into keyword matches
@@ -923,7 +940,8 @@ below.
 | Situation                                                                                                                       | Message                                                                                                                                                               |
 | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `[vector]` not enabled                                                                                                          | `vector search is not enabled: set [vector] enabled = true in config.toml` (from `agentsview index embeddings ...`)                                                   |
-| No `VectorSearcher` wired (index never built, DuckDB backend, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'`                                                           |
+| DuckDB backend | `semantic search not available: semantic search is not supported by the DuckDB backend` |
+| No `VectorSearcher` wired (index never built, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'`                                                        |
 | Only a building generation exists                                                                                               | same message, plus `: index is building: N% complete`                                                                                                                 |
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |

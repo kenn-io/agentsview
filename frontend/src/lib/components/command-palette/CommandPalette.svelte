@@ -21,6 +21,8 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { stripIdPrefix } from "../../utils/resume.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
+  import { EmbeddingsService, type VectorBuildStatus } from "../../api/generated/index.js";
+  import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
   import SemanticSetupHelp from "./SemanticSetupHelp.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
@@ -30,6 +32,18 @@
     SearchMode,
   } from "../../stores/search.svelte.js";
 
+  let hintStatus = $state<VectorBuildStatus | null>(null);
+  $effect(() => {
+    if (searchStore.mode !== "fulltext") return;
+    hintStatus = null;
+    const controller = new AbortController();
+    void EmbeddingsService.getApiV1EmbeddingsStatus({}, { signal: controller.signal })
+      .then((status) => {
+        if (!controller.signal.aborted) hintStatus = status;
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  });
   let inputRef: HTMLInputElement | undefined = $state(undefined);
   let project = $state(sessions.filters.project);
   let selectedIndex: number = $state(0);
@@ -270,7 +284,7 @@
         value={inputValue}
         oninput={handleInput}
       />
-      <KbdBadge keys={["⎋"]} ariaLabel="Escape" />
+      <KbdBadge keys={["⎋"]} joiner="compact" ariaLabel="Escape" />
     </div>
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -422,11 +436,15 @@
           </button>
         {/each}
       {/if}
+      {#if showSearchResults && !searchStore.isSearching && !searchStore.error && searchStore.mode === "fulltext"}
+        <div class="meaning-hint"><SearchByMeaningControl status={hintStatus} hint onchange={() => { hintStatus = null; searchStore.setMode("semantic"); }} /></div>
+      {/if}
     </div>
   </div>
 </div>
 
 <style>
+  .meaning-hint { padding: 8px 16px; }
   .palette-overlay {
     position: fixed;
     /* kit-ui-check-ignore: top-aligned command-palette overlay with palette-owned focus handling; kit-ui Modal's centered dialog chrome does not apply — adopting kit-ui CommandPalette wholesale is tracked as a follow-up */

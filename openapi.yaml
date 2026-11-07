@@ -4914,6 +4914,15 @@ components:
       required:
         - generations
       type: object
+    EmbeddingsSetupInputBody:
+      additionalProperties: false
+      properties:
+        approved_bytes:
+          description: Download size the user saw; a larger download is declined
+          format: int64
+          minimum: 0
+          type: integer
+      type: object
     EmptyTrashResponse:
       additionalProperties: false
       properties:
@@ -8843,6 +8852,8 @@ components:
           type: number
         running:
           type: boolean
+        setup:
+          $ref: "#/components/schemas/VectorSetupStatus"
         started_at:
           type: string
         total:
@@ -8932,6 +8943,40 @@ components:
         - failed
         - remaining
         - remaining_known
+      type: object
+    VectorSetupStatus:
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+        busy:
+          type: boolean
+        downloaded_bytes:
+          format: int64
+          type: integer
+        enabled:
+          type: boolean
+        error:
+          type: string
+        installing:
+          type: boolean
+        missing_bytes:
+          format: int64
+          type: integer
+        provider:
+          type: string
+        total_bytes:
+          format: int64
+          type: integer
+      required:
+        - enabled
+        - provider
+        - action
+        - missing_bytes
+        - installing
+        - busy
+        - downloaded_bytes
+        - total_bytes
       type: object
     VersionInfo:
       additionalProperties: false
@@ -13981,6 +14026,91 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Retire an embedding generation
+      tags:
+        - Embeddings
+  /api/v1/embeddings/setup:
+    post:
+      operationId: post-api-v1-embeddings-setup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmbeddingsSetupInputBody"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingsBuildResponse"
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Set up search by meaning
       tags:
         - Embeddings
   /api/v1/embeddings/status:

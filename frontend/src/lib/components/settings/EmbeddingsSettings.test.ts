@@ -6,6 +6,7 @@ import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
 import { EmbeddingsService } from "../../api/generated/index";
 import type { VectorBuildStatus } from "../../api/generated/index";
 import { ApiError } from "../../api/runtime.js";
+import { setLocale } from "../../i18n/index.js";
 
 vi.mock("../../api/runtime.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../../api/runtime.js")>();
@@ -21,6 +22,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
     EmbeddingsService: {
       getApiV1EmbeddingsStatus: vi.fn(),
       getApiV1EmbeddingsGenerations: vi.fn(),
+      postApiV1EmbeddingsSetup: vi.fn(),
     },
   };
 });
@@ -28,6 +30,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
 const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   getApiV1EmbeddingsGenerations: ReturnType<typeof vi.fn>;
+  postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
 };
 
 function runningStatus(
@@ -36,6 +39,16 @@ function runningStatus(
 ): VectorBuildStatus {
   return {
     running: true,
+    setup: {
+      enabled: true,
+      action: "",
+      provider: "built-in",
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    },
     build_id: 1,
     started_at: "2026-07-11T10:00:00Z",
     phase: "embedding",
@@ -64,6 +77,7 @@ describe("EmbeddingsSettings", () => {
     vi.setSystemTime(new Date("2026-07-11T10:00:05Z"));
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockReset();
+    embeddingsService.postApiV1EmbeddingsSetup.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
       generations: [BUILDING_GENERATION],
     });
@@ -80,45 +94,195 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
-  it("shows the daemon's warmed estimate on the first status response", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      runningStatus(200, {
-        estimate_ready: true,
-        rate_per_second: 50,
-        eta_milliseconds: 16_000,
-      }),
-    );
+  it("approves only the disclosed download when retrying after Ollama stops", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "ollama",
+      missing_bytes: 295000000,
+      busy: false,
+      installing: false,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    try {
+      await settle();
+      expect(document.body.textContent).toContain("Uses Ollama");
+      expect(document.body.textContent).not.toContain("Downloads 295 MB");
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+        running: false,
+        setup: {
+          ...setup,
+          provider: "built-in",
+          error: "embedding download declined; approve installation to use local embeddings",
+        },
+      });
+      [...document.body.querySelectorAll("button")]
+        .find((b) => b.textContent?.trim() === "Turn on")!
+        .click();
+      await settle();
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
+        approved_bytes: 0,
+      });
+      expect(document.body.textContent).toContain("Downloads 295 MB");
+      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
+        "download declined",
+      );
+      [...document.body.querySelectorAll("button")]
+        .find((b) => b.textContent?.trim() === "Retry")!
+        .click();
+      await settle();
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
+        approved_bytes: 295000000,
+      });
+    } finally {
+      unmount(component);
+    }
+  });
 
+  it("shows an enabled Ollama setup as on, with no switch", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+      running: false,
+      setup: {
+        enabled: true,
+        action: "",
+        provider: "ollama",
+        missing_bytes: 0,
+        busy: false,
+        installing: false,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+      },
+    });
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    try {
+      await settle();
+      const row = document.body.querySelector(".kit-search-by-meaning")!;
+      expect(row.textContent).toContain("On · Ollama");
+      expect(row.querySelector("button")).toBeNull();
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("keeps setup recovery available while hiding unqueried build details", async () => {
+    const setup = {
+      enabled: true,
+      action: "turn-on",
+      provider: "built-in",
+      error: "local embeddings: download interrupted",
+      busy: false,
+      installing: false,
+      missing_bytes: 295000000,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+      running: false,
+      setup,
+    });
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
-
-    const text = () => document.body.textContent ?? "";
-    expect(text()).toContain("test-embed-model");
-    expect(text()).toContain("256");
-    expect(text()).toContain("Embedding");
-    expect(text()).toContain("200 / 1,000 chunks");
-    expect(text()).toContain("20%");
-    expect(text()).toContain("50 chunks/s");
-    expect(text()).toContain("ETA 16s");
-    expect(text()).toContain("Elapsed 5s");
-
-    const progressbar = document.body.querySelector('[role="progressbar"]');
-    expect(progressbar?.getAttribute("aria-valuenow")).toBe("200");
-    expect(progressbar?.getAttribute("aria-valuemax")).toBe("1000");
-
+    expect(document.body.textContent).toContain(setup.error);
+    expect(embeddingsService.getApiV1EmbeddingsGenerations).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("No embedding generations exist yet.");
+    const button = [...document.body.querySelectorAll("button")].find(
+      (b) => b.textContent?.trim() === "Retry",
+    );
+    expect(button).toBeTruthy();
     unmount(component);
   });
 
-  it("shows an estimating state while the daemon warms its estimate", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
-      runningStatus(100, { estimate_ready: false }),
-    );
-
+  it("follows a concurrent build after Turn on returns 409 without retaining an error", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "built-in",
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsSetup.mockImplementation(async () => {
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+        runningStatus(1, { setup: { ...setup, enabled: true, action: "" } }),
+      );
+      throw new ApiError(409, "embedding build already running");
+    });
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
-    expect(document.body.textContent).toContain("Estimating time remaining...");
-
+    [...document.body.querySelectorAll("button")]
+      .find((b) => b.textContent?.trim() === "Turn on")!
+      .click();
+    await settle();
+    expect(document.body.textContent).toContain("Indexing");
+    expect(document.body.textContent).not.toContain("embedding build already running");
+    expect(document.body.querySelector('[role="alert"]')).toBeNull();
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      runningStatus(2, { setup: { ...setup, enabled: true, action: "" } }),
+    );
+    await settle(2000);
+    expect(document.body.textContent).toContain("Indexing 2 of");
     unmount(component);
+  });
+
+  it.each([true, false])(
+    "shows indexing progress with estimate_ready %s",
+    async (estimateReady) => {
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+        runningStatus(200, {
+          estimate_ready: estimateReady,
+          rate_per_second: 50,
+          eta_milliseconds: 16_000,
+        }),
+      );
+
+      const component = mount(EmbeddingsSettings, { target: document.body });
+      try {
+        await settle();
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("test-embed-model");
+        expect(text).toContain("256");
+        expect(text).toContain("Indexing 200 of 1,000 text sections");
+        expect(text).toContain("Elapsed 5s");
+        if (estimateReady) {
+          expect(text).toContain("under a minute left");
+          expect(text).toContain("50 text sections/s");
+        } else {
+          expect(text).not.toContain("under a minute left");
+          expect(text).not.toContain("50 text sections/s");
+        }
+        const progressbars = document.body.querySelectorAll('[role="progressbar"]');
+        expect(progressbars).toHaveLength(1);
+        expect(progressbars[0]?.getAttribute("aria-valuenow")).toBe("200");
+        expect(progressbars[0]?.getAttribute("aria-valuemax")).toBe("1000");
+      } finally {
+        unmount(component);
+      }
+    },
+  );
+
+  it("formats indexing numbers and time in the selected language, not the browser's", async () => {
+    vi.spyOn(navigator, "language", "get").mockReturnValue("en-US");
+    vi.spyOn(navigator, "languages", "get").mockReturnValue(["en-US"]);
+    setLocale("fr");
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      runningStatus(1200, { total: 3400, estimate_ready: true, eta_milliseconds: 2 * 3_600_000 }),
+    );
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    try {
+      await settle();
+      expect(document.body.textContent).toMatch(/Indexation de 1\s200 sur 3\s400/);
+      expect(document.body.textContent).toMatch(/environ 2\sheures/);
+    } finally {
+      unmount(component);
+      setLocale("en");
+    }
   });
 
   it("shows the scanning state without inventing totals", async () => {
@@ -131,6 +295,7 @@ describe("EmbeddingsSettings", () => {
 
     expect(document.body.textContent).toContain("Scanning");
     expect(document.body.textContent).toContain("the total amount of work is not known yet");
+    expect(document.body.textContent).not.toContain("of 0");
     expect(document.body.querySelector('[role="progressbar"]')).toBeNull();
 
     unmount(component);
@@ -146,6 +311,7 @@ describe("EmbeddingsSettings", () => {
       embeddingsService.getApiV1EmbeddingsGenerations.mock.calls.length;
 
     current = {
+      setup: runningStatus(0).setup,
       running: false,
       build_id: 1,
       started_at: "2026-07-11T10:00:00Z",
@@ -196,14 +362,17 @@ describe("EmbeddingsSettings", () => {
       eta_milliseconds: 0,
       model: "test-embed-model",
       dimension: 256,
+      setup: runningStatus(0).setup,
       last_error: "encode batch: connection refused",
     });
 
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
 
-    expect(document.body.textContent).toContain("Failed");
     expect(document.body.textContent).toContain("encode batch: connection refused");
+    expect(document.body.querySelector(".kit-search-by-meaning")?.textContent).toMatch(
+      /Search by meaning\s+On\s*$/,
+    );
 
     unmount(component);
   });
@@ -243,6 +412,7 @@ describe("EmbeddingsSettings", () => {
 
     // Idle cadence: after the build finishes, 2s ticks stop...
     current = {
+      setup: runningStatus(0).setup,
       running: false,
       done: 0,
       total: 0,

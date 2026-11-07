@@ -88,7 +88,7 @@ func TestReplicaRecipeQueryWithoutConfig(t *testing.T) {
 	require.NoError(t, runEmbeddingsBuildDirect(t.Context(), io.Discard, workstation,
 		vector.BuildRequest{}))
 	source := newVectorPushSource(workstation)
-	t.Cleanup(func() { closeVectorPushSource(source) })
+	t.Cleanup(func() { require.NoError(t, source.(*vectorPushSource).Close()) })
 	sync, err := postgres.New(t.Context(), pgURL, schema, local, "workstation", true,
 		storage.PusherOptions{VectorSource: source})
 	require.NoError(t, err)

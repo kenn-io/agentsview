@@ -280,8 +280,7 @@ matches a pushed generation.
 
 #### Enabling Semantic Search
 
-Follow these steps on the machine that owns the sessions. Approve the first
-local download in the CLI before running builds unattended.
+On the machine that owns the sessions, choose **Settings → Embeddings → Turn on** to approve the download and build the local index without restarting. For CLI setup, follow the steps below.
 
 1. Enable vectors in `~/.agentsview/config.toml`. AgentsView discovers Ollama
    with Nomic or uses Kit's shared local server. Explicit recipes and server

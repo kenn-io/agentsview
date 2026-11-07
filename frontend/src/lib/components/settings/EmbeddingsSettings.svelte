@@ -10,6 +10,8 @@
   } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
 
+  import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
+
   // Poll fast only while a build is actually running; when idle the section
   // only needs to notice an externally started build (CLI, scheduler)
   // eventually. Hidden pages do not poll at all.
@@ -33,24 +35,11 @@
   const generationsRead = new LatestRead();
 
   const numberFormat = $derived(new Intl.NumberFormat(getLocale()));
-  const percentFormat = $derived(
-    new Intl.NumberFormat(getLocale(), {
-      style: "percent",
-      maximumFractionDigits: 0,
-    }),
-  );
-
   const running = $derived(status?.running ?? false);
+  const settingUp = $derived(status?.setup?.busy || status?.setup?.installing);
   const phase = $derived(status?.phase ?? "");
   const estimateReady = $derived(status?.estimate_ready ?? false);
   const ratePerSecond = $derived(status?.rate_per_second ?? null);
-  const etaMs = $derived(status?.eta_milliseconds ?? null);
-  const progressFraction = $derived(
-    status && status.running && status.total > 0
-      ? Math.min(1, status.done / status.total)
-      : null,
-  );
-
   function clearTimer(): void {
     if (timer !== null) {
       clearTimeout(timer);
@@ -61,7 +50,7 @@
   function schedule(): void {
     clearTimer();
     if (disposed || unavailableReason !== null || document.hidden) return;
-    const interval = running ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+    const interval = running || settingUp ? ACTIVE_POLL_MS : IDLE_POLL_MS;
     timer = setTimeout(() => void poll(), interval);
   }
 
@@ -86,7 +75,7 @@
       unavailableReason = null;
       loadError = null;
       updateElapsed(next);
-      if (withGenerations || (wasRunning && !next.running)) {
+      if (next.setup?.enabled !== false && next.setup?.action !== "turn-on" && (withGenerations || (wasRunning && !next.running))) {
         activePollsSinceGenerations = 0;
         await refreshGenerations();
       }
@@ -174,12 +163,6 @@
     return m.settings_embeddings_duration_seconds({ seconds });
   }
 
-  function phaseLabel(): string {
-    if (phase === "scanning") return m.settings_embeddings_status_scanning();
-    if (phase === "embedding") return m.settings_embeddings_status_embedding();
-    return m.settings_embeddings_status_running();
-  }
-
   function stateLabel(state: string): string {
     if (state === "active") return m.settings_embeddings_state_active();
     if (state === "building") return m.settings_embeddings_state_building();
@@ -196,6 +179,7 @@
 </script>
 
 <div class="embeddings-settings">
+  <SearchByMeaningControl {status} onchange={() => void refresh(true).then(schedule)} />
   {#if !loaded}
     <p class="muted">{m.settings_embeddings_loading()}</p>
   {:else if unavailableReason !== null}
@@ -203,61 +187,15 @@
     <p class="muted detail">{unavailableReason}</p>
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
-  {:else if status}
-    <div class="status-grid">
-      {#if status.model}
-        <span class="row-label">{m.settings_embeddings_model_label()}</span>
-        <span class="row-value mono">{status.model}</span>
-      {/if}
-      {#if status.dimension}
-        <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
-        <span class="row-value">{numberFormat.format(status.dimension)}</span>
-      {/if}
-      <span class="row-label">{m.settings_embeddings_status_label()}</span>
-      <span class="row-value">
-        {#if running}
-          <Chip size="xs" tone="warning">{phaseLabel()}</Chip>
-        {:else if status.last_error}
-          <Chip size="xs" tone="danger">
-            {m.settings_embeddings_last_build_failed()}
-          </Chip>
-        {:else}
-          {m.settings_embeddings_status_idle()}
-        {/if}
-      </span>
-    </div>
-
+  {:else if status && status.setup?.enabled !== false && status.setup?.action !== "turn-on" && !status.setup?.busy}
     {#if running}
       {#if phase === "scanning" || status.total <= 0}
-        <p class="muted" aria-live="polite">
+        <p class="muted scanning-hint" aria-live="polite">
           {m.settings_embeddings_scanning_hint()}
         </p>
-      {:else}
+      {:else if (estimateReady && ratePerSecond !== null) || elapsedMs !== null}
         <div class="progress-block" aria-live="polite">
-          <div
-            class="progress-track"
-            role="progressbar"
-            aria-label={m.settings_embeddings_progress_aria()}
-            aria-valuemin={0}
-            aria-valuemax={status.total}
-            aria-valuenow={status.done}
-          >
-            <div
-              class="progress-fill"
-              style:width={`${(progressFraction ?? 0) * 100}%`}
-            ></div>
-          </div>
           <div class="progress-stats">
-            <span>
-              {m.settings_embeddings_progress_chunks({
-                count: status.total,
-                doneLabel: numberFormat.format(status.done),
-                totalLabel: numberFormat.format(status.total),
-              })}
-            </span>
-            {#if progressFraction !== null}
-              <span>{percentFormat.format(progressFraction)}</span>
-            {/if}
             {#if estimateReady && ratePerSecond !== null}
               <span>
                 {m.settings_embeddings_rate({
@@ -273,23 +211,27 @@
                 })}
               </span>
             {/if}
-            {#if estimateReady && etaMs !== null}
-              <span class="eta">
-                {m.settings_embeddings_eta({
-                  duration: formatDurationLocalized(etaMs),
-                })}
-              </span>
-            {:else}
-              <span class="eta muted"
-                >{m.settings_embeddings_eta_estimating()}</span
-              >
-            {/if}
           </div>
         </div>
       {/if}
-    {:else if status.last_error}
+    {/if}
+
+    {#if status.model || status.dimension}
+      <div class="status-grid">
+        {#if status.model}
+          <span class="row-label">{m.settings_embeddings_model_label()}</span>
+          <span class="row-value mono">{status.model}</span>
+        {/if}
+        {#if status.dimension}
+          <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
+          <span class="row-value">{numberFormat.format(status.dimension)}</span>
+        {/if}
+      </div>
+    {/if}
+
+    {#if !running && status.last_error}
       <p class="msg error" role="alert">{status.last_error}</p>
-    {:else if status.last_result}
+    {:else if !running && status.last_result}
       <div class="status-grid">
         <span class="row-label">{m.settings_embeddings_last_build_label()}</span
         >
@@ -397,18 +339,9 @@
     gap: 6px;
   }
 
-  .progress-track {
-    height: 6px;
-    border-radius: 3px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    overflow: hidden;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--accent-blue);
-    transition: width 0.4s ease;
+  .progress-block:not(:first-child),
+  .scanning-hint:not(:first-child) {
+    margin-top: calc(var(--space-3) - var(--space-5));
   }
 
   .progress-stats {
@@ -419,15 +352,8 @@
     color: var(--text-secondary);
   }
 
-  .progress-stats .eta {
-    color: var(--text-primary);
-  }
-
-  .progress-stats .eta.muted {
-    color: var(--text-muted);
-  }
-
   .subsection {
+    margin-top: var(--space-3);
     display: flex;
     flex-direction: column;
     gap: 6px;

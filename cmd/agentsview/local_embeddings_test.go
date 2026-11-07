@@ -64,9 +64,13 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 						"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
 							assert.True(t, installed)
 							dispatched = true
+							w.Header().Set("Content-Type", "application/json")
 							w.WriteHeader(http.StatusAccepted)
+							_, _ = io.WriteString(w, `{"started":true,"build_id":1}`)
 						},
-						"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{"running":false}`) },
+						"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+							_, _ = io.WriteString(w, `{"running":false,"build_id":1,"last_result":{}}`)
+						},
 					})
 				}
 				var out bytes.Buffer

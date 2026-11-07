@@ -130,8 +130,7 @@ type serveOptions struct {
 	BasePath        string
 	Pprof           bool
 	// ReloadConfig rebuilds the configuration with the same layers and flags
-	// as startup so saved provider settings apply without a restart. Nil
-	// leaves the startup provider set in place until the daemon restarts.
+	// as startup so saved provider settings apply without a restart.
 	ReloadConfig func() (config.Config, error)
 }
 
@@ -333,21 +332,17 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 
 	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
 
-	vectorServe, err := setupVectorServing(ctx, cfg, database, idleTracker)
+	vectorServe, err := newLiveVectorServing(ctx, cfg, database, idleTracker, opts.ReloadConfig)
 	if err != nil {
 		fatal("setting up vector index: %v", err)
 	}
-	if vectorServe.Close != nil {
-		defer func() {
-			if cerr := vectorServe.Close(); cerr != nil {
-				log.Printf("close vectors.db: %v", cerr)
-			}
-		}()
-	}
+	defer func() {
+		if cerr := vectorServe.Close(); cerr != nil {
+			log.Printf("close vectors.db: %v", cerr)
+		}
+	}()
 
-	emitter := wrapEmbeddingSyncEmitter(
-		broadcaster, vectorServe, cfg.Vector.Embed.RunAfterSyncEnabled(),
-	)
+	emitter := wrapEmbeddingSyncEmitter(broadcaster, vectorServe.Notify)
 
 	extractSched, err := setupRecallExtraction(ctx, cfg, database, idleTracker)
 	if err != nil {
@@ -358,9 +353,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			extractSched.onBattery = power.OnBattery
 			extractSched.onBatteryMgr = extract.NewReconciler(database)
 		}
-		if vectorServe.RecallMutationNotify != nil {
-			extractSched.onPassFinished = vectorServe.RecallMutationNotify
-		}
+		extractSched.onPassFinished = func() { vectorServe.Notify(true) }
 		emitter = extractTeeEmitter{primary: emitter, scheduler: extractSched}
 	}
 
@@ -619,9 +612,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		srvOpts = append(srvOpts, server.WithBasePath(rtOpts.BasePath))
 	}
 	srvOpts = append(srvOpts, pushBackendOptions()...)
-	srvOpts = append(srvOpts, vectorServe.ServerOpts...)
-	if src := newVectorPushSource(cfg); src != nil {
-		srvOpts = append(srvOpts, server.WithVectorPushSource(src))
+	if !cfg.ArchiveContent.UsageOnly() && !database.ArchiveContent().UsageOnly() {
+		srvOpts = append(srvOpts, vectorServe.ServerOptions()...)
 	}
 	if extractSched != nil {
 		// Trash, restore, and permanent-delete routes change extraction
@@ -765,20 +757,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 
 	startTelemetryPings(ctx, telemetryReporter, cfg)
 	defer startSetupTelemetry(ctx, telemetryReporter, cfg, database, broadcaster)()
-
-	if vectorServe.Scheduler != nil {
-		vectorServe.Scheduler.onBattery = power.OnBattery
-		go vectorServe.Scheduler.Run(ctx)
-		// Registered after the vectors.db Close defer above, so LIFO
-		// unwind order runs Stop (which waits for any in-flight
-		// TryBuild to return) before vectors.db is closed.
-		defer vectorServe.Scheduler.Stop()
-	}
-	if vectorServe.RecallScheduler != nil {
-		vectorServe.RecallScheduler.onBattery = power.OnBattery
-		go vectorServe.RecallScheduler.Run(ctx)
-		defer vectorServe.RecallScheduler.Stop()
-	}
 
 	if extractSched != nil {
 		go extractSched.Run(ctx)

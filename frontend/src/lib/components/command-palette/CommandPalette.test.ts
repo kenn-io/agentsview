@@ -755,6 +755,40 @@ describe("CommandPalette", () => {
 
   it.each([
     [
+      "while it is off",
+      { enabled: true, provider: "built-in", missing_bytes: 295000000, busy: false },
+      true,
+    ],
+    [
+      "not while Turn on runs",
+      { enabled: false, provider: "", missing_bytes: 0, busy: true },
+      false,
+    ],
+  ] as const)(
+    "fetches setup once across keyword queries and shows the footer hint %s",
+    async (_name, setup, shown) => {
+      mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+        running: false,
+        done: 0,
+        total: 0,
+        eta_milliseconds: 0,
+        setup: { ...setup, action: "turn-on", installing: false },
+      });
+      const component = mount(CommandPalette, { target: document.body });
+      await enterSearchQuery();
+      for (let i = 0; i < 10; i++) await tick();
+      expect(document.body.textContent?.includes("Search by meaning is off")).toBe(shown);
+      await enterSearchQuery("another query");
+      for (let i = 0; i < 10; i++) await tick();
+      if (shown) {
+        expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);
+      }
+      unmount(component);
+    },
+  );
+
+  it.each([
+    [
       "Build",
       () =>
         mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({

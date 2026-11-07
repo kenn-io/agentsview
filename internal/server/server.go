@@ -184,22 +184,14 @@ type Server struct {
 	// default; enabled by the hidden serve --pprof flag.
 	pprofEnabled bool
 
-	// embeddingsManager, when set, backs the /api/v1/embeddings/...
-	// build lifecycle routes. Nil (the default) leaves those routes
-	// unregistered, e.g. when semantic search is not configured.
-	embeddingsManager EmbeddingsManager
-	embeddingsStores  map[string]EmbeddingsManager
+	// embeddingsRuntime coordinates live setup and access to embedding managers.
+	embeddingsRuntime EmbeddingsRuntime
 
 	// embeddingsUnavailableReason, when non-empty, replaces the generic
 	// "embeddings manager not available" 501 message on the embeddings
 	// routes with a cause-specific one (e.g. vector serving disabled at
 	// startup because vectors.write.lock was held).
 	embeddingsUnavailableReason string
-
-	// embeddingsIncludeAutomatedDefault is the daemon's configured
-	// [vector].include_automated scope, applied to HTTP build requests
-	// that leave include_automated unset.
-	embeddingsIncludeAutomatedDefault bool
 
 	// vectorPushSource, when set, supplies the local vectors.db active
 	// generation to the daemon's pg push handler. Nil leaves the vector

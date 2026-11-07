@@ -10,6 +10,43 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
+// EmbeddingsRuntime owns the writable daemon's live vector setup.
+type EmbeddingsRuntime interface {
+	Manager(store string) EmbeddingsManager
+	IncludeAutomated() bool
+	SetupStatus(context.Context) (EmbeddingsSetupStatus, error)
+	// Setup approves at most approvedBytes of download, the size the user saw.
+	Setup(approvedBytes int64) error
+}
+
+type EmbeddingsSetupStatus = vector.SetupStatus
+
+func WithEmbeddingsRuntime(runtime EmbeddingsRuntime) Option {
+	return func(s *Server) { s.embeddingsRuntime = runtime }
+}
+
+type embeddingsSetupInput struct {
+	Body struct {
+		ApprovedBytes int64 `json:"approved_bytes,omitempty" minimum:"0" doc:"Download size the user saw; a larger download is declined"`
+	}
+}
+
+func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput) (*embeddingsBuildOutput, error) {
+	if s.embeddingsRuntime == nil {
+		return nil, s.embeddingsUnavailableError()
+	}
+	if err := s.embeddingsRuntime.Setup(in.Body.ApprovedBytes); err != nil {
+		if errors.Is(err, vector.ErrBuildRunning) {
+			return nil, embeddingsActionError(err)
+		}
+		if errors.Is(err, vector.ErrInvalidBuildRequest) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		}
+		return nil, internalError("set up embeddings", err)
+	}
+	return &embeddingsBuildOutput{Status: http.StatusAccepted, Body: embeddingsBuildResponse{Started: true}}, nil
+}
+
 // EmbeddingsManager is the subset of *vector.Manager's API the embeddings
 // build lifecycle routes need. Declaring it here (rather than depending on
 // *vector.Manager directly) lets tests substitute a fake. TryBuild is
@@ -24,24 +61,6 @@ type EmbeddingsManager interface {
 	Retire(ctx context.Context, id int64, force bool) error
 }
 
-// WithEmbeddingsManager wires the implementation behind the embeddings build
-// lifecycle routes (/api/v1/embeddings/...). The routes are registered even
-// when no manager is present so OpenAPI and generated clients expose the full
-// API surface; handlers return 501 until vector serving is configured.
-func WithEmbeddingsManager(m EmbeddingsManager) Option {
-	return func(s *Server) { s.embeddingsManager = m }
-}
-
-// WithEmbeddingsStoreManager registers a non-default embedding store manager.
-func WithEmbeddingsStoreManager(name string, m EmbeddingsManager) Option {
-	return func(s *Server) {
-		if s.embeddingsStores == nil {
-			s.embeddingsStores = make(map[string]EmbeddingsManager)
-		}
-		s.embeddingsStores[name] = m
-	}
-}
-
 // WithEmbeddingsUnavailableReason records why the embeddings routes are
 // unavailable, so their 501 responses carry an actionable message instead of
 // the generic "embeddings manager not available" — e.g. when the daemon
@@ -49,15 +68,6 @@ func WithEmbeddingsStoreManager(name string, m EmbeddingsManager) Option {
 // vectors.write.lock.
 func WithEmbeddingsUnavailableReason(reason string) Option {
 	return func(s *Server) { s.embeddingsUnavailableReason = reason }
-}
-
-// WithEmbeddingsIncludeAutomatedDefault records the daemon's configured
-// [vector].include_automated scope, applied to build requests that leave
-// include_automated unset. Scheduler and CLI builds resolve the same config
-// value themselves; without this, an HTTP build request omitting the field
-// would silently build with include_automated=false regardless of config.
-func WithEmbeddingsIncludeAutomatedDefault(includeAutomated bool) Option {
-	return func(s *Server) { s.embeddingsIncludeAutomatedDefault = includeAutomated }
 }
 
 // embeddingsUnavailableError is the 501 every embeddings route returns while
@@ -73,6 +83,7 @@ func (s *Server) embeddingsUnavailableError() error {
 func (s *Server) registerEmbeddingsRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/embeddings")
 	configureRouteGroup(group, "Embeddings")
+	registerRoute(group, http.MethodPost, "/setup", "Set up search by meaning", s.humaEmbeddingsSetup, s.humaTimeout(), func(op *huma.Operation) { op.DefaultStatus = http.StatusAccepted })
 
 	registerRoute(group, http.MethodPost, "/build", "Start an embeddings build", s.humaEmbeddingsBuild,
 		s.humaTimeout(), func(op *huma.Operation) { op.DefaultStatus = http.StatusAccepted })
@@ -130,10 +141,10 @@ type embeddingsGenerationActionInput struct {
 }
 
 func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
-	if store == "" || store == vector.MessageIndexSpec().Name {
-		return s.embeddingsManager
+	if s.embeddingsRuntime == nil {
+		return nil
 	}
-	return s.embeddingsStores[store]
+	return s.embeddingsRuntime.Manager(store)
 }
 
 func (s *Server) humaEmbeddingsBuild(
@@ -143,7 +154,7 @@ func (s *Server) humaEmbeddingsBuild(
 	if manager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	includeAutomated := s.embeddingsIncludeAutomatedDefault
+	includeAutomated := s.embeddingsRuntime.IncludeAutomated()
 	if in.Body.IncludeAutomated != nil {
 		includeAutomated = *in.Body.IncludeAutomated
 	}
@@ -184,14 +195,28 @@ func (s *Server) humaEmbeddingsBuild(
 	}, nil
 }
 
-func (s *Server) humaEmbeddingsStatus(
-	_ context.Context, in *embeddingsStoreInput,
-) (*jsonOutput[vector.BuildStatus], error) {
+func (s *Server) humaEmbeddingsStatus(ctx context.Context, in *embeddingsStoreInput) (*jsonOutput[vector.BuildStatus], error) {
+	var setup *EmbeddingsSetupStatus
+	if s.embeddingsRuntime != nil {
+		status, err := s.embeddingsRuntime.SetupStatus(ctx)
+		if err != nil {
+			status.Error = err.Error()
+		}
+		setup = &status
+		if !status.Enabled {
+			return &jsonOutput[vector.BuildStatus]{Body: vector.BuildStatus{Setup: setup}}, nil
+		}
+	}
 	manager := s.embeddingsManagerFor(in.Store)
 	if manager == nil {
+		if setup != nil && setup.Action != "" {
+			return &jsonOutput[vector.BuildStatus]{Body: vector.BuildStatus{Setup: setup}}, nil
+		}
 		return nil, s.embeddingsUnavailableError()
 	}
-	return &jsonOutput[vector.BuildStatus]{Body: manager.Status()}, nil
+	body := manager.Status()
+	body.Setup = setup
+	return &jsonOutput[vector.BuildStatus]{Body: body}, nil
 }
 
 func (s *Server) humaEmbeddingsGenerations(

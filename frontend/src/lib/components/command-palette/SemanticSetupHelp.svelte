@@ -27,9 +27,12 @@
   import { onMount } from "svelte";
   import { Button, CopyButton, Spinner } from "@kenn-io/kit-ui";
   import { getLocale, m } from "../../i18n/index.js";
-  import { EmbeddingsService } from "../../api/generated/index.js";
+  import { EmbeddingsService, type VectorBuildStatus } from "../../api/generated/index.js";
   import { ApiError, isAbortError } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
+
+  let setupStatus = $state<VectorBuildStatus | null>(null);
 
   interface Props {
     // Called when a build finishes successfully so the caller can re-run
@@ -88,22 +91,12 @@ enabled = true`;
   // by starting a new build; re-probing would just re-read the same persisted
   // last_error. Transport/API failures from the status calls retry by probing.
   let retryAction = $state<"probe" | "build">("probe");
-  let buildDone = $state(0);
-  let buildTotal = $state(0);
-  let scanning = $state(true);
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
   let copiedConfig = $state(false);
   let copiedCommand = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const percentFormat = $derived(
-    new Intl.NumberFormat(getLocale(), {
-      style: "percent",
-      maximumFractionDigits: 0,
-    }),
-  );
 
   onMount(() => {
     void probe();
@@ -118,8 +111,11 @@ enabled = true`;
     try {
       const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
-      if (status.running) {
-        applyProgress(status.phase, status.done, status.total);
+      setupStatus = status;
+      if (!status.running && status.setup && (status.setup.action === "turn-on" || !status.setup.enabled || status.setup.busy || status.setup.installing || status.setup.error)) {
+        phase = "unconfigured";
+        if (status.setup.busy || status.setup.installing) schedulePoll();
+      } else if (status.running) {
         phase = "building";
         schedulePoll();
       } else if (status.last_error) {
@@ -161,9 +157,6 @@ enabled = true`;
 
   async function startBuild(): Promise<void> {
     phase = "building";
-    scanning = true;
-    buildDone = 0;
-    buildTotal = 0;
     try {
       await EmbeddingsService.postApiV1EmbeddingsBuild({});
     } catch (e) {
@@ -187,11 +180,12 @@ enabled = true`;
   }
 
   async function poll(): Promise<void> {
+    if (setupStatus?.setup && (!setupStatus.setup.enabled || setupStatus.setup.busy || setupStatus.setup.installing)) { await probe(); return; }
     try {
       const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
+      setupStatus = status;
       if (status.running) {
-        applyProgress(status.phase, status.done, status.total);
         schedulePoll();
         return;
       }
@@ -211,16 +205,6 @@ enabled = true`;
     }
   }
 
-  function applyProgress(
-    buildPhase: string | undefined,
-    done: number,
-    total: number,
-  ): void {
-    scanning = buildPhase === "scanning" || total <= 0;
-    buildDone = done;
-    buildTotal = total;
-  }
-
   async function copy(text: string, which: "config" | "command"): Promise<void> {
     const ok = await copyToClipboard(text);
     if (!ok || disposed) return;
@@ -235,11 +219,14 @@ enabled = true`;
 </script>
 
 <div class="semantic-setup" role="alert">
+  {#if setupStatus?.setup}
+    <SearchByMeaningControl status={setupStatus} onchange={() => void probe()} />
+  {/if}
   {#if phase === "probing"}
     <div class="setup-row centered">
       <Spinner size={13} />
     </div>
-  {:else if phase === "unconfigured"}
+  {:else if phase === "unconfigured" && !setupStatus?.setup}
     <strong>{m.command_palette_semantic_setup_title()}</strong>
     <span class="setup-text">{m.command_palette_semantic_setup_config_step()}</span>
     <div class="setup-snippet">
@@ -291,24 +278,7 @@ enabled = true`;
       />
     </div>
     <span class="setup-hint">{m.command_palette_semantic_build_hint()}</span>
-  {:else if phase === "building"}
-    <div class="setup-row centered">
-      <Spinner size={13} />
-      <strong>{m.command_palette_semantic_building_title()}</strong>
-    </div>
-    <span class="setup-text" aria-live="polite">
-      {#if scanning}
-        {m.command_palette_semantic_building_scanning()}
-      {:else}
-        {m.command_palette_semantic_building_progress({
-          percentLabel: percentFormat.format(
-            buildTotal > 0 ? Math.min(1, buildDone / buildTotal) : 0,
-          ),
-        })}
-      {/if}
-    </span>
-    <span class="setup-hint">{m.command_palette_semantic_build_hint()}</span>
-  {:else}
+  {:else if phase === "failed"}
     <strong>{m.command_palette_semantic_failed_title()}</strong>
     {#if detail}
       <span class="setup-text">{detail}</span>

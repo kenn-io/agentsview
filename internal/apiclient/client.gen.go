@@ -30623,6 +30623,22 @@ type VectorRepairStats struct {
 	Scanned        bool  `json:"scanned"`
 }
 
+type VectorSetupStatus struct {
+	Action          string  `json:"action" validate:"required"`
+	Busy            bool    `json:"busy"`
+	DownloadedBytes int64   `json:"downloaded_bytes"`
+	Enabled         bool    `json:"enabled"`
+	ErrorData       *string `json:"error,omitempty"`
+	Installing      bool    `json:"installing"`
+	MissingBytes    int64   `json:"missing_bytes"`
+	Provider        string  `json:"provider" validate:"required"`
+	TotalBytes      int64   `json:"total_bytes"`
+}
+
+func (v VectorSetupStatus) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(v))
+}
+
 type VersionInfo struct {
 	APIVersion                 int64  `json:"api_version"`
 	ArchiveOnly                *bool  `json:"archive_only,omitempty"`

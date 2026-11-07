@@ -65,10 +65,11 @@ func closeVectorPushSource(src storage.VectorPushSource) {
 // call — a daemon push that starts before embeddings exist — reopens and picks
 // up a build that lands afterward. A nil index without error means the file is
 // absent ("nothing to push"); the pointer's own nil checks gate every
-// dereference.
+// dereference. The caller must hold s.mu.
 func (s *vectorPushSource) openIndex(ctx context.Context) (*vector.Index, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if !s.cfg.Vector.Enabled {
+		return nil, nil
+	}
 	if s.ix != nil {
 		return s.ix, nil
 	}
@@ -101,9 +102,27 @@ func (s *vectorPushSource) Close() error {
 	return err
 }
 
+// reconfigure points later exports at cfg's vectors.db by dropping the
+// memoized handle. BeginExport holds s.mu until its snapshot exists; an export
+// already running keeps its own read transaction.
+func (s *vectorPushSource) reconfigure(cfg config.Config) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg = cfg
+	if s.ix == nil {
+		return
+	}
+	if err := s.ix.Close(); err != nil {
+		log.Printf("closing vectors.db push source: %v", err)
+	}
+	s.ix = nil
+}
+
 func (s *vectorPushSource) BeginExport(
 	ctx context.Context, sessionIDs []string,
 ) (storage.VectorExport, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	ix, err := s.openIndex(ctx)
 	if err != nil || ix == nil {
 		return nil, false, err
@@ -130,7 +149,7 @@ func (s *vectorPushSource) BeginExport(
 
 // configuredGeneration is the generation the configured recipe builds. It
 // carries the recipe for publication unless the recipe was adopted from the
-// replica.
+// replica. Callers hold s.mu when the source can be reconfigured.
 func (s *vectorPushSource) configuredGeneration() storage.VectorGenerationInfo {
 	gen := vectorGeneration(s.cfg.Vector.Embeddings)
 	info := storage.VectorGenerationInfo{
