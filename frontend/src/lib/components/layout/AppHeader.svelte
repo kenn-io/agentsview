@@ -54,6 +54,10 @@
   const modKey = isMac ? "⌘" : "Ctrl";
 
   let showImportModal = $state(false);
+  const syncingLabel = () =>
+    claudeAISync.provider === "chatgpt"
+      ? m.header_actions_import_chatgpt_syncing()
+      : m.header_actions_import_claude_syncing();
   let showBlockFilter = $state(false);
   let showExportMenu = $state(false);
   let showPublishMenu = $state(false);
@@ -678,9 +682,9 @@
         : sync.readOnly
         ? m.header_actions_import_unavailable()
         : claudeAISync.running
-        ? m.header_actions_import_claude_syncing()
+        ? syncingLabel()
         : m.header_actions_import_conversations()}
-      aria-label={claudeAISync.running ? m.header_actions_import_claude_syncing() : m.header_actions_import_conversations()}
+      aria-label={claudeAISync.running ? syncingLabel() : m.header_actions_import_conversations()}
     >
       {#if claudeAISync.running}
         <span class="sync-spinner" aria-hidden="true"><Spinner size={12} /></span>

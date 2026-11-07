@@ -1,15 +1,18 @@
 // worker.js injects this file, then calls claudeFetch from a second script.
-globalThis.claudeFetch = async function claudeFetch(url) {
+// A request body turns the request into a POST; only gemini_fetch.js sends one.
+globalThis.claudeFetch = async function claudeFetch(url, headers, requestBody) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
     const response = await fetch(url, {
-      method: "GET",
+      method: requestBody === undefined ? "GET" : "POST",
+      body: requestBody,
       credentials: "include",
       redirect: "error",
+      headers,
       signal: controller.signal,
     });
-    const limit = 32 * 1024 * 1024; // Matches importer.ClaudeAIResponseLimit.
+    const limit = 32 * 1024 * 1024; // Browser sync caps each response at 32 MiB.
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
     let size = 0;
