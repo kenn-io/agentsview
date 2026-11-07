@@ -288,12 +288,15 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, setup.Error)
 	require.Empty(t, setup.Action)
+	// An empty build can activate before setup returns; inspect its completed export.
+	owner.serving.manager.Wait()
 	next, ok, err := owner.push.BeginExport(t.Context(), nil)
 	require.NoError(t, err)
-	if ok {
-		defer next.Close()
-	}
-	assert.False(t, ok, "the reloaded database path has no active generation")
+	require.True(t, ok, "the empty build must publish an exportable generation")
+	defer func() { require.NoError(t, next.Close()) }()
+	hashes, err = next.SessionDocHashes(t.Context(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, hashes, "the reloaded index must not export the previous index's sessions")
 }
 
 func TestLiveEmbeddingsSetupProgress(t *testing.T) {
