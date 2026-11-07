@@ -646,6 +646,42 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 			assert.Zero(t, stale, "every daily rollup must use the refreshed price")
 		})
 	}
+
+	t.Run("commit-during-last-batch", func(t *testing.T) {
+		database := testDB(t)
+		const sessionCount = usageCacheBackfillBatchSize + 1
+		seedUsageBatchSessions(t, database, sessionCount,
+			time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+		setUsageModelPrice(t, database, "model", 1_000_000)
+		snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+		require.NoError(t, err)
+		cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+		require.NoError(t, err)
+
+		var changed atomic.Bool
+		cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+			for _, build := range builds {
+				// The oldest session is alone in the final, newest-first batch.
+				if build.SessionID == "batch-000" && changed.CompareAndSwap(false, true) {
+					setUsageModelPrice(t, database, "model", 2_000_000)
+				}
+			}
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		t.Cleanup(database.StopUsageCacheBackfill)
+		require.NoError(t, database.StartUsageCacheBackfill(ctx))
+		require.NoError(t, database.WaitUsageCacheBackfill(ctx))
+		require.True(t, changed.Load(), "commit the new price during the last batch")
+
+		// Read persisted rows directly so a foreground read cannot repair stale prices.
+		var rows, stale int
+		require.NoError(t, cache.db.QueryRowContext(ctx, `SELECT count(*),
+			count(CASE WHEN estimated_cost_microdollars != 2 THEN 1 END)
+			FROM usage_daily_rollups`).Scan(&rows, &stale))
+		assert.Equal(t, sessionCount, rows)
+		assert.Zero(t, stale, "the final pricing check must restart with the committed price")
+	})
 }
 
 func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
