@@ -1,6 +1,7 @@
 ---
 title: Remote Access
 description: Access AgentsView from other devices on your network
+last_edited: 2026-11-06
 ---
 
 AgentsView binds to `127.0.0.1` by default, so only your local machine can reach
@@ -85,6 +86,70 @@ load the HTML shell, but API requests fail with `401` until the correct token is
 supplied.
 
 When `require_auth` is disabled, normal local loopback use remains ungated.
+
+## Push one archived session
+
+On current `main`, an explicit push can copy one normalized session to another
+instance. The receiver must run normal writable SQLite `serve`. PostgreSQL,
+DuckDB and ClickHouse read servers cannot accept these pushes.
+
+On the receiver, set both operator settings and restart the daemon:
+
+```toml
+require_auth = true
+accept_session_push = true # off by default
+```
+
+On the sender, supply the receiver's bearer token through an environment
+variable or a token file, then select the exact archive ID:
+
+```bash
+agentsview push codex:example --agent codex \
+  --to https://agents.example.com --token-env TEAM_TOKEN --json
+agentsview push example --agent claude \
+  --to https://agents.example.com --token-file /path/to/token --json
+```
+
+The default token variable is `AGENTSVIEW_PUSH_TOKEN`. Tokens cannot be passed
+as literal command arguments. The destination must use HTTPS, except for
+loopback development receivers, and redirects are rejected. A URL mount prefix
+is supported, for example `https://agents.example.com/view`.
+
+Use the canonical stored ID: `codex:<ID>` for Codex, `pi:<ID>` for Pi, and the
+unprefixed ID for Claude. `--agent` verifies the selected row; it does not
+resolve a native ID or search for another session. Missing sessions fail
+without syncing or reading provider files. The sender reads only its local
+SQLite archive, selected by `AGENTSVIEW_DATA_DIR` or the usual home directory.
+
+Only the selected session's normalized messages, tool calls and results, and
+usage data leave the archive. Parent and child references remain references;
+their sessions are never loaded. There is no raw-file, asset, checkpoint,
+archive-wide metadata or embedding transfer. Text and paths already present in
+the selected transcript are included. Receiver content and image policies
+still apply. Usage-only archives cannot send or receive transcript pushes.
+
+The first accepted snapshot is immutable in this version. Retrying it returns
+`"status":"unchanged"` without rewriting the receiver's session or curation.
+A changed snapshot or an existing session with the same ID returns a conflict;
+there is no force replacement. Finish recording a session before pushing it.
+Ordinary source ingestion cannot replace a pushed snapshot. Rebuilds reserve
+its ID before parsing and preserve the archived transcript with its receipt.
+References in a pushed transcript do not grant writes to other sessions.
+Successful JSON output contains `session_id`, `agent`, and `status` (`created`
+or `unchanged`). Failures return nonzero and leave stdout empty.
+
+The authenticated endpoint is `POST /api/v1/sessions/ingest`. It accepts only
+versioned, uncompressed JSON up to 64 MiB, including escaping overhead, with
+the artifact format's additional collection limits. Oversize or malformed
+input fails before insertion; sessions are never truncated to fit.
+Push metadata allows at most 256 PR links. JSON collections inside tool-result
+text are also bounded before image processing: at most 4,096 array entries and
+256 fields per object. Large structured results can exceed these limits even
+when the envelope is under 64 MiB.
+
+Use the normal bearer-authenticated listener. The optional restricted signed
+listener does not permit session ingest; configuring a request-signing key
+does not grant that permission or widen its 4 MiB request limit.
 
 ## HTTP Remote Sync
 

@@ -118,14 +118,15 @@ type SyncStats struct {
 	// SQLite virtual paths). The resync empty-discovery guard uses it so a
 	// container store's discovery does not mask the disappearance of plain
 	// file-backed sessions whose directories went empty.
-	nonContainerDiscovered int
-	messagesIndexed        int // unexported: progress message counter
-	parserExcludedFiles    int // file-level intentional parser exclusions
-	parserExcludedIDs      []string
-	providerFailures       int // authoritative discoveries that did not complete
-	deferredRetryPaths     []string
-	deferredRetryOverflow  bool
-	deferredPreservedIDs   []string
+	nonContainerDiscovered   int
+	messagesIndexed          int // unexported: progress message counter
+	parserExcludedFiles      int // file-level intentional parser exclusions
+	sessionPushReservedFiles int // source files fenced by immutable pushed snapshots
+	parserExcludedIDs        []string
+	providerFailures         int // authoritative discoveries that did not complete
+	deferredRetryPaths       []string
+	deferredRetryOverflow    bool
+	deferredPreservedIDs     []string
 	// preservedRetryFailures counts the Failed entries that are preserved
 	// Antigravity CLI fallbacks, whose saved rows a rebuild restores.
 	preservedRetryFailures int
