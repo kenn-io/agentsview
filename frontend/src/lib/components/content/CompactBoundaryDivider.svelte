@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Disclosure } from "@kenn-io/kit-ui";
   import type { DbMessage as Message } from "../../api/generated/index.js";
   import { formatTimestamp } from "../../utils/format.js";
   import { RefreshCwIcon } from "../../icons.js";
@@ -38,13 +39,13 @@
 </div>
 {#if preview}
   {#if hasMore}
-    <details class="boundary-details">
-      <summary class="boundary-preview">
-        <span>{preview}</span>
-        <span class="boundary-expand-hint">{m.compact_boundary_show_full_summary()}</span>
-      </summary>
+    <Disclosure variant="plain" class="boundary-details">
+      {#snippet summary()}
+        <span class="boundary-summary">{preview}</span>
+      {/snippet}
+      {#snippet meta()}{m.compact_boundary_show_full_summary()}{/snippet}
       <pre class="boundary-full">{content}</pre>
-    </details>
+    </Disclosure>
   {:else}
     <div class="boundary-preview">{preview}</div>
   {/if}
@@ -85,10 +86,8 @@
     text-transform: none;
     letter-spacing: 0;
   }
-  .boundary-details {
-    margin: 4px 12px 6px;
-  }
-  .boundary-preview {
+  .boundary-preview,
+  :global(.boundary-details) {
     margin: 4px 12px 6px;
     padding: 6px 10px;
     background: color-mix(
@@ -102,23 +101,14 @@
     border-radius: 0 var(--radius-sm, 4px)
       var(--radius-sm, 4px) 0;
   }
-  .boundary-details > .boundary-preview {
-    margin: 0;
-    cursor: pointer;
-    list-style: none;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
+  /* The shared summary row adds 4px above and below, so the card keeps
+     the short preview's height. */
+  :global(.boundary-details) {
+    padding-block: 2px;
   }
-  .boundary-details > .boundary-preview::-webkit-details-marker {
-    display: none;
-  }
-  .boundary-expand-hint {
-    flex: none;
-    font-size: 11px;
-    color: var(--text-muted);
-    white-space: nowrap;
+  .boundary-summary {
+    color: var(--text-secondary);
+    font-weight: 400;
   }
   .boundary-full {
     white-space: pre-wrap;

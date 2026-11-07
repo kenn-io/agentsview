@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Disclosure } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { formatTimestamp } from "../../utils/format.js";
 
@@ -40,10 +41,12 @@
     </span>
   {/if}
   {#if preview}
-    <details class="details">
-      <summary>{m.system_boundary_show_content()}</summary>
+    <Disclosure variant="plain">
+      {#snippet summary()}
+        <span class="show-content">{m.system_boundary_show_content()}</span>
+      {/snippet}
       <pre>{content}</pre>
-    </details>
+    </Disclosure>
   {/if}
 </div>
 
@@ -74,15 +77,12 @@
     font-size: 11px;
     color: var(--text-muted);
   }
-  .details {
-    margin-top: 2px;
-  }
-  .details summary {
-    cursor: pointer;
+  .show-content {
     font-size: 11px;
+    font-weight: 400;
     color: var(--text-muted);
   }
-  .details pre {
+  pre {
     white-space: pre-wrap;
     margin: 6px 0 0;
     padding: 8px 10px;
