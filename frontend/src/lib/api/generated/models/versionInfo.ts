@@ -9,6 +9,7 @@ export interface VersionInfo {
   commit: string;
   data_version: number;
   docbank_enabled?: boolean;
+  friction_auto_file?: boolean;
   friction_available: boolean;
   friction_build_allowed: boolean;
   friction_readable?: boolean;

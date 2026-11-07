@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/service"
@@ -419,6 +420,21 @@ func printFrictionFindings(w io.Writer, page *service.FrictionFindingPage) error
 	return nil
 }
 
+// frictionFilingLabel says why automatic filing has not linked a pattern.
+// A pause only records that a person unlinked the pattern, which matters
+// only where automatic filing runs, so the table leaves it out; --json
+// keeps it.
+func frictionFilingLabel(state string) string {
+	switch state {
+	case db.FrictionFilingNeedsPerson:
+		return "(file or link)"
+	case db.FrictionFilingPaused:
+		return "-"
+	default:
+		return "(" + state + ")"
+	}
+}
+
 func printFrictionPatterns(w io.Writer, page *service.FrictionPatternPage) error {
 	if len(page.Patterns) == 0 {
 		_, err := fmt.Fprintln(w, "(no friction patterns)")
@@ -428,8 +444,11 @@ func printFrictionPatterns(w io.Writer, page *service.FrictionPatternPage) error
 	_, _ = fmt.Fprintln(tw, "COUNT\tSESSIONS\tLAST SEEN\tKIND\tFINGERPRINT\tISSUE\tTITLE")
 	for _, p := range page.Patterns {
 		issue := "-"
-		if p.Issue != nil {
+		switch {
+		case p.Issue != nil:
 			issue = p.Issue.QualifiedID
+		case p.Filing != nil:
+			issue = frictionFilingLabel(p.Filing.State)
 		}
 		_, _ = fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\t%s\t%s\n", p.OccurrenceCount, p.SessionCount,
 			sanitizeTerminal(p.LastSeenDate), sanitizeTerminal(p.Kind),

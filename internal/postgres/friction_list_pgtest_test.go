@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -93,7 +94,7 @@ func seedFrictionPG(t *testing.T, store *Store) {
 	t.Helper()
 	pg := store.DB()
 	ctx := t.Context()
-	for _, table := range []string{"friction_findings", "friction_digest_sessions", "friction_patterns", "friction_digests", "friction_issue_links"} {
+	for _, table := range []string{"friction_findings", "friction_digest_sessions", "friction_patterns", "friction_digests", "friction_issue_links", "friction_filing_state"} {
 		_, err := pg.ExecContext(ctx, "DELETE FROM "+table)
 		require.NoError(t, err, table)
 	}
@@ -192,6 +193,13 @@ func TestFrictionListParity(t *testing.T) {
 	store.DetectFrictionAvailability(ctx)
 	assert.True(t, store.FrictionIssueLinksWritable())
 	require.NoError(t, store.SaveFrictionIssueLink(ctx, link))
+	failed, next := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC), time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+	retry := db.FrictionFilingState{
+		Fingerprint: "fl1:ccc", State: db.FrictionFilingRetry, Attempts: 1,
+		FirstFailedAt: &failed, NextAttemptAt: &next, LastError: "kata: HTTP 503", UpdatedAt: failed,
+	}
+	require.NoError(t, local.SaveFrictionFilingState(ctx, retry))
+	require.NoError(t, store.SaveFrictionFilingState(ctx, retry))
 
 	patternFilters := map[string]db.FrictionPatternFilter{
 		"all":             {},
@@ -200,6 +208,7 @@ func TestFrictionListParity(t *testing.T) {
 		"page":            {Limit: 1},
 		"fingerprints":    {Fingerprints: []string{"fl1:ccc", "fl1:aaa", "fl1:missing"}},
 		"no_fingerprints": {Fingerprints: []string{}},
+		"min_sessions":    {MinSessions: 2},
 	}
 	for name, f := range patternFilters {
 		t.Run("patterns_"+name, func(t *testing.T) {
@@ -252,10 +261,81 @@ func TestFrictionListParity(t *testing.T) {
 			require.NoError(t, err, name)
 		}
 	})
+
+	t.Run("automatic_writes_keep_what_a_person_did", func(t *testing.T) {
+		auto := link
+		auto.Fingerprint, auto.Source = "fl1:bbb", db.FrictionIssueSourceCreated
+		failed := db.FrictionFilingState{
+			Fingerprint: "fl1:bbb", State: db.FrictionFilingRetry, Attempts: 1, UpdatedAt: link.LinkedAt,
+		}
+		for name, s := range map[string]interface {
+			db.FrictionReader
+			db.FrictionIssueLinkWriter
+		}{"sqlite": local, "postgres": store} {
+			require.NoError(t, s.SaveFrictionIssueLink(ctx, auto), name)
+			removed, err := s.DeleteFrictionIssueLink(ctx, "fl1:bbb")
+			require.NoError(t, err, name)
+			require.True(t, removed, name)
+			rows, _, err := s.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Fingerprints: []string{"fl1:bbb"}})
+			require.NoError(t, err, name)
+			require.NotNil(t, rows[0].Filing, name)
+			assert.Equal(t, db.FrictionFilingPaused, rows[0].Filing.State, "%s: unlinking pauses", name)
+
+			_, linked, err := s.AddFrictionIssueLinkUnlessPaused(ctx, auto)
+			require.NoError(t, err, name)
+			assert.False(t, linked, "%s: automatic filing leaves a paused pattern unlinked", name)
+			require.NoError(t, s.SaveFrictionFilingState(ctx, failed), name)
+			rows, _, err = s.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Fingerprints: []string{"fl1:bbb"}})
+			require.NoError(t, err, name)
+			assert.Nil(t, rows[0].Issue, name)
+			assert.Equal(t, db.FrictionFilingPaused, rows[0].Filing.State, "%s: a failure does not replace the pause", name)
+
+			_, err = s.AddFrictionIssueLink(ctx, auto)
+			require.NoError(t, err, name)
+			require.NoError(t, s.SaveFrictionFilingState(ctx, failed), name)
+			rows, _, err = s.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Fingerprints: []string{"fl1:bbb"}})
+			require.NoError(t, err, name)
+			assert.NotNil(t, rows[0].Issue, "%s: filing by hand resumes", name)
+			assert.Nil(t, rows[0].Filing, "%s: no failure state beside a link", name)
+			_, err = s.DeleteFrictionIssueLink(ctx, "fl1:bbb")
+			require.NoError(t, err, name)
+		}
+	})
+
+	t.Run("retry_filter", func(t *testing.T) {
+		f := db.FrictionPatternFilter{FilingState: db.FrictionFilingRetry}
+		want, _, err := local.ListFrictionPatterns(ctx, f)
+		require.NoError(t, err)
+		got, _, err := store.ListFrictionPatterns(ctx, f)
+		require.NoError(t, err)
+		require.Len(t, want, 1)
+		assert.Equal(t, "fl1:ccc", want[0].Fingerprint)
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("linking_clears_filing_state", func(t *testing.T) {
+		ccc := link
+		ccc.Fingerprint = "fl1:ccc"
+		for name, s := range map[string]interface {
+			db.FrictionReader
+			db.FrictionIssueLinkWriter
+		}{"sqlite": local, "postgres": store} {
+			rows, _, err := s.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Fingerprints: []string{"fl1:ccc"}})
+			require.NoError(t, err, name)
+			require.Len(t, rows, 1, name)
+			assert.Equal(t, &retry, rows[0].Filing, name)
+
+			require.NoError(t, s.SaveFrictionIssueLink(ctx, ccc), name)
+			rows, _, err = s.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Fingerprints: []string{"fl1:ccc"}})
+			require.NoError(t, err, name)
+			assert.Equal(t, &ccc, rows[0].Issue, name)
+			assert.Nil(t, rows[0].Filing, name)
+		}
+	})
 }
 
-// A read-only serve role cannot add friction_issue_links to a schema that
-// predates it; pattern reads must still work and show no links.
+// A read-only serve role cannot add the Kata link and filing-state tables
+// to a schema that predates them; pattern reads must still work.
 func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
 	const schema = "agentsview_friction_nolinks_test"
 	pgURL := testPGURL(t)
@@ -274,8 +354,10 @@ func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
-	_, err = pg.ExecContext(ctx, "DROP TABLE friction_issue_links")
-	require.NoError(t, err)
+	for _, table := range []string{"friction_issue_links", "friction_filing_state"} {
+		_, err = pg.ExecContext(ctx, "DROP TABLE "+table)
+		require.NoError(t, err)
+	}
 	_, err = pg.ExecContext(ctx, `INSERT INTO friction_patterns (fingerprint, kind, title,
 		first_seen_date, last_seen_date, occurrence_count, session_count, last_subject_id)
 		VALUES ('fl1:aaa', 'error', 't', '2026-09-14', '2026-09-14', 2, 1, 's')`)
@@ -289,12 +371,13 @@ func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "fl1:aaa", rows[0].Fingerprint)
 	assert.Nil(t, rows[0].Issue)
+	assert.Nil(t, rows[0].Filing)
 	store.DetectFrictionAvailability(ctx)
 	assert.False(t, store.FrictionIssueLinksWritable(), "filing refuses before contacting Kata")
 
-	// Once a migration adds the table, the same store reads links.
+	// Once a migration adds the tables, the same store reads links.
 	for _, statement := range strings.Split(frictionReviewDDL, ";\n") {
-		if strings.Contains(statement, "friction_issue_links") {
+		if strings.Contains(statement, "friction_issue_links") || strings.Contains(statement, "friction_filing_state") {
 			_, err = pg.ExecContext(ctx, statement)
 			require.NoError(t, err)
 		}
@@ -311,10 +394,11 @@ func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, &link, rows[0].Issue)
+	assert.Nil(t, rows[0].Filing)
 }
 
-// Filing needs every link write: the replacing save's ON CONFLICT DO UPDATE
-// needs UPDATE, and unlinking needs DELETE. A role missing any of them must
+// Filing needs every link and filing-state write: the replacing saves' ON
+// CONFLICT DO UPDATE needs UPDATE, and unlinking and linking need DELETE. A role missing any of them must
 // fail the probe, or filing creates a Kata issue it cannot record.
 func TestFrictionIssueLinkProbeNeedsEveryWritePrivilege(t *testing.T) {
 	const schema = "agentsview_friction_privs_test"
@@ -358,10 +442,15 @@ func TestFrictionIssueLinkProbeNeedsEveryWritePrivilege(t *testing.T) {
 		{privileges: "SELECT, INSERT, UPDATE, DELETE", writable: true},
 	} {
 		t.Run(tt.privileges, func(t *testing.T) {
-			_, err := pg.ExecContext(ctx, "REVOKE ALL ON "+schema+".friction_issue_links FROM "+role)
+			// Every link write first locks the pattern's row.
+			_, err := pg.ExecContext(ctx, "GRANT SELECT, UPDATE ON "+schema+".friction_patterns TO "+role)
 			require.NoError(t, err)
-			_, err = pg.ExecContext(ctx, "GRANT "+tt.privileges+" ON "+schema+".friction_issue_links TO "+role)
-			require.NoError(t, err)
+			for _, table := range []string{"friction_issue_links", "friction_filing_state"} {
+				_, err := pg.ExecContext(ctx, "REVOKE ALL ON "+schema+"."+table+" FROM "+role)
+				require.NoError(t, err)
+				_, err = pg.ExecContext(ctx, "GRANT "+tt.privileges+" ON "+schema+"."+table+" TO "+role)
+				require.NoError(t, err)
+			}
 			rolePG, err := Open(ctx, roleURL.String(), schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, rolePG.Close()) })
@@ -430,4 +519,60 @@ func TestAddFrictionIssueLinkReturnsAConcurrentWinner(t *testing.T) {
 	got := <-done
 	require.NoError(t, got.err)
 	assert.Equal(t, winner, got.link)
+}
+
+// Every link and filing-state writer locks the pattern first, so a person
+// linking while automatic filing records a retry never deadlocks.
+func TestFrictionLinkWritersDoNotDeadlock(t *testing.T) {
+	const schema = "agentsview_friction_lock_test"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := t.Context()
+	pg, err := Open(ctx, pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	_, err = pg.ExecContext(ctx, "CREATE SCHEMA "+schema)
+	require.NoError(t, err)
+	for _, statement := range append(strings.Split(coreDDL, ";\n")[:2], strings.Split(frictionReviewDDL, ";\n")...) {
+		if strings.TrimSpace(statement) != "" {
+			_, err = pg.ExecContext(ctx, statement)
+			require.NoError(t, err)
+		}
+	}
+	_, err = pg.ExecContext(ctx, `INSERT INTO friction_patterns (fingerprint, kind, title,
+		first_seen_date, last_seen_date, occurrence_count, session_count, last_subject_id)
+		VALUES ('fl1:busy', 'error', 't', '2026-09-14', '2026-09-14', 1, 1, 's')`)
+	require.NoError(t, err)
+	store := &Store{pg: pg, ownedDB: pg}
+	link := db.FrictionIssueLink{
+		Fingerprint: "fl1:busy", KataInstanceUID: "i", KataProjectUID: "p", IssueUID: "u",
+		QualifiedID: "agentsview#f001", Source: db.FrictionIssueSourceManual,
+		LinkedAt: time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC),
+	}
+	retry := db.FrictionFilingState{Fingerprint: "fl1:busy", State: db.FrictionFilingRetry, Attempts: 1, UpdatedAt: link.LinkedAt}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 200)
+	for i := range 40 {
+		wg.Go(func() {
+			var err error
+			switch i % 4 {
+			case 0:
+				err = store.SaveFrictionIssueLink(ctx, link)
+			case 1:
+				_, err = store.AddFrictionIssueLink(ctx, link)
+			case 2:
+				err = store.SaveFrictionFilingState(ctx, retry)
+			default:
+				_, err = store.DeleteFrictionIssueLink(ctx, link.Fingerprint)
+			}
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
 }
