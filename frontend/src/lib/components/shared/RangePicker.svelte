@@ -97,18 +97,27 @@
     display: contents;
   }
 
-  /* The presets are a second segmented control under the Relative /
-     Calendar / Custom one, built like kit-ui's: the same inset track,
-     radius, flat options, and shared selected pill (app.css). They sit
-     below it as their own row, a little shorter and in regular weight, so
-     the mode switch stays the first choice. */
+  /* Two tiers of one choice. The Relative / Calendar / Custom track is the
+     primary control; the presets for the chosen mode hang under it as a
+     lower tier. The preset row starts flush against the track's bottom
+     edge with a straight, square top, inset so the track overhangs it on
+     both sides. Its fill is quieter than the track and only its sides and
+     bottom carry a hairline, so it reads as tucked beneath the track rather
+     than as a second equal bar. Radii, flat options, and the shared
+     selected pill match the segmented controls (app.css). */
+  .app-range-picker :global(.kit-date-range-picker__tabs:has(+ .kit-date-range-picker__pills)) {
+    margin-bottom: 0;
+  }
+
   .app-range-picker :global(.kit-date-range-picker__pills) {
     --app-presets-radius: var(--kit-control-radius, var(--radius-sm));
     gap: 1px;
+    margin: 0 var(--space-6);
     padding: 2px;
-    border-radius: var(--app-presets-radius);
-    background: var(--bg-inset);
-    box-shadow: var(--shadow-sunken, none);
+    border: 1px solid var(--border-muted);
+    border-top: 0;
+    border-radius: 0 0 var(--app-presets-radius) var(--app-presets-radius);
+    background: color-mix(in srgb, var(--bg-inset) 50%, var(--popover-bg, var(--bg-surface)));
   }
 
   .app-range-picker :global(.kit-date-range-picker__pills .kit-date-range-picker__pill) {

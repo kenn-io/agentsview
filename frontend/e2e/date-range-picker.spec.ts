@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 for (const theme of ["light", "dark"] as const) {
-  test(`date presets are a second segmented control under the mode tabs in ${theme}`, async ({
+  test(`date presets are a lower tier tucked under the mode tabs in ${theme}`, async ({
     page,
   }) => {
     await page.addInitScript((t) => localStorage.setItem("theme", t), theme);
@@ -37,6 +37,12 @@ for (const theme of ["light", "dark"] as const) {
           presetCorners: corners(presets),
           trackFill: style(track).backgroundColor,
           presetFill: style(presets).backgroundColor,
+          presetBorders: [
+            style(presets).borderTopWidth,
+            style(presets).borderRightWidth,
+            style(presets).borderBottomWidth,
+            style(presets).borderLeftWidth,
+          ],
           modeButtonCorners: corners(chosenMode),
           optionCorners: corners(chosenOption),
           modeHeight: chosenMode.getBoundingClientRect().height,
@@ -49,19 +55,29 @@ for (const theme of ["light", "dark"] as const) {
         };
       });
       const info = JSON.stringify(geometry);
-      // Its own row below the mode tabs, the same width, not joined to them.
-      expect(geometry.gap, info).toBeGreaterThanOrEqual(4);
-      expect(Math.abs(geometry.left), info).toBeLessThanOrEqual(0.5);
-      expect(Math.abs(geometry.right), info).toBeLessThanOrEqual(0.5);
+      // Tucked under the mode track: flush with its bottom edge, inset so
+      // the track overhangs it on both sides.
+      expect(Math.abs(geometry.gap), info).toBeLessThanOrEqual(1);
+      expect(geometry.left, info).toBeGreaterThanOrEqual(12);
+      expect(geometry.left, info).toBeLessThanOrEqual(20);
+      expect(geometry.right, info).toBeCloseTo(geometry.left, 0);
+      // A straight square top with no ornament at the join; the bottom
+      // corners use the track's radius.
       expect(geometry.ornaments, info).toEqual(["none", "none"]);
-      // The same track and option shape as the mode tabs.
-      expect(geometry.presetCorners, info).toEqual(geometry.trackCorners);
-      expect(geometry.presetFill, info).toBe(geometry.trackFill);
+      expect(geometry.presetCorners.slice(0, 2), info).toEqual(["0px", "0px"]);
+      expect(geometry.presetCorners.slice(2), info).toEqual(geometry.trackCorners.slice(2));
+      expect(geometry.trackCorners[2], info).not.toBe("0px");
+      // A lower tier: its own quieter fill, with a hairline on the sides and
+      // bottom but none along the join.
+      expect(geometry.presetFill, info).not.toBe(geometry.trackFill);
+      expect(geometry.presetBorders[0], info).toBe("0px");
+      expect(geometry.presetBorders.slice(1), info).toEqual(["1px", "1px", "1px"]);
+      // Options shaped like the mode tabs, unselected ones flat.
       expect(geometry.optionCorners, info).toEqual(geometry.modeButtonCorners);
       expect(geometry.otherOptionFill, info).toBe(geometry.otherModeFill);
       // The chosen preset uses the same selected pill as the chosen mode.
       expect(geometry.chosenOption, info).toEqual(geometry.chosenMode);
-      // Subordinate only by size: presets are no taller than the mode tabs.
+      // Subordinate in size too: preset options are shorter than the mode tabs.
       expect(geometry.optionHeight, info).toBeLessThan(geometry.modeHeight);
     }
   });
