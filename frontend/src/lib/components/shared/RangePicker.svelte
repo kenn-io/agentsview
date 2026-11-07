@@ -101,10 +101,11 @@
      primary control; the presets for the chosen mode hang under it as a
      lower tier. The preset row starts flush against the track's bottom
      edge with a straight, square top, inset so the track overhangs it on
-     both sides. Its fill is quieter than the track and only its sides and
-     bottom carry a hairline, so it reads as tucked beneath the track rather
-     than as a second equal bar. Radii, flat options, and the shared
-     selected pill match the segmented controls (app.css). */
+     both sides. Its top row is one contact line across its full width,
+     drawn over a quiet hairline ring so the top corners stay square, which
+     shows the track resting on the tier. Its fill, height, and type sit a
+     step below the track. Radii, flat options, and the shared selected
+     pill match the segmented controls (app.css). */
   .app-range-picker :global(.kit-date-range-picker__tabs:has(+ .kit-date-range-picker__pills)) {
     margin-bottom: 0;
   }
@@ -112,20 +113,39 @@
   .app-range-picker :global(.kit-date-range-picker__pills) {
     --app-presets-radius: var(--kit-control-radius, var(--radius-sm));
     gap: 1px;
-    margin: 0 var(--space-6);
-    padding: 2px;
-    border: 1px solid var(--border-muted);
-    border-top: 0;
+    margin: 0 calc(var(--space-6) + 4px);
+    /* One pixel more above and below than the track, for the contact line
+       and so tier fill shows around the chosen preset. */
+    padding: 3px;
+    border: 0;
     border-radius: 0 0 var(--app-presets-radius) var(--app-presets-radius);
-    background: color-mix(in srgb, var(--bg-inset) 50%, var(--popover-bg, var(--bg-surface)));
+    background: var(--app-presets-fill);
+    /* The first shadow paints on top: the contact line covers the ring's
+       top row, corners included. */
+    box-shadow:
+      inset 0 1px 0 var(--app-presets-contact),
+      inset 0 0 0 1px var(--app-presets-edge);
+    --app-presets-fill: color-mix(in srgb, var(--bg-inset) 68%, var(--popover-bg, var(--bg-surface)));
+    --app-presets-edge: color-mix(in srgb, var(--border-default) 50%, var(--border-muted));
+    --app-presets-contact: color-mix(in srgb, var(--border-default) 75%, var(--border-muted));
+  }
+
+  /* Dark: the tier sits a step above the near-black track with a quiet
+     outline, and a near-black contact line shows the track resting on it. */
+  :global(:root.dark) .app-range-picker :global(.kit-date-range-picker__pills) {
+    --app-presets-fill: color-mix(in srgb, var(--bg-inset) 35%, var(--popover-bg, var(--bg-surface)));
+    --app-presets-edge: color-mix(in srgb, var(--text-primary) 17%, var(--bg-surface));
+    --app-presets-contact: rgba(0, 0, 0, 0.55); /* kit-ui-check-ignore: dark tier contact line, upstream later */
   }
 
   .app-range-picker :global(.kit-date-range-picker__pills .kit-date-range-picker__pill) {
-    height: 20px;
+    height: 17px;
     border-radius: max(0px, calc(var(--app-presets-radius) - 1px));
     background: transparent;
     color: var(--text-secondary);
-    font-size: var(--kit-control-font-size, var(--font-size-xs));
+    /* A step below the mode labels, so the shared selected pill on a
+       preset still reads as the lesser choice. */
+    font-size: calc(var(--kit-control-font-size, var(--font-size-xs)) - 1px);
     font-weight: 400;
   }
 
@@ -136,7 +156,7 @@
   }
 
   /* Dark secondary ink reads as selected; unselected options step down to
-     muted, as in the segmented controls. */
+     muted, the same ink as the unselected mode tabs. */
   :global(:root.dark) .app-range-picker :global(.kit-date-range-picker__pills .kit-date-range-picker__pill:not(.active)) {
     color: var(--text-muted);
   }
