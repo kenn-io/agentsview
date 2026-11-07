@@ -951,7 +951,7 @@ func liveVectorServingFixture(t *testing.T, cfg config.Config, database *db.DB, 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	return &liveVectorServing{
-		ctx: ctx, cancel: cancel, schedCancel: cancel,
+		ctx: ctx, cancel: cancel,
 		cfg: cfg, database: database, serving: serving,
 		reload: func() (config.Config, error) { return cfg, nil },
 		push:   &vectorPushSource{cfg: cfg},

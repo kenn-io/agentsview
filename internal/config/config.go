@@ -4089,20 +4089,21 @@ func (e invalidVectorSetupError) Unwrap() error { return e.error }
 
 func (invalidVectorSetupError) Is(target error) bool { return target == ErrInvalidVectorSetup }
 
-// VectorSetupServer returns the default embeddings server SaveVectorSetup
-// would save now, or the reason it would refuse, so callers can check before slow work.
-func (c *Config) VectorSetupServer() (VectorEmbeddingsServerConfig, error) {
-	var server VectorEmbeddingsServerConfig
+// VectorSetupEmbeddings returns the validated embeddings recipe SaveVectorSetup
+// would save now, so status and activation select the same provider.
+func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
+	var embeddings VectorEmbeddingsConfig
 	err := c.withConfigLock(func() error {
 		_, candidate, err := c.vectorSetupCandidate()
 		if err == nil {
-			if _, server, err = candidate.Vector.Embeddings.Server(""); err != nil {
+			embeddings = candidate.Vector.Embeddings
+			if _, _, err = embeddings.Server(""); err != nil {
 				err = invalidVectorSetupError{err}
 			}
 		}
 		return err
 	})
-	return server, err
+	return embeddings, err
 }
 
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.

@@ -22,18 +22,17 @@ var (
 
 // liveVectorServing enables browser setup over the daemon's open indexes.
 type liveVectorServing struct {
-	mu          sync.Mutex
-	serving     vectorServing
-	cfg         config.Config
-	database    *db.DB
-	ctx         context.Context
-	idle        *server.IdleTracker
-	cancel      context.CancelFunc
-	schedCancel context.CancelFunc
-	done        chan struct{}
-	setup       server.EmbeddingsSetupStatus
-	reload      func() (config.Config, error)
-	push        *vectorPushSource
+	mu       sync.Mutex
+	serving  vectorServing
+	cfg      config.Config
+	database *db.DB
+	ctx      context.Context
+	idle     *server.IdleTracker
+	cancel   context.CancelFunc
+	done     chan struct{}
+	setup    server.EmbeddingsSetupStatus
+	reload   func() (config.Config, error)
+	push     *vectorPushSource
 }
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
@@ -56,19 +55,16 @@ func (v *liveVectorServing) startSchedulers() {
 	if v.serving.Scheduler == nil {
 		return
 	}
-	schedulerCtx, cancel := context.WithCancel(v.ctx)
-	v.schedCancel = cancel
 	v.serving.Scheduler.onBattery = onBattery
 	v.serving.RecallScheduler.onBattery = onBattery
-	go v.serving.Scheduler.Run(schedulerCtx)
-	go v.serving.RecallScheduler.Run(schedulerCtx)
+	go v.serving.Scheduler.Run(v.ctx)
+	go v.serving.RecallScheduler.Run(v.ctx)
 }
 
 func (v *liveVectorServing) stopBuilders() {
 	if v.serving.Scheduler == nil {
 		return
 	}
-	v.schedCancel()
 	v.serving.Scheduler.Stop()
 	v.serving.RecallScheduler.Stop()
 }
@@ -148,6 +144,11 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 	status.Action = ""
 	if missingManager && cfg.DeploymentEmbeddings == nil {
 		status.Action = "turn-on"
+		var err error
+		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
+		if err != nil {
+			return status, setupRequestError(err)
+		}
 	}
 	status, err := embeddingsSetupStatus(ctx, status, cfg)
 	if status.Action == "" {
@@ -213,7 +214,14 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	if v.setup.Busy {
 		return vector.ErrBuildRunning
 	}
-	deployment, err := v.cfg.VectorSetupServer()
+	embeddings := v.cfg.Vector.Embeddings
+	if v.serving.manager == nil {
+		embeddings, err = v.cfg.VectorSetupEmbeddings()
+		if err != nil {
+			return setupRequestError(err)
+		}
+	}
+	_, deployment, err := embeddings.Server("")
 	if err != nil {
 		return setupRequestError(err)
 	}

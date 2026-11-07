@@ -34,7 +34,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 		onBattery = oldOnBattery
 	})
-	for _, recipe := range []string{"fresh", "enabled-missing", "automatic", "configured", "nomic"} {
+	for _, recipe := range []string{"fresh", "enabled-missing", "automatic", "configured", "nomic", "changed-provider"} {
 		t.Run(recipe, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			dir := testDataDir(t)
@@ -73,9 +73,10 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			require.NoError(t, err)
 			cfg.DataDir, cfg.DBPath = dir, filepath.Join(dir, "sessions.db")
 			raw := map[string]string{
-				"enabled-missing": "[vector]\nenabled = true\n",
-				"configured":      "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmax_input_chars = 1024\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\ndefault_server = 'local'\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nmax_retries = 0\n[vector.embeddings.servers.backup]\nendpoint = 'http://127.0.0.1:1/v1'\nmax_retries = 0\n",
-				"nomic":           "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nmodel_context_tokens = 512\nquery_prefix = 'q: '\ndocument_prefix = 'd: '\ninput_suffix = '!'\nrequest_dimensions = true\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\nmax_batch_tokens = 512\n",
+				"enabled-missing":  "[vector]\nenabled = true\n",
+				"changed-provider": "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\n",
+				"configured":       "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmax_input_chars = 1024\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\ndefault_server = 'local'\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nmax_retries = 0\n[vector.embeddings.servers.backup]\nendpoint = 'http://127.0.0.1:1/v1'\nmax_retries = 0\n",
+				"nomic":            "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nmodel_context_tokens = 512\nquery_prefix = 'q: '\ndocument_prefix = 'd: '\ninput_suffix = '!'\nrequest_dimensions = true\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\nmax_batch_tokens = 512\n",
 			}[recipe]
 			if raw != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(raw), 0o600))
@@ -149,7 +150,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			provider := "built-in"
 			if recipe == "automatic" || recipe == "nomic" {
 				provider = "ollama"
-			} else if recipe == "configured" {
+			} else if recipe == "configured" || recipe == "changed-provider" {
 				provider = "configured"
 			}
 			assert.Equal(t, provider, initial.Setup.Provider)
@@ -159,7 +160,20 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if initial.Setup.Provider == "built-in" {
 				shown = initial.Setup.MissingBytes
 			}
+			if recipe == "changed-provider" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
+			} else if recipe == "enabled-missing" {
+				// A running manager keeps its recipe even if the file changes.
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'other-model'\ndimension = 3\n[vector.embeddings.servers.local]\nendpoint = 'http://127.0.0.1:1/v1'\n"), 0o600))
+			}
 			request("POST", "/api/v1/embeddings/setup", fmt.Sprintf(`{"approved_bytes":%d}`, shown), 202)
+			if recipe == "changed-provider" {
+				<-owner.done
+				retry := status()
+				require.Equal(t, "built-in", retry.Setup.Provider)
+				require.EqualValues(t, 295_000_000, retry.Setup.MissingBytes)
+				request("POST", "/api/v1/embeddings/setup", `{"approved_bytes":295000000}`, 202)
+			}
 			if recipe == "fresh" {
 				<-building
 				<-owner.done
@@ -191,7 +205,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "configured" {
 				assert.Empty(t, status().Setup.Action)
 			}
-			assert.Equal(t, (recipe == "fresh" || recipe == "enabled-missing"), installs.Load() > 0)
+			assert.Equal(t, (recipe == "fresh" || recipe == "enabled-missing" || recipe == "changed-provider"), installs.Load() > 0)
 			if recipe == "fresh" {
 				var result db.ContentSearchPage
 				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", 200), &result))

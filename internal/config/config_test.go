@@ -3226,7 +3226,7 @@ func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
 	path := filepath.Join(dir, configFileName)
 	raw := "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 512\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 256\n"
 	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
-	_, err = cfg.VectorSetupServer()
+	_, err = cfg.VectorSetupEmbeddings()
 	require.ErrorIs(t, err, ErrInvalidVectorSetup)
 	require.ErrorIs(t, cfg.SaveVectorSetup(), ErrInvalidVectorSetup)
 	data, err := os.ReadFile(path)
