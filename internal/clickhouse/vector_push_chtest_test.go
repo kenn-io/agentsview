@@ -351,6 +351,91 @@ func TestVectorStatementsHandleBatchSizes(t *testing.T) {
 	}
 }
 
+// TestVectorFlushHandlesKeysOverOneStatementsLimit pins that a flush whose
+// rewritten keys exceed what one statement may carry over HTTP still removes
+// exactly the rows the batch no longer holds. One session holds 4,000
+// documents, and one of them holds 6,000 chunks, so the keys of the session,
+// and of that one document, each span several statements. The "HTTP bound"
+// case splits over the native protocol too; the other uses the bound the
+// target's transport picks.
+func TestVectorFlushHandlesKeysOverOneStatementsLimit(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		limit int
+	}{
+		{name: "transport bound", limit: 0},
+		{name: "HTTP bound", limit: vectorFlushKeysBytes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			testVectorFlushOverOneStatementsLimit(t, tc.limit)
+		})
+	}
+}
+
+func testVectorFlushOverOneStatementsLimit(t *testing.T, limit int) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	s.vectorFlushKeysBytes = limit
+	conn := chtest.Open(t, target.URL, target.Database)
+	const (
+		session  = "long-session"
+		docCount = 4000
+		bigDoc   = 2000
+	)
+	docKey := func(i int) string { return fixtureDocKey(session, fmt.Sprintf("d%04d", i)) }
+	docs := func(dropped func(int) bool, bigChunks int) []storage.VectorPushDoc {
+		var out []storage.VectorPushDoc
+		for i := range docCount {
+			if dropped(i) {
+				continue
+			}
+			chunks := [][]float32{vecAlpha0a}
+			if i == bigDoc {
+				chunks = make([][]float32, bigChunks)
+				for c := range chunks {
+					chunks[c] = vecAlpha1
+				}
+			}
+			out = append(out, vdoc(session, docKey(i), i, "content", "h", chunks...))
+		}
+		return out
+	}
+	flush := func(docs []storage.VectorPushDoc) {
+		t.Helper()
+		b := s.newVectorBatch(vectorFixtureFP)
+		b.add(session, "hash", docs)
+		require.NoError(t, s.flushVectorBatch(ctx, b))
+	}
+
+	flush(docs(func(int) bool { return false }, 6000))
+	require.Equal(t, docCount, chtest.Count(t, conn, "vector_documents", ""))
+	// Another generation embedded the big document, a document that stays,
+	// and one that vanishes. Its chunks go only with a vanished document.
+	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{
+		{"fp-other-gen", docKey(bigDoc), int64(0), session, vecAlpha0a, uint64(1)},
+		{"fp-other-gen", docKey(bigDoc), int64(3000), session, vecAlpha0a, uint64(1)},
+		{"fp-other-gen", docKey(bigDoc), int64(5999), session, vecAlpha0a, uint64(1)},
+		{"fp-other-gen", docKey(3999), int64(0), session, vecAlpha0a, uint64(1)},
+		{"fp-other-gen", docKey(1), int64(0), session, vecAlpha0a, uint64(1)},
+	}))
+
+	// Every document ending in 1 vanishes, and the big document keeps its
+	// first 4,500 chunks.
+	flush(docs(func(i int) bool { return i%10 == 1 }, 4500))
+
+	assert.Equal(t, 3600, chtest.Count(t, conn, "vector_documents", ""))
+	assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "doc_key = ?", docKey(1)))
+	assert.Equal(t, 3599+4500, chtest.Count(t, conn, "vector_chunks",
+		"generation_fingerprint = ?", vectorFixtureFP))
+	assert.Equal(t, 4500, chtest.Count(t, conn, "vector_chunks",
+		"generation_fingerprint = ? AND doc_key = ? AND chunk_index < 4500", vectorFixtureFP, docKey(bigDoc)))
+	assert.Equal(t, 4, chtest.Count(t, conn, "vector_chunks", "generation_fingerprint = ?", "fp-other-gen"))
+	assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", docKey(1)))
+}
+
 // TestVectorEvictionReadsOnlyTheSessionsKeyRanges pins that reading a session's
 // chunks skips the key ranges other sessions hold, the reason the vector
 // statements carry a doc_key condition on top of their session_id filter.

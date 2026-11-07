@@ -54,6 +54,10 @@ type Sync struct {
 	// vectorBatchSessions overrides the vector flush session bound when
 	// positive; tests lower it to cover several flushes in one push.
 	vectorBatchSessions int
+	// vectorFlushKeysBytes overrides the bound on a vector flush DELETE's
+	// key parameters when positive; tests set it to split flushes over the
+	// native protocol too.
+	vectorFlushKeysBytes int
 
 	closeOnce sync.Once
 	closeErr  error
