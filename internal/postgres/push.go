@@ -3948,22 +3948,26 @@ func bulkInsertCursorUsageEvents(
 			input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens,
 			charged_microdollars, cursor_token_fee_microdollars,
-			user_id, user_email, is_headless, dedup_key
+			user_id, user_email, is_headless, dedup_key, agent
 		) VALUES `)
-		args := make([]any, 0, len(batch)*13)
+		args := make([]any, 0, len(batch)*14)
 		for j, ev := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*13 + 1
+			p := j*14 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4, p+5, p+6,
-				p+7, p+8, p+9, p+10, p+11, p+12,
+				p+7, p+8, p+9, p+10, p+11, p+12, p+13,
 			)
 			occurredAt, ok := ParseSQLiteTimestamp(ev.OccurredAt)
 			if !ok {
 				return fmt.Errorf("parsing cursor usage occurred_at %q", ev.OccurredAt)
+			}
+			agent := ev.Agent
+			if agent == "" {
+				agent = "cursor"
 			}
 			args = append(args,
 				occurredAt,
@@ -3979,6 +3983,7 @@ func bulkInsertCursorUsageEvents(
 				sanitizePG(ev.UserEmail),
 				ev.IsHeadless,
 				sanitizePG(ev.DedupKey),
+				sanitizePG(agent),
 			)
 		}
 		b.WriteString(` ON CONFLICT DO NOTHING`)

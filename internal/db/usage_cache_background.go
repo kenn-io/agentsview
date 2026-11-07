@@ -636,7 +636,7 @@ func ensureUsageRollupsAcross(ctx context.Context, cache *usageCache, snapshot u
 	return installs, total, nil
 }
 
-func (db *DB) refreshUsageRollups(ctx context.Context, cache *usageCache, fills map[string]usageFillResult, revision int64) {
+func (db *DB) refreshUsageRollups(ctx context.Context, cache *usageCache, fills map[string]usageFillResult) {
 	if !db.isUsageBackfillEnabled() {
 		return
 	}
@@ -655,7 +655,6 @@ func (db *DB) refreshUsageRollups(ctx context.Context, cache *usageCache, fills 
 			if err != nil {
 				return err
 			}
-			snapshot.ChangeRevision = min(snapshot.ChangeRevision, revision)
 			locations, err := usageBackfillLocations(ctx, cache, snapshot.location)
 			if err != nil {
 				return err

@@ -27,7 +27,7 @@
   import { settingsPanels } from "./settingsPanels.js";
 
   let authTokenInput: string = $state("");
-  let active = $state("appearance");
+  let active = $state(router.params.panel ?? "appearance");
   let searchQuery = $state("");
   let pageElement: HTMLElement;
   const panels = $derived(settingsPanels());

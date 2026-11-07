@@ -3173,5 +3173,8 @@
       "selectors": ["countPlural"],
       "match": { "countPlural=one": "text section", "countPlural=other": "text sections" }
     }
-  ]
+  ],
+  "empty_archive_title": "No sessions yet",
+  "empty_archive_desc": "AgentsView reads sessions from these folders. They appear here once an agent writes to one of them.",
+  "empty_archive_choose_folders": "Choose folders"
 }

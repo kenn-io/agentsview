@@ -136,10 +136,10 @@ const chDailyCursorUsageRowsSQLTemplate = `
 SELECT
 	'' AS session_id,
 	CAST(NULL AS Nullable(Int64)) AS message_ordinal,
-	'cursor' AS source,
+	cu.agent AS source,
 	cu.occurred_at AS ts,
 	cu.occurred_at AS pricing_ts,
-	cu.model AS model,
+	if(cu.model = '', '<unknown>', cu.model) AS model,
 	'' AS provider_id,
 	'' AS token_json,
 	'' AS claude_message_id,
@@ -153,9 +153,9 @@ SELECT
 	toInt64(0) AS reasoning_tokens,
 	toInt64(0) AS cache_create_1h, toInt64(0) AS web_search_requests,
 	CAST(cu.charged_microdollars AS Nullable(Int64)) AS cost_microdollars,
-	'cursor-reported' AS cost_source,
+	concat(cu.agent, '-reported') AS cost_source,
 	'' AS project,
-	'cursor' AS agent,
+	cu.agent AS agent,
 	'' AS machine,
 	toInt64(0) AS user_message_count,
 	cu.is_headless AS is_automated,
@@ -324,21 +324,21 @@ func chCursorUsageRowsWhere(
 		f.ActiveSince != "" {
 		return "", nil, false
 	}
-	if vals := db.CSVFilterValues(f.Agent); len(vals) > 0 && !slices.Contains(vals, "cursor") {
-		return "", nil, false
+	where := "1"
+	builder := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+	if pred := builder.ValuesPredicate("cu.agent", db.CSVFilterValues(f.Agent), true); pred != "" {
+		where += "\n\tAND " + pred
 	}
-	if vals := db.CSVFilterValues(f.ExcludeAgent); slices.Contains(vals, "cursor") {
-		return "", nil, false
+	if pred := builder.ValuesPredicate("cu.agent", db.CSVFilterValues(f.ExcludeAgent), false); pred != "" {
+		where += "\n\tAND " + pred
 	}
-
-	where := "cu.model != ''"
-	var args []any
+	args := builder.Args()
 	scope := db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	if pred := db.ClickHouseQueryDialect().AutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
 		where += "\n\tAND " + pred
 	}
 	where, args = appendChUsageSourceFilterClauses(
-		where, args, "cu.model", f,
+		where, args, "if(cu.model = '', '<unknown>', cu.model)", f,
 	)
 	where, args = appendChUsageColumnBounds(
 		where, "cu.occurred_at", b, args,
@@ -871,20 +871,20 @@ func chUsageCTEFromRawSource(
 		usage_normalized AS (
 			SELECT *,
 				if(source = 'message', %[8]s,
-					if(source = 'session', greatest(input_tokens, toInt64(0)),
+					if(source = 'session' OR session_id = '', greatest(input_tokens, toInt64(0)),
 						least(greatest(input_tokens, toInt64(0)), toInt64(%[4]d)))) AS input_tokens_norm,
 				if(source = 'message', %[9]s,
-					if(source = 'session', greatest(output_tokens, toInt64(0)),
+					if(source = 'session' OR session_id = '', greatest(output_tokens, toInt64(0)),
 						least(greatest(output_tokens, toInt64(0)), toInt64(%[4]d)))) AS output_tokens_norm,
 				if(source = 'message', %[10]s,
-					if(source = 'session', greatest(cache_create, toInt64(0)),
+					if(source = 'session' OR session_id = '', greatest(cache_create, toInt64(0)),
 						least(greatest(cache_create, toInt64(0)), toInt64(%[4]d)))) AS cache_create_norm,
 				if(source = 'message', %[11]s, toInt64(0)) AS cache_create_1h_norm,
 				if(source = 'message', %[12]s,
-					if(source = 'session', greatest(cache_read, toInt64(0)),
+					if(source = 'session' OR session_id = '', greatest(cache_read, toInt64(0)),
 						least(greatest(cache_read, toInt64(0)), toInt64(%[4]d)))) AS cache_read_norm,
 				if(source = 'message', %[13]s,
-					if(source = 'session', greatest(reasoning_tokens, toInt64(0)),
+					if(source = 'session' OR session_id = '', greatest(reasoning_tokens, toInt64(0)),
 						least(greatest(reasoning_tokens, toInt64(0)), toInt64(%[4]d)))) AS reasoning_tokens_norm,
 				if(source = 'message', %[15]s, toInt64(0)) AS web_search_requests_norm,
 				if(claude_message_id != '' AND claude_request_id != '',
@@ -1534,8 +1534,9 @@ func chCustomPricedModels(
 	return out
 }
 
-// chDailyUsageLoadAttempts bounds how often a read restarts because a push
-// added price contexts between the context load and the usage query.
+// chDailyUsageLoadAttempts bounds how often a read restarts with stored
+// prices because a push added price contexts between the context load and
+// the usage query.
 const chDailyUsageLoadAttempts = 3
 
 var errUsagePriceContextChanged = errors.New("usage price context changed during read")
@@ -1553,18 +1554,33 @@ func (s *Store) GetDailyUsage(
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
-	return retryUsagePriceContexts(func() (db.DailyUsageResult, error) {
+	return retryUsagePriceContexts(snapshot, func(snapshot *pricingSnapshot) (db.DailyUsageResult, error) {
 		return s.dailyUsageForCatalog(ctx, f, snapshot)
 	})
 }
 
-func retryUsagePriceContexts[T any](load func() (T, error)) (T, error) {
-	for attempt := 1; ; attempt++ {
-		result, err := load()
-		if !errors.Is(err, errUsagePriceContextChanged) || attempt == chDailyUsageLoadAttempts {
+// chUsageUnstoredDigest names no price records, so a read under it prices
+// every row from the catalog per request.
+const chUsageUnstoredDigest = ""
+
+// retryUsagePriceContexts runs load, and again with fresh contexts when a
+// price record names a context the read did not load. When every attempt
+// finds one, the read prices every row per request instead of failing:
+// besides a push adding contexts mid-read, a push that revives a digest
+// while another push drops it leaves records whose contexts are gone for
+// good.
+func retryUsagePriceContexts[T any](
+	snapshot *pricingSnapshot, load func(*pricingSnapshot) (T, error),
+) (T, error) {
+	for range chDailyUsageLoadAttempts {
+		result, err := load(snapshot)
+		if !errors.Is(err, errUsagePriceContextChanged) {
 			return result, err
 		}
 	}
+	unstored := *snapshot
+	unstored.catalog.digest = chUsageUnstoredDigest
+	return load(&unstored)
 }
 
 func (s *Store) usagePricingForCatalog(
@@ -2084,7 +2100,7 @@ func (s *Store) GetTopSessionsByCost(
 			slices.Clone(kept), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
 		), nil
 	}
-	out, err := retryUsagePriceContexts(func() ([]db.TopSessionEntry, error) {
+	out, err := retryUsagePriceContexts(pricing, func(pricing *pricingSnapshot) ([]db.TopSessionEntry, error) {
 		return s.topSessionsForCatalog(ctx, f, pricing)
 	})
 	if err != nil {

@@ -339,6 +339,7 @@ func (s *Server) computeUsageComparison(
 	priorFilter.ProjectLabels = slices.Clone(f.ProjectLabels)
 	priorFilter.ExcludeProjectLabels = slices.Clone(f.ExcludeProjectLabels)
 	priorFilter.Breakdowns = false
+	priorFilter.SkipSessionCounts = true
 	priorResult, err := s.db.GetDailyUsage(ctx, priorFilter)
 	if err != nil {
 		return nil, err

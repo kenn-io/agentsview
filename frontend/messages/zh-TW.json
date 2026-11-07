@@ -3067,5 +3067,8 @@
       "selectors": ["countPlural"],
       "match": { "countPlural=one": "文字片段", "countPlural=other": "文字片段" }
     }
-  ]
+  ],
+  "empty_archive_title": "尚無對話",
+  "empty_archive_desc": "AgentsView 會從這些資料夾讀取對話。代理寫入其中任一資料夾後，對話就會顯示在這裡。",
+  "empty_archive_choose_folders": "選擇資料夾"
 }

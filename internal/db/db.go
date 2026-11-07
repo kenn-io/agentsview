@@ -651,7 +651,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (165: show slash commands whose arguments contain "<" as "/name args"
 // prompts. Re-parse Claude-format, Grok and iFlow sources in place; source
 // and session identities are unchanged.)
-const dataVersion = 165
+// (166: retain inbound Claude peer user records as system messages. Re-parse
+// Claude-format sources in place; source and session identities are unchanged.)
+const dataVersion = 166
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2186,6 +2188,16 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
+	var missingAccountAgent bool
+	if err := conn.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_events')
+		AND NOT EXISTS(SELECT 1 FROM pragma_table_info('cursor_usage_events') WHERE name = 'agent')`,
+	).Scan(&missingAccountAgent); err != nil {
+		return fmt.Errorf("checking account usage schema: %w", err)
+	}
+	if missingAccountAgent {
+		return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: "agent"}
+	}
 	for _, index := range []string{
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
@@ -2425,6 +2437,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"excluded_sessions", "include_codex_pages",
 			"ALTER TABLE excluded_sessions ADD COLUMN include_codex_pages INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"cursor_usage_events", "agent",
+			"ALTER TABLE cursor_usage_events ADD COLUMN agent TEXT NOT NULL DEFAULT 'cursor'",
 		},
 		{
 			"session_project_assignments", "original_project",
@@ -4042,6 +4058,18 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 	); err != nil {
 		return err
 	}
+	// Activity pairing and message counts read the model and the counted-message
+	// flags with every timestamp. Covering them keeps those scans off message
+	// bodies. Widened here, after column migrations, since legacy archives
+	// lack source_subtype.
+	if err := ensureIndexColumnsLocked(ctx,
+		w, "idx_messages_velocity", messageVelocityIndexColumns,
+		`CREATE INDEX IF NOT EXISTS idx_messages_velocity
+		 ON messages(session_id, ordinal, role, timestamp, content_length,
+		             model, is_system, source_subtype)`,
+	); err != nil {
+		return err
+	}
 	// Widened here, after column migrations, since legacy archives lack is_automated.
 	if err := ensureIndexColumnsLocked(ctx,
 		w, "idx_sessions_parent", []string{"parent_session_id", "is_automated"},
@@ -4120,6 +4148,11 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 
 var messageSessionRoleIndexColumns = []string{
 	"session_id", "role", "is_system", "has_thinking", "has_tool_use", "source_subtype",
+}
+
+var messageVelocityIndexColumns = []string{
+	"session_id", "ordinal", "role", "timestamp", "content_length",
+	"model", "is_system", "source_subtype",
 }
 
 var usageSessionCoveringIndexColumns = []string{

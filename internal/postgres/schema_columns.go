@@ -3,6 +3,7 @@ package postgres
 // schemaColumnMigrations is shared by legacy setup and atomic hosted provisioning.
 func schemaColumnMigrations() []columnMigration {
 	return []columnMigration{
+		{"cursor_usage_events", "agent", `agent TEXT NOT NULL DEFAULT 'cursor'`, "adding cursor_usage_events.agent"},
 		{"tool_calls", "observed_outcome", `observed_outcome TEXT`, "adding tool_calls.observed_outcome"},
 		{"tool_calls", "observed_repeat", `observed_repeat TEXT`, "adding tool_calls.observed_repeat"},
 		{"tool_calls", "sequence_ending", `sequence_ending TEXT`, "adding tool_calls.sequence_ending"},

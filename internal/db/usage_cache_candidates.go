@@ -19,6 +19,7 @@ type usageQueryKind int
 const (
 	usageQueryKindToken usageQueryKind = iota
 	usageQueryKindActivity
+	usageQueryKindDayTotals
 )
 
 type usageSourceVersion struct {

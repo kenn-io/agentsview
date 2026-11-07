@@ -252,6 +252,7 @@ func TestUsageCacheBackfillPrunesStaleLocalTimezones(t *testing.T) {
 				"pruned timezones must cascade to their installs")
 			assert.Equal(t, kept, usageCacheCount(t, cache, "usage_rollup_days"),
 				"pruned timezones must cascade to their days")
+			assertUsageDayTotals(t, cache)
 		})
 	}
 }

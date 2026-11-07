@@ -9,9 +9,13 @@ interface.
 
 ## Dashboard
 
-When you open AgentsView with no session selected, you see the analytics
+If your archive is empty, AgentsView shows **No sessions yet** and lists the
+folders it reads for sessions. **Choose folders** opens **Settings > Session
+Providers**, where you can configure those sources.
+
+With sessions in your archive and no session selected, you see the analytics
 dashboard. It provides a high-level overview of your agent activity across all
-projects.
+projects, including when filters hide every session in the sidebar.
 
 ![Analytics dashboard](/docs/assets/generated/screenshots/dashboard.png)
 

@@ -700,9 +700,13 @@ The usage cache filename is derived from its format version and the archive
 `database_id`. A format or database-ID change selects a new generation; it does
 not migrate or rewrite the archive. Facts contain only message- and
 usage-event-derived data. Aggregate fingerprints additionally bake the exact
-session `agent` and `started_at`, because those fields affect deduplication and
-day bucketing. All other session metadata and filters come from the archive read
-snapshot. Do not widen or narrow this live/baked boundary implicitly.
+session `agent`, `started_at`, `project`, `machine`, `git_branch`,
+`is_automated`, and `user_message_count`. Those fields determine deduplication,
+day bucketing, and the filter dimensions of stored day totals. Journaled changes
+rebuild the session's rows and totals. Warm daily reads filter totals in SQL and
+read per-session rows for authoritative costs and dedup exceptions. Termination
+and `active_since` filters still use the archive snapshot. Do not widen or
+narrow this live/baked boundary implicitly.
 
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
@@ -752,18 +756,30 @@ persistent cache storage is unavailable or the current generation is
 incompatible, use the same schema and query path in a process-owned temporary
 file and warn that the cache will rebuild after restart.
 
+SQLite Activity reports read usage from `usage_facts`. Their hourly buckets and
+Copilot session-cost allocation need each row, which daily rollups drop. Before
+taking its bulk read, a report captures every live session with usage inside
+its padded usage bounds and fills their facts, the way the Usage page does. It
+then reads the candidate sessions' token facts, plus Claude snapshot peers from
+other captured sessions, through parallel cache reads, and runs the shared
+survivor selection and pricing on them. `activityReportUsage`, the raw archive
+row path, stays as the tests' oracle; reports must match it exactly.
+
 Usage reads are exact. A cold aggregate request fills facts, builds the required
 timezone rollups, then reads them in one pinned cache transaction. Without a
 trusted timezone claim, verify every candidate session's facts fingerprint,
 exact baked metadata, per-session pricing identity, resolved rate hashes, and
 Cursor high-water mark. With a trusted claim, refresh journaled sessions and
-invalidated installs, discover window sessions through date indexes, and verify
-coverage and concurrent installs in the pinned cache transaction. A timezone
-without a claim starts a coverage pass when backfill is enabled. A conflicting
-install sends the request's retries through the full path. A result is no older
-than the archive snapshot captured when the read began, and may be newer for a
-session whose facts were refilled meanwhile. A session confirmed deleted during
-fill is dropped from the request. `cached_at` is diagnostic only.
+invalidated installs, and verify coverage and concurrent installs in the pinned
+cache transaction. Covered daily totals read ordinary usage from day totals and
+load only window exception owners and matching authoritative sessions. Other
+window reads discover sessions through date indexes. A timezone without a claim
+starts a coverage pass when backfill is enabled. After a conflicting install,
+daily totals retry once with a fresh journal capture; further conflicts and
+other reads use the full path. A result is no older than the archive snapshot
+captured when the read began, and may be newer for a session whose facts were
+refilled meanwhile. A session confirmed deleted during fill is dropped from the
+request. `cached_at` is diagnostic only.
 
 The layers are kept apart so a live archive cannot veto a read. A fill reads one
 session's facts and that session's source version inside a single archive read
@@ -827,8 +843,10 @@ separate limits of 200,000 candidates and 4,096 entries. A full cache measured
 64.3 MiB of resident Go heap on Windows amd64, using the post-GC
 `runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
 with 36-byte session IDs, 24-byte models, and append-grown slices. Each entry
-also keeps the window's counted user and assistant messages; message counts read
-storage only for sessions without a matching entry. Every counted message except
+also keeps the window's counted user and assistant messages. A report counts
+messages from those entries and from its own pairing scan of the other
+sessions, so it never reads messages a second time. The scan's counted messages
+live only for that build, outside the budgets. Every counted message except
 a session's last starts a candidate, so the candidate budget bounds them too.
 They add about 57 bytes each: on Linux amd64 a full cache grew from 48.3 MiB to
 59.3 MiB. Empty sessions use only the entry budget. A week report then a month
@@ -851,6 +869,22 @@ The next writable SQLite open or PostgreSQL schema setup builds the index once
 for existing archives. PostgreSQL push must also detect its absence before
 taking the schema-current fast path. Creating the index scans existing tool
 results and can delay that first startup; it does not require a session resync.
+
+Activity pairing and message counts read every timestamped message of the
+selected sessions through `idx_messages_velocity` on `(session_id, ordinal,
+role, timestamp, content_length, model, is_system, source_subtype)`. The index
+covers both queries, so they never load message rows, which carry kilobytes of
+content, thinking, and dialogue text. On a 1.7 million message test archive the
+index takes 99 MiB, 10 MiB more than its older five-column form, and a busy
+week's pairing reads 41 MiB instead of 1.8 GiB. Writable opens widen the older
+form after column migrations and log that startup is waiting; the rebuild took
+about 6 s on that archive and needs no parser resync. Read-only opens use
+whichever form the archive has. PostgreSQL keeps the five-column index.
+
+The terminal candidates query names `idx_messages_assistant_model` with
+`INDEXED BY` for its prior-model lookup. The wider velocity index also covers
+that lookup, and SQLite can otherwise choose it and step back through every
+earlier message of a transcript that records no model.
 
 SQLite keeps completed Activity reports in memory with a 128 MiB estimated-size
 budget. Entries use `database_id` and `usage_pricing_revision` as their
@@ -875,9 +909,9 @@ The usage cache discovers bounded-window candidates through
 `idx_messages_usage_timestamp` and `idx_messages_activity_timestamp`, then
 extracts each selected session through the index-only
 `idx_messages_usage_session_covering` scan. The global activity index is for
-usage-cache candidate discovery, not the Activity report; that report continues
-to avoid a global timestamp scan. Keep these indexes narrow except for the
-single session-keyed covering index that carries `token_usage`.
+usage-cache candidate discovery, not the Activity report; Activity pairing
+continues to avoid a global timestamp scan. Keep these indexes narrow except
+for the single session-keyed covering index that carries `token_usage`.
 
 Discovery collects distinct session IDs per bounded timestamp range before
 checking `sessions`, so each session is looked up once per range.

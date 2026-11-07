@@ -23,6 +23,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/codexcloud"
@@ -32,6 +33,7 @@ import (
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/kata"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -116,7 +118,7 @@ type Server struct {
 	db                    db.Store
 	activityReports       *activityReportCache
 	assetCache            *assetCache
-	activityReportFlights *activityReportBuildGroup
+	activityReportFlights *kept.Flights[activity.CandidateArtifacts]
 	engine                *sync.Engine
 	onDemandEngine        *sync.Engine
 	sessions              service.SessionService
@@ -295,7 +297,7 @@ func New(
 		activeDisabledAgents:      append([]parser.AgentType(nil), cfg.DisabledAgents...),
 		db:                        database,
 		activityReports:           newActivityReportCache(),
-		activityReportFlights:     newActivityReportBuildGroup(),
+		activityReportFlights:     &kept.Flights[activity.CandidateArtifacts]{},
 		engine:                    engine,
 		sessions:                  sessions,
 		mux:                       http.NewServeMux(),
@@ -1070,7 +1072,7 @@ func cspMiddleware(
 // verbatim so the page stays hidden until its stylesheets and fonts load.
 // The fallback page for backend-only builds inlines the same bytes. It is the
 // base64 SHA-256 of that file's bytes.
-const holdFirstPaintScriptHash = "'sha256-wQLaMpgJbBRP7YmfiStbxXp4k39F0MoA0ronglioynI='"
+const holdFirstPaintScriptHash = "'sha256-Eym3PxQdYuGzQsfi2PA2bxFhXVJD9GuQ/Ig3m6m3of8='"
 
 // buildCSPPolicy constructs the Content-Security-Policy string.
 //

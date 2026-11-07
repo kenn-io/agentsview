@@ -6,9 +6,18 @@ name: Sibling pins on main
 #
 # Use the same permissions as normal pull request CI, including for forks.
 # The action reads only the candidate's dependency files.
+#
+# Only a code change reruns this check: a new commit, or the pull request
+# opening or reopening. Leave out `edited`. GitHub sends it for title,
+# description, and base branch changes. Each edit started another run on the
+# same commit, and GitHub reports the newest run's result, so a cancelled edit
+# run blocked the merge. Do not skip edits with `if:` either. A skipped
+# required job counts as passing and would hide a real failure.
+# The merge queue reruns the check on the merge group commit, so a
+# retargeted base cannot merge an unchecked pin.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]
 

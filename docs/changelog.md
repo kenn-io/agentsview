@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-06
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -41,6 +41,11 @@ The latest release is
 - PostgreSQL archives now keep a change journal. Installing it requires
   `CREATE` on the schema and `TRIGGER` on the watched tables. Roles without
   these privileges keep working without the journal.
+
+- Keep personal Claude.ai chats out of a work archive, or the reverse. List the
+  organization UUIDs to import under `[agents.claude-ai] organizations` in
+  `config.toml`, and Claude.ai Sync skips every other organization. See
+  [Choose which organizations Sync imports](/docs/chat-import/#choose-which-organizations-sync-imports).
 
 - Investigate an expensive archived session with `session diagnose <id>`. The
   report combines usage, context growth, compactions, large tool results, retry
@@ -145,6 +150,15 @@ The latest release is
 
 **Improvements**
 
+- ClickHouse mirrors stop growing without bound from stored usage prices. A push
+  now prices the mirror again only when the rates of a model in its usage
+  change, or when a model appears for the first time. Before, any change
+  anywhere in the shared pricing catalog repriced every usage row, and mirrors
+  pushed from several machines did so many times a day. Each push also deletes
+  stored prices that nothing has used for 24 hours. The first push after
+  upgrading clears the stored prices and prices the mirror once, so usage reads
+  are slower for the length of that push.
+
 - Substring and regex content search skip messages that cannot contain the
   search text, using a new substring index in the local archive. On a 1.7
   million message test archive, searching for rare text went from 2.1 s to 0.4
@@ -175,11 +189,38 @@ The latest release is
   one-year range from 6.0 s to 1.4 s. A report now holds its intervals in memory
   while it sorts them, about 130 bytes each (about 120 MB for that year).
 
+- A busy Activity week opens faster on the local archive the first time it is
+  shown. Activity now reads each message's parsed tokens and duplicate markers
+  from the usage cache that the Usage page already keeps, instead of reading
+  and parsing raw usage from every message again. On a
+  30,000-session test archive with 10,000 sessions in one week, reading that
+  week's usage went from 2.2 s to 0.7 s, and the whole first open from 2.9 s to
+  1.9 s. When the usage cache has never seen those sessions, such as right after
+  an upgrade before the daemon has filled it, Activity fills it first; on that
+  archive that first open took 3.5 s.
+
 - The Activity page counts user and assistant messages from the sessions it
   already holds in memory, so it no longer reads every message twice. On the
   same archive a month's report went from 250 ms to 210 ms when opened again,
   and from 350 ms to 300 ms on first open. The memory cache for Activity grows
   by about 57 bytes per counted message, at most about 11 MiB.
+
+- The Activity page reads about 8 times less data from the local archive the
+  first time it shows a range. Pairing and counting a session's messages now
+  read only a small index, never the message text. On a 30,000-session test
+  archive, a busy week's report read 0.4 GB instead of 3.3 GB. Its pairing step
+  read 41 MB instead of 1.8 GB and took 0.75 s instead of 1.1 to 1.4 s, or 1.2 s
+  instead of 2.6 s when the archive was not in memory. The whole report still
+  takes about 3.3 s, because it waits on usage, which runs at the same time.
+  The index grows by about 6 bytes per message (10 MB on that archive), and the
+  first start after upgrading waits while it is rebuilt, about 6 s for 1.7
+  million messages.
+
+- A busy week opens in Activity about a third faster the first time on the
+  local archive. On a 30,000-session test archive with about 10,000 sessions in
+  one week, the page went from about 3.5 s to about 2.4 s. Message counts reuse
+  the messages Activity already read to pair intervals, and usage rows are
+  sorted without copying each row many times.
 
 - The first Usage page after the usage cache is rebuilt, such as after an
   upgrade, loads in about half the time. On a 30,000-session test archive, all
@@ -195,6 +236,10 @@ The latest release is
 - Session sidebars on hosted PostgreSQL avoid repeatedly resolving the same
   parent links when counting roots and loading child trees, including pages
   filtered by labels or pull requests.
+
+- On `pg serve`, reopening Usage between pushes and loading the Pairwise ranking
+  after Summary reuse finished results instead of repricing every usage event.
+  The next push or custom pricing change rebuilds them.
 
 - The Recall corpus pane uses the shared page header for its title, description,
   entry count, and refresh control. The title stays a second-level heading under

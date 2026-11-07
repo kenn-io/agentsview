@@ -33,6 +33,7 @@ func (s *Store) runtimeState() *storeRuntime {
 					},
 				},
 			}
+			s.runtime.topUsage.Size = db.TopSessionsBytes
 		}
 	})
 	return s.runtime

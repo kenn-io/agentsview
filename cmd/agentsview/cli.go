@@ -624,6 +624,7 @@ func newUsageCommand() *cobra.Command {
 	cmd.AddCommand(newUsageDailyCommand())
 	cmd.AddCommand(newUsageStatuslineCommand())
 	cmd.AddCommand(newUsageCursorCommand())
+	cmd.AddCommand(newUsageGrokCommand())
 	return cmd
 }
 

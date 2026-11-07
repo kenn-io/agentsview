@@ -3138,5 +3138,8 @@
       "selectors": ["countPlural"],
       "match": { "countPlural=one": "テキスト区間", "countPlural=other": "テキスト区間" }
     }
-  ]
+  ],
+  "empty_archive_title": "まだセッションがありません",
+  "empty_archive_desc": "AgentsView はこれらのフォルダーからセッションを読み取ります。エージェントがいずれかに書き込むと、ここに表示されます。",
+  "empty_archive_choose_folders": "フォルダーを選択"
 }

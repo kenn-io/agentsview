@@ -237,8 +237,10 @@ func (s *Store) leavePricingLoad(load *pricingLoad) {
 	var cancel context.CancelFunc
 	s.runtimeState().pricingLoadMu.Lock()
 	load.waiters--
-	if load.waiters == 0 && s.runtimeState().pricingLoad == load {
-		s.runtimeState().pricingLoad = nil
+	if load.waiters == 0 {
+		if s.runtimeState().pricingLoad == load {
+			s.runtimeState().pricingLoad = nil
+		}
 		cancel = load.cancel
 	}
 	s.runtimeState().pricingLoadMu.Unlock()

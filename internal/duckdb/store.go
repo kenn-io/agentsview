@@ -46,6 +46,9 @@ type Store struct {
 	fileInfo      os.FileInfo
 	walStamp      string
 	reports       kept.Reports
+	dailyUsage    kept.Reads[db.DailyUsageResult]
+	planUsage     kept.Reads[*db.PlanUsageCountSummary]
+	topUsage      kept.Reads[[]db.TopSessionEntry]
 	pricingDigest string
 	aliasPath     string
 	closed        bool
@@ -96,17 +99,35 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{path: path, duck: conn, fileInfo: info, walStamp: walStamp}, nil
+	return &Store{
+		path: path, duck: conn, fileInfo: info, walStamp: walStamp,
+		topUsage: kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
+	}, nil
 }
 
 // mirrorStamp names the immutable handle's main file and opening WAL state.
 func (s *Store) mirrorStamp() string {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
+	return s.mirrorStampLocked()
+}
+
+func (s *Store) mirrorStampLocked() string {
 	if s.path == "" {
 		return ""
 	}
 	return fmt.Sprintf("%d|%d|%s", s.fileInfo.Size(), s.fileInfo.ModTime().UnixNano(), s.walStamp)
+}
+
+// keptVersion names the mirror handle and custom pricing used by in-memory Usage reads.
+func (s *Store) keptVersion() string {
+	s.handleMu.RLock()
+	defer s.handleMu.RUnlock()
+	stamp := s.mirrorStampLocked()
+	if stamp == "" {
+		return ""
+	}
+	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath
 }
 
 // Capture before opening: DuckDB may replay a leftover WAL on open.
@@ -260,6 +281,9 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	digest := sha256.Sum256(fmt.Appendf(nil, "%#v", p))
 	s.pricingDigest = hex.EncodeToString(digest[:])
 	s.reports.Clear()
+	s.dailyUsage.Clear()
+	s.planUsage.Clear()
+	s.topUsage.Clear()
 }
 
 func (s *Store) SetCursorSecret(secret []byte) {
@@ -551,17 +575,21 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 
 func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
 	filter := rootSessionWhere(excludeOneShot, excludeAutomated)
-	query := "\n\t\tSELECT\n\t\t\tCOUNT(*),\n\t\t\tCOALESCE(SUM(message_count), 0),\n\t\t\tCOUNT(DISTINCT project),\n\t\t\tCOUNT(DISTINCT machine),\n\t\t\tMIN(COALESCE(started_at, created_at))\n\t\tFROM sessions\n\t\tWHERE " + filter
+	query := "\n\t\tSELECT\n\t\t\tCOUNT(*),\n\t\t\tCOALESCE(SUM(message_count), 0),\n\t\t\tCOUNT(DISTINCT project),\n\t\t\tCOUNT(DISTINCT machine),\n\t\t\tMIN(COALESCE(started_at, created_at)),\n\t\t\t(SELECT MIN(occurred_at) FROM cursor_usage_events)\n\t\tFROM sessions\n\t\tWHERE " + filter
 	var stats db.Stats
 	var earliest any
+	var earliestAccount any
 	if err := s.queryRowContext(ctx, query).Scan(
 		&stats.SessionCount, &stats.MessageCount,
-		&stats.ProjectCount, &stats.MachineCount, &earliest,
+		&stats.ProjectCount, &stats.MachineCount, &earliest, &earliestAccount,
 	); err != nil {
 		return db.Stats{}, fmt.Errorf("fetching duckdb stats: %w", err)
 	}
 	if v := formatDBTime(earliest); v != "" {
 		stats.EarliestSession = &v
+	}
+	if v := formatDBTime(earliestAccount); v != "" {
+		stats.EarliestAccountUsage = &v
 	}
 	return stats, nil
 }

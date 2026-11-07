@@ -239,20 +239,24 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 // chStringArrayLiteral renders values as a ClickHouse Array(String)
 // literal, the text form of a query parameter.
 func chStringArrayLiteral(values []string) string {
-	escape := strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 	var b strings.Builder
 	b.WriteByte('[')
 	for i, v := range values {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteByte('\'')
-		b.WriteString(escape.Replace(v))
-		b.WriteByte('\'')
+		b.WriteString(chStringLiteral(v))
 	}
 	b.WriteByte(']')
 	return b.String()
 }
+
+// chStringLiteral quotes v as a ClickHouse string literal.
+func chStringLiteral(v string) string {
+	return "'" + chStringEscaper.Replace(v) + "'"
+}
+
+var chStringEscaper = strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 
 // readUsageCoverage relates the live sessions and snapshots to the prepared
 // rows. The comparisons run in Go over the identities ClickHouse returns:
@@ -429,7 +433,7 @@ func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
 // prepareUsageDelta prepares the rows of the changed snapshots as a refresh
 // would, priced under the current catalog. A snapshot's rows depend only
 // on the snapshot and the catalog, so they are kept per snapshot and
-// catalog digest and read again only for snapshots new since the last
+// whole-catalog digest and read again only for snapshots new since the last
 // call. Sessions whose usage no refresh prepares a row for stay changed
 // at every call; without the kept rows each call read all of them again.
 func (s *Store) prepareUsageDelta(ctx context.Context, changed []usageSnapshotKey) ([][]any, string, error) {
@@ -439,7 +443,7 @@ func (s *Store) prepareUsageDelta(ctx context.Context, changed []usageSnapshotKe
 	}
 	s.deltaCache.mu.Lock()
 	kept := s.deltaCache.rows
-	if s.deltaCache.digest != snapshot.catalog.digest {
+	if s.deltaCache.digest != snapshot.catalogDigest {
 		kept = nil
 	}
 	s.deltaCache.mu.Unlock()
@@ -480,7 +484,7 @@ func (s *Store) prepareUsageDelta(ctx context.Context, changed []usageSnapshotKe
 		}
 	}
 	s.deltaCache.mu.Lock()
-	s.deltaCache.digest, s.deltaCache.rows = snapshot.catalog.digest, next
+	s.deltaCache.digest, s.deltaCache.rows = snapshot.catalogDigest, next
 	s.deltaCache.mu.Unlock()
 	return out, snapshot.catalog.digest, nil
 }
@@ -607,8 +611,10 @@ type usageStamp struct {
 	priceCount                  uint64
 }
 
-// usageDeltaCache keeps, under one catalog digest, the prepared rows of
-// the snapshots the last delta covered; see prepareUsageDelta.
+// usageDeltaCache keeps, under one whole-catalog digest, the prepared rows
+// of the snapshots the last delta covered; see prepareUsageDelta. The
+// pricing digest would not do: it ignores models no registered model
+// resolves to, and a delta row can name a model not registered yet.
 type usageDeltaCache struct {
 	mu     sync.Mutex
 	digest string

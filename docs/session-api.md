@@ -428,7 +428,8 @@ Promoted `source_subtype` values on `is_system: true` messages: `continuation`,
 `resume`, `interrupted`, `task_notification`, `stop_hook`, `peer_message`,
 `compact_boundary`. `peer_message` is a message another Claude Code session
 sent; its `content` keeps the `<cross-session-message>` wrapper with the
-sender's name.
+sender's name. The content may include a framing line before the wrapper and a
+notice after it.
 
 ______________________________________________________________________
 

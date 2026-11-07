@@ -372,6 +372,7 @@ class UsageStore {
   excludedAgents: string = $state("");
   excludedModels: string = $state("");
   knownProjects: UsageProjectFilterItem[] = $state([]);
+  knownAgents: Array<{ name: string; count?: number }> = $state([]);
 
   constructor() {
     const saved = loadUsageFilters();

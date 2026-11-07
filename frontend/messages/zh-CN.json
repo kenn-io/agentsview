@@ -3064,5 +3064,8 @@
       "selectors": ["countPlural"],
       "match": { "countPlural=one": "文本片段", "countPlural=other": "文本片段" }
     }
-  ]
+  ],
+  "empty_archive_title": "暂无会话",
+  "empty_archive_desc": "AgentsView 从这些文件夹读取会话。代理写入其中任一文件夹后，会话就会显示在这里。",
+  "empty_archive_choose_folders": "选择文件夹"
 }

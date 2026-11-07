@@ -52,10 +52,14 @@ type storeRuntime struct {
 	// write friction_issue_links.
 	frictionIssueLinksWritable atomic.Bool
 
-	pricingMu     sync.Mutex
-	pricingLoadMu sync.Mutex
-	pricingLoad   *pricingLoad
-	customPricing map[string]config.CustomModelRate
+	pricingMu         sync.Mutex
+	pricingLoadMu     sync.Mutex
+	pricingLoad       *pricingLoad
+	customPricing     map[string]config.CustomModelRate
+	pricingGeneration uint64
+	dailyUsage        kept.Reads[db.DailyUsageResult]
+	planUsage         kept.Reads[*db.PlanUsageCountSummary]
+	topUsage          kept.Reads[[]db.TopSessionEntry]
 
 	// vectorMu guards the semantic-search seam. vectorSearcher is the PG
 	// vector searcher wired at pg serve startup when a generation matches
@@ -949,9 +953,13 @@ func (s *Store) GetStats(
 	}
 	// Sidebar polling needs all totals for the same rows. Aggregate them
 	// together so each refresh visits the filtered sessions only once.
+	billingStart := "NULL"
+	if pgHasTable(ctx, s.pg, "cursor_usage_events") {
+		billingStart = "(SELECT MIN(occurred_at) FROM cursor_usage_events)"
+	}
 	query := `SELECT COUNT(*), COALESCE(SUM(message_count), 0),
 		COUNT(DISTINCT project), COUNT(DISTINCT machine),
-		MIN(COALESCE(started_at, created_at))
+		MIN(COALESCE(started_at, created_at)), ` + billingStart + `
 		FROM sessions WHERE ` + filter
 	if s.hostedRelations {
 		query = `WITH filtered_sessions AS MATERIALIZED (
@@ -962,18 +970,20 @@ func (s *Store) GetStats(
 		SELECT COUNT(*), COALESCE(SUM(message_count), 0),
 		       COUNT(DISTINCT project),
 		       (SELECT COUNT(DISTINCT machine) FROM filtered_source_machines),
-		       MIN(COALESCE(started_at, created_at))
+		       MIN(COALESCE(started_at, created_at)), ` + billingStart + `
 		FROM filtered_sessions`
 	}
 
 	var st db.Stats
 	var earliest *time.Time
+	var earliestAccount *time.Time
 	err := s.pg.QueryRowContext(ctx, query).Scan(
 		&st.SessionCount,
 		&st.MessageCount,
 		&st.ProjectCount,
 		&st.MachineCount,
 		&earliest,
+		&earliestAccount,
 	)
 	if err != nil {
 		return db.Stats{},
@@ -982,6 +992,10 @@ func (s *Store) GetStats(
 	if earliest != nil {
 		str := FormatISO8601(*earliest)
 		st.EarliestSession = &str
+	}
+	if earliestAccount != nil {
+		str := FormatISO8601(*earliestAccount)
+		st.EarliestAccountUsage = &str
 	}
 	return st, nil
 }

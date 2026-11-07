@@ -3197,5 +3197,8 @@
       "selectors": ["countPlural"],
       "match": { "countPlural=one": "sección de texto", "countPlural=other": "secciones de texto" }
     }
-  ]
+  ],
+  "empty_archive_title": "Aún no hay sesiones",
+  "empty_archive_desc": "AgentsView lee las sesiones de estas carpetas. Aparecerán aquí cuando un agente escriba en alguna de ellas.",
+  "empty_archive_choose_folders": "Elegir carpetas"
 }

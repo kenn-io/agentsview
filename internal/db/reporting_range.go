@@ -42,7 +42,7 @@ func (db *DB) ExportReportingRange(ctx context.Context, now time.Time) (Reportin
 	if hasCursorUsage {
 		standaloneUsage = `UNION ALL
 			SELECT agentsview_timestamp_unix_micro(occurred_at)
-			FROM cursor_usage_events WHERE model != ''`
+			FROM cursor_usage_events`
 	}
 	err = reader.QueryRowContext(ctx, `
 		WITH timestamps(ts) AS (

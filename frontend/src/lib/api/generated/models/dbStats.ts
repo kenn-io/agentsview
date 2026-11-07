@@ -3,6 +3,7 @@
  */
 
 export interface DbStats {
+  earliest_account_usage?: string;
   /** @nullable */
   earliest_session: string | null;
   machine_count: number;

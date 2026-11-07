@@ -138,7 +138,7 @@ func NewStoreFromDB(conn *sql.DB) *Store {
 	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
 	s.sessionAggregateRows.Size = aggregateRowBytes
 	s.usageSessionRows.Size = usageSessionRowBytes
-	s.topSessionTotals.Size = topSessionBytes
+	s.topSessionTotals.Size = db.TopSessionBytes
 	s.analyticsSessionRows.Size = analyticsSessionBytes
 	s.activityUsageRows.Size, s.activityUsageRows.MaxBytes = keptUsageBytes, activityUsageRowsBytes
 	s.activityUsageRanges.Size, s.activityUsageRanges.MaxBytes = usageRangeBytes, activityUsageRangeBytes
