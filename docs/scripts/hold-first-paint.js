@@ -38,10 +38,10 @@
     await Promise.all([...document.fonts].map((face) => face.load().catch(() => {})));
     show();
   };
-  // The head is parsed, and every stylesheet link is in the document, once
-  // the document leaves "loading". Deferred and module scripts run later.
+  // Wait for deferred and module scripts too: a bundler's development server
+  // adds styles, and with them the font faces, only when a module runs.
   if (document.readyState === "loading") {
-    document.addEventListener("readystatechange", ready, { once: true });
+    document.addEventListener("DOMContentLoaded", ready, { once: true });
   } else {
     ready();
   }
