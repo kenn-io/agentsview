@@ -61,7 +61,7 @@ type Store struct {
 	// gone.
 	retiring sync.WaitGroup
 
-	// frustrationMemo serves local mirrors and resets on handle swap.
+	// frustrationMemo reuses local mirror counts by transcript fingerprint.
 	frustrationMemo db.FrustrationMarkerMemo
 
 	quack          *quackClient

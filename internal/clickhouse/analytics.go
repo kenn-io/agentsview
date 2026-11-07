@@ -70,7 +70,7 @@ func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "clickhouse", formatDBTime, true)
+	return readbase.ScanAnalyticsSessions(rows, "clickhouse", formatDBTime, true, false)
 }
 
 // analyticsSessionMemoKey names a session listing by predicate and

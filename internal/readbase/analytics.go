@@ -91,6 +91,7 @@ type AnalyticsSession struct {
 	NoCodeContextCount          int
 	RunawayToolLoopCount        int
 	PushVersion                 uint64 // ClickHouse cache version; zero for DuckDB.
+	PushFingerprint             string // DuckDB cache version; empty means uncached.
 }
 
 func (s *Analytics) analyticsSessionsModelTimeFiltered(

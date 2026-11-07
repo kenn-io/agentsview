@@ -212,11 +212,8 @@ type daemonPushRequest struct {
 	// request's fresh pusher can promote to generation-wide when the active
 	// generation id has changed (see storage.PushOptions).
 	LastReconciledVectorGeneration int64 `json:"last_reconciled_vector_generation,omitzero"`
-	// Automatic is set by the CLI's watch-mode mirror pushes: a mirror
-	// held by a live serve process defers instead of rebuilding the whole
-	// archive on every changed batch, and archive-scale diagnostics are
-	// skipped (see storage.MirrorPushOptions.Automatic). Explicit pushes
-	// leave it unset and do neither.
+	// Automatic marks watch-mode mirror pushes, which skip archive-scale
+	// diagnostics and defer on rebuild-lock contention.
 	Automatic     bool                        `json:"automatic,omitzero"`
 	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
 	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`

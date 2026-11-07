@@ -136,10 +136,8 @@ func (s *Sync) isFiltered() bool {
 // session-replace incremental push. A probe-time lock conflict means a
 // WRITER holds the file — another push in flight, or a serve process from a
 // build predating the read-only serve change — and fails closed. When the
-// incremental push's own write open is blocked by reader processes, the
-// push defers (storage.MirrorPushOptions.Automatic) or falls back to a rebuild, which
-// never write-opens the destination (rebuild file plus atomic rename). A
-// rebuild that was killed partway resumes on the next push. Every
+// incremental push's write open is blocked by readers, it catches up a standby
+// and swaps it in. A rebuild that was killed partway resumes. Every
 // rebuild logs and records its trigger in Diagnostics.RebuildReason, since
 // a rebuild silently substituted for a requested incremental push is
 // otherwise invisible to the operator.
@@ -205,10 +203,6 @@ func Push(
 		run.Reason = pending.Reason
 		reason = "resuming an unfinished rebuild, started because: " + pending.Reason
 	}
-	// errored is an unfinished rebuild that ended with session errors while
-	// the mirror needs no rebuild. It is kept until the incremental push
-	// runs, so a push that readers block resumes it instead of starting over.
-	var errored *rebuildRun
 	claim := func(required bool) error {
 		claimed, pending, restarted, err := claimRebuild(ctx, path, run, full)
 		if err != nil {
@@ -221,13 +215,13 @@ func Push(
 		switch {
 		case pending == nil:
 		case pending.Errored && !required:
-			errored = pending
+			err = removeRebuildFile(rebuildFilePath(path))
 		default:
 			// An unfinished rebuild resumes even when the mirror would now
 			// accept an incremental push, so a requested rebuild still finishes.
 			resume(pending)
 		}
-		return nil
+		return err
 	}
 	leftover, err := rebuildFileExists(path)
 	if err != nil {
@@ -240,40 +234,24 @@ func Push(
 	}
 	if reason == "" {
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
-		held := err != nil && isMirrorHeldError(err)
-		if errored != nil && !held {
-			log.Printf("duckdbsync: discarding the unfinished rebuild (%s); it ended with session errors and the mirror needs no rebuild",
-				errored.Reason)
-			err = errors.Join(err, removeRebuildFile(rebuildFilePath(path)))
-		}
-		switch {
-		case err == nil:
+		if err == nil {
 			cleanUpLegacyDuckDBSyncState(ctx, local)
 			return result, nil
-		case !held:
-			return result, err
-		case opts.Automatic:
-			return deferredHeldMirrorPush(), nil
 		}
-		const heldReason = "mirror is held open by reader processes; " +
-			"incremental write access unavailable"
-		switch {
-		case errored == nil:
-			reason = heldReason
-			run.Reason = reason
-		case errored.Reason == heldReason:
-			resume(errored)
-		default:
-			// Lead with the readers, since they are why this push rebuilds,
-			// and closing them would allow an incremental update instead.
-			resume(errored)
-			reason = heldReason + "; " + reason
+		if !isMirrorHeldError(err) {
+			return result, err
 		}
 		if lock == nil {
-			if err := claim(true); err != nil {
+			lock, _, _, err = claimRebuild(ctx, path, run, false)
+			if err != nil {
 				return rebuildClaimFailed(path, opts, err)
 			}
 		}
+		result, err = publishHeldMirror(ctx, path, probe, local, machine, opts, onProgress)
+		if err == nil {
+			cleanUpLegacyDuckDBSyncState(ctx, local)
+		}
+		return result, err
 	} else if err := ensureReplaceableMirror(path, probe); err != nil {
 		return storage.MirrorPushResult{}, err
 	}
@@ -288,7 +266,7 @@ func Push(
 }
 
 // rebuildClaimFailed reports a failed claimRebuild. Another push holding the
-// rebuild lock defers an automatic push, like a mirror held by readers.
+// rebuild lock defers an automatic push.
 func rebuildClaimFailed(
 	path string, opts storage.MirrorPushOptions, err error,
 ) (storage.MirrorPushResult, error) {
@@ -303,14 +281,6 @@ func rebuildClaimFailed(
 		return result, nil
 	}
 	return storage.MirrorPushResult{}, rebuildInProgressError(path, err)
-}
-
-func deferredHeldMirrorPush() storage.MirrorPushResult {
-	var result storage.MirrorPushResult
-	result.Diagnostics.Deferred = true
-	result.Diagnostics.DeferredReason = "mirror is held open by reader processes; deferring until write access is available"
-	log.Printf("duckdbsync: %s", result.Diagnostics.DeferredReason)
-	return result
 }
 
 // ensureReplaceableMirror is the fail-closed overwrite guard for rebuilds:

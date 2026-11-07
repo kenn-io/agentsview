@@ -33,7 +33,7 @@ func (s *Store) loadAnalyticsSessions(
 		args = append(args, extraArgs...)
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT `+readbase.AnalyticsSessionColumns+`
+		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, '')
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -41,7 +41,7 @@ func (s *Store) loadAnalyticsSessions(
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, false)
+	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, false, true)
 }
 
 func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -203,23 +203,24 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db
 	return readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
 }
 
+// Mirror replacements preserve the memo generation; fingerprints version entries.
+const frustrationMemoGeneration uint64 = 0
+
 func (s *Store) duckPopulateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
+	versions map[string]string,
 ) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	cache := s.path != ""
-	// Pin cached counts and the query start to the same mirror generation.
-	s.handleMu.RLock()
-	generation := s.frustrationMemo.Generation()
 	idx := make(map[string]int, len(rows))
 	placeholders := make([]string, 0, len(rows))
 	args := make([]any, 0, len(rows))
 	for i := range rows {
-		if cache {
-			if count, ok := s.frustrationMemo.Lookup(generation, rows[i].ID, ""); ok {
+		if version := versions[rows[i].ID]; cache && version != "" {
+			if count, ok := s.frustrationMemo.Lookup(frustrationMemoGeneration, rows[i].ID, version); ok {
 				rows[i].FrustrationMarkerCount = count
 				continue
 			}
@@ -229,15 +230,13 @@ func (s *Store) duckPopulateFrustrationMarkers(
 		args = append(args, rows[i].ID)
 	}
 	if len(args) == 0 {
-		s.handleMu.RUnlock()
 		return nil
 	}
 	q := `SELECT session_id, content, is_system
 		FROM messages
 		WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN (` +
 		strings.Join(placeholders, ",") + `)`
-	msgRows, err := queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, q, args...)
-	s.handleMu.RUnlock()
+	msgRows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb frustration markers: %w", err)
 	}
@@ -263,7 +262,9 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	if cache {
 		for id, i := range idx {
-			s.frustrationMemo.Store(generation, id, "", rows[i].FrustrationMarkerCount)
+			if version := versions[id]; version != "" {
+				s.frustrationMemo.Store(frustrationMemoGeneration, id, version, rows[i].FrustrationMarkerCount)
+			}
 		}
 	}
 	return nil
