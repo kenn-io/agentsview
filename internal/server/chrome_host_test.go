@@ -51,6 +51,11 @@ func testChromeConnection(t *testing.T, srv *Server) (string, net.Conn) {
 
 func readChromeRequest(t *testing.T, conn net.Conn) (string, string) {
 	t.Helper()
+	return readChromePlatformRequest(t, conn, chromehost.ClaudeAI)
+}
+
+func readChromePlatformRequest(t *testing.T, conn net.Conn, platform chromehost.Platform) (string, string) {
+	t.Helper()
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 	body, err := chromehost.ReadFrame(conn)
 	if timeout, ok := errors.AsType[net.Error](err); ok && timeout.Timeout() {
@@ -58,19 +63,21 @@ func readChromeRequest(t *testing.T, conn net.Conn) (string, string) {
 	}
 	require.NoError(t, err)
 	var request struct {
-		Version int    `json:"version"`
-		ID      string `json:"id"`
-		Path    string `json:"path"`
+		Version  int    `json:"version"`
+		ID       string `json:"id"`
+		Platform string `json:"platform"`
+		Path     string `json:"path"`
 	}
 	require.NoError(t, json.Unmarshal(body, &request))
 	require.NotEmpty(t, request.ID)
-	require.Equal(t, 1, request.Version)
+	require.Equal(t, chromehost.Version, request.Version)
+	require.Equal(t, string(platform), request.Platform)
 	return request.ID, request.Path
 }
 
 func writeChromeReply(t *testing.T, conn net.Conn, id string, status int, body string) {
 	t.Helper()
-	payload, err := json.Marshal(map[string]any{"version": 1, "id": id, "status": status, "body": body})
+	payload, err := json.Marshal(map[string]any{"version": chromehost.Version, "id": id, "status": status, "body": body})
 	require.NoError(t, err)
 	require.NoError(t, chromehost.WriteFrame(conn, payload))
 }
@@ -213,6 +220,7 @@ func TestChromeHostLocalOnly(t *testing.T) {
 		{"forwarded", http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", "127.0.0.1:1234", "for=192.0.2.10", "Chrome Sync requires a local connection", true, http.StatusForbidden},
 		{"repeated browser", http.MethodPost, "/api/v1/import/claude-ai/sync?browser&browser=chrome", "192.0.2.10:1234", "", `expected value to be one of \"chrome\" (query.browser: true)`, true, http.StatusBadRequest},
 		{"status", http.MethodGet, "/api/v1/import/claude-ai/chrome", "192.0.2.10:1234", "", "Chrome Sync requires a local connection", true, http.StatusForbidden},
+		{"chatgpt", http.MethodPost, "/api/v1/import/chatgpt/sync", "192.0.2.10:1234", "", "Chrome Sync requires a local connection", true, http.StatusForbidden},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -242,33 +250,51 @@ func TestChromeHostLocalOnly(t *testing.T) {
 }
 
 func TestChromeHostIncompatibleReply(t *testing.T) {
-	for _, reply := range []struct{ name, body string }{
-		{"missing revision", `{"status":0,"error":"Unsupported Claude fetch path"}`},
-		{"wrong revision", `{"version":2,"status":600,"body":"private"}`},
+	for _, reply := range []struct {
+		name, body string
+		platform   chromehost.Platform
+	}{
+		{"missing revision", `{"status":0,"error":"Unsupported Claude fetch path"}`, chromehost.ClaudeAI},
+		{"wrong revision", `{"version":1,"status":600,"body":"private"}`, chromehost.ClaudeAI},
+		{"chatgpt missing revision", `{"status":0,"error":"Unsupported ChatGPT fetch path"}`, chromehost.ChatGPT},
 	} {
 		t.Run(reply.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			_, conn := testChromeConnection(t, srv)
+			route := "/api/v1/import/claude-ai/sync?browser=chrome"
+			code := "claude_ai_chrome_host_update_required"
+			if reply.platform == chromehost.ChatGPT {
+				route = "/api/v1/import/chatgpt/sync"
+				code = "chrome_host_update_required"
+			}
 			response := httptest.NewRecorder()
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, route, nil)
 				req.RemoteAddr = "127.0.0.1:1234"
 				srv.mux.ServeHTTP(response, req)
 			}()
-			id, path := readChromeRequest(t, conn)
-			require.Equal(t, "/api/organizations", path)
-			body, err := os.ReadFile("../importer/testdata/claude_ai_sync/organizations.json")
-			require.NoError(t, err)
-			writeChromeReply(t, conn, id, 200, string(body))
-			id, path = readChromeRequest(t, conn)
-			require.Contains(t, path, "/chat_conversations_v2?")
-			body, err = os.ReadFile("../importer/testdata/claude_ai_sync/list_all.json")
-			require.NoError(t, err)
-			writeChromeReply(t, conn, id, 200, string(body))
-			id, path = readChromeRequest(t, conn)
-			require.Contains(t, path, "/chat_conversations/22222222-2222-4222-8222-222222222222?")
+			var id string
+			if reply.platform == chromehost.ChatGPT {
+				id, _ = readChromePlatformRequest(t, conn, reply.platform)
+				writeChromeReply(t, conn, id, http.StatusOK, `{"items":[{"id":"22222222-2222-4222-8222-222222222222","update_time":1700000001}],"total":1}`)
+				id, _ = readChromePlatformRequest(t, conn, reply.platform)
+			} else {
+				requestID, path := readChromeRequest(t, conn)
+				require.Equal(t, "/api/organizations", path)
+				body, err := os.ReadFile("../importer/testdata/claude_ai_sync/organizations.json")
+				require.NoError(t, err)
+				writeChromeReply(t, conn, requestID, 200, string(body))
+				requestID, path = readChromeRequest(t, conn)
+				require.Contains(t, path, "/chat_conversations_v2?")
+				body, err = os.ReadFile("../importer/testdata/claude_ai_sync/list_all.json")
+				require.NoError(t, err)
+				writeChromeReply(t, conn, requestID, 200, string(body))
+				requestID, path = readChromeRequest(t, conn)
+				require.Contains(t, path, "/chat_conversations/22222222-2222-4222-8222-222222222222?")
+				id = requestID
+			}
 			payload := `{"id":"` + id + `",` + reply.body[1:]
 			require.NoError(t, chromehost.WriteFrame(conn, []byte(payload)))
 			select {
@@ -277,7 +303,8 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 				require.FailNow(t, "incompatible host did not stop Sync")
 			}
 			assert.Contains(t, response.Body.String(), "Restart AgentsView if you upgraded it, run agentsview source chrome setup, reload the extension at chrome://extensions, then Sync again.")
-			assert.Contains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
+			assert.Contains(t, response.Body.String(), `"code":"`+code+`"`)
+			assert.NotContains(t, response.Body.String(), "context canceled")
 			assert.NotContains(t, response.Body.String(), "event: done")
 			assert.NotContains(t, response.Body.String(), "private")
 			stats, err := srv.db.GetStats(t.Context(), false, false)
@@ -293,7 +320,10 @@ func TestChromeHostDisconnect(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			_, conn := testChromeConnection(t, srv)
 			finished := make(chan error, 1)
-			go func() { _, err := srv.chrome.fetch(t.Context(), "/api/organizations"); finished <- err }()
+			go func() {
+				_, err := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations")
+				finished <- err
+			}()
 			_, path := readChromeRequest(t, conn)
 			require.Equal(t, "/api/organizations", path)
 			switch mode {
@@ -323,7 +353,10 @@ func TestChromeHostFrameReply(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
 	_, conn := testChromeConnection(t, srv)
 	finished := make(chan importer.ClaudeAIResponse, 1)
-	go func() { response, _ := srv.chrome.fetch(t.Context(), "/api/organizations"); finished <- response }()
+	go func() {
+		response, _ := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations")
+		finished <- response
+	}()
 	id, _ := readChromeRequest(t, conn)
 	writeChromeReply(t, conn, "foreign-id", 200, "private")
 	writeChromeReply(t, conn, id, 413, "")
@@ -342,7 +375,7 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 	for attempt := range 2 {
 		finished := make(chan error, 1)
 		go func() {
-			response, err := srv.chrome.fetch(t.Context(), "/api/organizations")
+			response, err := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations")
 			if err == nil {
 				assert.Equal(t, "[]", string(response.Body))
 			}

@@ -660,16 +660,15 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
-- **Code-mode wait output (checked 2026-11-03):** A local rollout records
-  `wait` arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
+- **Code-mode wait output (checked 2026-11-03):** A local rollout records `wait`
+  arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
   `function_call_output.output` is an array of `input_text` blocks containing
   completion timing and script output; running polls return plain text.
   Agentsview treats `wait` calls with a non-empty `cell_id` and no `ids` or
   `targets` arguments as code-mode polls and stores their output as normal
   tool results. Subagent waits keep their existing `status` handling,
-  including empty timeout statuses. They add no result event when `status`
-  is absent. Synthetic coverage in
-  `TestParseCodexSession_FunctionCalls` and
+  including empty timeout statuses. They add no result event when `status` is
+  absent. Synthetic coverage in `TestParseCodexSession_FunctionCalls` and
   `TestCodexCodeModeWaitOutputUpgradeReparsesInPlace` verifies the result and
   an in-place reparse for Codex at data version 164.
 
@@ -680,14 +679,14 @@ fixtures retain this field; missing identities remain source-local.
   [response schema](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/protocol/src/models.rs)
   stores function-call arguments as a JSON string. The
   [output formatter](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/output.rs)
-  emits text blocks with script status, wall time, and output. These polls stay
-  on the incremental parse path when they bind no agent IDs through `ids` or
-  `targets`. Subagent waits still require a full parse, including the empty
+  emits text blocks with script status, wall time, and output. These polls
+  stay on the incremental parse path when they bind no agent IDs through `ids`
+  or `targets`. Subagent waits still require a full parse, including the empty
   `status` object returned on timeout by the
   [subagent wait handler](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/handlers/multi_agents/wait.rs).
   Covered by `TestParseCodexSessionFrom_CodeModeWaitStaysIncremental` and
-  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure Code
-  share this parser. Parsed content and cursor encoding are unchanged.
+  `TestParseCodexSessionFrom_WaitOutputRequiresFullParse`. TraeX and Augure
+  Code share this parser. Parsed content and cursor encoding are unchanged.
 
 - **Hosted capacity (reverified 2026-11-01):** The pinned
   [message schema](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/protocol/src/models.rs)
@@ -695,8 +694,8 @@ fixtures retain this field; missing identities remain source-local.
   [rollout policy](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs)
   persists message items. `TestSandboxCodexOutcomesAboveFormerLimit` scales
   this existing shape synthetically through native capture, materialization
-  and the isolated parser, with one large string and many smaller messages.
-  It verifies lossless outcomes above the former transport ceiling, not a
+  and the isolated parser, with one large string and many smaller messages. It
+  verifies lossless outcomes above the former transport ceiling, not a
   producer size limit or a new provider format.
 
 - **Generated images (checked 2026-10-29 at
@@ -3725,16 +3724,20 @@ schemas keep their existing ordering behavior.
   text, count, or title triggers a detail fetch. Title-only repairs count as
   updates and send session refresh notifications. Reverified 2026-10-11 with
   reconstructed fixtures in `TestSyncClaudeAIZipTitleFreshness` and
-  `TestClaudeAISyncMutationNotifications`. Sync stores messages in the same
-  shape as zip import, without source UUIDs. Pins match by role, text, and
-  occurrence rank. Reverified 2026-10-08 against the reconstructed list and
-  detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`,
-  `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and
-  `TestSyncClaudeAIBranchSwitch`. Usage-only message and user-turn counts
-  follow the selected branch, including shorter branches. Verified 2026-10-22
-  with the reconstructed fixture in
-  `TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts`, rather than a live
-  observation of count behavior. Shorter zip exports remain refused. See
+  `TestClaudeAISyncMutationNotifications`. Usage-only sync refreshes counts
+  and end time for shorter snapshots with unchanged retained rows before
+  caching freshness. Reverified 2026-10-18 with
+  `TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts`. Sync stores
+  messages in the same shape as zip import, without source UUIDs. Pins match
+  by role, text, and occurrence rank. Reverified 2026-10-08 against the
+  reconstructed list and detail fixtures and
+  `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`,
+  `TestSyncClaudeAIZipSameCountFreshness`, and `TestSyncClaudeAIBranchSwitch`.
+  Usage-only message and user-turn counts follow the selected branch,
+  including shorter branches. Verified 2026-10-22 with the reconstructed
+  fixture in `TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts`, rather
+  than a live observation of count behavior. Shorter zip exports remain
+  refused. See
   [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
   for branch updates and Trash copies.
 - **Limits:** Browser reads and decoded relay responses are capped at 32 MiB.
@@ -3896,6 +3899,69 @@ schemas keep their existing ordering behavior.
   data.
 - **Agentsview:** `internal/parser/chatgpt.go`; graph ancestry is flattened for
   display and the importer does not claim billing completeness.
+- **Chrome Sync:** The contributor reports live use of the private session,
+  conversation list, and detail endpoints in
+  [agentsview#2226](https://github.com/kenn-io/agentsview/issues/2226),
+  checked 2026-10-17. Sync uses the export conversation parser; list
+  timestamps accept ISO strings or Unix seconds, and detail timestamps use
+  Unix seconds. A supplied signed-in capture has a detail timestamp 0.68 s
+  after the list timestamp and a `mapping` object. Reverified 2026-10-18 with
+  `TestSyncChatGPTEquivalentTimestampsSkipSecondDetail`: Sync allows 5 s of
+  endpoint skew and re-fetches detail 60 s newer than the list. The
+  [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
+  checked 2026-10-17, document separate active (`is_archived=false`) and
+  archived (`is_archived=true`) conversation lists. Sync pages both lists each
+  run. The
+  [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),
+  checked 2026-10-17, describe a newer flat `messages` array with
+  `page_info` pagination. Each detail without a `mapping` object or either
+  `conversation_id` or `id` counts toward the two-consecutive-failures stop. A
+  single unsupported detail reports the update error after the remaining chats
+  finish, verified by `TestSyncChatGPTSingleUnsupportedDetail` on 2026-10-18.
+  Sync does not parse the flat format or cache freshness for details without
+  an identity. Reverified against the parser and synthetic importer
+  regressions on 2026-10-18: tool nodes attach to assistant messages, and
+  browser image placeholders carry no asset identity. The parser records user
+  message and parent IDs in the archive's existing source identity fields.
+  Sync preserves uploaded images on user turns with matching ordinals, roles,
+  timestamps, and sanitized surrounding text. Saved message and parent IDs
+  must match when present in the archive; older ZIP imports have neither ID.
+  Matching turns fill empty source identities before Sync caches freshness
+  under full and transcripts storage, verified by
+  `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`. Generated
+  images use the browser snapshot. Sync keeps the previous version in Trash
+  when it replaces history with a different branch under full, transcripts,
+  and usage storage, with its pins, notes, and any archived images. Appending
+  turns makes no copy. Reverified with
+  `TestSyncChatGPTUsageArchiveAppendMakesNoTrashedCopy` and
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy` on 2026-10-18.
+  Re-syncing the same chat makes no further copy, verified by
+  `TestSyncChatGPTAppendFreshnessAndBranchChanges`,
+  `TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins`, and
+  `TestSyncChatGPTZipImageReconciliation` on 2026-10-18. Sync replaces turns
+  with conflicting nonempty source message IDs. Sync fills missing models and
+  keeps nonempty stored models under full, transcripts, and usage storage,
+  including when later replies cause the parser to infer a different model for
+  an older reply during appends or replacements. Reverified 2026-10-18 with
+  `TestSyncChatGPTArchiveUpdatesAppendedTurns` and
+  `TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness`. Usage-only sync
+  also fills missing models when turns and `update_time` match, verified by
+  `TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp`. Usage-only
+  sync keeps a Trash copy when shorter snapshots have matching retained
+  assistant turns, including when only a trailing user turn was dropped. It
+  refreshes counts and end time and fills missing models before caching
+  freshness. Reverified 2026-10-18 with
+  `TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata` and
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy`. When detail
+  `create_time` is null or absent, Sync keeps the stored start time or uses
+  the first non-zero message timestamp for a new chat, skipping undated
+  messages. Numeric `create_time` takes precedence. Reverified against the
+  parser and synthetic importer test `TestSyncChatGPTMissingCreateTime` on
+  2026-10-18; ZIP import is unchanged.
+- **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
+  disconnected host and `chrome_sync_running` reports an active browser sync.
+  Stream errors use `chatgpt_auth_required` for sign-in and
+  `chrome_host_update_required` for an incompatible native host.
 
 ## Kiro CLI (`kiro`)
 

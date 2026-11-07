@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 // seedReplaceSession stores a renamed three-message session with a tool call, two pins, and a usage event.
@@ -266,4 +267,40 @@ func TestReplaceSessionKeepingTrashedCopyPinIdentities(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, oldPins, 2)
 	assert.Equal(t, Ptr("saved note"), oldPins[0].Note)
+}
+
+// A usage-only replace that only drops the trailing user turn leaves every retained row unchanged. The live pin survives because its row is untouched, and the trashed copy must carry it too.
+func TestReplaceSessionKeepingTrashedCopyKeepsPinsWhenRetainedRowsUnchanged(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	ctx := t.Context()
+	build := func(count int) SessionBatchWrite {
+		write := replaceWrite("prompt", "reply", "follow-up")
+		write.Messages = write.Messages[:count]
+		write.Session.MessageCount = count
+		write.Messages[1].Role = "assistant"
+		write.Messages[1].Model = "model-a"
+		write.Messages[1].TokenUsage = []byte(`{"input_tokens":10,"output_tokens":2}`)
+		return write
+	}
+	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{build(3)})
+	require.NoError(t, err)
+	stored, err := d.GetAllMessages(ctx, "replace")
+	require.NoError(t, err)
+	require.Len(t, stored, 1, "usage-only storage keeps only the billed assistant row")
+	_, err = d.PinMessage(ctx, "replace", stored[0].ID, Ptr("keep me"))
+	require.NoError(t, err)
+
+	copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, build(2))
+	require.NoError(t, err)
+	require.NotEmpty(t, copyID)
+
+	live, err := d.ListPinnedMessages(ctx, "replace", "")
+	require.NoError(t, err)
+	require.Len(t, live, 1)
+	copied, err := d.ListPinnedMessages(ctx, copyID, "")
+	require.NoError(t, err)
+	require.Len(t, copied, 1, "the trashed copy must keep the pin")
+	assert.Equal(t, stored[0].Ordinal, copied[0].Ordinal)
+	assert.Equal(t, live[0].Note, copied[0].Note, "usage-only storage may clear the note, but both sides must agree")
 }
