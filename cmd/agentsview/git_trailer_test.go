@@ -137,6 +137,7 @@ func TestGitTrailerCommits(t *testing.T) {
 		{name: "verbose diff below scissors with spaced comment string", args: []string{"-v"}, staged: true, comment: [2]string{"core.commentString", "// x"}, abort: true},
 		{name: "verbose diff below scissors with automatic comment character", args: []string{"-v"}, staged: true, comment: [2]string{"core.commentChar", "auto"}, abort: true},
 		{name: "scissors-like line with unselected automatic comment character", args: []string{"-m", "; " + scissors}, comment: [2]string{"core.commentChar", "auto"}, want: "; " + scissors + "\n\n" + trailerLine},
+		{name: "scissors-like lines with unselected automatic comment character", args: []string{"-m", "; " + scissors + "\n; explanation"}, comment: [2]string{"core.commentChar", "auto"}, want: "; " + scissors + "\n; explanation\n\n" + trailerLine},
 		{name: "template signoff changed by another hook", template: true, templateText: "Template subject\n\nSigned-off-by: Template Author <author@example.com>\n", prepareSuffix: rewriteSignoff, want: "Template subject\n\nSigned-off-by: Other <other@example.com>\n" + trailerLine},
 		{name: "scissors-like message line", args: []string{"-m", "foo " + scissors}, want: "foo " + scissors + "\n\n" + trailerLine},
 		{name: "editor", editor: true, want: "from editor"},

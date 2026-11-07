@@ -65,7 +65,10 @@ keep their existing trailers. Amending from a different session adds a second
 
 The hook skips messages containing only blank lines, Git comments, or signoffs.
 Git still rejects empty messages. A comment-only message such as `-m '#123 fix'`
-can still commit when Git retains comments, but gets no trailer.
+can still commit when Git retains comments, but gets no trailer. Git doesn't
+tell hooks whether `-s` added a signoff, so when a commit template already ends
+with your own signoff and another hook changes that line, the commit gets no
+trailer.
 
 AgentsView must be on `PATH`. A missing or failing binary, or a missing,
 invalid, or ambiguous session, leaves the commit message unchanged.

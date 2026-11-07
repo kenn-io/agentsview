@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	gitcmd "go.kenn.io/kit/git/cmd"
@@ -99,25 +98,38 @@ func cleanMessage(ctx context.Context, file string) (string, error) {
 
 // scissorsOffset returns where Git cuts the message, or -1. Git cuts at the
 // first scissors line for its comment string. With core.commentChar=auto, Git
-// picks one of several characters and records nowhere which, so only a
-// scissors line followed by a comment with the same prefix counts, and the
-// last one wins: Git writes its own after all message text.
+// picks the first candidate that starts no message line and records nowhere
+// which, so a candidate counts only if every earlier one starts some line.
+// Git writes its own scissors line after all message text, so the last match
+// wins.
 func scissorsOffset(message string, comments []string) int {
-	lines := slices.Collect(strings.Lines(message))
-	cut, offset := -1, 0
-	for i, line := range lines {
-		for _, comment := range comments {
-			if strings.TrimRight(line, "\r\n") != comment+" "+cutLine {
+	starts := make([]bool, len(comments))
+	cuts := make([]int, len(comments))
+	for i := range cuts {
+		cuts[i] = -1
+	}
+	offset := 0
+	for line := range strings.Lines(message) {
+		for i, comment := range comments {
+			if !strings.HasPrefix(line, comment) {
 				continue
 			}
-			if len(comments) == 1 {
-				return offset
-			}
-			if i+1 < len(lines) && strings.HasPrefix(lines[i+1], comment) {
-				cut = offset
+			starts[i] = true
+			if strings.TrimRight(line, "\r\n") == comment+" "+cutLine {
+				if len(comments) == 1 {
+					return offset
+				}
+				cuts[i] = offset
 			}
 		}
 		offset += len(line)
+	}
+	cut := -1
+	for i := range comments {
+		cut = max(cut, cuts[i])
+		if !starts[i] {
+			break
+		}
 	}
 	return cut
 }
