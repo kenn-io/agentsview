@@ -1,0 +1,7 @@
+{
+  "generation": "baseline",
+  "sources": {
+    "race-linux": "go-race-linux-f55572c9390cf9e77bcd5dd77383093fcace6126714d3eeb13ff996dba9f85b7-2026-11-07",
+    "test-Linux-X64": "go-test-Linux-X64-f55572c9390cf9e77bcd5dd77383093fcace6126714d3eeb13ff996dba9f85b7-2026-11-07"
+  }
+}

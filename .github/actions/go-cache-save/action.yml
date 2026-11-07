@@ -6,7 +6,7 @@ runs:
   using: composite
   steps:
     - name: Prune unused cache entries
-      if: env.GO_CACHE_HIT != 'true' && env.GO_CACHE_TRACKING != ''
+      if: (env.GO_CACHE_HIT != 'true' || env.MEASURE_GO_CACHE_TRACK == 'true') && env.GO_CACHE_TRACKING != ''
       shell: bash
       env:
         CACHE_ACTION_PATH: ${{ github.action_path }}
@@ -20,12 +20,17 @@ runs:
         find "${paths[@]}" -mindepth 2 -maxdepth 2 \( -type f -o -type d \) \( -name '*-a' -o -name '*-d' \) ! -newer "$GO_CACHE_TRACKING" -print |
           awk 'FILENAME == ARGV[1] { keep[$0]=1; next } { n=split($0, parts, "/"); if (!(parts[n] in keep)) printf "%s%c", $0, 0 }' "$keep" - |
           xargs -0 rm -rf --
+        du -sk "${paths[@]}"
+        modules="$(go env GOMODCACHE)"
+        if [ "$RUNNER_OS" = 'Windows' ]; then modules="$(cygpath -u "$modules")"; fi
+        if [ -d "$modules" ]; then du -sk "$modules"; fi
 
     - name: Save caches
       if: >-
-        github.event_name == 'push' && github.ref == 'refs/heads/main'
-        && env.GO_CACHE_HIT != 'true'
+        (github.event_name == 'push' && github.ref == 'refs/heads/main'
+        && env.GO_CACHE_HIT != 'true')
+        || (github.event_name == 'pull_request' && env.MEASURE_GO_CACHE_SAVE == 'true')
       uses: actions/cache/save@v6.1.0
       with:
         path: ${{ env.GO_CACHE_PATHS }}
-        key: ${{ env.GO_CACHE_KEY }}
+        key: ${{ env.MEASURE_GO_CACHE_SAVE_KEY || env.GO_CACHE_KEY }}
