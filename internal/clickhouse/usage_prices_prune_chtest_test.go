@@ -118,6 +118,9 @@ func TestPushAdoptsModelsAnEarlierPushLeftPending(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newUsagePriceStore(t)
 	ctx := t.Context()
+	// Prepared deltas price new models on read, hiding missing stored prices.
+	// Keep this test on the raw path while it simulates a stopped push.
+	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage", "TRUNCATE TABLE prepared_usage")
 	filter := db.UsageFilter{Timezone: "UTC"}
 	baseline := dailyUsageGroupRowStats(t, store, filter)
 	before := pricedDigest(t, store.conn)
