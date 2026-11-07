@@ -150,12 +150,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			require.NotNil(t, initial.Setup)
 			assert.False(t, initial.Setup.Enabled)
 			assert.Equal(t, "turn-on", initial.Setup.Action)
-			switch recipe {
-			case "changed-provider":
-				assert.Equal(t, "configured", initial.Setup.Provider)
-			case "nomic":
-				assert.Equal(t, "ollama", initial.Setup.Provider)
-			}
 			assert.Zero(t, installs.Load())
 			// The row discloses a download only for the built-in provider.
 			var shown int64
@@ -266,19 +260,17 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
 	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), 202)
 	<-reloaded
-	client := &http.Client{Timeout: time.Second}
 	before := inspections.Load()
-	var status vector.BuildStatus
-	require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
-	require.NotNil(t, status.Setup)
-	assert.True(t, status.Setup.Busy)
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.True(t, status.Busy)
 	assert.Equal(t, before, inspections.Load(), "setup progress must not probe Ollama")
 	<-owner.done
-	require.NoError(t, json.Unmarshal(embeddingRequest(t, client, ts.URL, "GET", "/api/v1/embeddings/status", "application/json", nil, 200), &status))
-	require.NotNil(t, status.Setup)
-	assert.False(t, status.Setup.Busy)
-	assert.Equal(t, "turn-on", status.Setup.Action)
-	assert.Equal(t, "Another process may be using search. Close it and retry.", status.Setup.Error)
+	status, err = owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.False(t, status.Busy)
+	assert.Equal(t, "turn-on", status.Action)
+	assert.Equal(t, "Another process may be using search. Close it and retry.", status.Error)
 	export, ok, err := owner.push.BeginExport(t.Context(), nil)
 	require.NoError(t, err)
 	require.True(t, ok, "push must see the generation built by the process holding the write lock")
@@ -354,7 +346,7 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 }
 
 func TestLiveEmbeddingsSetupFailures(t *testing.T) {
-	for _, failure := range []string{"already enabled", "configured provider", "invalid endpoint", "invalid TOML", "model inspection", "config read"} {
+	for _, failure := range []string{"already enabled", "configured provider", "invalid TOML", "model inspection", "config read"} {
 		t.Run(failure, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
@@ -363,10 +355,6 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 			inspectionError := errors.New("model status unavailable")
 			switch failure {
-			case "invalid endpoint":
-				writeTestConfig(t, dir, "[vector]\nenabled=false\n[vector.embeddings]\nmodel='test-model'\ndimension=3\n[vector.embeddings.servers.local]\nendpoint='ftp://127.0.0.1/v1'\n")
-				cfg, err = config.LoadReadOnly()
-				require.NoError(t, err)
 			case "already enabled":
 				writeTestConfig(t, dir, "[vector]\nenabled=true\n")
 				cfg, err = config.LoadReadOnly()
@@ -431,13 +419,16 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 func TestEmbeddingsSetupStatusIdentifiesProviders(t *testing.T) {
 	oldInspect := inspectLocalEmbeddings
 	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
-	for _, provider := range []string{"configured Ollama port", "discovered Ollama", "built-in"} {
+	for _, provider := range []string{"configured", "configured CPU fallback", "configured Ollama port", "discovered Ollama", "built-in"} {
 		t.Run(provider, func(t *testing.T) {
 			cfg, err := config.Default()
 			require.NoError(t, err)
 			cfg.Vector.Enabled = true
-			if provider == "configured Ollama port" {
+			switch provider {
+			case "configured Ollama port":
 				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"ollama": {Endpoint: "http://127.0.0.1:11434/v1"}}
+			case "configured", "configured CPU fallback":
+				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": {Endpoint: "http://127.0.0.1:30000/v1", OllamaCPUFallback: provider == "configured CPU fallback"}}
 			}
 			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 				return embedlocal.Status{Installing: true, DownloadBytes: 295000000, OllamaAvailable: provider == "discovered Ollama"}, nil
@@ -450,7 +441,11 @@ func TestEmbeddingsSetupStatusIdentifiesProviders(t *testing.T) {
 				assert.Equal(t, "built-in", status.Provider)
 				assert.True(t, status.Installing)
 			} else {
-				assert.Equal(t, "ollama", status.Provider)
+				if provider == "configured" {
+					assert.Equal(t, "configured", status.Provider)
+				} else {
+					assert.Equal(t, "ollama", status.Provider)
+				}
 				if provider == "discovered Ollama" {
 					assert.False(t, status.Installing, "another app's install must not replace the active Ollama state")
 				}

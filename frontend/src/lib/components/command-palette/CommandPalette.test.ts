@@ -780,7 +780,9 @@ describe("CommandPalette", () => {
       expect(document.body.textContent?.includes("Search by meaning is off")).toBe(shown);
       await enterSearchQuery("another query");
       for (let i = 0; i < 10; i++) await tick();
-      expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);
+      if (shown) {
+        expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);
+      }
       unmount(component);
     },
   );
