@@ -40,7 +40,9 @@
 {#if preview}
   {#if hasMore}
     <Disclosure variant="plain" class="boundary-details">
-      {#snippet summary()}{preview}{/snippet}
+      {#snippet summary()}
+        <span class="boundary-summary">{preview}</span>
+      {/snippet}
       {#snippet meta()}{m.compact_boundary_show_full_summary()}{/snippet}
       <pre class="boundary-full">{content}</pre>
     </Disclosure>
@@ -98,6 +100,12 @@
     line-height: 1.5;
     border-radius: 0 var(--radius-sm, 4px)
       var(--radius-sm, 4px) 0;
+  }
+  /* Match the short preview's text in the shared toggle row. */
+  .boundary-summary {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 400;
   }
   .boundary-full {
     white-space: pre-wrap;
