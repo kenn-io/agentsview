@@ -1590,8 +1590,11 @@ fixtures retain this field; missing identities remain source-local.
   names the `interpreter` command used for resume. A rollout from Open
   Interpreter 0.0.59 attached to agentsview issue 2745 has
   `originator: "codex-tui"` and the Codex record shapes.
-- **Usage and cost:** `token_count` and `token_usage_record` records carry the
-  Codex fields, so normalization follows the Codex entry. Open Interpreter
+- **Usage and cost:** Each model response persists both a `token_count` event
+  and a `token_usage_record` with the same per-response usage. The parser
+  counts `token_count` alone, as for Codex, and skips `token_usage_record`,
+  which only TraeX reads because its rollouts lack `token_count`. Reading both
+  would add a response's usage once per tool call it issued. Open Interpreter
   targets open models through third-party providers (the sample used
   `glm-5.2`); slugs absent from the pricing catalog price as unpriced.
 - **Agentsview:** `internal/parser/openinterpreter.go` relabels the shared Codex

@@ -30,8 +30,9 @@ func openInterpreterRolloutName() string {
 // fixture built from an Open Interpreter 0.0.59 rollout (paths, prompts, and
 // instructions replaced). Its first turn keeps the records Codex-era fixtures
 // lack: the top-level ordinal, world_state, item_completed, and a turn that
-// ended in a provider error. The second turn exercises a tool call and token
-// usage in the shared Codex record shapes.
+// ended in a provider error. The second turn issues two tool calls in one
+// response, followed by the token_usage_record and token_count that Open
+// Interpreter persists for every response.
 func TestOpenInterpreterProviderParsesRollout(t *testing.T) {
 	root := t.TempDir()
 	writeOpenInterpreterFixture(t, filepath.Join(
@@ -67,22 +68,33 @@ func TestOpenInterpreterProviderParsesRollout(t *testing.T) {
 		"world_state, item_completed, and ordinal are valid records")
 	assert.Equal(t, 2, sess.UserMessageCount)
 
-	require.Len(t, msgs, 4)
+	require.Len(t, msgs, 5)
 	assert.Equal(t, RoleUser, msgs[0].Role)
 	assert.Equal(t, "which model", msgs[0].Content)
 	assert.Equal(t, RoleUser, msgs[1].Role)
 	assert.Equal(t, "List the notes directory.", msgs[1].Content)
-	assert.Equal(t, RoleAssistant, msgs[3].Role)
-	assert.Equal(t, "The directory holds README.md and todo.md.", msgs[3].Content)
+	assert.Equal(t, RoleAssistant, msgs[4].Role)
+	assert.Equal(t, "The directory holds README.md and todo.md.", msgs[4].Content)
+	outputTokens := 0
 	for _, msg := range msgs {
 		assert.Equal(t, "glm-5.2", msg.Model)
+		outputTokens += msg.OutputTokens
 	}
+	// token_usage_record repeats the usage token_count already carries. The
+	// parser counts token_count alone, as for Codex; reading both would bill
+	// the response once per tool call.
+	assert.Equal(t, 90, outputTokens)
 
-	require.Len(t, msgs[2].ToolCalls, 1)
-	call := msgs[2].ToolCalls[0]
-	assert.Equal(t, "call_exec_1", call.ToolUseID)
-	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(t, "README.md\ntodo.md", call.ResultEvents[0].Content)
+	for i, want := range []struct{ id, output string }{
+		{"call_exec_1", "README.md\ntodo.md"},
+		{"call_exec_2", "- ship it"},
+	} {
+		require.Len(t, msgs[2+i].ToolCalls, 1)
+		call := msgs[2+i].ToolCalls[0]
+		assert.Equal(t, want.id, call.ToolUseID)
+		require.Len(t, call.ResultEvents, 1)
+		assert.Equal(t, want.output, call.ResultEvents[0].Content)
+	}
 
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.Equal(t, 90, sess.TotalOutputTokens)
