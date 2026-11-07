@@ -85,10 +85,12 @@ export function formatDateTime(
 export function formatDayRange(from: string, to: string): string {
   const options: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
   const first = formatDateTime(`${from}T00:00:00`, options);
-  return from === to ? first : m.data_workspace_activity_range({
-    first,
-    last: formatDateTime(`${to}T00:00:00`, options),
-  });
+  return from === to
+    ? first
+    : m.data_workspace_activity_range({
+        first,
+        last: formatDateTime(`${to}T00:00:00`, options),
+      });
 }
 
 export function initI18n() {

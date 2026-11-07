@@ -23,15 +23,25 @@ describe("SummaryCards", () => {
     analytics.from = "2025-11-07";
     analytics.to = "2026-11-06";
     const data = {
-      total_sessions: 29, total_messages: 100, total_output_tokens: 0,
-      token_reporting_sessions: 0, models: [], active_projects: 3,
-      active_days: 5, avg_messages: 10, median_messages: 8, p90_messages: 20,
-      most_active_project: "project-a", concentration: 0.5, agents: {},
+      total_sessions: 29,
+      total_messages: 100,
+      total_output_tokens: 0,
+      token_reporting_sessions: 0,
+      models: [],
+      active_projects: 3,
+      active_days: 5,
+      avg_messages: 10,
+      median_messages: 8,
+      p90_messages: 20,
+      most_active_project: "project-a",
+      concentration: 0.5,
+      agents: {},
     };
     component = mount(SummaryCards, { target: document.body });
     await tick();
     const card = () => document.querySelector(".summary-cards .card")!;
-    const caption = () => card().querySelector(".card-sub")?.textContent?.replace(/\s/g, " ").trim();
+    const caption = () =>
+      card().querySelector(".card-sub")?.textContent?.replace(/\s/g, " ").trim();
     expect(caption()).toBeUndefined();
     analytics.summary = data;
     analytics.summaryFilterParams = { from: "2025-11-07", to: "2026-11-06" };

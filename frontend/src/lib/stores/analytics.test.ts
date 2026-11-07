@@ -1176,7 +1176,9 @@ describe("executeFetch concurrency and error handling", () => {
     analytics.from = "2026-02-01";
     let reject!: (reason: Error) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
-      new Promise((_resolve, rej) => { reject = rej; }),
+      new Promise((_resolve, rej) => {
+        reject = rej;
+      }),
     );
     const pending = analytics.fetchSummary();
     expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
