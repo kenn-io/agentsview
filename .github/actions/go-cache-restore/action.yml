@@ -63,22 +63,8 @@ runs:
         && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
       shell: bash
       env:
-        INCLUDE_GO_CACHE: ${{ inputs.include-go-cache }}
         CACHE_ACTION_PATH: ${{ github.action_path }}
       run: |
-        if [ "$INCLUDE_GO_CACHE" = 'true' ]; then
-          modules="$(go env GOMODCACHE)"
-          if [ "$RUNNER_OS" = 'Windows' ]; then modules="$(cygpath -u "$modules")"; fi
-          previous="$(mktemp -d "$RUNNER_TEMP/go-cache-modules.XXXXXX")/modules"
-          if [ -d "$modules" ]; then mv "$modules" "$previous"; fi
-          mkdir -p "$modules/cache/download"
-          if [ -d "$previous/cache/download/sumdb" ]; then
-            cp -R "$previous/cache/download/sumdb" "$modules/cache/download/"
-          fi
-          proxy="file://$previous/cache/download"
-          if [ "$RUNNER_OS" = 'Windows' ]; then proxy="file:///$(cygpath -m "$previous/cache/download")"; fi
-          echo "GOPROXY=$proxy|${GOPROXY:-https://proxy.golang.org,direct}" >> "$GITHUB_ENV"
-        fi
         # Go refreshes cache mtimes at most once an hour, so force used entries to refresh.
         if [ "$RUNNER_OS" = 'macOS' ]; then
           aged="$(date -v-2H +%Y%m%d%H%M.%S)"
