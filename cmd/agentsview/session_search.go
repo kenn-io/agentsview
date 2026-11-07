@@ -42,7 +42,8 @@ func newSessionSearchCommand() *cobra.Command {
 		Long: "Search archived message and tool content with redacted snippets. " +
 			"The default is substring search across available sources. " +
 			"Choose at most one of --regex, --fts, --semantic, or --hybrid. " +
-			"FTS and semantic/hybrid modes search messages only; semantic modes need an embedding index. " +
+			"FTS and semantic/hybrid modes search messages only. " +
+			"--semantic needs an embedding index; without one, --hybrid returns keyword matches with a note on stderr. " +
 			"JSON returns a numeric next_cursor for further matches; repeat the query, search mode, backend, and filters when continuing.",
 		Example: "  agentsview session search 'connection reset' --since 14d --in messages,tool_result --json\n" +
 			"  agentsview session search 'connection AND reset' --fts --json\n" +
@@ -77,6 +78,7 @@ func newSessionSearchCommand() *cobra.Command {
 			req := service.ContentSearchRequest{
 				Pattern:           args[0],
 				Mode:              mode,
+				KeywordFallback:   mode == "hybrid",
 				Sources:           sources,
 				ExcludeSystem:     excludeSystem,
 				Reveal:            reveal,
@@ -102,6 +104,9 @@ func newSessionSearchCommand() *cobra.Command {
 				return err
 			}
 			cliHints := contentSearchHints(cmd.Context(), cmd, svc, req, res)
+			if res.Note != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), sanitizeTerminal(res.Note))
+			}
 			if reveal {
 				fmt.Fprintln(cmd.ErrOrStderr(),
 					"WARNING: --reveal prints full secret values; "+

@@ -234,7 +234,7 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		if err := db.ValidateSemanticFilter(f); err != nil {
 			return db.ContentSearchPage{}, err
 		}
-		if s.getVectorSearcher() == nil {
+		if s.getVectorSearcher() == nil && (f.Mode != "hybrid" || !f.KeywordOnly) {
 			return db.ContentSearchPage{}, s.semanticUnavailableError()
 		}
 		if f.Mode == "hybrid" {

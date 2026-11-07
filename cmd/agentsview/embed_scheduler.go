@@ -599,10 +599,9 @@ func (a searcherAdapter) PrepareSemanticSearch(
 			fmt.Errorf("checking embedding index staleness: %w", err))
 	}
 	if stale {
-		return nil, 0, fmt.Errorf(
-			"%w: index is stale (embedding config changed): run "+
-				"'agentsview index embeddings build --full-rebuild'",
-			db.ErrSemanticUnavailable)
+		return nil, 0, db.NewSemanticUnavailableError(
+			"index is stale (embedding config changed): run " +
+				"'agentsview index embeddings build --full-rebuild'")
 	}
 
 	search, err := a.ix.PrepareSearch(ctx, a.enc, query)
@@ -664,10 +663,9 @@ func translateSearchError(err error) error {
 	queryEncErr, hasQueryEncErr := errors.AsType[*vector.QueryEncodeError](err)
 	switch {
 	case hasBuildingErr:
-		return fmt.Errorf("%w: index is building: %d%% complete",
-			db.ErrSemanticUnavailable, buildingErr.Percent)
+		return db.NewSemanticUnavailableError(fmt.Sprintf("index is building: %d%% complete", buildingErr.Percent))
 	case errors.Is(err, vector.ErrMirrorVersionMismatch):
-		return fmt.Errorf("%w: %w", db.ErrSemanticUnavailable, err)
+		return db.NewSemanticUnavailableError(err.Error())
 	case errors.Is(err, vector.ErrNoActiveGeneration):
 		return db.ErrSemanticUnavailable
 	case hasQueryEncErr:

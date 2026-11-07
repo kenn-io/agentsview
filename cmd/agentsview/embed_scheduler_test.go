@@ -706,7 +706,9 @@ func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T)
 	t.Run("building", func(t *testing.T) {
 		err := translateSearchError(&vector.BuildingError{Percent: 62})
 		require.ErrorIs(t, err, db.ErrSemanticUnavailable)
-		assert.Contains(t, err.Error(), "index is building: 62% complete")
+		unavailable, ok := errors.AsType[*db.SemanticUnavailableError](err)
+		require.True(t, ok)
+		assert.Equal(t, "index is building: 62% complete", unavailable.Reason)
 	})
 	t.Run("other error passes through", func(t *testing.T) {
 		boom := errors.New("boom")
@@ -733,8 +735,9 @@ func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T)
 		got := translateSearchError(
 			fmt.Errorf("checking embedding index staleness: %w", vector.ErrMirrorVersionMismatch))
 		require.ErrorIs(t, got, db.ErrSemanticUnavailable)
-		assert.Contains(t, got.Error(), "embeddings build",
-			"the rebuild remediation must survive translation")
+		unavailable, ok := errors.AsType[*db.SemanticUnavailableError](got)
+		require.True(t, ok)
+		assert.Contains(t, unavailable.Reason, "embeddings build")
 	})
 }
 

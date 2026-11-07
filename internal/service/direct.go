@@ -1244,6 +1244,18 @@ func (b *directBackend) SearchContent(
 	} else {
 		page, err = b.db.SearchContent(ctx, filter)
 	}
+	var effectiveMode, note string
+	if err != nil && req.Mode == "hybrid" && req.KeywordFallback && errors.Is(err, db.ErrSemanticUnavailable) {
+		reason := "not set up"
+		if unavailable, ok := errors.AsType[*db.SemanticUnavailableError](err); ok {
+			reason = unavailable.Reason
+		}
+		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
+		if reason == "not set up" {
+			note += " To enable search by meaning, set `enabled = true` in the `[vector]` section of `~/.agentsview/config.toml`, restart the daemon, then run `agentsview index embeddings build`. If `[vector]` is already enabled, run the build now."
+		}
+		page, err = b.db.SearchContent(ctx, filter)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1278,6 +1290,8 @@ func (b *directBackend) SearchContent(
 		NextCursor:          page.NextCursor,
 		RevisionBound:       revisionBound,
 		Coverage:            coverage,
+		EffectiveMode:       effectiveMode,
+		Note:                note,
 		CandidateTruncated:  candidateTruncated,
 	}, nil
 }

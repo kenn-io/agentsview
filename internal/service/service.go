@@ -46,7 +46,8 @@ var ErrAroundMutuallyExclusive = errors.New(
 var ErrBeforeAfterRequireAround = errors.New("before/after require around")
 
 // ErrSemanticUnavailable is returned by SearchContent for modes
-// "semantic"/"hybrid" when the backing store has no VectorSearcher wired in.
+// "semantic" and hybrid requests without keyword fallback when the backing
+// store has no VectorSearcher wired in.
 // It is the same sentinel as db.ErrSemanticUnavailable so direct callers can
 // errors.Is it without transport-specific handling; the HTTP backend maps a
 // 501 response back to it for daemon-backed callers.
@@ -183,11 +184,12 @@ type ContentSearchRequest struct {
 	Pattern string `json:"pattern"`
 	// Concepts runs one semantic search per concept and keeps only sessions
 	// with evidence for every one. See NormalizeContentSearchRequest.
-	Concepts      []string `json:"concepts,omitempty"`
-	Mode          string   `json:"mode,omitempty"` // substring|regex|fts|terms|semantic|hybrid
-	Sources       []string `json:"sources,omitempty"`
-	ExcludeSystem bool     `json:"exclude_system,omitempty"`
-	Reveal        bool     `json:"reveal,omitempty"`
+	Concepts        []string `json:"concepts,omitempty"`
+	Mode            string   `json:"mode,omitempty"` // substring|regex|fts|terms|semantic|hybrid
+	KeywordFallback bool     `json:"allow_keyword_fallback,omitempty"`
+	Sources         []string `json:"sources,omitempty"`
+	ExcludeSystem   bool     `json:"exclude_system,omitempty"`
+	Reveal          bool     `json:"reveal,omitempty"`
 	// Context requests N messages of inline context before and after each
 	// match (0 = off, max 10). See directBackend.SearchContent.
 	Context int `json:"context,omitempty"`
@@ -212,6 +214,8 @@ type ContentSearchRequest struct {
 
 // ContentSearchResult mirrors db.ContentSearchPage for transport.
 type ContentSearchResult struct {
+	EffectiveMode       string            `json:"effective_mode,omitempty"`
+	Note                string            `json:"note,omitempty"`
 	ActiveFilterApplied bool              `json:"active_filter_applied"`
 	Matches             []db.ContentMatch `json:"matches"`
 	NextCursor          int               `json:"next_cursor,omitempty"`
