@@ -822,6 +822,9 @@ func (b *httpBackend) SearchContent(
 	ctx context.Context, req service.ContentSearchRequest,
 ) (*service.ContentSearchResult, error) {
 	q := &apiclient.GetAPIV1SearchContentQuery{}
+	if req.KeywordFallback {
+		q.AllowKeywordFallback = new(true)
+	}
 	if req.Pattern != "" {
 		q.Pattern = new(req.Pattern)
 	}

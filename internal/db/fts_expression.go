@@ -237,3 +237,20 @@ func (e *FTSExpr) sqliteProbeable() bool {
 	}
 	return true
 }
+
+// RenderFTSExpression renders Boolean SQL, using termSQL to bind each term
+// and return its backend's match predicate. A nil expression is false.
+func RenderFTSExpression(expr *FTSExpr, termSQL func(string) string) string {
+	if expr == nil {
+		return "FALSE"
+	}
+	if expr.Op == "term" {
+		return termSQL(expr.Term)
+	}
+	left := RenderFTSExpression(expr.Left, termSQL)
+	right := RenderFTSExpression(expr.Right, termSQL)
+	if expr.Op == "NOT" {
+		return "(" + left + " AND NOT (" + right + "))"
+	}
+	return "(" + left + " " + expr.Op + " " + right + ")"
+}

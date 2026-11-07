@@ -237,22 +237,6 @@ func TestSessionSearchHybridWithToolSource(t *testing.T) {
 	assert.Contains(t, err.Error(), "messages only")
 }
 
-// TestSessionSearchScopeRequiresSemanticOrHybrid verifies --scope fails
-// fast (before any service/DB access) when set without --semantic/--hybrid.
-func TestSessionSearchScopeRequiresSemanticOrHybrid(t *testing.T) {
-	for _, args := range [][]string{
-		{"needle", "--scope", "top"},
-		{"needle", "--fts", "--scope", "all"},
-		{"needle", "--regex", "--scope", "subordinate"},
-	} {
-		cmd := newSessionSearchCommand()
-		cmd.SetArgs(args)
-		err := cmd.Execute()
-		require.Error(t, err, "args %v", args)
-		assert.Contains(t, err.Error(), "--semantic or --hybrid", "args %v", args)
-	}
-}
-
 // TestSessionSearchScopeRejectsInvalidValue verifies the value gate fires
 // at the CLI boundary rather than deep in the store.
 func TestSessionSearchScopeRejectsInvalidValue(t *testing.T) {
@@ -265,27 +249,25 @@ func TestSessionSearchScopeRejectsInvalidValue(t *testing.T) {
 
 func TestValidateScopeFlag(t *testing.T) {
 	tests := []struct {
-		name                   string
-		scope                  string
-		useSemantic, useHybrid bool
-		wantErr                string
+		name, scope, mode, wantErr string
 	}{
 		{name: "empty scope always valid"},
-		{name: "top with semantic", scope: "top", useSemantic: true},
-		{name: "all with hybrid", scope: "all", useHybrid: true},
-		{name: "subordinate with semantic", scope: "subordinate", useSemantic: true},
+		{name: "top with semantic", scope: "top", mode: "semantic"},
+		{name: "all with hybrid", scope: "all", mode: "hybrid"},
+		{name: "scope with regex", scope: "subordinate", mode: "regex", wantErr: "--scope is not supported with --regex"},
+		{name: "top with substring", scope: "top", mode: "substring"},
 		{
-			name: "scope without mode flag", scope: "top",
-			wantErr: "--semantic or --hybrid",
+			name: "scope with fts", scope: "top", mode: "fts",
+			wantErr: "--scope is not supported with --fts",
 		},
 		{
-			name: "invalid value", scope: "bogus", useSemantic: true,
+			name: "invalid value", scope: "bogus", mode: "semantic",
 			wantErr: "top, all, or subordinate",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateScopeFlag(tt.scope, tt.useSemantic, tt.useHybrid)
+			err := validateScopeFlag(tt.scope, tt.mode)
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return
@@ -894,6 +876,20 @@ func TestSessionSearchFTSHints(t *testing.T) {
 			assert.Empty(t, got.Hints)
 		}
 	}
+	t.Run("scoped", func(t *testing.T) {
+		ftsCalls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("mode") == "fts" {
+				ftsCalls++
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"matches":[]}`))
+		}))
+		defer ts.Close()
+		_, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "search", "decode error", "--scope", "top", "--json")
+		require.NoError(t, err)
+		assert.Zero(t, ftsCalls)
+	})
 }
 
 func TestSessionSearchHintPreservesServer(t *testing.T) {
@@ -959,4 +955,17 @@ func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 		require.NoError(t, err, string(output))
 		assert.Equal(t, "can't decode", strings.TrimSpace(string(output)))
 	}
+}
+
+func TestSessionSearchHybridKeywordFallback(t *testing.T) {
+	registerSQLiteDaemonRuntime(t, newAgentDataDir(t))
+	cmd := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"session", "search", "UnicodeDecodeError", "--hybrid", "--json"})
+	require.NoError(t, cmd.Execute())
+	got := decodeCLIJSON[service.ContentSearchResult](t, stdout.String())
+	require.NotEmpty(t, got.Note)
+	assert.Equal(t, got.Note+"\n", stderr.String())
 }

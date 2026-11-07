@@ -20,17 +20,20 @@ decision.
    identity, pass it as `current_session_id`. Do not invent a project filter
    from a display name or directory; apply one only when the exact archived
    project identifier is known.
-2. Refine or widen the query when the first results are weak. Treat rank and
-   score as relevance signals, never as truth probabilities.
+2. Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
+   results once and use the matches without retry. For thin or empty results,
+   try short `mode: substring` queries with key terms or synonyms. Preserve
+   `scope`, inclusion, and current-session flags. Treat rank and score as
+   relevance signals, never as truth probabilities.
 3. Choose the top 2-5 relevant sessions. Call `mcp__agentsview__get_messages`
    to read each source around the relevant ordinal range.
 4. Follow `next_from` or expand the message range when the relevant decision or
    a later correction may fall outside the first page. A snippet, summary, or
    short filtered page does not count as reading the source.
-5. If semantic search failed, report the failure before using a lexical
-   fallback. Preserve the inclusion and current-session flags but omit `scope`
-   for substring mode. Do not fall back on authentication or wrong-target
-   errors.
+5. Disclose explicit semantic errors. Use a lexical fallback only for an
+   unavailable index or transient embedding error; retry transient errors once
+   when appropriate. Preserve `scope`, inclusion, and current-session flags.
+   Do not fall back on authentication or wrong-target errors.
 
 A `search_content` hit located in `thinking`, `tool_input`, or `tool_result` cannot be
 opened through `get_messages`, which returns message text and a `has_tool_use`

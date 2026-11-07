@@ -16,8 +16,10 @@ concurrency, and the search path — see
 
     Semantic and hybrid search run on the local SQLite archive, on
     [PostgreSQL](#postgresql) via pgvector, and on [ClickHouse](#clickhouse). The
-    [DuckDB mirror](/docs/duckdb/) has no vector backend, so `--semantic`/`--hybrid`
-    against a DuckDB-backed server return the "not available" error described below.
+    [DuckDB mirror](/docs/duckdb/) has no vector backend. CLI and MCP hybrid
+    searches return keyword matches with a note when search by meaning is
+    unavailable. On DuckDB, semantic and ordinary HTTP/UI hybrid requests
+    return the "not available" error described below.
 
 ## Enabling `[vector]`
 
@@ -716,8 +718,13 @@ agentsview session search "flaky test" --hybrid --project myapp
 
 - `--semantic` ranks by cosine similarity against the query's embedding.
 - `--hybrid` fuses the semantic ranking with an FTS5 ranking of the same corpus
-  using reciprocal rank fusion, so exact-term matches and meaning-based
-  matches both surface.
+  using reciprocal rank fusion, so exact-term matches and meaning-based matches
+  both surface. When search by meaning is unavailable, CLI and MCP return the
+  keyword matches with `effective_mode: hybrid_keyword` and a note beside
+  `coverage`. The note gives the readiness reason; an unset index points to enabling
+  `[vector]`, restarting the daemon, and building embeddings. When keyword results are
+  empty or few, try short substring queries with key terms or synonyms,
+  retaining scope and other filters.
 - Both modes are restricted to the `messages` source — the same restriction
   `--fts` already has — since only user/assistant message content is embedded
   (never raw tool_input/tool_result rows or system messages). Passing `--in`
@@ -801,16 +808,18 @@ and hybrid results:
 - `subordinate`: only sidechain/delegated content, e.g. to find what a subagent
   actually did.
 
-`--scope` is only valid with `--semantic`/`--hybrid` (other modes reject it) and
-supersedes `--include-children` there: child sessions are always visible to
-these modes so that `scope` alone governs what you see. Subagent/fork-typed and
-parent-linked sessions are also exempt from the default one-shot exclusion in
-these modes — a subagent session structurally has exactly one "user" message
-(its task prompt), so the one-shot gate would otherwise hide nearly all of them.
-CLI substring, regex, and FTS searches keep the existing `--include-children`
-and one-shot behavior. HTTP and MCP substring/regex searches also accept `scope`
-and exempt child sessions from the one-shot exclusion when scope is explicit.
-MCP defaults scope to `all`; HTTP leaves scope blank unless requested.
+`--scope` is valid with substring, `--semantic`, and `--hybrid` searches;
+`--regex` and `--fts` reject it. An explicit scope supersedes
+`--include-children`: child
+sessions are visible to these modes so that `scope` alone governs what you see.
+Subagent/fork-typed and parent-linked sessions are also exempt from the default
+one-shot exclusion in these modes — a subagent session structurally has exactly
+one "user" message (its task prompt), so the one-shot gate would otherwise hide
+nearly all of them. Without `--scope`, CLI lexical searches keep the existing
+`--include-children` and one-shot behavior. HTTP and MCP substring/regex
+searches also accept `scope` and exempt child sessions from the one-shot
+exclusion when scope is explicit. MCP defaults scope to `all`; HTTP leaves scope
+blank unless requested.
 
 ### MCP all-terms exchange search
 
@@ -909,6 +918,10 @@ of `ordinal_range` to read the whole stretch.
 
 ## Error taxonomy
 
+CLI and MCP hybrid searches turn unavailable-index errors into keyword matches
+with a note; semantic and ordinary HTTP/UI hybrid requests return the errors
+below.
+
 | Situation                                                                                                                       | Message                                                                                                                                                               |
 | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `[vector]` not enabled                                                                                                          | `vector search is not enabled: set [vector] enabled = true in config.toml` (from `agentsview index embeddings ...`)                                                   |
@@ -916,7 +929,7 @@ of `ordinal_range` to read the whole stretch.
 | Only a building generation exists                                                                                               | same message, plus `: index is building: N% complete`                                                                                                                 |
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |
-| `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                                              | CLI: `--scope requires --semantic or --hybrid`; HTTP and MCP accept scope with substring, regex, terms, semantic, and hybrid                                                        |
+| `--scope` with `--regex` or `--fts`                                                              | CLI: `--scope is not supported with --regex` or `--fts`; HTTP and MCP accept scope with substring, regex, terms, semantic, and hybrid                                                        |
 | An unattended search or build needs a first local download                                                                      | `local embeddings: run agentsview index embeddings build to approve the first download`; run `agentsview index embeddings build` in the CLI and approve the download. |
 | Embeddings endpoint unreachable or timed out                                                                                    | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                                   |
 | Embeddings endpoint returned non-200                                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                           |
@@ -935,8 +948,9 @@ The `--pg` read path and `agentsview replica pg serve` support semantic and
 hybrid search backed by [pgvector](https://github.com/pgvector/pgvector), so a
 shared PostgreSQL deployment answers `--semantic`/`--hybrid` the same way a
 local SQLite index does. [ClickHouse](#clickhouse) does the same with its own
-tables. Only the DuckDB mirror lacks a vector backend and still returns the "not
-available" error (HTTP 501).
+tables. The DuckDB mirror has no vector backend. Its CLI and MCP hybrid requests
+return keyword matches with an unavailable note; semantic and ordinary HTTP/UI
+hybrid requests return the "not available" error (HTTP 501).
 
 ### Pushing embeddings
 
@@ -998,9 +1012,10 @@ until a configured machine pushes them again. If `pg serve` starts before a
 workstation pushes its first generation, restart `pg serve` after that push to
 enable semantic search.
 
-If no generation matches, `pg serve` starts normally but semantic and hybrid
-search return the 501 "not available" error carrying the mismatch reason, which
-lists the fingerprints PostgreSQL does have so an operator can tell a "wrong
+If no generation matches, `pg serve` starts normally. Semantic search returns
+the 501 "not available" error; CLI and MCP hybrid searches return keyword
+matches with the mismatch reason in a note. The reason lists the fingerprints
+PostgreSQL does have so an operator can tell a "wrong
 config" miss from a "never pushed" one. A missing pgvector extension or vector
 tables degrade the same way — see
 [Backends without pgvector](#backends-without-pgvector).
@@ -1041,8 +1056,8 @@ attempts `ALTER EXTENSION vector UPDATE` (healing servers whose pgvector package
 was upgraded in place) and otherwise skips the vector phase, reporting the
 installed version. Session and message sync are unaffected in every case. On the
 read side a missing vector table is treated as "no generation found", so
-`pg serve` starts and only `--semantic`/`--hybrid` return 501 while lexical
-search keeps working.
+`pg serve` starts; semantic search returns 501, and CLI and MCP hybrid searches
+return keyword matches with a note. Lexical search keeps working.
 
 ### Maintenance
 
@@ -1082,9 +1097,10 @@ generation-wide pass.
 
 On startup, `clickhouse serve` looks for a pushed generation whose fingerprint
 matches the local `[vector.embeddings]` config. A match installs the searcher; a
-miss starts the server normally and semantic and hybrid search return the 501
-"not available" error listing the fingerprints the mirror does have. Ranking is
-an exact cosine scan over the generation's chunks (`cosineDistance`), so results
+miss starts the server normally. Semantic search returns the 501 "not available"
+error; CLI and MCP hybrid searches return keyword matches with a note listing
+the fingerprints the mirror does have. Ranking is an exact cosine scan over
+the generation's chunks (`cosineDistance`), so results
 match the local SQLite index rather than an approximate index. The hybrid
 keyword leg is the mirror's recency-ordered term match, as on PostgreSQL.
 `pg vectors list` and `drop` have no ClickHouse counterpart yet.
@@ -1115,10 +1131,10 @@ keyword leg is the mirror's recency-ordered term match, as on PostgreSQL.
   the message that reaches `4 × max_input_chars` runes. An append re-embeds
   only the trailing piece, bounded by that cap plus one message; earlier
   pieces keep their vectors.
-- **DuckDB mirror has no vector backend.** `--semantic`/`--hybrid` against a
-  DuckDB-backed server return the "not available" error (HTTP 501) described
-  above. PostgreSQL is supported through pgvector — see
-  [PostgreSQL](#postgresql).
+- **DuckDB mirror has no vector backend.** Semantic and ordinary HTTP/UI hybrid
+  requests return the "not available" error (HTTP 501) described above. CLI/MCP
+  hybrid requests return keyword matches with a note. PostgreSQL is supported
+  through pgvector — see [PostgreSQL](#postgresql).
 - **The index embeds message `content` verbatim.** Like `--fts`, it only draws
   from the `messages` source, so raw tool_input/tool_result rows are never
   candidates. System messages are handled more strictly, though: `--fts` still

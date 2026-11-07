@@ -4831,3 +4831,76 @@ func TestTrendsTermsSessionWindowParity(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchContentHybridKeywordFallback(t *testing.T) {
+	const ts = "2026-03-22T10:00:00.000Z"
+	messages := []db.Message{
+		syncMessage("fallback", 0, "user", "quick fox", ts),
+		syncMessage("fallback", 1, "user", "quick brown fox", ts),
+		syncMessage("fallback", 2, "assistant", "quick red fox", ts),
+		syncMessage("fallback", 3, "assistant", "quick red fox again", ts),
+		syncMessage("fallback", 4, "user", "quick fox", ts),
+		syncMessage("fallback", 5, "assistant", "quick answer", ts),
+		syncMessage("fallback", 6, "system", "quick fox", ts),
+		syncMessage("fallback", 7, "tool", "quick fox", ts),
+	}
+	messages[0].IsSidechain, messages[4].IsSystem = true, true
+	var run []db.Message
+	for ordinal := range 205 {
+		run = append(run, syncMessage("run", ordinal, "assistant", "refill", ts))
+	}
+	run = append(run, syncMessage("run", 205, "user", "refill", ts))
+	child := syncSession("child", "alpha", "first", ts, 1)
+	child.ParentSessionID, child.RelationshipType, child.UserMessageCount = new("parent"), "subagent", 1
+	local := newLocalDB(t)
+	fallback := syncSession("fallback", "alpha", "first", ts, len(messages))
+	fallback.UserMessageCount = 3
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{
+		{Session: fallback, Messages: messages, DataVersion: 1, ReplaceMessages: true},
+		{Session: syncSession("run", "alpha", "first", ts, len(run)), Messages: run, DataVersion: 1, ReplaceMessages: true},
+		{Session: syncSession("parent", "alpha", "first", ts, 0), DataVersion: 1, ReplaceMessages: true},
+		{Session: child, Messages: []db.Message{syncMessage("child", 0, "user", "childneedle", ts)}, DataVersion: 1, ReplaceMessages: true},
+	})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(t.Context(), syncer.DB()))
+	_, err = syncer.pushEverything(t.Context(), nil)
+	require.NoError(t, err)
+	backend := service.NewReadOnlyBackend(NewStoreFromDB(syncer.DB()))
+	for _, tc := range []struct {
+		name, pattern, scope, session string
+		limit                         int
+		includeOneShot                bool
+		want                          []int
+	}{
+		{name: "blank scope", pattern: "quick fox", want: []int{0, 1, 2}},
+		{name: "top", pattern: "quick fox", scope: "top", want: []int{1, 2}},
+		{name: "subordinate", pattern: "quick fox", scope: "subordinate", want: []int{0}},
+		{name: "empty", pattern: "quick answer fox"},
+		{name: "boolean or", pattern: `"brown" OR "red"`, want: []int{1, 2}},
+		{name: "refill", pattern: "refill", limit: 2, includeOneShot: true, want: []int{0, 205}},
+		{name: "child blank", pattern: "childneedle", want: []int{0}},
+		{name: "child all", pattern: "childneedle", scope: "all", want: []int{0}},
+		{name: "child subordinate", pattern: "childneedle", scope: "subordinate", want: []int{0}},
+		{name: "child top", pattern: "childneedle", scope: "top"},
+		{name: "exact child", pattern: "childneedle", session: "child", want: []int{0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			page, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
+				Pattern: tc.pattern, Mode: "hybrid", KeywordFallback: true, Scope: tc.scope, SessionID: tc.session, Limit: tc.limit, IncludeOneShot: tc.includeOneShot,
+			})
+			require.NoError(t, err)
+			assert.Zero(t, page.NextCursor)
+			var ordinals []int
+			for _, match := range page.Matches {
+				ordinals = append(ordinals, match.Ordinal)
+			}
+			assert.ElementsMatch(t, tc.want, ordinals)
+		})
+	}
+	t.Run("unclosed quote", func(t *testing.T) {
+		_, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: `"quick`, Mode: "hybrid", KeywordFallback: true})
+		var inputErr *db.SearchInputError
+		require.ErrorAs(t, err, &inputErr)
+	})
+}

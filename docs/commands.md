@@ -2087,21 +2087,22 @@ flags. JSON adds `hints` entries with `code`, `message`, and a full `next` comma
 Counts use a bounded search and say `more than N` when more matches exist, or
 `at least N` for semantic and hybrid searches or when filtering or candidate
 limits prevent an exact count.
-For multi-word substring queries over messages, a hint offers `--fts` only when
-that retry finds matches. `excluded_combined` gives a retry with the remaining
-include flags for matches beyond the individual class hints. Failed diagnostic
-searches add no hint.
+For unscoped multi-word substring queries over messages, a hint offers `--fts`
+only when that retry finds matches. `excluded_combined` gives a retry with the
+remaining include flags for matches beyond the individual class hints. Failed
+diagnostic searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
-those sessions before `--limit`. Semantic and hybrid results can be scoped with
-`--scope top|all|subordinate` (default `all`) to include or exclude sidechain
-and subagent content — see
+those sessions before `--limit`. Hybrid returns keyword matches with a note
+while the embedding index is unavailable. Substring, semantic, and hybrid
+results can be scoped with `--scope top|all|subordinate` (default `all` for
+semantic and hybrid) to include or exclude sidechain and subagent content — see
 [Semantic Search](/docs/semantic-search/#scoping-results-scope). HTTP and MCP
-also accept `scope` for substring and regex searches. CLI lexical searches use
-`--include-children` instead. The human-readable table includes an `AGE` column derived from each match's
-timestamp, so recent evidence is visible without opening the session. Matches
-without a usable timestamp show `—`.
+also accept `scope` for substring and regex searches. `--regex` and `--fts` use
+`--include-children` instead of `--scope`. The human-readable table includes an
+`AGE` column derived from each match's timestamp, so recent evidence is visible
+without opening the session. Matches without a usable timestamp show `—`.
 
 Structured response commands accept `--format json`; `--json` is a short alias
 for that scripting mode. `session export` and `session watch` are the

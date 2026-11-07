@@ -42,7 +42,8 @@ func newSessionSearchCommand() *cobra.Command {
 		Long: "Search archived message and tool content with redacted snippets. " +
 			"The default is substring search across available sources. " +
 			"Choose at most one of --regex, --fts, --semantic, or --hybrid. " +
-			"FTS and semantic/hybrid modes search messages only; semantic modes need an embedding index. " +
+			"FTS and semantic/hybrid modes search messages only. " +
+			"--semantic needs an embedding index; without one, --hybrid returns keyword matches with a note on stderr. " +
 			"JSON returns a numeric next_cursor for further matches; repeat the query, search mode, backend, and filters when continuing.",
 		Example: "  agentsview session search 'connection reset' --since 14d --in messages,tool_result --json\n" +
 			"  agentsview session search 'connection AND reset' --fts --json\n" +
@@ -61,7 +62,7 @@ func newSessionSearchCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validateScopeFlag(scope, useSemantic, useHybrid); err != nil {
+			if err := validateScopeFlag(scope, mode); err != nil {
 				return err
 			}
 			activeSince, err = resolveSinceFlag(since, activeSince)
@@ -77,6 +78,7 @@ func newSessionSearchCommand() *cobra.Command {
 			req := service.ContentSearchRequest{
 				Pattern:           args[0],
 				Mode:              mode,
+				KeywordFallback:   mode == "hybrid",
 				Sources:           sources,
 				ExcludeSystem:     excludeSystem,
 				Reveal:            reveal,
@@ -102,6 +104,9 @@ func newSessionSearchCommand() *cobra.Command {
 				return err
 			}
 			cliHints := contentSearchHints(cmd.Context(), cmd, svc, req, res)
+			if res.Note != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), sanitizeTerminal(res.Note))
+			}
 			if reveal {
 				fmt.Fprintln(cmd.ErrOrStderr(),
 					"WARNING: --reveal prints full secret values; "+
@@ -145,7 +150,7 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.StringVar(&since, "since", "",
 		"Only sessions active since a relative duration (12h, 14d, 2w, 3m = 3 months, 1y) or YYYY-MM-DD")
 	flags.StringVar(&scope, "scope", "",
-		"Semantic/hybrid result scope: top, all, or subordinate (default all)")
+		"Result scope: top, all, or subordinate (unsupported with --regex or --fts)")
 	flags.BoolVar(&includeChildren, "include-children", false, "Include subagent sessions")
 	flags.BoolVar(&includeAutomated, "include-automated", false, "Include automated sessions")
 	flags.BoolVar(&includeOneShot, "include-one-shot", false, "Include one-shot sessions")
@@ -158,20 +163,19 @@ func newSessionSearchCommand() *cobra.Command {
 	return cmd
 }
 
-// validateScopeFlag gates --scope at the CLI boundary: it is only
-// meaningful for --semantic/--hybrid and must name a known scope.
-func validateScopeFlag(scope string, useSemantic, useHybrid bool) error {
+// validateScopeFlag checks mode support and known scope values at the CLI boundary.
+func validateScopeFlag(scope, mode string) error {
 	if scope == "" {
 		return nil
 	}
-	if !useSemantic && !useHybrid {
-		return cliUsageError(errors.New("--scope requires --semantic or --hybrid"), "choose one search mode and check --in / --scope with `agentsview session search --help`")
+	if mode == "regex" || !db.ContentSearchModeSupportsScope(mode) {
+		return cliUsageError(fmt.Errorf("--scope is not supported with --%s", mode), "drop --scope or choose substring, --semantic, or --hybrid")
 	}
 	switch scope {
 	case "top", "all", "subordinate":
 		return nil
 	}
-	return cliValidationError(fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope), "use --scope top, all, or subordinate with --semantic or --hybrid")
+	return cliValidationError(fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope), "use --scope top, all, or subordinate")
 }
 
 // resolveContentSearchMode picks the search mode from the mutually exclusive
@@ -551,7 +555,7 @@ func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]a
 func contentSearchHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest, res *service.ContentSearchResult) []contentSearchCLIHint {
 	hints := service.SearchContentHints(ctx, svc, req, res, true, nil)
 	messagesOnly := len(req.Sources) == 0 || len(req.Sources) == 1 && req.Sources[0] == "messages"
-	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly {
+	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && req.Scope == "" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly {
 		retry := req
 		retry.Mode = "fts"
 		if page, err := svc.SearchContent(ctx, retry); err == nil && len(page.Matches) > 0 {

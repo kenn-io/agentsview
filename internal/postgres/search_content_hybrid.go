@@ -38,21 +38,28 @@ type pgHybridLeg struct {
 // granularity with db.RRFMerge. Returned matches are enriched with
 // session/message metadata via the same lookup semantic search uses, ordered
 // by fused score descending, truncated to f.Limit. The caller (SearchContent)
-// has already run db.ValidateSemanticFilter and confirmed a searcher is wired.
+// has already run db.ValidateSemanticFilter before selecting either hybrid leg.
 func (s *Store) searchContentHybridPG(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
 	searcher := s.getVectorSearcher()
-	if searcher == nil {
+	if searcher == nil && !f.KeywordOnly {
 		return db.ContentSearchPage{}, s.semanticUnavailableError()
 	}
 
 	k := max(f.Limit*4, db.SemanticOverfetchMin)
-	vecLeg, err := s.hybridVectorLegPG(ctx, f, searcher, k)
-	if err != nil {
-		return db.ContentSearchPage{}, err
+	var vecLeg pgHybridLeg
+	var err error
+	var resolver db.UnitResolver = searcher
+	if f.KeywordOnly {
+		resolver = db.ArchiveUnitResolver(s.deriveLexicalUnitsPG)
+	} else {
+		vecLeg, err = s.hybridVectorLegPG(ctx, f, searcher, k)
+		if err != nil {
+			return db.ContentSearchPage{}, err
+		}
 	}
-	kwLeg, err := s.hybridKeywordLegPG(ctx, f, searcher, k)
+	kwLeg, err := s.hybridKeywordLegPG(ctx, f, resolver, k)
 	if err != nil {
 		return db.ContentSearchPage{}, err
 	}
@@ -116,7 +123,7 @@ const maxHybridKeywordBatches = 4
 // filtering can discard most of a batch, so the leg keeps fetching until it
 // holds k entries, the stream is exhausted, or maxHybridKeywordBatches is hit.
 func (s *Store) hybridKeywordLegPG(
-	ctx context.Context, f db.ContentSearchFilter, searcher db.VectorSearcher, k int,
+	ctx context.Context, f db.ContentSearchFilter, searcher db.UnitResolver, k int,
 ) (pgHybridLeg, error) {
 	leg := pgHybridLeg{display: make(map[string]pgHybridDisplay, k)}
 	for batch := range maxHybridKeywordBatches {
@@ -217,7 +224,7 @@ func pgKeywordApproxSnippet(content, pattern string) string {
 // scope are dropped, and a unit already seen (within or across batches) keeps
 // its earlier, better-ranked entry.
 func (s *Store) appendHybridKeywordHitsPG(
-	ctx context.Context, searcher db.VectorSearcher, f db.ContentSearchFilter,
+	ctx context.Context, searcher db.UnitResolver, f db.ContentSearchFilter,
 	hits []pgHybridDisplay, leg *pgHybridLeg,
 ) error {
 	if len(hits) == 0 {

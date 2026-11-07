@@ -30,6 +30,7 @@ const (
 type ContentSearchFilter struct {
 	Pattern       string
 	Mode          string   // "substring" (default) | "regex" | "fts" | "terms" | "semantic" | "hybrid"
+	KeywordOnly   bool     // internal hybrid keyword leg; skips the semantic index
 	Sources       []string // subset of {"messages","thinking","tool_input","tool_result"}
 	ExcludeSystem bool
 
@@ -1615,7 +1616,7 @@ func (db *DB) searchContentHybrid(
 		return ContentSearchPage{}, err
 	}
 	searcher := db.getVectorSearcher()
-	if searcher == nil {
+	if searcher == nil && !f.KeywordOnly {
 		return ContentSearchPage{}, ErrSemanticUnavailable
 	}
 	if !db.HasFTS(ctx) {
@@ -1623,11 +1624,18 @@ func (db *DB) searchContentHybrid(
 	}
 
 	k := max(f.Limit*4, SemanticOverfetchMin)
-	vecLeg, err := db.hybridVectorLeg(ctx, f, searcher, k)
-	if err != nil {
-		return ContentSearchPage{}, err
+	var vecLeg hybridLeg
+	var err error
+	var resolver UnitResolver = searcher
+	if f.KeywordOnly {
+		resolver = ArchiveUnitResolver(db.deriveLexicalUnits)
+	} else {
+		vecLeg, err = db.hybridVectorLeg(ctx, f, searcher, k)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
 	}
-	ftsLeg, err := db.hybridFTSLeg(ctx, f, searcher, k)
+	ftsLeg, err := db.hybridFTSLeg(ctx, f, resolver, k)
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
@@ -1697,7 +1705,7 @@ const maxHybridFTSBatches = 4
 // maxHybridFTSBatches is hit. The display seen-check dedups across batches;
 // earlier batches rank better, so the best-ranked hit per unit always wins.
 func (db *DB) hybridFTSLeg(
-	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
+	ctx context.Context, f ContentSearchFilter, searcher UnitResolver, k int,
 ) (hybridLeg, error) {
 	leg := hybridLeg{display: make(map[string]hybridDisplay, k)}
 	for batch := range maxHybridFTSBatches {
@@ -1769,7 +1777,7 @@ func (db *DB) fetchHybridFTSBatch(
 // outside scope are dropped, and a unit already seen (within or across
 // batches) keeps its earlier, better-ranked entry.
 func (db *DB) appendHybridFTSHits(
-	ctx context.Context, searcher VectorSearcher, scope string,
+	ctx context.Context, searcher UnitResolver, scope string,
 	hits []hybridDisplay, leg *hybridLeg,
 ) error {
 	if len(hits) == 0 {

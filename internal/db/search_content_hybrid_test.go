@@ -710,3 +710,36 @@ func TestSearchContentHybridVectorOnlyMatchCarriesUnitRange(t *testing.T) {
 	assert.Equal(t, [2]int{1, 2}, m.OrdinalRange)
 	assert.False(t, m.Subordinate)
 }
+
+func TestSearchContentHybridKeywordOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		searcher *fakeVectorSearcher
+	}{
+		{name: "unwired"}, {name: "wired", searcher: &fakeVectorSearcher{err: ErrSemanticTransient}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			if !d.HasFTS(t.Context()) {
+				t.Skip("fts5 not available")
+			}
+			seedSearchSession(t, d, "run", "project", [][2]string{
+				{"user", "needle question"}, {"assistant", "needle first: UnicodeDecodeError"}, {"assistant", "needle second"},
+			})
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "run", Ordinal: 3, Role: "assistant", Content: "needle side", ContentLength: 11, IsSidechain: true}}))
+			if tc.searcher != nil {
+				d.SetVectorSearcher(tc.searcher)
+			}
+			f := ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "top"}
+
+			page, err := d.SearchContent(t.Context(), f)
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 2)
+			assert.ElementsMatch(t, [][2]int{{0, 0}, {1, 2}}, [][2]int{page.Matches[0].OrdinalRange, page.Matches[1].OrdinalRange})
+			page, err = d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "subordinate"})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.True(t, page.Matches[0].Subordinate)
+		})
+	}
+}

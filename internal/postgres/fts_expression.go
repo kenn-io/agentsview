@@ -12,20 +12,7 @@ func pgFTSExpression(pattern, column string, pb *paramBuilder) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if expr == nil {
-		return "FALSE", nil
-	}
-	return pgFTSSQL(expr, column, pb), nil
-}
-
-func pgFTSSQL(expr *db.FTSExpr, column string, pb *paramBuilder) string {
-	if expr.Op == "term" {
-		return column + " ILIKE '%'||" + pb.add(escapeLike(expr.Term)) + "||'%' ESCAPE E'\\\\'"
-	}
-	left := pgFTSSQL(expr.Left, column, pb)
-	right := pgFTSSQL(expr.Right, column, pb)
-	if expr.Op == "NOT" {
-		return "(" + left + " AND NOT (" + right + "))"
-	}
-	return "(" + left + " " + expr.Op + " " + right + ")"
+	return db.RenderFTSExpression(expr, func(term string) string {
+		return column + " ILIKE '%'||" + pb.add(escapeLike(term)) + "||'%' ESCAPE E'\\\\'"
+	}), nil
 }

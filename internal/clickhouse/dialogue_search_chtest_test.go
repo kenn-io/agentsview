@@ -3,6 +3,7 @@
 package clickhouse
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -137,4 +138,33 @@ func TestDialogueReparseClickHouseRepushesSession(t *testing.T) {
 	var dialogue string
 	require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT dialogue_text FROM messages WHERE session_id = ? AND ordinal = 0", fixtureAlphaID).Scan(&dialogue))
 	assert.Equal(t, "answerneedle", dialogue)
+}
+
+func TestClickHouseHybridKeywordOnly(t *testing.T) {
+	for _, wired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("wired=%t", wired), func(t *testing.T) {
+			store, syncer, local := newPushedStore(t)
+			messages := []db.Message{
+				dbtest.UserMsg(fixtureAlphaID, 0, "needle question"),
+				dbtest.AsstMsg(fixtureAlphaID, 1, "needle"),
+				dbtest.AsstMsg(fixtureAlphaID, 2, "needle second"),
+				dbtest.AsstMsg(fixtureAlphaID, 3, "needle side"),
+			}
+			messages[3].IsSidechain = true
+			require.NoError(t, local.ReplaceSessionMessages(t.Context(), fixtureAlphaID, messages))
+			_, err := syncer.Push(t.Context(), true, nil)
+			require.NoError(t, err)
+			if wired {
+				store.SetVectorSearcher(&activityVectorSearcher{})
+			}
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "top", IncludeOneShot: true, SessionID: fixtureAlphaID})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 2)
+			assert.ElementsMatch(t, [][2]int{{0, 0}, {1, 2}}, [][2]int{page.Matches[0].OrdinalRange, page.Matches[1].OrdinalRange})
+			page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "subordinate", IncludeOneShot: true, SessionID: fixtureAlphaID})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.True(t, page.Matches[0].Subordinate)
+		})
+	}
 }

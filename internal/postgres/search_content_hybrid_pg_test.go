@@ -344,3 +344,27 @@ func TestPGHybridSnippetUsesDialogue(t *testing.T) {
 		})
 	}
 }
+
+func TestPGHybridKeywordOnly(t *testing.T) {
+	for _, wired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("wired=%t", wired), func(t *testing.T) {
+			store := setupContentSearch(t)
+			insertCSSession(t, store, "run", "proj", "claude", hybridStart, hybridEnd)
+			insertCSUnitMessage(t, store, "run", 0, "user", "needle question", false, false)
+			insertCSUnitMessage(t, store, "run", 1, "assistant", "needle", false, false)
+			insertCSUnitMessage(t, store, "run", 2, "assistant", "needle second", false, false)
+			insertCSUnitMessage(t, store, "run", 3, "assistant", "needle side", false, true)
+			if wired {
+				store.SetVectorSearcher(&hybridFakeSearcher{})
+			}
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "top"})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 2)
+			assert.ElementsMatch(t, [][2]int{{0, 0}, {1, 2}}, [][2]int{page.Matches[0].OrdinalRange, page.Matches[1].OrdinalRange})
+			page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "subordinate"})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.True(t, page.Matches[0].Subordinate)
+		})
+	}
+}

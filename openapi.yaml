@@ -6949,6 +6949,8 @@ components:
           type: boolean
         coverage:
           $ref: "#/components/schemas/ServiceMemoryCoverage"
+        effective_mode:
+          type: string
         matches:
           items:
             $ref: "#/components/schemas/DbContentMatch"
@@ -6956,6 +6958,8 @@ components:
         next_cursor:
           format: int64
           type: integer
+        note:
+          type: string
         revision_bound:
           type: boolean
       required:
@@ -19139,6 +19143,13 @@ paths:
               - semantic
               - hybrid
             type: string
+        - description: Return hybrid keyword matches when semantic search is unavailable
+          explode: false
+          in: query
+          name: allow_keyword_fallback
+          schema:
+            description: Return hybrid keyword matches when semantic search is unavailable
+            type: boolean
         - description: "Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)"
           explode: false
           in: query

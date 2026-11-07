@@ -201,10 +201,11 @@ func newServer(opts ServeOptions) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: ToolSearchContent,
-		Description: "Search raw session text, including thinking, tool inputs, and results. When a vector search index is " +
-			"configured, prefer mode hybrid (semantic similarity plus keywords) or semantic for finding " +
+		Description: "Search raw session text, including thinking, tool inputs, and results. " +
+			"Prefer mode hybrid (semantic similarity plus keywords) for finding " +
 			"prior work and answering contextual questions, especially when the exact wording is unknown. " +
-			"If these modes report not available, use terms when every literal term must occur within one " +
+			"Hybrid returns keyword matches with effective_mode hybrid_keyword and a note when search by meaning is unavailable. " +
+			"Use terms when every literal term must occur within one " +
 			"user/assistant exchange, or substring/regex for exact error messages, identifiers, and code fragments. " +
 			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
 			"The default mode remains substring. Scope defaults to all, including child sessions and sidechain messages; " +
