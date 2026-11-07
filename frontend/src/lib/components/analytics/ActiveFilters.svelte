@@ -11,7 +11,7 @@
     XIcon,
   } from "../../icons.js";
   import { agentColor, agentLabel } from "../../utils/agents.js";
-  import { formatDayRange, m } from "../../i18n/index.js";
+  import { formatDateTime, m } from "../../i18n/index.js";
 
   const selectedAgents = $derived(
     analytics.agent
@@ -74,7 +74,15 @@
   const activityRangeLabel = $derived.by(() => {
     const range = analytics.selectedActivityRange;
     if (!range) return "";
-    return formatDayRange(range.from, range.to);
+    const options: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    };
+    return m.data_workspace_activity_range({
+      first: formatDateTime(`${range.from}T00:00:00`, options),
+      last: formatDateTime(`${range.to}T00:00:00`, options),
+    });
   });
 
   const hasTime = $derived(

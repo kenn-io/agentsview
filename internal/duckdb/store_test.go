@@ -286,8 +286,10 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 		2, 2, false,
 	)
 	insertSession("stats-blank-parent", "child", "subagent", "2025-12-27 00:00:00", 1, 2, false)
+	_, err := duck.ExecContext(ctx, `UPDATE sessions SET parent_session_id='' WHERE id='stats-blank-parent'`)
+	require.NoError(t, err)
 	insertSession("stats-continuation", "alpha", "continuation", "2026-01-01 00:00:00", 3, 2, false)
-	_, err := duck.ExecContext(ctx, `UPDATE sessions SET parent_session_id='stats-human'
+	_, err = duck.ExecContext(ctx, `UPDATE sessions SET parent_session_id='stats-human'
 		WHERE id='stats-continuation'`)
 	require.NoError(t, err)
 	_, err = duck.ExecContext(ctx,

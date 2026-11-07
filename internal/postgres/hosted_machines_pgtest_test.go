@@ -173,10 +173,25 @@ func TestHostedSourceMachinesFilterCoalescedSessions(t *testing.T) {
 }
 
 func TestHostedSourceMachinesStats(t *testing.T) {
-	_, h := newHostedCoalescedMachinesFixture(t)
+	f, h := newHostedCoalescedMachinesFixture(t)
+	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions
+		(id, project, machine, agent, message_count, user_message_count, relationship_type, parent_session_id, started_at)
+		VALUES ('orphan', 'orphan-project', 'orphan-machine', 'claude', 2, 2, 'subagent', '', '2025-01-01T00:00:00Z')`)
+	require.NoError(t, err)
 	stats, err := h.GetStats(t.Context(), false, false)
 	require.NoError(t, err)
-	assert.Equal(t, 4, stats.MachineCount)
+	assert.Equal(t, 4, stats.SessionCount)
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions
+		(id, project, machine, agent, message_count, user_message_count, relationship_type, parent_session_id, started_at)
+		VALUES ('continuation', 'legacy', 'legacy-machine', 'claude', 4, 2, 'continuation', 'legacy-session', '2026-01-01T00:00:00Z')`)
+	require.NoError(t, err)
+	stats, err = h.GetStats(t.Context(), false, false)
+	require.NoError(t, err)
+	assert.Equal(t, db.Stats{SessionCount: 4, MessageCount: 10, ProjectCount: 2, MachineCount: 4,
+		EarliestSession: new("2026-01-01T00:00:00Z")}, stats)
+	index, err := h.GetSidebarSessionIndex(t.Context(), db.SessionFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, index.Total, stats.SessionCount)
 }
 
 func TestHostedSourceMachinesCatalogFlags(t *testing.T) {
