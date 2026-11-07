@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	gitcmd "go.kenn.io/kit/git/cmd"
@@ -66,6 +67,8 @@ func Install(repoDir string) error {
 			switch hook.state {
 			case hookOther:
 				fmt.Fprintf(&b, "\nadd this line to %s:\n%s", hook.path, hook.line)
+			case hookNotExecutable:
+				fmt.Fprintf(&b, "\nmake %s executable", hook.path)
 			case hookMissing:
 				fmt.Fprintf(&b, "\ncreate executable %s containing:\n%s", hook.path, strings.TrimSuffix(hook.script, "\n"))
 			}
@@ -85,6 +88,7 @@ type hookState int
 const (
 	hookMissing hookState = iota
 	hookInstalled
+	hookNotExecutable
 	hookOther
 )
 
@@ -98,7 +102,7 @@ func installHook(path, script string) error {
 		if err != nil {
 			return err
 		}
-		if state != hookInstalled {
+		if state != hookInstalled && state != hookNotExecutable {
 			return fmt.Errorf("%s changed during installation", path)
 		}
 		return os.Chmod(path, 0o755)
@@ -118,8 +122,16 @@ func existingHook(path, script string) (hookState, error) {
 	if err != nil {
 		return hookMissing, err
 	}
-	if string(data) == script {
-		return hookInstalled, nil
+	if string(data) != script {
+		return hookOther, nil
 	}
-	return hookOther, nil
+	// Git skips hooks without execute permission, except on Windows.
+	info, err := os.Stat(path)
+	if err != nil {
+		return hookMissing, err
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+		return hookNotExecutable, nil
+	}
+	return hookInstalled, nil
 }

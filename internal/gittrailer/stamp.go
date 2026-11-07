@@ -30,7 +30,13 @@ func PrepareTemplate(ctx context.Context, file, source string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(marker, []byte(message), 0o600)
+	// Git compares against the template file, which lacks the signoff -s adds
+	// before this hook runs; a later hook may rewrite that signoff.
+	lines := strings.SplitAfter(message, "\n")
+	for len(lines) > 0 && !hasContent(lines[len(lines)-1]) {
+		lines = lines[:len(lines)-1]
+	}
+	return os.WriteFile(marker, []byte(strings.Join(lines, "")), 0o600)
 }
 
 // Stamp adds session provenance only when Git has disabled the editor.
@@ -64,10 +70,13 @@ func cleanMessage(ctx context.Context, file string) (string, error) {
 		return "", err
 	}
 	message := string(data)
+	markers := map[string]bool{}
+	for _, comment := range commentStrings(ctx) {
+		markers[comment+" "+cutLine] = true
+	}
 	offset := 0
 	for line := range strings.Lines(message) {
-		prefix, found := strings.CutSuffix(strings.TrimRight(line, "\r\n"), " "+cutLine)
-		if found && prefix != "" && !strings.ContainsAny(prefix, " \t") {
+		if markers[strings.TrimRight(line, "\r\n")] {
 			message = message[:offset]
 			break
 		}
@@ -76,6 +85,22 @@ func cleanMessage(ctx context.Context, file string) (string, error) {
 	// Keep the hook's repository environment and the user's Git configuration.
 	out, _, err := (gitcmd.Runner{}).Run(ctx, "", strings.NewReader(message), "stripspace", "--strip-comments")
 	return string(out), err
+}
+
+// commentStrings returns the strings Git may put before the scissors line. The
+// last of core.commentChar and core.commentString wins, and "auto" lets Git
+// pick one character from a fixed set.
+func commentStrings(ctx context.Context) []string {
+	out, _, err := (gitcmd.Runner{}).Run(ctx, "", nil, "config", "--get-regexp", `^core\.comment(char|string)$`)
+	if err != nil {
+		return []string{"#"}
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	_, value, _ := strings.Cut(lines[len(lines)-1], " ")
+	if value == "auto" {
+		return strings.Split("#;@!$%^&|:", "")
+	}
+	return []string{value}
 }
 
 // hasContent mirrors Git, which ignores blank lines and signoffs here.
