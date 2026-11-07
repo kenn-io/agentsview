@@ -2,14 +2,17 @@ package vector
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/sqlitevec"
 )
 
 // fakeExportEncoder returns a deterministic 4-dimensional encoder for export
@@ -385,4 +388,169 @@ func sessionDocHashes(t *testing.T, ix *Index) map[string]string {
 	hashes, err := export.SessionDocHashes(ctx, nil)
 	require.NoError(t, err)
 	return hashes
+}
+
+func TestExportPreservesUnknownScope(t *testing.T) {
+	ix, _ := newBuiltTestIndex(t)
+	require.NoError(t, ix.metaDelete(t.Context(), scopeIncludeAutomatedKey))
+	exp, ok, err := ix.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	defer exp.Close()
+	assert.Nil(t, exp.Generation().IncludeAutomated, "a legacy mirror has no published scope")
+}
+
+func TestExportScopeRejectsConcurrentCommit(t *testing.T) {
+	ix, gen := newBuiltTestIndex(t)
+	for _, before := range []bool{false, true} {
+		for _, afterSnapshot := range []bool{false, true} {
+			require.NoError(t, ix.setIncludeAutomatedScope(t.Context(), before))
+			snap, _, err := ix.exportSnapshot(t.Context(), gen.Fingerprint(), func(ctx context.Context, fp string) (*sqlitevec.Snapshot[string, string], error) {
+				change := func() {
+					require.NoError(t, ix.setIncludeAutomatedScope(ctx, !before))
+					require.NoError(t, ix.setIncludeAutomatedScope(ctx, before))
+				}
+				if !afterSnapshot {
+					change()
+				}
+				snapshot, err := ix.store.Snapshot(ctx, fp)
+				if afterSnapshot {
+					change()
+				}
+				return snapshot, err
+			})
+			require.ErrorIs(t, err, ErrExportNotReady)
+			require.Nil(t, snap)
+			exp, ok, err := ix.BeginExport(t.Context(), nil)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.NotNil(t, exp.Generation().IncludeAutomated)
+			require.Equal(t, before, *exp.Generation().IncludeAutomated)
+			require.NoError(t, exp.Close())
+		}
+	}
+}
+
+func TestExportCanceledScopeChangeDoesNotCertifyOldScope(t *testing.T) {
+	ix, gen := newBuiltTestIndex(t)
+	_, err := ix.Build(t.Context(), exportTestSource(), fakeExportEncoder(), gen, BuildOptions{IncludeAutomated: true})
+	require.NoError(t, err)
+	_, err = ix.Build(t.Context(), failingRefreshSource{
+		unit: db.EmbeddableUnit{Kind: "user", SessionID: "session-2", SourceUUID: "u2", Deleted: true},
+		err:  context.Canceled,
+	}, fakeExportEncoder(), gen, BuildOptions{IncludeAutomated: false})
+	require.ErrorIs(t, err, context.Canceled)
+	export, ok, err := ix.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, export.Close()) })
+	assert.Nil(t, export.Generation().IncludeAutomated, "interrupted scope changes cannot certify the previous scope")
+	require.NoError(t, export.Close())
+	_, err = ix.Build(t.Context(), exportTestSource(), fakeExportEncoder(), gen, BuildOptions{IncludeAutomated: false})
+	require.NoError(t, err)
+	recovered, ok, err := ix.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, recovered.Generation().IncludeAutomated)
+	assert.False(t, *recovered.Generation().IncludeAutomated)
+	require.NoError(t, recovered.Close())
+}
+
+// Provenance is established by a complete scan, not by opening a mirror or
+// refreshing a watermark-sized subset after an archive/parser upgrade.
+func TestExportParserProvenance(t *testing.T) {
+	ctx := t.Context()
+	archive, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	defer archive.Close()
+	require.NoError(t, archive.UpsertSession(ctx, db.Session{ID: "A", Project: "proj", Agent: "claude"}))
+	require.NoError(t, archive.InsertMessages(ctx, []db.Message{{SessionID: "A", Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5}}))
+	setVersion := func(version int) {
+		require.NoError(t, archive.Update(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, "UPDATE sessions SET data_version=?", version); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, "PRAGMA user_version="+strconv.Itoa(version))
+			return err
+		}))
+	}
+	oldVersion := db.CurrentDataVersion() - 1
+	setVersion(oldVersion)
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	ix, err := Open(ctx, path, false, 8192)
+	require.NoError(t, err)
+	defer ix.Close()
+	_, err = ix.Build(ctx, archive, fakeExportEncoder(), fakeGeneration4Dim(), BuildOptions{Backstop: true})
+	require.NoError(t, err)
+	check := func(want int) {
+		t.Helper()
+		exp, ok, err := ix.BeginExport(ctx, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, want, exp.Generation().DataVersion)
+		require.NoError(t, exp.Close())
+	}
+	check(oldVersion)
+	// Both ordinary incremental refresh and read-only reopen retain full proof.
+	_, err = ix.Refresh(ctx, archive, false, false)
+	require.NoError(t, err)
+	check(oldVersion)
+	ro, err := Open(ctx, path, true, 8192)
+	require.NoError(t, err)
+	exp, ok, err := ro.BeginExport(ctx, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, oldVersion, exp.Generation().DataVersion)
+	require.NoError(t, exp.Close())
+	require.NoError(t, ro.Close())
+	setVersion(db.CurrentDataVersion())
+	_, err = ix.Refresh(ctx, archive, false, false)
+	require.NoError(t, err)
+	check(0)
+	_, err = ix.Refresh(ctx, archive, true, false)
+	require.NoError(t, err)
+	check(db.CurrentDataVersion())
+	_, err = ix.Refresh(ctx, archive, false, false)
+	require.NoError(t, err)
+	check(db.CurrentDataVersion())
+	_, err = ix.Refresh(ctx, lateFailingProofSource{archive}, true, false)
+	require.ErrorContains(t, err, "source scan failed")
+	check(0)
+	_, err = ix.Refresh(ctx, archive, false, false)
+	require.NoError(t, err)
+	check(0)
+	_, err = ix.Refresh(ctx, archive, true, false)
+	require.NoError(t, err)
+	check(db.CurrentDataVersion())
+	require.NoError(t, ix.metaDelete(ctx, sourceDataVersionKey))
+	ro, err = Open(ctx, path, true, 8192)
+	require.NoError(t, err)
+	exp, ok, err = ro.BeginExport(ctx, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Zero(t, exp.Generation().DataVersion, "a legacy mirror can export but read-only open cannot bless it")
+	require.NoError(t, exp.Close())
+	require.NoError(t, ro.Close())
+	_, err = ix.Refresh(ctx, archive, false, false)
+	require.NoError(t, err)
+	check(0)
+	_, err = ix.Refresh(ctx, archive, true, false)
+	require.NoError(t, err)
+	check(db.CurrentDataVersion())
+	for _, raw := range []string{"invalid", strconv.Itoa(db.CurrentDataVersion() + 1)} {
+		require.NoError(t, ix.metaSet(ctx, sourceDataVersionKey, raw))
+		_, ok, err := ix.BeginExport(ctx, nil)
+		assert.False(t, ok)
+		assert.ErrorIs(t, err, ErrExportNotReady)
+	}
+}
+
+type lateFailingProofSource struct{ *db.DB }
+
+func (s lateFailingProofSource) ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, maxRunRunes int, fn func(db.EmbeddableUnit) error) (string, error) {
+	_, err := s.DB.ScanEmbeddableUnits(ctx, since, includeAutomated, maxRunRunes, fn)
+	if err != nil {
+		return "", err
+	}
+	return "", errors.New("source scan failed")
 }

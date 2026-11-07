@@ -103,9 +103,10 @@ func newExportCommandWithDeps(deps exportReportingDeps) *cobra.Command {
 			"Handle export reset and message revision errors before resuming.",
 		Example: "  agentsview export sessions --help\n" +
 			"  agentsview export conversations --help",
-		GroupID:      groupData,
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
+		GroupID:          groupData,
+		SilenceUsage:     true,
+		Args:             cobra.NoArgs,
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) { noticeLocalArchive(cmd) },
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
@@ -25,6 +26,11 @@ type vectorSearcher struct {
 	maxInputChars int
 	encode        storage.VectorQueryEncoder
 	chunkTable    string
+
+	// Hub reads pin the selection made by OpenVectorSearcher, including the
+	// incarnation: table recreation can reuse the same numeric generation ID.
+	fingerprint string
+	createdAt   time.Time
 
 	// schemaMu guards the lazily resolved, quoted pgvector extension schema.
 	// The constructor takes no context, so it is resolved on first query
