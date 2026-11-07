@@ -3220,16 +3220,27 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 }
 
 func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
-	dir := setupTestEnv(t)
-	cfg, err := LoadReadOnly()
-	require.NoError(t, err)
-	path := filepath.Join(dir, configFileName)
-	raw := "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 512\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 256\n"
-	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
-	_, err = cfg.VectorSetupEmbeddings()
-	require.ErrorIs(t, err, ErrInvalidVectorSetup)
-	require.ErrorIs(t, cfg.SaveVectorSetup(), ErrInvalidVectorSetup)
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, raw, string(data))
+	for _, tc := range []struct{ name, raw, wantError string }{
+		{name: "invalid token budget", raw: "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 512\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 256\n"},
+		{name: "array of vector tables", raw: "[[vector]]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\n", wantError: "vector must be a table"},
+		{name: "scalar vector", raw: "vector = 'preserve this value'\n", wantError: "vector must be a table"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			cfg, err := LoadReadOnly()
+			require.NoError(t, err)
+			path := filepath.Join(dir, configFileName)
+			require.NoError(t, os.WriteFile(path, []byte(tc.raw), 0o600))
+			_, setupErr := cfg.VectorSetupEmbeddings()
+			saveErr := cfg.SaveVectorSetup()
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, tc.raw, string(data))
+			require.ErrorIs(t, setupErr, ErrInvalidVectorSetup)
+			require.ErrorIs(t, saveErr, ErrInvalidVectorSetup)
+			if tc.wantError != "" {
+				require.ErrorContains(t, setupErr, tc.wantError)
+			}
+		})
+	}
 }

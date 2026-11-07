@@ -4126,7 +4126,10 @@ func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 		}
 		return nil, Config{}, err
 	}
-	section, _ := existing["vector"].(map[string]any)
+	section, ok := existing["vector"].(map[string]any)
+	if !ok && existing["vector"] != nil {
+		return nil, Config{}, invalidVectorSetupError{errors.New("vector must be a table")}
+	}
 	if section == nil {
 		section = make(map[string]any)
 	}
