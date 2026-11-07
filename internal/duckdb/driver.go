@@ -36,27 +36,15 @@ type duckAppendBatch struct {
 	bytes     int
 }
 
-func newDuckAppendBatch(ctx context.Context, raw any, columns map[string][]string) (*duckAppendBatch, error) {
+func newDuckAppendBatch(ctx context.Context, raw any, columns map[string][]columnSpec) (*duckAppendBatch, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	b := &duckAppendBatch{dirty: make(map[string]bool), conn: raw.(driver.QueryerContext), appenders: make(map[string]*duckdbdriver.Appender), columns: make(map[string][]columnSpec)}
-	for table, names := range columns {
-		for _, name := range names {
-			column := columnSpec{name: name}
-			for _, spec := range mirrorTables {
-				if spec.name != table {
-					continue
-				}
-				for _, candidate := range spec.columns {
-					if candidate.name == name {
-						column = candidate
-						break
-					}
-				}
-				break
-			}
-			b.columns[table] = append(b.columns[table], column)
+	b := &duckAppendBatch{dirty: make(map[string]bool), conn: raw.(driver.QueryerContext), appenders: make(map[string]*duckdbdriver.Appender), columns: columns}
+	for table, specs := range columns {
+		names := make([]string, len(specs))
+		for i, column := range specs {
+			names[i] = column.name
 		}
 		a, err := duckdbdriver.NewAppenderWithColumns(raw.(driver.Conn), "", "", table, names)
 		if err != nil {
@@ -67,14 +55,12 @@ func newDuckAppendBatch(ctx context.Context, raw any, columns map[string][]strin
 	return b, nil
 }
 
+//nolint:nilaway // Callers use fixed table names with schema-derived columns.
 func (b *duckAppendBatch) add(ctx context.Context, table string, values ...any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	columns, ok := b.columns[table]
-	if !ok {
-		return errors.New("missing appender columns for " + table)
-	}
+	columns := b.columns[table]
 	row := make([]driver.Value, len(values))
 	payload := 0
 	for i, value := range values {

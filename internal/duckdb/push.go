@@ -1103,6 +1103,7 @@ func insertToolCalls(
 	for _, m := range msgs {
 		for i, tc := range m.ToolCalls {
 			if err := batch.add(ctx, "tool_calls",
+				tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding,
 				m.ID, m.SessionID, tc.ToolName, tc.Category,
 				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
 				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
@@ -1110,7 +1111,7 @@ func insertToolCalls(
 					tc.ResultContent, tc.ResultEvents,
 				)),
 				nilEmpty(tc.SubagentSessionID),
-				nilEmpty(tc.FilePath), tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding,
+				nilEmpty(tc.FilePath),
 			); err != nil {
 				return fmt.Errorf("inserting duckdb tool calls: %w", err)
 			}
@@ -1369,26 +1370,16 @@ func parseTimestamp(value string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-var duckAppendColumns = func() map[string][]string {
-	columns := map[string][]string{
-		"tool_calls": strings.Fields(strings.ReplaceAll(`
-			message_id, session_id, tool_name, category,
-			call_index, tool_use_id, input_json, skill_name,
-			result_content_length, result_content,
-			subagent_session_id, file_path, observed_outcome, observed_repeat, sequence_ending
-		`, ",", " ")),
-		"tool_result_events": strings.Fields(strings.ReplaceAll(`
-			session_id, tool_call_message_ordinal, call_index,
-			tool_use_id, agent_id, subagent_session_id,
-			source, status, content, content_length,
-			timestamp, event_index
-		`, ",", " ")),
-	}
+var duckAppendColumns = func() map[string][]columnSpec {
+	columns := make(map[string][]columnSpec)
 	for _, table := range mirrorTables {
 		switch table.name {
-		case "sessions", "messages", "usage_events":
+		case "sessions", "messages", "tool_calls", "tool_result_events", "usage_events":
 			for _, column := range table.columns {
-				columns[table.name] = append(columns[table.name], column.name)
+				if column.name == "id" && (table.name == "tool_calls" || table.name == "tool_result_events") {
+					continue
+				}
+				columns[table.name] = append(columns[table.name], column)
 			}
 		}
 	}

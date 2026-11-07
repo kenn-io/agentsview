@@ -26,7 +26,7 @@ func isMirrorOpenInSameProcessError(error) bool { return false }
 
 type duckAppendBatch struct{}
 
-func newDuckAppendBatch(context.Context, any, map[string][]string) (*duckAppendBatch, error) {
+func newDuckAppendBatch(context.Context, any, map[string][]columnSpec) (*duckAppendBatch, error) {
 	return nil, errUnsupportedPlatform
 }
 func (*duckAppendBatch) add(context.Context, string, ...any) error { return errUnsupportedPlatform }

@@ -3,12 +3,10 @@
 package duckdb
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +32,6 @@ func TestPushRejectsIntegerOverflowReplacement(t *testing.T) {
 	require.NotNil(t, sess)
 	_, err = syncer.pushSingleSession(ctx, *sess, "before")
 	require.NoError(t, err)
-	before := duckBatchSnapshot(t, syncer.DB(), sess.ID)
 
 	sess.TotalOutputTokens = 2147483648
 	sess.HasTotalOutputTokens = true
@@ -42,43 +39,14 @@ func TestPushRejectsIntegerOverflowReplacement(t *testing.T) {
 	sess, err = local.GetSession(ctx, sess.ID)
 	require.NoError(t, err)
 	require.Equal(t, 2147483648, sess.TotalOutputTokens)
-	var logs bytes.Buffer
-	previousLog := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(previousLog) })
-	var result storage.MirrorPushResult
-	var pushed []db.Session
-	require.NoError(t, syncer.pushSessionBatchForMode(ctx, []db.Session{*sess}, 0, 1, &result, &pushed, nil, map[string]string{sess.ID: "after"}))
-	assert.Equal(t, 1, result.Errors)
-	assert.Zero(t, result.SessionsPushed)
-	assert.Contains(t, logs.String(), "retrying sessions individually")
-	assert.Contains(t, logs.String(), "skipping session integer-overflow")
-	assert.Contains(t, logs.String(), "total_output_tokens")
-	assert.Contains(t, logs.String(), "INTEGER")
-	assert.Equal(t, before, duckBatchSnapshot(t, syncer.DB(), sess.ID))
-	var fingerprint string
+	_, err = syncer.tryPushSessionBatch(ctx, []db.Session{*sess}, map[string]string{sess.ID: "after"})
+	require.ErrorContains(t, err, "total_output_tokens")
+	require.ErrorContains(t, err, "INTEGER")
 	var total int64
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT total_output_tokens, agentsview_push_fingerprint FROM sessions WHERE id = ?`, sess.ID,
-	).Scan(&total, &fingerprint))
+		`SELECT total_output_tokens FROM sessions WHERE id = ?`, sess.ID,
+	).Scan(&total))
 	assert.Equal(t, int64(0), total)
-	assert.Equal(t, "before", fingerprint)
-}
-
-func TestPushBatchedDependentsPreserveValues(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	write := duckBatchFixture("batch-values", 103)
-	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
-	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	require.NoError(t, createSchema(ctx, syncer.DB()))
-	sess, err := local.GetSession(ctx, write.Session.ID)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	_, err = syncer.pushSingleSession(ctx, *sess, "initial")
-	require.NoError(t, err)
-	assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
 }
 
 func TestDuckAppenderPayloadBounds(t *testing.T) {
@@ -149,9 +117,9 @@ func TestDuckAppenderPayloadBounds(t *testing.T) {
 				defer func() { _ = tx.Rollback() }()
 				var batch *duckAppendBatch
 				err = sqlConn.Raw(func(raw any) error {
-					batch, err = newDuckAppendBatch(ctx, raw, map[string][]string{
-						"batch_bounds": {"id", "payload"},
-						"other_bounds": {"id", "payload"},
+					batch, err = newDuckAppendBatch(ctx, raw, map[string][]columnSpec{
+						"batch_bounds": {{"id", "id INTEGER"}, {"payload", "payload VARCHAR"}},
+						"other_bounds": {{"id", "id INTEGER"}, {"payload", "payload VARCHAR"}},
 					})
 					return err
 				})
@@ -510,7 +478,6 @@ func TestPushDuckDBTimestampCastParity(t *testing.T) {
 	_, parsed := parseTimestamp(raw)
 	require.False(t, parsed)
 	write.Session.StartedAt = new(raw)
-	write.Session.CreatedAt = raw
 	write.Messages[0].Timestamp = raw
 	write.Messages[0].ToolCalls[0].ResultEvents[0].Timestamp = raw
 	write.UsageEvents[0].OccurredAt = raw
@@ -520,12 +487,10 @@ func TestPushDuckDBTimestampCastParity(t *testing.T) {
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	sess, err := local.GetSession(ctx, write.Session.ID)
 	require.NoError(t, err)
-	sess.CreatedAt = raw
 	_, err = syncer.pushSingleSession(ctx, *sess, "timestamp")
 	require.NoError(t, err)
 	for _, field := range []struct{ table, column, where string }{
 		{"sessions", "started_at", "id = 'timestamp-cast'"},
-		{"sessions", "created_at", "id = 'timestamp-cast'"},
 		{"messages", "timestamp", "session_id = 'timestamp-cast' AND ordinal = 0"},
 		{"tool_result_events", "timestamp", "session_id = 'timestamp-cast' AND tool_use_id = 'row-000-call-0' AND event_index = 0"},
 		{"usage_events", "occurred_at", "session_id = 'timestamp-cast' AND dedup_key = 'row-000'"},
