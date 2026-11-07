@@ -328,7 +328,7 @@ class SessionsStore {
   childSessions: Map<string, Session> = $state(new Map());
   nextCursor: string | null = $state(null);
   total: number = $state(0);
-  archiveEmpty: boolean | null = $state(null);
+  archiveEmpty: boolean = $state(false);
   loading: boolean = $state(false);
   /** Why the server rejected the current sidebar filters, or null. */
   sidebarLoadError: string | null = $state(null);
@@ -655,7 +655,6 @@ class SessionsStore {
       this.sidebarLoadError = null;
     } catch (error) {
       if (this.loadVersion !== version) return;
-      if (this.archiveEmpty === null) this.archiveEmpty = false;
       // A rejected filter has no matching rows; showing the previous
       // filter's rows under it would mislabel them.
       if (error instanceof ApiError && error.status >= 400 && error.status < 500) {

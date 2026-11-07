@@ -709,13 +709,9 @@ describe("App root Sessions landing", () => {
         sessions: [],
         total: 0,
       } as never);
-      let resolveInventory!: (value: never) => void;
-      vi.spyOn(DataService, "getApiV1DataProjects").mockReturnValue(
-        new Promise((resolve) => {
-          resolveInventory = resolve;
-        }),
-      );
-      sessions.archiveEmpty = null;
+      vi.spyOn(DataService, "getApiV1DataProjects").mockResolvedValue({
+        total_sessions: total,
+      } as never);
       settings.loaded = true;
       settings.sessionProviders = [
         {
@@ -737,8 +733,6 @@ describe("App root Sessions landing", () => {
 
       component = mount(App, { target: document.body });
       await flushEffects();
-      expect(document.body.querySelector(".analytics-page")).toBeNull();
-      resolveInventory({ total_sessions: total } as never);
 
       await vi.waitFor(() => {
         expect(

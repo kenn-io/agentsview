@@ -953,7 +953,7 @@
         <MessageList bind:this={messageListRef} />
       {:else if sessions.archiveEmpty}
         <EmptyArchivePanel />
-      {:else if sessions.archiveEmpty === false}
+      {:else}
         <AnalyticsPage
           suppressSessionDateRestore={rootDetailDateRestoreSuppressed}
           suppressSessionDateRefresh={rootResetPending}
