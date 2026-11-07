@@ -60,7 +60,7 @@
     color: var(--text-muted);
     font-size: 11px;
   }
-  :global(summary:hover) .empty-summary {
+  .empty-summary:hover {
     color: var(--text-secondary);
   }
   .empty-line {
