@@ -31,8 +31,18 @@ const (
 	benchVectorRepushRounds   = 2
 )
 
+// benchSessionStride spreads the sessions a case changes across the doc_key
+// order: session s gets id number s*benchSessionStride mod
+// benchVectorSessions, a bijection because the stride is coprime to the
+// session count. It is near the session count over the golden ratio, so the
+// first N sessions land evenly across the id range for every N, the way the
+// random UUIDs of the sessions one production push changes do.
+const benchSessionStride = 19565
+
 // benchSessionID is the SQL expression for session s's UUID-shaped id.
-const benchSessionID = `concat('00000000-0000-4000-8000-', leftPad(toString(s), 12, '0'))`
+var benchSessionID = fmt.Sprintf(
+	`concat('00000000-0000-4000-8000-', leftPad(toString(s * %d %% %d), 12, '0'))`,
+	benchSessionStride, benchVectorSessions)
 
 // BenchmarkVectorPush measures generation-wide vector pushes on a mirror
 // seeded as above, where every session not named by a case is unchanged:
@@ -40,11 +50,26 @@ const benchSessionID = `concat('00000000-0000-4000-8000-', leftPad(toString(s), 
 //   - evict=N: the local index dropped N sessions the mirror still holds
 //     vectors for, so the push evicts them.
 //   - repush=N: N sessions gained one document, so the push rewrites them.
+//     N=10 is the size of a typical watch push.
 //
 // Each iteration re-seeds its sessions untimed. Besides time, it reports the
-// DELETE statements the push ran, the server CPU its statements used, and
-// the rows the DELETEs wrote to patch parts, read from system.query_log and
-// system.part_log, so the server needs both logs enabled.
+// DELETE statements the push ran, the server CPU and rows read its statements
+// used, the rows the DELETEs wrote to patch parts, and the work of the
+// mutations that ran for the DELETEs, read from system.query_log and
+// system.part_log, so the server needs both logs enabled. Under the default
+// lightweight_delete_mode a DELETE runs as a mutation on background threads,
+// which query_log does not charge to the statement, so server-cpu-s/op leaves
+// it out. part_log charges a mutation for the parts it rewrites
+// (mutation-cpu-s/op) but not for checking which parts hold matching rows.
+// server-wide-cpu-s/op covers everything the server did during the push,
+// including any merge that started, so a push starts only once the merges its
+// seeding triggered have finished.
+//
+// To measure lightweight_update, add ?lightweight_delete_mode=lightweight_update
+// to TEST_CLICKHOUSE_URL on a server whose merge_tree settings enable
+// enable_block_number_column and enable_block_offset_column. Without those
+// columns the server silently runs ALTER UPDATE instead, and the log lines the
+// seed writes report no patch rows.
 func BenchmarkVectorPush(b *testing.B) {
 	ctx := b.Context()
 	dsn, database := chtest.FreshDatabase(b)
@@ -62,7 +87,9 @@ func BenchmarkVectorPush(b *testing.B) {
 	require.NoError(b, err)
 	b.Cleanup(func() { require.NoError(b, s.Close()) })
 	require.NoError(b, s.EnsureSchema(ctx))
-	conn := chtest.Open(b, dsn, database)
+	// The push's own connection keeps the settings the DSN names, so the
+	// seeding deletes run under the same lightweight_delete_mode as the push.
+	conn := s.conn
 	seedBenchVectorMirror(b, conn, s.archiveID)
 
 	unchangedFrom := func(n int) map[string]string {
@@ -74,12 +101,17 @@ func BenchmarkVectorPush(b *testing.B) {
 	}
 	run := func(b *testing.B, sessions int, check func(storage.VectorPushResult)) {
 		var elapsed time.Duration
-		var deletes, patchRows uint64
-		var cpuSeconds float64
+		var total benchStats
+		var serverWideCPU float64
 		for b.Loop() {
 			b.StopTimer()
 			seedBenchVectorRows(b, conn, s.archiveID, 0, sessions)
 			comment := fmt.Sprintf("bench-vector-push-%d", newPushVersion())
+			waitForBenchMerges(b, conn)
+			var pushStart string
+			require.NoError(b, conn.QueryRowContext(b.Context(),
+				`SELECT toString(now64(6))`).Scan(&pushStart))
+			cpuBefore := benchServerWideCPUSeconds(b, conn)
 			pushCtx := chdriver.Context(b.Context(),
 				chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
 			b.StartTimer()
@@ -89,19 +121,23 @@ func BenchmarkVectorPush(b *testing.B) {
 			b.StopTimer()
 			require.NoError(b, err)
 			check(res)
-			n, cpu, rows := benchServerStats(b, conn, comment)
-			deletes += n
-			cpuSeconds += cpu
-			patchRows += rows
+			serverWideCPU += benchServerWideCPUSeconds(b, conn) - cpuBefore
+			total.add(benchServerStats(b, conn, comment, pushStart))
 			b.StartTimer()
 		}
 		b.ReportMetric(float64(elapsed.Milliseconds())/float64(b.N*sessions), "ms/session")
-		b.ReportMetric(float64(deletes)/float64(b.N), "deletes/op")
-		b.ReportMetric(cpuSeconds/float64(b.N), "server-cpu-s/op")
-		b.ReportMetric(float64(patchRows)/float64(b.N), "patch-rows/op")
+		n := float64(b.N)
+		b.ReportMetric(float64(total.deletes)/n, "deletes/op")
+		b.ReportMetric(total.cpuSeconds/n, "server-cpu-s/op")
+		b.ReportMetric(serverWideCPU/n, "server-wide-cpu-s/op")
+		b.ReportMetric(float64(total.readRows)/n, "read-rows/op")
+		b.ReportMetric(float64(total.patchRows)/n, "patch-rows/op")
+		b.ReportMetric(float64(total.mutatedParts)/n, "mutated-parts/op")
+		b.ReportMetric(float64(total.mutationReadRows)/n, "mutation-read-rows/op")
+		b.ReportMetric(total.mutationCPUSeconds/n, "mutation-cpu-s/op")
 	}
 
-	for _, evict := range []int{100, 2000} {
+	for _, evict := range []int{10, 50, 100, 500, 2000} {
 		b.Run(fmt.Sprintf("evict=%d", evict), func(b *testing.B) {
 			source.hashes, source.docs = unchangedFrom(evict), nil
 			run(b, evict, func(res storage.VectorPushResult) {
@@ -112,24 +148,25 @@ func BenchmarkVectorPush(b *testing.B) {
 			seedBenchVectorRows(b, conn, s.archiveID, 0, evict)
 		})
 	}
-	const repush = 500
-	b.Run(fmt.Sprintf("repush=%d", repush), func(b *testing.B) {
-		source.hashes = unchangedFrom(repush)
-		source.docs = make(map[string][]storage.VectorPushDoc, repush)
-		for i := range repush {
-			id := benchSessionIDOf(i)
-			source.hashes[id] = benchStateHash(i) + "-grown"
-			source.docs[id] = benchSessionDocs(i)
-		}
-		run(b, repush, func(res storage.VectorPushResult) {
-			require.Equal(b, repush, res.SessionsPushed)
-			require.Equal(b, benchVectorSessions-repush, res.SessionsUnchanged)
+	for _, repush := range []int{10, 50, 100, 500} {
+		b.Run(fmt.Sprintf("repush=%d", repush), func(b *testing.B) {
+			source.hashes = unchangedFrom(repush)
+			source.docs = make(map[string][]storage.VectorPushDoc, repush)
+			for i := range repush {
+				id := benchSessionIDOf(i)
+				source.hashes[id] = benchStateHash(i) + "-grown"
+				source.docs[id] = benchSessionDocs(i)
+			}
+			run(b, repush, func(res storage.VectorPushResult) {
+				require.Equal(b, repush, res.SessionsPushed)
+				require.Equal(b, benchVectorSessions-repush, res.SessionsUnchanged)
+			})
 		})
-	})
+	}
 }
 
 func benchSessionIDOf(i int) string {
-	return fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+	return fmt.Sprintf("00000000-0000-4000-8000-%012d", i*benchSessionStride%benchVectorSessions)
 }
 
 func benchStateHash(i int) string { return fmt.Sprintf("agg-%d", i) }
@@ -158,27 +195,82 @@ func benchSessionDocs(i int) []storage.VectorPushDoc {
 	return out
 }
 
+// waitForBenchMerges returns once no merge is running in the bench database.
+func waitForBenchMerges(b *testing.B, conn *sql.DB) {
+	b.Helper()
+	for {
+		var merges uint64
+		require.NoError(b, conn.QueryRowContext(b.Context(),
+			`SELECT count() FROM system.merges WHERE database = currentDatabase()`).Scan(&merges))
+		if merges == 0 {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// benchServerWideCPUSeconds returns the CPU the server has used since it
+// started, across all of its work.
+func benchServerWideCPUSeconds(b *testing.B, conn *sql.DB) float64 {
+	b.Helper()
+	var seconds float64
+	require.NoError(b, conn.QueryRowContext(b.Context(), `
+		SELECT sum(value) / 1e6 FROM system.events
+		WHERE event IN ('UserTimeMicroseconds', 'SystemTimeMicroseconds')`).Scan(&seconds))
+	return seconds
+}
+
+// benchStats is what the server did for one push.
+type benchStats struct {
+	deletes, readRows, patchRows   uint64
+	cpuSeconds                     float64
+	mutatedParts, mutationReadRows uint64
+	mutationCPUSeconds             float64
+}
+
+func (t *benchStats) add(s benchStats) {
+	t.deletes += s.deletes
+	t.readRows += s.readRows
+	t.patchRows += s.patchRows
+	t.cpuSeconds += s.cpuSeconds
+	t.mutatedParts += s.mutatedParts
+	t.mutationReadRows += s.mutationReadRows
+	t.mutationCPUSeconds += s.mutationCPUSeconds
+}
+
 // benchServerStats returns, for the statements that ran under comment, how
-// many were DELETEs, the server CPU seconds they all used, and the rows the
-// DELETEs wrote to patch parts.
-func benchServerStats(b *testing.B, conn *sql.DB, comment string) (deletes uint64, cpuSeconds float64, patchRows uint64) {
+// many were DELETEs, the server CPU seconds and rows read they all used, and
+// the rows the DELETEs wrote to patch parts. It adds the vector-table
+// mutations that finished since pushStart. A DELETE waits for its mutation
+// and the seed runs no mutation during a push, so those are the push's own.
+func benchServerStats(b *testing.B, conn *sql.DB, comment, pushStart string) benchStats {
 	b.Helper()
 	ctx := b.Context()
 	_, err := conn.ExecContext(ctx, `SYSTEM FLUSH LOGS`)
 	require.NoError(b, err)
+	var s benchStats
 	require.NoError(b, conn.QueryRowContext(ctx, `
 		SELECT countIf(query_kind = 'Delete'),
-			sum(ProfileEvents['UserTimeMicroseconds'] + ProfileEvents['SystemTimeMicroseconds']) / 1e6
+			sum(ProfileEvents['UserTimeMicroseconds'] + ProfileEvents['SystemTimeMicroseconds']) / 1e6,
+			sum(read_rows)
 		FROM system.query_log
 		WHERE type = 'QueryFinish' AND log_comment = ?`,
-		comment).Scan(&deletes, &cpuSeconds))
+		comment).Scan(&s.deletes, &s.cpuSeconds, &s.readRows))
 	require.NoError(b, conn.QueryRowContext(ctx, `
 		SELECT sum(rows) FROM system.part_log
 		WHERE event_type = 'NewPart' AND startsWith(part_name, 'patch-') AND query_id IN (
 			SELECT query_id FROM system.query_log
 			WHERE type = 'QueryFinish' AND log_comment = ? AND query_kind = 'Delete')`,
-		comment).Scan(&patchRows))
-	return deletes, cpuSeconds, patchRows
+		comment).Scan(&s.patchRows))
+	require.NoError(b, conn.QueryRowContext(ctx, `
+		SELECT countIf(read_rows > 0), sum(read_rows),
+			sum(ProfileEvents['UserTimeMicroseconds'] + ProfileEvents['SystemTimeMicroseconds']) / 1e6
+		FROM system.part_log
+		WHERE event_type = 'MutatePart' AND database = currentDatabase()
+		  AND table IN ('vector_documents', 'vector_chunks')
+		  AND event_time_microseconds >= toDateTime64(?, 6)`,
+		pushStart).Scan(&s.mutatedParts, &s.mutationReadRows, &s.mutationCPUSeconds))
+	return s
 }
 
 // seedBenchVectorMirror writes the resident session rows, then every
@@ -229,11 +321,24 @@ func seedBenchVectorMirror(b *testing.B, conn *sql.DB, archiveID string) {
 }
 
 // seedBenchVectorRows writes documents, chunks, and push state for sessions
-// [lo, hi) under a fresh push version and returns that version.
+// [lo, hi) under a fresh push version and returns that version. It inserts
+// at most benchSeedSessions sessions per statement, which keeps each insert
+// within a small test server's memory limit.
 func seedBenchVectorRows(b *testing.B, conn *sql.DB, archiveID string, lo, hi int) uint64 {
 	b.Helper()
-	ctx := context.WithoutCancel(b.Context())
 	version := newPushVersion()
+	for from := lo; from < hi; from += benchSeedSessions {
+		seedBenchVectorRange(b, conn, archiveID, from, min(from+benchSeedSessions, hi), version)
+	}
+	return version
+}
+
+// benchSeedSessions bounds the sessions one seeding insert covers.
+const benchSeedSessions = 500
+
+func seedBenchVectorRange(b *testing.B, conn *sql.DB, archiveID string, lo, hi int, version uint64) {
+	b.Helper()
+	ctx := context.WithoutCancel(b.Context())
 	docs := `
 		SELECT s, d, s * ? + d AS g, ` + benchSessionID + ` AS sid,
 			concat('u:', sid, ':00000000-0000-4000-9000-', leftPad(toString(g), 12, '0')) AS doc_key
@@ -267,5 +372,4 @@ func seedBenchVectorRows(b *testing.B, conn *sql.DB, archiveID string, lo, hi in
 		FROM (SELECT ? + number AS s FROM numbers(?))`,
 		archiveID, vectorFixtureFP, version, lo, hi-lo)
 	require.NoError(b, err, "seed vector push state")
-	return version
 }
