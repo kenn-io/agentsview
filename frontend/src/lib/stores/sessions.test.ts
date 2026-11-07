@@ -272,20 +272,17 @@ describe("SessionsStore", () => {
     it.each([
       [3, false, false],
       [0, false, true],
-      [0, true, false],
-    ] as const)(
-      "checks the whole archive for inventory %i, visible sidebar %s",
-      async (total, visible, empty) => {
-        sessions.filters.date = "2024-01-01";
-        sessions.archiveEmpty = !empty;
-        if (visible) mockSidebarIndex([makeSkinnyRow({ id: "present" })]);
-        api.getDataProjects.mockResolvedValue({ total_sessions: total });
-        await sessions.load();
-        await vi.waitFor(() => expect(sessions.archiveEmpty).toBe(empty));
-        if (visible) expect(api.getDataProjects).not.toHaveBeenCalled();
-        else expect(api.getDataProjects).toHaveBeenCalledExactlyOnceWith();
-      },
-    );
+      [3, true, false],
+    ] as const)("checks archive emptiness for fixture %#", async (total, visible, empty) => {
+      sessions.filters.date = "2024-01-01";
+      sessions.archiveEmpty = !empty;
+      if (visible) mockSidebarIndex([makeSkinnyRow({ id: "present" })]);
+      api.getDataProjects.mockResolvedValue({ total_sessions: total });
+      await sessions.load();
+      await vi.waitFor(() => expect(sessions.archiveEmpty).toBe(empty));
+      if (visible) expect(api.getDataProjects).not.toHaveBeenCalled();
+      else expect(api.getDataProjects).toHaveBeenCalledExactlyOnceWith();
+    });
 
     it("discards inventory after a newer sidebar load", async () => {
       let resolveOlder!: (value: { total_sessions: number }) => void;
