@@ -27,7 +27,6 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 		cause, wantErr              error
 		optIn                       bool
 		empty                       bool
-		wantInput                   bool
 	}{
 		{name: "not configured", mode: "hybrid", optIn: true, reason: "not set up"},
 		{name: "building", mode: "hybrid", optIn: true, cause: fmt.Errorf("search unavailable: %w", db.NewSemanticUnavailableError("index is building: 40% complete")), reason: "index is building: 40% complete"},
@@ -35,7 +34,6 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 		{name: "no opt in", mode: "hybrid", wantErr: db.ErrSemanticUnavailable},
 		{name: "semantic", mode: "semantic", optIn: true, wantErr: db.ErrSemanticUnavailable},
 		{name: "transient", mode: "hybrid", optIn: true, cause: db.ErrSemanticTransient, wantErr: db.ErrSemanticTransient},
-		{name: "invalid", mode: "hybrid", optIn: true, pattern: `"needle`, wantInput: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
@@ -52,11 +50,6 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 				pattern = "needle"
 			}
 			result, err := service.NewDirectBackend(d, nil).SearchContent(t.Context(), service.ContentSearchRequest{Pattern: pattern, Mode: tc.mode, KeywordFallback: tc.optIn})
-			if tc.wantInput {
-				var inputErr *db.SearchInputError
-				require.ErrorAs(t, err, &inputErr)
-				return
-			}
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
 				return

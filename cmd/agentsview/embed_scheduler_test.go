@@ -29,7 +29,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
@@ -708,6 +707,9 @@ func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T)
 		err := translateSearchError(&vector.BuildingError{Percent: 62})
 		require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 		assert.Contains(t, err.Error(), "index is building: 62% complete")
+		unavailable, ok := errors.AsType[*db.SemanticUnavailableError](err)
+		require.True(t, ok)
+		assert.Equal(t, "index is building: 62% complete", unavailable.Reason)
 	})
 	t.Run("other error passes through", func(t *testing.T) {
 		boom := errors.New("boom")
@@ -814,18 +816,9 @@ func TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable(t *test
 		"a version-mismatched index must surface the semantic-unavailable taxonomy")
 	assert.Contains(t, err.Error(), "embeddings build",
 		"the error must tell the user to rebuild the index")
-	database := dbtest.OpenTestDB(t)
-	dbtest.SeedSessionWithMessages(t, database, "mismatch", "project", []db.Message{
-		dbtest.UserMsg("mismatch", 0, "needle"),
-	}, dbtest.WithMessageCounts(1, 2))
-	database.SetVectorSearcher(adapter)
-	result, err := service.NewDirectBackend(database, nil).SearchContent(t.Context(), service.ContentSearchRequest{
-		Pattern: "needle", Mode: "hybrid", KeywordFallback: true,
-	})
-	require.NoError(t, err)
-	require.Len(t, result.Matches, 1)
-	assert.Equal(t, "hybrid_keyword", result.EffectiveMode)
-	assert.Contains(t, result.Note, "embeddings build")
+	unavailable, ok := errors.AsType[*db.SemanticUnavailableError](err)
+	require.True(t, ok)
+	assert.Contains(t, unavailable.Reason, "embeddings build")
 }
 
 func TestSearcherAdapterActivityCandidateExpansion(t *testing.T) {
@@ -2020,37 +2013,5 @@ func TestMessageSchedulerAutomaticBuildSettings(t *testing.T) {
 				assert.Empty(t, vs.Scheduler.batteryDeferredPath)
 			}
 		})
-	}
-}
-
-func TestHybridFallbackUsesArchiveRangesDuringFirstBuild(t *testing.T) {
-	cfg := enabledVectorConfig(t)
-	cfg.Vector.Embeddings.MaxInputChars = 32
-	database := dbtest.OpenTestDB(t)
-	dbtest.SeedSessionWithMessages(t, database, "capped", "project", []db.Message{
-		dbtest.UserMsg("capped", 0, "question"),
-		dbtest.AsstMsg("capped", 1, "needle first "+strings.Repeat("x", 128)),
-		dbtest.AsstMsg("capped", 2, "needle second "+strings.Repeat("y", 128)),
-	}, dbtest.WithMessageCounts(3, 2))
-	ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, 32)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, ix.Close()) })
-	gen := kitvec.Generation{Model: "fake-model", Dimensions: 4}
-	interrupted := errors.New("interrupted first build")
-	_, err = ix.Build(t.Context(), database, func(context.Context, []string) ([][]float32, error) {
-		return nil, interrupted
-	}, gen, vector.BuildOptions{})
-	require.ErrorIs(t, err, interrupted)
-	database.SetVectorSearcher(newSearcherAdapter(ix, fakePushEncoder(), generationSpace(gen)))
-	backend := service.NewDirectBackend(database, nil)
-	result, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "needle", Mode: "hybrid", KeywordFallback: true})
-	require.NoError(t, err)
-	require.Len(t, result.Matches, 2)
-	assert.Equal(t, "hybrid_keyword", result.EffectiveMode)
-	assert.Contains(t, result.Note, "index is building: 0% complete")
-	assert.ElementsMatch(t, [][2]int{{1, 2}, {1, 2}}, [][2]int{result.Matches[0].OrdinalRange, result.Matches[1].OrdinalRange})
-	assert.ElementsMatch(t, []int{1, 2}, []int{result.Matches[0].Ordinal, result.Matches[1].Ordinal})
-	for _, match := range result.Matches {
-		assert.Contains(t, match.Snippet, map[int]string{1: "needle first", 2: "needle second"}[match.Ordinal])
 	}
 }

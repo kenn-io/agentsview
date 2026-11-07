@@ -713,24 +713,29 @@ func TestSearchContentHybridVectorOnlyMatchCarriesUnitRange(t *testing.T) {
 
 func TestSearchContentHybridKeywordOnlyIgnoresMirrorScope(t *testing.T) {
 	d := testDB(t)
-	seedSearchSession(t, d, "run", "project", [][2]string{
-		{"user", "question"}, {"assistant", "needle first"}, {"assistant", "needle second"},
+	insertSession(t, d, "run", "project", func(s *Session) {
+		s.MessageCount, s.UserMessageCount = 4, 1
 	})
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "run", Ordinal: 3, Role: "assistant", Content: "needle side", IsSidechain: true}}))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "run", []Message{
+		{SessionID: "run", Ordinal: 0, Role: "user", Content: "question"},
+		{SessionID: "run", Ordinal: 1, Role: "assistant", Content: "needle first"},
+		{SessionID: "run", Ordinal: 2, Role: "assistant", Content: "needle second"},
+		{SessionID: "run", Ordinal: 3, Role: "assistant", Content: "needle side", IsSidechain: true},
+	}))
 	// The mirror predates the sidechain flag and has narrower capped units.
 	d.SetVectorSearcher(&fakeVectorSearcher{err: ErrSemanticTransient, units: []UnitRef{
 		{DocKey: "piece1", SessionID: "run", OrdinalStart: 1, OrdinalEnd: 1},
 		{DocKey: "piece2", SessionID: "run", OrdinalStart: 2, OrdinalEnd: 2},
 		{DocKey: "piece3", SessionID: "run", OrdinalStart: 3, OrdinalEnd: 3},
 	}})
-	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "top"})
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, IncludeOneShot: true, Scope: "top"})
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 2)
 	for _, match := range page.Matches {
 		assert.False(t, match.Subordinate)
 		assert.Equal(t, [2]int{1, 2}, match.OrdinalRange)
 	}
-	page, err = d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, Scope: "subordinate"})
+	page, err = d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, IncludeOneShot: true, Scope: "subordinate"})
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 1)
 	assert.True(t, page.Matches[0].Subordinate)

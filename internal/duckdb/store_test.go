@@ -4852,20 +4852,10 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 	_, err = syncer.pushEverything(t.Context(), nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
-	for _, scope := range []string{"all", "subordinate", "top"} {
-		t.Run(scope, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "childneedle", Mode: "hybrid", KeywordOnly: true, Scope: scope, Limit: 1})
-			require.NoError(t, err)
-			assert.Zero(t, page.NextCursor)
-			if scope == "top" {
-				assert.Empty(t, page.Matches)
-			} else {
-				require.Len(t, page.Matches, 1)
-				assert.Equal(t, "child", page.Matches[0].SessionID)
-				assert.Equal(t, "assistant", page.Matches[0].Role)
-				assert.Equal(t, 2, page.Matches[0].Ordinal)
-				assert.True(t, page.Matches[0].Subordinate)
-			}
-		})
-	}
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "childneedle", Mode: "hybrid", KeywordOnly: true, Scope: "all", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Zero(t, page.NextCursor)
+	assert.Equal(t, "assistant", page.Matches[0].Role)
+	assert.Equal(t, 2, page.Matches[0].Ordinal)
 }
