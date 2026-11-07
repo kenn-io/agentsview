@@ -627,6 +627,8 @@ func TestUsageJournaledClaimFailureWhileCacheWriterBusy(t *testing.T) {
 
 func TestUsageJournaledRefreshDiagnostics(t *testing.T) {
 	database := testDB(t)
+	// Leave the row rebuild to the foreground refresh measured below.
+	database.SetUsageCacheNotificationWork(func() (func(), bool) { return nil, false })
 	seedJournaledUsage(t, database, "session")
 	filter := UsageFilter{Timezone: "UTC"}
 	warmJournaledUsage(t, database, filter)
