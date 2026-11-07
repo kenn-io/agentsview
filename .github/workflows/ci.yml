@@ -57,7 +57,6 @@ jobs:
               - 'internal/importer/claude_ai_requests.txt'
 
   lint:
-    cache-mode: write
     env:
       DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
@@ -987,7 +986,6 @@ jobs:
 
   # Owns Windows Rust test coverage for PR and main-push desktop artifacts.
   desktop-windows-unit:
-    cache-mode: write
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'desktop')) }}
     name: Desktop Unit Tests (Windows)
