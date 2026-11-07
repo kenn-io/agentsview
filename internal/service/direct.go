@@ -1249,7 +1249,7 @@ func (b *directBackend) SearchContent(
 		reason := strings.TrimPrefix(err.Error(), db.ErrSemanticUnavailable.Error())
 		reason = strings.TrimPrefix(strings.TrimPrefix(reason, ": "), "semantic search not available: ")
 		if reason == "" {
-			reason = "not set up; enable [vector] in config.toml, restart the daemon, then run 'agentsview index embeddings build'"
+			reason = "not set up; run 'agentsview index embeddings build'"
 		}
 		filter.KeywordOnly = true
 		page, err = b.db.SearchContent(ctx, filter)

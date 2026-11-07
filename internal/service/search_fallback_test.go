@@ -34,9 +34,9 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 		empty                       bool
 		wantInput                   bool
 	}{
-		{name: "not configured", mode: "hybrid", optIn: true, reason: "not set up; enable [vector] in config.toml, restart the daemon, then run 'agentsview index embeddings build'"},
+		{name: "not configured", mode: "hybrid", optIn: true, reason: "not set up; run 'agentsview index embeddings build'"},
 		{name: "building", mode: "hybrid", optIn: true, cause: fmt.Errorf("%w: index is building: 40%% complete", db.ErrSemanticUnavailable), reason: "index is building: 40% complete"},
-		{name: "empty", mode: "hybrid", optIn: true, pattern: "absent", empty: true, reason: "not set up; enable [vector] in config.toml, restart the daemon, then run 'agentsview index embeddings build'"},
+		{name: "empty", mode: "hybrid", optIn: true, pattern: "absent", empty: true, reason: "not set up; run 'agentsview index embeddings build'"},
 		{name: "no opt in", mode: "hybrid", wantErr: db.ErrSemanticUnavailable},
 		{name: "semantic", mode: "semantic", optIn: true, wantErr: db.ErrSemanticUnavailable},
 		{name: "transient", mode: "hybrid", optIn: true, cause: db.ErrSemanticTransient, wantErr: db.ErrSemanticTransient},
