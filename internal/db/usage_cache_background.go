@@ -175,7 +175,9 @@ func (db *DB) isUsageBackfillEnabled() bool {
 
 func (db *DB) usageBackfillPricingChanged(ctx context.Context, revision int64) (bool, error) {
 	_, current, err := db.databaseIDAndUsagePricingRevision(ctx)
-	if err != nil || current == revision {
+	// Pricing triggers copy the incremented global revision, so only a
+	// pricing revision above the snapshot's change revision needs a rerun.
+	if err != nil || current <= revision {
 		return false, err
 	}
 	db.usageBackfillMu.Lock()
@@ -274,8 +276,10 @@ func (db *DB) runUsageCacheBackfillPass(
 	allResults := make(map[string]usageFillResult, len(snapshot.Versions))
 	var installs []map[string]usageRollupInstall
 	for start := 0; start < len(snapshot.Versions); start += usageCacheBackfillBatchSize {
-		if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.PricingRevision); err != nil || changed {
-			return err
+		if start > 0 {
+			if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.ChangeRevision); err != nil || changed {
+				return err
+			}
 		}
 		end := min(start+usageCacheBackfillBatchSize, len(snapshot.Versions))
 		cursorTarget := int64(0)
@@ -314,7 +318,7 @@ func (db *DB) runUsageCacheBackfillPass(
 			}
 		}
 	}
-	if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.PricingRevision); err != nil || changed {
+	if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.ChangeRevision); err != nil || changed {
 		return err
 	}
 	// Filling a later batch can invalidate a rollup install from an

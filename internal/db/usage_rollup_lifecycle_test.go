@@ -765,15 +765,9 @@ func TestUsageRollupPricingChangeInvalidatesInstalledRows(t *testing.T) {
 			TokenUsage: json.RawMessage(`{"input_tokens":1000000}`),
 		}}))
 	}
-	setPrice := func(pattern string, microdollars int64) {
-		require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
-			ModelPattern: pattern,
-			InputPerMTok: money.Money{Microdollars: microdollars},
-		}}))
-	}
-	setPrice("model-a", 1_000_000)
-	setPrice("model-b", 2_000_000)
-	setPrice("unused-model", 5_000_000)
+	setUsageModelPrice(t, database, "model-a", 1_000_000)
+	setUsageModelPrice(t, database, "model-b", 2_000_000)
+	setUsageModelPrice(t, database, "unused-model", 5_000_000)
 	ensure := func() (map[string]usageRollupInstall, usageRollupMetrics) {
 		snapshot, fills, cache := prepareUsageRollupTest(t, database)
 		installs, metrics, err := cache.rollup.Ensure(t.Context(), snapshot, fills,
@@ -785,7 +779,7 @@ func TestUsageRollupPricingChangeInvalidatesInstalledRows(t *testing.T) {
 
 	// A refresh that re-stamps used rows and reprices unused ones changes
 	// no session's cost.
-	setPrice("unused-model", 9_000_000)
+	setUsageModelPrice(t, database, "unused-model", 9_000_000)
 	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE model_pricing
 		SET updated_at = '2030-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)
@@ -794,7 +788,7 @@ func TestUsageRollupPricingChangeInvalidatesInstalledRows(t *testing.T) {
 	assert.Equal(t, first["session-b"].InstallRevision, unchanged["session-b"].InstallRevision)
 	assert.Zero(t, metrics.DailyRows)
 
-	setPrice("model-a", 3_000_000)
+	setUsageModelPrice(t, database, "model-a", 3_000_000)
 	repriced, metrics := ensure()
 	assert.Greater(t, repriced["session-a"].InstallRevision,
 		unchanged["session-a"].InstallRevision)

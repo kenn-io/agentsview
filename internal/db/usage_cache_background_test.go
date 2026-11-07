@@ -560,7 +560,7 @@ func TestReopenRestartsUsageBackfillOnlyWhenPreviouslyStarted(t *testing.T) {
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 }
 
-func setUsageBackfillPrice(t *testing.T, database *DB, model string, microdollars int64) {
+func setUsageModelPrice(t *testing.T, database *DB, model string, microdollars int64) {
 	t.Helper()
 	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: model,
@@ -580,7 +580,7 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 			database := testDB(t)
 			seedUsageBatchSessions(t, database, 5*usageCacheBackfillBatchSize+1,
 				time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
-			setUsageBackfillPrice(t, database, "model", 1_000_000)
+			setUsageModelPrice(t, database, "model", 1_000_000)
 			require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
 			require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 			snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
@@ -623,7 +623,7 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 			}
 			require.NoError(t, database.StartUsageCacheBackfill(ctx))
 			waitForBatch()
-			setUsageBackfillPrice(t, database, "model", 2_000_000)
+			setUsageModelPrice(t, database, "model", 2_000_000)
 			if test.rewarm {
 				require.NoError(t, database.RewarmUsageCache())
 			}
@@ -664,7 +664,7 @@ func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
 		Timestamp: "2026-08-10T09:00:00Z", Model: "rewarm-model",
 		TokenUsage: json.RawMessage(`{"input_tokens":1000000}`),
 	}}))
-	setUsageBackfillPrice(t, database, "rewarm-model", 1_000_000)
+	setUsageModelPrice(t, database, "rewarm-model", 1_000_000)
 
 	require.NoError(t, database.RewarmUsageCache())
 	database.usageBackfillMu.Lock()
@@ -681,7 +681,7 @@ func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give the first re-warm stale prices so it reaches the build hook.
-	setUsageBackfillPrice(t, database, "rewarm-model", 2_000_000)
+	setUsageModelPrice(t, database, "rewarm-model", 2_000_000)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
@@ -693,7 +693,7 @@ func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
 	}
 	require.NoError(t, database.RewarmUsageCache())
 	<-entered
-	setUsageBackfillPrice(t, database, "rewarm-model", 3_000_000)
+	setUsageModelPrice(t, database, "rewarm-model", 3_000_000)
 	require.NoError(t, database.RewarmUsageCache())
 	close(release)
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
