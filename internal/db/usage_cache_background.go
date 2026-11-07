@@ -350,6 +350,9 @@ func (db *DB) runUsageCacheBackfillPass(
 		exceptionGroups += metrics.ExceptionGroups
 		exceptionRows += metrics.ExceptionRows
 	}
+	if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.ChangeRevision); err != nil || changed {
+		return err
+	}
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
 	}

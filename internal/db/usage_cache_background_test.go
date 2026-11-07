@@ -647,6 +647,64 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 		})
 	}
 
+	t.Run("commit-during-final-recheck", func(t *testing.T) {
+		database := testDB(t)
+		const sessionCount = usageCacheBackfillBatchSize + 1
+		base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+		newest := fmt.Sprintf("batch-%03d", usageCacheBackfillBatchSize)
+		messages := make([]Message, 0, sessionCount)
+		for i := range sessionCount {
+			id := fmt.Sprintf("batch-%03d", i)
+			timestamp := base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
+			insertSession(t, database, id, "project", func(session *Session) {
+				session.StartedAt = &timestamp
+				session.EndedAt = &timestamp
+			})
+			message := Message{
+				SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: timestamp,
+				Model: "model", TokenUsage: json.RawMessage(`{"input_tokens":1}`),
+			}
+			// Dedup peers across batches force the final recheck to rebuild
+			// the newest session's invalidated install.
+			if i == 0 || id == newest {
+				message.ClaudeMessageID = "shared-batch-message"
+				message.ClaudeRequestID = "shared-batch-request"
+			}
+			messages = append(messages, message)
+		}
+		require.NoError(t, database.InsertMessages(t.Context(), messages))
+		setUsageModelPrice(t, database, "model", 1_000_000)
+		snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+		require.NoError(t, err)
+		cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+		require.NoError(t, err)
+
+		var newestBuilds atomic.Int64
+		var changed atomic.Bool
+		cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+			for _, build := range builds {
+				if build.SessionID == newest && newestBuilds.Add(1) == 2 {
+					setUsageModelPrice(t, database, "model", 2_000_000)
+					changed.Store(true)
+				}
+			}
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		t.Cleanup(database.StopUsageCacheBackfill)
+		require.NoError(t, database.StartUsageCacheBackfill(ctx))
+		require.NoError(t, database.WaitUsageCacheBackfill(ctx))
+		require.True(t, changed.Load(), "commit the new price while the final recheck rebuilds installs")
+
+		// Inspect persisted rows before any foreground read can repair them.
+		var rows, stale int
+		require.NoError(t, cache.db.QueryRowContext(ctx, `SELECT count(*),
+			count(CASE WHEN estimated_cost_microdollars != 2 THEN 1 END)
+			FROM usage_daily_rollups`).Scan(&rows, &stale))
+		assert.Equal(t, sessionCount-2, rows, "dedup peers remain in exception groups")
+		assert.Zero(t, stale, "a price committed during the final recheck must trigger a fresh pass")
+	})
+
 	t.Run("commit-during-last-batch", func(t *testing.T) {
 		database := testDB(t)
 		const sessionCount = usageCacheBackfillBatchSize + 1
