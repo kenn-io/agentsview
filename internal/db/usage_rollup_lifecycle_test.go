@@ -969,25 +969,9 @@ func TestUsageRollupCursorAppendsOnlyNewEvents(t *testing.T) {
 
 	// Compare every stored exception column except the install ID with a full rebuild.
 	readRows := func() [][]any {
-		rows, err := cache.db.QueryContext(t.Context(), `SELECT e.* FROM usage_rollup_exceptions e
+		return usageSpoolFactValues(t, cache.db, `SELECT e.* FROM usage_rollup_exceptions e
 			JOIN usage_rollup_installs i ON i.id = e.rollup_install_id
 			WHERE i.session_id = ? ORDER BY e.fact_index, e.group_kind, e.group_key`, usageRollupCursorSessionID)
-		require.NoError(t, err)
-		defer rows.Close()
-		columns, err := rows.Columns()
-		require.NoError(t, err)
-		var result [][]any
-		for rows.Next() {
-			values := make([]any, len(columns))
-			targets := make([]any, len(columns))
-			for index := range targets {
-				targets[index] = &values[index]
-			}
-			require.NoError(t, rows.Scan(targets...))
-			result = append(result, values[1:])
-		}
-		require.NoError(t, rows.Err())
-		return result
 	}
 	appendedRows := readRows()
 	require.Len(t, appendedRows, 2)
