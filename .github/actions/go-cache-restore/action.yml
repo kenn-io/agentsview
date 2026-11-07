@@ -43,43 +43,24 @@ runs:
           echo "EOF"
         } >> "$GITHUB_ENV"
 
-    - name: Select measurement generation
-      if: github.event_name == 'pull_request'
-      shell: bash
-      env:
-        GROUP: ${{ inputs.group }}
-        OWNER: ${{ inputs.owner }}
-        CACHE_ACTION_PATH: ${{ github.action_path }}
-      run: node "$CACHE_ACTION_PATH/../../measure-go-cache/select.cjs"
-
     - name: Restore caches
       id: restore
       uses: actions/cache/restore@v6.1.0
       with:
         path: ${{ env.GO_CACHE_PATHS }}
         key: ${{ env.GO_CACHE_KEY }}
-        fail-on-cache-miss: ${{ env.MEASURE_GO_CACHE == 'true' }}
         restore-keys: |
           ${{ env.GO_CACHE_PREFIX }}
           ${{ env.GO_CACHE_GROUP_PREFIX }}
 
     - name: Record exact cache hit
       shell: bash
-      env:
-        MATCHED_KEY: ${{ steps.restore.outputs.cache-matched-key }}
-        HIT: ${{ steps.restore.outputs.cache-hit }}
-      run: |
-        if [ "$MEASURE_GO_CACHE" = true ]; then
-          test "$HIT" = true
-          printf 'measure-go-cache matched=%s generation=%s save=%s\n' "$MATCHED_KEY" "$MEASURE_GO_CACHE_GENERATION" "$MEASURE_GO_CACHE_SAVE"
-        fi
-        echo "GO_CACHE_HIT=$HIT" >> "$GITHUB_ENV"
+      run: echo "GO_CACHE_HIT=${{ steps.restore.outputs.cache-hit }}" >> "$GITHUB_ENV"
 
     - name: Track cache use
       if: >-
-        inputs.owner == 'true' && ((github.event_name == 'push'
-        && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true')
-        || (github.event_name == 'pull_request' && env.MEASURE_GO_CACHE_TRACK == 'true'))
+        inputs.owner == 'true' && github.event_name == 'push'
+        && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
       shell: bash
       env:
         CACHE_ACTION_PATH: ${{ github.action_path }}

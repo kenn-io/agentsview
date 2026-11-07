@@ -10,7 +10,7 @@ permissions: read-all
 
 jobs:
   run:
-    cache-mode: write
+    cache-mode: read
     uses: ./.github/workflows/ci.yml
 
   gate:

@@ -1,7 +1,0 @@
-{
-  "generation": "read",
-  "sources": {
-    "race-linux": "measure-go-cache-race-linux-g2-42412476528",
-    "test-Linux-X64": "measure-go-cache-test-Linux-X64-g2-42412476528"
-  }
-}

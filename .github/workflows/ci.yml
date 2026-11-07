@@ -1,7 +1,5 @@
 name: CI
 
-cache-mode: read
-
 env:
   GOTRACEBACK: all
   # "|" falls back to direct on any proxy error (e.g. HTTP/2 INTERNAL_ERROR), not just 404/410.
@@ -301,7 +299,6 @@ jobs:
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
   test:
-    cache-mode: write
     needs: changes
     if: *go-lane
     name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
@@ -356,7 +353,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -390,7 +386,6 @@ jobs:
         continue-on-error: true
         uses: msys2/setup-msys2@v2.33.0
         with:
-          cache: false
           msystem: MINGW64
           update: false
           install: ${{ env.MSYS2_PACKAGES }}
@@ -400,7 +395,6 @@ jobs:
         if: runner.os == 'Windows' && steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
         with:
-          cache: false
           msystem: MINGW64
           update: false
           install: ${{ env.MSYS2_PACKAGES }}
@@ -869,7 +863,6 @@ jobs:
       - *print-slowest-tests
 
   test-race:
-    cache-mode: write
     env:
       DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
@@ -916,7 +909,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -973,7 +965,7 @@ jobs:
 
       # This job owns the shared cache, including tests run by the other shards.
       - name: Warm moved race test builds for the next run
-        if: matrix.testSet == 'other' && ((github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GO_CACHE_HIT != 'true') || (github.event_name == 'pull_request' && env.MEASURE_GO_CACHE_SAVE == 'true'))
+        if: matrix.testSet == 'other' && github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GO_CACHE_HIT != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/race-test-binaries"
           go test -p 4 -tags "fts5" -race -c -o "$RUNNER_TEMP/race-test-binaries/" ./cmd/agentsview ./internal/db ./internal/server
