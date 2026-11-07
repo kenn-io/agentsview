@@ -721,8 +721,8 @@ agentsview session search "flaky test" --hybrid --project myapp
   using reciprocal rank fusion, so exact-term matches and meaning-based matches
   both surface. When search by meaning is unavailable, CLI and MCP return the
   keyword matches with `effective_mode: hybrid_keyword` and a note beside
-  `coverage`. The note gives the readiness reason; an unset index points to enabling
-  `[vector]`, restarting the daemon, and building embeddings. When keyword results are
+  `coverage`. The note gives the readiness reason (`not set up` or indexing
+  progress) and explains that keyword terms must appear. When keyword results are
   empty or few, try short substring queries with key terms or synonyms,
   retaining scope and other filters.
 - Both modes are restricted to the `messages` source — the same restriction
