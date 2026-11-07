@@ -1767,6 +1767,23 @@ func TestProviderParserHostedEvenerMatchesLocal(t *testing.T) {
 				assert.Equal(t, source.DisplayPath, hosted.Outcome.Results[0].Result.Session.File.Path)
 				assert.Equal(t, "Child session", hosted.Outcome.Results[0].Result.Session.SessionName)
 				assert.Equal(t, "evener:parent", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
+
+				// Re-capturing metadata must retain the original path-keyed source.
+				require.NoError(t, os.WriteFile(filepath.Join(sessions, "session.meta.json"),
+					[]byte(`{"id":"session","name":"Renamed session","parent_session_id":"parent","divergence_turn":2}`), 0o600))
+				nextManifest, nextObjects := manifestFromCapturePlan(t, parser.AgentEvener, provider, source)
+				assert.NotEqual(t, manifest.ManifestID, nextManifest.ManifestID)
+				nextTree, err := (Materializer{
+					Store:   &materializerStore{objects: nextObjects},
+					BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
+				}).Materialize(t.Context(), nextManifest)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, nextTree.Cleanup()) })
+				next, err := dispatch.Parse(t.Context(), nextManifest, nextTree)
+				require.NoError(t, err)
+				require.Len(t, next.Outcome.Results, 1)
+				assert.Equal(t, source.DisplayPath, next.Outcome.Results[0].Result.Session.File.Path)
+				assert.Equal(t, "Renamed session", next.Outcome.Results[0].Result.Session.SessionName)
 			})
 		}
 	}
@@ -1807,4 +1824,24 @@ func TestProviderParserHostedCodexSkillNameStaysLexical(t *testing.T) {
 	require.Len(t, out.Outcome.Results[0].Result.Messages, 1)
 	require.Len(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls, 1)
 	assert.Empty(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
+}
+
+func TestStablePathMapLogicalPrimary(t *testing.T) {
+	root := t.TempDir()
+	transcript := filepath.Join(root, "sessions", "session.jsonl")
+	index := filepath.Join(root, "sessions", "sessions.json")
+	ref := objectRefForBytes(t, []byte("fixture"))
+	manifest := parserTestManifest(t, parser.AgentMusePersonal, "logical-session", []rawsync.Entry{
+		{Path: "sessions/session.jsonl", Type: "file", Length: ref.Length, Objects: []rawsync.ObjectRef{ref}},
+		{Path: "sessions/sessions.json", Type: "file", Length: ref.Length, Objects: []rawsync.ObjectRef{ref}},
+	})
+	tree := &Materialization{root: root, entries: map[string]string{
+		"sessions/session.jsonl": transcript, "sessions/sessions.json": index,
+	}}
+	paths := newStablePathMap(manifest, tree, "sessions/session.jsonl")
+	assert.Equal(t, "logical-session", paths.rewrite(transcript))
+	assert.Equal(t, paths.prefix+"sessions/sessions.json", paths.rewrite(index))
+	resolved, ok := paths.resolve("logical-session")
+	require.True(t, ok)
+	assert.Equal(t, transcript, resolved)
 }

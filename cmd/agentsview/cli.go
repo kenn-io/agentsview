@@ -964,6 +964,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  STEPCODE_DIR            StepCode sessions directory")
 	fmt.Fprintln(w, "  OMP_DIR                 OhMyPi sessions directory")
 	fmt.Fprintln(w, "  MUSE_SESSIONS_DIR       Muse Code sessions directory")
+	fmt.Fprintln(w, "  MUSE_PERSONAL_AGENTS_DIR")
+	fmt.Fprintln(w, "                          Muse Personal agents directory")
 	fmt.Fprintln(w, "  DEEPSEEK_TUI_SESSIONS_DIR")
 	fmt.Fprintln(w, "                          DeepSeek TUI sessions directory")
 	fmt.Fprintln(w, "  DEEPSEEK_HARNESS_SESSIONS_DIR")

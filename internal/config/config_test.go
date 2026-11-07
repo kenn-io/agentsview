@@ -3193,3 +3193,45 @@ func TestLoadFile_ModelAliases(t *testing.T) {
 		})
 	}
 }
+
+func TestMusePersonalRootResolution(t *testing.T) {
+	for _, mode := range []string{"default", "env", "config"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			home := canonicalTempDir(t)
+			setTestHome(t, home)
+			t.Setenv("MUSE_PERSONAL_AGENTS_DIR", "")
+			t.Setenv("CODEX_HOME", "")
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			t.Setenv("PI_CODING_AGENT_DIR", "")
+			writeConfig(t, dir, map[string]any{})
+			want := filepath.Join(home, "agents")
+			if mode == "env" {
+				want = filepath.Join(home, "explicit-root")
+				t.Setenv("MUSE_PERSONAL_AGENTS_DIR", want)
+			}
+			cfg, err := LoadMinimal()
+			require.NoError(t, err)
+			if mode == "config" {
+				want = filepath.Join(home, "configured-root")
+				require.NoError(t, cfg.applyConfigTOML(
+					"[agents.muse-personal]\ndirs = ["+strconv.Quote(want)+"]\n"))
+			}
+			assert.Equal(t, []string{want}, cfg.ResolveDirs(parser.AgentMusePersonal))
+			assert.Equal(t, mode != "default", cfg.IsUserConfigured(parser.AgentMusePersonal))
+			p, ok := parser.NewProvider(parser.AgentMusePersonal,
+				parser.ProviderConfig{Roots: cfg.ResolveDirs(parser.AgentMusePersonal)})
+			require.True(t, ok)
+			const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+			header := `{"type":"session_header","version":1,"session_id":"` + id +
+				`","agent_id":"` + id + `","created_at":"2026-10-05T16:00:00Z"}` + "\n"
+			session := filepath.Join(want, "agent-"+id, "sessions", id+".jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(session), 0o700))
+			require.NoError(t, os.WriteFile(session, []byte(header), 0o600))
+			sources, err := p.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			assert.Equal(t, "muse-personal:"+id, sources[0].Key)
+		})
+	}
+}

@@ -1,0 +1,6 @@
+{"type":"session_header","version":1,"session_id":"66666666-7777-4888-8999-000000000000","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:10.000000000+00:00"}
+{"type":"item","seq":0,"source":"runtime","created_at":"2026-10-05T15:04:10.100000000+00:00","item":{"type":"message","role":"user","text":"Synthetic subtask: count the synthetic widgets."}}
+{"type":"item","seq":1,"source":"runtime","created_at":"2026-10-05T15:04:11.000000000+00:00","item":{"type":"thinking","thinking":"Synthetic child reasoning.","signature":""}}
+{"type":"item","seq":2,"source":"runtime","created_at":"2026-10-05T15:04:12.000000000+00:00","item":{"type":"function_call","call_id":"call_00000000000000000000000000000b01","name":"exec","arguments":"{\"command\":\"echo synthetic-widget-count\"}"}}
+{"type":"item","seq":3,"source":"runtime","created_at":"2026-10-05T15:04:13.000000000+00:00","item":{"type":"function_call_output","call_id":"call_00000000000000000000000000000b01","output":"3","success":true}}
+{"type":"item","seq":4,"source":"runtime","created_at":"2026-10-05T15:04:14.000000000+00:00","item":{"type":"message","role":"assistant","text":"Synthetic subtask result: 3 widgets."}}
