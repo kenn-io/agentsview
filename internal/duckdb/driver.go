@@ -83,8 +83,7 @@ func (b *duckAppendBatch) add(ctx context.Context, table string, values ...any) 
 			}
 		case string:
 			payload += len(v)
-			switch columns[i].name {
-			case "started_at", "ended_at", "local_modified_at", "deleted_at", "created_at", "timestamp", "occurred_at":
+			if strings.Contains(" "+columns[i].def+" ", " TIMESTAMP ") {
 				// timeValue leaves DuckDB-only timestamp formats as strings. Preserve
 				// the SQL cast on this same transaction connection before appending.
 				rows, err := b.conn.QueryContext(ctx, "SELECT CAST(? AS TIMESTAMP)", []driver.NamedValue{{Ordinal: 1, Value: v}})
