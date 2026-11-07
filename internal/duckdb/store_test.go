@@ -258,11 +258,11 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 	}
 
 	insertSession(
-		"stats-fork", "fork", "fork", "2025-12-26 00:00:00",
+		"stats-null-parent-fork", "fork", "fork", "2025-12-26 00:00:00",
 		1, 2, false,
 	)
 	insertSession(
-		"stats-subagent", "child", "subagent", "2025-12-27 00:00:00",
+		"stats-null-parent-subagent", "child", "subagent", "2025-12-27 00:00:00",
 		1, 2, false,
 	)
 	insertSession(
@@ -285,11 +285,8 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 		"stats-human", "alpha", "root", "2026-01-01 00:00:00",
 		2, 2, false,
 	)
-	insertSession("stats-blank-parent", "child", "subagent", "2025-12-27 00:00:00", 1, 2, false)
-	_, err := duck.ExecContext(ctx, `UPDATE sessions SET parent_session_id='' WHERE id='stats-blank-parent'`)
-	require.NoError(t, err)
 	insertSession("stats-continuation", "alpha", "continuation", "2026-01-01 00:00:00", 3, 2, false)
-	_, err = duck.ExecContext(ctx, `UPDATE sessions SET parent_session_id='stats-human'
+	_, err := duck.ExecContext(ctx, `UPDATE sessions SET parent_session_id='stats-human'
 		WHERE id='stats-continuation'`)
 	require.NoError(t, err)
 	_, err = duck.ExecContext(ctx,
@@ -320,19 +317,19 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 	}
 
 	assertStats(
-		"include all root sessions", false, false, 6, 7, 3,
+		"include all root sessions", false, false, 5, 7, 3,
 		"2025-12-30T00:00:00Z",
 	)
 	assertStats(
-		"exclude one-shot keeps automated", true, false, 5, 6, 2,
+		"exclude one-shot keeps automated", true, false, 4, 6, 2,
 		"2025-12-31T00:00:00Z",
 	)
 	assertStats(
-		"exclude automated keeps human one-shot", false, true, 5, 6, 2,
+		"exclude automated keeps human one-shot", false, true, 4, 6, 2,
 		"2025-12-30T00:00:00Z",
 	)
 	assertStats(
-		"exclude one-shot and automated", true, true, 4, 5, 1,
+		"exclude one-shot and automated", true, true, 3, 5, 1,
 		"2026-01-01T00:00:00Z",
 	)
 

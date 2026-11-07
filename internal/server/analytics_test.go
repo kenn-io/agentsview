@@ -1056,8 +1056,8 @@ func TestAnalyticsTopSessions_OutputTokens(t *testing.T) {
 }
 
 // TestSessionCountConsistency verifies that session counts from
-// the sidebar and stats agree. The flat list includes continuations;
-// analytics also includes subagents.
+// the sidebar and stats agree, while analytics also includes
+// continuations and subagents.
 func TestSessionCountConsistency(t *testing.T) {
 	te := setup(t)
 
@@ -1144,13 +1144,8 @@ func TestSessionCountConsistency(t *testing.T) {
 	wantNavCount := 5
 	wantAnalyticsCount := 9
 
-	// 1. Session list
-	w := te.get(t, "/api/v1/sessions")
-	assertStatus(t, w, http.StatusOK)
-	listResp := decode[sessionListResponse](t, w)
-
-	// 2. Stats
-	w = te.get(t, "/api/v1/stats")
+	// Stats and sidebar wiring
+	w := te.get(t, "/api/v1/stats")
 	assertStatus(t, w, http.StatusOK)
 	statsResp := decode[db.Stats](t, w)
 	w = te.get(t, "/api/v1/sessions/sidebar-index")
@@ -1164,16 +1159,11 @@ func TestSessionCountConsistency(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	summaryResp := decode[db.AnalyticsSummary](t, w)
 
-	assert.Equal(t, 6, listResp.Total, "flat session list includes continuations")
 	assert.Equal(t, wantNavCount, sidebarResp.Total, "sidebar root total")
 	assert.Equal(t, wantNavCount, statsResp.SessionCount, "stats session_count")
 	assert.Equal(t, wantAnalyticsCount, summaryResp.TotalSessions,
 		"analytics total_sessions counts subagents")
 
-	require.Equal(t, sidebarResp.Total, statsResp.SessionCount,
-		"sidebar and stats session counts disagree")
-	require.Greater(t, summaryResp.TotalSessions, sidebarResp.Total,
-		"analytics additionally counts subagents and continuations")
 }
 
 func TestAnalyticsModelGroups(t *testing.T) {

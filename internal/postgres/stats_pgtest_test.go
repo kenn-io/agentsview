@@ -29,9 +29,8 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 		{"automated", "project-b", "machine-b", "2026-01-02T00:00:00Z", "", 4, 1, true, nil},
 		{"automated-multi", "project-b", "machine-c", "2026-01-01T00:00:00Z", "", 6, 3, true, nil},
 		{"empty", "excluded", "excluded", "2025-01-01T00:00:00Z", "", 0, 0, false, nil},
-		{"child", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", 100, 50, false, nil},
-		{"fork", "excluded", "excluded", "2025-01-01T00:00:00Z", "fork", 100, 50, false, nil},
-		{"blank-parent", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", 2, 2, false, nil},
+		{"null-parent-subagent", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", 100, 50, false, nil},
+		{"null-parent-fork", "excluded", "excluded", "2025-01-01T00:00:00Z", "fork", 100, 50, false, nil},
 		{"continuation", "project-a", "machine-a", "2026-01-04T00:00:00Z", "continuation", 4, 2, false, nil},
 		{"deleted", "excluded", "excluded", "2025-01-01T00:00:00Z", "", 100, 50, false, new("2026-02-01T00:00:00Z")},
 	} {
@@ -42,8 +41,6 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 			row.started, row.relationship, row.messages, row.users, row.automated, row.deleted)
 		require.NoError(t, err)
 	}
-	_, err = d.DB().ExecContext(ctx, `UPDATE sessions SET parent_session_id='' WHERE id='blank-parent'`)
-	require.NoError(t, err)
 	_, err = d.DB().ExecContext(ctx, `UPDATE sessions SET parent_session_id='human' WHERE id='continuation'`)
 	require.NoError(t, err)
 	for _, tc := range []struct {
@@ -52,22 +49,22 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 		want               db.Stats
 	}{
 		{"all", false, false, db.Stats{
-			SessionCount: 7, MessageCount: 27,
+			SessionCount: 6, MessageCount: 27,
 			ProjectCount: 2, MachineCount: 3,
 			EarliestSession: new("2026-01-01T00:00:00Z"),
 		}},
 		{"exclude one-shot", true, false, db.Stats{
-			SessionCount: 6, MessageCount: 24,
+			SessionCount: 5, MessageCount: 24,
 			ProjectCount: 2, MachineCount: 3,
 			EarliestSession: new("2026-01-01T00:00:00Z"),
 		}},
 		{"exclude automated", false, true, db.Stats{
-			SessionCount: 5, MessageCount: 17,
+			SessionCount: 4, MessageCount: 17,
 			ProjectCount: 1, MachineCount: 2,
 			EarliestSession: new("2026-01-03T00:00:00Z"),
 		}},
 		{"exclude both", true, true, db.Stats{
-			SessionCount: 4, MessageCount: 14,
+			SessionCount: 3, MessageCount: 14,
 			ProjectCount: 1, MachineCount: 1,
 			EarliestSession: new("2026-01-04T00:00:00Z"),
 		}},

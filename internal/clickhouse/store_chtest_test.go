@@ -92,6 +92,10 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 3, stats.SessionCount)
 		assert.Equal(t, 3, stats.MessageCount)
+	})
+
+	t.Run("stats_missing_parent_and_nested_continuation", func(t *testing.T) {
+		store, syncer, local := newPushedStore(t)
 
 		for _, row := range []struct{ id, relationship, parent string }{
 			{"ch-missing-parent", "subagent", "missing-parent"},
@@ -107,14 +111,14 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			}})
 			require.NoError(t, err)
 		}
-		_, err = syncer.Push(ctx, false, nil)
+		_, err := syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
-		stats, err = store.GetStats(ctx, false, false)
+		stats, err := store.GetStats(ctx, false, false)
 		require.NoError(t, err)
-		assert.Equal(t, 4, stats.SessionCount)
+		assert.Equal(t, 3, stats.SessionCount)
 		assert.Equal(t, 4, stats.MessageCount)
 		assert.Equal(t, 2, stats.ProjectCount)
-		index, err = store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
+		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
 		require.NoError(t, err)
 		assert.Equal(t, index.Total, stats.SessionCount)
 	})

@@ -25,7 +25,8 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 		{"automated", "project-b", "machine-b", "2026-01-02T00:00:00Z", "", "", 4, 1, true, nil},
 		{"automated-multi", "project-b", "machine-c", "2026-01-01T00:00:00Z", "", "", 6, 3, true, nil},
 		{"empty", "excluded", "excluded", "2025-01-01T00:00:00Z", "", "", 0, 0, false, nil},
-		{"child", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", "", 100, 50, false, nil},
+		{"blank-parent", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", "", 100, 50, false, nil},
+		{"fork", "excluded", "excluded", "2025-01-01T00:00:00Z", "fork", "", 100, 50, false, nil},
 		{"orphan", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", "missing-parent", 100, 50, false, nil},
 		{"parented-child", "excluded", "excluded", "2025-01-01T00:00:00Z", "subagent", "human", 100, 50, false, nil},
 		{"continuation", "project-a", "machine-a", "2026-01-05T00:00:00Z", "continuation", "human", 2, 2, false, nil},
@@ -44,22 +45,22 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 		want               Stats
 	}{
 		{"all", false, false, Stats{
-			SessionCount: 6, MessageCount: 25,
+			SessionCount: 7, MessageCount: 25,
 			ProjectCount: 2, MachineCount: 3,
 			EarliestSession: new("2026-01-01T00:00:00Z"),
 		}},
 		{"exclude one-shot", true, false, Stats{
-			SessionCount: 5, MessageCount: 22,
+			SessionCount: 6, MessageCount: 22,
 			ProjectCount: 2, MachineCount: 3,
 			EarliestSession: new("2026-01-01T00:00:00Z"),
 		}},
 		{"exclude automated", false, true, Stats{
-			SessionCount: 4, MessageCount: 15,
+			SessionCount: 5, MessageCount: 15,
 			ProjectCount: 1, MachineCount: 2,
 			EarliestSession: new("2026-01-03T00:00:00Z"),
 		}},
 		{"exclude both", true, true, Stats{
-			SessionCount: 3, MessageCount: 12,
+			SessionCount: 4, MessageCount: 12,
 			ProjectCount: 1, MachineCount: 1,
 			EarliestSession: new("2026-01-04T00:00:00Z"),
 		}},

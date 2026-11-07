@@ -1777,7 +1777,11 @@ func TestSidebarIndexPaginationTreatsContinuationsAsDescendants(t *testing.T) {
 		s.EndedAt = &otherEnd
 	})
 
-	w := te.get(t, "/api/v1/sessions/sidebar-index?limit=1")
+	w := te.get(t, "/api/v1/sessions?include_one_shot=true")
+	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, 3, decode[sessionListResponse](t, w).Total, "flat list includes the continuation")
+
+	w = te.get(t, "/api/v1/sessions/sidebar-index?limit=1")
 	assertStatus(t, w, http.StatusOK)
 	first := decode[db.SidebarSessionIndex](t, w)
 	firstIDs := sidebarIndexRowIDs(first.Sessions)
