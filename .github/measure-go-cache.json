@@ -1,7 +1,7 @@
 {
-  "generation": "g1",
+  "generation": "g2",
   "sources": {
-    "race-linux": "go-race-linux-f55572c9390cf9e77bcd5dd77383093fcace6126714d3eeb13ff996dba9f85b7-2026-11-07",
-    "test-Linux-X64": "go-test-Linux-X64-f55572c9390cf9e77bcd5dd77383093fcace6126714d3eeb13ff996dba9f85b7-2026-11-07"
+    "race-linux": "measure-go-cache-race-linux-g1-42410622636",
+    "test-Linux-X64": "measure-go-cache-test-Linux-X64-g1-42410622636"
   }
 }
