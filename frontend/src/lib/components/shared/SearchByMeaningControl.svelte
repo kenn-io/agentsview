@@ -48,7 +48,7 @@
 
 {#if setup}
   {#if hint}
-    {#if setup.action === "turn-on"}
+    {#if setup.action === "turn-on" && !setup.busy}
       <SearchByMeaningHint {labels} onturnon={() => void activate()} />
     {/if}
   {:else}
