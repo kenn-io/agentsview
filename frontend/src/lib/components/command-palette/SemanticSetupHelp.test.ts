@@ -226,7 +226,6 @@ describe("SemanticSetupHelp", () => {
     const row = document.body.querySelector(".kit-search-by-meaning")!;
     expect(row.textContent).toContain("On · Ollama");
     expect(row.querySelector("button")).toBeNull();
-    expect(row.querySelector(".kit-search-by-meaning__line")).toBeNull();
     unmount(component);
   });
 

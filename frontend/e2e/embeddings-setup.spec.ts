@@ -36,7 +36,6 @@ for (const width of [1280, 390]) {
     };
     await openEmbeddings();
     await expect(page.getByRole("alert")).toContainText("encoder unavailable");
-    await expect(page.locator(".kit-search-by-meaning .kit-chip")).toHaveText("On");
     const errorBox = (await page.getByRole("alert").boundingBox())!;
     const generationsBox = (await page.locator(".embeddings-settings .subsection").boundingBox())!;
     expect(generationsBox.y - errorBox.y - errorBox.height).toBeGreaterThanOrEqual(16);

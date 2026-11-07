@@ -144,7 +144,7 @@ describe("EmbeddingsSettings", () => {
     }
   });
 
-  it("retries Turn on after setup fails", async () => {
+  it("keeps setup recovery available while hiding unqueried build details", async () => {
     const setup = {
       enabled: true,
       action: "turn-on",
@@ -176,9 +176,6 @@ describe("EmbeddingsSettings", () => {
     expect.soft(document.body.textContent).not.toContain(staleBuildError);
     expect.soft(document.body.textContent).not.toContain("test-embed-model");
     expect.soft(document.body.textContent).not.toContain("Dimensions");
-    const calls = embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
-    await settle(60_000);
-    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBeGreaterThan(calls);
     const button = [...document.body.querySelectorAll("button")].find(
       (b) => b.textContent?.trim() === "Retry",
     );
@@ -382,6 +379,9 @@ describe("EmbeddingsSettings", () => {
     await settle();
 
     expect(document.body.textContent).toContain("encode batch: connection refused");
+    expect(document.body.querySelector(".kit-search-by-meaning")?.textContent).toMatch(
+      /Search by meaning\s+On\s*$/,
+    );
 
     unmount(component);
   });

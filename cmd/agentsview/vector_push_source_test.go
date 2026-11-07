@@ -111,6 +111,20 @@ func closePushSource(t *testing.T, src storage.VectorPushSource) {
 func TestNewVectorPushSourceDisabled(t *testing.T) {
 	cfg := config.Config{} // [vector] disabled
 	assert.Nil(t, newVectorPushSource(cfg))
+
+	cfg = enabledVectorConfig(t)
+	buildTestVectorsDB(t, cfg)
+	cfg.Vector.Enabled = false
+	source := &vectorPushSource{cfg: cfg}
+	t.Cleanup(func() { require.NoError(t, source.Close()) })
+	_, ok, err := source.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	assert.False(t, ok, "disabled search must skip even an existing index")
+	source.cfg.Vector.Enabled = true
+	export, ok, err := source.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, ok, "turning search on must make the same source exportable")
+	require.NoError(t, export.Close())
 }
 
 func TestVectorPushSourceMissingFile(t *testing.T) {

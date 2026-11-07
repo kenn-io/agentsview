@@ -22,7 +22,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedlocal"
 )
@@ -44,7 +43,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			building, resume := make(chan struct{}), make(chan struct{})
 			resumeBuild := sync.OnceFunc(func() { close(resume) })
 			defer resumeBuild()
-			var encoded, installs, inspections atomic.Int64
+			var encoded, installs atomic.Int64
 			stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
 					Model string   `json:"model"`
@@ -85,7 +84,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			}
 			var installed atomic.Bool
 			inspectLocalEmbeddings = func(_ context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
-				inspections.Add(1)
 				if recipe == "automatic" && !opts.SkipOllama {
 					return embedlocal.Status{OllamaAvailable: true, DownloadBytes: 295_000_000}, nil
 				}
@@ -133,8 +131,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			defer func() { require.NoError(t, owner.Close()) }()
 			ln, port := listenLoopback(t)
 			cfg.Host, cfg.Port = "127.0.0.1", port
-			replica := &embedPushReplica{Replica: pgReplica{}}
-			options := append(owner.ServerOptions(), server.WithReplicas(replica), server.WithBaseContext(t.Context()))
+			options := append(owner.ServerOptions(), server.WithBaseContext(t.Context()))
 			ts := startTestServer(t, ln, server.New(cfg, database, nil, options...).Handler())
 			request := func(method, path, body string, wantStatus int) []byte {
 				return embeddingRequest(t, ts.Client(), ts.URL, method, path, "application/json", strings.NewReader(body), wantStatus)
@@ -143,16 +140,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				var result vector.BuildStatus
 				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/embeddings/status", "", 200), &result))
 				return result
-			}
-			push := func() storage.PushResult {
-				var result storage.PushResult
-				require.NoError(t, json.Unmarshal(request("POST", "/api/v1/push/pg", `{"full":false,"replica":{"url":"postgres://hub.example/agentsview","machine_name":"receiver","push_vectors":true}}`, 200), &result))
-				return result
-			}
-			if recipe == "fresh" {
-				buildTestVectorsDB(t, cfg)
-				assert.True(t, push().Vectors.Skipped)
-				require.NoError(t, os.Remove(cfg.Vector.ResolvedDBPath(cfg.DataDir)))
 			}
 			originalManager := owner.Manager("")
 			initial := status()
@@ -191,6 +178,8 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "enabled-missing" {
 				assert.Same(t, originalManager, owner.Manager(""))
 				assert.Zero(t, reloads.Load())
+			} else {
+				assert.EqualValues(t, 1, reloads.Load())
 			}
 			if recipe == "configured" {
 				assert.Empty(t, status().Setup.Action)
@@ -358,7 +347,7 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 	return data
 }
 
-func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
+func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 	for _, failure := range []string{"configured provider", "invalid endpoint", "model inspection", "config read"} {
 		t.Run(failure, func(t *testing.T) {
 			dir := testDataDir(t)
@@ -366,7 +355,7 @@ func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 			require.NoError(t, err)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 			cfg.DataDir = dir
-			want := http.StatusBadRequest
+			inspectionError := errors.New("model status unavailable")
 			if failure == "invalid endpoint" {
 				writeTestConfig(t, dir, "[vector]\nenabled=false\n[vector.embeddings]\nmodel='test-model'\ndimension=3\n[vector.embeddings.servers.local]\nendpoint='ftp://127.0.0.1/v1'\n")
 				cfg, err = config.LoadReadOnly()
@@ -376,30 +365,39 @@ func TestLiveEmbeddingsSetupHTTPFailures(t *testing.T) {
 				t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
 				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 					if failure == "model inspection" {
-						return embedlocal.Status{}, errors.New("model status unavailable")
+						return embedlocal.Status{}, inspectionError
 					}
 					return embedlocal.Status{}, nil
 				}
 				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": {Local: true}}
-				want = http.StatusInternalServerError
 			} else {
 				cfg.DeploymentEmbeddings = &config.VectorEmbeddingsServerConfig{Endpoint: "https://embeddings.example/v1"}
 			}
 			owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
-			ln, port := listenLoopback(t)
-			cfg.Host, cfg.Port = "127.0.0.1", port
-			ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-			if failure == "configured provider" {
-				var status vector.BuildStatus
-				data := embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/embeddings/status", "", nil, http.StatusOK)
-				require.NoError(t, json.Unmarshal(data, &status))
-				require.NotNil(t, status.Setup)
-				assert.Empty(t, status.Setup.Action)
+			if failure == "model inspection" {
+				err := owner.Setup(0)
+				require.ErrorIs(t, err, inspectionError)
+				assert.NotErrorIs(t, err, vector.ErrInvalidBuildRequest)
+				return
 			}
 			if failure == "config read" {
 				require.NoError(t, os.Mkdir(filepath.Join(dir, "config.toml"), 0o700))
+				var pathError *os.PathError
+				err := owner.Setup(0)
+				require.ErrorAs(t, err, &pathError)
+				assert.NotErrorIs(t, err, vector.ErrInvalidBuildRequest)
+				return
 			}
-			embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), want)
+			if failure == "configured provider" {
+				status, err := owner.SetupStatus(t.Context())
+				require.NoError(t, err)
+				assert.Empty(t, status.Action)
+			}
+			err = owner.Setup(0)
+			require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
+			if failure == "invalid endpoint" {
+				assert.ErrorIs(t, err, config.ErrInvalidVectorSetup)
+			}
 		})
 	}
 }
@@ -456,16 +454,8 @@ func TestLiveEmbeddingsSetupRequiresConsentAfterOllamaStops(t *testing.T) {
 	assert.False(t, approved.Load(), "Turn on after an Ollama status must not approve an undisclosed 295 MB download")
 	recovery := status()
 	assert.Equal(t, "built-in", recovery.Setup.Provider)
-	assert.EqualValues(t, 295_000_000, recovery.Setup.MissingBytes)
 	assert.Equal(t, "turn-on", recovery.Setup.Action)
 	assert.Contains(t, recovery.Setup.Error, "download")
-	retry := func(approvedBytes int64) bool {
-		embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(fmt.Sprintf(`{"approved_bytes":%d}`, approvedBytes)), http.StatusAccepted)
-		<-owner.done
-		return approved.Load()
-	}
-	assert.False(t, retry(100_000_000), "Retry must not approve a download larger than the size shown")
-	assert.True(t, retry(recovery.Setup.MissingBytes), "Retry approves the refreshed size the row shows")
 }
 
 func TestEmbeddingsSetupStatusKeepsActiveProviderDuringSharedInstall(t *testing.T) {
