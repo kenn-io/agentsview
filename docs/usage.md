@@ -39,7 +39,7 @@ update automatically from a global SSE event stream (debounced during busy
 syncs). The dashboard and Activity page do not refetch their charts
 on every sync event — each pairs a manual refresh button with a relative
 "Updated…" timestamp, and the Analytics dashboard also refreshes periodically on
-its own. Click refresh, or change the date range, to pull the latest numbers.
+its own. Use refresh or change the date range for an immediate update.
 
 Usage automatically refreshes at most once a minute when session data changes.
 It pauses while hidden and catches up when you return.
