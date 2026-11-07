@@ -515,6 +515,31 @@ func TestUsageRollupCallKeyIncludesBakedSessionMetadata(t *testing.T) {
 	assert.NotEqual(t, agentChanged, startedAtChanged)
 }
 
+func TestUsageRollupCallKeyTracksOnlyGroupedSessionNames(t *testing.T) {
+	for _, groupKey := range []string{"", "daily:job"} {
+		t.Run(groupKey, func(t *testing.T) {
+			snapshot := usageQuerySnapshot{
+				location: time.UTC,
+				Versions: []usageSourceVersion{{SessionID: "session-a"}},
+				Sessions: []usageQuerySession{{ID: "session-a", GroupKey: groupKey, SessionName: "Original report · run"}},
+			}
+			before := usageRollupCallKey(snapshot, nil, "pricing")
+			baked := bakedUsageSession(snapshot.Sessions[0])
+			snapshot.Sessions[0].SessionName = "Renamed report · run"
+			after := usageRollupCallKey(snapshot, nil, "pricing")
+			if groupKey == "" {
+				assert.Empty(t, baked.GroupLabel)
+				assert.Equal(t, baked, bakedUsageSession(snapshot.Sessions[0]))
+				assert.Equal(t, before, after)
+			} else {
+				assert.Equal(t, "Original report", baked.GroupLabel)
+				assert.Equal(t, "Renamed report", bakedUsageSession(snapshot.Sessions[0]).GroupLabel)
+				assert.NotEqual(t, before, after)
+			}
+		})
+	}
+}
+
 func TestUsagePricingHashTracksPricingSemantics(t *testing.T) {
 	base := []export.EffectivePricingRow{{
 		ModelPattern: "model-*",
@@ -892,7 +917,7 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 	}
 	result, err := cache.usageRollupQuery(
 		t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter,
-		export.NewPricingResolver(newSnapshot.PricingRows))
+		export.NewPricingResolver(newSnapshot.PricingRows), 0)
 	require.NoError(t, err)
 	require.Len(t, result.Groups, 1)
 	assert.Equal(t, int64(20), result.Groups[0].OutputTokens)
@@ -960,7 +985,7 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 
 	result, err := cache.usageRollupQuery(
 		t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: newInstalls}, filter,
-		export.NewPricingResolver(newSnapshot.PricingRows))
+		export.NewPricingResolver(newSnapshot.PricingRows), 0)
 	require.NoError(t, err)
 	var inputTokens int64
 	for _, group := range result.Groups {

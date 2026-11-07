@@ -193,9 +193,10 @@ func scanIDs(rows *sql.Rows) ([]string, error) {
 }
 
 func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
+	count, args := db.StatsRootCountSQL(db.ClickHouseQueryDialect(), excludeOneShot, excludeAutomated)
 	query := `
 		SELECT
-			toInt64(COUNT(*)),
+			` + count + `,
 			toInt64(COALESCE(SUM(message_count), 0)),
 			toInt64(COUNT(DISTINCT project)),
 			toInt64(COUNT(DISTINCT machine)),
@@ -206,7 +207,7 @@ func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated b
 	var stats db.Stats
 	var earliest any
 	var earliestAccount any
-	if err := s.queryRowContext(ctx, query).Scan(
+	if err := s.queryRowContext(ctx, query, args...).Scan(
 		&stats.SessionCount, &stats.MessageCount,
 		&stats.ProjectCount, &stats.MachineCount, &earliest, &earliestAccount,
 	); err != nil {

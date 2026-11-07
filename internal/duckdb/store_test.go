@@ -258,11 +258,11 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 	}
 
 	insertSession(
-		"stats-fork", "fork", "fork", "2025-12-26 00:00:00",
+		"stats-null-parent-fork", "fork", "fork", "2025-12-26 00:00:00",
 		1, 2, false,
 	)
 	insertSession(
-		"stats-subagent", "child", "subagent", "2025-12-27 00:00:00",
+		"stats-missing-parent-subagent", "child", "subagent", "2025-12-27 00:00:00",
 		1, 2, false,
 	)
 	insertSession(
@@ -285,7 +285,13 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 		"stats-human", "alpha", "root", "2026-01-01 00:00:00",
 		2, 2, false,
 	)
-	_, err := duck.ExecContext(ctx,
+	insertSession("stats-continuation", "alpha", "continuation", "2026-01-01 00:00:00", 3, 2, false)
+	_, err := duck.ExecContext(ctx, `UPDATE sessions SET parent_session_id='missing-parent' WHERE id='stats-missing-parent-subagent'`)
+	require.NoError(t, err)
+	_, err = duck.ExecContext(ctx, `UPDATE sessions SET parent_session_id='stats-human'
+		WHERE id='stats-continuation'`)
+	require.NoError(t, err)
+	_, err = duck.ExecContext(ctx,
 		`UPDATE sessions SET deleted_at = CAST(? AS TIMESTAMP) WHERE id = ?`,
 		"2026-01-02 00:00:00", "stats-deleted",
 	)
@@ -307,22 +313,25 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 		assert.Equal(t, 1, stats.MachineCount, name)
 		require.NotNil(t, stats.EarliestSession, name)
 		assert.Equal(t, wantEarliest, *stats.EarliestSession, name)
+		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{ExcludeOneShot: excludeOneShot, ExcludeAutomated: excludeAutomated})
+		require.NoError(t, err)
+		assert.Equal(t, index.Total, stats.SessionCount, name)
 	}
 
 	assertStats(
-		"include all root sessions", false, false, 3, 4, 3,
+		"include all root sessions", false, false, 5, 7, 3,
 		"2025-12-30T00:00:00Z",
 	)
 	assertStats(
-		"exclude one-shot keeps automated", true, false, 2, 3, 2,
+		"exclude one-shot keeps automated", true, false, 4, 6, 2,
 		"2025-12-31T00:00:00Z",
 	)
 	assertStats(
-		"exclude automated keeps human one-shot", false, true, 2, 3, 2,
+		"exclude automated keeps human one-shot", false, true, 4, 6, 2,
 		"2025-12-30T00:00:00Z",
 	)
 	assertStats(
-		"exclude one-shot and automated", true, true, 1, 2, 1,
+		"exclude one-shot and automated", true, true, 3, 5, 1,
 		"2026-01-01T00:00:00Z",
 	)
 
@@ -4830,4 +4839,46 @@ func TestTrendsTermsSessionWindowParity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSearchContentHybridKeywordFallback(t *testing.T) {
+	const ts = "2026-03-22T10:00:00.000Z"
+	const childTS = "2026-03-23T10:00:00.000Z"
+	local := newLocalDB(t)
+	parent := syncSession("parent", "alpha", "first", ts, 3)
+	parent.UserMessageCount = 2
+	child := syncSession("child", "alpha", "first", childTS, 4)
+	child.ParentSessionID, child.RelationshipType, child.UserMessageCount = new("parent"), "subagent", 1
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{
+		{Session: parent, Messages: []db.Message{
+			syncMessage("parent", 0, "user", "question", ts),
+			syncMessage("parent", 1, "assistant", "rankneedle reply", ts),
+			syncMessage("parent", 2, "user", "follow-up", ts),
+		}, DataVersion: 1, ReplaceMessages: true},
+		{Session: child, Messages: []db.Message{
+			syncMessage("child", 0, "user", "question", childTS),
+			syncMessage("child", 1, "tool", "childneedle tool output", childTS),
+			syncMessage("child", 2, "assistant", "childneedle rankneedle reply", childTS),
+			syncMessage("child", 3, "assistant", "childneedle follow-up", childTS),
+		}, DataVersion: 1, ReplaceMessages: true},
+	})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(t.Context(), syncer.DB()))
+	_, err = syncer.pushEverything(t.Context(), nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "childneedle", Mode: "hybrid", KeywordOnly: true, Scope: "all", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Zero(t, page.NextCursor)
+	assert.Equal(t, "assistant", page.Matches[0].Role)
+	assert.Equal(t, 2, page.Matches[0].Ordinal)
+
+	page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "rankneedle", Mode: "hybrid", KeywordOnly: true, Scope: "all", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "parent", page.Matches[0].SessionID)
+	assert.False(t, page.Matches[0].Subordinate)
+	assert.Zero(t, page.NextCursor)
 }

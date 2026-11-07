@@ -31,6 +31,8 @@ type usageFactsGroup struct {
 type usageFactsResult struct {
 	Groups           []usageFactsGroup
 	MatchingSessions map[string]UsageSessionInfo
+	SessionCounts    UsageSessionCounts
+	TopSessions      []TopSessionEntry
 }
 
 type usageCacheMissingSessionError struct{ SessionID string }
@@ -57,7 +59,7 @@ func usageCursorIncluded(filter UsageFilter) bool {
 // deduplication can depend on the requested window or live session filters.
 func (cache *usageCache) usageRollupQuery(
 	ctx context.Context, prepared usagePreparedWindow, filter UsageFilter,
-	resolver *export.PricingResolver,
+	resolver *export.PricingResolver, topSessionsLimit int,
 ) (usageFactsResult, error) {
 	snapshot := prepared.snapshot
 	if !prepared.journaled && len(snapshot.Sessions) == 0 && snapshot.CursorHighWater == 0 {
@@ -88,8 +90,10 @@ func (cache *usageCache) usageRollupQuery(
 	var result usageFactsResult
 	if prepared.journaled && prepared.kind == usageQueryKindDayTotals {
 		result, err = readUsageDayTotals(ctx, conn, timezoneID, &snapshot, filter)
+	} else if prepared.journaled && prepared.kind == usageQueryKindTopSessions {
+		result, err = readUsageTopSessionOwners(ctx, conn, timezoneID, &snapshot, filter)
 	} else {
-		result, err = readUsageDailyRollups(ctx, conn, timezoneID, snapshot, filter, false)
+		result, err = readUsageDailyRollups(ctx, conn, timezoneID, snapshot, filter, "")
 	}
 	if err != nil {
 		return usageFactsResult{}, err
@@ -111,6 +115,12 @@ func (cache *usageCache) usageRollupQuery(
 			result.MatchingSessions[group.SessionID] = UsageSessionInfo{
 				Project: group.Project, Agent: group.Agent,
 			}
+		}
+	}
+	if prepared.journaled && prepared.kind == usageQueryKindTopSessions {
+		result.TopSessions, err = readUsageTopSessions(ctx, conn, timezoneID, snapshot, result, filter, topSessionsLimit)
+		if err != nil {
+			return usageFactsResult{}, err
 		}
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
@@ -201,7 +211,7 @@ func verifyUsageRollupInstall(
 
 func readUsageDailyRollups(
 	ctx context.Context, conn *sql.Conn, timezoneID int64,
-	snapshot usageQuerySnapshot, filter UsageFilter, authoritativeOnly bool,
+	snapshot usageQuerySnapshot, filter UsageFilter, restriction string, ownerArgs ...any,
 ) (usageFactsResult, error) {
 	from, to := usageRollupDateBounds(snapshot)
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
@@ -211,10 +221,6 @@ func readUsageDailyRollups(
 	}
 	if to != "" {
 		where += ` AND r.local_date<=` + b.Add(to)
-	}
-	restriction := ""
-	if authoritativeOnly {
-		restriction = " AND i.has_authoritative=1"
 	}
 	rows, err := conn.QueryContext(ctx, `SELECT i.session_id, r.local_date,
 		r.reported_model, r.provider_id, r.priced_model, r.matched_pattern, r.rate_ok,
@@ -230,7 +236,7 @@ func readUsageDailyRollups(
 		WHERE `+where+restriction+`
 		ORDER BY r.local_date, i.session_id, r.reported_model,
 			r.provider_id, r.band_threshold`,
-		b.Args()...)
+		append(b.Args(), ownerArgs...)...)
 	if err != nil {
 		return usageFactsResult{}, err
 	}

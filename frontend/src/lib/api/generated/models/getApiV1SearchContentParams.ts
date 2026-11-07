@@ -18,6 +18,10 @@ export type GetApiV1SearchContentParams = {
    */
   mode?: GetApiV1SearchContentMode;
   /**
+   * Return hybrid keyword matches when semantic search is unavailable
+   */
+  allow_keyword_fallback?: boolean;
+  /**
    * Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)
    */
   scope?: GetApiV1SearchContentScope;

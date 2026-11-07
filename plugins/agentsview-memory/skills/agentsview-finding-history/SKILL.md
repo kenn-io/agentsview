@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:ec918a5a6ff31111750026cdd62b674b9a665a6b7fed78d69439ae4ef7b55e47 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:a93330b7bd15703d3b6d7e7fb319473855c2959400bac4bb39669e7c1c6f9ab9 — do not edit; re-run `agentsview skills install`
 name: agentsview-finding-history
 description: Use proactively when prior decisions, rationale, solutions, pitfalls, project context, or repeated workflows may help, when stuck, or before guessing about something learned previously — searches AgentsView conversation history for evidence.
 ---
@@ -67,12 +67,14 @@ is true.
 
 ## Failures and fallbacks
 
-If semantic search failed, identify and disclose the failure before using a
-lexical fallback. For an unavailable semantic index or transient embedding
-failure, retry once when appropriate, then use `mode: substring` with several
-short queries and synonyms. Preserve the inclusion and current-session flags,
-but omit `scope` because substring mode does not accept it. Describe the
-fallback in the answer.
+Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
+results once and use the matches without retry. For thin or empty results,
+try short `mode: substring` queries with key terms or synonyms. Preserve
+`scope`, inclusion, and current-session flags.
+
+Disclose explicit semantic errors. Use a lexical fallback only for an
+unavailable index or transient embedding error; retry transient errors once
+when appropriate.
 
 Do not fall back on authentication or wrong-target errors. In particular, do
 not silently search a local archive when the intended remote archive rejected

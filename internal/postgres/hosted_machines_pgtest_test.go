@@ -172,11 +172,18 @@ func TestHostedSourceMachinesFilterCoalescedSessions(t *testing.T) {
 	assert.Equal(t, "codex:portable", httpPage.Sessions[0].ID)
 }
 
-func TestHostedSourceMachinesStats(t *testing.T) {
-	_, h := newHostedCoalescedMachinesFixture(t)
+func TestHostedStatsMachineAndSessionCounts(t *testing.T) {
+	f, h := newHostedCoalescedMachinesFixture(t)
+	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions
+		(id, project, machine, agent, message_count, user_message_count, relationship_type, parent_session_id, started_at)
+		VALUES ('continuation', 'legacy', 'legacy-machine', 'claude', 4, 2, 'continuation', 'legacy-session', '2026-01-01T00:00:00Z')`)
+	require.NoError(t, err)
 	stats, err := h.GetStats(t.Context(), false, false)
 	require.NoError(t, err)
 	assert.Equal(t, 4, stats.MachineCount)
+	index, err := h.GetSidebarSessionIndex(t.Context(), db.SessionFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, index.Total, stats.SessionCount)
 }
 
 func TestHostedSourceMachinesCatalogFlags(t *testing.T) {

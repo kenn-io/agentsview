@@ -33,8 +33,7 @@ import (
 )
 
 // requirePOSIXSignals skips the test on platforms without POSIX signal
-// semantics, where graceful SIGTERM termination and zombie-based liveness
-// checks do not apply.
+// semantics, such as graceful SIGTERM termination.
 func requirePOSIXSignals(t *testing.T, reason string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -52,9 +51,7 @@ func setStartProbeTickForTest(t *testing.T, tick time.Duration) {
 }
 
 // startSleepProcess starts a long-lived child process and reaps it during
-// cleanup. The returned PID is alive for the duration of the test, and once
-// signalled the child becomes a zombie that daemon.ProcessAlive still reports
-// as alive until cleanup reaps it.
+// cleanup. Once signalled, the child becomes a zombie until cleanup reaps it.
 func startSleepProcess(t *testing.T) int {
 	t.Helper()
 	return startProcessKilledOnCleanup(t, exec.CommandContext(t.Context(), "sleep", "60"))
@@ -116,9 +113,7 @@ func startProcessKilledOnCleanup(t *testing.T, cmd *exec.Cmd) int {
 }
 
 // startReapedSleepProcess starts a long-lived child and reaps it concurrently,
-// so once the process is signalled it leaves the zombie state and
-// daemon.ProcessAlive reports it as dead. The returned channel closes when the
-// child has been reaped.
+// so the returned channel closes once the signalled child has been reaped.
 func startReapedSleepProcess(t *testing.T) (int, <-chan struct{}) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "sleep", "60")

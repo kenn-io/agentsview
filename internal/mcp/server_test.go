@@ -61,17 +61,13 @@ func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
 	})
 	require.NotNil(t, srv)
 
-	st, ct := newInMemoryPair(t, srv)
-	tools, err := ct.ListTools(t.Context(), nil)
-	require.NoError(t, err)
+	tools := listCatalog(t, srv)
 	require.Len(t, tools.Tools, 20)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
 			"tool %s should be annotated read-only", tl.Name)
 	}
-	require.NoError(t, ct.Close())
-	require.NoError(t, st.Wait())
 }
 
 func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
@@ -82,9 +78,7 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 		Now:     func() time.Time { return fixedNow },
 	})
 
-	st, ct := newInMemoryPair(t, srv)
-	tools, err := ct.ListTools(t.Context(), nil)
-	require.NoError(t, err)
+	tools := listCatalog(t, srv)
 	require.Len(t, tools.Tools, 3)
 	names := make([]string, 0, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -98,8 +92,6 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus}, names)
-	require.NoError(t, ct.Close())
-	require.NoError(t, st.Wait())
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
@@ -127,6 +119,74 @@ func TestServer_GetMemoryStatus(t *testing.T) {
 	assert.Equal(t, service.MemoryReady, status.Lexical.Status)
 	assert.Equal(t, service.MemoryUnavailable, status.Semantic.Status)
 	assert.Equal(t, service.MemoryPartial, status.Status)
+}
+
+// Measured catalogs: full 86,462 bytes, memory 21,219 bytes.
+// Budgets allow 10%, rounded up to 1,000 bytes; increases need review and matching docs/mcp.md updates.
+const (
+	fullCatalogBudget   = 96_000
+	memoryCatalogBudget = 24_000
+)
+
+func listCatalog(t *testing.T, srv *mcp.Server) *mcp.ListToolsResult {
+	t.Helper()
+	st, ct := newInMemoryPair(t, srv)
+	defer func() {
+		require.NoError(t, ct.Close())
+		require.NoError(t, st.Wait())
+	}()
+	tools, err := ct.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	return tools
+}
+
+func checkCatalogBudget(tools *mcp.ListToolsResult, budget int) error {
+	raw, err := json.Marshal(tools)
+	if err != nil {
+		return err
+	}
+	if len(raw) <= budget {
+		return nil
+	}
+	var detail strings.Builder
+	fmt.Fprintf(&detail, "tool catalog: %d bytes exceeds %d-byte budget", len(raw), budget)
+	for _, tool := range tools.Tools {
+		raw, err := json.Marshal(tool)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&detail, "\n%s: %d bytes", tool.Name, len(raw))
+	}
+	return errors.New(detail.String())
+}
+
+func TestNewServer_CatalogFitsBudget(t *testing.T) {
+	for _, tc := range []struct {
+		profile Profile
+		budget  int
+	}{{ProfileFull, fullCatalogBudget}, {ProfileMemory, memoryCatalogBudget}} {
+		t.Run(string(tc.profile), func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			tools := listCatalog(t, newServer(ServeOptions{
+				Service: service.NewDirectBackend(d, nil, withTestDocbank()),
+				Profile: tc.profile,
+			}))
+			require.NoError(t, checkCatalogBudget(tools, tc.budget))
+		})
+	}
+}
+
+func TestCheckCatalogBudget_FailsOneByteOver(t *testing.T) {
+	const budget = 1_000
+	tools := &mcp.ListToolsResult{Tools: []*mcp.Tool{{Name: "catalog_fixture", Description: "x"}}}
+	raw, err := json.Marshal(tools)
+	require.NoError(t, err)
+	tools.Tools[0].Description += strings.Repeat("x", budget-len(raw))
+	require.NoError(t, checkCatalogBudget(tools, budget))
+	tools.Tools[0].Description += "x"
+	err = checkCatalogBudget(tools, budget)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "catalog_fixture:")
 }
 
 func TestParseProfile(t *testing.T) {

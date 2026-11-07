@@ -175,7 +175,7 @@ func scanAnalyticsMessageScope(rows *sql.Rows, backend string, formatTime func(a
 	return nil
 }
 
-func ScanAnalyticsSessions(rows *sql.Rows, backend string, formatTime func(any) string, pushVersion bool) ([]AnalyticsSession, error) {
+func ScanAnalyticsSessions(rows *sql.Rows, backend string, formatTime func(any) string, pushVersion, pushFingerprint bool) ([]AnalyticsSession, error) {
 	var out []AnalyticsSession
 	for rows.Next() {
 		var r AnalyticsSession
@@ -198,6 +198,9 @@ func ScanAnalyticsSessions(rows *sql.Rows, backend string, formatTime func(any) 
 		}
 		if pushVersion {
 			dest = append(dest, &r.PushVersion)
+		}
+		if pushFingerprint {
+			dest = append(dest, &r.PushFingerprint)
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scanning %s analytics session: %w", backend, err)

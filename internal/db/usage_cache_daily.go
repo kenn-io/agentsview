@@ -31,7 +31,7 @@ func (db *DB) GetDailyUsage(
 		kind = usageQueryKindDayTotals
 	}
 	_, facts, resolver, err := db.queryUsageRollups(
-		ctx, filter, kind, true)
+		ctx, filter, kind, true, 0)
 	if err != nil {
 		return DailyUsageResult{}, err
 	}
@@ -156,7 +156,7 @@ func (db *DB) assembleDailyUsageFacts(
 
 	var sessionCounts UsageSessionCounts
 	if !filter.SkipSessionCounts {
-		sessionCounts = NewUsageSessionCounts(facts.MatchingSessions)
+		sessionCounts = usageSessionCounts(facts)
 	}
 	projects, err := db.BuildProjectIdentityMap(ctx, SortedKeys(projectLabels))
 	if err != nil {

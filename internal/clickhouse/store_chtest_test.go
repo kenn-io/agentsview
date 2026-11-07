@@ -62,7 +62,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		assert.Equal(t, 2, next.Total)
 	})
 
-	t.Run("orphan_subagent_with_null_parent_is_sidebar_root", func(t *testing.T) {
+	t.Run("stats_counts_orphans_without_parented_continuation", func(t *testing.T) {
 		store, syncer, local := newPushedStore(t)
 		orphanID := "ch-orphan-child"
 		orphan := fixtureSession(orphanID, "alpha", "orphan first", "2026-01-10T00:06:00.000Z", 1)
@@ -77,11 +77,31 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			ReplaceMessages: true,
 		}})
 		require.NoError(t, err)
+
+		for _, row := range []struct{ id, relationship, parent string }{
+			{"ch-missing-parent", "subagent", "missing-parent"},
+			{"ch-continuation", "continuation", fixtureAlphaID},
+		} {
+			session := fixtureSession(row.id, "alpha", "child first", "2026-01-10T00:07:00.000Z", 1)
+			session.RelationshipType = row.relationship
+			session.ParentSessionID = &row.parent
+			_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+				Session:     session,
+				Messages:    []db.Message{fixtureMessage(row.id, 0, "user", "child first", "2026-01-10T00:07:00.000Z")},
+				DataVersion: 1, ReplaceMessages: true,
+			}})
+			require.NoError(t, err)
+		}
 		_, err = syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
-
-		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Project: "alpha"})
+		stats, err := store.GetStats(ctx, false, false)
 		require.NoError(t, err)
+		assert.Equal(t, 4, stats.SessionCount)
+		assert.Equal(t, 4, stats.MessageCount)
+		assert.Equal(t, 2, stats.ProjectCount)
+		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
+		require.NoError(t, err)
+		assert.Equal(t, index.Total, stats.SessionCount)
 		ids := make([]string, len(index.Sessions))
 		for i, row := range index.Sessions {
 			ids[i] = row.ID

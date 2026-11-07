@@ -205,7 +205,7 @@ func newReconciliationSpool(ctx context.Context, archivePath string) (*reconcili
 		return nil, fmt.Errorf("secure reconciliation spool: %w", err)
 	}
 
-	dsn := reconciliationSpoolDSN(path)
+	dsn := sqliteScratchDSN(path)
 	database, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		_ = os.Remove(path)
@@ -220,7 +220,8 @@ func newReconciliationSpool(ctx context.Context, archivePath string) (*reconcili
 	return spool, nil
 }
 
-func reconciliationSpoolDSN(path string) string {
+// sqliteScratchDSN reuses compiled SQL across a parse or reconciliation pass.
+func sqliteScratchDSN(path string) string {
 	var uri string
 	switch {
 	case windowsDrivePath(path):
@@ -230,11 +231,11 @@ func reconciliationSpoolDSN(path string) string {
 		// SQLite rejects non-local file URI authorities unless built with
 		// SQLITE_ALLOW_URI_AUTHORITY. The ordinary Windows filename preserves
 		// UNC semantics without requiring that optional compile-time feature.
-		return path
+		uri = path
 	default:
 		uri = "file:" + (&url.URL{Path: path}).EscapedPath()
 	}
-	return uri
+	return uri + "?_stmt_cache_size=64"
 }
 
 func windowsDrivePath(path string) bool {

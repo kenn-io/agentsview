@@ -106,6 +106,9 @@ include each session's labels, pull request links, and parent session. See
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
 
+With Docbank and every optional tool listed, the tool list the server sends is
+about 87 KB. `TestNewServer_CatalogFitsBudget` fails when it grows past 96 KB.
+
 ### Focused memory profile
 
 Clients that use AgentsView only for conversation memory can select the focused
@@ -132,6 +135,8 @@ remote servers report `unknown` with an `unsupported` reason. The tools use the
 same schemas and backend selection as the full profile, over either stdio or
 StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
 complete tool list above.
+
+This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
 The native
 [AgentsView Memory package](https://github.com/kenn-io/agentsview/tree/main/plugins/agentsview-memory)
@@ -195,13 +200,16 @@ default. Set `include_one_shot: true` or `include_automated: true` to include
 those classes. An empty result can therefore omit a matching one-shot or
 automated session.
 
-When a vector search index is configured, prefer `search_content` with
-`mode: "hybrid"` or `mode: "semantic"` for questions about prior work,
+Prefer `search_content` with `mode: "hybrid"` for questions about prior work,
 especially when the exact wording is unknown. Hybrid combines semantic
 similarity with keyword matching. Use `context` to include surrounding messages.
-If the index is unavailable, use `search_sessions` for keyword search, or
-`search_content` with substring/regex for exact errors, identifiers, and code
-fragments. The default search mode remains substring.
+Hybrid returns its keyword matches when search by meaning is unavailable. The
+response includes `effective_mode: "hybrid_keyword"` and a `note` beside
+`coverage` explaining why. Keyword matches need the query words to appear. If
+there are no matches or only a few, try one or two short substring queries with
+key terms or synonyms. Preserve `scope`, inclusion, and current-session filters.
+Disclose keyword-only results once. Use substring/regex for exact errors,
+identifiers, and code fragments. The default remains substring.
 
 `search_content` accepts a `mode` of `substring` (default), `regex`, `terms`,
 `semantic`, or `hybrid`. `terms` splits `pattern` on whitespace and requires
@@ -216,12 +224,11 @@ requires a SQLite or PostgreSQL backend.
 terms, semantic, and hybrid searches. `all` includes child sessions and
 sidechain messages; `top` excludes them, and `subordinate` returns only them.
 Child sessions bypass the one-shot exclusion; top-level one-shot sessions still
-require `include_one_shot: true`. The semantic and hybrid modes need the opt-in
-[semantic search](/docs/semantic-search/) index on the local SQLite archive;
-without it they return a "not available" error. Exact `session_id`,
-`git_branch`, `project`, `agent`, `date_from`, and `date_to` filters apply
-before the final limit. Limits default to 10 and go up to 50; a value outside
-that range falls back to the default.
+require `include_one_shot: true`. Semantic mode needs the opt-in
+[semantic search](/docs/semantic-search/) index and returns a "not available"
+error without it. Exact `session_id`, `git_branch`, `project`, `agent`,
+`date_from`, and `date_to` filters apply before the final limit. Limits default
+to 10 and go up to 50; a value outside that range falls back to the default.
 
 To find one past session that covered several ideas, pass `concepts` instead of
 `pattern`: two to five distinct natural-language strings. The mode defaults to

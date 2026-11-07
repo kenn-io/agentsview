@@ -92,6 +92,7 @@ type usageExceptionRow struct {
 type usageRollupBuild struct {
 	SessionID, Agent, StartedAt string
 	Project, Machine, GitBranch string
+	GroupKey, GroupLabel        string
 	IsAutomated                 bool
 	UserMessageCount            int
 	HasAuthoritative            bool
@@ -552,7 +553,7 @@ func buildUsageRollupSessions(
 		}
 		builds = append(builds, usageRollupBuild{
 			SessionID: id, Agent: sessions[id].Agent, StartedAt: sessions[id].StartedAt,
-			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch,
+			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch, GroupKey: sessions[id].GroupKey, GroupLabel: bakedUsageSession(sessions[id]).GroupLabel,
 			IsAutomated: sessions[id].IsAutomated, UserMessageCount: sessions[id].UserMessageCount,
 			HasAuthoritative: hasAuthoritative,
 			PricingInputs:    pricingInputs, PricingHash: pricingHash,

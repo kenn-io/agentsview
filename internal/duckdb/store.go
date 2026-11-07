@@ -61,7 +61,7 @@ type Store struct {
 	// gone.
 	retiring sync.WaitGroup
 
-	// frustrationMemo serves local mirrors and resets on handle swap.
+	// frustrationMemo reuses local mirror counts by transcript fingerprint.
 	frustrationMemo db.FrustrationMarkerMemo
 
 	quack          *quackClient
@@ -575,11 +575,12 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 
 func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
 	filter := rootSessionWhere(excludeOneShot, excludeAutomated)
-	query := "\n\t\tSELECT\n\t\t\tCOUNT(*),\n\t\t\tCOALESCE(SUM(message_count), 0),\n\t\t\tCOUNT(DISTINCT project),\n\t\t\tCOUNT(DISTINCT machine),\n\t\t\tMIN(COALESCE(started_at, created_at)),\n\t\t\t(SELECT MIN(occurred_at) FROM cursor_usage_events)\n\t\tFROM sessions\n\t\tWHERE " + filter
+	count, args := db.StatsRootCountSQL(db.DuckDBQueryDialect(), excludeOneShot, excludeAutomated)
+	query := "\n\t\tSELECT\n\t\t\t" + count + ",\n\t\t\tCOALESCE(SUM(message_count), 0),\n\t\t\tCOUNT(DISTINCT project),\n\t\t\tCOUNT(DISTINCT machine),\n\t\t\tMIN(COALESCE(started_at, created_at)),\n\t\t\t(SELECT MIN(occurred_at) FROM cursor_usage_events)\n\t\tFROM sessions\n\t\tWHERE " + filter
 	var stats db.Stats
 	var earliest any
 	var earliestAccount any
-	if err := s.queryRowContext(ctx, query).Scan(
+	if err := s.queryRowContext(ctx, query, args...).Scan(
 		&stats.SessionCount, &stats.MessageCount,
 		&stats.ProjectCount, &stats.MachineCount, &earliest, &earliestAccount,
 	); err != nil {
@@ -946,14 +947,14 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		if err := db.ValidateSemanticFilter(f); err != nil {
 			return db.ContentSearchPage{}, err
 		}
-		// No VectorSearcher seam on the DuckDB store yet (HasSemantic always
-		// false): gate after input validation.
-		return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
-			"semantic search is not supported by the DuckDB backend",
-		)
-	}
-
-	if err := db.ValidateContentSearchScope(f.Scope); err != nil {
+		if f.Mode == "hybrid" && f.KeywordOnly {
+			f.Mode, f.Sources, f.ExcludeSystem = "fts", []string{"messages"}, true
+		} else {
+			return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
+				"semantic search is not supported by the DuckDB backend",
+			)
+		}
+	} else if err := db.ValidateContentSearchScope(f.Scope); err != nil {
 		return db.ContentSearchPage{}, err
 	}
 
@@ -977,6 +978,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		return db.ContentSearchPage{},
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}
 	}
+	limit := f.Limit
+	if f.KeywordOnly {
+		f.Limit = max(limit*4, db.SemanticOverfetchMin)
+	}
 	matches, err := s.collectContentMatches(ctx, f)
 	if err != nil {
 		return db.ContentSearchPage{}, err
@@ -987,6 +992,22 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	// batched pass, matching the SQLite and PG backends.
 	if err := s.deriveLexicalUnitsDuck(ctx, page.Matches); err != nil {
 		return db.ContentSearchPage{}, err
+	}
+	if f.KeywordOnly {
+		leg := make([]db.RankedUnit, 0, len(page.Matches))
+		byKey := make(map[string]db.ContentMatch, len(page.Matches))
+		for _, match := range page.Matches {
+			key := db.MessageFusionKey(match.SessionID, match.Ordinal)
+			leg = append(leg, db.RankedUnit{Key: key, Subordinate: match.Subordinate})
+			byKey[key] = match
+		}
+		page.Matches = page.Matches[:0]
+		for _, fused := range db.RRFMerge([][]db.RankedUnit{leg}, limit) {
+			match := byKey[fused.Unit.Key]
+			match.Score = new(fused.Score)
+			page.Matches = append(page.Matches, match)
+		}
+		page.NextCursor = 0
 	}
 	return page, nil
 }
@@ -1049,6 +1070,9 @@ func (s *Store) collectContentSubstringMatches(
 	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.DuckDBQueryDialect())
+	if f.KeywordOnly {
+		scopeWhere, scopeArgs = db.BuildSessionBaseFilterSQL(db.SemanticContentSessionFilter(f), db.DuckDBQueryDialect())
+	}
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	var branches []string
@@ -1064,6 +1088,9 @@ func (s *Store) collectContentSubstringMatches(
 			sysPred := "TRUE"
 			if f.ExcludeSystem {
 				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+			}
+			if f.KeywordOnly {
+				sysPred += " AND m.role IN ('user', 'assistant')"
 			}
 			contentPred := addSearchArgs("COALESCE(m.dialogue_text, m.content)")
 			branches = append(branches, `

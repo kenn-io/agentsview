@@ -133,18 +133,42 @@ func (s Sessions) attachToolResultEvents(
 	return rows.Err()
 }
 
+// sessionActivitySQL reads only the fields activity buckets use. Content is
+// needed only for the injected-prompt check, which applies to user rows.
+const sessionActivitySQL = `SELECT ordinal, role, is_system, timestamp, source_subtype,
+	CASE WHEN role = 'user' THEN content ELSE '' END
+	FROM messages WHERE session_id = ?`
+
+type activityMessage struct {
+	ordinal       int
+	role          string
+	sourceSubtype string
+	timestamp     time.Time
+}
+
 func (s Sessions) GetSessionActivity(ctx context.Context, sessionID string) (*db.SessionActivityResponse, error) {
-	msgs, err := s.GetAllMessages(ctx, sessionID)
+	rows, err := s.backend.QueryContext(ctx, sessionActivitySQL, sessionID)
 	if err != nil {
-		return nil, err
+		return nil, s.backend.ReadError(QueryAllMessages, err)
 	}
-	visible := make([]db.Message, 0, len(msgs))
+	defer rows.Close()
+	var total int
+	var visible []activityMessage
 	var minTime, maxTime time.Time
-	for _, msg := range msgs {
-		if msg.IsSystem || db.IsSystemPrefixed(msg.Content, msg.Role) || msg.Timestamp == "" {
+	for rows.Next() {
+		var msg activityMessage
+		var isSystem bool
+		var ts any
+		var content string
+		if err := rows.Scan(&msg.ordinal, &msg.role, &isSystem, &ts, &msg.sourceSubtype, &content); err != nil {
+			return nil, s.backend.ReadError(ScanAllMessages, err)
+		}
+		total++
+		timestamp := s.backend.FormatTime(ts)
+		if isSystem || db.IsSystemPrefixed(content, msg.role) || timestamp == "" {
 			continue
 		}
-		t, ok := s.backend.ParseTime(msg.Timestamp)
+		t, ok := s.backend.ParseTime(timestamp)
 		if !ok {
 			continue
 		}
@@ -154,12 +178,16 @@ func (s Sessions) GetSessionActivity(ctx context.Context, sessionID string) (*db
 		if len(visible) == 0 || t.After(maxTime) {
 			maxTime = t
 		}
+		msg.timestamp = t
 		visible = append(visible, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, s.backend.ReadError(ScanAllMessages, err)
 	}
 	if len(visible) == 0 {
 		return &db.SessionActivityResponse{
 			Buckets:       []db.SessionActivityBucket{},
-			TotalMessages: len(msgs),
+			TotalMessages: total,
 		}, nil
 	}
 
@@ -173,19 +201,18 @@ func (s Sessions) GetSessionActivity(ctx context.Context, sessionID string) (*db
 	populated := map[int]bucketRow{}
 	maxIdx := 0
 	for _, msg := range visible {
-		t, _ := s.backend.ParseTime(msg.Timestamp)
-		idx := int((t.Unix() - anchor) / interval)
+		idx := int((msg.timestamp.Unix() - anchor) / interval)
 		row := populated[idx]
-		switch msg.Role {
+		switch msg.role {
 		case "user":
-			if msg.SourceSubtype != "tool_result" {
+			if msg.sourceSubtype != "tool_result" {
 				row.userCount++
 			}
 		case "assistant":
 			row.asstCount++
 		}
-		if row.firstOrdinal == nil || msg.Ordinal < *row.firstOrdinal {
-			ord := msg.Ordinal
+		if row.firstOrdinal == nil || msg.ordinal < *row.firstOrdinal {
+			ord := msg.ordinal
 			row.firstOrdinal = &ord
 		}
 		populated[idx] = row
@@ -207,7 +234,7 @@ func (s Sessions) GetSessionActivity(ctx context.Context, sessionID string) (*db
 	return &db.SessionActivityResponse{
 		Buckets:         buckets,
 		IntervalSeconds: interval,
-		TotalMessages:   len(msgs),
+		TotalMessages:   total,
 	}, nil
 }
 

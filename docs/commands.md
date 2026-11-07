@@ -2094,9 +2094,9 @@ searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
-those sessions before `--limit`. Semantic and hybrid results can be scoped with
-`--scope top|all|subordinate` (default `all`) to include or exclude sidechain
-and subagent content — see
+those sessions before `--limit`. Hybrid returns keyword matches with a note
+while the embedding index is unavailable. Semantic and hybrid
+results can be scoped with `--scope top|all|subordinate` (default `all`) to include or exclude sidechain and subagent content — see
 [Semantic Search](/docs/semantic-search/#scoping-results-scope). HTTP and MCP
 also accept `scope` for substring and regex searches. CLI lexical searches use
 `--include-children` instead. The human-readable table includes an `AGE` column derived from each match's

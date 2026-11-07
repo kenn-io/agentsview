@@ -591,6 +591,7 @@
   "analytics_export_csv": "CSVのエクスポート",
   "analytics_activity_by_day_hour": "日別および時間別の活動",
   "analytics_summary_sessions": "セッション",
+  "analytics_summary_sessions_scope": "{range} · サブエージェントを含む",
   "analytics_summary_messages": "メッセージ",
   "analytics_summary_projects": "プロジェクト",
   "analytics_summary_active_days": "アクティブな日",

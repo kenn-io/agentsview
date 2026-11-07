@@ -577,6 +577,7 @@
   "analytics_export_csv": "CSV 내보내기",
   "analytics_activity_by_day_hour": "요일 및 시간별 활동",
   "analytics_summary_sessions": "세션",
+  "analytics_summary_sessions_scope": "{range} · 서브에이전트 포함",
   "analytics_summary_messages": "메시지",
   "analytics_summary_projects": "프로젝트",
   "analytics_summary_active_days": "활동일",

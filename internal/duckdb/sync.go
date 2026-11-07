@@ -136,10 +136,8 @@ func (s *Sync) isFiltered() bool {
 // session-replace incremental push. A probe-time lock conflict means a
 // WRITER holds the file — another push in flight, or a serve process from a
 // build predating the read-only serve change — and fails closed. When the
-// incremental push's own write open is blocked by reader processes, the
-// push defers (storage.MirrorPushOptions.Automatic) or falls back to a rebuild, which
-// never write-opens the destination (rebuild file plus atomic rename). A
-// rebuild that was killed partway resumes on the next push. Every
+// incremental push's write open is blocked by readers, it catches up a standby
+// and swaps it in. A rebuild that was killed partway resumes. Every
 // rebuild logs and records its trigger in Diagnostics.RebuildReason, since
 // a rebuild silently substituted for a requested incremental push is
 // otherwise invisible to the operator.
@@ -205,10 +203,6 @@ func Push(
 		run.Reason = pending.Reason
 		reason = "resuming an unfinished rebuild, started because: " + pending.Reason
 	}
-	// errored is an unfinished rebuild that ended with session errors while
-	// the mirror needs no rebuild. It is kept until the incremental push
-	// runs, so a push that readers block resumes it instead of starting over.
-	var errored *rebuildRun
 	claim := func(required bool) error {
 		claimed, pending, restarted, err := claimRebuild(ctx, path, run, full)
 		if err != nil {
@@ -221,13 +215,13 @@ func Push(
 		switch {
 		case pending == nil:
 		case pending.Errored && !required:
-			errored = pending
+			err = removeRebuildFile(rebuildFilePath(path))
 		default:
 			// An unfinished rebuild resumes even when the mirror would now
 			// accept an incremental push, so a requested rebuild still finishes.
 			resume(pending)
 		}
-		return nil
+		return err
 	}
 	leftover, err := rebuildFileExists(path)
 	if err != nil {
@@ -240,40 +234,24 @@ func Push(
 	}
 	if reason == "" {
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
-		held := err != nil && isMirrorHeldError(err)
-		if errored != nil && !held {
-			log.Printf("duckdbsync: discarding the unfinished rebuild (%s); it ended with session errors and the mirror needs no rebuild",
-				errored.Reason)
-			err = errors.Join(err, removeRebuildFile(rebuildFilePath(path)))
-		}
-		switch {
-		case err == nil:
+		if err == nil {
 			cleanUpLegacyDuckDBSyncState(ctx, local)
 			return result, nil
-		case !held:
-			return result, err
-		case opts.Automatic:
-			return deferredHeldMirrorPush(), nil
 		}
-		const heldReason = "mirror is held open by reader processes; " +
-			"incremental write access unavailable"
-		switch {
-		case errored == nil:
-			reason = heldReason
-			run.Reason = reason
-		case errored.Reason == heldReason:
-			resume(errored)
-		default:
-			// Lead with the readers, since they are why this push rebuilds,
-			// and closing them would allow an incremental update instead.
-			resume(errored)
-			reason = heldReason + "; " + reason
+		if !isMirrorHeldError(err) {
+			return result, err
 		}
 		if lock == nil {
-			if err := claim(true); err != nil {
+			lock, _, _, err = claimRebuild(ctx, path, run, false)
+			if err != nil {
 				return rebuildClaimFailed(path, opts, err)
 			}
 		}
+		result, err = publishHeldMirror(ctx, path, probe, local, machine, opts, onProgress)
+		if err == nil {
+			cleanUpLegacyDuckDBSyncState(ctx, local)
+		}
+		return result, err
 	} else if err := ensureReplaceableMirror(path, probe); err != nil {
 		return storage.MirrorPushResult{}, err
 	}
@@ -288,7 +266,7 @@ func Push(
 }
 
 // rebuildClaimFailed reports a failed claimRebuild. Another push holding the
-// rebuild lock defers an automatic push, like a mirror held by readers.
+// rebuild lock defers an automatic push.
 func rebuildClaimFailed(
 	path string, opts storage.MirrorPushOptions, err error,
 ) (storage.MirrorPushResult, error) {
@@ -303,14 +281,6 @@ func rebuildClaimFailed(
 		return result, nil
 	}
 	return storage.MirrorPushResult{}, rebuildInProgressError(path, err)
-}
-
-func deferredHeldMirrorPush() storage.MirrorPushResult {
-	var result storage.MirrorPushResult
-	result.Diagnostics.Deferred = true
-	result.Diagnostics.DeferredReason = "mirror is held open by reader processes; deferring until write access is available"
-	log.Printf("duckdbsync: %s", result.Diagnostics.DeferredReason)
-	return result
 }
 
 // ensureReplaceableMirror is the fail-closed overwrite guard for rebuilds:
@@ -905,45 +875,78 @@ func reportDuckPushProgress(
 	})
 }
 
+// tryPushSessionBatch keeps native appenders and SQL on the transaction's connection.
 func (s *Sync) tryPushSessionBatch(
 	ctx context.Context, sessions []db.Session, fingerprints map[string]string,
 ) ([]int, error) {
-	tx, err := s.duck.BeginTx(ctx, nil)
+	conn, err := s.duck.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin duckdb session batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	messagesBySession := make([]int, len(sessions))
-
+	args := make([]any, len(sessions))
 	for i, sess := range sessions {
-		messages, err := s.pushSession(ctx, tx, sess, fingerprints[sess.ID])
-		if err != nil {
-			return nil, fmt.Errorf("pushing duckdb session %s: %w", sess.ID, err)
+		args[i] = sess.ID
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")
+	for _, table := range []string{"commit_links", "pinned_messages", "secret_findings", "tool_result_events", "tool_calls", "usage_events", "session_plan_usage", "messages", "sessions"} {
+		key := "session_id"
+		if table == "sessions" {
+			key = "id"
 		}
-		messagesBySession[i] = messages
+		if err := s.execMutation(ctx, tx, "DELETE FROM "+table+" WHERE "+key+" IN ("+placeholders+")", args...); err != nil {
+			return nil, err
+		}
+	}
+	counts := make([]int, len(sessions))
+	err = conn.Raw(func(raw any) (err error) {
+		batch, err := newDuckAppendBatch(ctx, raw, duckAppendColumns)
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, batch.close(ctx)) }()
+		for i, sess := range sessions {
+			counts[i], err = s.appendSession(ctx, batch, sess, fingerprints[sess.ID])
+			if err != nil {
+				return fmt.Errorf("appending duckdb session %s: %w", sess.ID, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pushing duckdb batch of %d sessions starting with %s: %w", len(sessions), sessions[0].ID, err)
+	}
+	for _, sess := range sessions {
+		if err := s.replacePlanUsage(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
+		if err := s.replaceCommitLinks(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
+		if err := s.replaceSecretFindings(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
+		if err := s.replacePinnedMessages(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit duckdb session batch: %w", err)
 	}
-	return messagesBySession, nil
+	return counts, nil
 }
 
-func (s *Sync) pushSingleSession(
-	ctx context.Context, sess db.Session, fingerprint string,
-) (int, error) {
-	tx, err := s.duck.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin duckdb session tx %s: %w", sess.ID, err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	messages, err := s.pushSession(ctx, tx, sess, fingerprint)
+func (s *Sync) pushSingleSession(ctx context.Context, sess db.Session, fingerprint string) (int, error) {
+	counts, err := s.tryPushSessionBatch(ctx, []db.Session{sess}, map[string]string{sess.ID: fingerprint})
 	if err != nil {
 		return 0, err
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit duckdb session %s: %w", sess.ID, err)
-	}
-	return messages, nil
+	return counts[0], nil
 }
 
 func countPushSessions(sessions []db.Session) storage.MirrorSessionCounts {

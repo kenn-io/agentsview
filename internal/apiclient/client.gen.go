@@ -22936,6 +22936,9 @@ type GetAPIV1SearchContentQuery struct {
 	// Mode Search mode
 	Mode *GetAPIV1SearchContentQueryMode `json:"mode,omitempty"`
 
+	// AllowKeywordFallback Return hybrid keyword matches when semantic search is unavailable
+	AllowKeywordFallback *bool `json:"allow_keyword_fallback,omitempty"`
+
 	// Scope Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)
 	Scope *GetAPIV1SearchContentQueryScope `json:"scope,omitempty"`
 
