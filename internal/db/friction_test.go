@@ -513,7 +513,7 @@ func TestStaleFrictionSessions(t *testing.T) {
 	require.NoError(t, d.replaceSessionFriction(ctx, "b", nil,
 		friction.RulesVersion, FrictionHash(nil, friction.RulesVersion)))
 	require.NoError(t, d.replaceSessionFriction(ctx, "c", nil,
-		"friction-v0", FrictionHash(nil, "friction-v0")))
+		"friction-v1", FrictionHash(nil, "friction-v1")))
 	insertSession(t, d, "skipped", "proj")
 	skipped := SkippedFriction()
 	require.NoError(t, d.replaceSessionFriction(ctx, "skipped", nil,

@@ -293,7 +293,9 @@ The latest release is
   detection no longer links failing calls by tool name alone. These archives
   drop tool inputs, so AgentsView cannot see repeated identical calls in them
   and now counts none. Health scores rise to match. AgentsView recomputes
-  signals for existing sessions in the background after the upgrade.
+  signals and Friction Log findings for existing sessions in the background
+  after the upgrade, which removes retry-loop and runaway-loop findings built
+  on name matches alone.
 - Roborev test-value reviews, look-ahead reviews, fix plans, rebase fixes, and
   non-PR review summaries are now hidden as automated sessions, like other
   roborev runs. The session list and analytics stopped counting them as your
