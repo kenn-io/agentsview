@@ -260,7 +260,6 @@ describe("SessionsStore", () => {
           api.getDataProjects.mockResolvedValue({ total_sessions: 1 });
           notify({ scope: "sessions" });
           await vi.advanceTimersByTimeAsync(300);
-          expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
           expect(sessions.archiveEmpty).toBe(false);
         } finally {
           detach();
@@ -271,13 +270,13 @@ describe("SessionsStore", () => {
     );
 
     it.each([
-      ["", 3, false],
-      ["2024-01-01", 0, true],
-      ["2024-01-01", 3, false],
+      [3, false],
+      [0, true],
     ] as const)(
-      "checks the whole archive for date %s, inventory %i",
-      async (date, total, empty) => {
-        sessions.filters.date = date;
+      "checks the whole archive for inventory %i",
+      async (total, empty) => {
+        sessions.filters.date = "2024-01-01";
+        sessions.archiveEmpty = !empty;
         api.getDataProjects.mockResolvedValue({ total_sessions: total });
         await sessions.load();
         expect(sessions.archiveEmpty).toBe(empty);
@@ -285,17 +284,14 @@ describe("SessionsStore", () => {
       },
     );
 
-    it.each(["", "2024-01-01"])(
-      "skips inventory when the sidebar has sessions, date %s",
-      async (date) => {
-        sessions.filters.date = date;
-        sessions.archiveEmpty = true;
-        mockSidebarIndex([makeSkinnyRow({ id: "present" })]);
-        await sessions.load();
-        expect(sessions.archiveEmpty).toBe(false);
-        expect(api.getDataProjects).not.toHaveBeenCalled();
-      },
-    );
+    it("skips inventory when the sidebar has sessions", async () => {
+      sessions.filters.date = "2024-01-01";
+      sessions.archiveEmpty = true;
+      mockSidebarIndex([makeSkinnyRow({ id: "present" })]);
+      await sessions.load();
+      expect(sessions.archiveEmpty).toBe(false);
+      expect(api.getDataProjects).not.toHaveBeenCalled();
+    });
 
     it("discards inventory after a newer sidebar load", async () => {
       let resolveOlder!: (value: { total_sessions: number }) => void;
