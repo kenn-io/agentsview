@@ -179,15 +179,13 @@ func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupSta
 		}
 		return status, nil
 	}
-	inspected, err := inspectLocalEmbeddings(ctx, embedlocal.Options{SkipOllama: deployment.Local || deployment.Endpoint != ""})
+	inspected, err := inspectLocalEmbeddings(ctx, embedlocal.Options{SkipOllama: deployment.Local})
 	if err != nil {
 		return status, err
 	}
 	status.MissingBytes = max(status.MissingBytes, inspected.DownloadBytes)
 	if inspected.OllamaAvailable {
 		status.Provider = "ollama"
-	} else if inspected.DownloadBytes > 0 && status.Action == "" && status.Provider != "ollama" {
-		status.Action = "turn-on"
 	}
 	status.Installing = inspected.Installing && status.Provider != "ollama"
 	return status, nil

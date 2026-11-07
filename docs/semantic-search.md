@@ -34,7 +34,8 @@ enabled = true
 Restart the daemon, then run `agentsview index embeddings build`. AgentsView
 uses a running Ollama server with Nomic or Kit's shared local server. If the
 local server needs files, the CLI asks before downloading them. Search and
-automatic builds reuse installed files; approve a first download in Settings or through the CLI. Declining stops the download and build.
+automatic builds reuse installed files; they direct you to the CLI when a
+download needs approval. Declining stops the download and build.
 
 The default recipe is `nomic-embed-text`, 768 dimensions, 4,000 input
 characters, 2,048 context tokens, `search_query: ` for queries, and
@@ -934,7 +935,7 @@ size in `setup.missing_bytes`. Retry must disclose and approve that amount.
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |
 | `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                                              | CLI: `--scope requires --semantic or --hybrid`; HTTP and MCP accept scope with substring, regex, terms, semantic, and hybrid                                                        |
-| An unattended search or build needs a first local download                                                                      | `local embeddings: approve the download in Settings > Embeddings or run agentsview index embeddings build`; the local daemon supports either setup path. |
+| An unattended search or build needs a first local download                                                                      | `local embeddings: run agentsview index embeddings build to approve the first download`; run `agentsview index embeddings build` in the CLI and approve the download. |
 | Embeddings endpoint unreachable or timed out                                                                                    | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                                   |
 | Embeddings endpoint returned non-200                                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                           |
 | Embeddings endpoint returned a non-finite or zero-norm vector                                                                   | `[vector.embeddings] invalid embedding at index <n>: ...`; correct the endpoint/cache configuration, then run `agentsview index embeddings build --repair-invalid`    |

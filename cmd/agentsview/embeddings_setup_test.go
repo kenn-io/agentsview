@@ -34,7 +34,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 		onBattery = oldOnBattery
 	})
-	for _, recipe := range []string{"fresh", "enabled-missing", "automatic", "nomic", "changed-provider"} {
+	for _, recipe := range []string{"fresh", "automatic", "nomic", "changed-provider"} {
 		t.Run(recipe, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			dir := testDataDir(t)
@@ -76,7 +76,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			}
 			cfg.DataDir, cfg.DBPath = dir, filepath.Join(dir, "sessions.db")
 			raw := map[string]string{
-				"enabled-missing":  "[vector]\nenabled = true\n",
 				"changed-provider": "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\n",
 				"nomic":            "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\nmodel_context_tokens = 512\nquery_prefix = 'q: '\ndocument_prefix = 'd: '\ninput_suffix = '!'\nrequest_dimensions = true\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\nmax_batch_tokens = 512\n",
 			}[recipe]
@@ -147,10 +146,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/embeddings/status", "", 200), &result))
 				return result
 			}
-			originalManager := owner.Manager("")
 			initial := status()
 			require.NotNil(t, initial.Setup)
-			assert.Equal(t, recipe == "enabled-missing", initial.Setup.Enabled)
+			assert.False(t, initial.Setup.Enabled)
 			assert.Equal(t, "turn-on", initial.Setup.Action)
 			provider := "built-in"
 			switch recipe {
@@ -166,12 +164,8 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if initial.Setup.Provider == "built-in" {
 				shown = initial.Setup.MissingBytes
 			}
-			switch recipe {
-			case "changed-provider":
+			if recipe == "changed-provider" {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
-			case "enabled-missing":
-				// A running manager keeps its recipe even if the file changes.
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'other-model'\ndimension = 3\n[vector.embeddings.servers.local]\nendpoint = 'http://127.0.0.1:1/v1'\n"), 0o600))
 			}
 			request("POST", "/api/v1/embeddings/setup", fmt.Sprintf(`{"approved_bytes":%d}`, shown), 202)
 			if recipe == "changed-provider" {
@@ -203,16 +197,11 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				return result
 			}
 			awaitBuild()
-			if recipe == "enabled-missing" {
-				assert.Same(t, originalManager, owner.Manager(""))
-				assert.Zero(t, reloads.Load())
-			} else {
-				assert.EqualValues(t, 1, reloads.Load())
-			}
+			assert.EqualValues(t, 1, reloads.Load())
 			if recipe == "nomic" {
 				assert.Empty(t, status().Setup.Action)
 			}
-			assert.Equal(t, (recipe == "fresh" || recipe == "enabled-missing"), installs.Load() > 0)
+			assert.Equal(t, recipe == "fresh", installs.Load() > 0)
 			if recipe == "fresh" {
 				var result db.ContentSearchPage
 				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", 200), &result))
@@ -315,7 +304,7 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 }
 
 func TestLiveEmbeddingsSetupFailureRecovery(t *testing.T) {
-	for _, recovery := range []string{"installed files", "retry"} {
+	for _, recovery := range []string{"already running", "retry"} {
 		t.Run(recovery, func(t *testing.T) {
 			oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 			t.Cleanup(func() {
@@ -324,17 +313,13 @@ func TestLiveEmbeddingsSetupFailureRecovery(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			t.Setenv("USERPROFILE", t.TempDir())
 			dir := testDataDir(t)
-			if recovery == "installed files" {
+			if recovery == "already running" {
 				writeTestConfig(t, dir, "[vector]\nenabled=true\n")
 			}
 			cfg, err := config.LoadReadOnly()
 			require.NoError(t, err)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-			var installed atomic.Bool
 			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-				if installed.Load() {
-					return embedlocal.Status{}, nil
-				}
 				return embedlocal.Status{DownloadBytes: 1000}, nil
 			}
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
@@ -352,27 +337,25 @@ func TestLiveEmbeddingsSetupFailureRecovery(t *testing.T) {
 			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, owner.Close()) }()
+			if recovery == "already running" {
+				require.NotNil(t, owner.Manager(""))
+				require.ErrorIs(t, owner.Setup(0), vector.ErrInvalidBuildRequest)
+				assert.Zero(t, calls.Load(), "a running setup cannot install another provider")
+				return
+			}
 			require.NoError(t, owner.Setup(0))
 			<-owner.done
 			status, err := owner.SetupStatus(t.Context())
 			require.NoError(t, err)
 			require.Equal(t, "download interrupted", status.Error)
-			if recovery == "installed files" {
-				installed.Store(true)
-				status, err = owner.SetupStatus(t.Context())
-				require.NoError(t, err)
-				assert.Empty(t, status.Action)
-				assert.Empty(t, status.Error)
-			} else {
-				require.NoError(t, owner.Setup(0))
-				<-started
-				require.ErrorIs(t, owner.Setup(0), vector.ErrBuildRunning)
-				assert.EqualValues(t, 2, calls.Load())
-				status, err = owner.SetupStatus(t.Context())
-				require.NoError(t, err)
-				assert.True(t, status.Busy)
-				assert.EqualValues(t, 100, status.DownloadedBytes)
-			}
+			require.NoError(t, owner.Setup(0))
+			<-started
+			require.ErrorIs(t, owner.Setup(0), vector.ErrBuildRunning)
+			assert.EqualValues(t, 2, calls.Load())
+			status, err = owner.SetupStatus(t.Context())
+			require.NoError(t, err)
+			assert.True(t, status.Busy)
+			assert.EqualValues(t, 100, status.DownloadedBytes)
 		})
 	}
 }
@@ -470,6 +453,7 @@ func TestEmbeddingsSetupStatusIdentifiesProviders(t *testing.T) {
 			status, err := embeddingsSetupStatus(t.Context(), server.EmbeddingsSetupStatus{}, cfg)
 			require.NoError(t, err)
 			if provider == "built-in" {
+				assert.Empty(t, status.Action)
 				assert.Equal(t, int64(295000000), status.MissingBytes, "built-in status discloses the shared download size")
 				assert.Equal(t, "built-in", status.Provider)
 				assert.True(t, status.Installing)

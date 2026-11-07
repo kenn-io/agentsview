@@ -42,7 +42,7 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	installation, err := installLocalEmbeddings(ctx, installOpts)
 	if err != nil {
 		if errors.Is(err, errLocalApprovalRequired) {
-			return "", errors.New("local embeddings: approve the download in Settings > Embeddings or run agentsview index embeddings build")
+			return "", errors.New("local embeddings: run agentsview index embeddings build to approve the first download")
 		}
 		return "", err
 	}
