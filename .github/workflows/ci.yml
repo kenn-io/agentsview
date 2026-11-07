@@ -370,7 +370,7 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
-          owner: ${{ matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other') }}
+          owner: &test-cache-owner ${{ matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other') }}
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
 
@@ -545,7 +545,7 @@ jobs:
           done
 
       - name: Save Go caches
-        if: matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other')
+        if: *test-cache-owner
         uses: $/.github/actions/go-cache-save
 
       # Save the test group before the linter restore replaces GO_CACHE_*.
@@ -921,7 +921,7 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: race-linux
-          owner: ${{ matrix.testSet == 'other' }}
+          owner: &race-cache-owner ${{ matrix.testSet == 'other' }}
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
 
@@ -973,7 +973,7 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Save Go caches
-        if: matrix.testSet == 'other'
+        if: *race-cache-owner
         uses: $/.github/actions/go-cache-save
 
   # Owns Windows Rust test coverage for PR and main-push desktop artifacts.

@@ -76,7 +76,7 @@ runs:
           fi
           proxy="file://$previous/cache/download"
           if [ "$RUNNER_OS" = 'Windows' ]; then proxy="file:///$(cygpath -m "$previous/cache/download")"; fi
-          echo "GOPROXY=$proxy,${GOPROXY:-https://proxy.golang.org,direct}" >> "$GITHUB_ENV"
+          echo "GOPROXY=$proxy|${GOPROXY:-https://proxy.golang.org,direct}" >> "$GITHUB_ENV"
         fi
         # Go refreshes cache mtimes at most once an hour, so force used entries to refresh.
         if [ "$RUNNER_OS" = 'macOS' ]; then
