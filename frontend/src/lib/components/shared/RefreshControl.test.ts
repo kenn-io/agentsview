@@ -38,6 +38,11 @@ describe("RefreshControl", () => {
       expect(onRefresh).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(300_000);
       expect(onRefresh).toHaveBeenCalledTimes(2);
+      expect(onRefresh).toHaveBeenNthCalledWith(1, "auto");
+      expect(onRefresh).toHaveBeenNthCalledWith(2, "auto");
+      document.body.querySelector<HTMLButtonElement>("button")!.click();
+      await tick();
+      expect(onRefresh).toHaveBeenNthCalledWith(3, "manual");
 
       hidden.mockReturnValue(true);
       document.dispatchEvent(new Event("visibilitychange"));
@@ -51,7 +56,7 @@ describe("RefreshControl", () => {
       vi.useRealTimers();
       document.body.innerHTML = "";
     }
-    expect(onRefresh).toHaveBeenCalledTimes(2);
+    expect(onRefresh).toHaveBeenCalledTimes(3);
   });
 
   it("localizes the never-updated label through the app formatter", async () => {
