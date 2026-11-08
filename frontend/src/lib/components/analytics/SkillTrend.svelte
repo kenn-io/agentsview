@@ -265,7 +265,7 @@
   <div class="trend-header">
     <h3 class="chart-title">{m.analytics_skill_trend_title()}</h3>
     <GranularityPicker
-      value={analytics.skillsGranularity}
+      value={analytics.requestedSkillsGranularity}
       onChange={(g) => analytics.setSkillsGranularity(g)}
       disabled={analytics.querying.skills}
     />

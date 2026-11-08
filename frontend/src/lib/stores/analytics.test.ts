@@ -100,7 +100,6 @@ function resetStore() {
   analytics.isPinned = false;
   analytics.windowDays = 365;
   analytics.skillsGranularity = "week";
-  analytics.requestedSkillsGranularity = "week";
   // Clear cached data fields so each test starts from a clean
   // "no data" state. Prior tests leave the singleton populated,
   // which breaks assertions like `loading === true during fetch`
@@ -149,7 +148,9 @@ function resetStore() {
 // await inside fetchSummary/etc.), so no async flushing is
 // needed for call-count or call-param assertions.
 
-beforeEach(() => {
+beforeEach(async () => {
+  mockAllAPIs();
+  await analytics.setSkillsGranularity("week");
   resetStore();
   vi.clearAllMocks();
   mockAllAPIs();
@@ -1430,6 +1431,40 @@ describe("AnalyticsStore panel scopes", () => {
     });
     releaseActivity(makeActivity());
     await activity;
+  });
+
+  it("keeps hour drilldown context through pending reads and failures", async () => {
+    await analytics.fetchAll();
+    const activity = analytics.activity;
+    const heatmap = analytics.heatmap;
+    let rejectActivity!: (error: Error) => void;
+    let rejectHeatmap!: (error: Error) => void;
+    analyticsService.getApiV1AnalyticsActivity.mockReturnValueOnce(
+      new Promise((_, reject) => {
+        rejectActivity = reject;
+      }),
+    );
+    analyticsService.getApiV1AnalyticsHeatmap.mockReturnValueOnce(
+      new Promise((_, reject) => {
+        rejectHeatmap = reject;
+      }),
+    );
+    analytics.selectHourOfWeek(1, 9);
+    expect(analytics.activity).toBe(activity);
+    expect(analytics.heatmap).toBe(heatmap);
+    for (const read of [
+      analyticsService.getApiV1AnalyticsActivity,
+      analyticsService.getApiV1AnalyticsHeatmap,
+    ]) {
+      expect(read.mock.lastCall?.[0]).toMatchObject({ dow: 1, hour: 9 });
+    }
+    rejectActivity(new Error("activity refresh failed"));
+    rejectHeatmap(new Error("heatmap refresh failed"));
+    await vi.waitFor(() => expect(analytics.querying.heatmap).toBe(false));
+    expect(analytics.activity).toBe(activity);
+    expect(analytics.heatmap).toBe(heatmap);
+    expect(analytics.errors.activity).toBe("activity refresh failed");
+    expect(analytics.errors.heatmap).toBe("heatmap refresh failed");
   });
 
   it("keeps recently-active values during clock-based refreshes and clears them when the filter changes", async () => {

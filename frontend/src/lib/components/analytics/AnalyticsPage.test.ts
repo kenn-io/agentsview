@@ -31,12 +31,6 @@ import {
 import { requestUrl } from "../../test-support/request-url.js";
 import { AnalyticsService, MetadataService } from "../../api/generated/index.js";
 
-class IdleResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
 async function flushEffects() {
   await tick();
   await Promise.resolve();
@@ -565,7 +559,6 @@ describe("AnalyticsPage panel failures", () => {
   });
 
   function mountPanels() {
-    vi.stubGlobal("ResizeObserver", IdleResizeObserver);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(outcomeTotals, "load").mockResolvedValue();
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
@@ -753,8 +746,32 @@ describe("AnalyticsPage panel failures", () => {
     },
   );
 
+  it("keeps Week selected after replacing a failed Month request and refreshing", async () => {
+    const skills = vi
+      .spyOn(AnalyticsService, "getApiV1AnalyticsSkills")
+      .mockResolvedValueOnce(makeSkills())
+      .mockRejectedValueOnce(new Error("Month failed"))
+      .mockResolvedValue(makeSkills());
+    mountPanels();
+    await flushEffects();
+    await analytics.fetchSkills("week");
+    await flushEffects();
+    const grouping = (name: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>(".trend-header button")].find(
+        (button) => button.textContent?.trim() === name,
+      )!;
+    grouping("Month").click();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".trend-container")!.textContent).toContain("Month failed"),
+    );
+    grouping("Week").click();
+    await vi.waitFor(() => expect(skills.mock.lastCall?.[0]?.granularity).toBe("week"));
+    await analytics.fetchSkills();
+    expect(skills.mock.lastCall?.[0]?.granularity).toBe("week");
+    expect(grouping("Week").classList).toContain("active");
+  });
+
   it("shows failed panels with Retry beside usable siblings", async () => {
-    vi.stubGlobal("ResizeObserver", IdleResizeObserver);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(outcomeTotals, "load").mockResolvedValue();
     const service = AnalyticsService as unknown as Record<string, unknown>;

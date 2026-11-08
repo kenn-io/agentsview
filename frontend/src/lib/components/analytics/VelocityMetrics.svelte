@@ -145,8 +145,6 @@
     {:else}
       <div class="empty">{m.analytics_velocity_no_breakdown()}</div>
     {/if}
-  {:else if analytics.velocity}
-    <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else if !analytics.errors.velocity}
     <div class="empty">{m.analytics_loading()}</div>
   {/if}

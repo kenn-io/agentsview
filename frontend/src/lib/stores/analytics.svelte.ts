@@ -71,7 +71,8 @@ class AnalyticsStore {
   windowDays: number = $state(ANALYTICS_DEFAULT_WINDOW_DAYS);
   granularity: Granularity = $state("day");
   skillsGranularity: Granularity = $state("week");
-  requestedSkillsGranularity: Granularity = "week";
+  private skillsRequestGranularity: Granularity = $state("week");
+
   metric: HeatmapMetric = $state("messages");
   selectedDate: string | null = $state(null);
   selectedActivityRange: { from: string; to: string } | null = $state(null);
@@ -182,6 +183,10 @@ class AnalyticsStore {
   private scopes: Partial<Record<Panel, string>> = {};
   private abortControllers: Partial<Record<Panel, AbortController>> = {};
   private fetchStartHandler: (() => void) | undefined;
+
+  get requestedSkillsGranularity(): Granularity {
+    return this.skillsRequestGranularity;
+  }
 
   get timezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -642,7 +647,7 @@ class AnalyticsStore {
     const params = { ...this.baseParams(), granularity: this.granularity };
     return await this.executeFetch(
       "activity",
-      params,
+      { ...params, dow: undefined, hour: undefined },
       (options) => AnalyticsService.getApiV1AnalyticsActivity(params, options),
       (data) => {
         this.activity = data;
@@ -655,7 +660,7 @@ class AnalyticsStore {
     const params = { ...this.baseParams(), metric: this.metric };
     return await this.executeFetch(
       "heatmap",
-      params,
+      { ...params, dow: undefined, hour: undefined },
       (options) => AnalyticsService.getApiV1AnalyticsHeatmap(params, options),
       (data) => {
         this.heatmap = data;
@@ -741,7 +746,7 @@ class AnalyticsStore {
   }
 
   async fetchSkills(granularity: Granularity = this.requestedSkillsGranularity): Promise<FetchResult> {
-    this.requestedSkillsGranularity = granularity;
+    this.skillsRequestGranularity = granularity;
     const scopeParams = this.filterParams();
     const params = { ...scopeParams, granularity };
     return await this.executeFetch(
