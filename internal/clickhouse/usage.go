@@ -576,7 +576,7 @@ type chUsageSource struct {
 // chPreparedUsageCTE is chUsageCTE over prepared usage rows.
 func chPreparedUsageCTE(state preparedUsageState, f db.UsageFilter, sessionID string) (string, []any) {
 	rawSQL, args := chPreparedUsageRawSQL(state, f, sessionID)
-	return chUsageCTEFromRawSource(f, rawSQL, args, true, chPreparedUsageNormSource())
+	return chUsageCTEFromRawSource(f, rawSQL, args, true, chPreparedUsageNormSource(), sessionID)
 }
 
 // chPreparedDailyUsageCTE is chDailyUsageCTE over prepared usage rows.
@@ -589,7 +589,7 @@ func chPreparedDailyUsageCTE(state preparedUsageState, f db.UsageFilter, include
 			"\n\t\tFROM (" + cursorRowsSQL + ") c"
 		sessionArgs = append(sessionArgs, cursorArgs...)
 	}
-	cte, args := chUsageCTEFromRawSource(f, sessionRowsSQL, sessionArgs, true, chPreparedUsageNormSource())
+	cte, args := chUsageCTEFromRawSource(f, sessionRowsSQL, sessionArgs, true, chPreparedUsageNormSource(), "")
 	return cte, args, ok
 }
 
@@ -622,7 +622,7 @@ func (s *Store) dailyUsageCTE(ctx context.Context, state preparedUsageState, f d
 func chUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
 	rawSQL, args := chUsageRawSQL(
 		chUsageSnapshotInputFilter(f), sessionID)
-	return chUsageCTEFromRaw(f, rawSQL, args, true)
+	return chUsageCTEFromRawSource(f, rawSQL, args, true, chUsageRawNormSource(), sessionID)
 }
 
 func chDailyUsageCTE(f db.UsageFilter) (string, []any) {
@@ -729,12 +729,15 @@ func chUsageCTEFromRaw(
 	f db.UsageFilter, rawSQL string, args []any,
 	preferCompleteClaudeSnapshots bool,
 ) (string, []any) {
-	return chUsageCTEFromRawSource(f, rawSQL, args, preferCompleteClaudeSnapshots, chUsageRawNormSource())
+	return chUsageCTEFromRawSource(f, rawSQL, args, preferCompleteClaudeSnapshots, chUsageRawNormSource(), "")
 }
 
+// chUsageCTEFromRawSource renders the usage CTEs over rawSQL. sessionID names
+// the one session rawSQL is restricted to, or is empty for a read of many
+// sessions.
 func chUsageCTEFromRawSource(
 	f db.UsageFilter, rawSQL string, args []any,
-	preferCompleteClaudeSnapshots bool, norms chUsageNormSource,
+	preferCompleteClaudeSnapshots bool, norms chUsageNormSource, sessionID string,
 ) (string, []any) {
 	localDateSQL, localDateArg := chUsageLocalDateSQL(f)
 	priceModelSQL := norms.priceModel
@@ -754,9 +757,18 @@ func chUsageCTEFromRawSource(
 	}
 	snapshotCTE := ""
 	rankedSource := "usage_normalized"
-	var snapshotFilterArgs []any
+	var snapshotArgs []any
 	if preferCompleteClaudeSnapshots {
+		// Attribution moves a row only to a session that has a row in the
+		// read, so a one-session read joins just that session. Otherwise the
+		// join reads every session.
+		attributedSessions := "sessions"
+		if sessionID != "" {
+			attributedSessions = "(SELECT * FROM sessions WHERE id = ?)"
+			snapshotArgs = append(snapshotArgs, sessionID)
+		}
 		snapshotFilter := "1"
+		var snapshotFilterArgs []any
 		snapshotFilter, snapshotFilterArgs = appendChUsageSourceFilterClauses(
 			snapshotFilter, snapshotFilterArgs, "survivor.model", f)
 		snapshotFilter, snapshotFilterArgs = appendChUsageSessionFilterClauses(
@@ -851,17 +863,24 @@ func chUsageCTEFromRawSource(
 					attributed.created_at
 				)) AS activity_at
 			FROM usage_snapshot_ranked ranked
-			LEFT JOIN sessions attributed
+			LEFT JOIN ` + attributedSessions + ` attributed
 				ON attributed.id = ranked.snapshot_attribution_session_id
 			WHERE ranked.snapshot_rank = 1
-		),
+		)`
+		rankedSource = "usage_snapshot_survivors"
+		// Without session or model filters, every survivor is kept and the
+		// filter join would only read every session.
+		if snapshotFilter != "1" {
+			snapshotCTE += `,
 		usage_snapshot_filtered AS (
 			SELECT survivor.*
 			FROM usage_snapshot_survivors survivor
 			LEFT JOIN sessions s ON s.id = survivor.session_id
 			WHERE survivor.session_id = '' OR (` + snapshotFilter + `)
 		)`
-		rankedSource = "usage_snapshot_filtered"
+			rankedSource = "usage_snapshot_filtered"
+			snapshotArgs = append(snapshotArgs, snapshotFilterArgs...)
+		}
 	}
 	maxTok := db.MaxPlausibleTokens
 	query := fmt.Sprintf(`
@@ -922,7 +941,7 @@ func chUsageCTEFromRawSource(
 	)
 	args = append(args, localDateArg)
 	args = append(args, dateArgs...)
-	args = append(args, snapshotFilterArgs...)
+	args = append(args, snapshotArgs...)
 	return query, args
 }
 
@@ -967,7 +986,20 @@ type chUsageAggregateRow struct {
 	authoritativeCostRows int
 	snapshotDedupOutput   int
 	groupKey, sessionName string
+	// breakdownEntry reports that the row is one of the session's usage
+	// breakdown entries; see chSessionUsageBreakdownEntrySQL.
+	breakdownEntry bool
 }
+
+// chSessionUsageBreakdownEntrySQL selects the usage_localized rows that a
+// session's usage breakdown lists: rows with a reported cost or a token count.
+const chSessionUsageBreakdownEntrySQL = `(cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported')
+			OR input_tokens_norm != 0
+			OR output_tokens_norm != 0
+			OR cache_create_norm != 0
+			OR cache_read_norm != 0
+			OR reasoning_tokens_norm != 0
+			OR web_search_requests_norm != 0`
 
 type chSessionUsageRow struct {
 	sessionID         string
@@ -1961,7 +1993,8 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			snapshot_deduplicated_output_tokens,
 			cache_create_norm AS cache_creation_tokens,
 			cache_create_1h_norm AS cache_creation_1h_tokens,
-			cache_read_norm AS cache_read_tokens,` + chUsageBillableSelect + `
+			cache_read_norm AS cache_read_tokens,` + chUsageBillableSelect + `,
+			toBool(` + chSessionUsageBreakdownEntrySQL + `) AS breakdown_entry
 		FROM usage_localized
 		-- Visit rows in time order so the last Copilot-reported total is the session cost.
 		ORDER BY session_id ASC, ts ASC, COALESCE(message_ordinal, -1) ASC,
@@ -1990,6 +2023,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			&r.billableWebSearch,
 			&r.explicitCost, &r.reportedCostRows,
 			&r.authoritativeCost, &r.authoritativeCostRows,
+			&r.breakdownEntry,
 		); err != nil {
 			return fmt.Errorf("scanning clickhouse session usage aggregate: %w", err)
 		}
@@ -2006,29 +2040,6 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	}
 	s.sessionAggregateRows.Put(memoSlot, memoVersion, memo)
 	return nil
-}
-
-func (s *Store) sessionUsageRowCount(
-	ctx context.Context, sessionID string,
-) (int, error) {
-	cte, args := chUsageCTE(db.UsageFilter{}, sessionID)
-	query := cte + `
-		SELECT toInt64(COUNT(*))
-		FROM usage_localized
-		WHERE (cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported')
-			OR input_tokens_norm != 0
-			OR output_tokens_norm != 0
-			OR cache_create_norm != 0
-			OR cache_read_norm != 0
-			OR reasoning_tokens_norm != 0
-			OR web_search_requests_norm != 0`
-	var count int
-	if err := s.queryRowContext(ctx, query, args...).
-		Scan(&count); err != nil {
-		return 0, fmt.Errorf(
-			"counting clickhouse session usage rows: %w", err)
-	}
-	return count, nil
 }
 
 func (s *Store) sessionUsageRows(
@@ -2601,15 +2612,15 @@ func (s *Store) GetSessionUsage(
 		return nil, err
 	}
 	var breakdownRows []chSessionUsageRow
-	breakdownCount := 0
 	if includeBreakdown {
 		breakdownRows, err = s.sessionUsageRows(ctx, sessionID)
-	} else {
-		breakdownCount, err = s.sessionUsageRowCount(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
 	}
-	if err != nil {
-		return nil, err
-	}
+	// Without the breakdown, its length is counted from the aggregate rows,
+	// which read the same usage_localized rows.
+	breakdownCount := 0
 	models := map[string]bool{}
 	unpriced := map[string]bool{}
 	var totalCost money.Money
@@ -2621,6 +2632,9 @@ func (s *Store) GetSessionUsage(
 		ctx, db.UsageFilter{}, sessionID,
 		func(r chUsageAggregateRow) error {
 			deduplicatedOutputTokens += r.snapshotDedupOutput
+			if r.breakdownEntry {
+				breakdownCount++
+			}
 			if r.authoritativeCostRows > 0 {
 				v := money.Money{Microdollars: r.authoritativeCost}
 				authoritativeCost = &v
