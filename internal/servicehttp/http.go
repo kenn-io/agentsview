@@ -731,6 +731,7 @@ func (b *httpBackend) Stats(
 	q.IncludeAutomated = new(includeAutomated)
 	q.IncludeProject = append(q.IncludeProject, f.IncludeProjects...)
 	q.ExcludeProject = append(q.ExcludeProject, f.ExcludeProjects...)
+	q.OutcomesOnly = new(f.OutcomesOnly)
 	q.IncludeGitOutcomes = new(f.IncludeGitOutcomes)
 	q.IncludeGithubOutcomes = new(f.IncludeGitHubOutcomes)
 

@@ -2837,7 +2837,12 @@ func TestGetSessionStats_OutcomesOnly(t *testing.T) {
 		fixture.startedAt = hoursAgo(1)
 		insertSessionFixture(t, d, fixture)
 	}
-	filter := StatsFilter{Since: "28d", ApplyDefaultVisibility: true, IncludeGitOutcomes: true}
+	now := time.Now().UTC()
+	filter := StatsFilter{
+		Since:                  now.AddDate(0, 0, -28).Format(time.RFC3339),
+		Until:                  now.AddDate(0, 0, 1).Format(time.RFC3339),
+		ApplyDefaultVisibility: true, IncludeGitOutcomes: true,
+	}
 	full, err := d.GetSessionStats(t.Context(), filter)
 	require.NoError(t, err)
 	require.NotNil(t, full.OutcomeStats)
