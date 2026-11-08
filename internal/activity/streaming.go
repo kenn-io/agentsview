@@ -616,3 +616,38 @@ func secondPrecisionWindows(windows []BucketWindow) []BucketWindow {
 	}
 	return normalized
 }
+
+// TranscriptMessage is one parseable message of a session. Starts marks a
+// message inside the pairing window, which may start a pair.
+type TranscriptMessage struct {
+	Ordinal     int
+	At          time.Time
+	Role, Model string
+	Starts      bool
+}
+
+// AppendTranscriptPairs pairs each window message of one session with
+// the next parseable one. The prior model is the latest assistant model whose
+// message is later than the message before it, up to and including the start.
+// Times compare at microseconds, as the reports order them.
+func AppendTranscriptPairs(
+	out []IntervalCandidate, sessionID string, ms []TranscriptMessage,
+) []IntervalCandidate {
+	prior := "unknown"
+	for i, m := range ms {
+		if i > 0 && m.Role == "assistant" && m.Model != "" &&
+			m.At.UnixMicro() > ms[i-1].At.UnixMicro() {
+			prior = m.Model
+		}
+		if !m.Starts || i+1 == len(ms) {
+			continue
+		}
+		next := ms[i+1]
+		out = append(out, IntervalCandidate{
+			SessionID: sessionID, StartOrdinal: m.Ordinal, EndOrdinal: next.Ordinal,
+			Start: m.At, End: next.At, ClosingRole: next.Role,
+			ClosingModel: next.Model, PriorModel: prior,
+		})
+	}
+	return out
+}
