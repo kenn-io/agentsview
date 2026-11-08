@@ -852,12 +852,15 @@ func (s *Sync) pushSessionBatch(
 	}
 	for batchIDs := range idBatches(ids) {
 		placeholders, args := inArgs(batchIDs)
+		args = slices.Concat(args, []any{version}, args, []any{version})
 		// The usage_messages view never sees deletes, so a shorter republished
 		// session would leave its removed ordinals behind at the old version.
 		for _, table := range slices.Concat(dependentTables, []string{"usage_messages"}) {
-			if _, err := s.conn.ExecContext(ctx,
-				"DELETE FROM "+table+" WHERE session_id IN ("+placeholders+") AND push_version < ?",
-				append(args, version)...); err != nil {
+			query, err := vanishedRowsDeleteSQL(table, placeholders)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := s.conn.ExecContext(ctx, query, args...); err != nil {
 				return nil, fmt.Errorf("deleting older clickhouse %s rows: %w", table, err)
 			}
 		}
@@ -874,6 +877,33 @@ func (s *Sync) pushSessionBatch(
 		return nil, err
 	}
 	return counts, nil
+}
+
+// vanishedRowsDeleteSQL returns the DELETE that removes the rows an older push
+// wrote to table for the sessions in placeholders under keys this push did not
+// write. It takes the session IDs and the push version twice, in that order.
+//
+// A key this push rewrote keeps its older row until ReplacingMergeTree
+// collapses it, which every final=1 read already does. Deleting those rows too
+// would write a patch row for each one: a re-pushed session would write one
+// for every row it has, and every later read of the table pays to apply patch
+// rows until merges fold them in. The subquery reads without FINAL because
+// any row at or above the version marks its key as current.
+func vanishedRowsDeleteSQL(table, placeholders string) (string, error) {
+	var key []string
+	if table == "usage_messages" {
+		key = usageMessagesOrderBy
+	} else {
+		spec, ok := tableByName(table)
+		if !ok {
+			return "", fmt.Errorf("missing clickhouse table specification for %s", table)
+		}
+		key = spec.orderBy
+	}
+	columns := strings.Join(key, ", ")
+	return "DELETE FROM " + table + " WHERE session_id IN (" + placeholders + ") AND push_version < ?" +
+		" AND (" + columns + ") NOT IN (SELECT " + columns + " FROM " + table +
+		" WHERE session_id IN (" + placeholders + ") AND push_version >= ? SETTINGS final = 0)", nil
 }
 
 func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, version uint64) error {

@@ -40,6 +40,10 @@ var usageColumns = []struct{ name, typ, expression string }{
 const usageMessageFields = `session_id, ordinal, timestamp, model, provider_id,
 	claude_message_id, claude_request_id, source_uuid, push_version`
 
+// usageMessagesOrderBy is the replacement key of usage_messages, the same key
+// as messages, since the view writes one row per message.
+var usageMessagesOrderBy = []string{"session_id", "ordinal"}
+
 func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 	columns := []string{
 		"session_id String", "ordinal Int64", "timestamp Nullable(DateTime64(6, 'UTC'))",
@@ -56,7 +60,7 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 	// the same push version. UInt128 preserves every possible UInt64 version.
 	columns = append(columns, "revision UInt128", "INDEX usage_time timestamp TYPE minmax GRANULARITY 1")
 	if _, err := conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS usage_messages ("+strings.Join(columns, ", ")+`)
-		 ENGINE = ReplacingMergeTree(revision) ORDER BY (session_id, ordinal)
+		 ENGINE = ReplacingMergeTree(revision) ORDER BY (`+strings.Join(usageMessagesOrderBy, ", ")+`)
 		 SETTINGS index_granularity = 64`); err != nil {
 		return fmt.Errorf("creating stored usage messages: %w", err)
 	}
