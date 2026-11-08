@@ -138,6 +138,7 @@ func TestGitTrailerCommits(t *testing.T) {
 		{name: "verbose diff below scissors with automatic comment character", args: []string{"-v"}, staged: true, comment: [2]string{"core.commentChar", "auto"}, abort: true},
 		{name: "scissors-like line with unselected automatic comment character", args: []string{"-m", "; " + scissors}, comment: [2]string{"core.commentChar", "auto"}, want: "; " + scissors + "\n\n" + trailerLine},
 		{name: "scissors-like lines with unselected automatic comment character", args: []string{"-m", "; " + scissors + "\n; explanation"}, comment: [2]string{"core.commentChar", "auto"}, want: "; " + scissors + "\n; explanation\n\n" + trailerLine},
+		{name: "automatic comment character with template comment from another hook", template: true, templateText: "#1 Template subject\n", comment: [2]string{"core.commentChar", "auto"}, prepareSuffix: `printf '; note from another hook\n' >> "$1"`, abort: true, abortContains: "you did not edit the message"},
 		{name: "template signoff changed by another hook", template: true, templateText: "Template subject\n\nSigned-off-by: Template Author <author@example.com>\n", prepareSuffix: rewriteSignoff, want: "Template subject\n\nSigned-off-by: Other <other@example.com>\n" + trailerLine},
 		{name: "scissors-like message line", args: []string{"-m", "foo " + scissors}, want: "foo " + scissors + "\n\n" + trailerLine},
 		{name: "editor", editor: true, want: "from editor"},
@@ -325,6 +326,10 @@ func TestGitHookInstallInstructions(t *testing.T) {
 		name  string
 		setup func(t *testing.T, f *gitTrailerFixture, hooks string)
 		steps int
+		// rejects means the existing hook's own check must still fail commits.
+		rejects bool
+		// editsTemplate means the existing prepare hook rewrites the template.
+		editsTemplate bool
 	}{
 		{name: "custom prepare-commit-msg", steps: 2, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
 			t.Helper()
@@ -333,6 +338,14 @@ func TestGitHookInstallInstructions(t *testing.T) {
 		{name: "custom commit-msg", steps: 2, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
 			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte(custom), 0o755))
+		}},
+		{name: "commit-msg whose last command fails", steps: 2, rejects: true, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			t.Helper()
+			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nprintf 'validation failed\\n' >&2\nfalse\n"), 0o755))
+		}},
+		{name: "prepare-commit-msg that rewrites the template", steps: 2, editsTemplate: true, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			t.Helper()
+			require.NoError(t, os.WriteFile(filepath.Join(hooks, "prepare-commit-msg"), []byte("#!/bin/sh\nif [ \"$2\" = template ]; then printf 'Edited by hook\\n' > \"$1\"; fi\n"), 0o755))
 		}},
 		{name: "custom non-executable prepare-commit-msg", steps: 3, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
 			t.Helper()
@@ -371,10 +384,17 @@ func TestGitHookInstallInstructions(t *testing.T) {
 				case "add":
 					data, err := os.ReadFile(step.path)
 					require.NoError(t, err)
-					require.NoError(t, os.WriteFile(step.path, append(data, step.text+"\n"...), 0o755))
+					first, rest, _ := strings.Cut(string(data), "\n")
+					require.NoError(t, os.WriteFile(step.path, []byte(first+"\n"+step.text+"\n"+rest), 0o755))
 				case "chmod":
 					require.NoError(t, os.Chmod(step.path, 0o755))
 				}
+			}
+			if tt.rejects {
+				out, err = f.run(t, "git", "commit", "--allow-empty", "-m", "integrated hooks")
+				require.Error(t, err, out)
+				assert.Contains(t, out, "validation failed")
+				return
 			}
 			f.git(t, "commit", "--allow-empty", "-m", "integrated hooks")
 			assert.Equal(t, "integrated hooks\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
@@ -383,6 +403,11 @@ func TestGitHookInstallInstructions(t *testing.T) {
 			f.git(t, "config", "commit.template", template)
 			f.setenv("GIT_EDITOR", ":")
 			out, err = f.run(t, "git", "commit", "--allow-empty")
+			if tt.editsTemplate {
+				require.NoError(t, err, out)
+				assert.Equal(t, "Edited by hook\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
+				return
+			}
 			require.Error(t, err, out)
 			assert.Contains(t, out, "you did not edit the message")
 		})
@@ -416,7 +441,9 @@ func hookInstructions(t *testing.T, out string) []hookStep {
 	for i, line := range lines {
 		if path, ok := strings.CutPrefix(line, "add this line to "); ok {
 			require.Greater(t, len(lines), i+1, out)
-			steps = append(steps, hookStep{action: "add", path: strings.TrimSuffix(path, ":"), text: lines[i+1]})
+			path, ok = strings.CutSuffix(path, " right after its first line, before any other commands:")
+			require.True(t, ok, out)
+			steps = append(steps, hookStep{action: "add", path: path, text: lines[i+1]})
 		}
 		if rest, ok := strings.CutPrefix(line, "create executable "); ok {
 			require.Greater(t, len(lines), i+2, out)

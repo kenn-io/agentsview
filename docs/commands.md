@@ -68,7 +68,8 @@ Git still rejects empty messages. A comment-only message such as `-m '#123 fix'`
 can still commit when Git retains comments, but gets no trailer. Git doesn't
 tell hooks whether `-s` added a signoff, so when a commit template already ends
 with your own signoff and another hook changes that line, the commit gets no
-trailer.
+trailer. With `core.commentChar=auto`, Git picks its comment character per
+commit, so commits that start from a commit template get no trailer.
 
 AgentsView must be on `PATH`. A missing or failing binary, or a missing,
 invalid, or ambiguous session, leaves the commit message unchanged.
@@ -105,7 +106,10 @@ including a global one, makes installation apply to every repository sharing
 that path. The two hooks only work as a pair. When either one already exists
 with other content, installation writes nothing and prints the steps for both:
 the line to add to each existing hook, and the file to create for a missing
-one. These are the lines:
+one. Put each line right after the hook's first line, before any other
+commands. At the end it would hide a failing final check in your hook, and the
+prepare step would save an already edited template as the original. These are
+the lines:
 
 ```sh
 if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$@" || :; fi

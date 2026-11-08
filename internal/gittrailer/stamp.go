@@ -59,11 +59,17 @@ func generatedSignoff(ctx context.Context) (string, error) {
 
 // Stamp adds session provenance only when Git has disabled the editor.
 func Stamp(ctx context.Context, file string, session Session) error {
-	template, err := consumeTemplateMarker(file)
+	template, fromTemplate, err := consumeTemplateMarker(file)
 	if err != nil {
 		return err
 	}
 	if os.Getenv("GIT_EDITOR") != ":" || session.ID == "" {
+		return nil
+	}
+	// With core.commentChar=auto, Git strips comments with a character it
+	// picks per commit and records nowhere, so a comment another hook adds to
+	// an unchanged template could look like an edit here.
+	if fromTemplate && len(commentStrings(ctx)) > 1 {
 		return nil
 	}
 	message, err := cleanMessage(ctx, file)
@@ -161,17 +167,18 @@ func hasContent(message string) bool {
 	return false
 }
 
-func consumeTemplateMarker(file string) (string, error) {
+// consumeTemplateMarker returns the saved template and whether Git loaded one.
+func consumeTemplateMarker(file string) (string, bool, error) {
 	marker := file + templateMarkerSuffix
 	template, err := os.ReadFile(marker)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
+		return "", false, nil
 	}
 	if err == nil {
 		err = os.Remove(marker)
 	}
 	if err != nil {
-		return "", fmt.Errorf("cannot check commit template: %w", err)
+		return "", true, fmt.Errorf("cannot check commit template: %w", err)
 	}
-	return string(template), nil
+	return string(template), true, nil
 }

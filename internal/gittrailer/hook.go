@@ -66,7 +66,10 @@ func Install(repoDir string) error {
 		for _, hook := range hooks {
 			switch hook.state {
 			case hookOther:
-				fmt.Fprintf(&b, "\nadd this line to %s:\n%s", hook.path, hook.line)
+				// At the end, the line's success would hide a failing final
+				// command, and the prepare step would save an already edited
+				// template as the original.
+				fmt.Fprintf(&b, "\nadd this line to %s right after its first line, before any other commands:\n%s", hook.path, hook.line)
 			case hookMissing:
 				fmt.Fprintf(&b, "\ncreate executable %s containing:\n%s", hook.path, strings.TrimSuffix(hook.script, "\n"))
 				continue
