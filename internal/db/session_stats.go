@@ -30,6 +30,7 @@ type StatsFilter struct {
 	IncludeProjects        []string
 	ExcludeProjects        []string
 	Timezone               string
+	OutcomesOnly           bool
 	IncludeGitOutcomes     bool
 	IncludeGitHubOutcomes  bool
 	GHToken                string
@@ -56,6 +57,9 @@ func (db *DB) GetSessionStats(
 	if err != nil {
 		return nil, &StatsInputError{Msg: err.Error()}
 	}
+	if f.OutcomesOnly {
+		return db.sessionOutcomeStats(ctx, f, tz, from, to, days)
+	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return nil, err
@@ -81,21 +85,7 @@ func (db *DB) GetSessionStats(
 		return nil, err
 	}
 
-	stats := &SessionStats{
-		SchemaVersion: 2,
-		Window: StatsWindow{
-			Since: from.UTC().Format(time.RFC3339),
-			Until: to.UTC().Format(time.RFC3339),
-			Days:  days,
-		},
-		Filters: StatsFilters{
-			Agent:            orDefault(f.Agent, "all"),
-			ProjectsIncluded: f.IncludeProjects,
-			ProjectsExcluded: nonNilSlice(f.ExcludeProjects),
-			Timezone:         tz.String(),
-		},
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-	}
+	stats := newSessionStats(f, tz, from, to, days)
 
 	computeTotalsAndArchetypes(stats, rows)
 	// Override the additive totals to count subagents. Archetypes and
@@ -159,12 +149,142 @@ func (db *DB) GetSessionStats(
 	release()
 	release = nil
 	if f.IncludeGitOutcomes || f.IncludeGitHubOutcomes {
-		if err := db.computeOutcomeStats(ctx, stats, f, from, to, rows); err != nil {
+		cwds := make([]string, 0, len(rows))
+		for _, row := range rows {
+			cwds = append(cwds, row.cwd)
+		}
+		if err := db.computeOutcomeStats(ctx, stats, f, from, to, cwds); err != nil {
 			return nil, fmt.Errorf("computing outcome stats: %w", err)
 		}
 	}
 
 	return stats, nil
+}
+
+func newSessionStats(f StatsFilter, tz *time.Location, from, to time.Time, days int) *SessionStats {
+	return &SessionStats{
+		SchemaVersion: 2,
+		Window: StatsWindow{
+			Since: from.UTC().Format(time.RFC3339),
+			Until: to.UTC().Format(time.RFC3339),
+			Days:  days,
+		},
+		Filters: StatsFilters{
+			Agent:            orDefault(f.Agent, "all"),
+			ProjectsIncluded: f.IncludeProjects,
+			ProjectsExcluded: nonNilSlice(f.ExcludeProjects),
+			Timezone:         tz.String(),
+		},
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+func (db *DB) sessionOutcomeStats(ctx context.Context, f StatsFilter, tz *time.Location, from, to time.Time, days int) (*SessionStats, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cwds, err := func() ([]string, error) {
+		defer release()
+		where, args := sessionsInWindowWhere(f, from, to, false)
+		rows, err := db.getReader().QueryContext(ctx, `SELECT COALESCE(s.cwd, '') FROM sessions s WHERE `+where, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var cwds []string
+		for rows.Next() {
+			var cwd string
+			if err := rows.Scan(&cwd); err != nil {
+				return nil, err
+			}
+			cwds = append(cwds, cwd)
+		}
+		return cwds, rows.Err()
+	}()
+	if err != nil {
+		return nil, fmt.Errorf("querying outcome session directories: %w", err)
+	}
+	stats := newSessionStats(f, tz, from, to, days)
+	if f.IncludeGitOutcomes || f.IncludeGitHubOutcomes {
+		if err := db.computeOutcomeStats(ctx, stats, f, from, to, cwds); err != nil {
+			return nil, fmt.Errorf("computing outcome stats: %w", err)
+		}
+	}
+	return stats, nil
+}
+
+func sessionsInWindowWhere(f StatsFilter, from, to time.Time, includeSubagents bool) (string, []any) {
+	// Use the same COALESCE(NULLIF(started_at, ''), created_at)
+	// expression as the rest of the analytics code so sessions whose
+	// started_at is missing (parser couldn't infer a start time) are
+	// still attributed to the window via their created_at fallback.
+	//
+	// includeSubagents selects which row set this is: the root-only set
+	// (default, drives distributions/shape/velocity and the human vs
+	// automation split) or the subagent-inclusive set (drives the
+	// additive token/session totals). Fork rows stay excluded in both
+	// because their tokens overlap their root session. The predicate is
+	// the same one the analytics builders use, via the shared helper, so
+	// the two paths can't drift.
+	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
+	if to.Sub(from) > analyticsDateIndexMaxWindow {
+		// Keep the same wide-window scan plan as buildWhereWithDate.
+		dateCol = "+" + dateCol
+	}
+	preds := []string{
+		"message_count > 0",
+		RelationshipExclusionSQL(includeSubagents, false, ""),
+		"deleted_at IS NULL",
+		dateCol + " >= ?",
+		dateCol + " < ?",
+	}
+	args := []any{
+		from.UTC().Format(time.RFC3339Nano),
+		to.UTC().Format(time.RFC3339Nano),
+	}
+	if f.ApplyDefaultVisibility {
+		visibilityBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(args))
+		preds, _ = appendSessionVisibilityPredicates(
+			preds,
+			SessionFilter{
+				ExcludeOneShot:   !f.IncludeOneShot,
+				ExcludeAutomated: !f.IncludeAutomated,
+			},
+			visibilityBuilder,
+			func(col string) string { return "s." + col },
+		)
+		args = append(args, visibilityBuilder.Args()...)
+	}
+
+	if f.Agent != "" {
+		agents := CSVFilterValues(f.Agent)
+		if len(agents) == 1 {
+			preds = append(preds, "agent = ?")
+			args = append(args, agents[0])
+		} else if len(agents) > 1 {
+			ph := make([]string, len(agents))
+			for i, a := range agents {
+				ph[i] = "?"
+				args = append(args, a)
+			}
+			preds = append(preds,
+				"agent IN ("+strings.Join(ph, ",")+")")
+		}
+	}
+
+	if len(f.IncludeProjects) > 0 {
+		ph, inArgs := InPlaceholders(f.IncludeProjects)
+		preds = append(preds, "project IN "+ph)
+		args = append(args, inArgs...)
+	}
+	if len(f.ExcludeProjects) > 0 {
+		ph, inArgs := InPlaceholders(f.ExcludeProjects)
+		preds = append(preds, "project NOT IN "+ph)
+		args = append(args, inArgs...)
+	}
+
+	return strings.Join(preds, " AND "), args
 }
 
 // computeToolAndModelMix fills stats.ToolMix and stats.ModelMix from
@@ -443,74 +563,7 @@ func (db *DB) loadSessionsInWindow(
 	ctx context.Context, f StatsFilter, from, to time.Time,
 	includeSubagents bool,
 ) ([]sessionStatsRow, error) {
-	// Use the same COALESCE(NULLIF(started_at, ''), created_at)
-	// expression as the rest of the analytics code so sessions whose
-	// started_at is missing (parser couldn't infer a start time) are
-	// still attributed to the window via their created_at fallback.
-	//
-	// includeSubagents selects which row set this is: the root-only set
-	// (default, drives distributions/shape/velocity and the human vs
-	// automation split) or the subagent-inclusive set (drives the
-	// additive token/session totals). Fork rows stay excluded in both
-	// because their tokens overlap their root session. The predicate is
-	// the same one the analytics builders use, via the shared helper, so
-	// the two paths can't drift.
-	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
-	if to.Sub(from) > analyticsDateIndexMaxWindow {
-		// Keep the same wide-window scan plan as buildWhereWithDate.
-		dateCol = "+" + dateCol
-	}
-	preds := []string{
-		"message_count > 0",
-		RelationshipExclusionSQL(includeSubagents, false, ""),
-		"deleted_at IS NULL",
-		dateCol + " >= ?",
-		dateCol + " < ?",
-	}
-	args := []any{
-		from.UTC().Format(time.RFC3339Nano),
-		to.UTC().Format(time.RFC3339Nano),
-	}
-	if f.ApplyDefaultVisibility {
-		visibilityBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(args))
-		preds, _ = appendSessionVisibilityPredicates(
-			preds,
-			SessionFilter{
-				ExcludeOneShot:   !f.IncludeOneShot,
-				ExcludeAutomated: !f.IncludeAutomated,
-			},
-			visibilityBuilder,
-			func(col string) string { return "s." + col },
-		)
-		args = append(args, visibilityBuilder.Args()...)
-	}
-
-	if f.Agent != "" {
-		agents := CSVFilterValues(f.Agent)
-		if len(agents) == 1 {
-			preds = append(preds, "agent = ?")
-			args = append(args, agents[0])
-		} else if len(agents) > 1 {
-			ph := make([]string, len(agents))
-			for i, a := range agents {
-				ph[i] = "?"
-				args = append(args, a)
-			}
-			preds = append(preds,
-				"agent IN ("+strings.Join(ph, ",")+")")
-		}
-	}
-
-	if len(f.IncludeProjects) > 0 {
-		ph, inArgs := InPlaceholders(f.IncludeProjects)
-		preds = append(preds, "project IN "+ph)
-		args = append(args, inArgs...)
-	}
-	if len(f.ExcludeProjects) > 0 {
-		ph, inArgs := InPlaceholders(f.ExcludeProjects)
-		preds = append(preds, "project NOT IN "+ph)
-		args = append(args, inArgs...)
-	}
+	where, args := sessionsInWindowWhere(f, from, to, includeSubagents)
 
 	// The tool-call / assistant-turn subqueries keep the per-session
 	// projection self-contained: one row per session, no separate
@@ -541,7 +594,7 @@ func (db *DB) loadSessionsInWindow(
 		s.tool_retry_count, s.compaction_count, s.edit_churn_count,
 		COALESCE(s.cwd, ''),
 		s.is_automated
-		FROM sessions s WHERE ` + strings.Join(preds, " AND ")
+		FROM sessions s WHERE ` + where
 
 	sqlRows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1539,7 +1592,7 @@ func (db *DB) accumulateAdoption(
 // because git does not understand the compact duration form.
 func (db *DB) computeOutcomeStats(
 	ctx context.Context, s *SessionStats, f StatsFilter,
-	from, to time.Time, rows []sessionStatsRow,
+	from, to time.Time, cwds []string,
 ) error {
 	archiveOnly, err := db.IsArchiveOnly(ctx)
 	if err != nil {
@@ -1548,12 +1601,7 @@ func (db *DB) computeOutcomeStats(
 	if archiveOnly {
 		return nil
 	}
-	cwds := make([]string, 0, len(rows))
-	for _, r := range rows {
-		if r.cwd != "" {
-			cwds = append(cwds, r.cwd)
-		}
-	}
+
 	repos := git.DiscoverRepos(ctx, cwds)
 	if len(repos) == 0 {
 		return nil

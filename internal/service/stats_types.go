@@ -14,6 +14,7 @@ type StatsFilter struct {
 	IncludeProjects        []string `json:"include_projects,omitempty"`
 	ExcludeProjects        []string `json:"exclude_projects,omitempty"`
 	Timezone               string   `json:"timezone,omitempty"`
+	OutcomesOnly           bool     `json:"-"`
 	IncludeGitOutcomes     bool     `json:"include_git_outcomes,omitempty"`
 	IncludeGitHubOutcomes  bool     `json:"include_github_outcomes,omitempty"`
 	GHToken                string   `json:"-"`

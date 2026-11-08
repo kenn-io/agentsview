@@ -2758,45 +2758,105 @@ func statsOutcomeRepo(t *testing.T) string {
 }
 
 func TestGetSessionStatsReleasesBulkLaneBeforeOutcomeLookups(t *testing.T) {
+	for _, outcomesOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("outcomesOnly=%t", outcomesOnly), func(t *testing.T) {
+			skipIfNoGit(t)
+			statsIsolateGit(t)
+			d := testDB(t)
+			insertSessionFixture(t, d, sessionFixture{
+				id: "outcome-lane", agent: "claude", userMsgs: 5,
+				startedAt: hoursAgo(5), cwd: statsOutcomeRepo(t),
+			})
+			writer := d.rawWriter()
+			conn, err := writer.Conn(t.Context())
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			result := make(chan error, 1)
+			done := make(chan struct{})
+			t.Cleanup(func() {
+				cancel()
+				_ = conn.Close()
+				<-done
+			})
+			waits := writer.Stats().WaitCount
+			go func() {
+				defer close(done)
+				stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d", IncludeGitOutcomes: true, OutcomesOnly: outcomesOnly})
+				if err == nil {
+					assert.NotNil(t, stats.OutcomeStats)
+				}
+				result <- err
+			}()
+			// WaitCount signals outcome lookup only while the git cache uses the writer.
+			require.Eventually(t, func() bool {
+				return writer.Stats().WaitCount > waits
+			}, 10*time.Second, 10*time.Millisecond)
+			assert.Zero(t, d.rawReader().Stats().InUse)
+			for range bulkReadSlots {
+				release, err := d.acquireBulkRead(ctx)
+				require.NoError(t, err)
+				defer release()
+			}
+			require.NoError(t, conn.Close())
+			require.NoError(t, <-result)
+		})
+	}
+}
+
+func TestGetSessionStats_OutcomesOnly(t *testing.T) {
 	skipIfNoGit(t)
 	statsIsolateGit(t)
 	d := testDB(t)
-	insertSessionFixture(t, d, sessionFixture{
-		id: "outcome-lane", agent: "claude", userMsgs: 5,
-		startedAt: hoursAgo(5), cwd: statsOutcomeRepo(t),
-	})
-	writer := d.rawWriter()
-	conn, err := writer.Conn(t.Context())
-	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	result := make(chan error, 1)
-	done := make(chan struct{})
-	t.Cleanup(func() {
-		cancel()
-		_ = conn.Close()
-		<-done
-	})
-	waits := writer.Stats().WaitCount
-	go func() {
-		defer close(done)
-		stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d", IncludeGitOutcomes: true})
-		if err == nil {
-			assert.NotNil(t, stats.OutcomeStats)
-		}
-		result <- err
-	}()
-	// WaitCount signals outcome lookup only while the git cache uses the writer.
-	require.Eventually(t, func() bool {
-		return writer.Stats().WaitCount > waits
-	}, 10*time.Second, 10*time.Millisecond)
-	assert.Zero(t, d.rawReader().Stats().InUse)
-	for range bulkReadSlots {
-		release, err := d.acquireBulkRead(ctx)
-		require.NoError(t, err)
-		defer release()
+	repo := t.TempDir()
+	statsInitRepoAt(t, repo)
+	for i := range 3 {
+		statsCommitFile(t, repo, "file.txt", strings.Repeat("line\n", i+1), "fixture")
 	}
-	require.NoError(t, conn.Close())
-	require.NoError(t, <-result)
+	checkout := filepath.Join(t.TempDir(), "checkout")
+	statsRunGit(t, repo, nil, "clone", "--quiet", repo, checkout)
+	statsRunGit(t, checkout, nil, "config", "user.email", "test@example.com")
+	for _, cwd := range []string{repo, checkout} {
+		statsRunGit(t, cwd, nil, "config", "remote.origin.url", "https://example.com/team/repo.git")
+	}
+	skipped := t.TempDir()
+	statsInitRepoAt(t, skipped)
+	statsCommitFile(t, skipped, "file.txt", "one\n", "fixture")
+	statsRunGit(t, skipped, nil, "config", "log.showSignature", "invalid")
+	excluded := t.TempDir()
+	statsInitRepoAt(t, excluded)
+	statsCommitFile(t, excluded, "file.txt", "excluded\n", "excluded")
+	for _, fixture := range []sessionFixture{
+		{id: "root", userMsgs: 5, cwd: repo},
+		{id: "checkout", userMsgs: 5, cwd: checkout},
+		{id: "skipped", userMsgs: 5, cwd: skipped},
+		{id: "child", userMsgs: 5, cwd: excluded, relationshipType: "subagent"},
+		{id: "fork", userMsgs: 5, cwd: excluded, relationshipType: "fork"},
+		{id: "one-shot", userMsgs: 1, cwd: excluded},
+		{id: "automated", userMsgs: 5, cwd: excluded, isAutomated: true},
+	} {
+		fixture.startedAt = hoursAgo(1)
+		insertSessionFixture(t, d, fixture)
+	}
+	filter := StatsFilter{Since: "28d", ApplyDefaultVisibility: true, IncludeGitOutcomes: true}
+	full, err := d.GetSessionStats(t.Context(), filter)
+	require.NoError(t, err)
+	require.NotNil(t, full.OutcomeStats)
+	assert.Equal(t, 1, full.OutcomeStats.ReposActive)
+	assert.Equal(t, 3, full.OutcomeStats.Commits)
+	require.Len(t, full.OutcomeStats.Skipped, 1)
+	filter.OutcomesOnly = true
+	outcomes, err := d.GetSessionStats(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, full.OutcomeStats, outcomes.OutcomeStats)
+	assert.Equal(t, full.Window, outcomes.Window)
+	assert.Equal(t, full.Filters, outcomes.Filters)
+	assert.Equal(t, 2, outcomes.SchemaVersion)
+	outcomes.Window = StatsWindow{}
+	outcomes.Filters = StatsFilters{}
+	outcomes.GeneratedAt = ""
+	outcomes.SchemaVersion = 0
+	outcomes.OutcomeStats = nil
+	assert.Equal(t, &SessionStats{}, outcomes)
 }
 
 func TestGetSessionStats_OutcomeStats_ExclusiveEnd(t *testing.T) {

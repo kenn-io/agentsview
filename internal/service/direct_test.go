@@ -233,6 +233,12 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 		"claude-3.5-sonnet",
 		source.Metrics.ConversationCounts[0].Model,
 	)
+
+	outcomes, err := svc.Stats(t.Context(), service.StatsFilter{
+		Since: "28d", Agent: "cursor", OutcomesOnly: true,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, outcomes.CodeAttribution)
 }
 
 func TestDirectBackend_Stats_CursorAttributionIgnoredForNonCursorFilter(

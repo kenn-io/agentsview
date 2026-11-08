@@ -20007,6 +20007,13 @@ paths:
           schema:
             description: IANA timezone name
             type: string
+        - description: Compute only outcome_stats; other sections are empty
+          explode: false
+          in: query
+          name: outcomes_only
+          schema:
+            description: Compute only outcome_stats; other sections are empty
+            type: boolean
         - description: Include git-derived outcome stats
           explode: false
           in: query

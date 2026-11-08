@@ -36,6 +36,10 @@ export type GetApiV1SessionStatsParams = {
    */
   timezone?: string;
   /**
+   * Compute only outcome_stats; other sections are empty
+   */
+  outcomes_only?: boolean;
+  /**
    * Include git-derived outcome stats
    */
   include_git_outcomes?: boolean;

@@ -46,6 +46,7 @@ type sessionStatsInput struct {
 	IncludeProjects       []string `query:"include_project" doc:"Restrict to these projects"`
 	ExcludeProjects       []string `query:"exclude_project" doc:"Exclude these projects"`
 	Timezone              string   `query:"timezone" doc:"IANA timezone name"`
+	OutcomesOnly          bool     `query:"outcomes_only" doc:"Compute only outcome_stats; other sections are empty"`
 	IncludeGitOutcomes    bool     `query:"include_git_outcomes" doc:"Include git-derived outcome stats"`
 	IncludeGitHubOutcomes bool     `query:"include_github_outcomes" doc:"Include GitHub PR outcome stats"`
 }
@@ -110,6 +111,7 @@ func (s *Server) humaGetSessionStats(
 		IncludeProjects:        in.IncludeProjects,
 		ExcludeProjects:        in.ExcludeProjects,
 		Timezone:               in.Timezone,
+		OutcomesOnly:           in.OutcomesOnly,
 		IncludeGitOutcomes:     in.IncludeGitOutcomes,
 		IncludeGitHubOutcomes:  in.IncludeGitHubOutcomes,
 		GHToken:                githubToken,

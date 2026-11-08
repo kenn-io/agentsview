@@ -1609,12 +1609,16 @@ func (b *directBackend) Stats(
 		IncludeProjects:        f.IncludeProjects,
 		ExcludeProjects:        f.ExcludeProjects,
 		Timezone:               f.Timezone,
+		OutcomesOnly:           f.OutcomesOnly,
 		IncludeGitOutcomes:     f.IncludeGitOutcomes,
 		IncludeGitHubOutcomes:  f.IncludeGitHubOutcomes,
 		GHToken:                f.GHToken,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if f.OutcomesOnly {
+		return stats, nil
 	}
 	archiveOnly, err := b.local.IsArchiveOnly(ctx)
 	if err != nil {

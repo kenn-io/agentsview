@@ -39,6 +39,7 @@ describe("OutcomeTotalsStore", () => {
     expect(calledWith(fetchStats)).toMatchObject({
       since: "2026-08-01",
       until: "2026-09-01",
+      outcomes_only: true,
       include_git_outcomes: true,
       include_github_outcomes: false,
     });
