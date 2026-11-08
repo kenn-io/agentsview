@@ -56,7 +56,7 @@ func newExportPushCommandWithSource(source exportPushSource) *cobra.Command {
 	var prefix bool
 	cmd := &cobra.Command{
 		Use: "export-push <session-id>", Short: "export one exact archived snapshot without uploading", GroupID: groupData,
-		Long: "Export one exact canonical archive ID. Claude IDs are unprefixed; other agents use agent:<native-id>.\n" +
+		Long: "Export one session by its full ID. Claude IDs are unprefixed; other agents use agent:<native-id>.\n" +
 			"Known truncated, malformed, summary-only or uncaptured data is refused. Separately stored parent/child/sibling sessions are excluded; text already embedded in the selected session remains for review.\n" +
 			"Does not sync source data, require upload credentials, or upload. The receiver keeps its first accepted snapshot for this session, even if later issues are closed.\n" +
 			"Snapshot export is unavailable in this build.",
