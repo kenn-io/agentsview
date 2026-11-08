@@ -7,6 +7,15 @@
 
   const skills = $derived(analytics.skills?.by_skill ?? []);
 
+  // Totals don't depend on the trend's grouping, so a failed request for
+  // a different grouping leaves them valid; Skill Trend reports that error.
+  const error = $derived(
+    analytics.skills !== null &&
+      analytics.requestedSkillsGranularity !== analytics.skillsGranularity
+      ? null
+      : analytics.errors.skills,
+  );
+
   const maxCount = $derived(
     skills.length > 0
       ? Math.max(...skills.map((s) => s.call_count), 1)
@@ -97,7 +106,7 @@
   <PanelStatus
     hasData={analytics.skills !== null}
     pending={analytics.querying.skills}
-    error={analytics.errors.skills}
+    {error}
     onRetry={() => analytics.fetchSkills()}
   />
   {#if skills.length > 0}

@@ -691,9 +691,10 @@ describe("AnalyticsPage panel failures", () => {
     analytics.topMetric = "messages";
   });
 
-  it.each([".skills-container", ".trend-container"])(
-    "retries the failed Month selection from %s",
-    async (selector) => {
+  it(
+    "keeps a failed Month selection in the trend while retaining skill totals",
+    async () => {
+      const selector = ".trend-container";
       analytics.skillsGranularity = "week";
       const data = {
         ...makeSkills(),
@@ -729,9 +730,12 @@ describe("AnalyticsPage panel failures", () => {
       await flushEffects();
       expect(month.classList).toContain("active");
       expect(trend()).not.toContain("review");
+      expect(document.querySelector(".skills-container")!.textContent).toContain("7 calls");
       await vi.waitFor(() =>
         expect(document.querySelector(selector)!.textContent).toContain("Month failed"),
       );
+      expect(document.querySelector(".skills-container")!.textContent).not.toContain("Month failed");
+      expect(document.querySelector(".skills-container .error button")).toBeNull();
       expect(month.classList).toContain("active");
       expect(trend()).not.toContain("review");
       let release!: (value: typeof data) => void;
@@ -743,7 +747,11 @@ describe("AnalyticsPage panel failures", () => {
       const retry = document.querySelector<HTMLButtonElement>(`${selector} .error button`)!;
       retry.click();
       await flushEffects();
-      expect(retry.classList).toContain("kit-button--busy");
+      const callsAfterRetry = skills.mock.calls.length;
+      expect(retry.querySelector(".retry-spinner .kit-spinner")).not.toBeNull();
+      expect(retry.querySelector(".kit-button__label")!.textContent).toBe("Retry");
+      retry.click();
+      expect(skills).toHaveBeenCalledTimes(callsAfterRetry);
       expect(skills.mock.lastCall?.[0]?.granularity).toBe("month");
       expect(document.querySelector(".skills-container")!.textContent).toContain("7 calls");
       expect(trend()).not.toContain("review");
