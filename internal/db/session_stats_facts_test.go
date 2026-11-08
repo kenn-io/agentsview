@@ -11,6 +11,8 @@ import (
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -232,6 +234,48 @@ func TestSessionStatsFactsSnapshotAndReaderSwap(t *testing.T) {
 			got, err := d.GetSessionStats(t.Context(), factsFilter)
 			require.NoError(t, err)
 			assert.InDelta(t, 50.0, got.Velocity.TurnCycleSeconds.P50, 1e-9)
+		})
+	}
+}
+
+func TestSessionStatsFactsPricingChanges(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"custom", "effective", "empty catalog"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			d := testDB(t)
+			insertSessionFixture(t, d, sessionFixture{id: "session", agent: "claude", startedAt: "2026-06-16T10:00:00Z", userMsgs: 2})
+			require.NoError(t, d.InsertMessages(t.Context(), statsFactMessages("session", 30)))
+			_, err := d.getWriter().Exec(t.Context(), "DELETE FROM model_pricing")
+			require.NoError(t, err)
+			setPricing := func(input, output int64) {
+				rates := map[string]export.ModelRates{"test-model": {InputPerMTok: money.Money{Microdollars: input}, OutputPerMTok: money.Money{Microdollars: output}}}
+				switch mode {
+				case "custom":
+					d.SetCustomPricing(map[string]config.CustomModelRate{"test-model": {InputMicrodollarsPerMTok: input, OutputMicrodollarsPerMTok: output}})
+				case "effective":
+					d.SetEffectivePricing(rates)
+				case "empty catalog":
+					d.SetEmptyCatalogPricing(rates)
+				}
+			}
+			setPricing(1_000_000, 2_000_000)
+			warm, err := d.GetSessionStats(t.Context(), factsFilter)
+			require.NoError(t, err)
+			require.NotNil(t, warm.CacheEconomics)
+			assert.Equal(t, int64(140), warm.CacheEconomics.DollarsSpent.Microdollars)
+			setPricing(10_000_000, 4_000_000)
+			got, err := d.GetSessionStats(t.Context(), factsFilter)
+			require.NoError(t, err)
+			require.NotNil(t, got.CacheEconomics)
+			assert.Equal(t, int64(1080), got.CacheEconomics.DollarsSpent.Microdollars)
+			if mode == "custom" {
+				d.SetCustomPricing(nil)
+				cleared, err := d.GetSessionStats(t.Context(), factsFilter)
+				require.NoError(t, err)
+				require.NotNil(t, cleared.CacheEconomics)
+				assert.Zero(t, cleared.CacheEconomics.DollarsSpent.Microdollars)
+			}
 		})
 	}
 }
