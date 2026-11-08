@@ -309,8 +309,8 @@ func TestGitHookReinstall(t *testing.T) {
 	got, err := filepath.EvalSymlinks(steps[0].path)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
-	require.Equal(t, "add", steps[0].action)
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+steps[0].text+"\nprintf 'later check\\n' >&2\nexit 42\n"), 0o755))
+	require.Equal(t, "append", steps[0].action)
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nprintf 'later check\\n' >&2\nfalse\n"+steps[0].text+"\n"), 0o755))
 	require.NoError(t, os.Remove(f.bin))
 	f.setenv("PATH", filepath.Dir(f.bin))
 	out, err = f.run(t, "git", "commit", "--allow-empty", "-m", "rejected by later check")
@@ -330,6 +330,8 @@ func TestGitHookInstallInstructions(t *testing.T) {
 		rejects bool
 		// editsTemplate means the existing prepare hook rewrites the template.
 		editsTemplate bool
+		// rewrites is the message an existing commit-msg hook writes.
+		rewrites string
 	}{
 		{name: "custom prepare-commit-msg", steps: 2, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
 			t.Helper()
@@ -342,6 +344,10 @@ func TestGitHookInstallInstructions(t *testing.T) {
 		{name: "commit-msg whose last command fails", steps: 2, rejects: true, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
 			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nprintf 'validation failed\\n' >&2\nfalse\n"), 0o755))
+		}},
+		{name: "commit-msg that rewrites the message", steps: 2, rewrites: "Rewritten by hook", setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			t.Helper()
+			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nprintf 'Rewritten by hook\\n' > \"$1\"\n"), 0o755))
 		}},
 		{name: "prepare-commit-msg that rewrites the template", steps: 2, editsTemplate: true, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
 			t.Helper()
@@ -386,6 +392,10 @@ func TestGitHookInstallInstructions(t *testing.T) {
 					require.NoError(t, err)
 					first, rest, _ := strings.Cut(string(data), "\n")
 					require.NoError(t, os.WriteFile(step.path, []byte(first+"\n"+step.text+"\n"+rest), 0o755))
+				case "append":
+					data, err := os.ReadFile(step.path)
+					require.NoError(t, err)
+					require.NoError(t, os.WriteFile(step.path, append(data, step.text+"\n"...), 0o755))
 				case "chmod":
 					require.NoError(t, os.Chmod(step.path, 0o755))
 				}
@@ -397,6 +407,10 @@ func TestGitHookInstallInstructions(t *testing.T) {
 				return
 			}
 			f.git(t, "commit", "--allow-empty", "-m", "integrated hooks")
+			if tt.rewrites != "" {
+				assert.Equal(t, tt.rewrites+"\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
+				return
+			}
 			assert.Equal(t, "integrated hooks\n\n"+trailerLine, f.git(t, "log", "-1", "--format=%B"))
 			template := filepath.Join(f.repo, "template")
 			require.NoError(t, os.WriteFile(template, []byte("Template subject\n"), 0o600))
@@ -441,9 +455,15 @@ func hookInstructions(t *testing.T, out string) []hookStep {
 	for i, line := range lines {
 		if path, ok := strings.CutPrefix(line, "add this line to "); ok {
 			require.Greater(t, len(lines), i+1, out)
-			path, ok = strings.CutSuffix(path, " right after its first line, before any other commands:")
-			require.True(t, ok, out)
-			steps = append(steps, hookStep{action: "add", path: path, text: lines[i+1]})
+			action := "add"
+			if first, ok := strings.CutSuffix(path, " right after its first line, before any other commands:"); ok {
+				path = first
+			} else {
+				last, ok := strings.CutSuffix(path, " as its last line, before any final exit:")
+				require.True(t, ok, out)
+				path, action = last, "append"
+			}
+			steps = append(steps, hookStep{action: action, path: path, text: lines[i+1]})
 		}
 		if rest, ok := strings.CutPrefix(line, "create executable "); ok {
 			require.Greater(t, len(lines), i+2, out)

@@ -106,14 +106,19 @@ including a global one, makes installation apply to every repository sharing
 that path. The two hooks only work as a pair. When either one already exists
 with other content, installation writes nothing and prints the steps for both:
 the line to add to each existing hook, and the file to create for a missing
-one. Put each line right after the hook's first line, before any other
-commands. At the end it would hide a failing final check in your hook, and the
-prepare step would save an already edited template as the original. These are
-the lines:
+one. Put the `prepare-commit-msg` line right after the hook's first line, so it
+saves the template before your hook edits it:
 
 ```sh
 if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$@" || :; fi
-if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi
+```
+
+Put the `commit-msg` line last, before any final `exit`, so it stamps after your
+hook's edits. It keeps the status of your hook's last command, so a failing
+check still rejects the commit:
+
+```sh
+agentsview_status=$?; if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi; exit "$agentsview_status"
 ```
 
 To remove the hooks, delete the installed `prepare-commit-msg` and `commit-msg`

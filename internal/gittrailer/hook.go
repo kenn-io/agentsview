@@ -16,6 +16,9 @@ const (
 	prepareHookScript = "#!/bin/sh\n" + prepareHookLine + "\n"
 	hookLine          = `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`
 	hookScript        = "#!/bin/sh\n" + hookLine + "\n"
+	// mergedHookLine ends an existing commit-msg hook. It stamps after the
+	// hook's own edits and keeps the status of the hook's last command.
+	mergedHookLine = `agentsview_status=$?; if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi; exit "$agentsview_status"`
 )
 
 func hookPath(repoDir, name string) (string, error) {
@@ -41,12 +44,15 @@ func hookPath(repoDir, name string) (string, error) {
 func Install(repoDir string) error {
 	type hookSpec struct {
 		name, line, script, path string
-		state                    hookState
-		executable               bool
+		// placement says where line goes in an existing hook.
+		placement  string
+		state      hookState
+		executable bool
 	}
 	hooks := []hookSpec{
-		{name: "prepare-commit-msg", line: prepareHookLine, script: prepareHookScript},
-		{name: "commit-msg", line: hookLine, script: hookScript},
+		// The prepare step must save the template before other hooks edit it.
+		{name: "prepare-commit-msg", line: prepareHookLine, script: prepareHookScript, placement: "right after its first line, before any other commands"},
+		{name: "commit-msg", line: mergedHookLine, script: hookScript, placement: "as its last line, before any final exit"},
 	}
 	conflict := false
 	for i := range hooks {
@@ -66,10 +72,7 @@ func Install(repoDir string) error {
 		for _, hook := range hooks {
 			switch hook.state {
 			case hookOther:
-				// At the end, the line's success would hide a failing final
-				// command, and the prepare step would save an already edited
-				// template as the original.
-				fmt.Fprintf(&b, "\nadd this line to %s right after its first line, before any other commands:\n%s", hook.path, hook.line)
+				fmt.Fprintf(&b, "\nadd this line to %s %s:\n%s", hook.path, hook.placement, hook.line)
 			case hookMissing:
 				fmt.Fprintf(&b, "\ncreate executable %s containing:\n%s", hook.path, strings.TrimSuffix(hook.script, "\n"))
 				continue
