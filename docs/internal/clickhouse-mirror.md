@@ -452,16 +452,15 @@ refresh, only when one of these holds:
 - The table is empty.
 - The pricing digest changed, or the price record count fell below the stored
   one, so the stored price copies no longer serve reads.
-- The rows reads prepare themselves reach `chPreparedUsageBehindRowsMax`
-  (20,000) or one `chPreparedUsageBehindShare` (one-fiftieth) of the stored
-  rows, whichever is smaller.
+- The rows reads prepare themselves reach one `chPreparedUsageBehindShare`
+  (one-fiftieth) of the stored rows.
 
 The push counts those rows with the delta query's own normalization, over the
 snapshots that no stored row was derived from, so a snapshot that prepares no
-rows counts nothing. On a 300,000-row test table, a 20,000-row delta added about
-0.2 seconds to the first read after a push and about 0.1 seconds to its
-coverage check. The share keeps a small table rebuilt on almost every push,
-where a rebuild costs little. Deleted sessions' rows stay until the next
+rows counts nothing. A rebuild then rewrites at most fifty times the rows that
+changed, and reads prepare at most a fiftieth of what they read. On a
+300,000-row test table, a 5,000-row delta added about 0.13 seconds to the first
+read after a push. Deleted sessions' rows stay until the next
 rebuild, and reads skip them. The view's 15-minute schedule is unchanged.
 
 ## Kept reads

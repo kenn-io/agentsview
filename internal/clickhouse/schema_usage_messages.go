@@ -176,21 +176,16 @@ const chPreparedUsageSortingKey = chPreparedUsageKeyColumn + ", session_id"
 // refresh once enough has changed; see preparedUsageRebuildDue.
 const chPreparedUsageRefresh = "EVERY 15 MINUTE"
 
-// chPreparedUsageBehindRowsMax and chPreparedUsageBehindShare decide when a
-// push rebuilds prepared_usage or starts the view's refresh. Reads stay exact
-// while the table is behind: they prepare the rows of the sessions pushed
-// since the last rebuild themselves. Those rows cost each read time, and a
-// rebuild rewrites the whole table, so a push rebuilds once the rows reads
-// prepare reach chPreparedUsageBehindRowsMax or one chPreparedUsageBehindShare
-// of the stored rows, whichever is smaller. On a 300,000-row test table a
-// 20,000-row delta added about 0.2 seconds to the first read after a push and
-// 0.1 seconds to its coverage check.
-// The share keeps a small table rebuilt on almost every push, where a rebuild
-// costs little; on a large one the row limit applies.
-const (
-	chPreparedUsageBehindRowsMax = 20_000
-	chPreparedUsageBehindShare   = 50
-)
+// chPreparedUsageBehindShare decides when a push rebuilds prepared_usage or
+// starts the view's refresh. Reads stay exact while the table is behind:
+// they prepare the rows of the sessions pushed since the last rebuild
+// themselves. Those rows cost each read time, and a rebuild rewrites the
+// whole table, so a push rebuilds once the rows reads prepare reach one
+// chPreparedUsageBehindShare of the stored rows. A rebuild then rewrites at
+// most that many times the rows that changed, and reads prepare at most that
+// share of what they read. On a 300,000-row test table, a 5,000-row delta
+// added about 0.13 seconds to the first read after a push.
+const chPreparedUsageBehindShare = 50
 
 // chPreparedUsageRefreshSettings apply to every query that fills
 // prepared_usage, whether the view runs it or a push does.
@@ -1144,7 +1139,7 @@ func chPreparedUsageBehindSQL() string {
 // or start the view's refresh, and why. Reads stay exact either way, so a
 // rebuild is due only when it changes what reads cost: the table is empty, the
 // stored price copies no longer serve reads, or reads prepare too many rows
-// themselves; see chPreparedUsageBehindRowsMax.
+// themselves; see chPreparedUsageBehindShare.
 func preparedUsageRebuildDue(ctx context.Context, conn *sql.DB) (due bool, reason string, err error) {
 	var stored, live usageStamp
 	var prepared uint64
@@ -1174,7 +1169,7 @@ func preparedUsageRebuildDue(ctx context.Context, conn *sql.DB) (due bool, reaso
 	if err := conn.QueryRowContext(ctx, chPreparedUsageBehindSQL()).Scan(&behind); err != nil {
 		return false, "", fmt.Errorf("counting usage rows prepared at read time: %w", err)
 	}
-	limit := min(chPreparedUsageBehindRowsMax, prepared/chPreparedUsageBehindShare)
+	limit := prepared / chPreparedUsageBehindShare
 	if behind < limit {
 		return false, "", nil
 	}

@@ -664,11 +664,10 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   table is behind: they compute the rows of sessions pushed since the last
   rebuild themselves. A rebuild rewrites the whole table, so a push rebuilds it,
   or starts the `prepare_usage` view's refresh, only when the table is empty,
-  prices changed, or the rows reads compute themselves reach 20,000 or
-  one-fiftieth of the stored rows, whichever is smaller. Other pushes write
-  nothing to the table. Where the view exists, its 15-minute schedule still
-  refreshes the table. Rows of deleted sessions stay in the table until the
-  next rebuild; reads skip them.
+  prices changed, or the rows reads compute themselves reach one-fiftieth of the
+  stored rows. Other pushes write nothing to the table. Where the view exists,
+  its 15-minute schedule still refreshes the table. Rows of deleted sessions
+  stay in the table until the next rebuild; reads skip them.
 - **Lock of a stopped push.** A lock expires an hour after its push last renewed
   it, so a push stopped mid-rebuild makes later pushes skip their rebuilds for
   up to an hour. If the skip message names a held lock and you know no push is

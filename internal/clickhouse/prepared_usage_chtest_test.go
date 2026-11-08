@@ -1101,7 +1101,7 @@ func readPreparedUsage(t *testing.T, store *Store, f db.UsageFilter) preparedUsa
 
 // preparedUsageLongID names a session whose 300 usage rows make the fixture
 // large enough that republishing one small session stays below the rebuild
-// limit, one fiftieth of the stored rows.
+// limit, one fiftieth of the stored rows, and republishing it passes it.
 const preparedUsageLongID = "ch-price-long"
 
 // writeLongUsageSession writes preparedUsageLongID with 300 usage messages,
