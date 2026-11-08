@@ -1147,8 +1147,10 @@ own metadata, which is why the docs below call the database a mirror.
   ClickHouse schema or data-version change. Design decisions live in
   [ClickHouse push and serve](../internal/clickhouse-mirror.md).
 - Keep push order per batch: insert dependents, then
-  `DELETE ... WHERE session_id IN (...) AND push_version < v`, then session
-  rows. Store every ClickHouse push cursor and version in the mirror's
+  `DELETE ... WHERE session_id IN (...) AND push_version < v` limited to keys
+  with no row at `v` or later (`vanishedRowsDeleteSQL`), then session rows.
+  Do not delete older rows whose key the push rewrote; `final=1` reads
+  already collapse them, and deleting them writes patch rows. Store every ClickHouse push cursor and version in the mirror's
   `sync_metadata`. Never store ClickHouse sync state in SQLite.
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
   sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not

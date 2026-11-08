@@ -118,10 +118,22 @@ transactions. Per batch of changed sessions (100 by default, set by the target's
 1. Insert dependent rows (messages, tool calls, result events, usage, findings,
    pins).
 1. `DELETE ... WHERE session_id IN (...) AND push_version < v` per dependent
-   table and for `usage_messages`. Its materialized view never sees deletes,
-   so a shorter republished session would otherwise leave obsolete usage rows
-   in the mirror.
+   table and for `usage_messages`, limited to rows whose sort key has no row
+   at `v` or later. Its materialized view never sees deletes, so a shorter
+   republished session would otherwise leave obsolete usage rows in the
+   mirror.
 1. Insert session rows with fingerprint and `source_archive_id`.
+
+The delete removes only keys the session no longer has, such as messages cut
+from a shorter session or a tool call dropped from a kept message. A key the
+push rewrote keeps its older row until `ReplacingMergeTree` collapses it, which
+every `final=1` read already does, as the vector push does for rewritten
+documents. On a server that runs deletes as patch parts
+(`lightweight_delete_mode = lightweight_update`), deleting those rows too
+wrote one patch row per row of every re-pushed session, and every later read of
+the table paid to apply them until a merge or `APPLY PATCHES` folded them in.
+Re-pushed sessions usually keep all their keys, so most of these deletes now
+match no rows and write nothing.
 
 A crash before step 3 leaves the fingerprint stale, so the next push re-selects
 the session. A crash between 1 and 2 leaves extra old rows that step 2 removes
