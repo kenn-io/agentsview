@@ -49,6 +49,26 @@ func TestDetectPatterns(t *testing.T) {
 		assert.Equal(t, "retry loop: `unknown` called 3 times with identical arguments", got[0].Text)
 	})
 
+	t.Run("calls without retained input form no loops", func(t *testing.T) {
+		// Transcript-only archives drop tool inputs. Sharing a name and
+		// failing is not evidence that the calls repeated each other.
+		var calls []signals.ToolCallRow
+		for i := range 12 {
+			calls = append(calls, signals.ToolCallRow{
+				ToolName: "Bash", Category: "Bash",
+				MessageOrdinal: i, EventStatus: "errored",
+			})
+		}
+		calls[11].EventStatus = "completed"
+		for i := 5; i < 11; i++ {
+			calls[i] = signals.ToolCallRow{
+				ToolName: "Read", Category: "Read",
+				MessageOrdinal: i, EventStatus: "completed",
+			}
+		}
+		assert.Empty(t, DetectPatterns("s1", false, patternInput(calls, base)))
+	})
+
 	t.Run("retry loop omits unknown call-time ranges", func(t *testing.T) {
 		calls := []signals.ToolCallRow{
 			{ToolName: "Bash", InputJSON: "{}", MessageOrdinal: 2},
