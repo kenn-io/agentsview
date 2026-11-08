@@ -521,3 +521,20 @@ func TestMachineSelectorLookupIncludesUnmergedIdentity(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"current-host"}, ids)
 }
+
+func TestStorePoolsCapQueryThreads(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newPushedStore(t)
+	ctx := t.Context()
+	require.NotSame(t, store.conn, store.pages, "serve keeps page reads on their own pool")
+	for name, row := range map[string]*sql.Row{
+		"scans": store.queryRowContext(ctx, `SELECT getSetting('max_threads')`),
+		"pages": store.pageQueryRowContext(ctx, `SELECT getSetting('max_threads')`),
+	} {
+		var threads uint64
+		require.NoError(t, row.Scan(&threads), name)
+		assert.Equal(t, uint64(8), threads, name)
+	}
+	assert.Equal(t, 4, store.pages.Stats().MaxOpenConnections)
+	assert.Equal(t, 12, store.conn.Stats().MaxOpenConnections)
+}

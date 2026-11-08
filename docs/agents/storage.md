@@ -1149,7 +1149,12 @@ own metadata, which is why the docs below call the database a mirror.
   rows. Store every ClickHouse push cursor and version in the mirror's
   `sync_metadata`. Never store ClickHouse sync state in SQLite.
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
-  sets `final = 1`. Do not write `FINAL` in query text. `OpenForAdmin`
+  sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not
+  write `FINAL` in query text. `clickhouse serve` keeps a separate 4-connection
+  pool for the session list, sidebar filters, and one-session reads
+  (`pageQueryContext`); dashboard, Usage, report, and search scans use the
+  main pool (`queryContext`), sized by the URL's `max_open_conns` (default
+  12). `OpenForAdmin`
   bootstraps through the server `default` database; do not ping a DSN-path
   database that does not exist yet.
 - Derived tables (`usage_messages`, `terminal_event_snapshots`) are

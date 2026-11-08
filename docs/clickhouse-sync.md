@@ -607,6 +607,32 @@ protocol, add `secure=true` to the URL (typical TLS port 9440). For HTTP, use an
 `allow_insecure` is set. Loopback (`127.0.0.1`, `localhost`) may stay plaintext
 or skip verification.
 
+### Connections and query threads
+
+Each agentsview process opens up to 12 ClickHouse connections, and each query
+uses at most 8 threads. The Analytics page sends 11 requests at once, so every
+panel's query can start right away, and the queries share the server's cores
+instead of each claiming one thread per core. `clickhouse serve` opens 4 more
+connections for the session list, sidebar filters, and single-session views,
+so page navigation never waits behind dashboard or Usage queries.
+
+To retune either limit, add a URL parameter:
+
+```toml
+[clickhouse]
+url = "clickhouse://user:pass@host:9440/agentsview?secure=true&max_open_conns=16&max_threads=4"
+```
+
+- `max_open_conns` sets the main pool size. The 4 page connections stay
+  fixed.
+- `max_threads` sets the per-query thread cap. `max_threads=0` restores the
+  ClickHouse server default, one thread per core.
+
+The best values depend on the server. A query thread costs more CPU when the
+data directory sits on network storage, so a host with slow storage or few
+cores may want fewer threads. The ClickHouse user must be allowed to change
+settings; a profile with `readonly=1` rejects them.
+
 ______________________________________________________________________
 
 ## Differences from PostgreSQL
