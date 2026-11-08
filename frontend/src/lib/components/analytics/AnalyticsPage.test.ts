@@ -20,7 +20,6 @@ import {
   makeActivity,
   makeHeatmap,
   makeProjects,
-  makeHourOfWeek,
   makeSessionShape,
   makeVelocity,
   makeTools,
@@ -573,7 +572,7 @@ describe("AnalyticsPage panel failures", () => {
     const panels = [
       ["activity", ".timeline-container", "No activity data"],
       ["heatmap", ".heatmap-container", "No data for this period"],
-      ["hourOfWeek", ".how-container", "No data for this period"],
+      ["hourOfWeek", ".how-container", null],
       ["projects", ".breakdown-container", "No project data"],
       ["sessionShape", ".shape-container", "No data for this period"],
       ["topSessions", ".top-sessions-container", "No sessions in range"],
@@ -592,8 +591,15 @@ describe("AnalyticsPage panel failures", () => {
 
     Object.assign(analytics, {
       activity: makeActivity(),
-      heatmap: makeHeatmap(),
-      hourOfWeek: makeHourOfWeek(),
+      metric: "output_tokens",
+      heatmap: { ...makeHeatmap(), metric: "output_tokens" },
+      hourOfWeek: {
+        cells: Array.from({ length: 168 }, (_, index) => ({
+          day_of_week: Math.floor(index / 24),
+          hour: index % 24,
+          messages: 0,
+        })),
+      },
       projects: makeProjects(),
       sessionShape: makeSessionShape(),
       tools: makeTools(),
@@ -602,26 +608,31 @@ describe("AnalyticsPage panel failures", () => {
       velocity: makeVelocity(),
     });
     await flushEffects();
-    for (const [, selector, empty] of panels) expect(text(selector)).toContain(empty);
+    for (const [, selector, empty] of panels) {
+      if (empty !== null) expect(text(selector)).toContain(empty);
+    }
+    expect(document.querySelector(".how-container .how-chart")).not.toBeNull();
     expect(document.querySelector(".velocity-container .metrics-grid")).not.toBeNull();
     analytics.errors.velocity = "velocity failed";
     for (const [panel] of panels) analytics.errors[panel] = `${panel} failed`;
     await flushEffects();
     expect(text(".velocity-container")).toContain("velocity failed");
     expect(document.querySelector(".velocity-container .metrics-grid")).not.toBeNull();
+    expect(document.querySelector(".how-container .how-chart")).not.toBeNull();
     analytics.velocity = null;
     for (const [panel, selector, empty] of panels) {
       expect(text(selector)).toContain(`${panel} failed`);
-      expect(text(selector)).toContain(empty);
+      if (empty !== null) expect(text(selector)).toContain(empty);
       expect(text(selector)).toContain("Retry");
       analytics[panel] = null;
     }
     await flushEffects();
     for (const [panel, selector, empty] of panels) {
       expect(text(selector)).toContain(`${panel} failed`);
-      expect(text(selector)).not.toContain(empty);
+      if (empty !== null) expect(text(selector)).not.toContain(empty);
       expect(text(selector)).not.toMatch(/Loading/);
     }
+    expect(document.querySelector(".how-container .how-chart")).toBeNull();
     expect(text(".velocity-container")).toContain("velocity failed");
     expect(document.querySelector(".velocity-container .metrics-grid")).toBeNull();
   });
