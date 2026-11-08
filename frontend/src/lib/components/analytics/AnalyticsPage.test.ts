@@ -323,6 +323,66 @@ describe("AnalyticsPage outcome window", () => {
     },
   );
 
+  it.each([false, true])(
+    "retries a failed outcome read with pull requests opted in=%s",
+    async (includePullRequests) => {
+      vi.stubEnv("TZ", "America/New_York");
+      const initialLoad = await start();
+      const window = initialLoad.mock.calls[0]![0];
+      initialLoad.mockRestore();
+      const response = {
+        outcome_stats: {
+          repos_active: 1,
+          commits: 5,
+          loc_added: 12,
+          loc_removed: 2,
+          files_changed: 3,
+          ...(includePullRequests ? { prs_opened: 2, prs_merged: 1 } : {}),
+        },
+      };
+      const pending = Promise.withResolvers<Response>();
+      const read = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValueOnce(new Error("Outcome request timed out"))
+        .mockReturnValueOnce(pending.promise);
+      await (includePullRequests
+        ? outcomeTotals.loadWithPullRequests(window)
+        : outcomeTotals.load(window));
+      await flushEffects();
+      try {
+        const retry = [
+          ...document.querySelectorAll<HTMLButtonElement>(".outcome-container button"),
+        ].find((button) => button.textContent?.trim() === "Retry");
+        expect(retry).toBeDefined();
+        retry!.click();
+        await flushEffects();
+        expect(retry!.getAttribute("aria-busy")).toBe("true");
+        expect(read).toHaveBeenCalledTimes(2);
+        const request = new URL(requestUrl(read.mock.lastCall![0]), "http://example.test");
+        expect(request.pathname).toBe("/api/v1/session-stats");
+        expect(Object.fromEntries(request.searchParams)).toMatchObject({
+          since: "2026-03-01T05:00:00.000Z",
+          until: "2026-04-01T04:00:00.000Z",
+          include_git_outcomes: "true",
+          include_github_outcomes: String(includePullRequests),
+        });
+        pending.resolve(Response.json(response));
+        await vi.waitFor(() => {
+          const commits = [...document.querySelectorAll(".outcome-card")].find(
+            (card) => card.querySelector(".outcome-label")?.textContent === "Commits",
+          );
+          expect(commits?.querySelector(".outcome-value")?.textContent).toBe("5");
+        });
+        expect(outcomeTotals.includePullRequests).toBe(includePullRequests);
+        expect(document.querySelector(".outcome-container")?.textContent).not.toContain(
+          "Outcome request timed out",
+        );
+      } finally {
+        pending.resolve(Response.json(response));
+      }
+    },
+  );
+
   it("uses local days for the range and follows selected days and activity ranges", async () => {
     vi.stubEnv("TZ", "America/New_York");
     const load = await start();
