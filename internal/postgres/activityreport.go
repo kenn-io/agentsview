@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -155,12 +156,13 @@ func (s *Store) activityReportMessageCounts(
 	if len(ids) == 0 {
 		return nil
 	}
+	// DescribeExec plans candidate reads with their actual IDs on every visit.
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT session_id, role, timestamp FROM messages
 		WHERE session_id = ANY($1)
 			AND role IN ('user', 'assistant') AND is_system = false
 			AND COALESCE(source_subtype, '') <> 'tool_result'
-			AND timestamp >= $2 AND timestamp < $3`, ids, q.RangeStart, q.EffectiveEnd)
+			AND timestamp >= $2 AND timestamp < $3`, pgx.QueryExecModeDescribeExec, ids, q.RangeStart, q.EffectiveEnd)
 	if err != nil {
 		return fmt.Errorf("querying pg activity message counts: %w", err)
 	}
@@ -566,7 +568,7 @@ func (s *Store) activityReportCandidateSource(
 		}
 
 		terminalRows, err := s.pg.QueryContext(
-			ctx, terminalQuery, ids, lower, q.EffectiveEnd,
+			ctx, terminalQuery, pgx.QueryExecModeDescribeExec, ids, lower, q.EffectiveEnd,
 		)
 		if err != nil {
 			return fmt.Errorf("querying pg activity report terminal candidates: %w", err)
@@ -635,7 +637,7 @@ func (s *Store) activityReportCandidateSource(
 				AND m.timestamp < $3
 			ORDER BY m.timestamp, m.session_id, m.ordinal`
 			rows, queryErr := s.pg.QueryContext(
-				ctx, query, ids, lower, q.EffectiveEnd,
+				ctx, query, pgx.QueryExecModeDescribeExec, ids, lower, q.EffectiveEnd,
 			)
 			if queryErr != nil {
 				return fmt.Errorf(
@@ -727,7 +729,7 @@ func (s *Store) activityReportUsage(
 	query := pgDailyUsageRowSelectFromRows(rowsSQL) + `
 		AND u.ts >= ` + lower + `::timestamptz
 		AND u.ts <= ` + upper + `::timestamptz`
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+	rows, err := s.pg.QueryContext(ctx, query, append([]any{pgx.QueryExecModeDescribeExec}, pb.args...)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("querying activity report usage: %w", err)
 	}

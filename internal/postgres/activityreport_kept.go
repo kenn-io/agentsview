@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
@@ -70,7 +71,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
     AND (`+activityReportClaudePeerPredicate("$2", "$3", "$4")+`)
     AND COALESCE(m.timestamp, s.started_at) >= $3::timestamptz
     AND COALESCE(m.timestamp, s.started_at) <= $4::timestamptz)`,
-			changed, entry.candidates, lower, upper).Scan(&overlaps)
+			pgx.QueryExecModeDescribeExec, changed, entry.candidates, lower, upper).Scan(&overlaps)
 		if err != nil {
 			return kept.Report{}, through, false, fmt.Errorf("checking kept activity changes: %w", err)
 		}

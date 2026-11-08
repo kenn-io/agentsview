@@ -217,6 +217,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, syncer, store := newUsageJournalFixture(t)
+			store.DB().SetMaxOpenConns(1)
 			pgKeptSession(t, d, "past", "project-a", "2026-06-14")
 			if tc.prepare != nil {
 				tc.prepare(t, d)
@@ -236,6 +237,11 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			}
 			pgKeptPush(t, syncer, tc.full)
 			changed := pgKeptBuild(t, store, f, q, !tc.keep)
+			var prepared int
+			require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*)
+				FROM pg_prepared_statements WHERE statement LIKE 'SELECT EXISTS (%'
+				AND statement LIKE '%m.claude_message_id != %'`).Scan(&prepared))
+			assert.Zero(t, prepared, "kept Activity overlap check must plan with its actual parameters")
 			tc.check(t, changed)
 			a, err := activity.ArtifactDigest(before)
 			require.NoError(t, err)
