@@ -92,10 +92,20 @@ type reconciliationSpoolStore interface {
 	HasNonAuthoritativeScopes(context.Context, parser.AgentType) (bool, error)
 	ContainsNonAuthoritativeScope(context.Context, parser.AgentType, string) (bool, error)
 	Page(context.Context, reconciliationCursor, int) ([]reconciliationCandidate, error)
+	Count(context.Context) (int, error)
 	LastAddWon() bool
 	LastAddReplaced() (reconciliationCandidate, bool)
 	Metrics() ReconciliationMetrics
 	CloseAndRemove(ctx context.Context) error
+}
+
+func (spool *reconciliationSpool) Count(ctx context.Context) (int, error) {
+	if err := spool.seal(ctx); err != nil {
+		return 0, err
+	}
+	var count int
+	err := spool.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM candidates").Scan(&count)
+	return count, err
 }
 
 type reconciliationSourceScope struct {

@@ -37,6 +37,12 @@ The latest release is
 - `agentsview sync` no longer prints a deprecation warning. It stays a supported
   shortcut for `agentsview source sync` and is listed in root help again.
 
+- Long-running syncs now report whether they are waiting for the engine lock
+  or processing sources. `debug.log` includes operation IDs, separate lock-wait
+  and running times, and a heartbeat every 30 seconds. Recovery source counts
+  accumulate across processing pages. The new records contain aggregate counts
+  without source paths or transcript contents.
+
 **Bug fixes**
 
 - Semantic search builds on Kit's built-in local embeddings server no longer

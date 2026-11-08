@@ -2227,6 +2227,36 @@ HTTP readiness. Their startup output prints phase and completion lines, and
 `agentsview daemon status` shows the starting PID, elapsed time, current phase,
 progress detail, and log path while the daemon holds the start lock.
 
+### Sync diagnostics
+
+On `main` (not yet released), `debug.log` includes `sync operation:` records
+for watcher batches, provider reconciliation, full syncs, rebuilds, startup
+fallbacks, sync-and-push coordination, and context-aware exclusive work. Each
+operation logs its start and finish, plus one heartbeat every 30 seconds while
+it remains active. These records use the existing logger and require no tracing
+service or extra configuration.
+
+Use `pid` and `operation` together to correlate records. Operation IDs are local
+to one process and restart from the beginning when that process restarts.
+
+| Field | Meaning |
+| --- | --- |
+| `kind`, `agent`, `roots`, `paths` | Operation type, requested provider and counts of explicitly requested roots and paths. `agent=all` means the request does not select one provider. |
+| `lost_events`, `full` | Whether the request reports lost events or explicitly requests full coverage. |
+| `phase` | The current stage, such as waiting, discovery, processing, persistence or finalization. |
+| `elapsed`, `lock_wait`, `running` | Total elapsed time, time before acquiring the engine lock, and time since acquiring it. Running time includes any post-sync work within the same lock interval. |
+| `active_operation`, `active_kind` | The observed lock owner while this operation waits. `active_operation=0 active_kind=untracked` means the owner is not instrumented or has not yet registered; it does not prove the lock is free. |
+| `pass`, `pages`, `sources_done`, `sources_total` | Cumulative reconciliation counts within the operation. Source progress does not reset at each processing page. Collected sources are not necessarily committed sessions. |
+| `total_known` | Whether the latest reconciliation pass obtained a source count from its discovery spool. During discovery, or if that diagnostic query fails, the total is unknown. Grouped operations add each pass's total as discovery completes. |
+| `updated`, `unchanged`, `errors`, `deferred` | Session outcomes from completed work. Reconciliation outcomes update after each page and include final pass errors when the pass returns. |
+| `canceled`, `error` | Whether the context ended or the operation returned an error. `state=finished` alone does not mean the operation succeeded. |
+
+The diagnostics do not log source paths, session IDs, prompts or transcript
+contents. They do not change recovery, retry or cancellation decisions. Some
+maintenance and legacy entry points are not instrumented and can appear as an
+untracked lock owner. Detailed source counters cover reconciliation; other
+operation types can report `total_known=false` throughout.
+
 ### Friction Log
 
 The Friction Log records moments a session went wrong: corrections, failed

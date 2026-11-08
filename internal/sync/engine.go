@@ -618,17 +618,18 @@ type Engine struct {
 	// TCC-protected locations. homeDir is empty when the home directory
 	// cannot be resolved, which disables the gate rather than guessing.
 	// goos mirrors runtime.GOOS so the gate is testable off-darwin.
-	scanProtectedPaths  bool
-	homeDir             string
-	goos                string
-	subagentLinkPending bool                 // protected by syncMu; retains failed global linking
-	trailerScanAttempts map[string]time.Time // protected by syncMu; includes failed scans
-	syncMu              gosync.Mutex         // serializes all sync operations
-	mu                  gosync.RWMutex
-	lastSync            time.Time
-	lastSyncStats       SyncStats
-	currentProgress     *Progress
-	progressStallAfter  time.Duration
+	scanProtectedPaths   bool
+	homeDir              string
+	goos                 string
+	subagentLinkPending  bool                 // protected by syncMu; retains failed global linking
+	trailerScanAttempts  map[string]time.Time // protected by syncMu; includes failed scans
+	syncMu               gosync.Mutex         // serializes all sync operations
+	operationDiagnostics syncOperationDiagnostics
+	mu                   gosync.RWMutex
+	lastSync             time.Time
+	lastSyncStats        SyncStats
+	currentProgress      *Progress
+	progressStallAfter   time.Duration
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
@@ -2077,11 +2078,18 @@ func (e *Engine) syncPathsWithLockContext(ctx context.Context, paths []string, f
 		return nil
 	}
 	ctx = e.parsePolicyContext(ctx)
-	stats, tombstoned, err := func() (SyncStats, int, error) {
+	stats, tombstoned, err := func() (stats SyncStats, tombstoned int, err error) {
+		op := e.beginSyncOperation(ctx, syncOperationScope{kind: "changed_paths", paths: len(paths)})
 		if err := e.lockSync(try); err != nil {
+			op.finish(ctx, err)
 			return SyncStats{}, 0, err
 		}
+		op.acquiredLock()
 		defer e.syncMu.Unlock()
+		defer func() {
+			op.recordStats(stats)
+			op.finish(ctx, err)
+		}()
 		defer e.clearCurrentProgress()
 		previous := e.forceFullParse
 		e.forceFullParse = previous || force
@@ -3091,7 +3099,9 @@ func (e *Engine) ResyncAll(
 	if e.refuseWriteInForceParse("ResyncAll") {
 		return SyncStats{}
 	}
+	op := e.beginSyncOperation(ctx, syncOperationScope{kind: "rebuild", full: true})
 	e.syncMu.Lock()
+	op.acquiredLock()
 	defer e.notifyStartupReconciled()
 	// Defers LIFO: Unlock runs before emit.
 	defer func() {
@@ -3100,6 +3110,10 @@ func (e *Engine) ResyncAll(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer func() {
+		op.recordStats(stats)
+		op.finish(ctx, nil)
+	}()
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, nil) }()
 
@@ -3138,7 +3152,9 @@ func (e *Engine) resyncAllWithOptionsAndOperations(
 	if e.refuseWriteInForceParse("ResyncAllWithOptions") {
 		return SyncStats{}, nil
 	}
+	op := e.beginSyncOperation(ctx, syncOperationScope{kind: "rebuild", full: true})
 	e.syncMu.Lock()
+	op.acquiredLock()
 	defer e.notifyStartupReconciled()
 	defer func() {
 		if stats.shouldEmitSync() {
@@ -3146,6 +3162,10 @@ func (e *Engine) resyncAllWithOptionsAndOperations(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer func() {
+		op.recordStats(stats)
+		op.finish(ctx, err)
+	}()
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, err) }()
 	opts.includePhaseDiagnostics = true
@@ -4533,14 +4553,20 @@ func (e *Engine) ResyncTempPath() string {
 // worker opens the original read-only. It does not swap or reopen anything.
 func (e *Engine) ResyncBuild(
 	ctx context.Context, onProgress ProgressFunc,
-) (string, SyncStats, error) {
+) (path string, stats SyncStats, err error) {
 	if e.refuseWriteInForceParse("ResyncBuild") {
 		return "", SyncStats{}, nil
 	}
+	op := e.beginSyncOperation(ctx, syncOperationScope{kind: "rebuild", full: true})
 	e.syncMu.Lock()
+	op.acquiredLock()
 	defer e.syncMu.Unlock()
+	defer func() {
+		op.recordStats(stats)
+		op.finish(ctx, err)
+	}()
 	defer e.clearCurrentProgress()
-	stats, err := e.resyncBuildLocked(
+	stats, err = e.resyncBuildLocked(
 		ctx, onProgress, RebuildOptions{}, productionRebuildOperations, false,
 	)
 	return e.ResyncTempPath(), stats, err
@@ -4819,7 +4845,9 @@ func (e *Engine) SyncThenRun(
 	if e.refuseWriteInForceParse("SyncThenRun") {
 		return SyncStats{}, nil
 	}
+	op := e.beginSyncOperation(ctx, syncOperationScope{kind: "sync_then_run", full: full})
 	e.lockSyncWithProgress(onProgress)
+	op.acquiredLock()
 	defer e.notifyStartupReconciled()
 	// Defers run LIFO: Unlock runs before emit.
 	defer func() {
@@ -4828,6 +4856,10 @@ func (e *Engine) SyncThenRun(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer func() {
+		op.recordStats(stats)
+		op.finish(ctx, err)
+	}()
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, err) }()
 	stats, err = e.syncThenRunLocked(ctx, full, onProgress, work)
@@ -4870,8 +4902,11 @@ func (e *Engine) syncThenRunLocked(
 	// work typically scans and pushes SQLite rows, so flush any
 	// deferred signal recomputes first (inline: syncMu is held) or
 	// pushed sessions could carry stale signal/secret fields.
+	op := e.operationDiagnostics.active.Load()
+	op.setPhase("signal_flush")
 	e.signalSched.flushAllInline(ctx)
 	e.clearCurrentProgress()
+	op.setPhase("post_sync")
 	if err := work(full || didResync); err != nil {
 		return stats, err
 	}
@@ -4921,7 +4956,9 @@ func (e *Engine) SyncThenRunWithRebuild(
 	if e.refuseWriteInForceParse("SyncThenRunWithRebuild") {
 		return SyncStats{}, nil
 	}
+	op := e.beginSyncOperation(ctx, syncOperationScope{kind: "sync_then_run", full: full})
 	e.lockSyncWithProgress(onProgress)
+	op.acquiredLock()
 	defer e.notifyStartupReconciled()
 	defer func() {
 		if stats.shouldEmitSync() {
@@ -4929,6 +4966,10 @@ func (e *Engine) SyncThenRunWithRebuild(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer func() {
+		op.recordStats(stats)
+		op.finish(ctx, retErr)
+	}()
 	defer func() {
 		if retErr == nil && (stats.Deferred == 0 || stats.ArchiveRebuilt) {
 			// Match SyncThenRun: successful foreground coordination unblocks
@@ -5003,8 +5044,10 @@ func (e *Engine) SyncThenRunWithRebuild(
 	if !stats.ProcessingComplete() {
 		return stats, nil
 	}
+	op.setPhase("signal_flush")
 	e.signalSched.flushAllInline(ctx)
 	e.clearCurrentProgress()
+	op.setPhase("post_sync")
 	if err := work(full || didResync, didResync); err != nil {
 		return stats, err
 	}
@@ -5205,7 +5248,9 @@ func (e *Engine) RunStartupSyncFallback(
 	if e.refuseWriteInForceParse("RunStartupSyncFallback") {
 		return SyncStats{}, false, nil
 	}
+	op := e.beginSyncOperation(ctx, syncOperationScope{kind: "startup", full: true})
 	e.syncMu.Lock()
+	op.acquiredLock()
 	defer e.notifyStartupReconciled()
 	// Defers run LIFO: Unlock runs before emit.
 	defer func() {
@@ -5214,6 +5259,10 @@ func (e *Engine) RunStartupSyncFallback(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer func() {
+		op.recordStats(stats)
+		op.finish(ctx, err)
+	}()
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, err) }()
 
@@ -5250,16 +5299,20 @@ func (e *Engine) RunExclusive(work func() error) error {
 // RunExclusiveCtx is RunExclusive for a caller that must stop waiting for the
 // lock when ctx ends, such as a push holding the daemon's push turn. It
 // returns ctx.Err() without running work if ctx ends before the lock is free.
-func (e *Engine) RunExclusiveCtx(ctx context.Context, work func() error) error {
+func (e *Engine) RunExclusiveCtx(ctx context.Context, work func() error) (err error) {
 	if e.refuseWriteInForceParse("RunExclusiveCtx") {
 		return errors.New(
 			"RunExclusiveCtx refused on report-only parse-diff engine",
 		)
 	}
+	op := e.beginSyncOperation(ctx, syncOperationScope{kind: "exclusive"})
 	if err := lockctx.Lock(ctx, &e.syncMu); err != nil {
+		op.finish(ctx, err)
 		return err
 	}
+	op.acquiredLock()
 	defer e.syncMu.Unlock()
+	defer func() { op.finish(ctx, err) }()
 	return work()
 }
 
@@ -5301,14 +5354,17 @@ func (e *Engine) TryRunExclusive(work func() error) error {
 // the worker-backed pass: work scans and pushes SQLite rows, so pending
 // recomputes must land first or pushed sessions could carry stale
 // signal/secret fields.
-func (e *Engine) RunExclusiveFlushed(ctx context.Context, work func() error) error {
+func (e *Engine) RunExclusiveFlushed(ctx context.Context, work func() error) (err error) {
 	if e.refuseWriteInForceParse("RunExclusiveFlushed") {
 		return errors.New(
 			"RunExclusiveFlushed refused on report-only parse-diff engine",
 		)
 	}
+	op := e.beginSyncOperation(ctx, syncOperationScope{kind: "exclusive_flush"})
 	e.syncMu.Lock()
+	op.acquiredLock()
 	defer e.syncMu.Unlock()
+	defer func() { op.finish(ctx, err) }()
 	e.signalSched.flushAllInline(ctx)
 	return work()
 }
@@ -5508,7 +5564,9 @@ func (e *Engine) syncAll(
 	if e.refuseWriteInForceParse("SyncAll") {
 		return SyncStats{}
 	}
+	op := e.beginSyncOperation(ctx, syncOperationScope{kind: "full_sync", full: true})
 	e.syncMu.Lock()
+	op.acquiredLock()
 	previousForceFullParse := e.forceFullParse
 	previousForceFullParseAllowsCache := e.forceFullParseAllowsCache
 	e.forceFullParse = forceFullParse
@@ -5523,6 +5581,10 @@ func (e *Engine) syncAll(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer func() {
+		op.recordStats(stats)
+		op.finish(ctx, nil)
+	}()
 	defer func() {
 		e.forceFullParse = previousForceFullParse
 		e.forceFullParseAllowsCache = previousForceFullParseAllowsCache
@@ -5629,8 +5691,15 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 	var errs []error
 	changed := false
 	func() {
+		roots := 0
+		for _, group := range groups {
+			roots += len(group.Roots)
+		}
+		op := e.beginSyncOperation(ctx, syncOperationScope{kind: "grouped_reconciliation", roots: roots})
 		e.syncMu.Lock()
+		op.acquiredLock()
 		defer e.syncMu.Unlock()
+		defer func() { op.finish(ctx, errors.Join(errs...)) }()
 		defer e.clearCurrentProgress()
 		repairEligible := false
 		linkEligible := false
@@ -5696,6 +5765,7 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 		var titleStats SyncStats
 		e.reconcileNativeTitlesLocked(ctx, &titleStats)
 		e.recordNativeTitleUpdates(titleStats)
+		op.recordStats(titleStats)
 		changed = changed || titleStats.TitlesUpdated > 0
 	}()
 	if changed {
@@ -5708,9 +5778,14 @@ func (e *Engine) reconcileScopedWatchRoots(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 	onProgress ProgressFunc,
 ) (SyncStats, int, error) {
-	stats, tombstoned, _, err := func() (SyncStats, int, passEpilogueEligibility, error) {
+	stats, tombstoned, _, err := func() (stats SyncStats, tombstoned int, eligibility passEpilogueEligibility, err error) {
+		op := e.beginSyncOperation(ctx, syncOperationScope{
+			kind: "reconciliation", agent: agent, roots: len(roots), full: full, lostEvents: force,
+		})
 		e.syncMu.Lock()
+		op.acquiredLock()
 		defer e.syncMu.Unlock()
+		defer func() { op.finish(ctx, err) }()
 		defer e.clearCurrentProgress()
 		return e.reconcileScopedWatchRootsLocked(
 			ctx, agent, roots, full, force, onProgress,
@@ -5776,6 +5851,7 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 		e.recordNativeTitleUpdates(titleStats)
 		stats.TitlesUpdated += titleStats.TitlesUpdated
 		stats.Failed += titleStats.Failed
+		e.operationDiagnostics.active.Load().recordStats(titleStats)
 	}
 	return stats, tombstoned, eligibility, err
 }
@@ -5937,6 +6013,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		return SyncStats{Aborted: true}, metrics, 0, eligibility, err
 	}
 	ctx = e.parsePolicyContext(ctx)
+	op := e.operationDiagnostics.active.Load()
+	op.beginReconciliation()
+	defer func() { op.reconciled(stats) }()
 	if force {
 		e.clearWatcherOverflowCaches(ctx)
 	}
@@ -6014,6 +6093,10 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		return stats, metrics, 0, eligibility, err
 	}
 	e.finishStreamingSQLiteContainerDiscovery()
+	if op != nil {
+		total, countErr := spool.Count(ctx)
+		op.discovered(total, countErr == nil)
+	}
 	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
 	for _, completed := range completedScopes {
 		authoritativeProviders[completed.agent] = struct{}{}
@@ -6054,6 +6137,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		if len(page) == 0 {
 			break
 		}
+		op.setPhase("rehydration")
 		files, err := e.rehydrateReconciliationPage(
 			ctx, page, providers, force,
 		)
@@ -6071,10 +6155,18 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		pageCtx := context.WithValue(
 			ctx, reconciliationBaselineContextKey{}, baselineTracker,
 		)
+		op.beginPage()
 		pageStats := e.collectAndBatch(
-			pageCtx, e.startWorkers(pageCtx, files), len(files), len(files), onProgress,
+			pageCtx, e.startWorkers(pageCtx, files), len(files), len(files), func(p Progress) {
+				op.pageProgress(p)
+				if onProgress != nil {
+					onProgress(p)
+				}
+			},
 			syncWriteDefault,
 		)
+		op.recordStats(pageStats)
+		op.setPhase("baselines")
 		mergeReconciliationSyncStats(&stats, pageStats)
 		if pageStats.Aborted || pageStats.Failed > 0 {
 			cleanupErr := e.revokeRejectedReconciliationBaselines(
@@ -6173,6 +6265,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		e.promoteSkipCacheWrites(eligibleCacheWrites)
 		cursor = page[len(page)-1].Cursor()
 	}
+	op.setPhase("linking")
 	retErr = errors.Join(retErr, e.finishCodexParentInventoryBatch(ctx, &stats))
 	stats.logRetrySummary("sync")
 	// Pending linking depends only on committed archive rows. Unrelated source
@@ -6262,6 +6355,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		e.lastSyncStats = stats
 		e.mu.Unlock()
 	}
+	op.setPhase("deletion_check")
 	if retErr == nil && ctx.Err() == nil && stats.ProcessingComplete() {
 		tombstoned, retErr = e.tombstoneMissingWatchSourceScopesLocked(
 			ctx, completedScopes, spool,
@@ -6282,6 +6376,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	if ctx.Err() == nil && !passEpilogueDeferred(ctx) {
 		e.flushFailureCache(ctx)
 	}
+	op.setPhase("finalizing")
 	metrics = mergeMetrics(spool.Metrics())
 	if cleanupErr := spool.CloseAndRemove(ctx); cleanupErr != nil {
 		stats.Aborted = true
@@ -10940,6 +11035,9 @@ func (e *Engine) collectAndBatchWithOptions(
 		if len(pending) == 0 {
 			return
 		}
+		op := e.operationDiagnostics.active.Load()
+		op.setPhase("persistence")
+		defer op.setPhase("processing")
 		func() {
 			defer releaseParseRetentionLeases(pendingLeases)
 			defer closeCodexStagingSinks(pendingStaged)
