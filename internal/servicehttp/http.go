@@ -329,9 +329,6 @@ func (b *httpBackend) requireAPIVersion(ctx context.Context, minimum int, featur
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
-	if f.Cursor != "" || f.IncludeOneShot && f.IncludeAutomated && f.IncludeChildren {
-		f.ExclusionCounts = ""
-	}
 	if f.ExclusionCounts != "" {
 		if err := b.requireAPIVersion(ctx, service.SessionExclusionCountsAPIVersion, "session exclusion counts"); err != nil {
 			return nil, err

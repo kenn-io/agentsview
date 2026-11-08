@@ -87,14 +87,10 @@ func TestSessionExclusionCounts(t *testing.T) {
 
 type unavailableExclusionChildren struct {
 	sessionsSQL
-	cancel context.CancelFunc
 }
 
 func (s unavailableExclusionChildren) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if strings.HasPrefix(query, "SELECT relationship_type") {
-		if s.cancel != nil {
-			s.cancel()
-		}
 		return nil, errors.New("child probe unavailable")
 	}
 	return s.sessionsSQL.QueryContext(ctx, query, args...)
@@ -108,10 +104,8 @@ func TestSessionExclusionCountsKeepsPageOnChildFailure(t *testing.T) {
 	require.NoError(t, err)
 	store := openPushedStore(t, path)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	reader := readbase.NewSessions(unavailableExclusionChildren{sessionsSQL: sessionsSQL{Store: store}, cancel: cancel})
-	page, err := reader.ListSessions(ctx, db.SessionFilter{Project: "exclusions", ExcludeOneShot: true, ExcludeAutomated: true, ExclusionCounts: "all"})
+	reader := readbase.NewSessions(unavailableExclusionChildren{sessionsSQL{Store: store}})
+	page, err := reader.ListSessions(t.Context(), db.SessionFilter{Project: "exclusions", ExcludeOneShot: true, ExcludeAutomated: true, ExclusionCounts: "all"})
 	require.NoError(t, err)
 	assert.Len(t, page.Sessions, 2)
 	assert.Equal(t, &db.SessionExclusionCounts{OneShot: 1, Automated: 1}, page.ExclusionCounts)

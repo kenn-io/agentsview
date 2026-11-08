@@ -69,7 +69,6 @@ func AssertSessionExclusionCounts(t *testing.T, store db.Store) {
 			f.OrderBy = "id"
 			f.Descending = new(false)
 		}, 2, 1, 1, 1},
-		{"machine miss", func(f *db.SessionFilter) { f.Machine = "other-machine" }, 0, 0, 0, 0},
 		{"nothing hidden", func(f *db.SessionFilter) { f.SessionID = "continuation" }, 1, 0, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

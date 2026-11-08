@@ -266,9 +266,6 @@ func persistedHeuristics(s *db.Session) signals.HeuristicSignals {
 func (b *directBackend) List(
 	ctx context.Context, f ListFilter,
 ) (*SessionList, error) {
-	if f.ExclusionCounts != "" && f.ExclusionCounts != "flat" && f.ExclusionCounts != "all" {
-		return nil, errors.New("list: exclusion_counts must be flat or all")
-	}
 	for _, d := range []string{f.Date, f.DateFrom, f.DateTo} {
 		if d != "" && !timeutil.IsValidDate(d) {
 			return nil, fmt.Errorf(
