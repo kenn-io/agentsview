@@ -812,10 +812,10 @@ func TestServeStatusLinesLifetime(t *testing.T) {
 	}{
 		{20 * time.Minute, "Exits after 20m idle (started automatically)"},
 		{0, "Stays running until agentsview daemon stop"},
+		{2 * time.Second, "Exits after 2s idle (started automatically)"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			rt := &DaemonRuntime{Record: testWritableRecord(79, ""), IdleTimeout: &tc.timeout}
-			rt.Record.Metadata[runtimeLaunchSource] = "automatic"
 			lines := serveStatusLines(rt)
 			require.Greater(t, len(lines), 2)
 			assert.Equal(t, "  "+tc.want, lines[1])
@@ -823,20 +823,4 @@ func TestServeStatusLinesLifetime(t *testing.T) {
 	}
 	rt := &DaemonRuntime{Record: testWritableRecord(79, "")}
 	assert.Contains(t, serveStatusLines(rt)[1], "pid:")
-}
-
-func TestServeStatusLabelsKnownLaunchSource(t *testing.T) {
-	for _, tc := range []struct {
-		source  string
-		timeout time.Duration
-		want    string
-	}{
-		{"foreground", 0, "Stays running until Ctrl-C"},
-		{"background", 2 * time.Second, "Exits after 2s idle"},
-		{"automatic", 2 * time.Second, "Exits after 2s idle (started automatically)"},
-	} {
-		rt := &DaemonRuntime{Record: testWritableRecord(79, ""), IdleTimeout: &tc.timeout}
-		rt.Record.Metadata[runtimeLaunchSource] = tc.source
-		assert.Equal(t, "  "+tc.want, serveStatusLines(rt)[1])
-	}
 }

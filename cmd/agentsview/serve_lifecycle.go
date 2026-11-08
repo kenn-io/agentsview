@@ -268,18 +268,13 @@ func serveStatusLines(rt *DaemonRuntime) []string {
 	}
 	if !rt.ReadOnly && rt.IdleTimeout != nil {
 		lifetime := "Stays running until agentsview daemon stop"
-		if rt.Record.Metadata[runtimeLaunchSource] == "foreground" {
-			lifetime = "Stays running until Ctrl-C"
-		}
 		if *rt.IdleTimeout > 0 {
 			duration := rt.IdleTimeout.String()
 			if *rt.IdleTimeout%time.Minute == 0 {
 				duration = fmt.Sprintf("%dm", *rt.IdleTimeout/time.Minute)
 			}
 			lifetime = fmt.Sprintf("Exits after %s idle", duration)
-			if rt.Record.Metadata[runtimeLaunchSource] == "automatic" {
-				lifetime += " (started automatically)"
-			}
+			lifetime += " (started automatically)"
 		}
 		lines = append(lines, "  "+lifetime)
 	}

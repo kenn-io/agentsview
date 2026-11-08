@@ -331,7 +331,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 		})
 	}
 	original := writeDaemonRuntimeWithAuthAndNoSync
-	writeDaemonRuntimeWithAuthAndNoSync = func(cfg config.Config, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
+	writeDaemonRuntimeWithAuthAndNoSync = func(lifetime *daemonLifetime, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
 		base := fmt.Sprintf("http://%s:%d", host, port)
 		client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
 		if kind != "" {
@@ -391,7 +391,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 			require.Contains(t, string(body), "hello")
 		}
 		fmt.Println("archive rebuild complete")
-		return original(cfg, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
+		return original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
 	}
 	runServe(t.Context(), cfg, serveOptions{SkipInitialSync: true}, 0)
 }
@@ -524,7 +524,7 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 	}
 	if os.Getenv("AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_FAIL") == "true" {
 		writeDaemonRuntimeWithAuthAndNoSync = func(
-			config.Config,
+			*daemonLifetime,
 			string, string, int, string, string, bool, bool, bool, *int, ...int,
 		) (string, error) {
 			return "", errors.New("forced runtime-record write failure")
@@ -532,12 +532,12 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 	} else {
 		original := writeDaemonRuntimeWithAuthAndNoSync
 		writeDaemonRuntimeWithAuthAndNoSync = func(
-			cfg config.Config,
+			lifetime *daemonLifetime,
 			dataDir, host string, port int, version, browserURL string, readOnly,
 			requireAuth, noSync bool, explicitPort *int, caddyPID ...int,
 		) (string, error) {
 			path, err := original(
-				cfg, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort,
+				lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort,
 				caddyPID...,
 			)
 			if os.Getenv("AGENTSVIEW_RUN_SERVE_BASE_PATH") != "" {
@@ -4101,17 +4101,21 @@ func TestNoSyncRebuildNotice(t *testing.T) {
 }
 
 func TestNewDaemonIdleTrackerExplicitLifetime(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		t.Setenv(backgroundChildEnvVar, "1")
-		t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
-		stopped := false
-		tracker := newDaemonIdleTracker(config.Config{SyncIdleAfter: time.Second, PersistentDaemon: true}, func() { stopped = true })
-		require.NotNil(t, tracker)
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		go tracker.Run(ctx)
-		time.Sleep(5 * time.Second)
-		synctest.Wait()
-		assert.False(t, stopped)
-	})
+	for _, persistent := range []bool{false, true} {
+		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				t.Setenv(backgroundChildEnvVar, "1")
+				t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
+				stopped := false
+				tracker := newDaemonIdleTracker(config.Config{SyncIdleAfter: time.Second, PersistentDaemon: persistent}, func() { stopped = true })
+				require.NotNil(t, tracker)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				go tracker.Run(ctx)
+				time.Sleep(5 * time.Second)
+				synctest.Wait()
+				assert.Equal(t, !persistent, stopped)
+			})
+		})
+	}
 }

@@ -17,8 +17,6 @@ func (s *Server) humaPersistDaemon(_ context.Context, _ *emptyInput) (*jsonOutpu
 	if s.persistDaemon == nil {
 		return nil, apiError(http.StatusNotImplemented, "daemon lifetime is unavailable on this server")
 	}
-	s.persistDaemonMu.Lock()
-	defer s.persistDaemonMu.Unlock()
 	if err := s.persistDaemon(); err != nil {
 		return nil, apiError(http.StatusInternalServerError, err.Error())
 	}

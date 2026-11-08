@@ -1056,7 +1056,6 @@ type Config struct {
 	RequireAuth          bool                        `json:"require_auth" toml:"require_auth"`
 	NoBrowser            bool                        `json:"no_browser" toml:"no_browser"`
 	DisableUpdateCheck   bool                        `json:"disable_update_check" toml:"disable_update_check"`
-	DaemonLaunchSource   string                      `json:"-" toml:"-"`
 	PersistentDaemon     bool                        `json:"-" toml:"-"`
 	NoSync               bool                        `json:"-" toml:"-"`
 	SkipInitialSync      bool                        `json:"-" toml:"-"`

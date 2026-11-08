@@ -776,7 +776,7 @@ func TestWriteDaemonRuntimeFailurePreservesUpdateLaunchArgs(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Mkdir(runtimePath, 0o700))
 
-	_, err = WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
+	_, err = WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dir, host, port, "test", "https://viewer.example/base", false, true, true, new(port),
 	)
 	require.Error(t, err)
@@ -817,7 +817,7 @@ func TestWriteDaemonRuntimeFailurePreservesManagedCaddyIdentity(t *testing.T) {
 	caddyCreateTime, ok := processCreateTimeMillis(os.Getpid())
 	require.True(t, ok)
 
-	_, err = WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
+	_, err = WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dir, host, port, "test", "", false, false, false, nil, os.Getpid(),
 	)
 	require.Error(t, err)
@@ -1039,7 +1039,7 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	endpoint := newPingDaemon(t)
 
-	path, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
+	path, err := WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dir, endpoint.Host, endpoint.Port, "1.0.0", "", false, true, true, nil,
 	)
 	require.NoError(t, err)
@@ -1967,21 +1967,15 @@ func TestBasePathDaemonDiscoveryAndAPITransport(t *testing.T) {
 }
 
 func TestDaemonRuntimePublishesLifetime(t *testing.T) {
-	for _, persistent := range []bool{false, true} {
-		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
-			t.Setenv(backgroundChildEnvVar, "1")
-			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
+	for _, lifetime := range []daemonLifetime{{IdleTimeout: 2 * time.Second}, {Persistent: true}} {
+		t.Run(strconv.FormatBool(lifetime.Persistent), func(t *testing.T) {
 			dir := runtimeTestDir(t)
-			path, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{PersistentDaemon: persistent, DaemonLaunchSource: "automatic"}, dir, "127.0.0.1", 8080, "test", "", false, false, false, nil)
+			path, err := WriteDaemonRuntimeWithAuthAndNoSync(&lifetime, dir, "127.0.0.1", 8080, "test", "", false, false, false, nil)
 			require.NoError(t, err)
 			rt := daemonRuntimeFromRecord(readRuntimeRecord(t, path))
-			assert.Equal(t, persistent, rt.Persistent)
+			assert.Equal(t, lifetime.Persistent, rt.Persistent)
 			require.NotNil(t, rt.IdleTimeout)
-			want := 2 * time.Second
-			if persistent {
-				want = 0
-			}
-			assert.Equal(t, want, *rt.IdleTimeout)
+			assert.Equal(t, lifetime.IdleTimeout, *rt.IdleTimeout)
 		})
 	}
 }
@@ -1989,9 +1983,7 @@ func TestDaemonRuntimePublishesLifetime(t *testing.T) {
 func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
-			t.Setenv(backgroundChildEnvVar, "1")
 			// A configured zero timeout does not imply explicit persistence.
-			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "0s")
 			dir := runtimeTestDir(t)
 			MarkDaemonStarting(dir)
 			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
@@ -2000,7 +1992,7 @@ func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 			path, err := runtimeStore(dir).Path(os.Getpid())
 			require.NoError(t, err)
 			require.NoError(t, os.Mkdir(path, 0o700))
-			_, err = WriteDaemonRuntimeWithAuthAndNoSync(config.Config{PersistentDaemon: persistent, DaemonLaunchSource: "automatic"}, dir, host, port, "test", "", false, false, false, nil)
+			_, err = WriteDaemonRuntimeWithAuthAndNoSync(&daemonLifetime{Persistent: persistent}, dir, host, port, "test", "", false, false, false, nil)
 			require.Error(t, err)
 			rt := FindWritableDaemonRuntime(dir)
 			require.NotNil(t, rt)
@@ -2019,24 +2011,36 @@ func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 }
 
 func TestPersistentDaemonPublicationFailureIsReported(t *testing.T) {
-	dir := runtimeTestDir(t)
-	t.Setenv(backgroundChildEnvVar, "1")
-	t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
-	MarkDaemonStarting(dir)
-	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-	newStartupStateWriter(dir, time.Now).SetPhase("starting HTTP server")
-	host, port := testPingServer(t)
-	path, err := runtimeStore(dir).Path(os.Getpid())
-	require.NoError(t, err)
-	require.NoError(t, os.Mkdir(path, 0o700))
-	cfg := config.Config{DataDir: dir}
-	_, err = WriteDaemonRuntimeWithAuthAndNoSync(cfg, dir, host, port, "test", "", false, false, false, nil)
-	require.Error(t, err)
-	require.NoError(t, os.Mkdir(filepath.Join(dir, startupStateFileName+".tmp"), 0o700))
-	require.Error(t, publishPersistentDaemon(cfg))
-	rt := FindWritableDaemonRuntime(dir)
-	require.NotNil(t, rt)
-	assert.False(t, rt.Persistent)
-	require.NotNil(t, rt.IdleTimeout)
-	assert.Equal(t, 2*time.Second, *rt.IdleTimeout)
+	for _, fail := range []bool{false, true} {
+		t.Run(strconv.FormatBool(fail), func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			MarkDaemonStarting(dir)
+			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+			newStartupStateWriter(dir, time.Now).SetPhase("starting HTTP server")
+			host, port := testPingServer(t)
+			path, err := runtimeStore(dir).Path(os.Getpid())
+			require.NoError(t, err)
+			require.NoError(t, os.Mkdir(path, 0o700))
+			_, err = WriteDaemonRuntimeWithAuthAndNoSync(&daemonLifetime{IdleTimeout: 2 * time.Second}, dir, host, port, "test", "", false, false, false, nil)
+			require.Error(t, err)
+			if fail {
+				require.NoError(t, os.Mkdir(filepath.Join(dir, startupStateFileName+".tmp"), 0o700))
+			}
+			err = publishPersistentDaemon(dir)
+			if fail {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			rt := FindWritableDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			assert.Equal(t, !fail, rt.Persistent)
+			require.NotNil(t, rt.IdleTimeout)
+			if fail {
+				assert.Equal(t, 2*time.Second, *rt.IdleTimeout)
+			} else {
+				assert.Zero(t, *rt.IdleTimeout)
+			}
+		})
+	}
 }

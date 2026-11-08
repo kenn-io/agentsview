@@ -320,15 +320,15 @@ func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	deps.isStarting = func(string) bool { return true }
 	deps.writableRuntime = func(string, string) *DaemonRuntime {
 		rec := testWritableRecord(79, "")
-		rec.Version = version
 		return &DaemonRuntime{
 			Record:          rec,
 			Host:            "127.0.0.1",
 			Port:            8079,
 			RuntimeFallback: true,
-			Persistent:      true,
 		}
 	}
+	promoted := false
+	deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error { promoted = true; return nil }
 	starts := 0
 	deps.startBackground = func(context.Context,
 		config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy,
@@ -338,6 +338,7 @@ func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	}
 
 	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
+	assert.True(t, promoted)
 	assert.Zero(t, starts)
 	assert.Contains(t, out.String(), "already running")
 	assert.Contains(t, out.String(), "8079")
@@ -1237,71 +1238,73 @@ func TestDaemonStartConfigFailureReturnsError(t *testing.T) {
 }
 
 func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
-	for _, fallback := range []bool{false, true} {
-		for _, contended := range []bool{false, true} {
-			t.Run(fmt.Sprintf("fallback=%v/contention=%v", fallback, contended), func(t *testing.T) {
-				dir := testDataDir(t)
-				cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), Host: "127.0.0.1", PublicURL: "http://viewer.example.test", DaemonLaunchSource: "automatic"}
-				t.Setenv(backgroundChildEnvVar, "automatic")
-				t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
-				database, err := db.Open(t.Context(), cfg.DBPath)
-				require.NoError(t, err)
-				defer database.Close()
-				ts := httptest.NewUnstartedServer(nil)
-				ep := testDaemonEndpoint{Host: "127.0.0.1", Port: ts.Listener.Addr().(*net.TCPAddr).Port}
-				cfg.Port = ep.Port
-				ts.Config.Handler = server.New(cfg, database, nil, server.WithBasePath("/av"), server.WithVersion(server.VersionInfo{Version: version}), server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg) })).Handler()
-				ts.Start()
-				defer ts.Close()
-				MarkDaemonStarting(dir)
-				t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-				newStartupStateWriter(dir, time.Now).SetPhase("starting HTTP server")
-				if fallback {
-					path, err := runtimeStore(dir).Path(os.Getpid())
+	for _, timeout := range []time.Duration{0, 2 * time.Second} {
+		for _, fallback := range []bool{false, true} {
+			for _, contended := range []bool{false, true} {
+				t.Run(fmt.Sprintf("fallback=%v/contention=%v/idle=%s", fallback, contended, timeout), func(t *testing.T) {
+					dir := testDataDir(t)
+					cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), Host: "127.0.0.1", PublicURL: "http://viewer.example.test"}
+					t.Setenv(backgroundChildEnvVar, "1")
+					t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", timeout.String())
+					database, err := db.Open(t.Context(), cfg.DBPath)
 					require.NoError(t, err)
-					require.NoError(t, os.Mkdir(path, 0o700))
-				}
-				_, err = WriteDaemonRuntimeWithAuthAndNoSync(cfg, dir, ep.Host, ep.Port, version, cfg.PublicURL+"/av", false, false, true, nil)
-				if fallback {
-					require.Error(t, err)
-				} else {
-					require.NoError(t, err)
-				}
-				rt := FindWritableDaemonRuntime(dir)
-				require.NotNil(t, rt)
-				assert.Equal(t, fallback, rt.RuntimeFallback)
-				before := rt.Record
-				deps, out := daemonCommandTestDeps(t)
-				deps.resolveDataDir = func() (string, error) { return dir, nil }
-				deps.mkdirAll = os.MkdirAll
-				deps.loadConfig = func() (config.Config, error) { return cfg, nil }
-				deps.writableRuntime = func(dataDir, token string) *DaemonRuntime { return FindWritableDaemonRuntime(dataDir, token) }
-				deps.persistRuntime = persistDaemonRuntime
-				if contended {
-					attempts := 0
-					deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) {
-						attempts++
-						return &testDaemonLaunchLock{}, attempts > 1, nil
+					defer database.Close()
+					ts := httptest.NewUnstartedServer(nil)
+					ep := testDaemonEndpoint{Host: "127.0.0.1", Port: ts.Listener.Addr().(*net.TCPAddr).Port}
+					cfg.Port = ep.Port
+					ts.Config.Handler = server.New(cfg, database, nil, server.WithBasePath("/av"), server.WithVersion(server.VersionInfo{Version: version}), server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg.DataDir) })).Handler()
+					ts.Start()
+					defer ts.Close()
+					MarkDaemonStarting(dir)
+					t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+					newStartupStateWriter(dir, time.Now).SetPhase("starting HTTP server")
+					if fallback {
+						path, err := runtimeStore(dir).Path(os.Getpid())
+						require.NoError(t, err)
+						require.NoError(t, os.Mkdir(path, 0o700))
 					}
-					deps.waitContendedLaunch = func(string) daemonLaunchObservation {
-						return daemonLaunchObservation{Records: []daemon.RuntimeRecord{before}}
+					_, err = WriteDaemonRuntimeWithAuthAndNoSync(&daemonLifetime{IdleTimeout: timeout}, dir, ep.Host, ep.Port, version, cfg.PublicURL+"/av", false, false, true, nil)
+					if fallback {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
 					}
-				}
-				deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
-					require.FailNow(t, "promotion must keep the running daemon in place")
-					return backgroundLaunchResult{}, nil
-				}
-				for range 2 {
-					require.NoError(t, runDaemonStart(t.Context(), out, *deps))
-				}
-				after := FindWritableDaemonRuntime(dir)
-				require.NotNil(t, after)
-				assert.Equal(t, before.PID, after.Record.PID)
-				assert.Equal(t, before.StartedAt, after.Record.StartedAt)
-				assert.True(t, after.Persistent)
-				require.NotNil(t, after.IdleTimeout)
-				assert.Zero(t, *after.IdleTimeout)
-			})
+					rt := FindWritableDaemonRuntime(dir)
+					require.NotNil(t, rt)
+					assert.Equal(t, fallback, rt.RuntimeFallback)
+					before := rt.Record
+					deps, out := daemonCommandTestDeps(t)
+					deps.resolveDataDir = func() (string, error) { return dir, nil }
+					deps.mkdirAll = os.MkdirAll
+					deps.loadConfig = func() (config.Config, error) { return cfg, nil }
+					deps.writableRuntime = func(dataDir, token string) *DaemonRuntime { return FindWritableDaemonRuntime(dataDir, token) }
+					deps.persistRuntime = persistDaemonRuntime
+					if contended {
+						attempts := 0
+						deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) {
+							attempts++
+							return &testDaemonLaunchLock{}, attempts > 1, nil
+						}
+						deps.waitContendedLaunch = func(string) daemonLaunchObservation {
+							return daemonLaunchObservation{Records: []daemon.RuntimeRecord{before}}
+						}
+					}
+					deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+						require.FailNow(t, "promotion must keep the running daemon in place")
+						return backgroundLaunchResult{}, nil
+					}
+					for range 2 {
+						require.NoError(t, runDaemonStart(t.Context(), out, *deps))
+					}
+					after := FindWritableDaemonRuntime(dir)
+					require.NotNil(t, after)
+					assert.Equal(t, before.PID, after.Record.PID)
+					assert.Equal(t, before.StartedAt, after.Record.StartedAt)
+					assert.True(t, after.Persistent)
+					require.NotNil(t, after.IdleTimeout)
+					assert.Zero(t, *after.IdleTimeout)
+				})
+			}
 		}
 	}
 }
@@ -1329,29 +1332,23 @@ func TestRestartCommandSelectsLifetime(t *testing.T) {
 }
 
 func TestDaemonStartReplacesOlderAutomaticDaemon(t *testing.T) {
-	for _, fallback := range []bool{false, true} {
-		t.Run(fmt.Sprintf("fallback=%v", fallback), func(t *testing.T) {
-			deps, out := daemonCommandTestDeps(t)
-			setTestVersion(t, "1.1.0")
-			rt := daemonRuntimeFromRecord(testWritableRecord(79, ""))
-			rt.Record.Version = "1.0.0"
-			rt.RuntimeFallback = fallback
-			deps.writableRuntime = func(string, string) *DaemonRuntime { return rt }
-			deps.isStarting = func(string) bool { return fallback }
-			promoted, replaced := false, false
-			deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error {
-				promoted = true
-				return errors.New("old daemon has no persistence endpoint")
-			}
-			deps.startBackground = func(_ context.Context, _ config.Config, _ []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
-				replaced = true
-				return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: testWritableRecord(80, ""), Persistent: true}}, nil
-			}
-			require.NoError(t, runDaemonStart(t.Context(), out, *deps))
-			assert.True(t, replaced)
-			assert.False(t, promoted)
-		})
+	deps, out := daemonCommandTestDeps(t)
+	setTestVersion(t, "1.1.0")
+	rt := daemonRuntimeFromRecord(testWritableRecord(79, ""))
+	rt.Record.Version = "1.0.0"
+	deps.writableRuntime = func(string, string) *DaemonRuntime { return rt }
+	promoted, replaced := false, false
+	deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error {
+		promoted = true
+		return errors.New("old daemon has no persistence endpoint")
 	}
+	deps.startBackground = func(_ context.Context, _ config.Config, _ []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+		replaced = true
+		return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: testWritableRecord(80, ""), Persistent: true}}, nil
+	}
+	require.NoError(t, runDaemonStart(t.Context(), out, *deps))
+	assert.True(t, replaced)
+	assert.False(t, promoted)
 }
 
 func TestDaemonStartReportsMissingPersistenceOperation(t *testing.T) {

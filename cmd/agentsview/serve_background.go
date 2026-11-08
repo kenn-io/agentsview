@@ -76,7 +76,7 @@ const (
 // runningAsBackgroundChild reports whether this process was spawned by
 // runServeBackground.
 func runningAsBackgroundChild() bool {
-	return os.Getenv(backgroundChildEnvVar) == "1" || os.Getenv(backgroundChildEnvVar) == "automatic"
+	return os.Getenv(backgroundChildEnvVar) == "1"
 }
 
 // backgroundLaunchLockPath is the advisory lock that serializes concurrent
@@ -396,14 +396,14 @@ func prepareBackgroundReplacement(ctx context.Context,
 	if cfg == nil {
 		return errors.New("nil replacement config")
 	}
-	if adoptRuntimeOptions {
-		adoptDaemonRuntimeLaunchOptions(cfg, rt)
-	}
 	if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
 		return err
 	}
 	if err := checkBackgroundReplacementDataVersion(ctx, cfg); err != nil {
 		return err
+	}
+	if adoptRuntimeOptions {
+		adoptDaemonRuntimeLaunchOptions(cfg, rt)
 	}
 	validationCfg := *cfg
 	if validationCfg.Host == "" {
@@ -448,7 +448,6 @@ func ensureBackgroundServe(
 	if cfg == nil {
 		return nil, errors.New("nil config")
 	}
-	cfg.DaemonLaunchSource = "automatic"
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -981,11 +980,7 @@ func startServeBackgroundProcess(ctx context.Context,
 	childArgs := serveBackgroundChildArgs(args)
 	// The daemon outlives the launcher; readiness still uses the caller context.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), exe, childArgs...)
-	source := "1"
-	if cfg.DaemonLaunchSource == "automatic" {
-		source = "automatic"
-	}
-	cmd.Env = append(os.Environ(), backgroundChildEnvVar+"="+source, persistentDaemonEnvVar+"="+strconv.FormatBool(cfg.PersistentDaemon))
+	cmd.Env = append(os.Environ(), backgroundChildEnvVar+"=1", persistentDaemonEnvVar+"="+strconv.FormatBool(cfg.PersistentDaemon))
 	if cfg.DataDir != "" {
 		cmd.Env = append(cmd.Env, "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
 	}

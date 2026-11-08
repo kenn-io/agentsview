@@ -164,10 +164,9 @@ type Server struct {
 	// (e.g. "/agentsview"). When set, all routes are served
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
-	basePath        string
-	idle            *IdleTracker
-	persistDaemon   func() error
-	persistDaemonMu gosync.Mutex
+	basePath      string
+	idle          *IdleTracker
+	persistDaemon func() error
 
 	ingestionFreshness IngestionFreshness
 

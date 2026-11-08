@@ -8,12 +8,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/update"
 )
 
@@ -233,7 +235,7 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 			first, _, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, 0, nil)
 			require.NoError(t, err)
 			require.Equal(t, "http://viewer.example.test:8080", first.PublicURL)
-			_, err = WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
+			_, err = WriteDaemonRuntimeWithAuthAndNoSync(nil,
 				dir, first.Host, first.Port, "test", first.PublicURL, false, false, false, new(port),
 			)
 			require.NoError(t, err)
@@ -427,25 +429,52 @@ func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
 			dir := testDataDir(t)
-			host, port := testPingServer(t)
-			old := startServeBackgroundProcessForRun
-			t.Cleanup(func() { startServeBackgroundProcessForRun = old })
-			launched := false
-			startServeBackgroundProcessForRun = func(ctx context.Context, cfg config.Config, args []string) (*exec.Cmd, string, error) {
-				launched = true
-				assert.Equal(t, persistent, cfg.PersistentDaemon)
-				assert.Equal(t, host, cfg.Host)
-				assert.Equal(t, port, cfg.Port)
-				assert.True(t, cfg.NoSync)
-				_, err := WriteDaemonRuntimeWithAuthAndNoSync(cfg, dir, host, port, version, "", false, false, true, nil)
-				require.NoError(t, err)
-				child := exec.CommandContext(t.Context(), "sleep", "2")
-				require.NoError(t, child.Start())
-				t.Cleanup(func() { _ = child.Process.Kill() })
-				return child, filepath.Join(dir, "serve.log"), nil
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
+			t.Setenv("DO_NOT_TRACK", "1")
+			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "0s")
+			var disabled []string
+			for _, def := range parser.Registry {
+				if def.FileBased || def.EnvVar != "" {
+					disabled = append(disabled, strconv.Quote(string(def.Type)))
+				}
 			}
-			require.NoError(t, restartDaemonAfterUpdate(t.Context(), config.Config{DataDir: dir}, updateDaemonStopResult{Persistent: persistent, Host: host, Port: port, ExplicitPort: &port, NoSync: true, RequireAuthKnown: true}))
-			assert.True(t, launched)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("disabled_agents = ["+strings.Join(disabled, ",")+"]\n"+"host = \"127.0.0.1\"\nport = 0\nno_browser = true\nno_sync = true\ndisable_update_check = true\n[vector]\nenabled = false\n"), 0o600))
+			cfg := config.Config{DataDir: dir}
+			t.Cleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+				defer cancel()
+				_, err := stopWritableDaemonsForUpdate(cleanupCtx, cfg)
+				assert.NoError(t, err)
+			})
+			args := []string{"serve", "--background", "--no-sync"}
+			out, err := exec.CommandContext(ctx, os.Args[0], args...).CombinedOutput()
+			require.NoError(t, err, string(out))
+			if persistent {
+				out, err = exec.CommandContext(ctx, os.Args[0], "daemon", "start").CombinedOutput()
+				require.NoError(t, err, string(out))
+			}
+			rt := FindWritableDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			require.NotNil(t, rt.IdleTimeout)
+			assert.Zero(t, *rt.IdleTimeout)
+			stopped, err := stopWritableDaemonsForUpdate(ctx, cfg)
+			require.NoError(t, err)
+			assert.Equal(t, persistent, stopped.Persistent)
+			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
+			require.NoError(t, restartDaemonAfterUpdate(ctx, cfg, stopped))
+			rt = FindWritableDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			assert.Equal(t, persistent, rt.Persistent)
+			require.NotNil(t, rt.IdleTimeout)
+			if persistent {
+				assert.Zero(t, *rt.IdleTimeout)
+			} else {
+				assert.Equal(t, 2*time.Second, *rt.IdleTimeout)
+			}
+			time.Sleep(5 * time.Second) //nolint:kennlint // sleeptest: the child process uses the real clock for its two-second idle exit.
+			assert.Equal(t, persistent, FindWritableDaemonRuntime(dir) != nil)
 		})
 	}
 }

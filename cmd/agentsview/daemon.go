@@ -276,7 +276,7 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 		return fmt.Errorf("daemon start: %w", err)
 	}
 	incumbent := deps.writableRuntime(cfg.DataDir, cfg.AuthToken)
-	if incumbent != nil && !shouldReplaceDaemonRuntime(incumbent, version) {
+	if incumbent != nil && (incumbent.RuntimeFallback || !shouldReplaceDaemonRuntime(incumbent, version)) {
 		if !incumbent.Persistent {
 			if err := deps.persistRuntime(ctx, cfg, incumbent); err != nil {
 				return err
@@ -288,7 +288,7 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 		writeDaemonStartResult(w, backgroundLaunchResult{Runtime: incumbent}, false)
 		return nil
 	}
-	if deps.isStarting(cfg.DataDir) && (incumbent == nil || !incumbent.RuntimeFallback) {
+	if deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
 
@@ -316,14 +316,6 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 			return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 		}
 		return errors.New("daemon start: startup did not publish a writable runtime; inspect serve.log before retrying")
-	}
-	if result.Runtime != nil && !result.Runtime.Persistent {
-		if err := deps.persistRuntime(ctx, cfg, result.Runtime); err != nil {
-			return err
-		}
-		result.Runtime.Persistent = true
-		zero := time.Duration(0)
-		result.Runtime.IdleTimeout = &zero
 	}
 	// The attached launch callback already printed the log path alongside
 	// the child identity; keep the completion output to the result line.
@@ -545,7 +537,7 @@ func writeDaemonStartResult(w io.Writer, result backgroundLaunchResult, restarte
 }
 
 func backgroundResultError(err error, result backgroundLaunchResult) error {
-	if err != nil && result.LogPath != "" && !result.errorIncludesLogPath {
+	if result.LogPath != "" && !result.errorIncludesLogPath {
 		return fmt.Errorf("%w\nLogs: %s", err, result.LogPath)
 	}
 	return err

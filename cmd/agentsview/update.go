@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -223,28 +224,24 @@ func loadDaemonConfigForUpdate() (config.Config, error) {
 func restartDaemonAfterUpdate(ctx context.Context,
 	cfg config.Config, stopResult updateDaemonStopResult,
 ) error {
-	lock, ok, err := acquireBackgroundLaunchLockWithError(cfg.DataDir)
+	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return fmt.Errorf("finding current executable: %w", err)
 	}
-	if !ok {
-		return errors.New("daemon launch is already in progress")
-	}
-	defer func() { _ = lock.Unlock() }()
-	args := restartDaemonAfterUpdateArgs(cfg, stopResult)
-	cmd := newServeCommand()
-	if err := cmd.Flags().Parse(args[1:]); err != nil {
-		return err
-	}
-	restartCfg, err := config.LoadPFlags(cmd.Flags())
+	cmd := exec.CommandContext(ctx, exe, restartDaemonAfterUpdateArgs(cfg, stopResult)...)
+	cmd.Env = append(os.Environ(), "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return err
+		return fmt.Errorf("serve --background: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	if err := validateLockedDataDir(cfg.DataDir, restartCfg.DataDir); err != nil {
-		return err
+	if stopResult.Persistent {
+		rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+		if rt == nil {
+			return errors.New("updated daemon did not publish a writable runtime")
+		}
+		return persistDaemonRuntime(ctx, cfg, rt)
 	}
-	result, err := startServeBackground(ctx, restartCfg, args, serveReplacementOptions{}, backgroundLaunchPolicy{Persistent: stopResult.Persistent, Operation: "update restart"})
-	return backgroundResultError(err, result)
+	return nil
 }
 
 func restartDaemonAfterUpdateArgs(

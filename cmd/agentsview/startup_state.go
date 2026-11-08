@@ -4,7 +4,6 @@ package main
 
 import (
 	"encoding/json/v2"
-	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -34,7 +33,6 @@ type startupState struct {
 	Detail           string    `json:"detail,omitempty"`
 	LogPath          string    `json:"log_path,omitempty"`
 	Host             string    `json:"host,omitempty"`
-	LaunchSource     string    `json:"launch_source,omitempty"`
 	BrowserURL       string    `json:"browser_url,omitempty"`
 	Port             int       `json:"port,omitempty"`
 	ExplicitPort     *int      `json:"explicit_port,omitempty"`
@@ -263,11 +261,11 @@ func readStartupState(dataDir string) *startupState {
 // lifecycle readers can still report startup progress and require a daemon-
 // authored snapshot before trusting this fallback.
 func publishStartupStateFallback(
-	dataDir, host string, port int, browserURL string, requireAuth, noSync bool, explicitPort *int, caddyPID int, runtimeErr error, metadata map[string]string,
-) error {
+	dataDir, host string, port int, browserURL string, requireAuth, noSync bool, explicitPort *int, caddyPID int, runtimeErr error, lifetime *daemonLifetime,
+) {
 	st := readStartupState(dataDir)
 	if st == nil || host == "" || port <= 0 || runtimeErr == nil {
-		return errors.New("daemon fallback state is unavailable")
+		return
 	}
 	st.Host = host
 	st.BrowserURL = browserURL
@@ -276,9 +274,9 @@ func publishStartupStateFallback(
 	st.RuntimeError = runtimeErr.Error()
 	st.RequireAuth = requireAuth
 	st.RequireAuthKnown = true
-	st.Persistent, _ = strconv.ParseBool(metadata[runtimePersistent])
-	st.IdleTimeout = metadata[runtimeIdleTimeout]
-	st.LaunchSource = metadata[runtimeLaunchSource]
+	if lifetime != nil {
+		st.Persistent, st.IdleTimeout = lifetime.Persistent, lifetime.IdleTimeout.String()
+	}
 	st.NoSync = noSync
 	st.NoSyncKnown = true
 	st.APIVersion = daemonAPIVersion
@@ -296,9 +294,9 @@ func publishStartupStateFallback(
 	st.UpdatedAt = time.Now()
 	data, err := json.Marshal(st)
 	if err != nil {
-		return err
+		return
 	}
-	return writeStartupState(dataDir, data)
+	_ = writeStartupState(dataDir, data)
 }
 
 func removeStartupState(dataDir string) {
