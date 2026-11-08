@@ -1,34 +1,51 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-08
 ---
 
-# agentsview
+<h1 align="center">agentsview</h1>
 
-Browse, search, and track costs across your AI coding agents. Your session
-archive stays on your machine unless you choose a feature that shares it.
+<p align="center">
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.27.3+-00ADD8?logo=go" alt="Go 1.27.3+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://agentsview.io"><img src="https://img.shields.io/badge/Docs-agentsview.io-blue" alt="Docs"></a>
+</p>
 
-This README and the [documentation](https://agentsview.io/docs/) follow `main`.
-The latest release is **v0.46.1**. Check the
-[changelog](https://agentsview.io/docs/changelog/) for what it includes.
+<p align="center">
+  <a href="https://agentsview.io/docs/">Documentation</a> ·
+  <a href="https://agentsview.io/docs/quickstart/">Quickstart</a> ·
+  <a href="https://agentsview.io/docs/commands/">Command Reference</a>
+</p>
 
-Version 0.46.1 fixes Antigravity transcripts and read-only mounts, preserves
-repeated prompts, and restores container builds.
+**Browse, search, and track costs across your AI coding agents.**
 
-Version 0.46.0 adds
-[Claude.ai Sync through Chrome](https://agentsview.io/docs/chat-import/#sync-claudeai-chats),
-opt-in
-[Codex cloud chats](https://agentsview.io/docs/configuration/#codex-cloud), and
-Muse Code and fx sessions. Preserve a retired machine's history with
-[local archives](https://agentsview.io/docs/commands/#agentsview-archive), or
-sync a remote machine over
-[SSH](https://agentsview.io/docs/remote-access/#ssh-remote-sync) without
-installing a daemon. Find work by label or linked pull request, narrow cost
-charts by project, and inspect tool effectiveness with transcript evidence.
-Connected assistants gain eight read-only MCP tools for the same archive.
+Your session archive stays on your machine unless you choose a feature that
+shares it.
+
+This README and the [documentation](https://agentsview.io/docs/) follow
+`main`; see the [changelog](https://agentsview.io/docs/changelog/) for
+releases and upgrade notes.
 
 <p align="center">
   <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
 </p>
+
+## What you can do
+
+- **Bring every agent's sessions together.** Discover Claude Code, Codex,
+  Copilot CLI, Cursor, Gemini CLI, Forge, OpenCode, and more, and sync them
+  into one local SQLite archive.
+- **Find the session you need.** Search transcripts, narrow by label, project,
+  or linked pull request, and inspect tool effectiveness with transcript
+  evidence.
+- **Track token usage and cost.** Daily cost reports, per-model breakdowns,
+  and per-session statistics across all your agents, computed with
+  prompt-caching-aware pricing.
+- **Keep history across machines.** Preserve a retired machine's history with
+  local archives, or sync a remote machine over SSH without installing a
+  daemon.
+- **Use your own tools.** Browse the web UI, script against the CLI and REST
+  API, connect an assistant to the read-only MCP tools, or push the archive
+  to PostgreSQL, DuckDB, or ClickHouse.
 
 ## Install
 
