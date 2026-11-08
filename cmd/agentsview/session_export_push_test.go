@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,7 +96,7 @@ func TestExportPushDefaultUnavailableDoesNotCreateOutput(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	cmd.SetArgs([]string{"pi:selected", "--agent", "pi", "--snapshot-prefix", "--output", path})
-	require.ErrorContains(t, cmd.ExecuteContext(t.Context()), "codec integration unavailable")
+	require.ErrorContains(t, cmd.ExecuteContext(t.Context()), "snapshot export is unavailable")
 	_, err := os.Stat(path)
 	require.True(t, os.IsNotExist(err))
 }
@@ -126,4 +127,44 @@ func TestExportPushCancellationPublishesNoFile(t *testing.T) {
 	require.Error(t, publishExportPush(ctx, path, []byte("selected")))
 	_, err := os.Stat(path)
 	require.True(t, os.IsNotExist(err))
+}
+
+type exportPushFailingOutput struct {
+	stage string
+	cause error
+}
+
+func (f exportPushFailingOutput) Write(p []byte) (int, error) {
+	if f.stage == "write" {
+		return 0, f.cause
+	}
+	return len(p), nil
+}
+
+func (f exportPushFailingOutput) Sync() error {
+	if f.stage == "sync" {
+		return f.cause
+	}
+	return nil
+}
+
+func (f exportPushFailingOutput) Close() error {
+	if f.stage == "close" {
+		return f.cause
+	}
+	return nil
+}
+
+func TestExportPushPublicationErrorsArePathFree(t *testing.T) {
+	for _, stage := range []string{"write", "sync", "close"} {
+		cause := &os.PathError{Op: stage, Path: "private-selected-path", Err: io.ErrClosedPipe}
+		err := writeExportPushContent(t.Context(), exportPushFailingOutput{stage, cause}, []byte("snapshot"))
+		require.ErrorIs(t, err, io.ErrClosedPipe)
+		for _, machine := range []bool{false, true} {
+			var output bytes.Buffer
+			writeCLIDiagnostic(&output, &cliDiagnosticError{err: err, kind: "error", json: machine})
+			require.NotContains(t, output.String(), "private-selected-path")
+			require.Contains(t, output.String(), "publication failed")
+		}
+	}
 }

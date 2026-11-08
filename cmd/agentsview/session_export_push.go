@@ -56,11 +56,11 @@ func newExportPushCommandWithSource(source exportPushSource) *cobra.Command {
 	var prefix bool
 	cmd := &cobra.Command{
 		Use: "export-push <session-id>", Short: "export one exact archived snapshot for explicit review without uploading", GroupID: groupData,
-		Long: "Export one exact canonical archive ID. Claude IDs are unprefixed; other agents use agent:<native-id>. --agent requires the exact stored agent and never resolves IDs.\n" +
-			"--snapshot-prefix acknowledges the captured point and possible unknown tail. This does not promise a complete running session.\n" +
+		Long: "Export one exact canonical archive ID. Claude IDs are unprefixed; other agents use agent:<native-id>.\n" +
+			"This does not promise a complete running session.\n" +
 			"Known truncated, malformed, summary-only or uncaptured data is refused. Separately stored parent/child/sibling sessions are excluded; text already embedded in the selected session remains for review.\n" +
 			"Writes a new private file only; no source sync, receiver token or network push. The receiver's first accepted snapshot is immutable across later closes too.\n" +
-			"The #2811 codec adapter is an unmerged prerequisite; this main-based draft refuses until that integration is available.",
+			"Snapshot export is unavailable in this build.",
 		Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := runExportPush(cmd.Context(), source, args[0], agent, prefix, output, cmd.ErrOrStderr()); err != nil {
@@ -97,7 +97,7 @@ func runExportPush(ctx context.Context, source exportPushSource, id, agent strin
 	snapshot, err := source.Capture(ctx, id, agent)
 	if err != nil {
 		if _, unavailable := source.(unavailableExportPushSource); unavailable {
-			return errors.New("export-push: codec integration unavailable; requires the repaired session-push dependency")
+			return errors.New("export-push: snapshot export is unavailable in this build")
 		}
 		return errors.New("export-push: cannot capture selected snapshot; no output published")
 	}
@@ -133,16 +133,35 @@ func publishExportPush(ctx context.Context, path string, payload []byte) (err er
 	if err != nil {
 		return errors.New("export-push: output must be a new file")
 	}
+	err = writeExportPushContent(ctx, file, payload)
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	return err
+}
+
+type exportPushPrivateOutput interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+type exportPushPublicationError struct{ cause error }
+
+func (e *exportPushPublicationError) Error() string {
+	return "export-push: snapshot publication failed"
+}
+func (e *exportPushPublicationError) Unwrap() error { return e.cause }
+func writeExportPushContent(ctx context.Context, file exportPushPrivateOutput, payload []byte) (err error) {
 	defer func() {
-		if closeErr := file.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			_ = os.Remove(path)
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = &exportPushPublicationError{cause: closeErr}
 		}
 	}()
 	if _, err = io.Copy(file, ctxio.Reader{Context: ctx, Reader: bytes.NewReader(payload)}); err != nil {
-		return errors.New("export-push: output interrupted; partial file removed")
+		return &exportPushPublicationError{cause: err}
 	}
-	return file.Sync()
+	if err = file.Sync(); err != nil {
+		return &exportPushPublicationError{cause: err}
+	}
+	return nil
 }

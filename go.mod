@@ -52,7 +52,7 @@ require (
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
-	hegel.dev/go/hegel v0.9.28
+	hegel.dev/go/hegel v0.9.30
 	modernc.org/libc v1.79.1
 	modernc.org/sqlite v1.61.0
 )

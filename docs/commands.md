@@ -2690,7 +2690,7 @@ AGENTSVIEW_DATA_DIR=/tmp/av-test agentsview serve
 ### `agentsview export-push <session-id>` (draft integration)
 
 Prepare one exact frozen snapshot for review without uploading it. This
-main-based draft currently refuses with `codec integration unavailable` and
+main-based draft currently refuses with `snapshot export is unavailable in this build` and
 creates no output. The real encoder/validator is an independently owned
 [session-push prerequisite](https://github.com/kenn-io/agentsview/pull/2811),
 last inspected at `d8ae9e8e37449a9d2dec40eee6834e84698e1f64`.
