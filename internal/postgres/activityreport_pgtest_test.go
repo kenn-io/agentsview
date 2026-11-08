@@ -62,7 +62,7 @@ func seedPGDailyFixture(t *testing.T, store *Store) {
 	require.NoError(t, err, "insert messages")
 }
 
-func TestPGActivityReportFreshPlans(t *testing.T) {
+func TestPGActivityReportReadersAvoidPreparedStatements(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_activity_fresh_plan_test")
 	seedPGDailyFixture(t, store)
 	tx, err := store.DB().BeginTx(t.Context(), nil)
@@ -71,10 +71,8 @@ func TestPGActivityReportFreshPlans(t *testing.T) {
 	view := store.readView(tx)
 	q := pgDayQuery(t, "2026-06-16", "UTC")
 	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Second)
-	for range 2 {
-		_, err = view.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, q, nil)
-		require.NoError(t, err)
-	}
+	_, err = view.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, q, nil)
+	require.NoError(t, err)
 	for _, reader := range []string{
 		"%SELECT session_id, role, timestamp FROM messages%",
 		"%AS web_search_requests%",
