@@ -28,7 +28,7 @@ permissions:
 jobs:
   changes:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux-1cpu
     timeout-minutes: 5
     permissions:
       pull-requests: read
