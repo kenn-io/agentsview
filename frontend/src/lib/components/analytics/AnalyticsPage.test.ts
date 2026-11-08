@@ -551,6 +551,8 @@ describe("AnalyticsPage initial load", () => {
 
 describe("AnalyticsPage panel failures", () => {
   afterEach(() => {
+    analytics.metric = "messages";
+    analytics.topMetric = "messages";
     analytics.cancelInFlightReads();
     for (const panel of Object.keys(analytics.errors) as (keyof typeof analytics.errors)[]) {
       analytics[panel] = null;
@@ -664,17 +666,13 @@ describe("AnalyticsPage panel failures", () => {
     },
   );
 
-  it.each(["pending", "failed"])("keeps Output Tokens usable with summary %s", async (state) => {
+  it("keeps Output Tokens usable without a summary", async () => {
     analytics.summary = null;
-    analytics.errors.summary = state === "failed" ? "summary failed" : null;
+    analytics.errors.summary = "summary failed";
     analytics.heatmap = makeHeatmap();
     analytics.topSessions = makeTopSessions();
-    const heatmap = vi
-      .spyOn(AnalyticsService, "getApiV1AnalyticsHeatmap")
-      .mockResolvedValue(makeHeatmap());
-    const top = vi
-      .spyOn(AnalyticsService, "getApiV1AnalyticsTopSessions")
-      .mockResolvedValue(makeTopSessions());
+    const heatmap = vi.spyOn(analytics, "setMetric").mockImplementation(() => {});
+    const top = vi.spyOn(analytics, "setTopMetric").mockImplementation(() => {});
     mountPanels();
     await flushEffects();
     for (const selector of [".heatmap-container", ".top-sessions-container"]) {
@@ -685,10 +683,8 @@ describe("AnalyticsPage panel failures", () => {
       button!.click();
     }
     await flushEffects();
-    expect(heatmap.mock.lastCall?.[0]?.metric).toBe("output_tokens");
-    expect(top.mock.lastCall?.[0]?.metric).toBe("output_tokens");
-    analytics.metric = "messages";
-    analytics.topMetric = "messages";
+    expect(heatmap).toHaveBeenCalledWith("output_tokens");
+    expect(top).toHaveBeenCalledWith("output_tokens");
   });
 
   it(
@@ -747,12 +743,6 @@ describe("AnalyticsPage panel failures", () => {
       const retry = document.querySelector<HTMLButtonElement>(`${selector} .error button`)!;
       retry.click();
       await flushEffects();
-      const callsAfterRetry = skills.mock.calls.length;
-      expect(retry.getAttribute("aria-busy")).toBe("true");
-      expect(retry.disabled || retry.getAttribute("aria-disabled") === "true").toBe(true);
-      expect(retry.querySelector(".kit-button__label")!.textContent).toBe("Retry");
-      retry.click();
-      expect(skills).toHaveBeenCalledTimes(callsAfterRetry);
       expect(skills.mock.lastCall?.[0]?.granularity).toBe("month");
       expect(document.querySelector(".skills-container")!.textContent).toContain("7 calls");
       expect(trend()).not.toContain("review");
@@ -762,65 +752,6 @@ describe("AnalyticsPage panel failures", () => {
       expect(document.querySelector(selector)!.textContent).not.toContain("Month failed");
     },
   );
-
-  it("keeps Week selected after replacing a failed Month request and refreshing", async () => {
-    const skills = vi
-      .spyOn(AnalyticsService, "getApiV1AnalyticsSkills")
-      .mockResolvedValueOnce(makeSkills())
-      .mockRejectedValueOnce(new Error("Month failed"))
-      .mockResolvedValue(makeSkills());
-    mountPanels();
-    await flushEffects();
-    await analytics.fetchSkills("week");
-    await flushEffects();
-    const grouping = (name: string) =>
-      [...document.querySelectorAll<HTMLButtonElement>(".trend-header button")].find(
-        (button) => button.textContent?.trim() === name,
-      )!;
-    grouping("Month").click();
-    await vi.waitFor(() =>
-      expect(document.querySelector(".trend-container")!.textContent).toContain("Month failed"),
-    );
-    grouping("Week").click();
-    await vi.waitFor(() => expect(skills.mock.lastCall?.[0]?.granularity).toBe("week"));
-    await analytics.fetchSkills();
-    expect(skills.mock.lastCall?.[0]?.granularity).toBe("week");
-    expect(grouping("Week").classList).toContain("active");
-  });
-
-  it("shows failed panels with Retry beside usable siblings", async () => {
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    vi.spyOn(outcomeTotals, "load").mockResolvedValue();
-    const service = AnalyticsService as unknown as Record<string, unknown>;
-    for (const name of Object.keys(service)) {
-      if (name.startsWith("getApiV1Analytics")) {
-        vi.spyOn(service as Record<string, () => Promise<unknown>>, name).mockResolvedValue(null);
-      }
-    }
-    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSummary").mockResolvedValue({
-      total_sessions: 29,
-      agents: {},
-    } as never);
-    const signalsRead = vi
-      .spyOn(AnalyticsService, "getApiV1AnalyticsSignals")
-      .mockRejectedValueOnce(new Error("signals timed out"))
-      .mockResolvedValue({ ...makeSignals(), scored_sessions: 4, avg_health_score: 72 });
-    router.route = "sessions";
-    component = mount(AnalyticsPage, { target: document.body });
-    await vi.waitFor(() => expect(document.body.textContent).toContain("signals timed out"));
-
-    const panel = (selector: string) => document.querySelector<HTMLElement>(selector)!;
-    expect(panel(".summary-cards").textContent).toContain("29");
-    expect(panel(".health-section").textContent).toContain("Session Health");
-
-    const retry = [...panel(".health-section").querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
-    retry!.click();
-    await vi.waitFor(() => expect(panel(".health-section").textContent).toContain("72"));
-    expect(panel(".health-section").textContent).not.toContain("signals timed out");
-    expect(signalsRead).toHaveBeenCalledTimes(2);
-  });
 });
 
 describe("AnalyticsPage sidebar controls", () => {

@@ -33,6 +33,7 @@ afterEach(() => {
   document.body.innerHTML = "";
   analytics.signals = signals;
   analytics.errors.signals = null;
+  vi.clearAllMocks();
 });
 analytics.signals = signals;
 it("sorts agent scores and project names independently", async () => {
@@ -60,7 +61,19 @@ it("keeps scored results beside a refresh failure", async () => {
   await tick();
   expect(screen.getByText("refresh failed")).toBeTruthy();
   expect(screen.getAllByRole("table")).toHaveLength(2);
-  unmount(component);
+  await unmount(component);
+
+  analytics.signals = null;
+  const failed = mount(SessionHealthSection, { target: document.body });
+  try {
+    await tick();
+    expect(screen.getByText("refresh failed")).toBeTruthy();
+    expect(screen.queryAllByRole("table")).toHaveLength(0);
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(analytics.fetchSignals).toHaveBeenCalledOnce();
+  } finally {
+    await unmount(failed);
+  }
 });
 
 it("stays hidden when a successful response has no sessions", async () => {

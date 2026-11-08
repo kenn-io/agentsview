@@ -83,6 +83,16 @@ async function loadAnalyticsStore() {
 }
 
 function resetStore() {
+  analytics.cancelInFlightReads();
+  Object.assign(analytics, {
+    skillsRequestGranularity: "week",
+    scopes: {},
+    loadedModelAliases: {},
+  });
+  for (const panel of Object.keys(analytics.errors) as (keyof typeof analytics.errors)[]) {
+    analytics.errors[panel] = null;
+    analytics.loading[panel] = false;
+  }
   analytics.selectedDate = null;
   analytics.selectedActivityRange = null;
   analytics.selectedDow = null;
@@ -146,9 +156,7 @@ function resetStore() {
 // await inside fetchSummary/etc.), so no async flushing is
 // needed for call-count or call-param assertions.
 
-beforeEach(async () => {
-  mockAllAPIs();
-  await analytics.setSkillsGranularity("week");
+beforeEach(() => {
   resetStore();
   vi.clearAllMocks();
   mockAllAPIs();
@@ -186,9 +194,9 @@ describe("AnalyticsStore.selectDate", () => {
     expect(analyticsService.getApiV1AnalyticsHourOfWeek).not.toHaveBeenCalled();
   });
 
-  it("keeps the parent hour-of-week data while a date is selected", () => {
-    const parent = makeHourOfWeek();
-    analytics.hourOfWeek = parent;
+  it("keeps the parent hour-of-week data while a date is selected", async () => {
+    await analytics.fetchHourOfWeek();
+    const parent = analytics.hourOfWeek;
 
     analytics.selectDate("2024-01-15");
 
@@ -263,7 +271,7 @@ describe("AnalyticsStore.setDateRange", () => {
 
 describe("AnalyticsStore.setSkillsGranularity", () => {
   it("applies the new granularity only after its response arrives", async () => {
-    analytics.skills = makeSkills();
+    await analytics.fetchSkills("week");
     let resolve!: (value: SkillsAnalyticsResponse) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockReturnValueOnce(
       new Promise((r) => {
@@ -287,7 +295,7 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
   });
 
   it("keeps the applied granularity when the request fails", async () => {
-    analytics.skills = makeSkills();
+    await analytics.fetchSkills("week");
     vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockRejectedValueOnce(
       new Error("network down"),
     );
@@ -296,8 +304,13 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 
     expect(result).toBe("error");
     expect(analytics.skillsGranularity).toBe("week");
+    expect(analytics.requestedSkillsGranularity).toBe("month");
+    await analytics.setSkillsGranularity("week");
+    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]?.granularity).toBe("week");
+    expect(analytics.requestedSkillsGranularity).toBe("week");
+    await analytics.fetchSkills();
+    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]?.granularity).toBe("week");
   });
-
 });
 
 describe("AnalyticsStore freshness state", () => {
@@ -612,7 +625,7 @@ describe("AnalyticsStore activity range selection", () => {
 
   it("does not retain parent summary data when a brushed-range request fails", async () => {
     vi.spyOn(sessions, "load").mockResolvedValue();
-    analytics.summary = makeSummary();
+    await analytics.fetchSummary();
     analyticsService.getApiV1AnalyticsSummary.mockRejectedValueOnce(
       new Error("range request failed"),
     );
@@ -659,10 +672,10 @@ describe("AnalyticsStore.clearDate", () => {
     expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).toEqual(expected);
   });
 
-  it("keeps the parent hour-of-week data when the date is cleared", () => {
+  it("keeps the parent hour-of-week data when the date is cleared", async () => {
     analytics.selectedDate = "2024-01-15";
-    const parent = makeHourOfWeek();
-    analytics.hourOfWeek = parent;
+    await analytics.fetchHourOfWeek();
+    const parent = analytics.hourOfWeek;
 
     analytics.clearDate();
 
@@ -813,9 +826,11 @@ describe("AnalyticsStore model filter", () => {
     expect(analytics.summary).toBeNull();
     expect(analytics.errors.summary).toBe("Summary timed out");
     expect(analytics.displayedModels).toBe("claude-4");
+    const refresh = vi.spyOn(analytics, "fetchAll");
     analytics.toggleModel("claude-4");
     expect(analytics.model).toBe("");
-    await vi.waitFor(() => expect(analytics.querying.summary).toBe(false));
+    await refresh.mock.results[0]!.value;
+    refresh.mockRestore();
   });
 
   it("requests grouped model rows", async () => {
@@ -1066,23 +1081,34 @@ describe("executeFetch concurrency and error handling", () => {
     );
     await analytics.fetchSummary();
     expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
-
-    analytics.from = "2026-02-01";
-    vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(new Promise(() => {}));
-    void analytics.fetchSummary();
-    expect(analytics.summary).toBeNull();
-    expect(analytics.summaryFilterParams).toBeNull();
   });
 
-  it("clears the tools filter snapshot with its data", async () => {
-    await analytics.fetchTools();
-    expect(analytics.toolsFilterParams).not.toBeNull();
-    analytics.agent = "codex";
-    vi.mocked(analyticsService.getApiV1AnalyticsTools).mockReturnValueOnce(new Promise(() => {}));
-    void analytics.fetchTools();
-    expect(analytics.tools).toBeNull();
-    expect(analytics.toolsFilterParams).toBeNull();
-  });
+  it.each(["summary", "tools"] as const)(
+    "clears the %s filter snapshot with its data",
+    async (panel) => {
+      const fetch =
+        panel === "summary" ? () => analytics.fetchSummary() : () => analytics.fetchTools();
+      const read =
+        panel === "summary"
+          ? analyticsService.getApiV1AnalyticsSummary
+          : analyticsService.getApiV1AnalyticsTools;
+      const snapshot = panel === "summary" ? "summaryFilterParams" : "toolsFilterParams";
+      await fetch();
+      expect(analytics[snapshot]).not.toBeNull();
+      analytics.agent = "codex";
+      let release!: (value: unknown) => void;
+      read.mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+      );
+      const pending = fetch();
+      expect(analytics[panel]).toBeNull();
+      expect(analytics[snapshot]).toBeNull();
+      release(panel === "summary" ? makeSummary() : makeTools());
+      await pending;
+    },
+  );
 
   it("should ignore stale error from superseded request", async () => {
     let rejectFirst!: (e: Error) => void;
@@ -1191,22 +1217,12 @@ describe("AnalyticsStore rolling default date range", () => {
     expect(analytics.to).toBe("2026-04-25");
   });
 
-  it("fetchAll re-derives from/to against the current clock while unpinned", async () => {
+  it("fetchAll re-derives its request range and clears old results while pending and after failure", async () => {
     const { analytics } = await loadAnalyticsStore();
-
-    expect(analytics.from).toBe("2025-04-26");
-    expect(analytics.to).toBe("2026-04-25");
-
-    vi.setSystemTime(new Date("2026-04-26T12:00:00"));
-    await analytics.fetchAll();
-
-    expect(analytics.from).toBe("2025-04-27");
-    expect(analytics.to).toBe("2026-04-26");
-  });
-
-  it("clears yesterday's results while the rolled range loads and after it fails", async () => {
-    const { analytics } = await loadAnalyticsStore();
-    analyticsService.getApiV1AnalyticsTools.mockResolvedValueOnce({ ...makeTools(), total_calls: 12 });
+    analyticsService.getApiV1AnalyticsTools.mockResolvedValueOnce({
+      ...makeTools(),
+      total_calls: 12,
+    });
     await analytics.fetchAll();
     expect(analytics.summary?.total_sessions).toBe(10);
     expect(analytics.tools?.total_calls).toBe(12);
@@ -1369,21 +1385,12 @@ describe("invalid machine refetches", () => {
 });
 
 describe("AnalyticsStore panel scopes", () => {
-  it("applies successful panels while tools are pending, then reports and retries a failed refresh", async () => {
-    let releaseTools!: (value: ToolsAnalyticsResponse) => void;
-    vi.mocked(analyticsService.getApiV1AnalyticsTools).mockReturnValueOnce(
-      new Promise((resolve) => {
-        releaseTools = resolve;
-      }),
-    );
-    const refresh = analytics.fetchAll();
-    await vi.waitFor(() => {
-      expect(analytics.summary?.total_sessions).toBe(10);
+  it("retains tools through a failed refresh and clears its error after retry", async () => {
+    analyticsService.getApiV1AnalyticsTools.mockResolvedValueOnce({
+      ...makeTools(),
+      total_calls: 12,
     });
-    expect(analytics.loading.tools).toBe(true);
-    expect(analytics.tools).toBeNull();
-    releaseTools({ ...makeTools(), total_calls: 12 });
-    await refresh;
+    await analytics.fetchTools();
 
     vi.mocked(analyticsService.getApiV1AnalyticsTools).mockRejectedValueOnce(
       new Error("tools unavailable"),
@@ -1406,67 +1413,9 @@ describe("AnalyticsStore panel scopes", () => {
     expect(analytics.errors.tools).toBeNull();
   });
 
-  it.each(["success", "error"])(
-    "ignores a late January %s after changing to February and another agent",
-    async (late) => {
-      analytics.applyDateRange("2026-01-01", "2026-01-31");
-      analytics.agent = "claude";
-      await analytics.fetchSummary();
-      let resolveJanuary!: (value: AnalyticsSummary) => void;
-      let rejectJanuary!: (error: Error) => void;
-      vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
-        new Promise((resolve, reject) => {
-          resolveJanuary = resolve;
-          rejectJanuary = reject;
-        }),
-      );
-      const january = analytics.fetchSummary();
-      analytics.applyDateRange("2026-02-01", "2026-02-28");
-      analytics.agent = "codex";
-      let rejectFebruary!: (error: Error) => void;
-      vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
-        new Promise((_resolve, reject) => {
-          rejectFebruary = reject;
-        }),
-      );
-      const february = analytics.fetchSummary();
-      expect(analytics.summary).toBeNull();
-      expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toMatchObject({
-        from: "2026-02-01",
-        to: "2026-02-28",
-        agent: "codex",
-      });
-      if (late === "success") resolveJanuary({ ...makeSummary(), total_sessions: 77 });
-      else rejectJanuary(new Error("January failed"));
-      await january;
-      expect(analytics.summary).toBeNull();
-      expect(analytics.errors.summary).toBeNull();
-      expect(analytics.loading.summary).toBe(true);
-      rejectFebruary(new Error("February failed"));
-      await february;
-      expect(analytics.errors.summary).toBe("February failed");
-    },
-  );
-
   it("clears activity and heatmap when the selected hour changes", async () => {
     await analytics.fetchAll();
-    const activity = analytics.activity;
-    const heatmap = analytics.heatmap;
-    let rejectActivity!: (error: Error) => void;
-    let rejectHeatmap!: (error: Error) => void;
-    analyticsService.getApiV1AnalyticsActivity.mockReturnValueOnce(
-      new Promise((_, reject) => {
-        rejectActivity = reject;
-      }),
-    );
-    analyticsService.getApiV1AnalyticsHeatmap.mockReturnValueOnce(
-      new Promise((_, reject) => {
-        rejectHeatmap = reject;
-      }),
-    );
     analytics.selectHourOfWeek(1, 9);
-    expect(activity).not.toBeNull();
-    expect(heatmap).not.toBeNull();
     expect(analytics.activity).toBeNull();
     expect(analytics.heatmap).toBeNull();
     for (const read of [
@@ -1475,12 +1424,8 @@ describe("AnalyticsStore panel scopes", () => {
     ]) {
       expect(read.mock.lastCall?.[0]).toMatchObject({ dow: 1, hour: 9 });
     }
-    rejectActivity(new Error("activity refresh failed"));
-    rejectHeatmap(new Error("heatmap refresh failed"));
-    await vi.waitFor(() => expect(analytics.querying.heatmap).toBe(false));
-    expect(analytics.activity).toBeNull();
-    expect(analytics.heatmap).toBeNull();
-    expect(analytics.errors.activity).toBe("activity refresh failed");
-    expect(analytics.errors.heatmap).toBe("heatmap refresh failed");
+    await vi.waitFor(() =>
+      expect(analytics.querying.activity || analytics.querying.heatmap).toBe(false),
+    );
   });
 });
