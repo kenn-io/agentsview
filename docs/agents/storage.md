@@ -18,9 +18,12 @@ reader connections so quick reads always get one. Each holder uses one reader
 connection at a time. Validate input before acquiring a permit. Release it
 before waiting for another bulk reader or doing host git/GitHub lookups.
 
-The archive writer caches up to 64 prepared SQL statements per connection to
-avoid compiling repeated import and project-attribution queries. The cache stays
-in memory and closes with its connection. Reader connections do not use it.
+The archive writer and its serving reader pool cache up to 64 prepared SQL
+statements per connection. This avoids compiling repeated import, project
+attribution, session, and transcript queries. The cache stays in memory and
+closes with its connection. The serving pool retains at most four connections.
+Cold read-only opens and standalone schema probes use their existing uncached
+connections.
 
 Reconciliation spools and Codex staging databases also cache up to 64 prepared
 statements per connection. Writable vector indexes use the same limit with the
@@ -261,10 +264,10 @@ content still contains the thinking.
   `is_content` set, and payload loads restore it from the payload's content.
 - PostgreSQL, ClickHouse, and DuckDB mirrors keep no marker. PostgreSQL and
   ClickHouse rewrite existing copies once from schema setup, guarded by the
-  `dialogue_dedupe_v1` and `agentsview_dialogue_deduplicated` metadata keys. The
-  ClickHouse mutation must write `''` beneath the NULL; an UPDATE to plain NULL
-  keeps the old string under the null mask. DuckDB schema version 24 rebuilds
-  the mirror.
+  `dialogue_dedupe_v1` and `agentsview_dialogue_deduplicated` metadata keys.
+  The ClickHouse mutation must write `''` beneath the NULL; an UPDATE to plain
+  NULL keeps the old string under the null mask. DuckDB schema version 24
+  rebuilds the mirror.
 
 Data version 146 reparses providers with dialogue classification in place,
 including the shared Codex parser. Retained sources that cannot be reparsed keep
@@ -737,10 +740,9 @@ grouped sessions so older writers' trigger rebuilds leave it in place. Warm
 daily reads filter totals in SQL and read per-session rows for authoritative
 costs and dedup exceptions. Warm Top sessions rank session or group units in
 cache SQL and use installed group labels. Only returned individual sessions load
-archive names. Session counts group ordinary daily rows in SQL and add
-surviving owners.
-Termination and `active_since` filters still use the archive snapshot. Do not
-widen or narrow this live/baked boundary implicitly.
+archive names. Session counts group ordinary daily rows in SQL and add surviving
+owners. Termination and `active_since` filters still use the archive snapshot.
+Do not widen or narrow this live/baked boundary implicitly.
 
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
@@ -808,12 +810,12 @@ invalidated installs, and verify coverage and concurrent installs in the pinned
 cache transaction. Covered daily totals read ordinary usage from day totals and
 load only window exception owners and matching authoritative sessions. Covered
 Top sessions skip discovery; other window reads use date indexes. Without a
-claim, enabled backfill starts coverage. After conflicts, daily totals
-and Top sessions retry once with a fresh journal capture; further conflicts and
-other reads use the full path. A result is no older than the archive snapshot
-captured when the read began, and may be newer for a session whose facts were
-refilled meanwhile. A session confirmed deleted during fill is dropped from the
-request. `cached_at` is diagnostic only.
+claim, enabled backfill starts coverage. After conflicts, daily totals and Top
+sessions retry once with a fresh journal capture; further conflicts and other
+reads use the full path. A result is no older than the archive snapshot captured
+when the read began, and may be newer for a session whose facts were refilled
+meanwhile. A session confirmed deleted during fill is dropped from the request.
+`cached_at` is diagnostic only.
 
 The layers are kept apart so a live archive cannot veto a read. A fill reads one
 session's facts and that session's source version inside a single archive read

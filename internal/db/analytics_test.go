@@ -155,23 +155,40 @@ func mustProjects(
 }
 
 func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "summary", "project", func(s *Session) {
-		s.StartedAt = new("2024-06-01T09:00:00Z")
-	})
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	// Fail during SQLite row evaluation, after QueryContext has returned rows.
-	require.NoError(t, conn.Raw(func(driverConn any) error {
-		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("strftime", func(...any) (string, error) {
-			return "", errors.New("summary read failure")
-		}, false)
-	}))
-	require.NoError(t, conn.Close())
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{"serving", "querying analytics summary: summary read failure"},
+		{"cold read-only", "summary read failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "summary", "project", func(s *Session) {
+				s.StartedAt = new("2024-06-01T09:00:00Z")
+			})
+			if tc.name == "cold read-only" {
+				reader, err := OpenReadOnly(t.Context(), d.Path())
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reader.Close()) })
+				d = reader
+			}
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			// Cached SQL evaluates its first row during QueryContext; cold
+			// read-only SQL evaluates it during Next. Both must return the error.
+			require.NoError(t, conn.Raw(func(driverConn any) error {
+				return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("strftime", func(...any) (string, error) {
+					return "", errors.New("summary read failure")
+				}, false)
+			}))
+			require.NoError(t, conn.Close())
 
-	_, err = d.GetAnalyticsSummary(t.Context(), baseFilter())
-	require.EqualError(t, err, "summary read failure")
+			_, err = d.GetAnalyticsSummary(t.Context(), baseFilter())
+			require.EqualError(t, err, tc.want)
+		})
+	}
 }
 
 func TestGetAnalyticsSummary(t *testing.T) {

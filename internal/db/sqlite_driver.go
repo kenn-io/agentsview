@@ -54,7 +54,9 @@ func (c *archiveReaderConnector) Connect(context.Context) (driver.Conn, error) {
 }
 
 func (db *DB) openReader(path string) *sql.DB {
-	reader := sql.OpenDB(&archiveReaderConnector{dsn: makeDSN(path, true), reads: &db.reads})
+	// Serving readers repeatedly execute the same session and transcript SQL.
+	dsn := makeDSN(path, true) + "&_stmt_cache_size=64"
+	reader := sql.OpenDB(&archiveReaderConnector{dsn: dsn, reads: &db.reads})
 	configureReaderPool(reader)
 	return reader
 }

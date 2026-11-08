@@ -286,43 +286,61 @@ func TestSubstringSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
 	assert.Equal(t, 0, page.Matches[0].Ordinal)
 }
 
-// SQLite compiles a query when it is prepared but reads the schema again on
-// the first row. A regex search whose candidate query was prepared just
-// before an import dropped the index must still rerun as a scan.
+// Cached serving queries open their snapshot during QueryContext and can finish
+// against an index dropped afterwards. Cold read-only queries take their first
+// step during Next and must retry as a scan when the index has disappeared.
 func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	seedSearchSession(t, d, "s1", "proj", [][2]string{
-		{"user", "where is the rare-token"},
-		{"assistant", "nothing to see"},
-	})
-	countMessagesForSubstringIndex(t, d, "s1")
-	f := ContentSearchFilter{
-		Pattern: `rare-tok(en)`, Mode: "regex", Limit: 50,
-		Sources: []string{"messages", "thinking", "tool_input", "tool_result"},
-	}
-	re, err := regexp.Compile(f.Pattern)
-	require.NoError(t, err)
-	lit := LiteralPrefix(f.Pattern)
+	for _, tc := range []struct {
+		name      string
+		cold      bool
+		wantIndex []bool
+	}{
+		{"serving", false, []bool{true}},
+		{"cold read-only", true, []bool{true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			archive := testDB(t)
+			ctx := t.Context()
+			seedSearchSession(t, archive, "s1", "proj", [][2]string{
+				{"user", "where is the rare-token"},
+				{"assistant", "nothing to see"},
+			})
+			countMessagesForSubstringIndex(t, archive, "s1")
+			d := archive
+			if tc.cold {
+				reader, err := OpenReadOnly(ctx, archive.Path())
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reader.Close()) })
+				d = reader
+			}
+			f := ContentSearchFilter{
+				Pattern: `rare-tok(en)`, Mode: "regex", Limit: 50,
+				Sources: []string{"messages", "thinking", "tool_input", "tool_result"},
+			}
+			re, err := regexp.Compile(f.Pattern)
+			require.NoError(t, err)
+			lit := LiteralPrefix(f.Pattern)
 
-	var usedIndex []bool
-	matches, err := searchWithSubstringCandidates(ctx, d, f, lit,
-		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
-			usedIndex = append(usedIndex, candidates.message.sql != "")
-			rows, err := d.regexCandidateRows(ctx, f, lit, candidates)
-			if err != nil {
-				return nil, err
-			}
-			if len(usedIndex) == 1 {
-				require.NoError(t, d.DropFTS(ctx))
-			}
-			return regexMatches(f, re, rows)
+			var usedIndex []bool
+			matches, err := searchWithSubstringCandidates(ctx, d, f, lit,
+				func(candidates substringCandidateFilters) ([]ContentMatch, error) {
+					usedIndex = append(usedIndex, candidates.message.sql != "")
+					rows, err := d.regexCandidateRows(ctx, f, lit, candidates)
+					if err != nil {
+						return nil, err
+					}
+					if len(usedIndex) == 1 {
+						require.NoError(t, archive.DropFTS(ctx))
+					}
+					return regexMatches(f, re, rows)
+				})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantIndex, usedIndex)
+			require.Len(t, matches, 1)
+			assert.Equal(t, "message", matches[0].Location)
+			assert.Equal(t, 0, matches[0].Ordinal)
 		})
-	require.NoError(t, err)
-	assert.Equal(t, []bool{true, false}, usedIndex)
-	require.Len(t, matches, 1)
-	assert.Equal(t, "message", matches[0].Location)
-	assert.Equal(t, 0, matches[0].Ordinal)
+	}
 }
 
 // Terms search prefilters sessions through the index only for terms it

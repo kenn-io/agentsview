@@ -29,8 +29,7 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 		activityKept:      newActivityKeptMemo(),
 		sessionStatsFacts: newSessionStatsFactsMemo(),
 	}
-	reader := sql.OpenDB(&archiveReaderConnector{dsn: makeDSN(path, true), reads: &db.reads})
-	reader.SetMaxOpenConns(4)
+	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
