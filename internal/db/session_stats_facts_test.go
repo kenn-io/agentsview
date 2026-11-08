@@ -249,7 +249,7 @@ func TestSessionStatsFactsSnapshotAndReaderSwap(t *testing.T) {
 			result := make(chan sessionStatsFactsByID, 1)
 			fail := make(chan error, 1)
 			go func() {
-				facts, e := d.readSessionStatsFacts(t.Context(), []sessionStatsRow{{id: "session", agent: "claude"}}, []sessionStatsRow{{id: "session", agent: "claude"}})
+				_, _, facts, e := d.readSessionStatsFacts(t.Context(), factsFilter, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
 				result <- facts
 				fail <- e
 			}()

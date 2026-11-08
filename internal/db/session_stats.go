@@ -76,16 +76,7 @@ func (db *DB) GetSessionStats(
 	// metrics. A second, subagent-inclusive load supplies the additive
 	// token/session totals, where subagent spend is real and belongs in
 	// the headline numbers.
-	rows, err := db.loadSessionsInWindow(ctx, f, from, to, false)
-	if err != nil {
-		return nil, err
-	}
-	rowsWithSubagents, err := db.loadSessionsInWindow(ctx, f, from, to, true)
-	if err != nil {
-		return nil, err
-	}
-
-	facts, err := db.readSessionStatsFacts(ctx, rows, rowsWithSubagents)
+	rows, rowsWithSubagents, facts, err := db.readSessionStatsFacts(ctx, f, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("reading session statistics facts: %w", err)
 	}
@@ -563,8 +554,8 @@ type sessionStatsRow struct {
 // Matches the analytics.go convention: exclude subagent/fork rows
 // and soft-deleted rows, require non-empty message_count, and bound
 // by started_at within [from, to).
-func (db *DB) loadSessionsInWindow(
-	ctx context.Context, f StatsFilter, from, to time.Time,
+func loadSessionsInWindow(
+	ctx context.Context, reader messageRowsQuerier, f StatsFilter, from, to time.Time,
 	includeSubagents bool,
 ) ([]sessionStatsRow, error) {
 	where, args := sessionsInWindowWhere(f, from, to, includeSubagents)
@@ -581,7 +572,7 @@ func (db *DB) loadSessionsInWindow(
 		s.is_automated
 		FROM sessions s WHERE ` + where
 
-	sqlRows, err := db.getReader().QueryContext(ctx, query, args...)
+	sqlRows, err := reader.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"querying sessions for stats window: %w", err,

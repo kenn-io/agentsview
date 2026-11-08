@@ -78,7 +78,7 @@ func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
 	ctx := t.Context()
 	from := time.Now().Add(-24 * time.Hour)
 	to := time.Now().Add(1 * time.Hour)
-	rows, err := d.loadSessionsInWindow(ctx, StatsFilter{}, from, to, false)
+	rows, err := loadSessionsInWindow(ctx, d.getReader(), StatsFilter{}, from, to, false)
 	require.NoError(t, err, "loadSessionsInWindow")
 	byID := map[string]bool{}
 	for _, r := range rows {
@@ -124,7 +124,7 @@ func Test_loadSessionsInWindow_DateIndexWindow(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			evaluations = 0
-			rows, err := d.loadSessionsInWindow(t.Context(), StatsFilter{}, from, from.AddDate(0, 0, tc.days), false)
+			rows, err := loadSessionsInWindow(t.Context(), d.getReader(), StatsFilter{}, from, from.AddDate(0, 0, tc.days), false)
 			require.NoError(t, err)
 			assert.Empty(t, rows)
 			if tc.indexed {

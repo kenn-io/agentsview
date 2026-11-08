@@ -41,7 +41,8 @@ func (facts sessionStatsFactsByID) session(id string) *sessionStatsFacts {
 }
 
 func (f *sessionStatsFacts) size() int64 {
-	size := int64(unsafe.Sizeof(*f)) + 208 + int64(len(f.id))
+	// Include the retained slice's pointer and three estimated map headers.
+	size := int64(unsafe.Sizeof(*f)+unsafe.Sizeof(f)) + 3*64 + int64(len(f.id))
 	size += int64(cap(f.velocity.turnCycles)+cap(f.velocity.firstResponses)) * 8
 	size += int64(unsafe.Sizeof(sessionCacheTotals{}))
 	for key := range f.tools {
@@ -115,7 +116,7 @@ func (m *sessionStatsFactsMemo) Swap(swap func()) {
 	m.rows.DeleteSlots(func(string) bool { return true })
 }
 
-func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionStatsRow) (sessionStatsFactsByID, error) {
+func (db *DB) readSessionStatsFacts(ctx context.Context, filter StatsFilter, from, to time.Time) ([]sessionStatsRow, []sessionStatsRow, sessionStatsFactsByID, error) {
 	var generation uint64
 	memo := db.sessionStatsFacts
 	if memo != nil {
@@ -123,22 +124,33 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 	}
 	conn, err := db.getReader().Conn(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	defer conn.Close()
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	identity, pricingRevision, err := databaseIDAndUsagePricingRevisionFrom(ctx, tx)
+	roots, err := loadSessionsInWindow(ctx, tx, filter, from, to, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	version := fmt.Sprintf("%s|%d", identity, pricingRevision)
+	all, err := loadSessionsInWindow(ctx, tx, filter, from, to, true)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var version string
 	var previous []*sessionStatsFacts
-	if memo != nil && identity != "" {
-		previous = memo.Lookup(generation, version)
+	if memo != nil {
+		identity, pricingRevision, e := databaseIDAndUsagePricingRevisionFrom(ctx, tx)
+		if e != nil {
+			return nil, nil, nil, e
+		}
+		if identity != "" {
+			version = fmt.Sprintf("%s|%d", identity, pricingRevision)
+			previous = memo.Lookup(generation, version)
+		}
 	}
 	old := make(sessionStatsFactsByID, len(previous))
 	for _, f := range previous {
@@ -149,10 +161,8 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 		rootIDs[r.id] = true
 	}
 	agents := make(map[string]string, len(all))
-	for _, set := range [][]sessionStatsRow{all, roots} {
-		for _, row := range set {
-			agents[row.id] = row.agent
-		}
+	for _, row := range all {
+		agents[row.id] = row.agent
 	}
 	ids := make([]string, 0, len(agents))
 	for id := range agents {
@@ -161,24 +171,26 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 	slices.Sort(ids)
 	facts := make(sessionStatsFactsByID, len(ids))
 	var missing, rootMiss, claudeMiss []string
-	err = queryChunked(ids, func(chunk []string) error {
-		ph, args := InPlaceholders(chunk)
-		rows, e := tx.QueryContext(ctx, `SELECT s.id,COALESCE(c.revision,0) FROM sessions s LEFT JOIN usage_session_changes c ON c.session_id=s.id WHERE s.id IN `+ph, args...)
-		if e != nil {
-			return e
-		}
-		defer rows.Close()
-		for rows.Next() {
-			f := &sessionStatsFacts{}
-			if e = rows.Scan(&f.id, &f.revision); e != nil {
+	if memo != nil {
+		err = queryChunked(ids, func(chunk []string) error {
+			ph, args := InPlaceholders(chunk)
+			rows, e := tx.QueryContext(ctx, `SELECT session_id,revision FROM usage_session_changes WHERE session_id IN `+ph, args...)
+			if e != nil {
 				return e
 			}
-			facts[f.id] = f
+			defer rows.Close()
+			for rows.Next() {
+				f := &sessionStatsFacts{}
+				if e = rows.Scan(&f.id, &f.revision); e != nil {
+					return e
+				}
+				facts[f.id] = f
+			}
+			return rows.Err()
+		})
+		if err != nil {
+			return nil, nil, nil, err
 		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, err
 	}
 	var publish []*sessionStatsFacts
 	for _, id := range ids {
@@ -209,12 +221,12 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 		publish = append(publish, f)
 	}
 	if err = loadSessionStatsCountsAndMix(ctx, tx, missing, facts); err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	msgs := map[string][]TimingMessage{}
 	err = queryChunked(rootMiss, func(chunk []string) error { return db.queryVelocityMsgs(ctx, tx, chunk, time.UTC, msgs) })
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	for _, id := range rootMiss {
 		if len(msgs[id]) >= 2 {
@@ -224,7 +236,7 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 	if len(claudeMiss) > 0 {
 		pricing, e := db.loadPricingMapFrom(ctx, tx)
 		if e != nil {
-			return nil, e
+			return nil, nil, nil, e
 		}
 		resolver := export.NewPricingResolver(pricing)
 		cache := map[string]*sessionCacheTotals{}
@@ -235,19 +247,19 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 			return accumulateAdoption(ctx, tx, chunk, facts)
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		for _, id := range claudeMiss {
 			facts.session(id).cache = cache[id]
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	if memo != nil && identity != "" {
+	if memo != nil && version != "" {
 		memo.Store(generation, version, publish, previous)
 	}
-	return facts, nil
+	return roots, all, facts, nil
 }
 
 func loadSessionStatsCountsAndMix(ctx context.Context, tx *sql.Tx, ids []string, facts sessionStatsFactsByID) error {
@@ -259,6 +271,7 @@ func loadSessionStatsCountsAndMix(ctx context.Context, tx *sql.Tx, ids []string,
 			return err
 		}
 		ph, args := InPlaceholders(chunk)
+		// System-only assistant rows represent injected metadata, not turns.
 		rows, err := tx.QueryContext(ctx, `SELECT session_id,COUNT(*) FROM messages WHERE session_id IN `+ph+` AND role='assistant' AND is_system=0 GROUP BY session_id`, args...)
 		if err != nil {
 			return err
