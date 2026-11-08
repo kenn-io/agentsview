@@ -312,8 +312,8 @@ func computeToolAndModelMix(stats *SessionStats, sessionIDs []string, facts sess
 	}
 }
 
-// accumulateToolMix folds one chunk of session IDs into
-// stats.ToolMix. Each row in tool_calls increments the matching
+// accumulateToolMix fills each session's tool facts for one chunk of IDs.
+// Each row in tool_calls increments that session's matching
 // category bucket and the total counter; empty-string categories are
 // silently grouped under "" so the total stays consistent with
 // GetAnalyticsTools.
@@ -342,10 +342,8 @@ func accumulateToolMix(
 	return rows.Err()
 }
 
-// accumulateModelMix folds one chunk of session IDs into
-// stats.ModelMix. Token contribution is messages.output_tokens summed
-// per model — the per-message cost column, matching the spec's
-// "model_mix.by_tokens reflects total output tokens per model".
+// accumulateModelMix fills each session's model facts for one chunk of IDs.
+// Token contribution is messages.output_tokens summed per session and model.
 //
 // Eligibility mirrors usageMessageEligibility (internal/db/usage.go):
 // rows without parsed token_usage and rows tagged as "<synthetic>" are
