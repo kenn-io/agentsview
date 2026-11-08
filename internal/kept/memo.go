@@ -19,7 +19,7 @@ type Memo[T any] struct {
 	// Limit caps the slots; zero means memoLimit.
 	Limit int
 	// Size estimates a row's bytes. With it, MaxBytes caps the bytes kept,
-	// zero meaning memoBytes, and rows over that cap are not kept.
+	// zero meaning DefaultMaxBytes, and rows over that cap are not kept.
 	// Without it only the slots are capped.
 	Size     func(T) int64
 	MaxBytes int64
@@ -34,7 +34,8 @@ type memoEntry[T any] struct {
 
 const (
 	memoLimit = 64
-	memoBytes = 64 << 20
+	// DefaultMaxBytes caps the bytes kept when MaxBytes is zero.
+	DefaultMaxBytes = 64 << 20
 )
 
 func (m *Memo[T]) Get(slot, version string) ([]T, bool) {
@@ -60,7 +61,7 @@ func (m *Memo[T]) Put(slot, version string, rows []T) {
 			size += m.Size(row)
 		}
 	}
-	maxBytes := cmp.Or(m.MaxBytes, memoBytes)
+	maxBytes := cmp.Or(m.MaxBytes, DefaultMaxBytes)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.removeLocked(slot)

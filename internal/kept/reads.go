@@ -32,7 +32,7 @@ func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(conte
 			}
 			encoded, err := json.Marshal(value)
 			if err != nil {
-				return memoBytes + 1
+				return DefaultMaxBytes + 1
 			}
 			return int64(len(encoded))
 		}

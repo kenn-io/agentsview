@@ -3,13 +3,15 @@ package db
 import (
 	"encoding/json/v2"
 	"unsafe"
+
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 // Bytes includes the immutable side data omitted from the public response.
 func (r DailyUsageResult) Bytes() int64 {
 	encoded, err := json.Marshal(r)
 	if err != nil {
-		return 64<<20 + 1
+		return kept.DefaultMaxBytes + 1
 	}
 	n := int64(len(encoded))
 	if r.Pairwise != nil {
