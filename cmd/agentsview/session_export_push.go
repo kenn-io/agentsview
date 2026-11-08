@@ -59,7 +59,7 @@ func newExportPushCommandWithSource(source exportPushSource) *cobra.Command {
 		Long: "Export one exact canonical archive ID. Claude IDs are unprefixed; other agents use agent:<native-id>.\n" +
 			"This does not promise a complete running session.\n" +
 			"Known truncated, malformed, summary-only or uncaptured data is refused. Separately stored parent/child/sibling sessions are excluded; text already embedded in the selected session remains for review.\n" +
-			"No source sync, receiver token or network push. The receiver's first accepted snapshot is immutable across later closes too.\n" +
+			"Does not sync source data, require upload credentials, or upload. The receiver never replaces its first accepted snapshot, even after later closes.\n" +
 			"Snapshot export is unavailable in this build.",
 		Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
