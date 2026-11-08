@@ -55,11 +55,11 @@ func newExportPushCommandWithSource(source exportPushSource) *cobra.Command {
 	var agent, output string
 	var prefix bool
 	cmd := &cobra.Command{
-		Use: "export-push <session-id>", Short: "export one exact archived snapshot for explicit review without uploading", GroupID: groupData,
+		Use: "export-push <session-id>", Short: "export one exact archived snapshot without uploading", GroupID: groupData,
 		Long: "Export one exact canonical archive ID. Claude IDs are unprefixed; other agents use agent:<native-id>.\n" +
 			"This does not promise a complete running session.\n" +
 			"Known truncated, malformed, summary-only or uncaptured data is refused. Separately stored parent/child/sibling sessions are excluded; text already embedded in the selected session remains for review.\n" +
-			"Writes a new private file only; no source sync, receiver token or network push. The receiver's first accepted snapshot is immutable across later closes too.\n" +
+			"No source sync, receiver token or network push. The receiver's first accepted snapshot is immutable across later closes too.\n" +
 			"Snapshot export is unavailable in this build.",
 		Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
