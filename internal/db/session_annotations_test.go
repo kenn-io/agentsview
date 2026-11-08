@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"hegel.dev/go/hegel"
 )
 
 func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
@@ -743,6 +746,94 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	link, err = d.GetSessionExternalParent(ctx, "child")
 	require.NoError(t, err)
 	assert.True(t, link.Applied)
+}
+
+type sessionAnnotationTestReporter interface {
+	Errorf(string, ...any)
+	FailNow()
+}
+
+func exercisePassiveSessionPushExternalParent(
+	t sessionAnnotationTestReporter, d *DB, ctx context.Context, suffix, toolName string,
+) {
+	managerID := "manager-" + suffix
+	workerID := "worker-" + suffix
+	pushedID := "pushed-" + suffix
+	for _, id := range []string{managerID, workerID} {
+		require.NoError(t, d.UpsertSession(ctx, Session{
+			ID: id, Project: "proj", Machine: defaultMachine, Agent: defaultAgent,
+		}))
+	}
+
+	link, err := d.SetSessionExternalParent(ctx, workerID, managerID)
+	require.NoError(t, err)
+	assert.True(t, link.Applied)
+
+	receipt, write := sessionPushFixture(pushedID)
+	write.Session.UserMessageCount = 0
+	write.Messages[0].Role = "assistant"
+	write.Messages[0].HasToolUse = true
+	write.Messages[0].ToolCalls = []ToolCall{{
+		ToolName: toolName, Category: "Task", SubagentSessionID: workerID,
+	}}
+	created, err := d.ApplySessionPush(ctx, receipt, write)
+	require.NoError(t, err)
+	assert.True(t, created)
+
+	assertApplied := func() {
+		link, err := d.GetSessionExternalParent(ctx, workerID)
+		require.NoError(t, err)
+		assert.True(t, link.Applied)
+		worker, err := d.GetSession(ctx, workerID)
+		require.NoError(t, err)
+		require.NotNil(t, worker)
+		require.NotNil(t, worker.ParentSessionID)
+		assert.Equal(t, managerID, *worker.ParentSessionID)
+	}
+	assertCleared := func() {
+		worker, err := d.GetSession(ctx, workerID)
+		require.NoError(t, err)
+		require.NotNil(t, worker)
+		assert.Nil(t, worker.ParentSessionID)
+		assert.Empty(t, worker.RelationshipType)
+		_, err = d.GetSessionExternalParent(ctx, workerID)
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	}
+	assertApplied()
+	cleared, err := d.ClearSessionExternalParent(ctx, workerID)
+	require.NoError(t, err)
+	assert.True(t, cleared.Changed)
+	assertCleared()
+
+	link, err = d.SetSessionExternalParent(ctx, workerID, managerID)
+	require.NoError(t, err)
+	assert.True(t, link.Applied)
+	assertApplied()
+	cleared, err = d.ClearSessionExternalParent(ctx, workerID)
+	require.NoError(t, err)
+	assert.True(t, cleared.Changed)
+	assertCleared()
+}
+
+func TestSessionExternalParentIgnoresPassiveSessionPushReferences(t *testing.T) {
+	d := testDB(t)
+	exercisePassiveSessionPushExternalParent(t, d, t.Context(), "fixture", "Agent")
+}
+
+func TestSessionExternalParentIgnoresGeneratedPassiveSessionPushReferences(t *testing.T) {
+	d := testDB(t)
+	caseIndex := 0
+	hegel.Test(t, func(ht *hegel.T) {
+		random := hegel.Draw(ht, hegel.Text())
+		if len(random) > 64 {
+			random = random[:64]
+		}
+		suffix := fmt.Sprintf("%d-%s", caseIndex, hex.EncodeToString([]byte(random)))
+		caseIndex++
+		exercisePassiveSessionPushExternalParent(
+			ht, d, t.Context(), suffix, "Agent-"+suffix,
+		)
+	}, hegel.WithTestCases(64))
 }
 
 func TestAnnotationTreeSkipsHiddenAncestors(t *testing.T) {

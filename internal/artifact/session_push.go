@@ -68,7 +68,10 @@ func EncodeSessionPush(ctx context.Context, database *db.DB, id, expectedAgent s
 	}
 	session, data, err := database.LoadSessionPushData(ctx, id, artifactExportLoadLimits(productionArtifactLimits()))
 	if err != nil {
-		return nil, errors.New("cannot load bounded session snapshot")
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, errors.New("cannot read the selected session within transfer limits")
 	}
 	if session == nil {
 		return nil, errors.New("session is not in the local archive")

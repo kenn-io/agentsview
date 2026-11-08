@@ -4,15 +4,19 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"reflect"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/db"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
+
+const sessionPushReadTimeout = 2 * time.Minute
 
 type sessionPushResponse struct {
 	SessionID string `json:"session_id"`
@@ -94,6 +98,11 @@ func (s *Server) handleSessionPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.sessionPushMu.Unlock()
+	if err := extendRequestReadDeadline(w, sessionPushReadTimeout); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		log.Printf("extending session push read deadline: %v", err)
+		http.Error(w, "cannot prepare session upload", http.StatusInternalServerError)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, artifact.MaxSessionPushBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

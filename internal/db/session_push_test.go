@@ -118,7 +118,7 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 			require.NoError(t, err)
 			write.Messages[0].Content = "replacement must not land"
 			created, err := d.ApplySessionPush(ctx, receipt, write)
-			assert.ErrorIs(t, err, ErrSessionPushConflict)
+			require.ErrorIs(t, err, ErrSessionPushConflict)
 			assert.False(t, created)
 			after, err := d.GetArtifactExportSession(ctx, "snapshot")
 			require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {
 		if id == "live" {
 			assert.NoError(t, err)
 		} else {
-			assert.ErrorIs(t, err, ErrSessionPushConflict)
+			require.ErrorIs(t, err, ErrSessionPushConflict)
 		}
 	}
 }
@@ -280,7 +280,7 @@ func TestSessionPushCanceledDoesNotPublish(t *testing.T) {
 	cancel()
 	receipt, write := sessionPushFixture("snapshot")
 	created, err := d.ApplySessionPush(ctx, receipt, write)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, created)
 	var count int
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM session_push_receipts`).Scan(&count))
@@ -320,7 +320,7 @@ func TestLoadSessionPushDataExactLiveSession(t *testing.T) {
 	limits := smallArtifactExportLoadLimits()
 	limits.MessageBytes = 1
 	_, _, err = d.LoadSessionPushData(ctx, "parent", limits)
-	assert.ErrorIs(t, err, ErrArtifactExportLimit)
+	require.ErrorIs(t, err, ErrArtifactExportLimit)
 }
 
 func TestLoadSessionPushDataCoherentSnapshotDuringWrites(t *testing.T) {
@@ -350,7 +350,16 @@ func TestLoadSessionPushDataCoherentSnapshotDuringWrites(t *testing.T) {
 	close(start)
 	for range 24 {
 		session, data, err := d.LoadSessionPushData(ctx, "snapshot", smallArtifactExportLoadLimits())
-		if !assert.NoError(t, err) || !assert.NotNil(t, session) || !assert.Len(t, data.Messages, 1) {
+		if err != nil {
+			t.Errorf("loading session push snapshot: %v", err)
+			break
+		}
+		if session == nil {
+			t.Error("loaded session push snapshot is nil")
+			break
+		}
+		if len(data.Messages) != 1 {
+			t.Errorf("got %d messages in session push snapshot, want 1", len(data.Messages))
 			break
 		}
 		assert.Equal(t, Ptr(data.Messages[0].Content), session.FirstMessage)

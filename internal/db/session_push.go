@@ -164,35 +164,34 @@ func ValidateSessionPushResultCollections(content string) error {
 func validateSessionPushResultJSON(content string) error {
 	dec := jsontext.NewDecoder(strings.NewReader(content))
 	first, err := dec.ReadToken()
-	if err != nil || (first.Kind() != jsontext.KindBeginArray && first.Kind() != jsontext.KindBeginObject) {
-		return nil
-	}
-	type collection struct {
-		kind  jsontext.Kind
-		count int
-	}
-	stack := []collection{{kind: first.Kind()}}
-	for len(stack) > 0 {
-		token, err := dec.ReadToken()
-		if err != nil {
-			return nil
+	if err == nil && (first.Kind() == jsontext.KindBeginArray || first.Kind() == jsontext.KindBeginObject) {
+		type collection struct {
+			kind  jsontext.Kind
+			count int
 		}
-		kind := token.Kind()
-		if kind == jsontext.KindEndArray || kind == jsontext.KindEndObject {
-			stack = stack[:len(stack)-1]
-			continue
-		}
-		current := &stack[len(stack)-1]
-		current.count++
-		limit := 4096
-		if current.kind == jsontext.KindBeginObject {
-			limit = 512
-		} // 256 name/value pairs
-		if current.count > limit {
-			return errors.New("session push result collection exceeds limit")
-		}
-		if kind == jsontext.KindBeginArray || kind == jsontext.KindBeginObject {
-			stack = append(stack, collection{kind: kind})
+		stack := []collection{{kind: first.Kind()}}
+		for len(stack) > 0 {
+			token, err := dec.ReadToken()
+			if err != nil {
+				break
+			}
+			kind := token.Kind()
+			if kind == jsontext.KindEndArray || kind == jsontext.KindEndObject {
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			current := &stack[len(stack)-1]
+			current.count++
+			limit := 4096
+			if current.kind == jsontext.KindBeginObject {
+				limit = 512
+			} // 256 name/value pairs
+			if current.count > limit {
+				return errors.New("session push result collection exceeds limit")
+			}
+			if kind == jsontext.KindBeginArray || kind == jsontext.KindBeginObject {
+				stack = append(stack, collection{kind: kind})
+			}
 		}
 	}
 	return nil

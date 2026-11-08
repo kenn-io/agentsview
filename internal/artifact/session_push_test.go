@@ -49,10 +49,16 @@ func TestSessionPushPreservesCapabilities(t *testing.T) {
 
 func TestSessionPushCanceledContext(t *testing.T) {
 	d := testDB(t)
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
+		ID: "sample", Agent: "claude", Machine: "source",
+	}))
+	_, err := EncodeSessionPush(t.Context(), d, "sample", "")
+	require.NoError(t, err, "the selected session must be encodable before cancellation")
+
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := EncodeSessionPush(ctx, d, "sample", "")
-	require.Error(t, err)
+	_, err = EncodeSessionPush(ctx, d, "sample", "")
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestSessionPushRejectMalformed(t *testing.T) {

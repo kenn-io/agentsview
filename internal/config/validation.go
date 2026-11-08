@@ -66,7 +66,7 @@ func (c *Config) validateSections() error {
 
 func (c *Config) validateSessionPush() error {
 	if c.AcceptSessionPush && !c.RequireAuth {
-		return fmt.Errorf("accept_session_push requires require_auth = true")
+		return errors.New("accept_session_push requires require_auth = true")
 	}
 	return nil
 }

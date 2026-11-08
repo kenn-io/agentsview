@@ -88,7 +88,8 @@ func TestSessionPushNormalizedCollectionsRejectAtomically(t *testing.T) {
 					receiver.SetAssetsDir(assets)
 					receiver.SetToolResultImages(policy)
 					request := func(packet []byte) *httptest.ResponseRecorder {
-						r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/ingest", bytes.NewReader(packet))
+						r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+							"/api/v1/sessions/ingest", bytes.NewReader(packet))
 						r.Header.Set("Authorization", "Bearer fixture")
 						r.Header.Set("Content-Type", "application/json")
 						w := httptest.NewRecorder()

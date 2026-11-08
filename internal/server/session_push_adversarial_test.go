@@ -26,7 +26,8 @@ func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T)
 			s := testServer(t, 30*time.Second)
 			s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
 			body := &sessionPushObservedBody{}
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/ingest", body)
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+				"/api/v1/sessions/ingest", body)
 			r.Header.Set("Content-Type", "application/json")
 			r.Header.Set("Authorization", "Bearer fixture")
 			want := http.StatusUnauthorized
@@ -68,7 +69,8 @@ func TestSessionPushBasePathAndMalformedBodyAreAtomic(t *testing.T) {
 	s := testServer(t, 30*time.Second, WithBasePath("/view"))
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
 	for _, payload := range []string{`{"v":99,"session_id":"selected"}`, `{"v":1,"v":1}`, `{} {}`} {
-		r := httptest.NewRequest(http.MethodPost, "/view/api/v1/sessions/ingest", strings.NewReader(payload))
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+			"/view/api/v1/sessions/ingest", strings.NewReader(payload))
 		r.Header.Set("Authorization", "Bearer fixture")
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -84,7 +86,8 @@ func TestSessionPushBasePathAndMalformedBodyAreAtomic(t *testing.T) {
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "selected", Agent: "claude", Machine: "source"}))
 	payload, err := artifact.EncodeSessionPush(t.Context(), d, "selected", "")
 	require.NoError(t, err)
-	r := httptest.NewRequest(http.MethodPost, "/view/api/v1/sessions/ingest", bytes.NewReader(payload))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+		"/view/api/v1/sessions/ingest", bytes.NewReader(payload))
 	r.Header.Set("Authorization", "Bearer fixture")
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

@@ -36,8 +36,8 @@ func newPushSessionCommand() *cobra.Command {
 			"Codex IDs start with codex:, Pi IDs with pi:, and Claude IDs are unprefixed.\n" +
 			"The first accepted snapshot is immutable: identical retries succeed, changed snapshots conflict.\n" +
 			"The receiver needs writable SQLite, require_auth=true and accept_session_push=true.\n" +
-			"Tokens come only from --token-env (default AGENTSVIEW_PUSH_TOKEN) or --token-file.\n" +
-			"Use AGENTSVIEW_DATA_DIR to select the local archive. HTTPS is required except on loopback.",
+			"Literal token arguments are not accepted.\n" +
+			"Use AGENTSVIEW_DATA_DIR to select the local archive.",
 		Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("token-file") && strings.TrimSpace(tokenFile) == "" {
@@ -175,21 +175,21 @@ func sendSessionPush(ctx context.Context, base, token string, payload []byte, id
 	if resp.StatusCode != http.StatusOK {
 		reason := "receiver rejected the session"
 		switch resp.StatusCode {
-		case 301, 302, 303, 307, 308:
+		case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
 			reason = "receiver redirect refused"
-		case 401:
+		case http.StatusUnauthorized:
 			reason = "receiver rejected the bearer token"
-		case 403, 404:
-			reason = "receiver ingest is disabled or unavailable"
-		case 409:
+		case http.StatusForbidden, http.StatusNotFound:
+			reason = "receiver is unavailable or does not accept session pushes"
+		case http.StatusConflict:
 			reason = "session conflicts with receiver's accepted snapshot or maintenance is busy"
-		case 413:
+		case http.StatusRequestEntityTooLarge:
 			reason = "session exceeds receiver size limit"
-		case 415:
+		case http.StatusUnsupportedMediaType:
 			reason = "receiver rejected the transfer encoding"
-		case 501:
-			reason = "receiver backend does not support session ingest"
-		case 503:
+		case http.StatusNotImplemented:
+			reason = "receiver does not support session pushes"
+		case http.StatusServiceUnavailable:
 			reason = "receiver is temporarily unavailable"
 		}
 		return result, fmt.Errorf("push: %s (HTTP %d)", reason, resp.StatusCode)
