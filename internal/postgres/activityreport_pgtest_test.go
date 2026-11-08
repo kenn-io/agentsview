@@ -76,7 +76,7 @@ func TestPGActivityReportReadersAvoidPreparedStatements(t *testing.T) {
 	for _, reader := range []string{
 		"%SELECT session_id, role, timestamp FROM messages%",
 		"%AS web_search_requests%",
-		"%successor.ordinal%",
+		"%SELECT session_id, ordinal, role, timestamp, model%",
 		"%WITH terminal_events AS%",
 	} {
 		var prepared int
