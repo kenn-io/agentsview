@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-08
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -2686,3 +2686,45 @@ profile or pass them inline:
 ```bash
 AGENTSVIEW_DATA_DIR=/tmp/av-test agentsview serve
 ```
+
+### `agentsview export-push <session-id>` (draft integration)
+
+Prepare one exact frozen snapshot for review without uploading it. This
+main-based draft currently refuses with `codec integration unavailable` and
+creates no output. The real encoder/validator is an independently owned
+[session-push prerequisite](https://github.com/kenn-io/agentsview/pull/2811),
+last inspected at `d8ae9e8e37449a9d2dec40eee6834e84698e1f64`.
+It is not merged or copied into this companion.
+
+The intended integrated command is:
+
+```sh
+agentsview export-push pi:example-session --agent pi --snapshot-prefix --output snapshot.json
+```
+
+`--agent` requires the exact stored agent; it does not resolve an ID. Claude
+IDs are unprefixed; other supported agents use their canonical `agent:<native-id>`
+ID. The companion will consume the existing codec from one bounded read-only
+SQLite snapshot selected by `AGENTSVIEW_DATA_DIR`. It will not sync sources,
+traverse separately stored parent/child/sibling sessions, look up receiver
+tokens or call `agentsview push <session-id>`.
+
+`--snapshot-prefix` explicitly acknowledges the capture cutoff and any unknown
+tail. The snapshot may omit later running-session turns. No `ended_at` is
+required. Empty, known truncated, malformed, summary-only or known uncaptured
+content is refused. Sparse ordinals and references to filtered usage carriers
+alone are valid and do not establish missing turns. Embedded mixed-purpose
+selected text is retained for review; no silent redaction occurs.
+
+The output is a new exclusive 0600 file, at most 64 MiB, with partial output
+removed on write failure or cancellation. Existing files are never overwritten.
+The command reports the exact-byte SHA-256 and byte count. Keep those bytes
+for explicit relay consent and retries. AgentsView retains the first accepted
+snapshot immutably, including across later closes in the same growing session.
+This export command never reports an upload or indexing success.
+
+The synthetic consumer tests cover scope acknowledgement, positive quality
+refusals, exact-byte publication, private output, cancellation and collisions.
+They have not run locally. Full codec closure, separate-session privacy and
+real receiver interoperability still require the prerequisite adapter and
+remote runtime evidence; synthetic source responses do not prove those cases.
