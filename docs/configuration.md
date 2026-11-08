@@ -59,8 +59,9 @@ choice. To use a different directory, point those variables at a writable
 directory before you start AgentsView.
 
 The desktop app and CLI share a detached local daemon for fresh reads and
-writes. A running daemon owns local SQLite writes for this data directory and
-self-exits after an idle period. Ordinary session commands require the daemon.
+writes. A running daemon owns local SQLite writes for this data directory.
+Automatically started daemons self-exit after an idle period; explicit starts
+stay running until stopped. Ordinary session commands require the daemon.
 Dedicated diagnostics, including `db adopt-machine --list` and `doctor sync`,
 can inspect the archive without starting it. Set `AGENTSVIEW_NO_DAEMON=1` when a
 script must never auto-start a daemon; commands that require one will refuse.
@@ -288,7 +289,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `auth_token`                        | Auto-generated 256-bit bearer token for remote access; overridden by `AGENTSVIEW_AUTH_TOKEN`, or by `AGENTSVIEW_AUTH_TOKEN_FILE` under a [container deployment](#container-deployment)                                                                                                                                                                                                                                                                                           |
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `daemon_idle_timeout`               | Idle timeout for automatically started writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                        |
 | `sync_idle_after`                   | Pause local collection after this long without client activity; defaults to `"10m"`, with `"0"` disabling the pause                                                                                                                                                                                                                                                                                                                                                              |
 | `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.                                                                                                                       |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
@@ -516,10 +517,10 @@ For a one-off flag override, `agentsview serve --background --host 0.0.0.0`
 remains available, including without auth. Prefer authenticated persistent
 configuration for an always-available remote node.
 
-Detached writable daemons started by `agentsview daemon start`, automatic CLI
-startup, or `agentsview serve --background` exit after `daemon_idle_timeout`
-when idle. Set it to zero on machines that should stay available for HTTP remote
-sync:
+Explicit `agentsview daemon start` and `daemon restart` stay running until
+stopped. Automatic CLI startup and `agentsview serve --background` exit after
+`daemon_idle_timeout` when idle. Set it to zero on machines that should stay
+available for HTTP remote sync:
 
 ```toml
 daemon_idle_timeout = "0s"
@@ -1389,10 +1390,10 @@ listening in on, that it is listening in on none right now, that live tokens are
 off and why, or that live tokens stopped after a reply AgentsView could not
 read.
 
-A detached daemon normally exits once it has been idle for `daemon_idle_timeout`.
-While AgentsView is listening in on a running chat, the daemon stays up past that
-timeout, for at most 6 hours per chat. A daemon that is shutting down does not
-start listening in on new chats.
+An automatically started daemon normally exits once it has been idle for
+`daemon_idle_timeout`. While AgentsView is listening in on a running chat, the
+daemon stays up past that timeout, for at most 6 hours per chat. A daemon that
+is shutting down does not start listening in on new chats.
 
 Each token update carries the chat's running total, so an update also covers
 every turn that finished before it, back to the last time OpenAI restarted that

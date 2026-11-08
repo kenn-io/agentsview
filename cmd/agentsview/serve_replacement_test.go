@@ -72,7 +72,7 @@ func TestPrepareForegroundServeDaemonPreservesNoSyncWhenReplacingOlderDaemon(
 	dir := runtimeTestDir(t)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	host, port := testPingServer(t)
-	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
 		dir, host, port, "1.0.0", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestPrepareForegroundServeDaemonExplicitNoSyncOverridesRuntime(
 	dir := runtimeTestDir(t)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	host, port := testPingServer(t)
-	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
 		dir, host, port, "1.0.0", "", false, false, true, nil,
 	)
 	require.NoError(t, err)

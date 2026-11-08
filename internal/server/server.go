@@ -164,8 +164,10 @@ type Server struct {
 	// (e.g. "/agentsview"). When set, all routes are served
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
-	basePath string
-	idle     *IdleTracker
+	basePath        string
+	idle            *IdleTracker
+	persistDaemon   func() error
+	persistDaemonMu gosync.Mutex
 
 	ingestionFreshness IngestionFreshness
 
@@ -1844,3 +1846,8 @@ func logMiddleware(next http.Handler) http.Handler {
 
 // WithRawSyncTenant binds every raw credential/token identity before route work.
 func WithRawSyncTenant(tenant string) Option { return func(s *Server) { s.rawSyncTenant = tenant } }
+
+// WithDaemonPersistence installs the writable local daemon's lifetime publisher.
+func WithDaemonPersistence(publish func() error) Option {
+	return func(s *Server) { s.persistDaemon = publish }
+}

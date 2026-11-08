@@ -265,8 +265,25 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 func serveStatusLines(rt *DaemonRuntime) []string {
 	lines := []string{
 		"agentsview running at " + urlFromDaemonRuntime(rt),
-		fmt.Sprintf("  pid:     %d", rt.Record.PID),
 	}
+	if !rt.ReadOnly && rt.IdleTimeout != nil {
+		lifetime := "Stays running until agentsview daemon stop"
+		if rt.Record.Metadata[runtimeLaunchSource] == "foreground" {
+			lifetime = "Stays running until Ctrl-C"
+		}
+		if *rt.IdleTimeout > 0 {
+			duration := rt.IdleTimeout.String()
+			if *rt.IdleTimeout%time.Minute == 0 {
+				duration = fmt.Sprintf("%dm", *rt.IdleTimeout/time.Minute)
+			}
+			lifetime = fmt.Sprintf("Exits after %s idle", duration)
+			if rt.Record.Metadata[runtimeLaunchSource] == "automatic" {
+				lifetime += " (started automatically)"
+			}
+		}
+		lines = append(lines, "  "+lifetime)
+	}
+	lines = append(lines, fmt.Sprintf("  pid:     %d", rt.Record.PID))
 	if rt.Record.Version != "" {
 		lines = append(lines, "  version: "+rt.Record.Version)
 	}
@@ -439,6 +456,7 @@ func stopWritableDaemonsForUpdate(ctx context.Context,
 			result.RequireAuth = rt.RequireAuth
 			result.RequireAuthKnown = rt.RequireAuthKnown
 			result.NoSync = rt.NoSync
+			result.Persistent = rt.Persistent
 		}
 		if err := stopDaemonRuntimeForUpgrade(ctx, cfg, rt); err != nil {
 			return result, err

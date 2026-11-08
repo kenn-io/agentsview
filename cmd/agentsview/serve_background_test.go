@@ -1998,15 +1998,23 @@ func TestEnsureBackgroundServePassesSkipInitialSyncToChild(t *testing.T) {
 	assert.Equal(t, []string{"serve", "--skip-initial-sync"}, gotArgs)
 }
 
-func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
-	t *testing.T,
-) {
+func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(t *testing.T) {
+	for _, persistent := range []bool{false, true} {
+		t.Run(strconv.FormatBool(persistent), func(t *testing.T) { testEnsureBackgroundServePreservesLaunchOptions(t, persistent) })
+	}
+}
+
+func testEnsureBackgroundServePreservesLaunchOptions(t *testing.T, persistent bool) {
+	t.Helper()
+	t.Setenv(backgroundChildEnvVar, "1")
+	t.Setenv(persistentDaemonEnvVar, strconv.FormatBool(persistent))
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
-	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{PersistentDaemon: persistent},
 		dir, host, port, "1.0.0", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
+	t.Setenv(persistentDaemonEnvVar, "false")
 
 	oldVersion := version
 	version = "1.1.0"
@@ -2026,8 +2034,9 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
 	oldStartProcess := startServeBackgroundProcessForEnsure
 	var gotArgs []string
 	startServeBackgroundProcessForEnsure = func(ctx context.Context,
-		_ config.Config, arguments []string,
+		cfg config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
+		assert.Equal(t, persistent, cfg.PersistentDaemon)
 		gotArgs = append([]string(nil), arguments...)
 		if _, err := WriteDaemonRuntime(
 			dir, newHost, newPort, "1.1.0", false,
@@ -2054,9 +2063,14 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
 	assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
 }
 
-func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
-	t *testing.T,
-) {
+func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(t *testing.T) {
+	for _, persistent := range []bool{false, true} {
+		t.Run(strconv.FormatBool(persistent), func(t *testing.T) { testRunServeBackgroundPreservesLaunchOptions(t, persistent) })
+	}
+}
+
+func testRunServeBackgroundPreservesLaunchOptions(t *testing.T, persistent bool) {
+	t.Helper()
 	tests := []struct {
 		name         string
 		writeRuntime func(t *testing.T, dir, host string, port int)
@@ -2065,7 +2079,7 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			name: "compatible",
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
-				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+				_, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
 					dir, host, port, "1.0.0", "", false, false, true, nil,
 				)
 				require.NoError(t, err)
@@ -2092,6 +2106,10 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			dir := runtimeTestDir(t)
 			oldHost, oldPort := testPingServer(t)
 			tt.writeRuntime(t, dir, oldHost, oldPort)
+			rec := readRuntimeRecord(t, runtimePathForTest(dir, os.Getpid()))
+			rec.Metadata[runtimePersistent] = strconv.FormatBool(persistent)
+			_, err := runtimeStore(dir).Write(rec)
+			require.NoError(t, err)
 
 			oldVersion := version
 			version = "1.1.0"
@@ -2111,8 +2129,9 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			oldStart := startServeBackgroundProcessForRun
 			var gotArgs []string
 			startServeBackgroundProcessForRun = func(ctx context.Context,
-				_ config.Config, arguments []string,
+				cfg config.Config, arguments []string,
 			) (*exec.Cmd, string, error) {
+				assert.Equal(t, persistent, cfg.PersistentDaemon)
 				gotArgs = serveBackgroundChildArgs(arguments)
 				if _, err := WriteDaemonRuntime(
 					dir, newHost, newPort, "1.1.0", false,
@@ -2153,7 +2172,7 @@ func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
 			name: "compatible",
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
-				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+				_, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
 					dir, host, port, "1.0.0", "", false, false, true, nil,
 				)
 				require.NoError(t, err)
@@ -2575,7 +2594,7 @@ func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(
 ) {
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
-	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
 		dir, oldHost, oldPort, "1.0.0", "", false, false, false, nil,
 	)
 	require.NoError(t, err)
@@ -2874,6 +2893,7 @@ func requireConfiguredServeBackgroundSysProcAttr(t *testing.T) *syscall.SysProcA
 func TestStartServeBackgroundProcessSurvivesLauncherCancellation(t *testing.T) {
 	const childAddress = "AGENTSVIEW_TEST_BACKGROUND_ADDRESS"
 	if address := os.Getenv(childAddress); address != "" {
+		require.Equal(t, "true", os.Getenv(persistentDaemonEnvVar))
 		var dialer net.Dialer
 		conn, err := dialer.DialContext(t.Context(), "tcp", address)
 		require.NoError(t, err)
@@ -2886,6 +2906,7 @@ func TestStartServeBackgroundProcessSurvivesLauncherCancellation(t *testing.T) {
 		require.NoError(t, err)
 		return
 	}
+	t.Setenv(persistentDaemonEnvVar, "false")
 	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	require.NoError(t, err)
 	defer listener.Close()
@@ -2893,7 +2914,7 @@ func TestStartServeBackgroundProcessSurvivesLauncherCancellation(t *testing.T) {
 	t.Setenv(childAddress, listener.Addr().String())
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	child, _, err := startServeBackgroundProcess(ctx, config.Config{DataDir: t.TempDir()},
+	child, _, err := startServeBackgroundProcess(ctx, config.Config{DataDir: t.TempDir(), PersistentDaemon: true},
 		[]string{"-test.run=^TestStartServeBackgroundProcessSurvivesLauncherCancellation$"})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -2912,4 +2933,16 @@ func TestStartServeBackgroundProcessSurvivesLauncherCancellation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, byte('x'), reply[0])
 	require.NoError(t, child.Wait())
+}
+
+func TestReplacementDoesNotRepeatWaitForServingFallback(t *testing.T) {
+	dir := runtimeTestDir(t)
+	holdExternalDaemonStartLock(t, dir)
+	host, port := testPingServer(t)
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
+	waited, err := waitForExternalServeStartupBeforeReplacement(t.Context(), dir, "", time.Second)
+	require.NoError(t, err)
+	assert.False(t, waited, "a serving fallback must advance to replacement while retaining its start lock")
 }

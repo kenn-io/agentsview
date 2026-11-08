@@ -32,6 +32,7 @@ func TestPerformUpdateWithDaemonLifecycleRestartsStoppedDaemon(t *testing.T) {
 			assert.Equal(t, cfg.DataDir, got.DataDir)
 			return updateDaemonStopResult{
 				Stopped:          true,
+				Persistent:       true,
 				Host:             "127.0.0.1",
 				Port:             18080,
 				RequireAuth:      true,
@@ -49,6 +50,7 @@ func TestPerformUpdateWithDaemonLifecycleRestartsStoppedDaemon(t *testing.T) {
 			assert.Equal(t, 18080, stop.Port)
 			assert.True(t, stop.RequireAuth)
 			assert.True(t, stop.RequireAuthKnown)
+			assert.True(t, stop.Persistent)
 			return nil
 		},
 	)
@@ -113,13 +115,14 @@ func TestPerformUpdateWithDaemonLifecycleRestartsAfterInstallFailure(t *testing.
 		},
 		func(context.Context, config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
-			return updateDaemonStopResult{Stopped: true}, nil
+			return updateDaemonStopResult{Stopped: true, Persistent: true}, nil
 		},
 		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
 			calls = append(calls, "perform")
 			return installErr
 		},
-		func(context.Context, config.Config, updateDaemonStopResult) error {
+		func(_ context.Context, _ config.Config, stopped updateDaemonStopResult) error {
+			assert.True(t, stopped.Persistent)
 			calls = append(calls, "restart")
 			return nil
 		},
@@ -230,7 +233,7 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 			first, _, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, 0, nil)
 			require.NoError(t, err)
 			require.Equal(t, "http://viewer.example.test:8080", first.PublicURL)
-			_, err = WriteDaemonRuntimeWithAuthAndNoSync(
+			_, err = WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
 				dir, first.Host, first.Port, "test", first.PublicURL, false, false, false, new(port),
 			)
 			require.NoError(t, err)

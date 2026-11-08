@@ -155,6 +155,14 @@ func applyServeMemoryLimit() {
 }
 
 func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restartPort int) {
+	cfg.PersistentDaemon = !runningAsBackgroundChild() || os.Getenv(persistentDaemonEnvVar) == "true"
+	cfg.DaemonLaunchSource = "foreground"
+	if runningAsBackgroundChild() {
+		cfg.DaemonLaunchSource = "background"
+	}
+	if os.Getenv(backgroundChildEnvVar) == "automatic" {
+		cfg.DaemonLaunchSource = "automatic"
+	}
 	setupDebugLogWriter(cfg.DataDir)
 	archiveOnly, err := archiveModeAfterRecovery(ctx, cfg)
 	if err != nil {
@@ -277,7 +285,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		fatal("opening writable database: %v", err)
 	}
 	databaseProgress.Finish()
-	runtimeRecordDataDir := ""
+	runtimeRecordDataDir := cfg.DataDir
 	defer func() {
 		closeWriteDB(database, writeLock)
 		if runtimeRecordDataDir != "" {
@@ -592,6 +600,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	cfg = preparedCfg
 	rtOpts.BasePath = opts.BasePath
 
+	publicationReady := make(chan struct{})
+	var publicationCfg config.Config
 	telemetryCapture, startScreenClaimMigration := telemetryCaptureHandler(cfg, telemetryReporter.Enabled(), telemetryReporter.CaptureHandler())
 	srvOpts := []server.Option{
 		server.WithCodexCloudStatus(codexCloudStatus),
@@ -604,6 +614,14 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
 		server.WithIdleTracker(idleTracker),
+		server.WithDaemonPersistence(func() error {
+			select {
+			case <-publicationReady:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return publishPersistentDaemon(publicationCfg)
+		}),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
 		server.WithTelemetryCapture(telemetryCapture),
@@ -705,6 +723,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		explicitPort = new(rtOpts.RequestedPort)
 	}
 	if _, sfErr := writeDaemonRuntimeWithAuthAndNoSync(
+		rt.Cfg,
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, rt.PublicURL, false,
 		rt.Cfg.RequireAuth, rt.Cfg.NoSync, explicitPort,
 		rt.Caddy.Pid(),
@@ -717,6 +736,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		runtimeRecordDataDir = rt.Cfg.DataDir
 		UnmarkDaemonStarting(rt.Cfg.DataDir)
 	}
+	publicationCfg = rt.Cfg
+	close(publicationReady)
 	releaseForegroundServeLaunch()
 	if idleTracker != nil {
 		idleTracker.Touch()
@@ -1456,7 +1477,10 @@ func ensureServeAuthToken(cfg *config.Config) error {
 	return cfg.EnsureAuthToken()
 }
 
-func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.IdleTracker {
+func effectiveDaemonIdleTimeout(cfg config.Config) time.Duration {
+	if cfg.PersistentDaemon {
+		return 0
+	}
 	timeout := time.Duration(0)
 	if runningAsBackgroundChild() {
 		timeout = cfg.DaemonIdleTimeout
@@ -1472,6 +1496,11 @@ func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.Id
 			timeout = parsed
 		}
 	}
+	return max(timeout, 0)
+}
+
+func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.IdleTracker {
+	timeout := effectiveDaemonIdleTimeout(cfg)
 	if timeout <= 0 && (cfg.NoSync || cfg.SyncIdleAfter <= 0) {
 		return nil
 	}

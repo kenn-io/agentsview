@@ -37,9 +37,12 @@ const (
 	runtimeReadOnly        = "read_only"
 	runtimeHost            = "host"
 	runtimeBrowserURL      = "browser_url"
+	runtimeLaunchSource    = "launch_source"
 	runtimePort            = "port"
 	runtimeExplicitPort    = "explicit_port"
 	runtimeRequireAuth     = "require_auth"
+	runtimePersistent      = "persistent"
+	runtimeIdleTimeout     = "idle_timeout"
 	runtimeNoSync          = "no_sync"
 	runtimeAPIVersion      = "api_version"
 	runtimeDataVersion     = "data_version"
@@ -69,6 +72,8 @@ type DaemonRuntime struct {
 	ReadOnly         bool
 	RequireAuth      bool
 	RequireAuthKnown bool
+	Persistent       bool
+	IdleTimeout      *time.Duration
 	NoSync           bool
 	API              int
 	Data             int
@@ -156,14 +161,14 @@ func WriteDaemonRuntimeWithAuth(
 	dataDir string, host string, port int, version, browserURL string,
 	readOnly bool, requireAuth bool, caddyPID ...int,
 ) (string, error) {
-	return WriteDaemonRuntimeWithAuthAndNoSync(
+	return WriteDaemonRuntimeWithAuthAndNoSync(config.Config{},
 		dataDir, host, port, version, browserURL, readOnly, requireAuth, false,
 		nil, caddyPID...,
 	)
 }
 
 func WriteDaemonRuntimeWithAuthAndNoSync(
-	dataDir string, host string, port int, version, browserURL string,
+	cfg config.Config, dataDir string, host string, port int, version, browserURL string,
 	readOnly bool, requireAuth bool, noSync bool, explicitPort *int, caddyPID ...int,
 ) (string, error) {
 	ep := daemon.Endpoint{
@@ -180,6 +185,11 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 		runtimeNoSync:      strconv.FormatBool(noSync),
 		runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
 		runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
+	}
+	if !readOnly {
+		rec.Metadata[runtimePersistent] = strconv.FormatBool(cfg.PersistentDaemon)
+		rec.Metadata[runtimeIdleTimeout] = effectiveDaemonIdleTimeout(cfg).String()
+		rec.Metadata[runtimeLaunchSource] = cfg.DaemonLaunchSource
 	}
 	if explicitPort != nil {
 		rec.Metadata[runtimeExplicitPort] = strconv.Itoa(*explicitPort)
@@ -203,9 +213,11 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 	path, err := runtimeStore(dataDir).Write(rec)
 	if err != nil {
 		if !readOnly {
-			publishStartupStateFallback(
-				dataDir, host, port, browserURL, requireAuth, noSync, explicitPort, caddy, err,
-			)
+			if fallbackErr := publishStartupStateFallback(
+				dataDir, host, port, browserURL, requireAuth, noSync, explicitPort, caddy, err, rec.Metadata,
+			); fallbackErr != nil {
+				return "", errors.Join(err, fallbackErr)
+			}
 		}
 		return "", err
 	}
@@ -331,6 +343,9 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 			continue
 		}
 		if !rt.ReadOnly {
+			if fallback := findStartupStateFallback(dataDir, token); fallback != nil && fallback.Record.PID == rt.Record.PID {
+				return fallback
+			}
 			return rt
 		}
 		if readOnly == nil {
@@ -381,6 +396,14 @@ func writableDaemonRecordsWithFallback(
 	}
 	records = filtered
 	if hasWritable {
+		if rt := resolve(); rt != nil && rt.RuntimeFallback {
+			for i, rec := range records {
+				if rec.PID == rt.Record.PID {
+					records[i] = rt.Record
+					return records, true
+				}
+			}
+		}
 		return records, false
 	}
 	rt := resolve()
@@ -434,6 +457,11 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 	}
 	if st.RequireAuthKnown {
 		rec.Metadata[runtimeRequireAuth] = strconv.FormatBool(st.RequireAuth)
+	}
+	rec.Metadata[runtimePersistent] = strconv.FormatBool(st.Persistent)
+	rec.Metadata[runtimeLaunchSource] = st.LaunchSource
+	if st.IdleTimeout != "" {
+		rec.Metadata[runtimeIdleTimeout] = st.IdleTimeout
 	}
 	if st.NoSyncKnown {
 		rec.Metadata[runtimeNoSync] = strconv.FormatBool(st.NoSync)
@@ -630,7 +658,13 @@ func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
 		apiVersion, _ = strconv.Atoi(rec.Metadata[runtimeAPIVersion])
 		dataVersion, _ = strconv.Atoi(rec.Metadata[runtimeDataVersion])
 	}
+	var idleTimeout *time.Duration
+	if parsed, err := time.ParseDuration(rec.Metadata[runtimeIdleTimeout]); err == nil {
+		idleTimeout = &parsed
+	}
+	persistent, _ := strconv.ParseBool(rec.Metadata[runtimePersistent])
 	return &DaemonRuntime{
+		Persistent: persistent, IdleTimeout: idleTimeout,
 		Record:           rec,
 		Port:             port,
 		ExplicitPort:     explicitPort,
@@ -1160,4 +1194,51 @@ func probeHostForDial(host string) string {
 	default:
 		return host
 	}
+}
+
+func publishPersistentDaemon(cfg config.Config) error {
+	store := runtimeStore(cfg.DataDir)
+	path, err := store.Path(os.Getpid())
+	if err != nil {
+		return err
+	}
+	rec, err := store.Read(path)
+	if err != nil {
+		rt := findStartupStateFallback(cfg.DataDir, cfg.AuthToken)
+		if rt == nil {
+			return fmt.Errorf("reading daemon lifetime: %w", err)
+		}
+		rec = rt.Record
+	}
+	rec.Metadata[runtimePersistent] = "true"
+	rec.Metadata[runtimeIdleTimeout] = "0s"
+	if _, err = store.Write(rec); err == nil {
+		UnmarkDaemonStarting(cfg.DataDir)
+		return nil
+	}
+	held, acquired := markDaemonStarting(cfg.DataDir)
+	if !held {
+		return fmt.Errorf("preserving daemon lifetime: %w", err)
+	}
+	published := false
+	defer func() {
+		if acquired && !published {
+			UnmarkDaemonStarting(cfg.DataDir)
+		}
+	}()
+	if readStartupState(cfg.DataDir) == nil {
+		st := startupState{PID: rec.PID, StartedAt: rec.StartedAt}
+		data, marshalErr := json.Marshal(st)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if writeErr := writeStartupState(cfg.DataDir, data); writeErr != nil {
+			return writeErr
+		}
+	}
+	rt := daemonRuntimeFromRecord(rec)
+	caddyPID, _ := strconv.Atoi(rec.Metadata[runtimeCaddyPID])
+	err = publishStartupStateFallback(cfg.DataDir, rt.Host, rt.Port, rt.BrowserURL, rt.RequireAuth, rt.NoSync, rt.ExplicitPort, caddyPID, err, rec.Metadata)
+	published = err == nil
+	return err
 }
