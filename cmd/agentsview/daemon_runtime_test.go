@@ -1990,6 +1990,7 @@ func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
 			t.Setenv(backgroundChildEnvVar, "1")
+			// A configured zero timeout does not imply explicit persistence.
 			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "0s")
 			dir := runtimeTestDir(t)
 			MarkDaemonStarting(dir)
@@ -2006,7 +2007,6 @@ func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 			assert.Equal(t, persistent, rt.Persistent)
 			require.NotNil(t, rt.IdleTimeout)
 			assert.Zero(t, *rt.IdleTimeout)
-			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
 			oldStop := stopDaemonRuntimeForUpgrade
 			stopDaemonRuntimeForUpgrade = func(context.Context, config.Config, *DaemonRuntime) error { return nil }
 			t.Cleanup(func() { stopDaemonRuntimeForUpgrade = oldStop })

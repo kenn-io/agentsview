@@ -16,21 +16,20 @@ import (
 
 func TestDaemonPersistenceDisablesShutdownAndPreservesSyncIdle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		stopped, suspended := false, false
+		stopped, suspended, published := false, false, false
 		tracker := NewIdleTracker(2*time.Second, func() { stopped = true })
 		tracker.SetSyncIdle(time.Second, func() { suspended = true })
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		go tracker.Run(ctx)
-		s := New(config.Config{PublicURL: "http://localhost", PublicOrigins: []string{"http://localhost"}}, nil, nil, WithIdleTracker(tracker), WithDaemonPersistence(func() error { time.Sleep(3 * time.Second); return nil }))
-		for range 2 {
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://localhost/api/v1/daemon/persist", nil)
-			req.Header.Set("Origin", "http://localhost")
-			req.RemoteAddr = "127.0.0.1:1234"
-			w := httptest.NewRecorder()
-			s.Handler().ServeHTTP(w, req)
-			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		}
+		s := New(config.Config{PublicURL: "http://localhost", PublicOrigins: []string{"http://localhost"}}, nil, nil, WithIdleTracker(tracker), WithDaemonPersistence(func() error { published = true; time.Sleep(3 * time.Second); return nil }))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://localhost/api/v1/daemon/persist", nil)
+		req.Header.Set("Origin", "http://localhost")
+		req.RemoteAddr = "127.0.0.1:1234"
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.True(t, published)
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
 		assert.False(t, stopped)

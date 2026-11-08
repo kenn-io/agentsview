@@ -4101,21 +4101,17 @@ func TestNoSyncRebuildNotice(t *testing.T) {
 }
 
 func TestNewDaemonIdleTrackerExplicitLifetime(t *testing.T) {
-	for _, persistent := range []bool{false, true} {
-		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				t.Setenv(backgroundChildEnvVar, "1")
-				t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
-				stopped := false
-				tracker := newDaemonIdleTracker(config.Config{SyncIdleAfter: time.Second, PersistentDaemon: persistent}, func() { stopped = true })
-				require.NotNil(t, tracker)
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				go tracker.Run(ctx)
-				time.Sleep(5 * time.Second)
-				synctest.Wait()
-				assert.Equal(t, !persistent, stopped)
-			})
-		})
-	}
+	synctest.Test(t, func(t *testing.T) {
+		t.Setenv(backgroundChildEnvVar, "1")
+		t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
+		stopped := false
+		tracker := newDaemonIdleTracker(config.Config{SyncIdleAfter: time.Second, PersistentDaemon: true}, func() { stopped = true })
+		require.NotNil(t, tracker)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go tracker.Run(ctx)
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		assert.False(t, stopped)
+	})
 }

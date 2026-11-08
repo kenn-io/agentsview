@@ -1247,11 +1247,10 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 				database, err := db.Open(t.Context(), cfg.DBPath)
 				require.NoError(t, err)
 				defer database.Close()
-				tracker := server.NewIdleTracker(2*time.Second, func() {})
 				ts := httptest.NewUnstartedServer(nil)
 				ep := testDaemonEndpoint{Host: "127.0.0.1", Port: ts.Listener.Addr().(*net.TCPAddr).Port}
 				cfg.Port = ep.Port
-				ts.Config.Handler = server.New(cfg, database, nil, server.WithBasePath("/av"), server.WithVersion(server.VersionInfo{Version: version}), server.WithIdleTracker(tracker), server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg) })).Handler()
+				ts.Config.Handler = server.New(cfg, database, nil, server.WithBasePath("/av"), server.WithVersion(server.VersionInfo{Version: version}), server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg) })).Handler()
 				ts.Start()
 				defer ts.Close()
 				MarkDaemonStarting(dir)

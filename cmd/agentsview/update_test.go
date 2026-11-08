@@ -122,7 +122,7 @@ func TestPerformUpdateWithDaemonLifecycleRestartsAfterInstallFailure(t *testing.
 			calls = append(calls, "perform")
 			return installErr
 		},
-		func(_ context.Context, _ config.Config, stopped updateDaemonStopResult) error {
+		func(context.Context, config.Config, updateDaemonStopResult) error {
 			calls = append(calls, "restart")
 			return nil
 		},

@@ -1998,7 +1998,7 @@ func TestEnsureBackgroundServePassesSkipInitialSyncToChild(t *testing.T) {
 	assert.Equal(t, []string{"serve", "--skip-initial-sync"}, gotArgs)
 }
 
-func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(t *testing.T) {
+func TestEnsureBackgroundServePreservesLaunchOptionsWhenReplacingOlderDaemon(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(strconv.FormatBool(persistent), func(t *testing.T) { testEnsureBackgroundServePreservesLaunchOptions(t, persistent) })
 	}
@@ -2060,7 +2060,7 @@ func testEnsureBackgroundServePreservesLaunchOptions(t *testing.T, persistent bo
 	assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
 }
 
-func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(t *testing.T) {
+func TestRunServeBackgroundPreservesLaunchOptionsWhenReplacingOlderDaemon(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(strconv.FormatBool(persistent), func(t *testing.T) { testRunServeBackgroundPreservesLaunchOptions(t, persistent) })
 	}
