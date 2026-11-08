@@ -286,9 +286,6 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 			if err := deps.persistRuntime(ctx, cfg, incumbent); err != nil {
 				return err
 			}
-			incumbent.Persistent = true
-			zero := time.Duration(0)
-			incumbent.IdleTimeout = &zero
 		}
 		writeDaemonStartResult(w, backgroundLaunchResult{Runtime: incumbent}, false)
 		return nil
@@ -511,6 +508,7 @@ func startupStateStopRecord(st *startupState) (daemon.RuntimeRecord, bool) {
 		StartedAt: st.StartedAt,
 		Metadata: map[string]string{
 			runtimeCreateTime: st.CreateTime,
+			runtimePersistent: strconv.FormatBool(st.Persistent),
 		},
 	}
 	if st.CaddyPID > 0 {

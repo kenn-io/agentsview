@@ -66,3 +66,13 @@ func TestDaemonPersistenceUnavailableWithoutPublisher(t *testing.T) {
 	s.Handler().ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotImplemented, w.Code, w.Body.String())
 }
+
+func TestDaemonPersistenceDuringArchiveRebuild(t *testing.T) {
+	f := newSyncRouteFixture(t, withStaleDB())
+	published := false
+	f.srv.persistDaemon = func() error { published = true; return nil }
+	require.NoError(t, f.db.CloseWriter())
+	res := serveJSON(t, f.handler, http.MethodPost, "/api/v1/daemon/persist", nil)
+	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
+	assert.True(t, published)
+}

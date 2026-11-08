@@ -228,16 +228,14 @@ func restartDaemonAfterUpdate(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("finding current executable: %w", err)
 	}
-	commands := [][]string{restartDaemonAfterUpdateArgs(cfg, stopResult)}
+	cmd := exec.CommandContext(ctx, exe, restartDaemonAfterUpdateArgs(cfg, stopResult)...)
+	cmd.Env = append(os.Environ(), "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
 	if stopResult.Persistent {
-		commands = append(commands, []string{"daemon", "start"})
+		cmd.Env = append(cmd.Env, updateRestartPersistentEnvVar+"=true")
 	}
-	for _, args := range commands {
-		cmd := exec.CommandContext(ctx, exe, args...)
-		cmd.Env = append(os.Environ(), "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("%s: %w: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(string(out)))
-		}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("serve --background: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

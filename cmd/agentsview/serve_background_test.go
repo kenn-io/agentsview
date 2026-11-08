@@ -2900,6 +2900,7 @@ func TestStartServeBackgroundProcessPreservesLifetimeAfterLauncherCancellation(t
 		var message [1]byte
 		_, err = conn.Read(message[:])
 		require.NoError(t, err)
+		require.Empty(t, os.Getenv(updateRestartPersistentEnvVar))
 		_, err = conn.Write([]byte(os.Getenv(persistentDaemonEnvVar)))
 		require.NoError(t, err)
 		return
@@ -2913,6 +2914,7 @@ func TestStartServeBackgroundProcessPreservesLifetimeAfterLauncherCancellation(t
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			t.Setenv(persistentDaemonEnvVar, tc.parent)
+			t.Setenv(updateRestartPersistentEnvVar, "true")
 			listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 			require.NoError(t, err)
 			defer listener.Close()
@@ -2965,6 +2967,27 @@ func TestFreshBackgroundServeIgnoresInheritedPersistence(t *testing.T) {
 	startServeBackgroundProcessForRun = func(ctx context.Context, cfg config.Config, args []string) (*exec.Cmd, string, error) {
 		launched = true
 		assert.False(t, cfg.PersistentDaemon, "fresh background serve must remain automatic")
+		_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil, dir, host, port, version, "", false, false, true, nil)
+		require.NoError(t, err)
+		child := exec.CommandContext(t.Context(), "sleep", "2")
+		require.NoError(t, child.Start())
+		t.Cleanup(func() { _ = child.Process.Kill() })
+		return child, "", nil
+	}
+	runServeBackground(t.Context(), config.Config{DataDir: dir, Host: host, Port: port}, []string{"serve", "--background"}, serveReplacementOptions{})
+	assert.True(t, launched)
+}
+
+func TestUpdateBackgroundServeCarriesPersistence(t *testing.T) {
+	dir := testDataDir(t)
+	t.Setenv(updateRestartPersistentEnvVar, "true")
+	host, port := testPingServer(t)
+	old := startServeBackgroundProcessForRun
+	t.Cleanup(func() { startServeBackgroundProcessForRun = old })
+	launched := false
+	startServeBackgroundProcessForRun = func(ctx context.Context, cfg config.Config, args []string) (*exec.Cmd, string, error) {
+		launched = true
+		assert.True(t, cfg.PersistentDaemon)
 		_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil, dir, host, port, version, "", false, false, true, nil)
 		require.NoError(t, err)
 		child := exec.CommandContext(t.Context(), "sleep", "2")

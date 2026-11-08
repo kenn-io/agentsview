@@ -536,6 +536,10 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 			dataDir, host string, port int, version, browserURL string, readOnly,
 			requireAuth, noSync bool, explicitPort *int, caddyPID ...int,
 		) (string, error) {
+			snapshot := readStartupState(dataDir)
+			require.NotNil(t, snapshot)
+			assert.True(t, snapshot.Persistent)
+			assert.Equal(t, "0s", snapshot.IdleTimeout)
 			path, err := original(
 				lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort,
 				caddyPID...,

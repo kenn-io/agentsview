@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -69,8 +70,9 @@ func (p backgroundLaunchPolicy) operation() string {
 // background launch. The child reads it to keep the auth token out of
 // serve.log; the parent prints the token to the invoking terminal instead.
 const (
-	backgroundChildEnvVar  = "AGENTSVIEW_BACKGROUND_CHILD"
-	persistentDaemonEnvVar = "AGENTSVIEW_PERSISTENT_DAEMON"
+	backgroundChildEnvVar         = "AGENTSVIEW_BACKGROUND_CHILD"
+	persistentDaemonEnvVar        = "AGENTSVIEW_PERSISTENT_DAEMON"
+	updateRestartPersistentEnvVar = "AGENTSVIEW_UPDATE_RESTART_PERSISTENT"
 )
 
 // runningAsBackgroundChild reports whether this process was spawned by
@@ -176,7 +178,7 @@ func runServeBackground(ctx context.Context,
 	cfg config.Config, args []string, opts serveReplacementOptions,
 ) {
 	result, err := startServeBackground(ctx,
-		cfg, args, opts, backgroundLaunchPolicy{},
+		cfg, args, opts, backgroundLaunchPolicy{Persistent: os.Getenv(updateRestartPersistentEnvVar) == "true"},
 	)
 	if err != nil {
 		fatal("%v", err)
@@ -980,7 +982,7 @@ func startServeBackgroundProcess(ctx context.Context,
 	childArgs := serveBackgroundChildArgs(args)
 	// The daemon outlives the launcher; readiness still uses the caller context.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), exe, childArgs...)
-	cmd.Env = append(os.Environ(), backgroundChildEnvVar+"=1", persistentDaemonEnvVar+"="+strconv.FormatBool(cfg.PersistentDaemon))
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(env string) bool { return strings.HasPrefix(env, updateRestartPersistentEnvVar+"=") }), backgroundChildEnvVar+"=1", persistentDaemonEnvVar+"="+strconv.FormatBool(cfg.PersistentDaemon))
 	if cfg.DataDir != "" {
 		cmd.Env = append(cmd.Env, "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
 	}

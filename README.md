@@ -106,7 +106,8 @@ For a one-shot sync with no background server, stop the daemon first and run
 Use `agentsview daemon start` when you want to start the writable SQLite daemon
 explicitly. It loads the normal effective configuration from `config.toml` and
 supported environment variables; `daemon start` and `daemon restart` accept no
-serve-specific flags. Explicit starts and restarts stay running until stopped.
+serve-specific flags. `daemon start` and `daemon restart` stay running until
+stopped.
 Automatically started daemons self-exit after an idle period unless a client
 request or daemon-owned job is active.
 

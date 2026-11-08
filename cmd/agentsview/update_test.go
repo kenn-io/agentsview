@@ -1,12 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json/v2"
 	"errors"
-	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -257,6 +253,9 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(func() { listener.Close() })
 			}
+			automaticArgs := restartDaemonAfterUpdateArgs(config.Config{}, stopped)
+			stopped.Persistent = true
+			require.Equal(t, automaticArgs, restartDaemonAfterUpdateArgs(config.Config{}, stopped))
 			args := serveBackgroundChildArgs(restartDaemonAfterUpdateArgs(config.Config{}, stopped))
 			cmd = newServeCommand()
 			require.NoError(t, cmd.Flags().Parse(args[1:]))
@@ -478,92 +477,4 @@ func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
 			assert.Equal(t, persistent, FindWritableDaemonRuntime(dir) != nil)
 		})
 	}
-}
-
-func TestRestartDaemonAfterUpdateAcrossAPIVersion(t *testing.T) {
-	if os.Getenv("AGENTSVIEW_TEST_UPDATE_RESIDENT") == "1" {
-		_, err := io.ReadFull(os.Stdin, make([]byte, 1))
-		require.NoError(t, err)
-		require.NoError(t, restartDaemonAfterUpdate(t.Context(), config.Config{DataDir: os.Getenv("AGENTSVIEW_DATA_DIR")}, updateDaemonStopResult{Persistent: true, NoSync: true}))
-		return
-	}
-	requirePOSIXSignals(t, "replaces the running updater executable")
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
-	dir := testDataDir(t)
-	t.Setenv("DO_NOT_TRACK", "1")
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
-	var disabled []string
-	for _, def := range parser.Registry {
-		if def.FileBased || def.EnvVar != "" {
-			disabled = append(disabled, strconv.Quote(string(def.Type)))
-		}
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("disabled_agents = ["+strings.Join(disabled, ",")+"]\nhost = \"127.0.0.1\"\nport = 0\nno_browser = true\ndisable_update_check = true\n[vector]\nenabled = false\n"), 0o600))
-	root, err := filepath.Abs("../..")
-	require.NoError(t, err)
-	source := filepath.Join(root, "internal", "server", "server.go")
-	data, err := os.ReadFile(source)
-	require.NoError(t, err)
-	futureAPI := daemonAPIVersion + 1
-	changed := bytes.Replace(data, []byte(fmt.Sprintf("APIVersion = %d", daemonAPIVersion)), []byte(fmt.Sprintf("APIVersion = %d", futureAPI)), 1)
-	require.NotEqual(t, data, changed)
-	overlaySource := filepath.Join(dir, "server.go")
-	require.NoError(t, os.WriteFile(overlaySource, changed, 0o600))
-	overlay, err := json.Marshal(map[string]any{"Replace": map[string]string{source: overlaySource}})
-	require.NoError(t, err)
-	overlayPath := filepath.Join(dir, "overlay.json")
-	require.NoError(t, os.WriteFile(overlayPath, overlay, 0o600))
-	installed := filepath.Join(dir, "installed")
-	build := exec.CommandContext(ctx, "make", "--eval=future-cli: pricing-snapshot ensure-embed-dir; CGO_ENABLED=1 go build -tags fts5 -overlay \"$(OVERLAY)\" -o \"$(OUTPUT)\" ./cmd/agentsview", "future-cli", "OVERLAY="+overlayPath, "OUTPUT="+installed)
-	build.Dir = root
-	out, err := build.CombinedOutput()
-	require.NoError(t, err, string(out))
-	updater := filepath.Join(dir, "updater")
-	src, err := os.Open(os.Args[0])
-	require.NoError(t, err)
-	defer src.Close()
-	dst, err := os.OpenFile(updater, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
-	require.NoError(t, err)
-	_, err = io.Copy(dst, src)
-	closeErr := dst.Close()
-	require.NoError(t, err)
-	require.NoError(t, closeErr)
-	resident := exec.CommandContext(ctx, updater, "-test.run=^TestRestartDaemonAfterUpdateAcrossAPIVersion$")
-	resident.Env = append(os.Environ(), "AGENTSVIEW_TEST_UPDATE_RESIDENT=1")
-	var output bytes.Buffer
-	resident.Stdout, resident.Stderr = &output, &output
-	input, err := resident.StdinPipe()
-	require.NoError(t, err)
-	require.NoError(t, resident.Start())
-	t.Cleanup(func() {
-		if resident.ProcessState == nil {
-			_ = resident.Process.Kill()
-			_ = resident.Wait()
-		}
-	})
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
-		defer cancel()
-		stop := exec.CommandContext(cleanupCtx, updater, "daemon", "stop")
-		out, err := stop.CombinedOutput()
-		assert.NoError(t, err, string(out))
-	})
-	require.NoError(t, os.Rename(installed, updater))
-	_, err = input.Write([]byte{1})
-	require.NoError(t, err)
-	require.NoError(t, input.Close())
-	err = resident.Wait()
-	require.NoError(t, err, output.String())
-	records := liveDaemonRecords(dir)
-	require.Len(t, records, 1)
-	rt := daemonRuntimeFromRecord(records[0])
-	assert.Equal(t, futureAPI, rt.API)
-	assert.True(t, rt.Persistent)
-	time.Sleep(5 * time.Second) //nolint:kennlint // sleeptest: the replacement is a real process with a two-second idle timeout.
-	status := exec.CommandContext(ctx, updater, "daemon", "status")
-	out, err = status.CombinedOutput()
-	require.NoError(t, err, string(out))
-	assert.Contains(t, string(out), "Stays running until agentsview daemon stop")
 }

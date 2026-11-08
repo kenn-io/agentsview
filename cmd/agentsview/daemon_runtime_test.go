@@ -1987,7 +1987,10 @@ func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 			dir := runtimeTestDir(t)
 			MarkDaemonStarting(dir)
 			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-			newStartupStateWriter(dir, time.Now).SetPhase("starting HTTP server")
+			writer := newStartupStateWriter(dir, time.Now)
+			writer.state.Persistent = persistent
+			writer.state.IdleTimeout = "0s"
+			writer.SetPhase("starting HTTP server")
 			host, port := testPingServer(t)
 			path, err := runtimeStore(dir).Path(os.Getpid())
 			require.NoError(t, err)
@@ -2014,7 +2017,9 @@ func TestPersistentDaemonPublicationFailureKeepsLifetime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	MarkDaemonStarting(dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-	newStartupStateWriter(dir, time.Now).SetPhase("starting HTTP server")
+	writer := newStartupStateWriter(dir, time.Now)
+	writer.state.IdleTimeout = "2s"
+	writer.SetPhase("starting HTTP server")
 	host, port := testPingServer(t)
 	path, err := runtimeStore(dir).Path(os.Getpid())
 	require.NoError(t, err)

@@ -207,6 +207,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	MarkDaemonStarting(cfg.DataDir)
 	defer UnmarkDaemonStarting(cfg.DataDir)
 	startupProgress := newStartupStateWriter(cfg.DataDir, time.Now)
+	startupProgress.state.Persistent = cfg.PersistentDaemon
+	startupProgress.state.IdleTimeout = effectiveDaemonIdleTimeout(cfg).String()
 
 	// The signal context is created before the startup worker so SIGTERM can
 	// interrupt the worker pass. The server is fully drained by

@@ -261,7 +261,7 @@ func readStartupState(dataDir string) *startupState {
 // lifecycle readers can still report startup progress and require a daemon-
 // authored snapshot before trusting this fallback.
 func publishStartupStateFallback(
-	dataDir, host string, port int, browserURL string, requireAuth, noSync bool, explicitPort *int, caddyPID int, runtimeErr error, lifetime *daemonLifetime,
+	dataDir, host string, port int, browserURL string, requireAuth, noSync bool, explicitPort *int, caddyPID int, runtimeErr error,
 ) {
 	st := readStartupState(dataDir)
 	if st == nil || host == "" || port <= 0 || runtimeErr == nil {
@@ -274,9 +274,6 @@ func publishStartupStateFallback(
 	st.RuntimeError = runtimeErr.Error()
 	st.RequireAuth = requireAuth
 	st.RequireAuthKnown = true
-	if lifetime != nil {
-		st.Persistent, st.IdleTimeout = lifetime.Persistent, lifetime.IdleTimeout.String()
-	}
 	st.NoSync = noSync
 	st.NoSyncKnown = true
 	st.APIVersion = daemonAPIVersion

@@ -1063,7 +1063,7 @@ func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	deps.readStartupState = func(string) *startupState {
 		return &startupState{
 			PID: 113, Version: "v1.2.3-test", CreateTime: "987654321",
-			Phase: "initial sync",
+			Phase: "initial sync", Persistent: true,
 		}
 	}
 	deps.stopTargetConfirmed = func(rec daemon.RuntimeRecord, _ string) bool {
@@ -1080,6 +1080,7 @@ func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	) (backgroundLaunchResult, error) {
 		assert.Equal(t, []string{"serve"}, args)
 		assert.Equal(t, "daemon restart", policy.Operation)
+		assert.True(t, policy.Persistent)
 		return backgroundLaunchResult{
 			Runtime: &DaemonRuntime{
 				Record: daemon.RuntimeRecord{PID: 315},
@@ -1089,7 +1090,7 @@ func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 		}, nil
 	}
 
-	require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+	require.NoError(t, runDaemonRestart(t.Context(), out, *deps))
 	assert.Equal(t, 113, stopped.PID)
 	assert.Contains(t, out.String(), "restarted")
 	assert.NotContains(t, out.String(), "startup is still in progress")

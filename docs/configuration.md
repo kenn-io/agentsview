@@ -60,8 +60,9 @@ directory before you start AgentsView.
 
 The desktop app and CLI share a detached local daemon for fresh reads and
 writes. A running daemon owns local SQLite writes for this data directory.
-Automatically started daemons self-exit after an idle period; explicit starts
-stay running until stopped. Ordinary session commands require the daemon.
+Automatically started daemons self-exit after an idle period; `daemon start`
+and `daemon restart` stay running until stopped. Ordinary session commands
+require the daemon.
 Dedicated diagnostics, including `db adopt-machine --list` and `doctor sync`,
 can inspect the archive without starting it. Set `AGENTSVIEW_NO_DAEMON=1` when a
 script must never auto-start a daemon; commands that require one will refuse.

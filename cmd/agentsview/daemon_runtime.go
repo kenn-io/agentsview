@@ -216,7 +216,7 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 	path, err := runtimeStore(dataDir).Write(rec)
 	if err != nil {
 		if !readOnly {
-			publishStartupStateFallback(dataDir, host, port, browserURL, requireAuth, noSync, explicitPort, caddy, err, lifetime)
+			publishStartupStateFallback(dataDir, host, port, browserURL, requireAuth, noSync, explicitPort, caddy, err)
 		}
 		return "", err
 	}
