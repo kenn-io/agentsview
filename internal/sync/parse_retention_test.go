@@ -20,8 +20,12 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+// parseRetentionFinalizerMarker is padded past 16 bytes so the runtime cannot
+// batch it into a tiny allocation slot with a live neighbor, which would stop
+// its finalizer from ever running (see runtime.SetFinalizer).
 type parseRetentionFinalizerMarker struct {
 	value bool
+	_     [16]byte
 }
 
 func TestClaudeContinuationRetentionIncludesCompanion(t *testing.T) {

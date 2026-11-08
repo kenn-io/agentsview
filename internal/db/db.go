@@ -952,6 +952,12 @@ type DB struct {
 		waitCount    int64
 		waitDuration time.Duration
 	}
+
+	// memberFreshnessPages counts ListVirtualContainerMemberFreshnessPage
+	// calls so tests can pin how many pages a sync pass reads. Serving readers
+	// reuse prepared statements, so a SQLite authorizer sees one compilation
+	// per query shape rather than one per page.
+	memberFreshnessPages atomic.Int64
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the
