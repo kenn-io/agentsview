@@ -432,7 +432,7 @@ const SessionAnnotationsAPIVersion = 11
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.
 type ListFilter struct {
-	ExclusionCounts string `json:"exclusion_counts,omitempty"`
+	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
 	// IDs selects explicit sessions and their host copies; nil uses discovery defaults.
 	IDs []string `json:"ids,omitzero"`
 

@@ -28,6 +28,10 @@ func SeedSessionExclusions(t *testing.T, d *db.DB) {
 				s.RelationshipType = "subagent"
 				if id == "continuation" {
 					s.RelationshipType = id
+				} else {
+					s.ParentSessionID = new("one-shot")
+					s.UserMessageCount = 1
+					s.IsAutomated, s.SessionKind = true, "roborev"
 				}
 			}
 		})
@@ -47,20 +51,20 @@ func AssertSessionExclusionCounts(t *testing.T, store db.Store) {
 		{"defaults", func(*db.SessionFilter) {}, 2, 1, 1, 1},
 		{"include one-shot", func(f *db.SessionFilter) { f.ExcludeOneShot = false }, 3, 0, 1, 1},
 		{"include automated", func(f *db.SessionFilter) { f.ExcludeAutomated = false }, 3, 1, 0, 1},
-		{"tree", func(f *db.SessionFilter) { f.IncludeChildren = true }, 3, 1, 1, 0},
+		{"tree", func(f *db.SessionFilter) { f.IncludeChildren = true }, 2, 1, 1, 1},
 		{"label with child summary", func(f *db.SessionFilter) { f.Labels = []string{"exclusion-label"} }, 5, 0, 0, 0},
 		{"label explicit one-shot", func(f *db.SessionFilter) {
-			f.ExclusionCounts = "flat"
+			f.ExclusionCounts = new(false)
 			f.Labels = []string{"exclusion-label"}
 			f.OneShotFilterSet = true
-		}, 3, 2, 0, 0},
+		}, 2, 3, 0, 0},
 		{"label explicit automated", func(f *db.SessionFilter) {
-			f.ExclusionCounts = "flat"
+			f.ExclusionCounts = new(false)
 			f.Labels = []string{"exclusion-label"}
 			f.AutomatedFilterSet = true
-		}, 4, 0, 1, 0},
+		}, 3, 0, 2, 0},
 		{"pull request", func(f *db.SessionFilter) {
-			f.ExclusionCounts = "flat"
+			f.ExclusionCounts = new(false)
 			f.PR = db.PRFilter{Repository: "example/project", Number: 1}
 		}, 5, 0, 0, 0},
 		{"explicit IDs", func(f *db.SessionFilter) { f.IDs = []string{"visible", "one-shot", "automated"} }, 3, 0, 0, 0},
@@ -81,14 +85,15 @@ func AssertSessionExclusionCounts(t *testing.T, store db.Store) {
 		{"nothing hidden", func(f *db.SessionFilter) { f.SessionID = "continuation" }, 1, 0, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := db.SessionFilter{Project: "exclusions", ExcludeOneShot: true, ExcludeAutomated: true, ExclusionCounts: "all", Limit: 1}
+			f := db.SessionFilter{Project: "exclusions", ExcludeOneShot: true, ExcludeAutomated: true, ExclusionCounts: new(true), Limit: 1}
 			tc.change(&f)
 			page, err := store.ListSessions(t.Context(), f)
 			require.NoError(t, err)
 			assert.Equal(t, tc.total, page.Total)
 			require.NotNil(t, page.ExclusionCounts)
 			assert.Equal(t, &db.SessionExclusionCounts{OneShot: tc.oneShot, Automated: tc.automated, Children: tc.children}, page.ExclusionCounts)
-			if page.NextCursor != "" {
+			if tc.name == "defaults" {
+				require.NotEmpty(t, page.NextCursor)
 				f.Cursor = page.NextCursor
 				next, err := store.ListSessions(t.Context(), f)
 				require.NoError(t, err)
@@ -98,7 +103,7 @@ func AssertSessionExclusionCounts(t *testing.T, store db.Store) {
 	}
 
 	t.Run("fully included", func(t *testing.T) {
-		page, err := store.ListSessions(t.Context(), db.SessionFilter{Project: "exclusions", IncludeChildren: true, ExclusionCounts: "all"})
+		page, err := store.ListSessions(t.Context(), db.SessionFilter{Project: "exclusions", IncludeChildren: true, ExclusionCounts: new(true)})
 		require.NoError(t, err)
 		assert.Equal(t, 5, page.Total)
 		assert.Nil(t, page.ExclusionCounts)

@@ -137,9 +137,9 @@ func newSessionListCommand() *cobra.Command {
 			}
 			defer cleanup()
 
-			f.ExclusionCounts = "flat"
+			f.ExclusionCounts = new(false)
 			if len(f.Labels) == 0 && f.PR == "" && (!f.IncludeChildren || !f.IncludeOneShot && !f.IncludeAutomated) {
-				f.ExclusionCounts = "all"
+				f.ExclusionCounts = new(true)
 			}
 			list, err := svc.List(cmd.Context(), f)
 			if err != nil {
@@ -246,7 +246,7 @@ func newSessionListCommand() *cobra.Command {
 }
 
 func sessionListDefaultExclusionNotice(f service.ListFilter, counts *db.SessionExclusionCounts) string {
-	if f.ExclusionCounts == "" || counts == nil {
+	if counts == nil {
 		return ""
 	}
 	hiddenOneShot, hiddenAutomated, hiddenChildren := counts.OneShot, counts.Automated, counts.Children

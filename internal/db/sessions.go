@@ -572,7 +572,7 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
-	ExclusionCounts string // empty, flat, or all; opt-in first-page summary
+	ExclusionCounts *bool // nil omits the summary; true includes child counts
 	// IDs selects rows directly. Nil preserves discovery defaults; an empty
 	// non-nil slice matches nothing. Raw IDs expand over literal tilde suffixes.
 	IDs []string

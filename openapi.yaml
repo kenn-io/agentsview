@@ -20125,16 +20125,13 @@ paths:
     get:
       operationId: get-api-v1-sessions
       parameters:
-        - description: Include default-exclusion counts; all also samples hidden children. First page only.
+        - description: Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
           explode: false
           in: query
           name: exclusion_counts
           schema:
-            description: Include default-exclusion counts; all also samples hidden children. First page only.
-            enum:
-              - flat
-              - all
-            type: string
+            description: Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
+            type: boolean
         - description: Filter by project
           explode: false
           in: query

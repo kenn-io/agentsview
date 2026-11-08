@@ -60,7 +60,7 @@ func (q *unavailableExclusionChildren) QueryContext(context.Context, string, ...
 }
 
 func TestSessionExclusionCountsKeepsFlatCountsOnChildFailure(t *testing.T) {
-	f := SessionFilter{Project: "exclusions", ExcludeOneShot: true, ExcludeAutomated: true, ExclusionCounts: "all"}
+	f := SessionFilter{Project: "exclusions", ExcludeOneShot: true, ExcludeAutomated: true, ExclusionCounts: new(true)}
 	counts := &SessionExclusionCounts{OneShot: 1, Automated: 1}
 	q := &unavailableExclusionChildren{}
 	counts.LoadChildren(t.Context(), q, f, SQLiteQueryDialect(), 1)

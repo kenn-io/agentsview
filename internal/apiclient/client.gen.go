@@ -21985,24 +21985,6 @@ func (g GetAPIV1SearchContentQueryScope) Validate() error {
 	}
 }
 
-// GetAPIV1SessionsQueryExclusionCounts Include default-exclusion counts; all also samples hidden children. First page only.
-type GetAPIV1SessionsQueryExclusionCounts string
-
-const (
-	Flat                                    GetAPIV1SessionsQueryExclusionCounts = "flat"
-	GetAPIV1SessionsQueryExclusionCountsAll GetAPIV1SessionsQueryExclusionCounts = "all"
-)
-
-// Validate checks if the GetAPIV1SessionsQueryExclusionCounts value is valid
-func (g GetAPIV1SessionsQueryExclusionCounts) Validate() error {
-	switch g {
-	case Flat, GetAPIV1SessionsQueryExclusionCountsAll:
-		return nil
-	default:
-		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1SessionsQueryExclusionCounts value, got: %v", g))
-	}
-}
-
 // GetAPIV1SessionsIDMessagesQueryDirection Message ordering direction
 type GetAPIV1SessionsIDMessagesQueryDirection string
 
@@ -23250,8 +23232,8 @@ type GetAPIV1SessionStatsQuery struct {
 }
 
 type GetAPIV1SessionsQuery struct {
-	// ExclusionCounts Include default-exclusion counts; all also samples hidden children. First page only.
-	ExclusionCounts *GetAPIV1SessionsQueryExclusionCounts `json:"exclusion_counts,omitempty"`
+	// ExclusionCounts Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
+	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
 
 	// Project Filter by project
 	Project *string `json:"project,omitempty"`
@@ -23346,13 +23328,6 @@ type GetAPIV1SessionsQuery struct {
 
 func (g GetAPIV1SessionsQuery) Validate() error {
 	var errors runtime.ValidationErrors
-	if g.ExclusionCounts != nil {
-		if v, ok := any(g.ExclusionCounts).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("ExclusionCounts", err)
-			}
-		}
-	}
 	if g.Date != nil {
 		if v, ok := any(g.Date).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {

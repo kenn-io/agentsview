@@ -17,7 +17,7 @@ type SessionExclusionCounts struct {
 
 // WantsExclusionCounts keeps cursor pages and fully included lists cheap.
 func (f SessionFilter) WantsExclusionCounts() bool {
-	return f.ExclusionCounts != "" && f.Cursor == "" &&
+	return f.ExclusionCounts != nil && f.Cursor == "" &&
 		(f.ExcludeOneShot || f.ExcludeAutomated || !f.IncludeChildren)
 }
 
@@ -73,7 +73,7 @@ func CountSessionExclusions(ctx context.Context, q messageRowsQuerier, f Session
 
 // LoadChildren preserves flat counts and the visible page if the probe fails.
 func (c *SessionExclusionCounts) LoadChildren(ctx context.Context, q messageRowsQuerier, f SessionFilter, dialect QueryDialect, visible int) {
-	if c == nil || f.ExclusionCounts != "all" || f.HasAnnotationFilter() {
+	if c == nil || f.ExclusionCounts == nil || !*f.ExclusionCounts || f.HasAnnotationFilter() {
 		return
 	}
 	query, args := buildSessionExclusionChildrenSQL(f, dialect)

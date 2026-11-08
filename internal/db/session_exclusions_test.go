@@ -34,7 +34,7 @@ func TestSessionExclusionChildrenBounds(t *testing.T) {
 				dbtest.SeedSession(t, d, fmt.Sprintf("root-%03d", i), "bounds", func(s *db.Session) { s.UserMessageCount = 3 })
 			}
 			dbtest.SeedSession(t, d, tc.childID, "bounds", func(s *db.Session) { s.ParentSessionID = new("root-000"); s.RelationshipType = "fork" })
-			page, err := d.ListSessions(t.Context(), db.SessionFilter{Project: "bounds", ExclusionCounts: "all", OrderBy: "id", Descending: new(false)})
+			page, err := d.ListSessions(t.Context(), db.SessionFilter{Project: "bounds", ExclusionCounts: new(true), OrderBy: "id", Descending: new(false)})
 			require.NoError(t, err)
 			require.NotNil(t, page.ExclusionCounts)
 			assert.Equal(t, tc.children, page.ExclusionCounts.Children)

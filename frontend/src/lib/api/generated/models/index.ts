@@ -342,7 +342,6 @@ export * from "./getApiV1SessionsByIdToolSequencesPathParameters.ts";
 export * from "./getApiV1SessionsByIdUsageParams.ts";
 export * from "./getApiV1SessionsByIdUsagePathParameters.ts";
 export * from "./getApiV1SessionsByIdWatchPathParameters.ts";
-export * from "./getApiV1SessionsExclusionCounts.ts";
 export * from "./getApiV1SessionsParams.ts";
 export * from "./getApiV1SessionsSidebarIndexParams.ts";
 export * from "./getApiV1SessionStatsParams.ts";
