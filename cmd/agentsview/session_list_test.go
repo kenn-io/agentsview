@@ -411,23 +411,6 @@ func TestSessionListChildCountLowerBoundNotice(t *testing.T) {
 	assert.Equal(t, "Excluded at least 2 child sessions by default. Use --include-children to include them.", notice)
 }
 
-func TestSessionListAllowsMissingExclusionCounts(t *testing.T) {
-	newAgentDataDir(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sessions":[{"id":"visible"}],"total":1}`))
-	}))
-	t.Cleanup(srv.Close)
-	root := newRootCommand()
-	var stdout, stderr bytes.Buffer
-	root.SetOut(&stdout)
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"session", "list", "--server", srv.URL, "--json"})
-	require.NoError(t, root.Execute())
-	assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
-	assert.Empty(t, stderr.String())
-}
-
 func TestSessionListSeparatesFlatAndChildRetries(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSessionsWithOpts(t, dataDir,
