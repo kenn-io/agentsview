@@ -1246,7 +1246,9 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 			defer ts.Close()
 			MarkDaemonStarting(dir)
 			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-			newStartupStateWriter(dir, time.Now).SetPhase("starting HTTP server")
+			writer := newStartupStateWriter(dir, time.Now)
+			writer.state.IdleTimeout = "2s"
+			writer.SetPhase("starting HTTP server")
 			if tc.fallback {
 				path, err := runtimeStore(dir).Path(os.Getpid())
 				require.NoError(t, err)

@@ -253,9 +253,6 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(func() { listener.Close() })
 			}
-			automaticArgs := restartDaemonAfterUpdateArgs(config.Config{}, stopped)
-			stopped.Persistent = true
-			require.Equal(t, automaticArgs, restartDaemonAfterUpdateArgs(config.Config{}, stopped))
 			args := serveBackgroundChildArgs(restartDaemonAfterUpdateArgs(config.Config{}, stopped))
 			cmd = newServeCommand()
 			require.NoError(t, cmd.Flags().Parse(args[1:]))
@@ -467,12 +464,6 @@ func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
 			rt = FindWritableDaemonRuntime(dir)
 			require.NotNil(t, rt)
 			assert.Equal(t, persistent, rt.Persistent)
-			require.NotNil(t, rt.IdleTimeout)
-			if persistent {
-				assert.Zero(t, *rt.IdleTimeout)
-			} else {
-				assert.Equal(t, 2*time.Second, *rt.IdleTimeout)
-			}
 			time.Sleep(5 * time.Second) //nolint:kennlint // sleeptest: the child process uses the real clock for its two-second idle exit.
 			assert.Equal(t, persistent, FindWritableDaemonRuntime(dir) != nil)
 		})

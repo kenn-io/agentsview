@@ -22,7 +22,7 @@ func TestDaemonPersistenceDisablesShutdownAndPreservesSyncIdle(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		go tracker.Run(ctx)
-		s := New(config.Config{PublicURL: "http://localhost", PublicOrigins: []string{"http://localhost"}}, nil, nil, WithIdleTracker(tracker), WithDaemonPersistence(func() error { published = true; time.Sleep(3 * time.Second); return nil }))
+		s := New(config.Config{PublicURL: "http://localhost", PublicOrigins: []string{"http://localhost"}}, nil, nil, WithIdleTracker(tracker), WithDaemonPersistence(func() error { published = true; return nil }))
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://localhost/api/v1/daemon/persist", nil)
 		req.Header.Set("Origin", "http://localhost")
 		req.RemoteAddr = "127.0.0.1:1234"

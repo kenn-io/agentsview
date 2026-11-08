@@ -2957,44 +2957,32 @@ func TestReplacementDoesNotRepeatWaitForServingFallback(t *testing.T) {
 	assert.False(t, waited, "a serving fallback must advance to replacement while retaining its start lock")
 }
 
-func TestFreshBackgroundServeIgnoresInheritedPersistence(t *testing.T) {
-	dir := testDataDir(t)
-	t.Setenv(persistentDaemonEnvVar, "true")
-	host, port := testPingServer(t)
-	old := startServeBackgroundProcessForRun
-	t.Cleanup(func() { startServeBackgroundProcessForRun = old })
-	launched := false
-	startServeBackgroundProcessForRun = func(ctx context.Context, cfg config.Config, args []string) (*exec.Cmd, string, error) {
-		launched = true
-		assert.False(t, cfg.PersistentDaemon, "fresh background serve must remain automatic")
-		_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil, dir, host, port, version, "", false, false, true, nil)
-		require.NoError(t, err)
-		child := exec.CommandContext(t.Context(), "sleep", "2")
-		require.NoError(t, child.Start())
-		t.Cleanup(func() { _ = child.Process.Kill() })
-		return child, "", nil
+func TestBackgroundServeSelectsLaunchLifetime(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		updateIntent string
+		persistent   bool
+	}{{"fresh", "", false}, {"update", "true", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := testDataDir(t)
+			t.Setenv(persistentDaemonEnvVar, "true")
+			t.Setenv(updateRestartPersistentEnvVar, tc.updateIntent)
+			host, port := testPingServer(t)
+			old := startServeBackgroundProcessForRun
+			t.Cleanup(func() { startServeBackgroundProcessForRun = old })
+			launched := false
+			startServeBackgroundProcessForRun = func(ctx context.Context, cfg config.Config, args []string) (*exec.Cmd, string, error) {
+				launched = true
+				assert.Equal(t, tc.persistent, cfg.PersistentDaemon)
+				_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil, dir, host, port, version, "", false, false, true, nil)
+				require.NoError(t, err)
+				child := exec.CommandContext(t.Context(), "sleep", "2")
+				require.NoError(t, child.Start())
+				t.Cleanup(func() { _ = child.Process.Kill() })
+				return child, "", nil
+			}
+			runServeBackground(t.Context(), config.Config{DataDir: dir, Host: host, Port: port}, []string{"serve", "--background"}, serveReplacementOptions{})
+			assert.True(t, launched)
+		})
 	}
-	runServeBackground(t.Context(), config.Config{DataDir: dir, Host: host, Port: port}, []string{"serve", "--background"}, serveReplacementOptions{})
-	assert.True(t, launched)
-}
-
-func TestUpdateBackgroundServeCarriesPersistence(t *testing.T) {
-	dir := testDataDir(t)
-	t.Setenv(updateRestartPersistentEnvVar, "true")
-	host, port := testPingServer(t)
-	old := startServeBackgroundProcessForRun
-	t.Cleanup(func() { startServeBackgroundProcessForRun = old })
-	launched := false
-	startServeBackgroundProcessForRun = func(ctx context.Context, cfg config.Config, args []string) (*exec.Cmd, string, error) {
-		launched = true
-		assert.True(t, cfg.PersistentDaemon)
-		_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil, dir, host, port, version, "", false, false, true, nil)
-		require.NoError(t, err)
-		child := exec.CommandContext(t.Context(), "sleep", "2")
-		require.NoError(t, child.Start())
-		t.Cleanup(func() { _ = child.Process.Kill() })
-		return child, "", nil
-	}
-	runServeBackground(t.Context(), config.Config{DataDir: dir, Host: host, Port: port}, []string{"serve", "--background"}, serveReplacementOptions{})
-	assert.True(t, launched)
 }
