@@ -353,6 +353,10 @@ func TestGitHookInstallInstructions(t *testing.T) {
 			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nfalse\nexit 0\n"), 0o755))
 		}},
+		{name: "commit-msg with set -e and an optional check", steps: 2, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			t.Helper()
+			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nset -e\nfalse && echo optional\nexit 0\n"), 0o755))
+		}},
 		{name: "commit-msg that rewrites the message", steps: 2, rewrites: "Rewritten by hook", setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
 			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nprintf 'Rewritten by hook\\n' > \"$1\"\n"), 0o755))
