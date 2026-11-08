@@ -274,7 +274,6 @@ func serveStatusLines(rt *DaemonRuntime) []string {
 				duration = fmt.Sprintf("%dm", *rt.IdleTimeout/time.Minute)
 			}
 			lifetime = fmt.Sprintf("Exits after %s idle", duration)
-			lifetime += " (started automatically)"
 		}
 		lines = append(lines, "  "+lifetime)
 	}

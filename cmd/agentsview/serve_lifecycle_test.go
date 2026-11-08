@@ -810,9 +810,9 @@ func TestServeStatusLinesLifetime(t *testing.T) {
 		timeout time.Duration
 		want    string
 	}{
-		{20 * time.Minute, "Exits after 20m idle (started automatically)"},
+		{20 * time.Minute, "Exits after 20m idle"},
 		{0, "Stays running until agentsview daemon stop"},
-		{2 * time.Second, "Exits after 2s idle (started automatically)"},
+		{2 * time.Second, "Exits after 2s idle"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			rt := &DaemonRuntime{Record: testWritableRecord(79, ""), IdleTimeout: &tc.timeout}
