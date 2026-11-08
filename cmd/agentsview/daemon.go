@@ -18,9 +18,9 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -275,26 +275,23 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon start: %w", err)
 	}
-	if rt := deps.writableRuntime(cfg.DataDir, cfg.AuthToken); rt != nil && !rt.Persistent {
-		if err := daemonRuntimeCompatibilityError(rt); err != nil {
-			return err
+	incumbent := deps.writableRuntime(cfg.DataDir, cfg.AuthToken)
+	if incumbent != nil && !shouldReplaceDaemonRuntime(incumbent, version) {
+		if !incumbent.Persistent {
+			if err := deps.persistRuntime(ctx, cfg, incumbent); err != nil {
+				return err
+			}
+			incumbent.Persistent = true
+			zero := time.Duration(0)
+			incumbent.IdleTimeout = &zero
 		}
-		if err := deps.persistRuntime(ctx, cfg, rt); err != nil {
-			return err
-		}
-		rt.Persistent = true
-		zero := time.Duration(0)
-		rt.IdleTimeout = &zero
-		writeDaemonStartResult(w, backgroundLaunchResult{Runtime: rt}, false)
+		writeDaemonStartResult(w, backgroundLaunchResult{Runtime: incumbent}, false)
 		return nil
 	}
-	if rt := writableRuntimeFallbackForCommand(cfg, deps); rt != nil {
-		writeDaemonStartResult(w, backgroundLaunchResult{Runtime: rt}, false)
-		return nil
-	}
-	if deps.isStarting(cfg.DataDir) {
+	if deps.isStarting(cfg.DataDir) && (incumbent == nil || !incumbent.RuntimeFallback) {
 		return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
+
 	progress := &daemonLaunchProgressWriter{w: w}
 	result, err := deps.startBackground(ctx,
 		cfg, []string{"serve"}, serveReplacementOptions{},
@@ -934,25 +931,16 @@ func daemonStatusRecords(
 
 func persistDaemonRuntime(ctx context.Context, cfg config.Config, rt *DaemonRuntime) error {
 	tr := transportFromRuntime(rt)
-	client, err := requestsign.ClientFromEnvironment(tr.URL, &http.Client{Timeout: 10 * time.Second})
+	client, err := apiclient.NewHTTPClient(tr.URL, cfg.AuthToken, &http.Client{Timeout: 10 * time.Second})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tr.URL+"/api/v1/daemon/persist", nil)
-	if err != nil {
-		return err
+	resp, err := client.PostAPIV1DaemonPersistWithResponse(ctx)
+	if resp != nil && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("daemon start: daemon version %s could not confirm persistence with CLI version %s (HTTP %d); run agentsview daemon restart to reload saved configuration", rt.Record.Version, version, resp.StatusCode)
 	}
-	req.Header.Set("Origin", daemonOriginURL(tr.URL))
-	if cfg.AuthToken != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
-	}
-	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("daemon start: confirming persistence: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("daemon start: daemon version %s could not confirm persistence with CLI version %s (HTTP %d); run agentsview daemon restart to reload saved configuration", rt.Record.Version, version, resp.StatusCode)
 	}
 	return nil
 }

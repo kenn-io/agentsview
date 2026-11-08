@@ -175,7 +175,6 @@ func runServeBackgroundCommand(
 func runServeBackground(ctx context.Context,
 	cfg config.Config, args []string, opts serveReplacementOptions,
 ) {
-	cfg.PersistentDaemon = cfg.PersistentDaemon || os.Getenv(persistentDaemonEnvVar) == "true"
 	result, err := startServeBackground(ctx,
 		cfg, args, opts, backgroundLaunchPolicy{},
 	)

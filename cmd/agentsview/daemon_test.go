@@ -319,8 +319,10 @@ func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.isStarting = func(string) bool { return true }
 	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		rec := testWritableRecord(79, "")
+		rec.Version = version
 		return &DaemonRuntime{
-			Record:          testWritableRecord(79, ""),
+			Record:          rec,
 			Host:            "127.0.0.1",
 			Port:            8079,
 			RuntimeFallback: true,
@@ -1270,6 +1272,11 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 				rt := FindWritableDaemonRuntime(dir)
 				require.NotNil(t, rt)
 				assert.Equal(t, fallback, rt.RuntimeFallback)
+				if contended && !fallback {
+					delete(rt.Record.Metadata, runtimePersistent)
+					_, err := runtimeStore(dir).Write(rt.Record)
+					require.NoError(t, err)
+				}
 				before := rt.Record
 				deps, out := daemonCommandTestDeps(t)
 				deps.resolveDataDir = func() (string, error) { return dir, nil }
@@ -1341,4 +1348,52 @@ func TestRestartCommandSelectsLifetime(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestDaemonStartReplacesOlderAutomaticDaemon(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fallback=%v", fallback), func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			setTestVersion(t, "1.1.0")
+			rt := daemonRuntimeFromRecord(testWritableRecord(79, ""))
+			rt.Record.Version = "1.0.0"
+			rt.RuntimeFallback = fallback
+			deps.writableRuntime = func(string, string) *DaemonRuntime { return rt }
+			deps.isStarting = func(string) bool { return fallback }
+			promoted, replaced := false, false
+			deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error {
+				promoted = true
+				return errors.New("old daemon has no persistence endpoint")
+			}
+			deps.startBackground = func(_ context.Context, _ config.Config, _ []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+				replaced = true
+				assert.True(t, policy.Persistent)
+				return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: testWritableRecord(80, ""), Persistent: true}}, nil
+			}
+			require.NoError(t, runDaemonStart(t.Context(), out, *deps))
+			assert.True(t, replaced)
+			assert.False(t, promoted)
+		})
+	}
+}
+
+func TestDaemonStartReportsMissingPersistenceOperation(t *testing.T) {
+	ts := httptest.NewServer(http.NotFoundHandler())
+	defer ts.Close()
+	endpoint, err := url.Parse(ts.URL)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(endpoint.Port())
+	require.NoError(t, err)
+	deps, out := daemonCommandTestDeps(t)
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{Record: daemon.RuntimeRecord{Version: version}, Host: endpoint.Hostname(), Port: port}
+	}
+	deps.persistRuntime = persistDaemonRuntime
+	deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+		require.FailNow(t, "eligible daemon should be promoted in place")
+		return backgroundLaunchResult{}, nil
+	}
+	err = runDaemonStart(t.Context(), out, *deps)
+	require.ErrorContains(t, err, "HTTP 404")
+	require.ErrorContains(t, err, "agentsview daemon restart")
 }

@@ -383,6 +383,7 @@ export * from "./pingInfo.ts";
 export * from "./pinMessageResponse.ts";
 export * from "./pinRequest.ts";
 export * from "./pinsResponse.ts";
+export * from "./postApiV1DaemonPersist200.ts";
 export * from "./postApiV1EmbeddingsGenerationsByIdActivateParams.ts";
 export * from "./postApiV1EmbeddingsGenerationsByIdActivatePathParameters.ts";
 export * from "./postApiV1EmbeddingsGenerationsByIdRetireParams.ts";

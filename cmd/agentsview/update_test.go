@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -419,6 +420,34 @@ func TestUpdateCheckGivesPackageManagerGuidance(t *testing.T) {
 			} else {
 				assert.NotContains(t, out, "manages this installation")
 			}
+		})
+	}
+}
+
+func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
+	for _, persistent := range []bool{false, true} {
+		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
+			dir := testDataDir(t)
+			t.Setenv(persistentDaemonEnvVar, "true")
+			host, port := testPingServer(t)
+			old := startServeBackgroundProcessForRun
+			t.Cleanup(func() { startServeBackgroundProcessForRun = old })
+			launched := false
+			startServeBackgroundProcessForRun = func(ctx context.Context, cfg config.Config, args []string) (*exec.Cmd, string, error) {
+				launched = true
+				assert.Equal(t, persistent, cfg.PersistentDaemon)
+				assert.Equal(t, host, cfg.Host)
+				assert.Equal(t, port, cfg.Port)
+				assert.True(t, cfg.NoSync)
+				_, err := WriteDaemonRuntimeWithAuthAndNoSync(cfg, dir, host, port, version, "", false, false, true, nil)
+				require.NoError(t, err)
+				child := exec.CommandContext(t.Context(), "sleep", "2")
+				require.NoError(t, child.Start())
+				t.Cleanup(func() { _ = child.Process.Kill() })
+				return child, "", nil
+			}
+			require.NoError(t, restartDaemonAfterUpdate(t.Context(), config.Config{DataDir: dir}, updateDaemonStopResult{Persistent: persistent, Host: host, Port: port, ExplicitPort: &port, NoSync: true, RequireAuthKnown: true}))
+			assert.True(t, launched)
 		})
 	}
 }

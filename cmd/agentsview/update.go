@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -224,17 +223,28 @@ func loadDaemonConfigForUpdate() (config.Config, error) {
 func restartDaemonAfterUpdate(ctx context.Context,
 	cfg config.Config, stopResult updateDaemonStopResult,
 ) error {
-	exe, err := os.Executable()
+	lock, ok, err := acquireBackgroundLaunchLockWithError(cfg.DataDir)
 	if err != nil {
-		return fmt.Errorf("finding current executable: %w", err)
+		return err
 	}
-	cmd := exec.CommandContext(ctx, exe, restartDaemonAfterUpdateArgs(cfg, stopResult)...)
-	cmd.Env = append(os.Environ(), "AGENTSVIEW_DATA_DIR="+cfg.DataDir, persistentDaemonEnvVar+"="+strconv.FormatBool(stopResult.Persistent))
-	out, err := cmd.CombinedOutput()
+	if !ok {
+		return errors.New("daemon launch is already in progress")
+	}
+	defer func() { _ = lock.Unlock() }()
+	args := restartDaemonAfterUpdateArgs(cfg, stopResult)
+	cmd := newServeCommand()
+	if err := cmd.Flags().Parse(args[1:]); err != nil {
+		return err
+	}
+	restartCfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
-		return fmt.Errorf("serve --background: %w: %s", err, strings.TrimSpace(string(out)))
+		return err
 	}
-	return nil
+	if err := validateLockedDataDir(cfg.DataDir, restartCfg.DataDir); err != nil {
+		return err
+	}
+	result, err := startServeBackground(ctx, restartCfg, args, serveReplacementOptions{}, backgroundLaunchPolicy{Persistent: stopResult.Persistent, Operation: "update restart"})
+	return backgroundResultError(err, result)
 }
 
 func restartDaemonAfterUpdateArgs(

@@ -2946,3 +2946,21 @@ func TestReplacementDoesNotRepeatWaitForServingFallback(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, waited, "a serving fallback must advance to replacement while retaining its start lock")
 }
+
+func TestFreshBackgroundServeIgnoresInheritedPersistence(t *testing.T) {
+	dir := testDataDir(t)
+	t.Setenv(persistentDaemonEnvVar, "true")
+	host, port := testPingServer(t)
+	old := startServeBackgroundProcessForRun
+	t.Cleanup(func() { startServeBackgroundProcessForRun = old })
+	startServeBackgroundProcessForRun = func(ctx context.Context, cfg config.Config, args []string) (*exec.Cmd, string, error) {
+		assert.False(t, cfg.PersistentDaemon, "fresh background serve must remain automatic")
+		_, err := WriteDaemonRuntimeWithAuthAndNoSync(cfg, dir, host, port, version, "", false, false, true, nil)
+		require.NoError(t, err)
+		child := exec.CommandContext(t.Context(), "sleep", "2")
+		require.NoError(t, child.Start())
+		t.Cleanup(func() { _ = child.Process.Kill() })
+		return child, "", nil
+	}
+	runServeBackground(t.Context(), config.Config{DataDir: dir, Host: host, Port: port}, []string{"serve", "--background"}, serveReplacementOptions{})
+}
