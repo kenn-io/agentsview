@@ -369,7 +369,7 @@ func (s analyticsSQL) scanMissingVelocities(ctx context.Context, ids []string, o
 	if err != nil {
 		return err
 	}
-	maps.Copy(out, readbase.SessionVelocities(scanned))
+	maps.Copy(out, db.SessionVelocities(scanned))
 	return nil
 }
 

@@ -232,7 +232,7 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, filter StatsFilter, fro
 	}
 	for _, id := range rootMiss {
 		if len(msgs[id]) >= 2 {
-			processSessionVelocity([]*velocityAccumulator{&facts.session(id).velocity}, msgs[id], 0)
+			addSessionVelocity([]*velocityAccumulator{&facts.session(id).velocity}, ComputeSessionVelocity(msgs[id]), 0)
 		}
 	}
 	if len(claudeMiss) > 0 {

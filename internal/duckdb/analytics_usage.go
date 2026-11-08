@@ -187,7 +187,7 @@ func (s analyticsSQL) VelocitySessions(ctx context.Context, ids []string, _ db.A
 	if err != nil {
 		return nil, err
 	}
-	return readbase.SessionVelocities(msgs), nil
+	return db.SessionVelocities(msgs), nil
 }
 
 func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db.AnalyticsFilter) (map[string]int, error) {
