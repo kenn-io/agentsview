@@ -50,7 +50,7 @@ func TestSessionPushUsageRoundTripAndReceipt(t *testing.T) {
 	require.NoError(t, json.Unmarshal(packet, &envelope))
 	var wire manifest
 	require.NoError(t, json.Unmarshal(envelope.Manifest, &wire))
-	for _, invalid := range []int{-1, 1} {
+	for _, invalid := range []int{-1} {
 		t.Run("ordinal="+strconv.Itoa(invalid), func(t *testing.T) {
 			wire.UsageEvents[0].MessageOrdinal = &invalid
 			envelope.Manifest, err = json.Marshal(wire)
@@ -58,7 +58,7 @@ func TestSessionPushUsageRoundTripAndReceipt(t *testing.T) {
 			bad, err := json.Marshal(envelope)
 			require.NoError(t, err)
 			receipt, write, err := DecodeSessionPush(bad)
-			require.ErrorContains(t, err, "usage references missing message")
+			require.ErrorContains(t, err, "usage has negative message ordinal")
 			assert.Empty(t, receipt.SessionID)
 			assert.Empty(t, write.Session.ID)
 		})

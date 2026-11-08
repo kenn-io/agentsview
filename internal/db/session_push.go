@@ -171,8 +171,8 @@ func validateSessionPushResultJSON(content string) error {
 		}
 		stack := []collection{{kind: first.Kind()}}
 		for len(stack) > 0 {
-			token, err := dec.ReadToken()
-			if err != nil {
+			token, _ := dec.ReadToken() // Malformed result text remains displayable.
+			if token.Kind() == 0 {
 				break
 			}
 			kind := token.Kind()

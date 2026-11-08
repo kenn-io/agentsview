@@ -191,6 +191,10 @@ func (s *Server) humaUpdateSettings(
 		s.settingsApplyMu.Lock()
 		defer s.settingsApplyMu.Unlock()
 		s.mu.Lock()
+		if in.Body.RequireAuth != nil && !*in.Body.RequireAuth && s.cfg.AcceptSessionPush {
+			s.mu.Unlock()
+			return nil, apiError(http.StatusBadRequest, "disable session pushes before disabling authentication")
+		}
 		rollback := s.ingestionRollbackLocked(patch)
 		err := s.cfg.SaveSettings(patch)
 		if err == nil && s.cfg.RequireAuth {

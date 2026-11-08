@@ -4143,6 +4143,29 @@ func TestSettingsRemainWritableInLocalNoSyncMode(t *testing.T) {
 	assert.False(t, resp.ReadOnly)
 }
 
+func TestSettingsRejectDisablingAuthForSessionPushReceiver(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.AcceptSessionPush = true
+		c.RequireAuth = true
+		c.AuthToken = "fixture-token"
+	})
+	t.Setenv("AGENTSVIEW_DATA_DIR", te.dataDir)
+	path := filepath.Join(te.dataDir, "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("accept_session_push = true\nrequire_auth = true\nauth_token = \"fixture-token\"\n"), 0o600))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings", strings.NewReader(`{"require_auth":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	req.Header.Set("Authorization", "Bearer fixture-token")
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "disable session pushes")
+	reloaded, err := config.Load(nil)
+	require.NoError(t, err)
+	assert.True(t, reloaded.RequireAuth)
+	assert.True(t, reloaded.AcceptSessionPush)
+}
+
 func TestPublishSession_DoesNotUseGitHubCLIAuthTokenFallbackForForwardedRequest(t *testing.T) {
 	useGitHubCLIAuthTokenStub(t)
 	te := setup(t)

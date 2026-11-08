@@ -72,7 +72,7 @@ func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
 	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
 	t.Cleanup(engine.Close)
 	jobs := make(chan syncJob, 1)
-	job := syncJob{agent: parser.AgentCursor, path: "fixture-source"}
+	job := syncJob{agent: parser.AgentCursor, path: "fixture-source"} //nolint:modernize // Embedded-field literal shorthand is not supported by the CI compiler.
 	job.results = []parser.ParseResult{
 		{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentCursor, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "replacement"}}},
 		{Session: parser.ParsedSession{ID: "independent", Agent: parser.AgentCursor, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "independent content"}}},
@@ -100,7 +100,7 @@ func TestSessionPushReservedExclusionDoesNotBlockSourceMember(t *testing.T) {
 	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
 	t.Cleanup(engine.Close)
 	jobs := make(chan syncJob, 1)
-	job := syncJob{agent: parser.AgentVibe, path: "fixture-source"}
+	job := syncJob{agent: parser.AgentVibe, path: "fixture-source"} //nolint:modernize // Embedded-field literal shorthand is not supported by the CI compiler.
 	job.excludedSessionIDs = []string{"reserved"}
 	job.results = []parser.ParseResult{{Session: parser.ParsedSession{ID: "canonical", Agent: parser.AgentVibe, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "canonical content"}}}}
 	jobs <- job

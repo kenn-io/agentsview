@@ -240,10 +240,10 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		return zero, noWrite, err
 	}
 	for _, event := range m.UsageEvents {
-		if event.MessageOrdinal != nil {
-			if _, exists := ordinals[*event.MessageOrdinal]; !exists {
-				return zero, noWrite, errors.New("usage references missing message")
-			}
+		// A filtered tool-result carrier can leave usage at an ordinal with no
+		// retained message; keep that coordinate for accounting fidelity.
+		if event.MessageOrdinal != nil && *event.MessageOrdinal < 0 {
+			return zero, noWrite, errors.New("usage has negative message ordinal")
 		}
 	}
 	// Hash the canonical validated manifest and ordered dependency digests, never

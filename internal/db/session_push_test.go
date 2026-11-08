@@ -350,9 +350,7 @@ func TestLoadSessionPushDataCoherentSnapshotDuringWrites(t *testing.T) {
 	close(start)
 	for range 24 {
 		session, data, err := d.LoadSessionPushData(ctx, "snapshot", smallArtifactExportLoadLimits())
-		if !assert.NoError(t, err, "loading session push snapshot") {
-			break
-		}
+		require.NoError(t, err, "loading session push snapshot")
 		if !assert.NotNil(t, session, "loaded session push snapshot") {
 			break
 		}

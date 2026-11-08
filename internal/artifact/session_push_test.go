@@ -94,6 +94,23 @@ func TestSessionPushGooseAuthoritativeCounts(t *testing.T) {
 	}
 }
 
+func TestSessionPushPreservesUsageForFilteredCarrier(t *testing.T) {
+	ordinal := 1
+	session := db.Session{ID: "zcode:sample", Agent: "zcode", Machine: "source", MessageCount: 2, UserMessageCount: 1}
+	data := db.ArtifactExportData{
+		Messages:    []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 2, Role: "assistant", Content: "answer"}},
+		UsageEvents: []db.UsageEvent{{SessionID: session.ID, MessageOrdinal: &ordinal, Source: "session", DedupKey: "carrier", InputTokens: 42}},
+	}
+	packet, err := encodeSessionPushData(t.Context(), "source", session, data)
+	require.NoError(t, err)
+	_, write, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	require.Len(t, write.UsageEvents, 1)
+	require.NotNil(t, write.UsageEvents[0].MessageOrdinal)
+	assert.Equal(t, 1, *write.UsageEvents[0].MessageOrdinal)
+	assert.Equal(t, 42, write.UsageEvents[0].InputTokens)
+}
+
 func TestSessionPushCanceledContext(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{

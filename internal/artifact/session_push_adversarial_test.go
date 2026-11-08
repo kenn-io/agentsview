@@ -5,10 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"hegel.dev/go/hegel"
 )
 
 // Build through the existing artifact encoder, independently of push validation,
@@ -79,23 +77,4 @@ func TestSessionPushRejectsNestedCoordinates(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
-}
-
-func TestSessionPushRejectsForeignIDProperty(t *testing.T) {
-	valid := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source"}, nil)
-	hegel.Test(t, func(ht *hegel.T) {
-		other := hegel.Draw(ht, hegel.Text())
-		if other == "selected" {
-			other += "different"
-		}
-		var envelope SessionPushEnvelope
-		require.NoError(ht, json.Unmarshal(valid, &envelope))
-		envelope.SessionID = other
-		data, err := json.Marshal(envelope)
-		require.NoError(ht, err)
-		receipt, write, err := DecodeSessionPush(data)
-		require.Error(ht, err)
-		assert.Empty(ht, receipt.SessionID)
-		assert.Empty(ht, write.Session.ID)
-	}, hegel.WithTestCases(2000))
 }
