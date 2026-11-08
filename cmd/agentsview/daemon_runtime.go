@@ -374,7 +374,7 @@ func FindWritableDaemonRuntime(dataDir string, authToken ...string) *DaemonRunti
 	return rt
 }
 
-// writableDaemonRecordsWithFallback appends a confirmed fallback only when no live writable record exists.
+// writableDaemonRecordsWithFallback overlays a serving fallback or appends one when no writable record exists.
 func writableDaemonRecordsWithFallback(
 	records []daemon.RuntimeRecord,
 	resolve func() *DaemonRuntime,

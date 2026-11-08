@@ -97,17 +97,12 @@ func TestClockShiftedRuntimeRecordStaysVisibleToDiscovery(t *testing.T) {
 			name: "writable records with fallback",
 			check: func(t *testing.T, _ string, rec daemon.RuntimeRecord) {
 				t.Helper()
-				resolved := false
 				records, fallback := writableDaemonRecordsWithFallback(
-					[]daemon.RuntimeRecord{rec}, func() *DaemonRuntime {
-						resolved = true
-						return nil
-					},
+					[]daemon.RuntimeRecord{rec}, func() *DaemonRuntime { return nil },
 				)
 				require.Len(t, records, 1)
 				assert.Equal(t, rec.PID, records[0].PID)
 				assert.False(t, fallback)
-				assert.False(t, resolved)
 			},
 		},
 		{

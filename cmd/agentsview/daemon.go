@@ -170,7 +170,7 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 			Use: "start", Short: "Start the background server",
 			Long: "Start the writable server in the background using saved configuration, without opening a browser. " +
 				"It stays running until stopped. " +
-				"An automatic daemon stays running in place; a persistent daemon is reused. " +
+				"Keeps a running daemon in place unless an upgrade is needed. " +
 				"This is also the explicit startup step when automatic startup is disabled.",
 			Example:      "  agentsview daemon start",
 			SilenceUsage: true, Args: cobra.NoArgs,

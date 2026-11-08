@@ -1288,12 +1288,9 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 						return daemonLaunchObservation{Records: []daemon.RuntimeRecord{before}}
 					}
 				}
-				deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error {
-					require.FailNow(t, "promotion stopped the daemon")
-					return nil
-				}
 				deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
-					return backgroundLaunchResult{Runtime: FindWritableDaemonRuntime(dir)}, nil
+					require.FailNow(t, "promotion must keep the running daemon in place")
+					return backgroundLaunchResult{}, nil
 				}
 				for range 2 {
 					require.NoError(t, runDaemonStart(t.Context(), out, *deps))
