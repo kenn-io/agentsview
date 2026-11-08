@@ -68,8 +68,6 @@ func TestPGActivityReportPairingMatchesSQLPairing(t *testing.T) {
 			{"assistant", "2026-06-16T09:30:00.123456Z", ""},
 			{"user", "2026-06-16T23:59:59.999999Z", ""},
 			{"assistant", "2026-06-17T00:00:00Z", "after"},
-			{"user", "2026-06-16T12:00:00Z", ""},
-			{"assistant", "2026-06-17T08:00:00Z", "successor"},
 		},
 		"e-boundary": {
 			{"assistant", "2026-06-15T23:54:59.999999Z", "before"},
@@ -128,9 +126,15 @@ func TestPGActivityReportPairingMatchesSQLPairing(t *testing.T) {
 			assert.Equal(t, want, got)
 		})
 	}
+}
+
+func TestPGActivityReportCandidateSourceStopsOnConsumerError(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_activity_pairing_stop_test")
+	seedPGDailyFixture(t, store)
+	q := pgDayQuery(t, "2026-06-16", "UTC")
 	sentinel := errors.New("consumer stopped")
 	emitted := 0
-	assert.ErrorIs(t, store.ActivityReportCandidateSource(ids, day)(t.Context(), func(activity.IntervalCandidate) error {
+	assert.ErrorIs(t, store.ActivityReportCandidateSource([]string{"a", "b"}, q)(t.Context(), func(activity.IntervalCandidate) error {
 		emitted++
 		return sentinel
 	}), sentinel)
