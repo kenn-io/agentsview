@@ -118,4 +118,18 @@ func TestSessionExclusionCounts(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { store.Close() })
 	dbtest.AssertSessionExclusionCounts(t, store)
+	t.Run("tree query plan", func(t *testing.T) {
+		query, args := db.BuildSessionExclusionCountsSQL(db.SessionFilter{
+			ExcludeOneShot: true, ExcludeAutomated: true, IncludeChildren: true,
+		}, db.PostgresQueryDialect())
+		rows, err := store.DB().QueryContext(t.Context(), "EXPLAIN "+query, args...)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var line string
+			require.NoError(t, rows.Scan(&line))
+			require.NotContains(t, line, "SubPlan")
+		}
+		require.NoError(t, rows.Err())
+	})
 }
