@@ -1,6 +1,6 @@
 import { groupedModelCsv, toggleGroupedModel } from "../utils/model-groups.js";
 import { m } from "../i18n/index.js";
-import { queryStepFrom, type QueryStep } from "../utils/refresh.js";
+import { queryStepFrom, refreshScopeKey, type QueryStep } from "../utils/refresh.js";
 import { LiveQuery } from "../utils/liveQuery.svelte.js";
 import type { AutomatedScope } from "../api/types.js";
 import type {
@@ -343,7 +343,6 @@ class AnalyticsStore {
 
   clearDate() {
     this.selectedDate = null;
-    this.clearDrilldownData({ preserveHourOfWeek: true });
     void this.fetchSummary();
     void this.fetchProjects();
     void this.fetchSessionShape();
@@ -489,8 +488,7 @@ class AnalyticsStore {
   ): Promise<FetchResult> {
     const v = ++this.versions[panel];
     const signal = this.nextAbortSignal(panel);
-    // The moving active-since boundary keeps the same refresh scope.
-    const scope = JSON.stringify({ ...params, active_since: params.active_since !== undefined });
+    const scope = refreshScopeKey(params);
     if (this.scopes[panel] !== scope) this[panel] = null;
     this.scopes[panel] = scope;
     this.querying[panel] = true;
@@ -738,10 +736,11 @@ class AnalyticsStore {
   }
 
   async fetchSkills(granularity: Granularity = this.skillsGranularity): Promise<FetchResult> {
-    const params = { ...this.filterParams(), granularity };
+    const scopeParams = this.filterParams();
+    const params = { ...scopeParams, granularity };
     return await this.executeFetch(
       "skills",
-      params,
+      scopeParams,
       (options) => AnalyticsService.getApiV1AnalyticsSkills(params, options),
       (data) => {
         this.skills = data;
@@ -839,7 +838,6 @@ class AnalyticsStore {
   setActivitySelection(from: string, to: string) {
     this.selectedDate = null;
     this.selectedActivityRange = { from, to };
-    this.clearDrilldownData();
     sessions.applyPanelDateFilters({ date_from: from, date_to: to }, null);
     sessions.activeSessionId = null;
     void sessions.load();
@@ -857,7 +855,6 @@ class AnalyticsStore {
   clearActivitySelection() {
     if (this.selectedActivityRange === null) return;
     this.selectedActivityRange = null;
-    this.clearDrilldownData();
     this.restoreSessionsParentRange();
     void this.fetchSummary();
     void this.fetchProjects();
@@ -891,7 +888,6 @@ class AnalyticsStore {
     } else {
       this.selectedDate = date;
     }
-    this.clearDrilldownData({ preserveHourOfWeek: !hadActivityRange });
     void this.fetchSummary();
     void this.fetchProjects();
     if (hadActivityRange) void this.fetchHourOfWeek(this.baseParams({ includeTime: false }));
@@ -910,21 +906,6 @@ class AnalyticsStore {
     );
     sessions.activeSessionId = null;
     void sessions.load();
-  }
-
-  private clearDrilldownData({
-    preserveHourOfWeek = false,
-  }: { preserveHourOfWeek?: boolean } = {}) {
-    this.summary = null;
-    this.projects = null;
-    if (!preserveHourOfWeek) this.hourOfWeek = null;
-    this.sessionShape = null;
-    this.velocity = null;
-    this.tools = null;
-    this.toolsFilterParams = null;
-    this.skills = null;
-    this.topSessions = null;
-    this.signals = null;
   }
 
   setGranularity(g: Granularity) {

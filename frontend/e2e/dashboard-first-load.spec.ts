@@ -109,7 +109,7 @@ test.describe("Chromium dashboard evidence", () => {
       await preset.click();
     };
     await pickPreset("30d");
-    await expect(sessionsValue).toHaveText("--");
+    await expect(sessionsValue).toHaveText("-");
     await pickPreset("7d");
     await expect(sessionsValue).toHaveText(/^\d/);
     held.resolve();

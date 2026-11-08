@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { ApiError, attachResponseTiming } from "../api/runtime.js";
 import { analytics } from "./analytics.svelte.js";
+import { makeSignals } from "../test-support/analytics.js";
 import { sessions } from "./sessions.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
 
@@ -138,60 +139,6 @@ function makeSkills(): SkillsAnalyticsResponse {
 
 function makeTopSessions(): TopSessionsResponse {
   return { metric: "messages", sessions: [] };
-}
-
-function makeSignals(): SignalsAnalyticsResponse {
-  return {
-    scored_sessions: 0,
-    unscored_sessions: 0,
-    grade_distribution: {},
-    avg_health_score: null,
-    outcome_distribution: {},
-    outcome_confidence_distribution: {},
-    tool_health: {
-      total_failure_signals: 0,
-      total_retries: 0,
-      total_edit_churn: 0,
-      sessions_with_failures: 0,
-      failure_rate: 0,
-    },
-    context_health: {
-      avg_compaction_count: 0,
-      sessions_with_compaction: 0,
-      mid_task_compaction_count: 0,
-      sessions_with_mid_task_compaction: 0,
-      sessions_with_context_data: 0,
-      avg_context_pressure: null,
-      high_pressure_sessions: 0,
-    },
-    quality_health: {
-      computed_sessions: 0,
-      totals: {
-        short_prompt_count: 0,
-        unstructured_start: 0,
-        missing_success_criteria_count: 0,
-        missing_verification_count: 0,
-        duplicate_prompt_count: 0,
-        no_code_context_count: 0,
-        runaway_tool_loop_count: 0,
-        frustration_marker_count: 0,
-      },
-      sessions_with_signal: {
-        short_prompt_count: 0,
-        unstructured_start: 0,
-        missing_success_criteria_count: 0,
-        missing_verification_count: 0,
-        duplicate_prompt_count: 0,
-        no_code_context_count: 0,
-        runaway_tool_loop_count: 0,
-        frustration_marker_count: 0,
-      },
-    },
-    trend: [],
-    by_agent: [],
-    by_project: [],
-    calibration: {},
-  };
 }
 
 function mockAllAPIs() {
@@ -394,7 +341,11 @@ describe("AnalyticsStore.setDateRange", () => {
 
 describe("AnalyticsStore.setSkillsGranularity", () => {
   it("applies the new granularity only after its response arrives", async () => {
-    analytics.skills = makeSkills();
+    vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockResolvedValueOnce({
+      ...makeSkills(),
+      total_skill_calls: 7,
+    });
+    await analytics.fetchSkills();
     let resolve!: (value: SkillsAnalyticsResponse) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockReturnValueOnce(
       new Promise((r) => {
@@ -405,20 +356,26 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
     const pending = analytics.setSkillsGranularity("month");
 
     expect(analytics.skillsGranularity).toBe("week");
+    expect(analytics.skills?.total_skill_calls).toBe(7);
     expect(analytics.querying.skills).toBe(true);
     expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ granularity: "month" }),
     );
 
-    resolve(makeSkills());
+    resolve({ ...makeSkills(), total_skill_calls: 17 });
     await pending;
 
     expect(analytics.skillsGranularity).toBe("month");
+    expect(analytics.skills?.total_skill_calls).toBe(17);
     expect(analytics.querying.skills).toBe(false);
   });
 
   it("keeps the applied granularity when the request fails", async () => {
-    analytics.skills = makeSkills();
+    vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockResolvedValueOnce({
+      ...makeSkills(),
+      total_skill_calls: 7,
+    });
+    await analytics.fetchSkills();
     vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockRejectedValueOnce(
       new Error("network down"),
     );
@@ -427,6 +384,8 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 
     expect(result).toBe("error");
     expect(analytics.skillsGranularity).toBe("week");
+    expect(analytics.skills?.total_skill_calls).toBe(7);
+    expect(analytics.errors.skills).toBe("network down");
   });
 });
 

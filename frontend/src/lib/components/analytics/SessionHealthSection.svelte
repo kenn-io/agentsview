@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
+  import { Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import GradeDistribution
@@ -34,17 +34,13 @@
   }
 </script>
 
-{#snippet status()}
-  {#if analytics.errors.signals}
-    <div class="error">
-      {analytics.errors.signals}
-      <Button surface="soft" size="sm" onclick={() => analytics.fetchSignals()}>
-        {m.shared_retry()}
-      </Button>
-    </div>
-  {:else if !signals}
-    <div class="empty">{m.analytics_loading()}</div>
-  {/if}
+{#snippet error()}
+  <div class="error">
+    {analytics.errors.signals}
+    <button class="retry-btn" onclick={() => analytics.fetchSignals()}>
+      {m.shared_retry()}
+    </button>
+  </div>
 {/snippet}
 
 {#if visible && signals}
@@ -61,7 +57,9 @@
         })}
       </span>
     </div>
-    {@render status()}
+    {#if analytics.errors.signals}
+      {@render error()}
+    {/if}
 
     <div class="health-summary-cards">
       <Card level="default" padding="none" class="card">
@@ -236,7 +234,15 @@
     <div class="section-header">
       <h3 class="section-title">{m.analytics_session_health_title()}</h3>
     </div>
-    {@render status()}
+    <Card level="default" padding="none">
+      <div class="status">
+        {#if analytics.errors.signals}
+          {@render error()}
+        {:else}
+          <div class="empty">{m.analytics_loading()}</div>
+        {/if}
+      </div>
+    </Card>
   </div>
 {/if}
 
@@ -260,10 +266,22 @@
   .error {
     color: var(--accent-red);
     font-size: 12px;
-    padding: 12px;
+    padding: 0 0 12px;
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+  .status .error {
+    justify-content: center;
+    padding: 24px;
+  }
+  .retry-btn {
+    padding: 2px 8px;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: inherit;
+    cursor: pointer;
   }
   .empty {
     color: var(--text-muted);

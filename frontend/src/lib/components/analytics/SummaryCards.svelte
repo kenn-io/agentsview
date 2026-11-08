@@ -73,8 +73,11 @@
   {#each cards as card}
     <Card level="default" padding="none" class="card">
       {#if !analytics.summary}
-        <span class="card-value placeholder">--</span>
+        <span class="card-value placeholder">-</span>
         <span class="card-label">{card.label()}</span>
+        {#if card.sub}
+          <span class="card-sub placeholder" aria-hidden="true"></span>
+        {/if}
       {:else}
         <span class="card-value">
           {card.value()}
@@ -147,6 +150,11 @@
     font-size: 10px;
     color: var(--text-muted);
     margin-top: 2px;
+  }
+
+  /* Reserve room for a caption that wraps once loaded. */
+  .card-sub.placeholder {
+    min-height: 2lh;
   }
 
   .error-bar {

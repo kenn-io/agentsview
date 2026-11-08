@@ -15,6 +15,7 @@ import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import AnalyticsPage from "./AnalyticsPage.svelte";
 // @ts-ignore
 import QualityPage from "../quality/QualityPage.svelte";
+import { makeSignals } from "../../test-support/analytics.js";
 import { requestUrl } from "../../test-support/request-url.js";
 import { AnalyticsService, MetadataService } from "../../api/generated/index.js";
 
@@ -537,19 +538,6 @@ describe("AnalyticsPage initial load", () => {
 });
 
 describe("AnalyticsPage panel failures", () => {
-  const signals = {
-    scored_sessions: 4,
-    unscored_sessions: 0,
-    avg_health_score: 72,
-    grade_distribution: {},
-    outcome_distribution: {},
-    trend: [],
-    tool_health: { failure_rate: 0, sessions_with_failures: 0 },
-    context_health: { sessions_with_compaction: 0, avg_compaction_count: 0 },
-    by_agent: [],
-    by_project: [],
-  };
-
   afterEach(() => {
     analytics.cancelInFlightReads();
     for (const panel of Object.keys(analytics.errors) as (keyof typeof analytics.errors)[]) {
@@ -587,7 +575,7 @@ describe("AnalyticsPage panel failures", () => {
     const signalsRead = vi
       .spyOn(AnalyticsService, "getApiV1AnalyticsSignals")
       .mockRejectedValueOnce(new Error("signals timed out"))
-      .mockResolvedValue(signals as never);
+      .mockResolvedValue({ ...makeSignals(), scored_sessions: 4, avg_health_score: 72 });
     const setProject = vi.spyOn(analytics, "setProject").mockImplementation(() => {});
     router.route = "sessions";
     component = mount(AnalyticsPage, { target: document.body });
