@@ -41,14 +41,6 @@ const usageMessageFields = `session_id, ordinal, timestamp, model, provider_id,
 	claude_message_id, claude_request_id, source_uuid, push_version`
 
 func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
-	const marker = "usage_messages_backfill"
-	metadata, err := readMetadata(ctx, conn, marker)
-	if err != nil {
-		return err
-	}
-	if metadata[marker] == "1" {
-		return nil
-	}
 	columns := []string{
 		"session_id String", "ordinal Int64", "timestamp Nullable(DateTime64(6, 'UTC'))",
 		"model String", "provider_id String", "claude_message_id String",
@@ -63,17 +55,27 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 	// The low bit makes a live insert beat a concurrent, older backfill of
 	// the same push version. UInt128 preserves every possible UInt64 version.
 	columns = append(columns, "revision UInt128", "INDEX usage_time timestamp TYPE minmax GRANULARITY 1")
-	queries := []string{
-		"CREATE TABLE IF NOT EXISTS usage_messages (" + strings.Join(columns, ", ") + `)
+	if _, err := conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS usage_messages ("+strings.Join(columns, ", ")+`)
 		 ENGINE = ReplacingMergeTree(revision) ORDER BY (session_id, ordinal)
-		 SETTINGS index_granularity = 64`,
-		"CREATE MATERIALIZED VIEW IF NOT EXISTS usage_messages_mv TO usage_messages AS SELECT " +
-			selection + ", toUInt128(push_version) * 2 + 1 AS revision FROM messages",
+		 SETTINGS index_granularity = 64`); err != nil {
+		return fmt.Errorf("creating stored usage messages: %w", err)
 	}
-	for _, query := range queries {
-		if _, err := conn.ExecContext(ctx, query); err != nil {
-			return fmt.Errorf("creating stored usage messages: %w", err)
-		}
+	// Mirrors from before the view computed the counters read them from
+	// stored columns of messages that the code no longer creates.
+	if err := ensureView(ctx, conn, mirrorView{
+		name:    "usage_messages_mv",
+		clauses: "TO usage_messages",
+		query:   "SELECT " + selection + ", toUInt128(push_version) * 2 + 1 AS revision FROM messages",
+	}); err != nil {
+		return err
+	}
+	const marker = "usage_messages_backfill"
+	metadata, err := readMetadata(ctx, conn, marker)
+	if err != nil {
+		return err
+	}
+	if metadata[marker] == "1" {
+		return nil
 	}
 	log.Print("ClickHouse: filling usage messages before serving; source messages remain unchanged")
 	if _, err := conn.ExecContext(ctx, "INSERT INTO usage_messages SELECT "+selection+
@@ -639,12 +641,16 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 
 // createPreparedUsageView creates the view that refreshes prepared_usage
 // on the server. It leaves the table empty until the first refresh.
+//
+// The prepared_usage comment covers the refresh schedule and query, and a
+// change to either drops the view with the table. The view's own check also
+// covers the refresh settings.
 func createPreparedUsageView(ctx context.Context, conn *sql.DB) error {
-	if _, err := conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage REFRESH `+chPreparedUsageRefresh+`
-		TO prepared_usage EMPTY AS `+chPreparedUsageQuery()+" SETTINGS "+chPreparedUsageRefreshSettings); err != nil {
-		return fmt.Errorf("creating prepared usage: %w", err)
-	}
-	return nil
+	return ensureView(ctx, conn, mirrorView{
+		name:    "prepare_usage",
+		clauses: "REFRESH " + chPreparedUsageRefresh + " TO prepared_usage EMPTY",
+		query:   chPreparedUsageQuery() + " SETTINGS " + chPreparedUsageRefreshSettings,
+	})
 }
 
 func preparedUsageViewExists(ctx context.Context, conn *sql.DB) (bool, error) {
