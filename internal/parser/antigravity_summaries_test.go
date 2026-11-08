@@ -478,7 +478,7 @@ func TestAntigravitySummariesRetryAfterTransientLock(t *testing.T) {
 	_, err = conn.ExecContext(t.Context(), "ROLLBACK")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-	assert.Error(t, loadAntigravitySummaries(t.Context(), root).err, "the same pass reuses the failure")
+	require.Error(t, loadAntigravitySummaries(t.Context(), root).err, "the same pass reuses the failure")
 
 	clock = now.Add(antigravitySummariesFailureRetry + time.Second)
 	recovered := loadAntigravitySummaries(t.Context(), root)
