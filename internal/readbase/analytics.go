@@ -40,7 +40,14 @@ type AnalyticsBackend interface {
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
 	VelocityMessages(ctx context.Context, ids []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error)
 	VelocityToolCounts(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
-	ToolCountsSQL(ids []string) (string, []any)
+	// VisitSessionIDSets calls visit with SQL for a parenthesized relation of
+	// ids, either a placeholder list or a subquery, and the arguments it
+	// binds. visit must query with the context it receives. A backend may
+	// split ids across several calls.
+	VisitSessionIDSets(ctx context.Context, ids []string, visit func(ctx context.Context, idSet string, args []any) error) error
+	// ToolCountsSQL selects tool call counts for the sessions in idSet, a
+	// relation from VisitSessionIDSets.
+	ToolCountsSQL(idSet string, args []any) (string, []any)
 	// Session metadata supplies ClickHouse cache versions; DuckDB uses only rows.
 	PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []AnalyticsSession) error
 }

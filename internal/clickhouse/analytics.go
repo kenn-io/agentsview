@@ -145,16 +145,25 @@ func chAnalyticsMessageTimeExists(
 		strings.Join(preds, " AND ") + ")", args
 }
 
-func (s analyticsSQL) ToolCountsSQL(ids []string) (string, []any) {
-	ph, args := db.InPlaceholders(ids)
+// VisitSessionIDSets sends every id as one external table, so each read
+// over the selection is one statement whatever the selection's size.
+func (s analyticsSQL) VisitSessionIDSets(ctx context.Context, ids []string, visit func(ctx context.Context, idSet string, args []any) error) error {
+	ctx, idSet, err := analyticsSessionIDsContext(ctx, ids)
+	if err != nil {
+		return err
+	}
+	return visit(ctx, idSet, nil)
+}
+
+func (s analyticsSQL) ToolCountsSQL(idSet string, args []any) (string, []any) {
 	return `
 			SELECT tc.session_id, m.model, m.timestamp, toInt64(COUNT(*))
 			FROM tool_calls tc
-			JOIN messages m
+			JOIN (` + chAnalyticsToolCallMessagesSQL + idSet + `) m
 				ON m.session_id = tc.session_id
 				AND m.ordinal = tc.message_ordinal
-			WHERE tc.session_id IN ` + ph + `
-			GROUP BY tc.session_id, m.model, m.timestamp`, args
+			WHERE tc.session_id IN ` + idSet + `
+			GROUP BY tc.session_id, m.model, m.timestamp`, slices.Concat(args, args)
 }
 
 func chAnalyticsBucketExpr(dateExpr, granularity string) string {

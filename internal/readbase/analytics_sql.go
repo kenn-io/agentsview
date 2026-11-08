@@ -56,22 +56,19 @@ func AnalyticsActivityAgentsSQL(where string, args []any, localDate string, loca
 		ORDER BY bucket, fs.agent`, queryArgs
 }
 
-func analyticsModelsSQL(ids []string) (string, []any) {
-	ph, args := db.InPlaceholders(ids)
+func analyticsModelsSQL(idSet string, args []any) (string, []any) {
 	return `
 			SELECT DISTINCT model
 			FROM messages
-			WHERE session_id IN ` + ph + `
-				AND COALESCE(model, '') <> ''
-			ORDER BY model`, args
+			WHERE session_id IN ` + idSet + `
+				AND COALESCE(model, '') <> ''`, args
 }
 
-func analyticsModelTimesSQL(ids []string) (string, []any) {
-	ph, args := db.InPlaceholders(ids)
+func analyticsModelTimesSQL(idSet string, args []any) (string, []any) {
 	return `
 			SELECT model, timestamp
 			FROM messages
-			WHERE session_id IN ` + ph + `
+			WHERE session_id IN ` + idSet + `
 				AND COALESCE(model, '') <> ''`, args
 }
 
