@@ -99,6 +99,16 @@ func TestExportPushMaximumCanonicalSessionID(t *testing.T) {
 	require.NoError(t, runExportPush(t.Context(), source, id, agent, true, filepath.Join(t.TempDir(), "snapshot.json"), &status))
 }
 
+func TestExportPushAcceptsCodecMaximumSessionID(t *testing.T) {
+	id := "pi:" + strings.Repeat("a", 1021)
+	source := &exportPushFixtureSource{snapshot: exportPushSnapshot{SessionID: id, Agent: "pi", Payload: []byte("snapshot"), Messages: 1}}
+	var status bytes.Buffer
+	require.NoError(t, runExportPush(t.Context(), source, id, "pi", true, filepath.Join(t.TempDir(), "snapshot.json"), &status))
+	tooLong := id + "a"
+	source.snapshot.SessionID = tooLong
+	require.Error(t, runExportPush(t.Context(), source, tooLong, "pi", true, filepath.Join(t.TempDir(), "snapshot.json"), &status))
+}
+
 func TestExportPushRejectsInvalidCanonicalSessionIDs(t *testing.T) {
 	for _, tc := range []struct{ agent, id string }{
 		{"pi", "selected"},
