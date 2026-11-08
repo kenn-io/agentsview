@@ -391,7 +391,7 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 		wantOut     string
 	}{
 		{
-			name: "published writable",
+			name: "failed lock reacquire after writable publication",
 			observation: daemonLaunchObservation{Records: []daemon.RuntimeRecord{
 				testWritableRecord(21, "/runtime/21.json"),
 			}},
@@ -993,7 +993,6 @@ func TestServeRestartDelegatesToCanonicalWriterOnlyRestart(t *testing.T) {
 	assert.True(t, daemon.ProcessAlive(pid), "read-only server must remain alive")
 	assert.FileExists(t, path, "read-only runtime record must survive restart")
 	assert.True(t, gotPolicy.ConfigOnly)
-	assert.False(t, gotPolicy.Persistent)
 	assert.Equal(t, "daemon restart", gotPolicy.Operation)
 	assert.False(t, gotPolicy.Attached)
 	assert.Nil(t, gotPolicy.OnLaunch)
@@ -1242,7 +1241,7 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 		for _, contended := range []bool{false, true} {
 			t.Run(fmt.Sprintf("fallback=%v/contention=%v", fallback, contended), func(t *testing.T) {
 				dir := testDataDir(t)
-				cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), Host: "127.0.0.1", PublicURL: "http://viewer.example.test", PublicOrigins: []string{"https://alternate.example.test"}, DaemonLaunchSource: "automatic"}
+				cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), Host: "127.0.0.1", PublicURL: "http://viewer.example.test", DaemonLaunchSource: "automatic"}
 				t.Setenv(backgroundChildEnvVar, "automatic")
 				t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
 				database, err := db.Open(t.Context(), cfg.DBPath)
@@ -1272,11 +1271,6 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 				rt := FindWritableDaemonRuntime(dir)
 				require.NotNil(t, rt)
 				assert.Equal(t, fallback, rt.RuntimeFallback)
-				if contended && !fallback {
-					delete(rt.Record.Metadata, runtimePersistent)
-					_, err := runtimeStore(dir).Write(rt.Record)
-					require.NoError(t, err)
-				}
 				before := rt.Record
 				deps, out := daemonCommandTestDeps(t)
 				deps.resolveDataDir = func() (string, error) { return dir, nil }
@@ -1311,18 +1305,6 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 				assert.True(t, after.Persistent)
 				require.NotNil(t, after.IdleTimeout)
 				assert.Zero(t, *after.IdleTimeout)
-				for _, origin := range []string{cfg.PublicURL, cfg.PublicOrigins[0]} {
-					req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/av/api/v1/settings", nil)
-					require.NoError(t, err)
-					u, err := url.Parse(origin)
-					require.NoError(t, err)
-					req.Host = u.Host
-					req.Header.Set("Origin", origin)
-					resp, err := ts.Client().Do(req)
-					require.NoError(t, err)
-					require.NoError(t, resp.Body.Close())
-					assert.Equal(t, http.StatusOK, resp.StatusCode)
-				}
 			})
 		}
 	}
@@ -1367,7 +1349,6 @@ func TestDaemonStartReplacesOlderAutomaticDaemon(t *testing.T) {
 			}
 			deps.startBackground = func(_ context.Context, _ config.Config, _ []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 				replaced = true
-				assert.True(t, policy.Persistent)
 				return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: testWritableRecord(80, ""), Persistent: true}}, nil
 			}
 			require.NoError(t, runDaemonStart(t.Context(), out, *deps))

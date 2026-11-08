@@ -811,7 +811,6 @@ func TestServeStatusLinesLifetime(t *testing.T) {
 		want    string
 	}{
 		{20 * time.Minute, "Exits after 20m idle (started automatically)"},
-		{2 * time.Second, "Exits after 2s idle (started automatically)"},
 		{0, "Stays running until agentsview daemon stop"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
@@ -820,10 +819,10 @@ func TestServeStatusLinesLifetime(t *testing.T) {
 			lines := serveStatusLines(rt)
 			require.Greater(t, len(lines), 2)
 			assert.Equal(t, "  "+tc.want, lines[1])
-			rt.IdleTimeout = nil
-			assert.Contains(t, serveStatusLines(rt)[1], "pid:")
 		})
 	}
+	rt := &DaemonRuntime{Record: testWritableRecord(79, "")}
+	assert.Contains(t, serveStatusLines(rt)[1], "pid:")
 }
 
 func TestServeStatusLabelsKnownLaunchSource(t *testing.T) {

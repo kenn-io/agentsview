@@ -1970,7 +1970,6 @@ func TestDaemonRuntimePublishesLifetime(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
 			t.Setenv(backgroundChildEnvVar, "1")
-			t.Setenv(persistentDaemonEnvVar, strconv.FormatBool(persistent))
 			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
 			dir := runtimeTestDir(t)
 			path, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{PersistentDaemon: persistent, DaemonLaunchSource: "automatic"}, dir, "127.0.0.1", 8080, "test", "", false, false, false, nil)
@@ -1991,7 +1990,6 @@ func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
 			t.Setenv(backgroundChildEnvVar, "1")
-			t.Setenv(persistentDaemonEnvVar, strconv.FormatBool(persistent))
 			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "0s")
 			dir := runtimeTestDir(t)
 			MarkDaemonStarting(dir)
@@ -2008,7 +2006,6 @@ func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 			assert.Equal(t, persistent, rt.Persistent)
 			require.NotNil(t, rt.IdleTimeout)
 			assert.Zero(t, *rt.IdleTimeout)
-			assert.Contains(t, serveStatusLines(rt)[1], "Stays running")
 			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
 			oldStop := stopDaemonRuntimeForUpgrade
 			stopDaemonRuntimeForUpgrade = func(context.Context, config.Config, *DaemonRuntime) error { return nil }

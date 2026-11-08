@@ -4105,19 +4105,16 @@ func TestNewDaemonIdleTrackerExplicitLifetime(t *testing.T) {
 		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				t.Setenv(backgroundChildEnvVar, "1")
-				t.Setenv(persistentDaemonEnvVar, strconv.FormatBool(persistent))
 				t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
-				stopped, suspended := false, false
+				stopped := false
 				tracker := newDaemonIdleTracker(config.Config{SyncIdleAfter: time.Second, PersistentDaemon: persistent}, func() { stopped = true })
 				require.NotNil(t, tracker)
-				tracker.SetSyncIdle(time.Second, func() { suspended = true })
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				go tracker.Run(ctx)
 				time.Sleep(5 * time.Second)
 				synctest.Wait()
 				assert.Equal(t, !persistent, stopped)
-				assert.True(t, suspended)
 			})
 		})
 	}

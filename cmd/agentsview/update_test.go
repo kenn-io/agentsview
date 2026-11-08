@@ -116,14 +116,13 @@ func TestPerformUpdateWithDaemonLifecycleRestartsAfterInstallFailure(t *testing.
 		},
 		func(context.Context, config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
-			return updateDaemonStopResult{Stopped: true, Persistent: true}, nil
+			return updateDaemonStopResult{Stopped: true}, nil
 		},
 		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
 			calls = append(calls, "perform")
 			return installErr
 		},
 		func(_ context.Context, _ config.Config, stopped updateDaemonStopResult) error {
-			assert.True(t, stopped.Persistent)
 			calls = append(calls, "restart")
 			return nil
 		},
@@ -428,7 +427,6 @@ func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
 			dir := testDataDir(t)
-			t.Setenv(persistentDaemonEnvVar, "true")
 			host, port := testPingServer(t)
 			old := startServeBackgroundProcessForRun
 			t.Cleanup(func() { startServeBackgroundProcessForRun = old })

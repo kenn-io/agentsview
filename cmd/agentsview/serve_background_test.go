@@ -2006,15 +2006,12 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(t *testing
 
 func testEnsureBackgroundServePreservesLaunchOptions(t *testing.T, persistent bool) {
 	t.Helper()
-	t.Setenv(backgroundChildEnvVar, "1")
-	t.Setenv(persistentDaemonEnvVar, strconv.FormatBool(persistent))
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(config.Config{PersistentDaemon: persistent},
 		dir, host, port, "1.0.0", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
-	t.Setenv(persistentDaemonEnvVar, "false")
 
 	oldVersion := version
 	version = "1.1.0"
