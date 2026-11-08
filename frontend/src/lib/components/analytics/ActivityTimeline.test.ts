@@ -46,8 +46,14 @@ describe("ActivityTimeline", () => {
       }),
     };
 
+    const data = analytics.activity;
+    analytics.activity = null;
     const component = mount(ActivityTimeline, { target: document.body });
     await tick();
+    expect(document.querySelector(".loading")).not.toBeNull();
+    analytics.activity = data;
+    await tick();
+    expect(document.querySelector(".loading")).toBeNull();
 
     const chart = document.querySelector<SVGSVGElement>("svg");
     expect(chart).not.toBeNull();
@@ -57,6 +63,17 @@ describe("ActivityTimeline", () => {
     expect(document.querySelectorAll<SVGRectElement>("rect.bar-other")).toHaveLength(120);
     const bars = document.querySelectorAll<SVGRectElement>("rect.bar");
     expect(Number(bars[0]!.getAttribute("width"))).toBeGreaterThan(0);
+
+    analytics.activity = { granularity: "day", series: [] };
+    await tick();
+    expect(document.body.textContent).toContain("No activity data");
+    analytics.errors.activity = "request failed";
+    await tick();
+    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.body.textContent).toContain("No activity data");
+    analytics.activity = null;
+    await tick();
+    expect(document.body.textContent).not.toContain("No activity data");
 
     unmount(component);
   });

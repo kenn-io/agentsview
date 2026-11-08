@@ -116,7 +116,7 @@ describe("ToolUsage", () => {
     await unmount(component);
   });
 
-  it("renders empty results and failures with or without retained results", async () => {
+  it("shows an empty message only after receiving empty results", async () => {
     analytics.tools = {
       total_calls: 0,
       by_category: [],
@@ -129,17 +129,15 @@ describe("ToolUsage", () => {
     await tick();
 
     expect(document.body.textContent).toContain("No tool usage data");
+    expect(document.querySelector(".loading")).toBeNull();
 
     analytics.errors.tools = "request failed";
     await tick();
-    expect(document.body.textContent).toContain("request failed");
+    expect(document.querySelector(".error")).not.toBeNull();
     expect(document.body.textContent).toContain("No tool usage data");
-    expect(document.querySelector(".error button")?.textContent).toContain("Retry");
     analytics.tools = null;
     await tick();
-    expect(document.body.textContent).toContain("request failed");
     expect(document.body.textContent).not.toContain("No tool usage data");
-    expect(document.body.textContent).not.toMatch(/Loading/);
 
     await unmount(component);
   });

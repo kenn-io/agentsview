@@ -9,6 +9,7 @@ const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototyp
 describe("Heatmap", () => {
   afterEach(() => {
     analytics.heatmap = null;
+    analytics.errors.heatmap = null;
     analytics.summary = null;
     analytics.metric = "messages";
     document.body.innerHTML = "";
@@ -36,14 +37,22 @@ describe("Heatmap", () => {
       })),
     };
 
+    const data = analytics.heatmap;
+    analytics.heatmap = null;
     const component = mount(Heatmap, { target: document.body });
     await tick();
+    expect.soft(document.querySelector(".loading")).not.toBeNull();
+    analytics.heatmap = data;
+    await tick();
+    expect.soft(document.querySelector(".loading")).toBeNull();
 
     const container = document.querySelector<HTMLElement>(".heatmap-scroll");
     const chart = container?.querySelector<SVGSVGElement>("svg");
-    expect(container).not.toBeNull();
-    expect(chart).not.toBeNull();
-    expect(Number(chart!.getAttribute("width"))).toBeLessThanOrEqual(container!.clientWidth);
+    expect.soft(container).not.toBeNull();
+    expect.soft(chart).not.toBeNull();
+    expect
+      .soft(Number(chart?.getAttribute("width")))
+      .toBeLessThanOrEqual(container?.clientWidth ?? 0);
 
     const tokens = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Output Tokens",
@@ -51,6 +60,18 @@ describe("Heatmap", () => {
     expect(tokens).toBeDefined();
     tokens!.click();
     expect(metric).toHaveBeenCalledWith("output_tokens");
+
+    analytics.metric = "output_tokens";
+    analytics.heatmap = { ...data!, metric: "output_tokens", entries: [] };
+    await tick();
+    expect(document.body.textContent).toContain("No data for this period");
+    analytics.errors.heatmap = "request failed";
+    await tick();
+    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.body.textContent).toContain("No data for this period");
+    analytics.heatmap = null;
+    await tick();
+    expect(document.body.textContent).not.toContain("No data for this period");
 
     unmount(component);
   });

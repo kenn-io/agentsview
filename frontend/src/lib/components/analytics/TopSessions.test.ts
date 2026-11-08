@@ -188,12 +188,18 @@ describe("TopSessions", () => {
       topSessions: null,
     };
 
+    const data = analytics.topSessions;
+    analytics.topSessions = null;
     const component = mount(TopSessions, { target: document.body });
     await tick();
+    expect.soft(document.querySelector(".loading")).not.toBeNull();
+    analytics.topSessions = data;
+    await tick();
+    expect.soft(document.querySelector(".loading")).toBeNull();
 
-    expect(document.querySelector(".session-label")?.textContent?.trim()).toBe(
-      "Renamed sidebar title",
-    );
+    expect
+      .soft(document.querySelector(".session-label")?.textContent?.trim())
+      .toBe("Renamed sidebar title");
 
     try {
       const tokens = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -206,6 +212,17 @@ describe("TopSessions", () => {
       analytics.summary = summary;
       metric.mockRestore();
     }
+
+    analytics.topSessions = { metric: "messages", sessions: [] };
+    await tick();
+    expect(document.body.textContent).toContain("No sessions in range");
+    analytics.errors.topSessions = "request failed";
+    await tick();
+    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.body.textContent).toContain("No sessions in range");
+    analytics.topSessions = null;
+    await tick();
+    expect(document.body.textContent).not.toContain("No sessions in range");
 
     unmount(component);
   });

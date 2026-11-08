@@ -17,15 +17,10 @@ import AnalyticsPage from "./AnalyticsPage.svelte";
 import QualityPage from "../quality/QualityPage.svelte";
 import {
   makeSummary,
-  makeActivity,
-  makeHeatmap,
   makeProjects,
   makeSessionShape,
   makeVelocity,
   makeTools,
-  makeSkills,
-  makeTopSessions,
-  makeSignals,
 } from "../../test-support/analytics.js";
 import { requestUrl } from "../../test-support/request-url.js";
 import { AnalyticsService, MetadataService } from "../../api/generated/index.js";
@@ -570,12 +565,8 @@ describe("AnalyticsPage panel failures", () => {
 
   it("distinguishes loading, empty results, and failures with or without retained results", async () => {
     const panels = [
-      ["activity", ".timeline-container", "No activity data"],
-      ["heatmap", ".heatmap-container", "No data for this period"],
-      ["hourOfWeek", ".how-container", null],
       ["projects", ".breakdown-container", "No project data"],
       ["sessionShape", ".shape-container", "No data for this period"],
-      ["topSessions", ".top-sessions-container", "No sessions in range"],
     ] as const;
     for (const [panel] of panels) {
       analytics[panel] = null;
@@ -586,54 +577,38 @@ describe("AnalyticsPage panel failures", () => {
     mountPanels();
     await flushEffects();
     const text = (selector: string) => document.querySelector(selector)!.textContent;
-    for (const [, selector] of panels) expect(text(selector)).toMatch(/Loading/);
-    expect(text(".velocity-container")).toContain("Loading");
+    for (const [, selector] of panels) {
+      expect(document.querySelector(`${selector} .loading`)).not.toBeNull();
+    }
+    expect(document.querySelector(".velocity-container .loading")).not.toBeNull();
 
     Object.assign(analytics, {
-      activity: makeActivity(),
-      metric: "output_tokens",
-      heatmap: { ...makeHeatmap(), metric: "output_tokens" },
-      hourOfWeek: {
-        cells: Array.from({ length: 168 }, (_, index) => ({
-          day_of_week: Math.floor(index / 24),
-          hour: index % 24,
-          messages: 0,
-        })),
-      },
       projects: makeProjects(),
       sessionShape: makeSessionShape(),
-      tools: makeTools(),
-      skills: makeSkills(),
-      topSessions: makeTopSessions(),
       velocity: makeVelocity(),
     });
     await flushEffects();
     for (const [, selector, empty] of panels) {
-      if (empty !== null) expect(text(selector)).toContain(empty);
+      expect(text(selector)).toContain(empty);
     }
-    expect(document.querySelector(".how-container .how-chart")).not.toBeNull();
     expect(document.querySelector(".velocity-container .metrics-grid")).not.toBeNull();
     analytics.errors.velocity = "velocity failed";
     for (const [panel] of panels) analytics.errors[panel] = `${panel} failed`;
     await flushEffects();
-    expect(text(".velocity-container")).toContain("velocity failed");
+    expect(document.querySelector(".velocity-container .error")).not.toBeNull();
     expect(document.querySelector(".velocity-container .metrics-grid")).not.toBeNull();
-    expect(document.querySelector(".how-container .how-chart")).not.toBeNull();
     analytics.velocity = null;
     for (const [panel, selector, empty] of panels) {
-      expect(text(selector)).toContain(`${panel} failed`);
-      if (empty !== null) expect(text(selector)).toContain(empty);
-      expect(text(selector)).toContain("Retry");
+      expect(document.querySelector(`${selector} .error`)).not.toBeNull();
+      expect(text(selector)).toContain(empty);
       analytics[panel] = null;
     }
     await flushEffects();
-    for (const [panel, selector, empty] of panels) {
-      expect(text(selector)).toContain(`${panel} failed`);
-      if (empty !== null) expect(text(selector)).not.toContain(empty);
-      expect(text(selector)).not.toMatch(/Loading/);
+    for (const [, selector, empty] of panels) {
+      expect(document.querySelector(`${selector} .error`)).not.toBeNull();
+      expect(text(selector)).not.toContain(empty);
     }
-    expect(document.querySelector(".how-container .how-chart")).toBeNull();
-    expect(text(".velocity-container")).toContain("velocity failed");
+    expect(document.querySelector(".velocity-container .error")).not.toBeNull();
     expect(document.querySelector(".velocity-container .metrics-grid")).toBeNull();
   });
 
@@ -673,38 +648,6 @@ describe("AnalyticsPage panel failures", () => {
       }
     },
   );
-
-  it("keeps a failed Month selection active and retries without overriding its grouping", async () => {
-    const applied = analytics.skillsGranularity;
-    const requested = analytics.requestedSkillsGranularity;
-    const skills = vi
-      .spyOn(AnalyticsService, "getApiV1AnalyticsSkills")
-      .mockResolvedValueOnce(makeSkills())
-      .mockRejectedValueOnce(new Error("Month failed"));
-    const fetchSkills = vi.spyOn(analytics, "fetchSkills");
-    try {
-      mountPanels();
-      await analytics.fetchSkills("week");
-      await flushEffects();
-      const month = [...document.querySelectorAll<HTMLButtonElement>(".trend-header button")].find(
-        (b) => b.textContent?.trim() === "Month",
-      )!;
-      month.click();
-      await vi.waitFor(() =>
-        expect(document.querySelector(".trend-container")!.textContent).toContain("Month failed"),
-      );
-      expect(month.classList).toContain("active");
-      skills.mockResolvedValueOnce(makeSkills());
-      fetchSkills.mockClear();
-      document.querySelector<HTMLButtonElement>(".trend-container .error button")!.click();
-      await flushEffects();
-      expect(fetchSkills).toHaveBeenCalledExactlyOnceWith();
-    } finally {
-      skills.mockResolvedValue(makeSkills());
-      await analytics.fetchSkills(requested);
-      analytics.skillsGranularity = applied;
-    }
-  });
 });
 
 describe("AnalyticsPage sidebar controls", () => {

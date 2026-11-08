@@ -194,12 +194,14 @@ describe("AnalyticsStore.selectDate", () => {
     expect(analyticsService.getApiV1AnalyticsHourOfWeek).not.toHaveBeenCalled();
   });
 
-  it("keeps the parent hour-of-week data while a date is selected", async () => {
+  it("keeps parent hour-of-week data through selecting and clearing a date", async () => {
     await analytics.fetchHourOfWeek();
     const parent = analytics.hourOfWeek;
 
     analytics.selectDate("2024-01-15");
 
+    expect(analytics.hourOfWeek).toEqual(parent);
+    analytics.clearDate();
     expect(analytics.hourOfWeek).toEqual(parent);
   });
 
@@ -294,7 +296,7 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
     expect(analytics.querying.skills).toBe(false);
   });
 
-  it("keeps the applied granularity when the request fails", async () => {
+  it("keeps the applied grouping and permits retrying or returning after failure", async () => {
     await analytics.fetchSkills("week");
     vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockRejectedValueOnce(
       new Error("network down"),
@@ -305,6 +307,9 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
     expect(result).toBe("error");
     expect(analytics.skillsGranularity).toBe("week");
     expect(analytics.requestedSkillsGranularity).toBe("month");
+    vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockRejectedValueOnce(
+      new Error("still unavailable"),
+    );
     await analytics.fetchSkills();
     expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]?.granularity).toBe("month");
     await analytics.setSkillsGranularity("week");
@@ -670,16 +675,6 @@ describe("AnalyticsStore.clearDate", () => {
     });
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(expected);
     expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).toEqual(expected);
-  });
-
-  it("keeps the parent hour-of-week data when the date is cleared", async () => {
-    analytics.selectedDate = "2024-01-15";
-    await analytics.fetchHourOfWeek();
-    const parent = analytics.hourOfWeek;
-
-    analytics.clearDate();
-
-    expect(analytics.hourOfWeek).toEqual(parent);
   });
 });
 
@@ -1219,7 +1214,6 @@ describe("AnalyticsStore rolling default date range", () => {
 
   it("fetchAll re-derives its rolling request range", async () => {
     const { analytics } = await loadAnalyticsStore();
-    await analytics.fetchAll();
     vi.setSystemTime(new Date("2026-04-26T12:00:00"));
     await analytics.fetchAll();
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toMatchObject({

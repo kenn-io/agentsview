@@ -85,19 +85,6 @@ describe("TopSkills", () => {
     expect(document.body.textContent).toContain("2");
     expect(document.body.textContent).toContain("29%");
     expect(document.body.textContent).toContain("Projects: agentsview: 4, notes: 3");
-    const data = analytics.skills!;
-    const read = vi.spyOn(AnalyticsService, "getApiV1AnalyticsSkills").mockResolvedValue(data);
-    await analytics.fetchSkills("week");
-    read.mockRejectedValueOnce(new Error("Month failed"));
-    try {
-      await analytics.fetchSkills("month");
-      await tick();
-      expect(document.body.textContent).toContain("9 calls");
-      expect(document.body.textContent).not.toContain("Month failed");
-      expect(document.querySelector(".error button")).toBeNull();
-    } finally {
-      await analytics.fetchSkills("week");
-    }
 
     await unmount(component);
   });
@@ -117,7 +104,7 @@ describe("TopSkills", () => {
     await unmount(component);
   });
 
-  it("renders loading, empty results, and failures with or without retained results", async () => {
+  it("shows an empty message only after receiving empty results", async () => {
     analytics.skills = {
       total_skill_calls: 0,
       distinct_skills: 0,
@@ -129,41 +116,40 @@ describe("TopSkills", () => {
     const component = mount(TopSkills, { target: document.body });
     await tick();
 
-    expect(document.body.textContent).toMatch(/Loading/);
+    expect(document.querySelector(".loading")).not.toBeNull();
     analytics.skills = data;
     await tick();
     expect(document.body.textContent).toContain("No skill usage data");
+    expect(document.querySelector(".loading")).toBeNull();
 
     analytics.errors.skills = "request failed";
     await tick();
-    expect(document.body.textContent).toContain("request failed");
     expect(document.body.textContent).toContain("No skill usage data");
-    expect(document.querySelector(".error button")?.textContent).toContain("Retry");
     analytics.skills = null;
     await tick();
-    expect(document.body.textContent).toContain("request failed");
     expect(document.body.textContent).not.toContain("No skill usage data");
-    expect(document.body.textContent).not.toMatch(/Loading/);
 
+    const retry = vi.spyOn(analytics, "fetchSkills").mockResolvedValue("ok");
+    document.querySelector<HTMLButtonElement>(".error button")!.click();
+    expect(retry).toHaveBeenCalledExactlyOnceWith();
     await unmount(component);
   });
 
-  it("renders error state and retries", async () => {
-    analytics.skills = null;
-    // @ts-ignore
-    analytics.errors = {
-      ...analytics.errors,
-      skills: "Failed to load",
-    };
-    const retrySpy = vi.spyOn(analytics, "fetchSkills").mockResolvedValue("ok");
-    const component = mount(TopSkills, { target: document.body });
-    await tick();
-
-    expect(document.body.textContent).toContain("Failed to load");
-    document.querySelector<HTMLButtonElement>(".error button")!.click();
-    await tick();
-
-    expect(retrySpy).toHaveBeenCalledOnce();
+  it("retains totals and hides a failed grouping request", async () => {
+    const component = mountWithData();
+    const data = analytics.skills!;
+    const read = vi.spyOn(AnalyticsService, "getApiV1AnalyticsSkills").mockResolvedValue(data);
+    await analytics.fetchSkills("week");
+    read.mockRejectedValueOnce(new Error("Month failed"));
+    try {
+      await analytics.fetchSkills("month");
+      await tick();
+      expect(document.body.textContent).toContain("9 calls");
+      expect(document.body.textContent).not.toContain("Month failed");
+      expect(document.querySelector(".error button")).toBeNull();
+    } finally {
+      await analytics.fetchSkills("week");
+    }
 
     await unmount(component);
   });

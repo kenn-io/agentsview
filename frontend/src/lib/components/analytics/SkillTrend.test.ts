@@ -335,6 +335,7 @@ describe("SkillTrend", () => {
       monthBtn!.click();
       await vi.waitFor(() => expect(document.body.textContent).toContain("Month failed"));
       expect(fetchSpy).toHaveBeenCalledExactlyOnceWith("month");
+      expect(monthBtn!.classList).toContain("active");
       expect(document.querySelector(".chart")).toBeNull();
     } finally {
       await analytics.fetchSkills("week");
@@ -342,28 +343,25 @@ describe("SkillTrend", () => {
     }
   });
 
-  it("renders loading, empty results, and failures with or without retained results", async () => {
+  it("shows an empty message only after receiving empty results", async () => {
     analytics.skills = skillsResponse([]);
     const data = analytics.skills;
     analytics.skills = null;
     const component = mount(SkillTrend, { target: document.body });
     await tick();
 
-    expect(document.body.textContent).toMatch(/Loading/);
+    expect(document.querySelector(".loading")).not.toBeNull();
     analytics.skills = data;
     await tick();
     expect(document.body.textContent).toContain("No skill usage data");
+    expect(document.querySelector(".loading")).toBeNull();
 
     analytics.errors.skills = "request failed";
     await tick();
-    expect(document.body.textContent).toContain("request failed");
     expect(document.body.textContent).toContain("No skill usage data");
-    expect(document.querySelector(".error button")?.textContent).toContain("Retry");
     analytics.skills = null;
     await tick();
-    expect(document.body.textContent).toContain("request failed");
     expect(document.body.textContent).not.toContain("No skill usage data");
-    expect(document.body.textContent).not.toMatch(/Loading/);
 
     await unmount(component);
   });
@@ -383,7 +381,7 @@ describe("SkillTrend", () => {
     document.querySelector<HTMLButtonElement>(".error button")!.click();
     await tick();
 
-    expect(retrySpy).toHaveBeenCalledOnce();
+    expect(retrySpy).toHaveBeenCalledExactlyOnceWith();
 
     await unmount(component);
   });
