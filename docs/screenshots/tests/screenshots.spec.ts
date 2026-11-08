@@ -1311,12 +1311,10 @@ test.describe('Command palette', () => {
     );
 
     const setup = palette.locator('.semantic-setup');
-    await expect(setup).toContainText(
-      "Semantic search isn't set up",
-      { timeout: 10_000 }
-    );
-    await expect(setup).toContainText('[vector]');
-    await expect(setup).toContainText('agentsview index embeddings build');
+    await expect(setup).toContainText('Search by meaning', {
+      timeout: 10_000,
+    });
+    await expect(setup.getByRole('button', { name: 'Turn on' })).toBeVisible();
     await snapEl(palette.locator('.palette'), 'semantic-search-setup');
   });
 
