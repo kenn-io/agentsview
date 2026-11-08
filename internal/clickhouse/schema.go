@@ -64,6 +64,7 @@ const (
 	tVersion       = "UInt64"
 	tFloatArray    = "Array(Float32)"
 	tFloat64Array  = "Array(Float64)"
+	tLowString     = "LowCardinality(String)"
 	tStringArray   = "Array(String)"
 	pushVersionCol = "push_version"
 )
@@ -500,7 +501,8 @@ var mirrorTables = []tableSpec{
 			// tool analytics need not join messages. message_facts marks
 			// rows that carry them; older rows read the message instead.
 			col("message_timestamp", tNullTime),
-			col("message_model", tString),
+			// A mirror holds a few dozen model names across millions of calls.
+			col("message_model", tLowString),
 			col("message_facts", tBool),
 		},
 		orderBy: []string{"session_id", "message_ordinal", "call_index"},

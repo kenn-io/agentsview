@@ -188,19 +188,13 @@ func chActivityBucketsFromFactsSQL(where, localDate, bucketExpr string) string {
 		),
 		session_rows AS (
 			SELECT ` + bucketExpr + ` AS bucket,
-				toInt64(COUNT(*)) AS sessions
+				toInt64(COUNT(*)) AS sessions,
+				toInt64(sumIf(fact_messages, facts_known)) AS messages,
+				toInt64(sumIf(fact_user_messages, facts_known)) AS user_messages,
+				toInt64(sumIf(fact_assistant_messages, facts_known)) AS assistant_messages,
+				toInt64(sumIf(fact_thinking_messages, facts_known)) AS thinking_messages,
+				toInt64(sumIf(fact_tool_calls, facts_known)) AS tool_calls
 			FROM filtered_sessions
-			GROUP BY bucket
-		),
-		fact_rows AS (
-			SELECT ` + bucketExpr + ` AS bucket,
-				toInt64(sum(fact_messages)) AS messages,
-				toInt64(sum(fact_user_messages)) AS user_messages,
-				toInt64(sum(fact_assistant_messages)) AS assistant_messages,
-				toInt64(sum(fact_thinking_messages)) AS thinking_messages,
-				toInt64(sum(fact_tool_calls)) AS tool_calls
-			FROM filtered_sessions
-			WHERE facts_known
 			GROUP BY bucket
 		),
 		message_rows AS (
@@ -236,15 +230,9 @@ func chActivityBucketsFromFactsSQL(where, localDate, bucketExpr string) string {
 			toInt64(sum(thinking_messages)) AS thinking_messages,
 			toInt64(sum(tool_calls)) AS tool_calls
 		FROM (
-			SELECT bucket, sessions,
-				toInt64(0) AS messages, toInt64(0) AS user_messages,
-				toInt64(0) AS assistant_messages, toInt64(0) AS thinking_messages,
-				toInt64(0) AS tool_calls
-			FROM session_rows
-			UNION ALL
-			SELECT bucket, toInt64(0) AS sessions, messages, user_messages,
+			SELECT bucket, sessions, messages, user_messages,
 				assistant_messages, thinking_messages, tool_calls
-			FROM fact_rows
+			FROM session_rows
 			UNION ALL
 			SELECT bucket, toInt64(0) AS sessions, messages, user_messages,
 				assistant_messages, thinking_messages, toInt64(0) AS tool_calls
@@ -380,7 +368,8 @@ const (
 
 // chToolMessageJoin left-joins the messages of tool calls that lack copied
 // message fields. It reads only the sessions that still have such calls,
-// so it reads no messages once every call carries its fields.
+// so it reads no messages once every call carries its fields. Under FINAL
+// a call matches at most one message, so ANY keeps one row per key.
 func chToolMessageJoin(ids string) string {
 	return `LEFT ANY JOIN (` + chAnalyticsToolCallMessagesSQL + `(
 				SELECT DISTINCT session_id FROM tool_calls
