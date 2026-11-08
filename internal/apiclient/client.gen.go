@@ -23224,7 +23224,7 @@ type GetAPIV1SessionStatsQuery struct {
 	// Timezone IANA timezone name
 	Timezone *string `json:"timezone,omitempty"`
 
-	// OutcomesOnly Compute only outcome_stats; other sections are empty
+	// OutcomesOnly Compute only outcome_stats; other sections are zero-valued
 	OutcomesOnly *bool `json:"outcomes_only,omitempty"`
 
 	// IncludeGitOutcomes Include git-derived outcome stats

@@ -36,7 +36,7 @@ export type GetApiV1SessionStatsParams = {
    */
   timezone?: string;
   /**
-   * Compute only outcome_stats; other sections are empty
+   * Compute only outcome_stats; other sections are zero-valued
    */
   outcomes_only?: boolean;
   /**

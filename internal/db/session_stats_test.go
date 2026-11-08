@@ -2829,6 +2829,7 @@ func TestGetSessionStats_OutcomesOnly(t *testing.T) {
 		{id: "root", userMsgs: 5, cwd: repo},
 		{id: "checkout", userMsgs: 5, cwd: checkout},
 		{id: "skipped", userMsgs: 5, cwd: skipped},
+		{id: "no-cwd", userMsgs: 5},
 		{id: "child", userMsgs: 5, cwd: excluded, relationshipType: "subagent"},
 		{id: "fork", userMsgs: 5, cwd: excluded, relationshipType: "fork"},
 		{id: "one-shot", userMsgs: 1, cwd: excluded},

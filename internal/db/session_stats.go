@@ -151,7 +151,9 @@ func (db *DB) GetSessionStats(
 	if f.IncludeGitOutcomes || f.IncludeGitHubOutcomes {
 		cwds := make([]string, 0, len(rows))
 		for _, row := range rows {
-			cwds = append(cwds, row.cwd)
+			if row.cwd != "" {
+				cwds = append(cwds, row.cwd)
+			}
 		}
 		if err := db.computeOutcomeStats(ctx, stats, f, from, to, cwds); err != nil {
 			return nil, fmt.Errorf("computing outcome stats: %w", err)
@@ -198,7 +200,9 @@ func (db *DB) sessionOutcomeStats(ctx context.Context, f StatsFilter, tz *time.L
 			if err := rows.Scan(&cwd); err != nil {
 				return nil, err
 			}
-			cwds = append(cwds, cwd)
+			if cwd != "" {
+				cwds = append(cwds, cwd)
+			}
 		}
 		return cwds, rows.Err()
 	}()
