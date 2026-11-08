@@ -808,12 +808,12 @@ func extendTruncatedTextTx(
 			continue
 		}
 		var id int64
-		var stored string
+		var stored, thinking string
 		err := tx.QueryRow(
-			`SELECT id, content FROM messages
+			`SELECT id, content, thinking_text FROM messages
 			 WHERE session_id = ? AND ordinal = ?`,
 			sessionID, m.Ordinal,
-		).Scan(&id, &stored)
+		).Scan(&id, &stored, &thinking)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -826,10 +826,11 @@ func extendTruncatedTextTx(
 		if !IsTextExtension(stored, m.Content) {
 			continue
 		}
+		dialogue, dialogueIsContent := StoredDialogue(m.Content, thinking, m.DialogueText)
 		if _, err := tx.Exec(
-			`UPDATE messages SET content = ?, content_length = ?, dialogue_text = ?
+			`UPDATE messages SET content = ?, content_length = ?, dialogue_text = ?, dialogue_is_content = ?
 			 WHERE id = ?`,
-			m.Content, m.ContentLength, m.DialogueText, id,
+			m.Content, m.ContentLength, dialogue, dialogueIsContent, id,
 		); err != nil {
 			return 0, fmt.Errorf(
 				"extending text for %s ordinal %d: %w",

@@ -23224,6 +23224,9 @@ type GetAPIV1SessionStatsQuery struct {
 	// Timezone IANA timezone name
 	Timezone *string `json:"timezone,omitempty"`
 
+	// OutcomesOnly Compute only outcome_stats; other sections are zero-valued
+	OutcomesOnly *bool `json:"outcomes_only,omitempty"`
+
 	// IncludeGitOutcomes Include git-derived outcome stats
 	IncludeGitOutcomes *bool `json:"include_git_outcomes,omitempty"`
 
@@ -23232,6 +23235,9 @@ type GetAPIV1SessionStatsQuery struct {
 }
 
 type GetAPIV1SessionsQuery struct {
+	// ExclusionCounts Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
+	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
+
 	// Project Filter by project
 	Project *string `json:"project,omitempty"`
 
@@ -27964,6 +27970,8 @@ func (d DBSecretFindingRow) Validate() error {
 type DBSession = db.Session
 
 type DBSessionCommitList = db.SessionCommitList
+
+type DBSessionExclusionCounts = db.SessionExclusionCounts
 
 type DBSessionExternalParent = db.SessionExternalParent
 

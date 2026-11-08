@@ -108,6 +108,7 @@ export * from "./dbSession.ts";
 export * from "./dbSessionActivityBucket.ts";
 export * from "./dbSessionActivityResponse.ts";
 export * from "./dbSessionCommitList.ts";
+export * from "./dbSessionExclusionCounts.ts";
 export * from "./dbSessionExternalParent.ts";
 export * from "./dbSessionLabels.ts";
 export * from "./dbSessionPage.ts";

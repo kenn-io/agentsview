@@ -395,7 +395,14 @@ func (s *Store) ListSessions(
 		total = cur.Total
 	}
 
-	if total <= 0 {
+	var exclusions *db.SessionExclusionCounts
+	if f.WantsExclusionCounts() {
+		var err error
+		total, exclusions, err = db.CountSessionExclusions(ctx, s.pg, f, s.sessionDialect())
+		if err != nil {
+			return db.SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
+		}
+	} else if total <= 0 {
 		countQ := "SELECT COUNT(*) FROM sessions WHERE " +
 			where
 		if err := s.pg.QueryRowContext(
@@ -443,7 +450,10 @@ func (s *Store) ListSessions(
 		return db.SessionPage{}, err
 	}
 
-	return db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor), nil
+	exclusions.LoadChildren(ctx, s.pg, f, s.sessionDialect(), total)
+	page := db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor)
+	page.ExclusionCounts = exclusions
+	return page, nil
 }
 
 // GetSidebarSessionIndex returns the skinny session rows needed by

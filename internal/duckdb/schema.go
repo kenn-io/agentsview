@@ -27,7 +27,9 @@ import (
 // v21 adds messages.dialogue_text.
 // v22 adds commit provenance and copied prompts.
 // v23 adds the agent identity and 64-bit counters to imported account usage rows.
-const SchemaVersion = 23
+// v24 stores dialogue that repeats content as NULL (see db.StoredDialogue);
+// the rebuild drops the copies older pushes wrote.
+const SchemaVersion = 24
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 

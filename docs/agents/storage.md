@@ -243,10 +243,33 @@ those fields from archived messages without reparsing or replacing message IDs.
 Copies preserve both projections and apply content policy to both.
 
 Keep a known dialogue projection even when it equals display content; NULL also
-represents unclassified messages and cannot carry both meanings. Data version
-146 reparses providers with dialogue classification in place, including the
-shared Codex parser. Retained sources that cannot be reparsed keep their content
-and classification gaps; export itself never reads the original source.
+represents unclassified messages and cannot carry both meanings. Storage writes
+such a copy once: `db.StoredDialogue` decides the value every backend writes.
+When the dialogue equals `content` and `thinking_text` is empty, backends store
+NULL, which every search already reads as `content` through
+`COALESCE(dialogue_text, content)`. A message with thinking text keeps its copy,
+because search treats NULL dialogue beside thinking text as a legacy row whose
+content still contains the thinking.
+
+- SQLite sets `messages.dialogue_is_content` on those rows, and message readers
+  restore the projection from `content`. SQL that needs the full projection
+  outside search reads `sqliteDialogueExprM` or `sqliteDialogueExprBare`. The
+  writable open that adds the column moves existing copies in the same
+  transaction; it leaves the full-text update triggers out of that UPDATE,
+  because the indexed text does not change.
+- Hosted `raw_message_dialogue` stores an empty `dialogue_text` with
+  `is_content` set, and payload loads restore it from the payload's content.
+- PostgreSQL, ClickHouse, and DuckDB mirrors keep no marker. PostgreSQL and
+  ClickHouse rewrite existing copies once from schema setup, guarded by the
+  `dialogue_dedupe_v1` and `agentsview_dialogue_deduplicated` metadata keys. The
+  ClickHouse mutation must write `''` beneath the NULL; an UPDATE to plain NULL
+  keeps the old string under the null mask. DuckDB schema version 24 rebuilds
+  the mirror.
+
+Data version 146 reparses providers with dialogue classification in place,
+including the shared Codex parser. Retained sources that cannot be reparsed keep
+their content and classification gaps; export itself never reads the original
+source.
 
 ### Claude subagent sources
 

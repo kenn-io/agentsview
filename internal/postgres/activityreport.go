@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -155,12 +156,13 @@ func (s *Store) activityReportMessageCounts(
 	if len(ids) == 0 {
 		return nil
 	}
+	// DescribeExec plans candidate reads with their actual IDs on every visit.
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT session_id, role, timestamp FROM messages
 		WHERE session_id = ANY($1)
 			AND role IN ('user', 'assistant') AND is_system = false
 			AND COALESCE(source_subtype, '') <> 'tool_result'
-			AND timestamp >= $2 AND timestamp < $3`, ids, q.RangeStart, q.EffectiveEnd)
+			AND timestamp >= $2 AND timestamp < $3`, pgx.QueryExecModeDescribeExec, ids, q.RangeStart, q.EffectiveEnd)
 	if err != nil {
 		return fmt.Errorf("querying pg activity message counts: %w", err)
 	}
@@ -566,7 +568,7 @@ func (s *Store) activityReportCandidateSource(
 		}
 
 		terminalRows, err := s.pg.QueryContext(
-			ctx, terminalQuery, ids, lower, q.EffectiveEnd,
+			ctx, terminalQuery, pgx.QueryExecModeDescribeExec, ids, lower, q.EffectiveEnd,
 		)
 		if err != nil {
 			return fmt.Errorf("querying pg activity report terminal candidates: %w", err)
@@ -593,68 +595,55 @@ func (s *Store) activityReportCandidateSource(
 			ctx context.Context,
 			yield func(activity.IntervalCandidate) error,
 		) error {
-			query := `SELECT
-				m.session_id, m.ordinal, successor.ordinal,
-				m.timestamp, successor.timestamp,
-				successor.role, successor.model,
-				COALESCE((
-					SELECT prior.model
-					FROM messages prior
-					WHERE prior.session_id = m.session_id
-						AND prior.ordinal <= m.ordinal
-						AND prior.role = 'assistant'
-						AND prior.model != ''
-						AND prior.timestamp IS NOT NULL
-						AND prior.timestamp > (
-							SELECT prior_previous.timestamp
-							FROM messages prior_previous
-							WHERE prior_previous.session_id = prior.session_id
-								AND prior_previous.ordinal < prior.ordinal
-								AND prior_previous.timestamp IS NOT NULL
-							ORDER BY prior_previous.ordinal DESC
-							LIMIT 1
-						)
-					ORDER BY prior.ordinal DESC
-					LIMIT 1
-				), 'unknown')
-			FROM messages m
-			JOIN messages successor
-				ON successor.session_id = m.session_id
-				AND successor.ordinal = (
-					SELECT next.ordinal
-					FROM messages next
-					WHERE next.session_id = m.session_id
-						AND next.ordinal > m.ordinal
-						AND next.timestamp IS NOT NULL
-					ORDER BY next.ordinal
-					LIMIT 1
-				)
-			WHERE m.session_id = ANY($1)
-				AND m.timestamp IS NOT NULL
-				AND m.timestamp >= $2
-				AND m.timestamp < $3
-			ORDER BY m.timestamp, m.session_id, m.ordinal`
+			query := `SELECT session_id, ordinal, role, timestamp, model
+				FROM messages
+				WHERE session_id = ANY($1) AND timestamp IS NOT NULL
+				ORDER BY session_id, ordinal`
 			rows, queryErr := s.pg.QueryContext(
-				ctx, query, ids, lower, q.EffectiveEnd,
+				ctx, query, pgx.QueryExecModeDescribeExec, ids,
 			)
 			if queryErr != nil {
 				return fmt.Errorf(
 					"querying pg activity report candidates: %w", queryErr)
 			}
 			defer rows.Close()
+			var pairs []activity.IntervalCandidate
+			var sessionID, id string
+			var session []activity.TranscriptMessage
+			var m activity.TranscriptMessage
+			lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
 			for rows.Next() {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				candidate, scanErr := scanCandidate(rows)
-				if scanErr != nil {
-					return scanErr
+				if err := rows.Scan(&id, &m.Ordinal, &m.Role, &m.At, &m.Model); err != nil {
+					return fmt.Errorf("scanning pg activity report message: %w", err)
+				}
+				if id != sessionID {
+					pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
+					sessionID, session = id, session[:0]
+				}
+				m.At = m.At.UTC()
+				us := m.At.UnixMicro()
+				m.Starts = us >= lowerMicro && us < upperMicro
+				session = append(session, m)
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
+			sort.Slice(pairs, func(i, j int) bool {
+				return activity.CandidateLess(pairs[i], pairs[j])
+			})
+			for _, candidate := range pairs {
+				if err := ctx.Err(); err != nil {
+					return err
 				}
 				if err := yield(candidate); err != nil {
 					return err
 				}
 			}
-			return rows.Err()
+			return nil
 		}
 		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
@@ -727,7 +716,7 @@ func (s *Store) activityReportUsage(
 	query := pgDailyUsageRowSelectFromRows(rowsSQL) + `
 		AND u.ts >= ` + lower + `::timestamptz
 		AND u.ts <= ` + upper + `::timestamptz`
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+	rows, err := s.pg.QueryContext(ctx, query, append([]any{pgx.QueryExecModeDescribeExec}, pb.args...)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("querying activity report usage: %w", err)
 	}

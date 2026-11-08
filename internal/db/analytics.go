@@ -3326,6 +3326,7 @@ func (db *DB) GetAnalyticsSkills(
 // and appends them to sessionMsgs, keyed by session ID.
 func (db *DB) queryVelocityMsgs(
 	ctx context.Context,
+	q messageRowsQuerier,
 	chunk []string,
 	loc *time.Location,
 	sessionMsgs map[string][]TimingMessage,
@@ -3337,13 +3338,13 @@ func (db *DB) queryVelocityMsgs(
 	// invalid, so the row is excluded from velocity stats rather than
 	// crashing the analytics endpoint. This matches the NULL-safe
 	// PostgreSQL and DuckDB velocity twins.
-	q := `SELECT session_id, ordinal, role,
+	query := `SELECT session_id, ordinal, role,
 		COALESCE(timestamp, ''), content_length
 		FROM messages
 		WHERE session_id IN ` + ph + `
 		ORDER BY session_id, ordinal`
 
-	rows, err := db.getReader().QueryContext(ctx, q, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf(
 			"querying velocity messages: %w", err,
@@ -3386,7 +3387,7 @@ func (db *DB) getAnalyticsVelocityMessages(
 	loc := f.location()
 	if strings.TrimSpace(f.Model) == "" {
 		err := queryChunked(sessionIDs, func(chunk []string) error {
-			return db.queryVelocityMsgs(ctx, chunk, loc, sessionMsgs)
+			return db.queryVelocityMsgs(ctx, db.getReader(), chunk, loc, sessionMsgs)
 		})
 		return sessionMsgs, err
 	}
@@ -3452,78 +3453,6 @@ type velocityAccumulator struct {
 	totalToolCalls int
 	activeMinutes  float64
 	sessions       int
-}
-
-// populateVelocityAccumulator fetches per-message timestamps and tool
-// counts for the given sessions and feeds them through
-// processSessionVelocity into a single accumulator. Used by
-// GetSessionStats, which already has its filtered session list and
-// only needs the overall velocity slice — no agent/complexity
-// breakdowns. Sessions with fewer than two messages are silently
-// skipped, matching GetAnalyticsVelocity.
-func populateVelocityAccumulator(
-	ctx context.Context, db *DB, sessionIDs []string,
-	loc *time.Location,
-) (*velocityAccumulator, error) {
-	accum := &velocityAccumulator{}
-	if len(sessionIDs) == 0 {
-		return accum, nil
-	}
-
-	sessionMsgs := make(map[string][]TimingMessage)
-	if err := queryChunked(sessionIDs,
-		func(chunk []string) error {
-			return db.queryVelocityMsgs(
-				ctx, chunk, loc, sessionMsgs,
-			)
-		}); err != nil {
-		return nil, err
-	}
-
-	toolCountMap := make(map[string]int)
-	err := queryChunked(sessionIDs,
-		func(chunk []string) error {
-			ph, chunkArgs := InPlaceholders(chunk)
-			q := `SELECT session_id, COUNT(*)
-				FROM tool_calls
-				WHERE session_id IN ` + ph + `
-				GROUP BY session_id`
-			rows, qErr := db.getReader().QueryContext(
-				ctx, q, chunkArgs...,
-			)
-			if qErr != nil {
-				return fmt.Errorf(
-					"querying velocity tool_calls: %w", qErr,
-				)
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var sid string
-				var count int
-				if err := rows.Scan(&sid, &count); err != nil {
-					return fmt.Errorf(
-						"scanning velocity tool_call: %w", err,
-					)
-				}
-				toolCountMap[sid] = count
-			}
-			return rows.Err()
-		})
-	if err != nil {
-		return nil, err
-	}
-
-	for _, sid := range sessionIDs {
-		msgs := sessionMsgs[sid]
-		if len(msgs) < 2 {
-			continue
-		}
-		processSessionVelocity(
-			[]*velocityAccumulator{accum},
-			msgs, toolCountMap[sid],
-		)
-	}
-	return accum, nil
 }
 
 // processSessionVelocity updates every accumulator in accums with one
