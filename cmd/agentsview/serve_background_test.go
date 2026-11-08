@@ -2099,6 +2099,9 @@ func testRunServeBackgroundPreservesLaunchOptions(t *testing.T, persistent bool)
 		},
 	}
 
+	if persistent {
+		tests = tests[:1] // The incompatible API predates persistent lifetime metadata.
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := runtimeTestDir(t)

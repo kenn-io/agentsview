@@ -226,17 +226,25 @@ func TestRuntimeWarningHelper(t *testing.T) {
 }
 
 func TestServeRuntimeRecordWriteFailureWarnsVisibleAfterStartupRelease(t *testing.T) {
-	out, err := runServeRuntimeWarningHelper(t, true)
+	out, err := runServeRuntimeWarningHelper(t, true, false)
 	require.NoError(t, err, string(out))
 	assert.Contains(t, string(out), "could not write daemon runtime record")
 	assert.Contains(t, string(out), "icacls <dir> /setowner <user>")
 }
 
-func TestServeRuntimeRecordWriteSuccessDoesNotWarnVisible(t *testing.T) {
-	out, err := runServeRuntimeWarningHelper(t, false)
-	require.NoError(t, err, string(out))
-	assert.Contains(t, string(out), "runtime record write reached")
-	assert.NotContains(t, string(out), "could not write daemon runtime record")
+func TestServePublishesStartupLifetime(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		background bool
+		want       string
+	}{{"foreground", false, "startup lifetime: true 0s"}, {"automatic background", true, "startup lifetime: false 2s"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runServeRuntimeWarningHelper(t, false, tc.background)
+			require.NoError(t, err, string(out))
+			assert.Contains(t, string(out), tc.want)
+			assert.NotContains(t, string(out), "could not write daemon runtime record")
+		})
+	}
 }
 
 func TestServeCommandMountsWritableServerAtBasePath(t *testing.T) {
@@ -403,10 +411,14 @@ func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
 }
 
 func runServeRuntimeWarningHelper(
-	t *testing.T, failWrite bool,
+	t *testing.T, failWrite, background bool,
 ) ([]byte, error) {
 	t.Helper()
 	dataDir := t.TempDir()
+	child := ""
+	if background {
+		child = "1"
+	}
 	marker := "runtime record write reached"
 	if failWrite {
 		// Wait for the remedy, which is emitted after the warning, so the parent
@@ -419,6 +431,9 @@ func runServeRuntimeWarningHelper(
 			"AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_HELPER=1",
 			"AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_FAIL=" + strconv.FormatBool(failWrite),
 			"AGENTSVIEW_DATA_DIR=" + dataDir,
+			backgroundChildEnvVar + "=" + child,
+			persistentDaemonEnvVar + "=false",
+			"AGENTSVIEW_DAEMON_IDLE_TIMEOUT=2s",
 		},
 		marker,
 	)
@@ -536,12 +551,9 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 			dataDir, host string, port int, version, browserURL string, readOnly,
 			requireAuth, noSync bool, explicitPort *int, caddyPID ...int,
 		) (string, error) {
-			// This running CLI reaches readiness before publishing its runtime, so it
-			// also checks the snapshot used when a user restarts during startup.
-			snapshot := readStartupState(dataDir)
-			require.NotNil(t, snapshot)
-			assert.True(t, snapshot.Persistent)
-			assert.Equal(t, "0s", snapshot.IdleTimeout)
+			if snapshot := readStartupState(dataDir); snapshot != nil {
+				fmt.Printf("startup lifetime: %t %s\n", snapshot.Persistent, snapshot.IdleTimeout)
+			}
 			path, err := original(
 				lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort,
 				caddyPID...,

@@ -2013,7 +2013,7 @@ func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 	}
 }
 
-func TestPersistentDaemonPublicationFailureKeepsLifetime(t *testing.T) {
+func TestFailedFallbackPromotionPreservesAutomaticLifetime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	MarkDaemonStarting(dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })

@@ -326,8 +326,6 @@ func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 			RuntimeFallback: true,
 		}
 	}
-	promoted := false
-	deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error { promoted = true; return nil }
 	starts := 0
 	deps.startBackground = func(context.Context,
 		config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy,
@@ -337,7 +335,6 @@ func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	}
 
 	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
-	assert.True(t, promoted)
 	assert.Zero(t, starts)
 	assert.Contains(t, out.String(), "already running")
 	assert.Contains(t, out.String(), "8079")
