@@ -65,7 +65,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if velocity}
+  {/if}
+  {#if velocity}
     {#if activeTab === "overall"}
       {@const o = velocity.overall}
       <div class="metrics-grid">
@@ -144,8 +145,10 @@
     {:else}
       <div class="empty">{m.analytics_velocity_no_breakdown()}</div>
     {/if}
-  {:else}
+  {:else if analytics.velocity}
     <div class="empty">{m.shared_no_data_for_period()}</div>
+  {:else if !analytics.errors.velocity}
+    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 

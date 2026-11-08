@@ -103,7 +103,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if skills.length > 0}
+  {/if}
+  {#if skills.length > 0}
     <div class="skill-list">
       {#each skills.slice(0, 8) as skill}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -166,8 +167,10 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.skills}
     <div class="empty">{m.analytics_top_skills_empty()}</div>
+  {:else if !analytics.errors.skills}
+    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 

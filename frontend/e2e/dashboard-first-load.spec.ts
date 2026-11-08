@@ -56,6 +56,68 @@ test.describe("Chromium dashboard evidence", () => {
     expect(respondedAtRow).toBe(false);
   });
 
+  test("a held then failed tools read leaves siblings usable and recovers", async ({ page }) => {
+    const held = Promise.withResolvers<void>();
+    let toolsReads = 0;
+    await page.route("**/api/v1/analytics/tools?**", async (route) => {
+      toolsReads++;
+      if (toolsReads > 1) return route.continue();
+      await held.promise;
+      await route.fulfill({ status: 503, json: { error: "tools unavailable" } });
+    });
+    await page.goto("/");
+    const tools = page.locator(".tool-container");
+    const sessionsValue = page.locator(".summary-cards .card-value").first();
+    await expect(tools).toContainText("Loading tool usage...");
+    await expect(sessionsValue).toHaveText(/^\d/);
+    const duration = page
+      .locator(".top-sessions-container")
+      .getByRole("button", { name: "By Duration" });
+    await duration.click();
+    await expect(duration).toHaveClass(/active/);
+
+    held.resolve();
+    const retry = tools.getByRole("button", { name: "Retry" });
+    await expect(retry).toBeVisible();
+    await expect(sessionsValue).toHaveText(/^\d/);
+    await retry.click();
+    await expect(retry).toHaveCount(0);
+    await expect(tools).not.toContainText("Loading tool usage...");
+    expect(toolsReads).toBe(2);
+  });
+
+  test("a date change clears old values and ignores a late response", async ({ page }) => {
+    const held = Promise.withResolvers<void>();
+    let summaryReads = 0;
+    let lateSettled = false;
+    await page.route("**/api/v1/analytics/summary?**", async (route) => {
+      summaryReads++;
+      if (summaryReads !== 2) return route.continue();
+      await held.promise;
+      await route.fulfill({ json: { total_sessions: 987654, agents: {} } }).catch(() => {});
+      lateSettled = true;
+    });
+    await page.goto("/");
+    const sessionsValue = page.locator(".summary-cards .card-value").first();
+    await expect(sessionsValue).toHaveText(/^\d/);
+
+    const pickPreset = async (label: string) => {
+      const preset = page.getByRole("button", { name: label, exact: true });
+      if (!(await preset.isVisible())) {
+        await page.locator(".kit-date-range-picker__trigger").first().click();
+      }
+      await preset.click();
+    };
+    await pickPreset("30d");
+    await expect(sessionsValue).toHaveText("--");
+    await pickPreset("7d");
+    await expect(sessionsValue).toHaveText(/^\d/);
+    held.resolve();
+    await expect.poll(() => lateSettled).toBe(true);
+    await expect(sessionsValue).not.toHaveText("987,654");
+    expect(summaryReads).toBe(3);
+  });
+
   for (const width of [1280, 768, 400]) {
     test(`root shell at ${width}`, async ({ page }, testInfo) => {
       await page.setViewportSize({ width, height: 900 });

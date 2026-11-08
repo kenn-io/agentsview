@@ -91,7 +91,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if activeBuckets.length > 0}
+  {/if}
+  {#if activeBuckets.length > 0}
     <div class="bar-chart">
       {#each activeBuckets as bucket}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -120,8 +121,10 @@
         })}
       </div>
     {/if}
-  {:else}
+  {:else if analytics.sessionShape}
     <div class="empty">{m.shared_no_data_for_period()}</div>
+  {:else if !analytics.errors.sessionShape}
+    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 

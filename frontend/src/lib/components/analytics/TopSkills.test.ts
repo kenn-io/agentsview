@@ -117,6 +117,27 @@ describe("TopSkills", () => {
     await unmount(component);
   });
 
+  it("renders loading before the first response", async () => {
+    const component = mount(TopSkills, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).toContain("Loading...");
+    expect(document.body.textContent).not.toContain("No skill usage data");
+
+    await unmount(component);
+  });
+
+  it("keeps skills beside a refresh failure", async () => {
+    const component = mountWithData();
+    analytics.errors = { ...analytics.errors, skills: "refresh failed" };
+    await tick();
+
+    expect(document.body.textContent).toContain("refresh failed");
+    expect(document.body.textContent).toContain("skill-creator");
+
+    await unmount(component);
+  });
+
   it("renders error state and retries", async () => {
     analytics.skills = null;
     // @ts-ignore
@@ -129,6 +150,7 @@ describe("TopSkills", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Failed to load");
+    expect(document.body.textContent).not.toContain("Loading...");
     document.querySelector<HTMLButtonElement>(".retry-btn")!.click();
     await tick();
 

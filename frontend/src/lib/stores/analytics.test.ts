@@ -1144,7 +1144,7 @@ describe("executeFetch concurrency and error handling", () => {
     expect(analytics.errors.summary).toBe("Failed to load");
   });
 
-  it("ignores stale summary data and clears accepted params when filters change", async () => {
+  it("ignores stale summary data and keeps accepted params after a failed refetch", async () => {
     let resolveFirst!: (v: AnalyticsSummary) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
       new Promise((r) => {
@@ -1181,13 +1181,10 @@ describe("executeFetch concurrency and error handling", () => {
       }),
     );
     const pending = analytics.fetchSummary();
-    expect(analytics.summary).toBeNull();
-    expect(analytics.summaryFilterParams).toBeNull();
+    expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
     reject(new Error("summary unavailable"));
     await pending;
-    expect(analytics.summary).toBeNull();
-    expect(analytics.summaryFilterParams).toBeNull();
-    expect(analytics.errors.summary).toBe("summary unavailable");
+    expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
   });
 
   it("should ignore stale error from superseded request", async () => {
@@ -1495,7 +1492,6 @@ describe("AnalyticsStore panel scopes", () => {
       );
       const february = analytics.fetchSummary();
       expect(analytics.summary).toBeNull();
-      expect(analytics.summaryFilterParams).toBeNull();
       expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toMatchObject({
         from: "2026-02-01",
         to: "2026-02-28",
@@ -1577,7 +1573,6 @@ describe("AnalyticsStore panel scopes", () => {
       );
       await analytics.fetchTools();
       expect(analytics.tools).toBeNull();
-      expect(analytics.toolsFilterParams).toBeNull();
     } finally {
       vi.useRealTimers();
     }

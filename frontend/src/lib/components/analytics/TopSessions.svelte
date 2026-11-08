@@ -142,7 +142,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if analytics.topSessions && analytics.topSessions.sessions.length > 0}
+  {/if}
+  {#if analytics.topSessions && analytics.topSessions.sessions.length > 0}
     <div class="session-list">
       {#each analytics.topSessions.sessions as session, i}
         {@const label = sessionLabel(session)}
@@ -183,8 +184,10 @@
         </div>
       {/each}
     </div>
-  {:else}
+  {:else if analytics.topSessions}
     <div class="empty">{m.shared_no_sessions_in_range()}</div>
+  {:else if !analytics.errors.topSessions}
+    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 

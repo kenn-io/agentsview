@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
+  import { Button, Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import GradeDistribution
@@ -34,6 +34,19 @@
   }
 </script>
 
+{#snippet status()}
+  {#if analytics.errors.signals}
+    <div class="error">
+      {analytics.errors.signals}
+      <Button surface="soft" size="sm" onclick={() => analytics.fetchSignals()}>
+        {m.shared_retry()}
+      </Button>
+    </div>
+  {:else if !signals}
+    <div class="empty">{m.analytics_loading()}</div>
+  {/if}
+{/snippet}
+
 {#if visible && signals}
   <div class="health-section">
     <div class="section-header">
@@ -48,6 +61,7 @@
         })}
       </span>
     </div>
+    {@render status()}
 
     <div class="health-summary-cards">
       <Card level="default" padding="none" class="card">
@@ -217,6 +231,13 @@
       </Card>
     </div>
   </div>
+{:else if !signals || analytics.errors.signals}
+  <div class="health-section">
+    <div class="section-header">
+      <h3 class="section-title">{m.analytics_session_health_title()}</h3>
+    </div>
+    {@render status()}
+  </div>
 {/if}
 
 <style>
@@ -235,6 +256,20 @@
   .section-subtitle {
     font-size: 12px;
     color: var(--text-muted);
+  }
+  .error {
+    color: var(--accent-red);
+    font-size: 12px;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .empty {
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 24px;
+    text-align: center;
   }
   .health-summary-cards {
     display: grid;

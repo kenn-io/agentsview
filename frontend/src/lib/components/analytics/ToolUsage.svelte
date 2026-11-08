@@ -248,9 +248,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if analytics.loading.tools}
-    <div class="empty">{m.analytics_tool_usage_loading()}</div>
-  {:else if categories.length > 0}
+  {/if}
+  {#if categories.length > 0}
     <div class="sections">
       {#if toolRows.length > 0}
         <div class="section">
@@ -390,8 +389,10 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.tools}
     <div class="empty">{m.analytics_tool_usage_empty()}</div>
+  {:else if !analytics.errors.tools}
+    <div class="empty">{m.analytics_tool_usage_loading()}</div>
   {/if}
 </div>
 

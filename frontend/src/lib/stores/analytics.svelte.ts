@@ -491,11 +491,7 @@ class AnalyticsStore {
     const signal = this.nextAbortSignal(panel);
     // The moving active-since boundary keeps the same refresh scope.
     const scope = JSON.stringify({ ...params, active_since: params.active_since !== undefined });
-    if (this.scopes[panel] !== scope) {
-      this[panel] = null;
-      if (panel === "summary") this.summaryFilterParams = null;
-      if (panel === "tools") this.toolsFilterParams = null;
-    }
+    if (this.scopes[panel] !== scope) this[panel] = null;
     this.scopes[panel] = scope;
     this.querying[panel] = true;
     this.loading[panel] = !hasExistingData();

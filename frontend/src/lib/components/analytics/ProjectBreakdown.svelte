@@ -116,7 +116,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if rows.length > 0}
+  {/if}
+  {#if rows.length > 0}
     <div class="bar-list">
       {#each rows as project, i}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -154,8 +155,10 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.projects}
     <div class="empty">{m.analytics_projects_empty()}</div>
+  {:else if !analytics.errors.projects}
+    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 

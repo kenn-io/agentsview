@@ -281,9 +281,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if analytics.loading.skills && trendEntries.length === 0}
-    <div class="empty">{m.analytics_skill_trend_loading()}</div>
-  {:else if trendEntries.length > 0 && allSeries.length > 0}
+  {/if}
+  {#if trendEntries.length > 0 && allSeries.length > 0}
     <div
       class="legend"
       role="group"
@@ -440,8 +439,10 @@
         {/each}
       </div>
     {/if}
-  {:else}
+  {:else if analytics.skills}
     <div class="empty">{m.analytics_skill_trend_empty()}</div>
+  {:else if !analytics.errors.skills}
+    <div class="empty">{m.analytics_skill_trend_loading()}</div>
   {/if}
 </div>
 

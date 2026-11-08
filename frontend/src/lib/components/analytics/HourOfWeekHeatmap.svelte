@@ -173,7 +173,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if grid}
+  {/if}
+  {#if grid}
     <div class="how-chart" bind:clientWidth={availableWidth}>
       <Chart
         width={chartWidth}
@@ -254,8 +255,10 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.hourOfWeek}
     <div class="empty">{m.shared_no_data_for_period()}</div>
+  {:else if !analytics.errors.hourOfWeek}
+    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 

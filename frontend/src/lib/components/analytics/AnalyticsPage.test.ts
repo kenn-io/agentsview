@@ -16,7 +16,7 @@ import AnalyticsPage from "./AnalyticsPage.svelte";
 // @ts-ignore
 import QualityPage from "../quality/QualityPage.svelte";
 import { requestUrl } from "../../test-support/request-url.js";
-import { MetadataService } from "../../api/generated/index.js";
+import { AnalyticsService, MetadataService } from "../../api/generated/index.js";
 
 async function flushEffects() {
   await tick();
@@ -534,6 +534,81 @@ describe("AnalyticsPage initial load", () => {
       expect(cancel).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+describe("AnalyticsPage panel failures", () => {
+  const signals = {
+    scored_sessions: 4,
+    unscored_sessions: 0,
+    avg_health_score: 72,
+    grade_distribution: {},
+    outcome_distribution: {},
+    trend: [],
+    tool_health: { failure_rate: 0, sessions_with_failures: 0 },
+    context_health: { sessions_with_compaction: 0, avg_compaction_count: 0 },
+    by_agent: [],
+    by_project: [],
+  };
+
+  afterEach(() => {
+    analytics.cancelInFlightReads();
+    for (const panel of Object.keys(analytics.errors) as (keyof typeof analytics.errors)[]) {
+      analytics[panel] = null;
+      analytics.errors[panel] = null;
+    }
+  });
+
+  it("shows failed panels with Retry beside usable siblings", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(outcomeTotals, "load").mockResolvedValue();
+    const service = AnalyticsService as unknown as Record<string, unknown>;
+    for (const name of Object.keys(service)) {
+      if (name.startsWith("getApiV1Analytics")) {
+        vi.spyOn(service as Record<string, () => Promise<unknown>>, name).mockResolvedValue(null);
+      }
+    }
+    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSummary").mockResolvedValue({
+      total_sessions: 29,
+      agents: {},
+    } as never);
+    vi.spyOn(AnalyticsService, "getApiV1AnalyticsProjects").mockResolvedValue({
+      projects: [{ name: "alpha", sessions: 3, messages: 9 }],
+    } as never);
+    const tools = vi
+      .spyOn(AnalyticsService, "getApiV1AnalyticsTools")
+      .mockRejectedValue(new Error("tools timed out"));
+    const signalsRead = vi
+      .spyOn(AnalyticsService, "getApiV1AnalyticsSignals")
+      .mockRejectedValueOnce(new Error("signals timed out"))
+      .mockResolvedValue(signals as never);
+    const setProject = vi.spyOn(analytics, "setProject").mockImplementation(() => {});
+    router.route = "sessions";
+    component = mount(AnalyticsPage, { target: document.body });
+    await vi.waitFor(() => expect(document.body.textContent).toContain("signals timed out"));
+
+    const panel = (selector: string) => document.querySelector<HTMLElement>(selector)!;
+    expect(panel(".summary-cards").textContent).toContain("29");
+    expect(panel(".tool-container").textContent).toContain("tools timed out");
+    expect(panel(".health-section").textContent).toContain("Session Health");
+    panel(".breakdown-container .bar-row").click();
+    expect(setProject).toHaveBeenCalledWith("alpha");
+
+    const retry = [...panel(".health-section").querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    retry!.click();
+    await vi.waitFor(() => expect(panel(".health-section").textContent).toContain("72"));
+    expect(panel(".health-section").textContent).not.toContain("signals timed out");
+    expect(signalsRead).toHaveBeenCalledTimes(2);
+    expect(tools).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("AnalyticsPage sidebar controls", () => {

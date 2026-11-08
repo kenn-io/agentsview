@@ -588,6 +588,7 @@
   "shared_other": "Other",
   "shared_no_branch": "(no branch)",
   "shared_unknown": "unknown",
+  "analytics_loading": "Loading...",
   "analytics_refresh": "Refresh analytics",
   "analytics_export_csv": "Export CSV",
   "analytics_activity_by_day_hour": "Activity by Day and Hour",

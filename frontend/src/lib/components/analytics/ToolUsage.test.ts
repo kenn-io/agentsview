@@ -104,9 +104,8 @@ describe("ToolUsage", () => {
     await unmount(component);
   });
 
-  it("renders loading state while the first fetch is in flight", async () => {
+  it("renders loading state until the first response arrives", async () => {
     analytics.tools = null;
-    analytics.loading = { ...analytics.loading, tools: true };
 
     const component = mount(ToolUsage, { target: document.body });
     await tick();
@@ -114,7 +113,6 @@ describe("ToolUsage", () => {
     expect(document.body.textContent).toContain("Loading tool usage...");
     expect(document.body.textContent).not.toContain("No tool usage data");
 
-    analytics.loading = { ...analytics.loading, tools: false };
     await unmount(component);
   });
 
@@ -178,6 +176,22 @@ describe("ToolUsage", () => {
     await tick();
     return text;
   }
+
+  it("keeps tool rows usable beside a refresh failure", async () => {
+    seedRates();
+    analytics.errors = { ...analytics.errors, tools: "tools timed out" };
+    const retry = vi.spyOn(analytics, "fetchTools").mockResolvedValue("ok");
+    const component = mount(ToolUsage, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).toContain("tools timed out");
+    expect(document.body.textContent).not.toContain("Loading tool usage...");
+    expect(rateButton("Grep Empty rate: 70.0%")).not.toBeNull();
+    document.querySelector<HTMLButtonElement>(".retry-btn")!.click();
+    expect(retry).toHaveBeenCalledOnce();
+
+    await unmount(component);
+  });
 
   it("names each rate's value and explains its denominator on focus", async () => {
     seedRates();

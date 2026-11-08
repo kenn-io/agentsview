@@ -72,8 +72,8 @@
 <div class="summary-cards">
   {#each cards as card}
     <Card level="default" padding="none" class="card">
-      {#if analytics.errors.summary}
-        <span class="card-value error">--</span>
+      {#if !analytics.summary}
+        <span class="card-value placeholder">--</span>
         <span class="card-label">{card.label()}</span>
       {:else}
         <span class="card-value">
@@ -89,6 +89,9 @@
       {/if}
     </Card>
   {/each}
+  {#if !analytics.summary && !analytics.errors.summary}
+    <span class="kit-sr-only" role="status">{m.analytics_loading()}</span>
+  {/if}
 </div>
 
 {#if analytics.errors.summary}
@@ -130,7 +133,7 @@
     line-height: 1.2;
   }
 
-  .card-value.error {
+  .card-value.placeholder {
     color: var(--text-muted);
   }
 

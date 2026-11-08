@@ -83,25 +83,36 @@
       };
     });
   });
+
+  // The comparison joins three responses, so it waits for all of them
+  // instead of reading a missing one as zeroes.
+  const sources = [
+    { panel: "summary", fetch: () => analytics.fetchSummary() },
+    { panel: "velocity", fetch: () => analytics.fetchVelocity() },
+    { panel: "tools", fetch: () => analytics.fetchTools() },
+  ] as const;
+  const failed = $derived(sources.filter((s) => analytics.errors[s.panel]));
+  const missing = $derived(sources.filter((s) => analytics[s.panel] === null));
 </script>
 
 <div class="agent-comparison">
   <h3 class="chart-title">{m.analytics_agent_comparison_title()}</h3>
 
-  {#if analytics.errors.velocity || analytics.errors.summary || analytics.errors.tools}
+  {#if failed.length > 0}
     <div class="error">
-      {analytics.errors.velocity ?? analytics.errors.summary ?? analytics.errors.tools}
+      {analytics.errors[failed[0]!.panel]}
       <button
         class="retry-btn"
-        onclick={() => {
-          analytics.fetchVelocity();
-          analytics.fetchSummary();
-          analytics.fetchTools();
-        }}
+        onclick={() => failed.forEach((s) => s.fetch())}
       >
         {m.shared_retry()}
       </button>
     </div>
+  {/if}
+  {#if missing.length > 0}
+    {#if missing.some((s) => !analytics.errors[s.panel])}
+      <div class="empty">{m.analytics_loading()}</div>
+    {/if}
   {:else if agents.length < 2}
     <div class="empty">
       {m.analytics_agent_comparison_empty()}

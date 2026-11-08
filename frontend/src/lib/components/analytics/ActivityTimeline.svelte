@@ -534,7 +534,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if chart.bars.length > 0}
+  {/if}
+  {#if chart.bars.length > 0}
     <div class="chart-area" bind:clientWidth={chartAreaWidth}>
       <BarChart
         data={chart.bars}
@@ -647,8 +648,10 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.activity}
     <div class="empty">{m.analytics_activity_empty()}</div>
+  {:else if !analytics.errors.activity}
+    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 

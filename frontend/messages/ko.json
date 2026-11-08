@@ -573,6 +573,7 @@
   "shared_other": "기타",
   "shared_no_branch": "(브랜치 없음)",
   "shared_unknown": "알 수 없음",
+  "analytics_loading": "불러오는 중...",
   "analytics_refresh": "분석 새로고침",
   "analytics_export_csv": "CSV 내보내기",
   "analytics_activity_by_day_hour": "요일 및 시간별 활동",

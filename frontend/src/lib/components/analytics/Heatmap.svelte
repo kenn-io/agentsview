@@ -197,7 +197,8 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if grid.cols.length > 0}
+  {/if}
+  {#if grid.cols.length > 0}
     {#if analytics.heatmap?.entries_from && analytics.heatmap.entries_from > analytics.from}
       <div class="clamp-note">{m.analytics_heatmap_showing_recent_year()}</div>
     {/if}
@@ -266,8 +267,10 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.heatmap}
     <div class="empty">{m.shared_no_data_for_period()}</div>
+  {:else if !analytics.errors.heatmap}
+    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 
