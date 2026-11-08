@@ -486,12 +486,14 @@ func TestAntigravitySummariesRetryAfterTransientLock(t *testing.T) {
 	assert.Equal(t, "/tmp/ws-proj", recovered.byID[summaryTestID].workspace)
 }
 
-// A store that can be read when the source is fingerprinted but not when it
-// is parsed leaves the parse without the parent the fingerprint covered. The
-// session is still published, but without the source hash, so the next sync
-// reparses it. A store that is unreadable at both points keeps the hash.
+// A store that is unreadable or gone when a source is parsed, though it was
+// readable when the source was fingerprinted, leaves the parse without the
+// parent the fingerprint covered. The session is still published, but
+// without the source hash, so the next sync reparses it once the store is
+// back. A store unreadable at both points keeps the hash, so it does not
+// reparse every sync.
 func TestAntigravityStoreOutageAfterFingerprint(t *testing.T) {
-	tests := map[string]struct {
+	providers := map[string]struct {
 		agent AgentType
 		id    string
 		write func(t *testing.T, root, id string)
@@ -499,34 +501,47 @@ func TestAntigravityStoreOutageAfterFingerprint(t *testing.T) {
 		"app and IDE": {AgentAntigravity, summaryTestID, writeAntigravityIDEProviderFixture},
 		"CLI":         {AgentAntigravityCLI, summaryTestCLIID, writeAntigravityCLIProviderFixture},
 	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
-			tc.write(t, root, tc.id)
-			store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
-				tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: summaryTestParent},
-			})
-			provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
-			require.True(t, ok)
-			discovered, err := provider.Discover(t.Context())
-			require.NoError(t, err)
-			source := antigravitySourceAt(t, discovered, filepath.Join(root, "conversations", tc.id+".db"))
-			readable, err := provider.Fingerprint(t.Context(), source)
-			require.NoError(t, err)
-
+	outages := map[string]func(t *testing.T, store string){
+		"unreadable": func(t *testing.T, store string) {
+			t.Helper()
 			mustWrite(t, store, []byte("not a sqlite database, long enough to fill a header page"))
-			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source, Fingerprint: readable})
-			require.NoError(t, err)
-			require.Len(t, outcome.Results, 1)
-			assert.Empty(t, outcome.Results[0].Result.Session.ParentSessionID)
-			assert.Empty(t, outcome.Results[0].Result.Session.File.Hash)
+		},
+		"removed": func(t *testing.T, store string) {
+			t.Helper()
+			require.NoError(t, os.Remove(store))
+		},
+	}
+	for providerName, tc := range providers {
+		for outageName, outage := range outages {
+			t.Run(providerName+"/"+outageName, func(t *testing.T) {
+				root := t.TempDir()
+				tc.write(t, root, tc.id)
+				store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+					tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: summaryTestParent},
+				})
+				provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
+				require.True(t, ok)
+				discovered, err := provider.Discover(t.Context())
+				require.NoError(t, err)
+				source := antigravitySourceAt(t, discovered, filepath.Join(root, "conversations", tc.id+".db"))
+				readable, err := provider.Fingerprint(t.Context(), source)
+				require.NoError(t, err)
 
-			unreadable, err := provider.Fingerprint(t.Context(), source)
-			require.NoError(t, err)
-			outcome, err = provider.Parse(t.Context(), ParseRequest{Source: source, Fingerprint: unreadable})
-			require.NoError(t, err)
-			require.Len(t, outcome.Results, 1)
-			assert.Equal(t, unreadable.Hash, outcome.Results[0].Result.Session.File.Hash)
-		})
+				outage(t, store)
+				outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source, Fingerprint: readable})
+				require.NoError(t, err)
+				require.Len(t, outcome.Results, 1)
+				assert.Empty(t, outcome.Results[0].Result.Session.ParentSessionID)
+				assert.Empty(t, outcome.Results[0].Result.Session.File.Hash)
+
+				during, err := provider.Fingerprint(t.Context(), source)
+				require.NoError(t, err)
+				assert.NotEqual(t, readable.Hash, during.Hash)
+				outcome, err = provider.Parse(t.Context(), ParseRequest{Source: source, Fingerprint: during})
+				require.NoError(t, err)
+				require.Len(t, outcome.Results, 1)
+				assert.Equal(t, during.Hash, outcome.Results[0].Result.Session.File.Hash)
+			})
+		}
 	}
 }

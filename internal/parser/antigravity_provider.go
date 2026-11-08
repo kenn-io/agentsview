@@ -167,8 +167,7 @@ func (p *antigravityProvider) Parse(
 		sess.RelationshipType = RelSubagent
 	}
 	applyAntigravityTitle(ctx, sess, src)
-	if req.Fingerprint.Hash != "" &&
-		(summaries.err == nil || antigravityFingerprintHolds(ctx, p, req)) {
+	if antigravityHashCoversSummary(req.Fingerprint.Hash, summaries.fingerprintDigest(src.ID)) {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
 	return ParseOutcome{
@@ -442,17 +441,11 @@ func (s antigravitySourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, err
 	}
-	summaries := loadAntigravitySummaries(ctx, src.Root)
-	hash, err := antigravityCompositeHashWithExtra(
-		src.Path,
-		antigravityIDECompanionPaths(src.Path),
-		func(h interface{ Write([]byte) (int, error) }) error {
-			return summaries.writeFingerprint(h, src.ID)
-		},
-	)
+	hash, err := antigravityCompositeHash(src.Path, antigravityIDECompanionPaths(src.Path)...)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
+	hash = antigravityHashWithSummary(hash, loadAntigravitySummaries(ctx, src.Root).fingerprintDigest(src.ID))
 	return SourceFingerprint{
 		Key:     key,
 		Size:    info.Size(),

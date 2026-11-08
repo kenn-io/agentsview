@@ -4554,11 +4554,17 @@ schemas keep their existing ordering behavior.
   unchanged. Remote archives snapshot both providers' stores, so a checkpoint
   during transfer cannot mix versions.
 
-- **Unreadable store:** The handling is eventually consistent. A failed read is
-  not cached, so the next sync tries again. While the store cannot be read,
-  each source keeps its stored working directory, and a reparse in that window
-  can drop a parent or a store-derived project. The first sync after the store
-  reads again restores them, because the fingerprint changes back.
+- **Unreadable store:** The handling is eventually consistent, and an unreadable
+  store never blocks a transcript. A failed read stands for 15 seconds, so one
+  sync pass does not wait on a locked store once per conversation, and the
+  next pass reads again. While the store cannot be read, each source keeps its
+  stored working directory, and a reparse in that window can drop a parent or
+  a store-derived project. Each source hash ends with a digest of the
+  conversation's summary values. A parse that read different values than its
+  fingerprint, because the store became unreadable, disappeared, or changed in
+  between, leaves its source hash unset, so the next sync reparses it. Once
+  the store reads again, the digest changes back and the dropped values
+  return.
 
 - **Change detection (checked 2026-10-20):** Parsing opens conversation
   databases and the title store read-only, which rewrites their `-shm` WAL

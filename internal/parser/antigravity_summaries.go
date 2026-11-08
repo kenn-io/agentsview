@@ -2,9 +2,10 @@ package parser
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -78,18 +79,36 @@ func (s antigravitySummaries) parent(id string) string {
 	return parent
 }
 
-// writeFingerprint adds what the store says about id to a source fingerprint.
+// fingerprintDigest condenses what the store says about id. A source
+// fingerprint ends with it, so a parse can check that it read the same values
+// the fingerprint covered.
 // A conversation the store does not list adds nothing, so roots without a
 // store keep their fingerprints. An unreadable store lists nothing, so the
 // conversation reparses again once the store reads.
-func (s antigravitySummaries) writeFingerprint(w io.Writer, id string) error {
+func (s antigravitySummaries) fingerprintDigest(id string) string {
 	summary, ok := s.byID[id]
 	if !ok {
-		return nil
+		return ""
 	}
-	_, err := fmt.Fprintf(w, "summary\x00%t\x00%d\x00%s\x00%s\x00",
+	h := sha256.New()
+	fmt.Fprintf(h, "%t\x00%t\x00%d\x00%s\x00%s\x00", summary.workspaceRecorded,
 		summary.hasWorkspace, len(summary.workspace), summary.workspace, s.parent(id))
-	return err
+	return hex.EncodeToString(h.Sum(nil)[:16])
+}
+
+// antigravityHashWithSummary appends a summary digest to a source hash.
+func antigravityHashWithSummary(hash, digest string) string {
+	return hash + "." + digest
+}
+
+// antigravityHashCoversSummary reports whether a source hash was taken with
+// the summary values a parse read. When it was not, for example because the
+// store became unreadable, disappeared, or changed between fingerprint and
+// parse, the parse leaves its source hash unset and the next sync reparses.
+// A store unreadable at both points matches, so it does not reparse every
+// sync.
+func antigravityHashCoversSummary(hash, digest string) bool {
+	return hash != "" && strings.HasSuffix(hash, "."+digest)
 }
 
 type antigravitySummariesSnapshot struct {
@@ -249,14 +268,4 @@ func antigravityWorkspacePath(uri string) string {
 
 func isASCIILetter(b byte) bool {
 	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
-}
-
-// antigravityFingerprintHolds reports whether a parse that could not read
-// the summary store may still be recorded under the fingerprint taken before
-// it. That holds when the fingerprint saw the same unreadable store. When the
-// store was readable then, the parse lacks values the fingerprint covered, so
-// its source hash is left unset and the next sync reparses it.
-func antigravityFingerprintHolds(ctx context.Context, p Provider, req ParseRequest) bool {
-	current, err := p.Fingerprint(ctx, req.Source)
-	return err == nil && current.Hash == req.Fingerprint.Hash
 }

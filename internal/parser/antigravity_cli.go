@@ -76,9 +76,8 @@ type AntigravityCLIParseStatus struct {
 	// messages instead. Sync can store the fallback while leaving
 	// data_version stale so the next pass retries.
 	NeedsRetry bool
-	// SummariesUnread is true when the summary store could not be read
-	// for the parent.
-	SummariesUnread bool
+	// summaryDigest condenses the summary values the parse read.
+	summaryDigest string
 }
 
 // parseSessionWithStatus parses one CLI session into the canonical
@@ -419,11 +418,11 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 			Mtime: mtime,
 		},
 	}
+	summaries := loadAntigravitySummaries(ctx, root)
+	status.summaryDigest = summaries.fingerprintDigest(id)
 	if parentCascadeID == "" {
 		// Without the reader sidecar, the summary store still names the
 		// conversation that started a sub-agent conversation.
-		summaries := loadAntigravitySummaries(ctx, root)
-		status.SummariesUnread = summaries.err != nil
 		parentCascadeID = summaries.parent(id)
 	}
 	if parentCascadeID != "" && !strings.EqualFold(parentCascadeID, id) {
@@ -1223,8 +1222,8 @@ func antigravityCompositeHashWithExtra(
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func antigravityCLICompositeHash(path, id, workspace string) (string, error) {
-	return antigravityCompositeHashWithExtra(
+func antigravityCLICompositeHash(ctx context.Context, path, id, workspace string) (string, error) {
+	hash, err := antigravityCompositeHashWithExtra(
 		path,
 		antigravityCLIProviderCompanionPaths(path),
 		func(h interface{ Write([]byte) (int, error) }) error {
@@ -1233,10 +1232,6 @@ func antigravityCLICompositeHash(path, id, workspace string) (string, error) {
 				filepath.Join(filepath.Dir(filepath.Dir(path)), "history.jsonl"),
 				strings.TrimPrefix(id, antigravityImplicitTag),
 			); err != nil {
-				return err
-			}
-			if err := loadAntigravitySummaries(context.Background(), filepath.Dir(filepath.Dir(path))).
-				writeFingerprint(h, strings.TrimPrefix(id, antigravityImplicitTag)); err != nil {
 				return err
 			}
 			if workspace == "" {
@@ -1252,6 +1247,11 @@ func antigravityCLICompositeHash(path, id, workspace string) (string, error) {
 			return err
 		},
 	)
+	if err != nil {
+		return "", err
+	}
+	summaries := loadAntigravitySummaries(ctx, filepath.Dir(filepath.Dir(path)))
+	return antigravityHashWithSummary(hash, summaries.fingerprintDigest(strings.TrimPrefix(id, antigravityImplicitTag))), nil
 }
 
 func antigravityCLIProviderCompanionPaths(path string) []string {

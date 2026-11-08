@@ -142,8 +142,7 @@ func (p *antigravityCLIProvider) Parse(
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
-	if req.Fingerprint.Hash != "" &&
-		(!status.SummariesUnread || antigravityFingerprintHolds(ctx, p, req)) {
+	if antigravityHashCoversSummary(req.Fingerprint.Hash, status.summaryDigest) {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
 	result := ParseResultOutcome{
@@ -521,7 +520,7 @@ func (s antigravityCLISourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, err
 	}
-	hash, err := antigravityCLICompositeHash(src.Path, src.ID, src.Workspace)
+	hash, err := antigravityCLICompositeHash(ctx, src.Path, src.ID, src.Workspace)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
