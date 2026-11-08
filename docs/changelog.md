@@ -39,8 +39,9 @@ The latest release is
 
 - Long-running syncs now report whether they are waiting for the engine lock
   or processing sources. `debug.log` includes operation IDs, separate lock-wait
-  and running times, and a heartbeat every 30 seconds. Recovery source counts
-  accumulate across processing pages. The new records contain aggregate counts
+  and running times, and a heartbeat every 30 seconds. Waiting operations
+  identify every engine-lock owner, including maintenance work. Recovery source
+  counts accumulate across processing pages. The new records contain aggregate counts
   without source paths or transcript contents.
 
 **Bug fixes**

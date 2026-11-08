@@ -623,7 +623,7 @@ type Engine struct {
 	goos                 string
 	subagentLinkPending  bool                 // protected by syncMu; retains failed global linking
 	trailerScanAttempts  map[string]time.Time // protected by syncMu; includes failed scans
-	syncMu               gosync.Mutex         // serializes all sync operations
+	syncMu               syncMutex            // serializes all sync operations
 	operationDiagnostics syncOperationDiagnostics
 	mu                   gosync.RWMutex
 	lastSync             time.Time

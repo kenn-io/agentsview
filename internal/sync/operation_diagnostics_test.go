@@ -49,7 +49,7 @@ func operationLogRecords(t *testing.T, output string) []map[string]string {
 		}
 		require.Equal(t, strconv.Itoa(os.Getpid()), record["pid"])
 		delete(record, "pid")
-		for _, key := range []string{"elapsed", "lock_wait", "running"} {
+		for _, key := range []string{"elapsed", "lock_wait", "running", "active_running"} {
 			value, ok := record[key]
 			if !ok {
 				continue
@@ -213,11 +213,91 @@ func TestWatcherDiagnosticsPreservePostSyncError(t *testing.T) {
 	}, records)
 }
 
+func TestMaintenanceLockOwnersAppearInWaitingDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		run      func(*Engine, func() error) error
+		wantKind string
+	}{
+		{name: "blocking", run: (*Engine).RunExclusive, wantKind: "sync.(*Engine).RunExclusive"},
+		{name: "try lock", run: (*Engine).TryRunExclusive, wantKind: "sync.(*Engine).TryRunExclusive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureOperationLogs(t)
+			engine := &Engine{}
+			entered, release := make(chan struct{}), make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				done <- tc.run(engine, func() error {
+					close(entered)
+					<-release
+					return nil
+				})
+			}()
+			t.Cleanup(func() {
+				close(release)
+				require.NoError(t, <-done)
+			})
+			<-entered
+			waiter := engine.beginSyncOperation(t.Context(), syncOperationScope{kind: "reconciliation"})
+			defer waiter.finish(t.Context(), nil)
+			waiter.writeLog(t.Context(), "heartbeat", nil)
+			records := operationLogRecords(t, logs.take())
+			require.Len(t, records, 2)
+			ownerID, err := strconv.ParseUint(records[1]["active_operation"], 10, 64)
+			require.NoError(t, err)
+			require.NotZero(t, ownerID, "every engine lock owner must register an operation")
+			assert.Equal(t, map[string]string{
+				"operation": strconv.FormatUint(waiter.id, 10), "kind": "reconciliation", "agent": "all",
+				"roots": "0", "paths": "0", "lost_events": "false", "full": "false",
+				"state": "heartbeat", "phase": "waiting", "elapsed": "duration",
+				"lock_wait": "duration", "running": "duration", "canceled": "false",
+				"error": "false", "pass": "0", "pages": "0", "sources_done": "0",
+				"sources_total": "0", "total_known": "false", "updated": "0",
+				"unchanged": "0", "errors": "0", "deferred": "0",
+				"active_operation": strconv.FormatUint(ownerID, 10), "active_kind": tc.wantKind,
+				"active_running": "duration",
+			}, records[1])
+		})
+	}
+}
+
+func TestEngineLockOwnershipSurvivesFailedTryAndClearsOnRelease(t *testing.T) {
+	logs := captureOperationLogs(t)
+	engine := &Engine{}
+	waiter := engine.beginSyncOperation(t.Context(), syncOperationScope{kind: "reconciliation"})
+	defer waiter.finish(t.Context(), nil)
+	logs.take()
+	require.NoError(t, engine.RunExclusive(func() error {
+		waiter.writeLog(t.Context(), "heartbeat", nil)
+		assert.False(t, engine.syncMu.TryLock())
+		waiter.writeLog(t.Context(), "heartbeat", nil)
+		return nil
+	}))
+	waiter.writeLog(t.Context(), "heartbeat", nil)
+	records := operationLogRecords(t, logs.take())
+	require.NotEmpty(t, records)
+	ownerID, err := strconv.ParseUint(records[0]["active_operation"], 10, 64)
+	require.NoError(t, err)
+	require.NotZero(t, ownerID)
+	type ownerRecord struct{ operation, kind string }
+	var owners []ownerRecord
+	for _, record := range records {
+		owners = append(owners, ownerRecord{record["active_operation"], record["active_kind"]})
+	}
+	assert.Equal(t, []ownerRecord{
+		{strconv.FormatUint(ownerID, 10), "sync.(*Engine).RunExclusive"},
+		{strconv.FormatUint(ownerID, 10), "sync.(*Engine).RunExclusive"},
+		{"0", "none"},
+	}, owners)
+}
+
 func TestSyncOperationHeartbeatReportsOwnerAndStops(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		logs := captureOperationLogs(t)
 		engine := &Engine{}
 		owner := engine.beginSyncOperation(t.Context(), syncOperationScope{kind: "watcher"})
+		engine.syncMu.Lock()
 		owner.acquiredLock()
 		synctest.Wait()
 		logs.take()
@@ -247,9 +327,12 @@ func TestSyncOperationHeartbeatReportsOwnerAndStops(t *testing.T) {
 			"sources_total": "0", "total_known": "false", "updated": "0",
 			"unchanged": "0", "errors": "0", "deferred": "0",
 			"active_operation": strconv.FormatUint(owner.id, 10), "active_kind": "watcher",
+			"active_running": "duration",
 		}}, waiting)
 
 		owner.finish(t.Context(), nil)
+		engine.syncMu.Unlock()
+		engine.syncMu.Lock()
 		waiter.acquiredLock()
 		waiter.beginReconciliation()
 		waiter.discovered(260, true)
@@ -267,6 +350,7 @@ func TestSyncOperationHeartbeatReportsOwnerAndStops(t *testing.T) {
 		assert.NotContains(t, output, "kind=watcher")
 
 		waiter.finish(t.Context(), nil)
+		engine.syncMu.Unlock()
 		logs.take()
 		time.Sleep(time.Minute)
 		synctest.Wait()
@@ -316,7 +400,8 @@ func TestSyncOperationCancellationKeepsExclusiveWorkUnchanged(t *testing.T) {
 				"unchanged": "0", "errors": "0", "deferred": "0",
 			}
 			if tc.canceled {
-				finished["active_operation"], finished["active_kind"] = "0", "untracked"
+				finished["active_operation"], finished["active_kind"] = "0", "none"
+				finished["active_running"] = "duration"
 			}
 			assert.Equal(t, []map[string]string{
 				{

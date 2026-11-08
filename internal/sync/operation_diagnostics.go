@@ -51,6 +51,7 @@ type syncOperationProgress struct {
 
 type syncOperation struct {
 	owner   *syncOperationDiagnostics
+	lock    *syncMutex
 	id      uint64
 	scope   syncOperationScope
 	started time.Time
@@ -67,6 +68,7 @@ type syncOperation struct {
 func (e *Engine) beginSyncOperation(ctx context.Context, scope syncOperationScope) *syncOperation {
 	op := &syncOperation{
 		owner: &e.operationDiagnostics,
+		lock:  &e.syncMu,
 		id:    syncOperationSequence.Add(1), scope: scope, started: time.Now(),
 		done: make(chan struct{}), stopped: make(chan struct{}),
 		progress: syncOperationProgress{phase: "waiting"},
@@ -96,6 +98,9 @@ func (op *syncOperation) acquiredLock() {
 	op.acquired = time.Now()
 	op.progress.phase = "processing"
 	op.mu.Unlock()
+	op.lock.owner.Store(&syncLockOwner{
+		operation: op.id, kind: op.scope.kind, acquired: op.acquired,
+	})
 	op.owner.active.Store(op)
 }
 
@@ -215,11 +220,12 @@ func (op *syncOperation) writeLog(ctx context.Context, state string, err error) 
 		progress.totalKnown, progress.updated, progress.unchanged, progress.errors, progress.deferred,
 	)
 	if acquired.IsZero() {
-		activeID, activeKind := uint64(0), syncOperationKind("untracked")
-		if active := op.owner.active.Load(); active != nil {
-			activeID, activeKind = active.id, active.scope.kind
+		activeID, activeKind, activeRunning := uint64(0), syncOperationKind("none"), time.Duration(0)
+		if active := op.lock.owner.Load(); active != nil {
+			activeID, activeKind = active.operation, active.kind
+			activeRunning = time.Since(active.acquired)
 		}
-		message += fmt.Sprintf(" active_operation=%d active_kind=%s", activeID, activeKind)
+		message += fmt.Sprintf(" active_operation=%d active_kind=%s active_running=%s", activeID, activeKind, activeRunning.Round(time.Millisecond))
 	}
 	log.Print(message)
 }

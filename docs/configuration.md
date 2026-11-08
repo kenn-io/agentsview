@@ -2245,16 +2245,16 @@ to one process and restart from the beginning when that process restarts.
 | `lost_events`, `full` | Whether the request reports lost events or explicitly requests full coverage. |
 | `phase` | The current stage, such as waiting, discovery, processing, persistence or finalization. |
 | `elapsed`, `lock_wait`, `running` | Total elapsed time, time before acquiring the engine lock, and time since acquiring it. Running time includes any post-sync work within the same lock interval. |
-| `active_operation`, `active_kind` | The observed lock owner while this operation waits. `active_operation=0 active_kind=untracked` means the owner is not instrumented or has not yet registered; it does not prove the lock is free. |
+| `active_operation`, `active_kind`, `active_running` | The observed engine-lock owner's operation ID, kind and time since acquisition. Maintenance without lifecycle records uses its Go function identifier as the kind. `active_operation=0 active_kind=none` means no owner was observed at that instant; the lock can be free or transferring between owners. |
 | `pass`, `pages`, `sources_done`, `sources_total` | Cumulative reconciliation counts within the operation. Source progress does not reset at each processing page. Collected sources are not necessarily committed sessions. |
 | `total_known` | Whether the latest reconciliation pass obtained a source count from its discovery spool. During discovery, or if that diagnostic query fails, the total is unknown. Grouped operations add each pass's total as discovery completes. |
 | `updated`, `unchanged`, `errors`, `deferred` | Session outcomes from completed work. Reconciliation outcomes update after each page and include final pass errors when the pass returns. |
 | `canceled`, `error` | Whether the context ended or the operation returned an error. `state=finished` alone does not mean the operation succeeded. |
 
 The diagnostics do not log source paths, session IDs, prompts or transcript
-contents. They do not change recovery, retry or cancellation decisions. Some
-maintenance and legacy entry points are not instrumented and can appear as an
-untracked lock owner. Detailed source counters cover reconciliation; other
+contents. They do not change recovery, retry or cancellation decisions. Every
+engine-lock acquisition registers its owner, including maintenance and legacy
+entry points without operation lifecycle records. Detailed source counters cover reconciliation; other
 operation types can report `total_known=false` throughout.
 
 ### Friction Log
