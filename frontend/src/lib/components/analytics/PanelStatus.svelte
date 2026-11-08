@@ -33,17 +33,6 @@
     gap: 8px;
   }
 
-  /* Button's busy spinner would cover and fade the short "Retry" label;
-     set it beside the label instead and keep the label legible. */
-  .error :global(.kit-button > .kit-button__busy) {
-    position: static;
-    order: -1;
-  }
-
-  .error :global(.kit-button.kit-button--busy > .kit-button__label) {
-    opacity: 1;
-  }
-
   .loading {
     color: var(--text-muted);
     font-size: 12px;
