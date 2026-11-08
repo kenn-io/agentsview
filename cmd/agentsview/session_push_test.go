@@ -116,27 +116,33 @@ func TestPushSessionCommandExactGraph(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	var requests atomic.Int32
 	received := make(chan capturedPush, 1)
+	capture := func(result capturedPush) {
+		select {
+		case received <- result:
+		default: // The request count assertion reports duplicate requests.
+		}
+	}
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		if r.URL.Path != "/mounted/api/v1/sessions/ingest" ||
 			r.Header.Get("Authorization") != "Bearer fixture-token" {
-			received <- capturedPush{err: fmt.Errorf("unexpected push request path %q or authorization header", r.URL.Path)}
+			capture(capturedPush{err: fmt.Errorf("unexpected push request path %q or authorization header", r.URL.Path)})
 			http.Error(w, "unexpected push request", http.StatusBadRequest)
 			return
 		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			received <- capturedPush{err: err}
+			capture(capturedPush{err: err})
 			http.Error(w, "cannot read pushed session", http.StatusBadRequest)
 			return
 		}
 		receipt, write, err := artifact.DecodeSessionPush(body)
 		if err != nil {
-			received <- capturedPush{err: err}
+			capture(capturedPush{err: err})
 			http.Error(w, "invalid pushed session", http.StatusBadRequest)
 			return
 		}
-		received <- capturedPush{receipt: receipt, write: write}
+		capture(capturedPush{receipt: receipt, write: write})
 		_, _ = w.Write([]byte("{\"session_id\":\"codex:chosen\",\"agent\":\"codex\",\"status\":\"created\"}"))
 	}))
 	defer remote.Close()
