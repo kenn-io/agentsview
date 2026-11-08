@@ -393,6 +393,7 @@ jobs:
         if: runner.os == 'Windows' && steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
         with:
+          release: false
           msystem: MINGW64
           update: false
           install: ${{ env.MSYS2_PACKAGES }}
@@ -649,6 +650,7 @@ jobs:
         if: steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
         with:
+          release: false
           msystem: MINGW64
           update: false
           install: mingw-w64-x86_64-gcc
@@ -832,6 +834,7 @@ jobs:
         if: steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
         with:
+          release: false
           msystem: MINGW64
           update: false
           install: mingw-w64-x86_64-gcc
