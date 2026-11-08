@@ -11194,7 +11194,12 @@ func (e *Engine) collectAndBatchWithOptions(
 		if !e.discardWritesOnCancel {
 			completionCtx = context.WithoutCancel(ctx)
 		}
-		if err := e.validateSourceSessionOwnership(completionCtx, r.processResult); err != nil {
+		allReserved, ownershipErr := e.filterReservedSourceMembers(completionCtx, &r.processResult, r.agent)
+		if allReserved || ownershipErr != nil {
+			err := ownershipErr
+			if allReserved {
+				err = db.ErrSessionPushConflict
+			}
 			if errors.Is(err, db.ErrSessionPushConflict) {
 				stats.RecordSkip()
 				stats.filesOK++
@@ -11208,6 +11213,12 @@ func (e *Engine) collectAndBatchWithOptions(
 			e.noteSQLiteContainerResult(r.containerResultPath(), false)
 			r.releaseAll()
 			continue
+		}
+		if r.sourceProofWithheld(false) && !proofWithheld {
+			proofWithheld = true
+			if tracker := reconciliationBaselineTrackerFor(ctx); tracker != nil {
+				tracker.addNonAuthoritativeScope(r.agent, r.path)
+			}
 		}
 		sourceAllowsParserExclusions := e.sourceAllowsParserExclusions(
 			r.processResult,
@@ -21985,7 +21996,11 @@ func (e *Engine) processAndWriteSessionFile(
 		}
 		return false, sessionsChanged, res.err
 	}
-	if err := e.validateSourceSessionOwnership(ctx, res); err != nil {
+	allReserved, err := e.filterReservedSourceMembers(ctx, &res, file.Agent)
+	if allReserved {
+		return false, sessionsChanged, db.ErrSessionPushConflict
+	}
+	if err != nil {
 		return false, sessionsChanged, err
 	}
 	if res.sourceCwdResolution.State != parser.SourceCwdUnspecified {

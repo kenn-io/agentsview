@@ -7,6 +7,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func (e *Engine) sessionArchiveProvenance(session *db.Session, native string) (*db.ArchiveSessionProvenance, error) {
@@ -66,6 +67,54 @@ func (e *Engine) validateSourceSessionOwnership(ctx context.Context, res process
 		return e.parserExclusionPolicy(ctx, excluded)
 	}
 	return nil
+}
+
+// filterReservedSourceMembers allows independent members of a shared source to
+// progress while leaving a pushed snapshot untouched. Claude-format DAGs must
+// still be admitted as a whole, and partial sources cannot prove freshness.
+func (e *Engine) filterReservedSourceMembers(ctx context.Context, res *processResult, agent parser.AgentType) (bool, error) {
+	if err := e.validateSourceSessionOwnership(ctx, *res); err == nil {
+		return false, nil
+	} else if !errors.Is(err, db.ErrSessionPushConflict) || res.incremental != nil {
+		return false, err
+	} else if sourceRequiresAtomicDAGCompletion(agent, len(res.results)) {
+		return false, fmt.Errorf("atomic source contains a reserved session: %v", err)
+	}
+	kept := make([]parser.ParseResult, 0, len(res.results))
+	for _, result := range res.results {
+		one := *res
+		one.results = []parser.ParseResult{result}
+		one.excludedSessionIDs = nil
+		if err := e.validateSourceSessionOwnership(ctx, one); err != nil {
+			if errors.Is(err, db.ErrSessionPushConflict) {
+				continue
+			}
+			return false, err
+		}
+		kept = append(kept, result)
+	}
+	if len(kept) == len(res.results) {
+		return false, db.ErrSessionPushConflict // e.g. an excluded ID is reserved
+	}
+	if len(kept) == 0 {
+		if len(res.excludedSessionIDs) > 0 || len(res.sourceMissingMembers) > 0 {
+			return false, errors.New("reserved source also contains other members")
+		}
+		return true, nil
+	}
+	partial := *res
+	partial.results = kept
+	// Do not delete or tombstone members based on a partial source view.
+	partial.excludedSessionIDs = nil
+	partial.sourceMissingMembers = nil
+	if err := e.validateSourceSessionOwnership(ctx, partial); err != nil {
+		return false, err
+	}
+	partial.needsRetry = true
+	partial.noCacheSkip = true
+	partial.suppressPresenceSweep = true
+	*res = partial
+	return false, nil
 }
 
 func (e *Engine) writeAttachedStaged(ctx context.Context, prepared preparedSessionWrite, pw pendingWrite, provenance *db.ArchiveSessionProvenance) error {

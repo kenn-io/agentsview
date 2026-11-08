@@ -62,3 +62,29 @@ func TestSessionPushRebuildSkipClassificationPreservesFailureGuard(t *testing.T)
 		})
 	}
 }
+
+func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
+	d := openTestDB(t)
+	receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+	write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: "cursor", Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true}
+	_, err := d.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
+	t.Cleanup(engine.Close)
+	jobs := make(chan syncJob, 1)
+	jobs <- syncJob{agent: parser.AgentCursor, path: "fixture-source", processResult: processResult{results: []parser.ParseResult{
+		{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentCursor, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "replacement"}}},
+		{Session: parser.ParsedSession{ID: "independent", Agent: parser.AgentCursor, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "independent content"}}},
+	}}}
+	close(jobs)
+	stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
+	assert.Zero(t, stats.Failed)
+	reserved, err := d.GetAllMessages(t.Context(), "reserved")
+	require.NoError(t, err)
+	require.Len(t, reserved, 1)
+	assert.Equal(t, "accepted snapshot", reserved[0].Content)
+	independent, err := d.GetAllMessages(t.Context(), "independent")
+	require.NoError(t, err)
+	require.Len(t, independent, 1)
+	assert.Equal(t, "independent content", independent[0].Content)
+}

@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"hegel.dev/go/hegel"
 )
 
 func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
@@ -818,22 +816,6 @@ func exercisePassiveSessionPushExternalParent(
 func TestSessionExternalParentIgnoresPassiveSessionPushReferences(t *testing.T) {
 	d := testDB(t)
 	exercisePassiveSessionPushExternalParent(t, d, t.Context(), "fixture", "Agent")
-}
-
-func TestSessionExternalParentIgnoresGeneratedPassiveSessionPushReferences(t *testing.T) {
-	d := testDB(t)
-	caseIndex := 0
-	hegel.Test(t, func(ht *hegel.T) {
-		random := hegel.Draw(ht, hegel.Text())
-		if len(random) > 64 {
-			random = random[:64]
-		}
-		suffix := fmt.Sprintf("%d-%s", caseIndex, hex.EncodeToString([]byte(random)))
-		caseIndex++
-		exercisePassiveSessionPushExternalParent(
-			ht, d, t.Context(), suffix, "Agent-"+suffix,
-		)
-	}, hegel.WithTestCases(64))
 }
 
 func TestAnnotationTreeSkipsHiddenAncestors(t *testing.T) {

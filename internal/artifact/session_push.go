@@ -179,6 +179,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		return zero, noWrite, errors.New("segment closure mismatch")
 	}
 	var messages []db.Message
+	ordinals := make(map[int]struct{})
 	var nested nestedCollectionCounts
 	var decodedBytes int64
 	for i, segment := range segments {
@@ -197,9 +198,13 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 			if err := json.Unmarshal(record, &message, json.RejectUnknownMembers(true)); err != nil {
 				return zero, noWrite, err
 			}
-			if message.Ordinal != len(messages) {
-				return zero, noWrite, errors.New("message ordinals must be contiguous from zero")
+			if message.Ordinal < 0 {
+				return zero, noWrite, errors.New("message ordinal must be nonnegative")
 			}
+			if _, exists := ordinals[message.Ordinal]; exists {
+				return zero, noWrite, errors.New("duplicate message ordinal")
+			}
+			ordinals[message.Ordinal] = struct{}{}
 			for callIndex, call := range message.ToolCalls {
 				if call.CallIndex != callIndex {
 					return zero, noWrite, errors.New("invalid tool call coordinate")
@@ -233,8 +238,10 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		return zero, noWrite, err
 	}
 	for _, event := range m.UsageEvents {
-		if event.MessageOrdinal != nil && (*event.MessageOrdinal < 0 || *event.MessageOrdinal >= len(messages)) {
-			return zero, noWrite, errors.New("usage references missing message")
+		if event.MessageOrdinal != nil {
+			if _, exists := ordinals[*event.MessageOrdinal]; !exists {
+				return zero, noWrite, errors.New("usage references missing message")
+			}
 		}
 	}
 	// Hash the canonical validated manifest and ordered dependency digests, never

@@ -47,6 +47,30 @@ func TestSessionPushPreservesCapabilities(t *testing.T) {
 	assert.True(t, write.Session.HasContextData)
 }
 
+func TestSessionPushSparseOrdinalsAndToolResultCarrier(t *testing.T) {
+	ordinal := 5
+	session := db.Session{ID: "cortex:sample", Agent: "cortex", Machine: "source", MessageCount: 3, UserMessageCount: 1}
+	data := db.ArtifactExportData{
+		Messages: []db.Message{
+			{Ordinal: 0, Role: "user", Content: "question"},
+			{Ordinal: 3, Role: "user", SourceSubtype: "tool_result", Content: "tool output"},
+			{Ordinal: 5, Role: "assistant", Content: "answer"},
+		},
+		UsageEvents: []db.UsageEvent{{SessionID: session.ID, MessageOrdinal: &ordinal, Source: "session", DedupKey: "turn"}},
+	}
+	packet, err := encodeSessionPushData(t.Context(), "source", session, data)
+	require.NoError(t, err)
+	_, write, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	require.Len(t, write.Messages, 3)
+	assert.Equal(t, []int{0, 3, 5}, []int{write.Messages[0].Ordinal, write.Messages[1].Ordinal, write.Messages[2].Ordinal})
+	assert.Equal(t, "tool_result", write.Messages[1].SourceSubtype)
+	assert.Equal(t, 1, write.Session.UserMessageCount)
+	require.Len(t, write.UsageEvents, 1)
+	require.NotNil(t, write.UsageEvents[0].MessageOrdinal)
+	assert.Equal(t, 5, *write.UsageEvents[0].MessageOrdinal)
+}
+
 func TestSessionPushCanceledContext(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{

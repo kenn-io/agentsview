@@ -169,7 +169,7 @@ func sendSessionPush(ctx context.Context, base, token string, payload []byte, id
 		return nil
 	})
 	if err != nil {
-		return result, errors.New("push: cannot contact receiver with the configured transport")
+		return result, errors.New("push: cannot contact receiver")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
