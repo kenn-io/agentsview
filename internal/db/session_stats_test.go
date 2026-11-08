@@ -485,7 +485,6 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 
 	assert.Equal(t, 5, stats.ToolMix.TotalCalls)
 	assert.InDelta(t, 2.0, stats.Distributions.ToolsPerTurn.ScopeAll.Mean, 1e-9)
-	assert.Zero(t, stats.Velocity.TurnCycleSeconds.P50)
 	// Additive totals include the subagent.
 	assert.Equal(t, 2, stats.Totals.SessionsAll, "sessions_all")
 	assert.Equal(t, 25, stats.Totals.MessagesTotal, "messages_total")

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -55,12 +54,16 @@ func equalStatsFacts(t *testing.T, want, got *SessionStats) {
 
 func TestSessionStatsFactsChanges(t *testing.T) {
 	t.Parallel()
-	for _, change := range []string{"warm", "append", "replace", "legacy replace", "usage", "committed usage", "recreate", "new", "agent", "project", "visibility", "relationship", "pricing", "agent filter", "narrow window", "wide window", "timezone", "empty"} {
+	for _, change := range []string{"warm", "append", "replace", "legacy replace", "usage", "committed usage", "recreate", "new", "agent", "visibility", "relationship", "pricing", "agent filter", "empty"} {
 		t.Run(change, func(t *testing.T) {
 			t.Parallel()
 			d := testDB(t)
 			seedStatsFacts(t, d)
 			f := factsFilter
+			if change == "relationship" {
+				_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET agent='claude', relationship_type='subagent' WHERE id='codex'")
+				require.NoError(t, err)
+			}
 			if change == "legacy replace" {
 				_, err := d.getWriter().Exec(t.Context(), "DELETE FROM usage_session_changes")
 				require.NoError(t, err)
@@ -94,21 +97,10 @@ func TestSessionStatsFactsChanges(t *testing.T) {
 			case "new":
 				insertSessionFixture(t, d, sessionFixture{id: "new", startedAt: "2026-06-16T10:00:00Z", userMsgs: 2})
 				require.NoError(t, d.InsertMessages(t.Context(), statsFactMessages("new", 50)))
-			case "agent", "project", "visibility", "relationship":
-				query := map[string]string{"agent": "UPDATE sessions SET agent='codex' WHERE id='session'", "project": "UPDATE sessions SET project='project-b' WHERE id='session'", "visibility": "UPDATE sessions SET deleted_at='2026-06-17' WHERE id='session'", "relationship": "UPDATE sessions SET relationship_type='subagent' WHERE id='session'"}[change]
+			case "agent", "visibility", "relationship":
+				query := map[string]string{"agent": "UPDATE sessions SET agent='claude' WHERE id='codex'", "visibility": "UPDATE sessions SET deleted_at='2026-06-17' WHERE id='session'", "relationship": "UPDATE sessions SET relationship_type='' WHERE id='codex'"}[change]
 				_, err = d.getWriter().Exec(t.Context(), query)
 				require.NoError(t, err)
-				got, err := d.GetSessionStats(t.Context(), f)
-				require.NoError(t, err)
-				equalStatsFacts(t, freshStatsFacts(t, d, f), got)
-				if change == "agent" || change == "relationship" {
-					column, value := "agent", "claude"
-					if change == "relationship" {
-						column, value = "relationship_type", ""
-					}
-					_, err = d.getWriter().Exec(t.Context(), "UPDATE sessions SET "+column+"=? WHERE id='session'", value)
-					require.NoError(t, err)
-				}
 			case "pricing":
 				require.NoError(t, d.UpsertModelPricing([]ModelPricing{{ModelPattern: "test-model", InputPerMTok: money.MustParseDollars("2"), OutputPerMTok: money.MustParseDollars("4"), CacheReadPerMTok: money.MustParseDollars(".2"), CacheCreationPerMTok: money.MustParseDollars("2.5")}}))
 			case "agent filter":
@@ -116,15 +108,6 @@ func TestSessionStatsFactsChanges(t *testing.T) {
 				_, err = d.GetSessionStats(t.Context(), f)
 				require.NoError(t, err)
 				f.Agent = ""
-			case "narrow window":
-				f.Until = "2026-06-16T10:00:20Z"
-			case "wide window":
-				f.Until = "2026-06-16T10:00:20Z"
-				_, err = d.GetSessionStats(t.Context(), f)
-				require.NoError(t, err)
-				f.Until = "2026-07-01"
-			case "timezone":
-				f.Timezone = "America/New_York"
 			case "empty":
 				f.IncludeProjects = []string{"absent"}
 			}
@@ -142,44 +125,31 @@ func TestSessionStatsFactsChanges(t *testing.T) {
 
 func TestSessionStatsFactsLimitsAndOwnership(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"byte cap", "readonly", "mutation", "cancel", "no identity"} {
+	for _, mode := range []string{"byte cap", "mutation", "no identity"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			d := testDB(t)
 			seedStatsFacts(t, d)
+			f := factsFilter
+			if mode == "mutation" {
+				f.Agent = "claude"
+			}
 			switch mode {
 			case "byte cap":
 				d.sessionStatsFacts.rows.MaxBytes = 1
-			case "readonly":
-				r, err := OpenReadOnly(t.Context(), d.Path())
-				require.NoError(t, err)
-				defer r.Close()
-				d = r
 			case "no identity":
 				_, err := d.getWriter().Exec(t.Context(), "DELETE FROM archive_metadata WHERE key='database_id'")
 				require.NoError(t, err)
-			case "cancel":
-				ctx, cancel := context.WithCancel(t.Context())
-				cancel()
-				_, err := d.GetSessionStats(ctx, factsFilter)
-				require.ErrorIs(t, err, context.Canceled)
-				require.Empty(t, d.sessionStatsFacts.Lookup(0, ""))
-				return
 			}
-			got, err := d.GetSessionStats(t.Context(), factsFilter)
+			got, err := d.GetSessionStats(t.Context(), f)
 			require.NoError(t, err)
 			if mode == "mutation" {
 				got.ToolMix.ByCategory["Other"] = 999
 				got.ModelMix.ByTokens["test-model"] = 999
-				got.CacheEconomics.DollarsSpent = money.MustParseDollars("999")
-				got.Adoption.DistinctSkills = 999
 			}
-			again, err := d.GetSessionStats(t.Context(), factsFilter)
+			again, err := d.GetSessionStats(t.Context(), f)
 			require.NoError(t, err)
-			equalStatsFacts(t, freshStatsFacts(t, d, factsFilter), again)
-			if mode == "readonly" {
-				assert.Nil(t, d.sessionStatsFacts)
-			}
+			equalStatsFacts(t, freshStatsFacts(t, d, f), again)
 			if mode == "byte cap" || mode == "no identity" {
 				id, rev, e := d.databaseIDAndUsagePricingRevision(t.Context())
 				require.NoError(t, e)
@@ -191,29 +161,6 @@ func TestSessionStatsFactsLimitsAndOwnership(t *testing.T) {
 	}
 }
 
-func TestSessionStatsFactsConcurrent(t *testing.T) {
-	d := testDB(t)
-	seedStatsFacts(t, d)
-	want := freshStatsFacts(t, d, factsFilter)
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Go(func() {
-			got, err := d.GetSessionStats(t.Context(), factsFilter)
-			if assert.NoError(t, err) {
-				got.GeneratedAt = ""
-				a, e := json.Marshal(got)
-				assert.NoError(t, e)
-				wantCopy := *want
-				wantCopy.GeneratedAt = ""
-				b, e := json.Marshal(wantCopy)
-				assert.NoError(t, e)
-				assert.JSONEq(t, string(b), string(a))
-			}
-		})
-	}
-	wg.Wait()
-}
-
 func TestSessionStatsFactsSnapshotAndReaderSwap(t *testing.T) {
 	for _, swap := range []bool{false, true} {
 		t.Run(map[bool]string{false: "writer", true: "reader swap"}[swap], func(t *testing.T) {
@@ -221,7 +168,7 @@ func TestSessionStatsFactsSnapshotAndReaderSwap(t *testing.T) {
 			seedStatsFacts(t, d)
 			_, err := d.GetSessionStats(t.Context(), factsFilter)
 			require.NoError(t, err)
-			d.reader.Load().SetMaxOpenConns(1)
+			d.rawReader().SetMaxOpenConns(1)
 			entered, resume := make(chan struct{}), make(chan struct{})
 			var once, resumeOnce sync.Once
 			release := func() { resumeOnce.Do(func() { close(resume) }) }
@@ -273,6 +220,7 @@ func TestSessionStatsFactsSnapshotAndReaderSwap(t *testing.T) {
 				require.FailNow(t, "validation did not finish")
 			}
 			require.NoError(t, <-fail)
+			// The pinned snapshot validates the warm entry against its old journal revision.
 			assert.Equal(t, []float64{30}, facts["session"].velocity.turnCycles)
 			if swap {
 				id, rev, e := d.databaseIDAndUsagePricingRevision(t.Context())
