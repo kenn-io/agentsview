@@ -204,11 +204,23 @@ func TestBackfillVersionEightMigrationPreservesQueueAndReceipt(t *testing.T) {
 	_, err = store.AcknowledgeGeneration(t.Context(), "device-a", gen.CaptureID, receipt)
 	require.NoError(t, err)
 	// A queued tombstone retains its acknowledged predecessor independently of
-	// the compacted receipt. Strip only new, empty tables to obtain a v8 fixture.
+	// the compacted receipt. Remove later schema additions to obtain a v8 fixture.
 	queued, found, err := store.QueueTombstone(t.Context(), gen.Source)
 	require.NoError(t, err)
 	require.True(t, found)
-	for _, statement := range []string{`DROP INDEX raw_source_base_objects_object_idx`, `DROP TRIGGER backfill_generation_deleted`, `DROP TABLE backfill_members`, `DROP TABLE backfill_roots`, `DROP TABLE backfill_providers`, `DROP TABLE backfill_runs`, `ALTER TABLE outbox_config DROP COLUMN destination`, `PRAGMA user_version=8`} {
+	for _, statement := range []string{
+		`UPDATE outbox_generations SET manifest_schema_version=1, root_aliases_json='[]'`,
+		`DROP INDEX raw_source_base_objects_object_idx`,
+		`DROP TRIGGER backfill_generation_deleted`,
+		`DROP TABLE backfill_members`,
+		`DROP TABLE backfill_roots`,
+		`DROP TABLE backfill_providers`,
+		`DROP TABLE backfill_runs`,
+		`ALTER TABLE outbox_config DROP COLUMN destination`,
+		`ALTER TABLE outbox_generations DROP COLUMN manifest_schema_version`,
+		`ALTER TABLE outbox_generations DROP COLUMN root_aliases_json`,
+		`PRAGMA user_version=8`,
+	} {
 		_, err = store.db.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
 	}
@@ -264,7 +276,19 @@ func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "migrated.db")
 	store, err := Open(t.Context(), path)
 	require.NoError(t, err)
-	for _, statement := range []string{`DROP INDEX raw_source_base_objects_object_idx`, `DROP TRIGGER backfill_generation_deleted`, `DROP TABLE backfill_members`, `DROP TABLE backfill_roots`, `DROP TABLE backfill_providers`, `DROP TABLE backfill_runs`, `ALTER TABLE outbox_config DROP COLUMN destination`, `PRAGMA user_version=8`} {
+	for _, statement := range []string{
+		`UPDATE outbox_generations SET manifest_schema_version=1, root_aliases_json='[]'`,
+		`DROP INDEX raw_source_base_objects_object_idx`,
+		`DROP TRIGGER backfill_generation_deleted`,
+		`DROP TABLE backfill_members`,
+		`DROP TABLE backfill_roots`,
+		`DROP TABLE backfill_providers`,
+		`DROP TABLE backfill_runs`,
+		`ALTER TABLE outbox_config DROP COLUMN destination`,
+		`ALTER TABLE outbox_generations DROP COLUMN manifest_schema_version`,
+		`ALTER TABLE outbox_generations DROP COLUMN root_aliases_json`,
+		`PRAGMA user_version=8`,
+	} {
 		_, err = store.db.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
 	}

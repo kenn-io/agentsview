@@ -74,6 +74,9 @@ type ProviderConfig struct {
 	// path (Aider) use it to seed those IDs from the canonical remote path
 	// rather than the changing temp path. Most providers ignore it.
 	PathRewriter func(string) string
+	// StoredPathResolver maps captured client paths to materialized entries.
+	// It is available during discovery and raw plan matching, before Parse.
+	StoredPathResolver func(string) (string, bool)
 	// SQLiteContainerListsWatermarkOnly authorizes a shared SQLite container
 	// at dbPath to use its complete-membership, session/project-watermark
 	// listing for this discovery pass. The caller's container gate decides

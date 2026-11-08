@@ -978,9 +978,10 @@ func TestCodexCloudToolTextUpgradeReparsesInPlace(t *testing.T) {
 }
 
 func TestPiSubagentRelationshipUpgradeReparsesInPlace(t *testing.T) {
-	scope := db.ScopedDataVersionProviders(155, 156)
+	scope := db.ScopedDataVersionProviders(166, 167)
 	assert.ElementsMatch(t, []parser.AgentType{
-		parser.AgentPi, parser.AgentOMO, parser.AgentPrimeAgent, parser.AgentStepCode,
+		parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent,
+		parser.AgentStepCode,
 	}, scope)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))

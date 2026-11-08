@@ -15,17 +15,24 @@ import (
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
-// downgradeToVersionNine strips what version 10 added so the next Open
-// replays that migration against otherwise current state.
-func downgradeToVersionNine(t *testing.T, store *Store) {
+// downgradeToVersionNine strips schema changes after version 9 and returns a
+// transport snapshot with the legacy manifest metadata values.
+func downgradeToVersionNine(t *testing.T, store *Store) map[string][]string {
 	t.Helper()
+	_, err := store.db.ExecContext(t.Context(), `UPDATE outbox_generations
+		SET root_aliases_json = '[]', manifest_schema_version = 1`)
+	require.NoError(t, err)
+	transport := checkpointRows(t, store.db)
 	for _, statement := range []string{
 		`DROP INDEX raw_source_base_objects_object_idx`,
+		`ALTER TABLE outbox_generations DROP COLUMN manifest_schema_version`,
+		`ALTER TABLE outbox_generations DROP COLUMN root_aliases_json`,
 		`PRAGMA user_version = 9`,
 	} {
 		_, err := store.db.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
 	}
+	return transport
 }
 
 // openCheckpointForTest closes the store when the test ends. Close is
@@ -284,12 +291,22 @@ func TestVersionNineUpgradePreservesTransportState(t *testing.T) {
 	}
 	acknowledgeNextTestGeneration(t, store, receipt)
 	queued := commitTestGeneration(t, store, 2, root, "source-queued", "", pending)
-	before := checkpointRows(t, store.db)
+	_, err = store.db.ExecContext(t.Context(), `UPDATE outbox_generations
+		SET root_aliases_json = '[]', manifest_schema_version = 1`)
+	require.NoError(t, err)
+	var legacyVersion int
+	var legacyAliases string
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT
+		manifest_schema_version, root_aliases_json FROM outbox_generations
+		WHERE capture_id = ?`, queued.CaptureID,
+	).Scan(&legacyVersion, &legacyAliases))
+	assert.Equal(t, 1, legacyVersion)
+	assert.Equal(t, "[]", legacyAliases)
+	before := downgradeToVersionNine(t, store)
 	require.NotEmpty(t, before["raw_source_base_objects"])
 	require.NotEmpty(t, before["outbox_entry_objects"])
 	require.NotEmpty(t, before["backfill_runs"])
 
-	downgradeToVersionNine(t, store)
 	require.NoError(t, store.Close())
 	store = openCheckpointForTest(t, path)
 

@@ -70,6 +70,10 @@ type RawCapturePlan struct {
 	CaptureRoot    string
 	SourceKey      string
 	Entries        []RawCaptureEntry
+	// RootAliases are other absolute client-side spellings of CaptureRoot.
+	// They are persisted as lookup prefixes so hosted replay can resolve paths
+	// recorded through a configured-root symlink without probing the client.
+	RootAliases []string
 	// SidecarRoots lists additional local directories whose files a
 	// provider reads as inputs for this source, such as a second Codex
 	// home's session_index.jsonl. Entries may live under any of them.
@@ -315,6 +319,20 @@ func validateRawCapturePlan(
 	if err != nil {
 		return RawCapturePlan{}, err
 	}
+	rootAliases := make([]string, 0, len(plan.RootAliases))
+	seenRootAliases := make(map[string]struct{}, len(plan.RootAliases))
+	for _, alias := range plan.RootAliases {
+		validated, err := validateRawCaptureRootAlias(alias, captureRoot)
+		if err != nil {
+			return RawCapturePlan{}, err
+		}
+		if _, exists := seenRootAliases[validated]; exists {
+			return RawCapturePlan{}, invalidRawCapturePlan("root alias %q is duplicated", validated)
+		}
+		seenRootAliases[validated] = struct{}{}
+		rootAliases = append(rootAliases, validated)
+	}
+	slices.Sort(rootAliases)
 	if len(plan.Entries) == 0 {
 		return RawCapturePlan{}, invalidRawCapturePlan("source has no entries")
 	}
@@ -398,8 +416,26 @@ func validateRawCapturePlan(
 		CaptureRoot:    captureRoot,
 		SourceKey:      plan.SourceKey,
 		Entries:        entries,
+		RootAliases:    rootAliases,
 		SidecarRoots:   sidecarRoots,
 	}, nil
+}
+
+func validateRawCaptureRootAlias(alias, captureRoot string) (string, error) {
+	alias = filepath.Clean(alias)
+	if !filepath.IsAbs(alias) {
+		return "", invalidRawCapturePlan("root alias must be absolute")
+	}
+	resolved, err := filepath.EvalSymlinks(alias)
+	if err != nil {
+		return "", invalidRawCapturePlan(
+			"resolve root alias: %s", rawCaptureFilesystemError(err),
+		)
+	}
+	if filepath.Clean(resolved) != captureRoot {
+		return "", invalidRawCapturePlan("root alias does not resolve to capture root")
+	}
+	return alias, nil
 }
 
 func validateRawCaptureRoot(kind, root string) (string, error) {
