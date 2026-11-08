@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -954,6 +955,10 @@ func TestUsageFillEnsureRefillsOnlyChangedSessions(t *testing.T) {
 }
 
 func TestUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
+	synctest.Test(t, testUsageFillCoordinatorSharesDetachedSessionWork)
+}
+
+func testUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
 	database := usageCandidateFixture(t)
 	snapshot, err := database.captureUsageQuery(
 		t.Context(), UsageFilter{}, usageQueryKindToken,
@@ -974,6 +979,7 @@ func TestUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
 		},
 	}
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	firstDone := make(chan error, 1)
 	go func() {
 		_, fillErr := cache.fill.Ensure(ctx, snapshot.Versions[:1], 0)
@@ -987,9 +993,11 @@ func TestUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
 		)
 		secondDone <- fillErr
 	}()
+	// Both callers must be waiting on the blocked fill before it can finish.
+	synctest.Wait()
 	cancel()
-	close(release)
 	require.ErrorIs(t, <-firstDone, context.Canceled)
+	close(release)
 	require.NoError(t, <-secondDone)
 	assert.Equal(t, int32(1), extractions.Load())
 }
