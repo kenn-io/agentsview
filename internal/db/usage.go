@@ -1773,12 +1773,66 @@ type UsageTotals struct {
 
 // DailyUsageResult wraps the daily entries and totals.
 type DailyUsageResult struct {
+	Pairwise      *UsagePairwiseSides               `json:"-"`
 	SchemaVersion int                               `json:"schema_version,omitempty"`
 	Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
 	Projects      map[string]export.ProjectMapEntry `json:"projects"`
 	Daily         []DailyUsageEntry                 `json:"daily"`
 	Totals        UsageTotals                       `json:"totals"`
 	SessionCounts UsageSessionCounts                `json:"sessionCounts,omitempty"`
+}
+
+// UsagePairwiseValue contains a ranking value's totals and distinct sessions.
+// Inexact means filtering can select a duplicate omitted by the ranking.
+type UsagePairwiseValue struct {
+	Totals   UsageTotals
+	Sessions []string
+	Inexact  bool
+}
+
+// UsagePairwiseSides is immutable once attached to a daily usage result.
+type UsagePairwiseSides struct {
+	Models, Projects map[string]UsagePairwiseValue
+}
+
+// Side combines raw ranking values, including session unions for model groups.
+// A filtered read must supply values whose totals cannot be derived exactly.
+func (s *UsagePairwiseSides) Side(dimension string, values []string) (DailyUsageResult, bool) {
+	if s == nil || dimension != "model" && dimension != "project" {
+		return DailyUsageResult{}, false
+	}
+	entries := s.Models
+	if dimension == "project" {
+		entries = s.Projects
+	}
+	var result DailyUsageResult
+	sessions := make(map[string]struct{})
+	selected := make(map[string]bool)
+	for _, value := range values {
+		if selected[value] {
+			continue
+		}
+		selected[value] = true
+		entry := entries[value]
+		if entry.Inexact {
+			return DailyUsageResult{}, false
+		}
+		t := &result.Totals
+		t.InputTokens += entry.Totals.InputTokens
+		t.OutputTokens += entry.Totals.OutputTokens
+		t.CacheCreationTokens += entry.Totals.CacheCreationTokens
+		t.CacheReadTokens += entry.Totals.CacheReadTokens
+		var err error
+		t.TotalCost, err = money.Add(t.TotalCost, entry.Totals.TotalCost)
+		if err != nil {
+			return DailyUsageResult{}, false
+		}
+		for _, id := range entry.Sessions {
+			sessions[id] = struct{}{}
+		}
+	}
+	result.SessionCounts.Total = len(sessions)
+	return result, true
 }
 
 // Clone copies the slices and maps that usage response builders mutate.

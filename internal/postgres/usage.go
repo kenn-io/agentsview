@@ -1573,6 +1573,26 @@ func (s *Store) GetDailyUsage(
 	})
 }
 
+type accumKey struct {
+	date       string
+	project    string
+	agent      string
+	machine    string
+	model      string
+	providerID string
+}
+type bucket struct {
+	inputTok  int
+	outputTok int
+	cacheCr   int
+	cacheRd   int
+	cost      money.Money
+}
+type sessionCost struct {
+	estimated     map[accumKey]money.Money
+	authoritative *money.Money
+}
+
 func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
 	loc := f.Location()
 
@@ -1595,29 +1615,14 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 	}
 	defer rows.Close()
 
-	type accumKey struct {
-		date       string
-		project    string
-		agent      string
-		machine    string
-		model      string
-		providerID string
-	}
-	type bucket struct {
-		inputTok  int
-		outputTok int
-		cacheCr   int
-		cacheRd   int
-		cost      money.Money
-	}
-	type sessionCost struct {
-		estimated     map[accumKey]money.Money
-		authoritative *money.Money
-	}
 	accum := make(map[accumKey]*bucket)
 	sessionCosts := make(map[string]sessionCost)
 	useAuthoritativeCost := !f.HasModelFilter()
-	seen := make(map[activity.UsageDedupToken]struct{})
+	seen := make(map[activity.UsageDedupToken]int)
+	type dimensionPair struct{ project, model string }
+	dimensions := make(map[dimensionPair]int)
+	var dimensionValues []dimensionPair
+	inexactModels, inexactProjects := make(map[string]bool), make(map[string]bool)
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
 		seenSessions = make(map[string]db.UsageSessionInfo)
@@ -1639,8 +1644,26 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 		if f.To != "" && date > f.To {
 			continue
 		}
-		if !activity.KeepSessionUsageRow(seen, r.UsageIdentity()) {
-			continue
+		if token, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok {
+			if first, duplicate := seen[token]; duplicate {
+				if f.Breakdowns {
+					inexactModels[r.model] = inexactModels[r.model] || dimensionValues[first].model != r.model
+					inexactProjects[r.project] = inexactProjects[r.project] || dimensionValues[first].project != r.project
+				}
+				continue
+			}
+			index := 0
+			if f.Breakdowns {
+				pair := dimensionPair{r.project, r.model}
+				var exists bool
+				index, exists = dimensions[pair]
+				if !exists {
+					index = len(dimensionValues)
+					dimensions[pair] = index
+					dimensionValues = append(dimensionValues, pair)
+				}
+			}
+			seen[token] = index
 		}
 
 		if seenSessions != nil && r.sessionID != "" {
@@ -2143,14 +2166,19 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 		return db.DailyUsageResult{}, fmt.Errorf(
 			"building pricing block: %w", err)
 	}
-	return db.DailyUsageResult{
+	result := db.DailyUsageResult{
 		SchemaVersion: export.UsageDailySchemaVersion,
 		Pricing:       &pricingBlock,
 		Projects:      export.ProjectMapForWire(projects),
 		Daily:         daily,
 		Totals:        totals,
 		SessionCounts: sessionCounts,
-	}, nil
+		Pairwise:      pgDailyPairwiseSides(accum, sessionCosts, sessionIDs, inexactModels, inexactProjects),
+	}
+	if result.Bytes() > 64<<20 {
+		result.Pairwise = nil
+	}
+	return result, nil
 }
 
 // GetTopSessionsByCost returns sessions ranked by total cost.
@@ -2486,4 +2514,55 @@ WHERE `+where, pb.args...).Scan(&count)
 		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
 	}
 	return len(seen), nil
+}
+
+// pgDailyPairwiseSides folds the ranking's existing buckets, preserving its
+// allocated project costs and the pre-allocation estimates model filters use.
+func pgDailyPairwiseSides(accum map[accumKey]*bucket, costs map[string]sessionCost, sessionIDs []string, inexactModels, inexactProjects map[string]bool) *db.UsagePairwiseSides {
+	sides := &db.UsagePairwiseSides{Models: make(map[string]db.UsagePairwiseValue), Projects: make(map[string]db.UsagePairwiseValue)}
+	for model, inexact := range inexactModels {
+		sides.Models[model] = db.UsagePairwiseValue{Inexact: inexact}
+	}
+	for project, inexact := range inexactProjects {
+		sides.Projects[project] = db.UsagePairwiseValue{Inexact: inexact}
+	}
+	add := func(entries map[string]db.UsagePairwiseValue, name string, b *bucket, cost money.Money) {
+		value := entries[name]
+		value.Totals.InputTokens += b.inputTok
+		value.Totals.OutputTokens += b.outputTok
+		value.Totals.CacheCreationTokens += b.cacheCr
+		value.Totals.CacheReadTokens += b.cacheRd
+		var err error
+		value.Totals.TotalCost, err = money.Add(value.Totals.TotalCost, cost)
+		value.Inexact = value.Inexact || err != nil
+		entries[name] = value
+	}
+	for key, b := range accum {
+		add(sides.Models, key.model, b, money.Money{})
+		if key.project != "" {
+			add(sides.Projects, key.project, b, b.cost)
+		}
+	}
+	for _, sessionID := range sessionIDs {
+		cost := costs[sessionID]
+		models, projects := make(map[string]bool), make(map[string]bool)
+		for key, estimated := range cost.estimated {
+			add(sides.Models, key.model, &bucket{}, estimated)
+			models[key.model], projects[key.project] = true, true
+		}
+		if sessionID == "" {
+			continue
+		}
+		for _, entry := range []struct {
+			values map[string]db.UsagePairwiseValue
+			names  map[string]bool
+		}{{sides.Models, models}, {sides.Projects, projects}} {
+			for name := range entry.names {
+				value := entry.values[name]
+				value.Sessions = append(value.Sessions, sessionID)
+				entry.values[name] = value
+			}
+		}
+	}
+	return sides
 }

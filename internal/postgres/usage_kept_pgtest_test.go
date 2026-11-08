@@ -269,9 +269,7 @@ func TestUsageKeptServicePairwiseSharesSummary(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"group-a", "group-b"}, []string{got.Left.Value, got.Right.Value})
 	require.Equal(t, 1250, got.Left.OutputTokens+got.Right.OutputTokens)
-	for query, count := range queries {
-		assert.Equal(t, count, counter.queries[query])
-	}
+	assert.Equal(t, queries, counter.queries)
 	fresh := service.NewReadOnlyBackend(&Store{pg: counter.storeExecutor}, service.WithModelGroups(groups))
 	want, err := fresh.UsagePairwiseComparison(t.Context(), pairReq)
 	require.NoError(t, err)
@@ -335,4 +333,127 @@ func TestUsageKeptBypasses(t *testing.T) {
 			assert.Equal(t, 2*count, counter.queries[query])
 		}
 	})
+}
+
+func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
+	local, syncer, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	for _, session := range []struct{ id, project, agent string }{
+		{"mixed", "project-a", "codex"}, {"copilot", "billing", "copilot"},
+		{"duplicate-a", "source-a", "codex"}, {"duplicate-b", "source,b", "codex"}, {"claude", "project-a", "claude"},
+	} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: session.id, Project: session.project, Agent: session.agent, Machine: "test-machine", StartedAt: new("2026-01-01T09:00:00Z")}))
+	}
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "mixed", []db.UsageEvent{
+		{SessionID: "mixed", Source: "provider", Model: "paid-a", InputTokens: 7, OutputTokens: 200, CacheCreationInputTokens: 9, CacheReadInputTokens: 13, DedupKey: "a", OccurredAt: "2026-01-01T09:00:00Z"},
+		{SessionID: "mixed", Source: "provider", Model: "paid-b", OutputTokens: 300, DedupKey: "b", OccurredAt: "2026-01-02T09:00:00Z"},
+	}))
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "copilot", []db.UsageEvent{
+		{SessionID: "copilot", Source: "shutdown", Model: "paid-a", OutputTokens: 100, DedupKey: "a", OccurredAt: "2026-01-01T09:00:00Z"},
+		{SessionID: "copilot", Source: "shutdown", Model: "paid-b", OutputTokens: 200, Cost: new(money.MustParseDollars("0.25")), CostSource: db.CopilotReportedCostSource, DedupKey: "b", OccurredAt: "2026-01-02T09:00:00Z"},
+	}))
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "claude-model", OutputPerMTok: money.MustParseDollars("10")}}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{
+		{SessionID: "duplicate-a", Ordinal: 0, Role: "assistant", Content: "first", Model: "paid-a", TokenUsage: []byte(`{"output_tokens":11}`), SourceUUID: "shared-message", Timestamp: "2026-01-01T09:01:00Z"},
+		{SessionID: "duplicate-b", Ordinal: 0, Role: "assistant", Content: "second", Model: "paid-b", TokenUsage: []byte(`{"output_tokens":29}`), SourceUUID: "shared-message", Timestamp: "2026-01-01T09:02:00Z"},
+		{SessionID: "claude", Ordinal: 0, Role: "assistant", Content: "streaming", Model: "claude-model", TokenUsage: []byte(`{"output_tokens":10}`), ClaudeMessageID: "message", ClaudeRequestID: "request", Timestamp: "2026-01-01T09:01:00Z"},
+		{SessionID: "claude", Ordinal: 1, Role: "assistant", Content: "final", Model: "claude-model", TokenUsage: []byte(`{"output_tokens":20}`), ClaudeMessageID: "message", ClaudeRequestID: "request", Timestamp: "2026-01-02T09:02:00Z"},
+	}))
+	pushed, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	for _, tc := range []struct {
+		name, project, dimension string
+		values                   []string
+		inexact                  bool
+		tokens, sessions         int
+		cost                     string
+	}{
+		{"estimated model", "", "model", []string{"paid-a"}, false, 811, 4, "0.00811"},
+		{"reported project", "", "project", []string{"billing"}, false, 300, 1, "0.25"},
+		{"group union", "project-a", "model", []string{"paid-a", "paid-b"}, false, 1750, 3, "0.01225"},
+		{"Claude snapshots", "project-a", "model", []string{"claude-model"}, false, 20, 1, "0.0002"},
+		{"first duplicate project", "", "project", []string{"source-a"}, false, 11, 1, "0.00011"},
+		{"dropped duplicate project", "", "project", []string{"source,b"}, true, 0, 0, "0"},
+		{"dropped duplicate model", "", "model", []string{"paid-b"}, true, 0, 0, "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC", Project: tc.project, Breakdowns: true}
+			ranking, err := store.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			got, ok := ranking.Pairwise.Side(tc.dimension, tc.values)
+			require.Equal(t, !tc.inexact, ok)
+			if !ok {
+				return
+			}
+			assert.Equal(t, tc.tokens, got.Totals.OutputTokens)
+			assert.Equal(t, tc.sessions, got.SessionCounts.Total)
+			assert.Equal(t, money.MustParseDollars(tc.cost), got.Totals.TotalCost)
+			filter.Breakdowns = false
+			if tc.dimension == "model" {
+				filter.Model = strings.Join(tc.values, ",")
+			} else {
+				filter.Project, filter.ProjectLabels = "", tc.values
+			}
+			want, err := store.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			assert.Equal(t, want.Totals.TotalCost, got.Totals.TotalCost)
+			assert.Equal(t, want.Totals.InputTokens, got.Totals.InputTokens)
+			assert.Equal(t, want.Totals.OutputTokens, got.Totals.OutputTokens)
+			assert.Equal(t, want.Totals.CacheCreationTokens, got.Totals.CacheCreationTokens)
+			assert.Equal(t, want.Totals.CacheReadTokens, got.Totals.CacheReadTokens)
+			assert.Equal(t, want.SessionCounts.Total, got.SessionCounts.Total)
+		})
+	}
+	// A ranked value with cross-model duplicates must use the filtered side.
+	comparison, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(ctx, service.UsagePairwiseComparisonRequest{
+		UsageRequest:  service.UsageRequest{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC", IncludeOneShot: true},
+		LeftDimension: "model", LeftValue: "paid-a", RightDimension: "model", RightValue: "paid-b", FallbackToDefault: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 811, comparison.Left.OutputTokens)
+	assert.Equal(t, 1279, comparison.Right.OutputTokens)
+	assert.Equal(t, 4, comparison.Right.SessionCount)
+}
+
+func TestUsagePairwiseHostedRankingScansOnce(t *testing.T) {
+	f := newHostedFixture(t, "tenant-a")
+	_, err := f.runtime.ExecContext(t.Context(), `
+INSERT INTO sessions(id,project,machine,agent,started_at,message_count,user_message_count) VALUES
+ ('a','project-a','device','codex','2026-01-01T09:00:00Z',2,2),
+ ('b','project-b','device','codex','2026-01-01T09:00:00Z',2,2);
+INSERT INTO usage_events(session_id,source,model,output_tokens,cost_microdollars,occurred_at) VALUES
+ ('a','provider','paid-a',500,5000,'2026-01-01T09:00:00Z'),
+ ('b','provider','paid-b',750,3750,'2026-01-01T09:00:00Z')`)
+	require.NoError(t, err)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
+	require.NoError(t, err)
+	counter := &usageReadCounter{storeExecutor: h.physical.pg, queries: map[string]int{}}
+	h.physical.pg = counter
+	got, err := service.NewReadOnlyBackend(h).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true}})
+	require.NoError(t, err)
+	assert.Equal(t, 1250, got.Left.OutputTokens+got.Right.OutputTokens)
+	assert.Equal(t, 1, got.Left.SessionCount)
+	assert.Equal(t, 1, got.Right.SessionCount)
+	require.Len(t, counter.queries, 2, "one ranking and one plan-count read")
+	for _, count := range counter.queries {
+		assert.Equal(t, 1, count)
+	}
+}
+
+func TestUsagePairwiseExplicitIgnoresUnselectedCosts(t *testing.T) {
+	_, _, store, counter := keptUsageFixture(t)
+	_, err := store.DB().ExecContext(t.Context(), `
+INSERT INTO usage_events(session_id,source,model,cost_microdollars,occurred_at,dedup_key) VALUES
+ ('plan','provider','unselected',4611686018427387904,'2026-01-01T09:00:00Z','overflow-a'),
+ ('plan','provider','unselected',4611686018427387904,'2026-01-01T09:00:00Z','overflow-b')`)
+	require.NoError(t, err)
+	got, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true}, LeftDimension: "model", LeftValue: "paid-a", RightDimension: "model", RightValue: "paid-b"})
+	require.NoError(t, err)
+	assert.Equal(t, 500, got.Left.OutputTokens)
+	assert.Equal(t, 750, got.Right.OutputTokens)
+	require.Len(t, counter.queries, 1)
+	for _, count := range counter.queries {
+		assert.Equal(t, 2, count)
+	}
 }

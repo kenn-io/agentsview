@@ -1052,6 +1052,7 @@ func (b *directBackend) UsagePairwiseComparison(
 		return nil, err
 	}
 	useDefault := req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == ""
+	var sides *db.UsagePairwiseSides
 	if req.FallbackToDefault && !useDefault {
 		if err := validatePairwiseDimension(req.LeftDimension, req.LeftValue, "left"); err != nil {
 			return nil, err
@@ -1075,6 +1076,7 @@ func (b *directBackend) UsagePairwiseComparison(
 		if err != nil {
 			return nil, err
 		}
+		sides = rankingResult.Pairwise
 		rankingPlanUsage, err := b.db.GetPlanUsageSessionCounts(ctx, rankingFilter)
 		if err != nil {
 			return nil, err
@@ -1127,18 +1129,28 @@ func (b *directBackend) UsagePairwiseComparison(
 
 	var leftResult db.DailyUsageResult
 	var rightResult db.DailyUsageResult
+	readSide := func(ctx context.Context, dimension string, filter db.UsageFilter) (db.DailyUsageResult, error) {
+		values := splitCSVTokens(filter.Model)
+		if dimension == "project" {
+			values = filter.ProjectFilterLabels()
+		}
+		if result, ok := sides.Side(dimension, values); ok {
+			return result, nil
+		}
+		return b.db.GetDailyUsage(ctx, filter)
+	}
 	group, groupCtx := errgroup.WithContext(ctx)
 	if !leftEmpty {
 		group.Go(func() error {
 			var readErr error
-			leftResult, readErr = b.db.GetDailyUsage(groupCtx, leftFilter)
+			leftResult, readErr = readSide(groupCtx, req.LeftDimension, leftFilter)
 			return readErr
 		})
 	}
 	if !rightEmpty {
 		group.Go(func() error {
 			var readErr error
-			rightResult, readErr = b.db.GetDailyUsage(groupCtx, rightFilter)
+			rightResult, readErr = readSide(groupCtx, req.RightDimension, rightFilter)
 			return readErr
 		})
 	}
