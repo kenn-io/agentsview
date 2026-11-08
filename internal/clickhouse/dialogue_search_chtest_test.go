@@ -163,8 +163,11 @@ func TestDialogueClickHouseStoresContentCopyOnce(t *testing.T) {
 	require.Equal(t, "alpha first", messages[0].Content)
 	messages[0].DialogueText = new("alpha first")
 	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureAlphaID, messages))
-	_, err = syncer.Push(ctx, false, nil)
+	// A dialogue-only replacement leaves the session's sync marker alone, so
+	// only a full push rewrites the row through StoredDialogue.
+	result, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
+	require.Positive(t, result.SessionsPushed)
 
 	isNull, size := storedDialogueBytes(t, store, fixtureAlphaID, 0)
 	assert.True(t, isNull)
