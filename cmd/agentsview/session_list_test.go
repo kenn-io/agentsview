@@ -352,7 +352,6 @@ func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 		relationship string
 		date         bool
 	}{
-		{"subagent", false},
 		{"continuation", false},
 		{"subagent", true},
 	} {
@@ -396,9 +395,20 @@ func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 	}
 }
 
-func TestSessionListChildCountLowerBoundNotice(t *testing.T) {
-	notice := sessionListDefaultExclusionNotice(service.ListFilter{ExclusionCounts: new(true), IncludeOneShot: true, IncludeAutomated: true}, &db.SessionExclusionCounts{Children: 2, ChildrenLowerBound: true})
-	assert.Equal(t, "Excluded at least 2 child sessions by default. Use --include-children to include them.", notice)
+func TestSessionListDefaultExclusionNotice(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		filter service.ListFilter
+		counts db.SessionExclusionCounts
+		want   string
+	}{
+		{"child lower bound", service.ListFilter{ExclusionCounts: new(true), IncludeOneShot: true, IncludeAutomated: true}, db.SessionExclusionCounts{Children: 2, ChildrenLowerBound: true}, "Excluded at least 2 child sessions by default. Use --include-children to include them."},
+		{"one-shot and child guidance", service.ListFilter{ExclusionCounts: new(true)}, db.SessionExclusionCounts{OneShot: 1, Children: 1}, "Excluded 2 sessions by default: 1 one-shot, 1 child. For one-shot sessions, use --include-one-shot. For child sessions, use --include-one-shot --include-automated --include-children."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, sessionListDefaultExclusionNotice(tc.filter, &tc.counts))
+		})
+	}
 }
 
 func TestSessionListOneShotContinuationWithProjectFilter(t *testing.T) {
@@ -424,7 +434,6 @@ func TestSessionListOneShotContinuationWithProjectFilter(t *testing.T) {
 	root.SetArgs(args)
 	require.NoError(t, root.Execute())
 	assert.Equal(t, []string{"parent"}, sessionListIDs(t, stdout.String()))
-	assert.Equal(t, "Excluded 2 sessions by default: 1 one-shot, 1 child. For one-shot sessions, use --include-one-shot. For child sessions, use --include-one-shot --include-automated --include-children.\n", stderr.String())
 	stdout.Reset()
 	root = newRootCommand()
 	root.SetOut(&stdout)

@@ -68,7 +68,6 @@ func AssertSessionExclusionCounts(t *testing.T, store db.Store) {
 			f.PR = db.PRFilter{Repository: "example/project", Number: 1}
 		}, 5, 0, 0, 0},
 		{"explicit IDs", func(f *db.SessionFilter) { f.IDs = []string{"visible", "one-shot", "automated"} }, 3, 0, 0, 0},
-		{"explicit child ID", func(f *db.SessionFilter) { f.IDs = []string{"child"} }, 1, 0, 0, 0},
 		{"explicit IDs one-shot", func(f *db.SessionFilter) {
 			f.IDs = []string{"visible", "one-shot", "automated"}
 			f.OneShotFilterSet = true
@@ -91,21 +90,30 @@ func AssertSessionExclusionCounts(t *testing.T, store db.Store) {
 			page, err := store.ListSessions(t.Context(), f)
 			require.NoError(t, err)
 			assert.Equal(t, tc.total, page.Total)
-			if tc.name == "explicit child ID" {
-				require.Len(t, page.Sessions, 1)
-				assert.Equal(t, "child", page.Sessions[0].ID)
-			}
 			require.NotNil(t, page.ExclusionCounts)
 			assert.Equal(t, &db.SessionExclusionCounts{OneShot: tc.oneShot, Automated: tc.automated, Children: tc.children}, page.ExclusionCounts)
-			if tc.name == "defaults" {
-				require.NotEmpty(t, page.NextCursor)
-				f.Cursor = page.NextCursor
-				next, err := store.ListSessions(t.Context(), f)
-				require.NoError(t, err)
-				assert.Nil(t, next.ExclusionCounts)
-			}
 		})
 	}
+
+	t.Run("explicit child ID", func(t *testing.T) {
+		page, err := store.ListSessions(t.Context(), db.SessionFilter{Project: "exclusions", IDs: []string{"child"}, ExcludeOneShot: true, ExcludeAutomated: true, ExclusionCounts: new(true), Limit: 1})
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		assert.Equal(t, "child", page.Sessions[0].ID)
+		assert.Equal(t, 1, page.Total)
+		assert.Equal(t, &db.SessionExclusionCounts{}, page.ExclusionCounts)
+	})
+
+	t.Run("cursor page", func(t *testing.T) {
+		f := db.SessionFilter{Project: "exclusions", ExcludeOneShot: true, ExcludeAutomated: true, ExclusionCounts: new(true), Limit: 1}
+		page, err := store.ListSessions(t.Context(), f)
+		require.NoError(t, err)
+		require.NotEmpty(t, page.NextCursor)
+		f.Cursor = page.NextCursor
+		next, err := store.ListSessions(t.Context(), f)
+		require.NoError(t, err)
+		assert.Nil(t, next.ExclusionCounts)
+	})
 
 	t.Run("fully included", func(t *testing.T) {
 		page, err := store.ListSessions(t.Context(), db.SessionFilter{Project: "exclusions", IncludeChildren: true, ExclusionCounts: new(true)})
