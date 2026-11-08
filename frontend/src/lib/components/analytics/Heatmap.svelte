@@ -151,10 +151,6 @@
   const svgHeight = $derived(
     7 * cellStep + HEADER_HEIGHT + 4,
   );
-  const supportsOutputTokens = $derived(
-    analytics.summary?.total_output_tokens !== undefined &&
-      analytics.summary?.token_reporting_sessions !== undefined,
-  );
 </script>
 
 <div class="heatmap-container">
@@ -175,15 +171,13 @@
       >
         {m.analytics_metric_sessions()}
       </button>
-      {#if supportsOutputTokens}
-        <button
-          class="toggle-btn"
-          class:active={analytics.metric === "output_tokens"}
-          onclick={() => analytics.setMetric("output_tokens")}
-        >
-          {m.analytics_metric_output_tokens()}
-        </button>
-      {/if}
+      <button
+        class="toggle-btn"
+        class:active={analytics.metric === "output_tokens"}
+        onclick={() => analytics.setMetric("output_tokens")}
+      >
+        {m.analytics_metric_output_tokens()}
+      </button>
     </div>
   </div>
 
@@ -385,15 +379,10 @@
   .error {
     color: var(--accent-red);
     font-size: 12px;
-    padding: 0 0 12px;
+    padding: 12px;
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-
-  .error:last-child {
-    justify-content: center;
-    padding: 24px;
   }
 
   .retry-btn {

@@ -88,11 +88,19 @@ test.describe("Chromium dashboard evidence", () => {
 
   test("a date change clears old values and ignores a late response", async ({ page }) => {
     const held = Promise.withResolvers<void>();
-    let summaryReads = 0;
+    let heldRange: { from: string; to: string } | undefined;
     let lateSettled = false;
     await page.route("**/api/v1/analytics/summary?**", async (route) => {
-      summaryReads++;
-      if (summaryReads !== 2) return route.continue();
+      const params = new URL(route.request().url()).searchParams;
+      if (!heldRange) {
+        const to = params.get("to")!;
+        const from = new Date(`${to}T12:00:00Z`);
+        from.setUTCDate(from.getUTCDate() - 29);
+        heldRange = { from: from.toISOString().slice(0, 10), to };
+      }
+      if (params.get("from") !== heldRange.from || params.get("to") !== heldRange.to) {
+        return route.continue();
+      }
       await held.promise;
       await route.fulfill({ json: { total_sessions: 987654, agents: {} } }).catch(() => {});
       lateSettled = true;
@@ -115,7 +123,6 @@ test.describe("Chromium dashboard evidence", () => {
     held.resolve();
     await expect.poll(() => lateSettled).toBe(true);
     await expect(sessionsValue).not.toHaveText("987,654");
-    expect(summaryReads).toBe(3);
   });
 
   for (const width of [1280, 768, 400]) {

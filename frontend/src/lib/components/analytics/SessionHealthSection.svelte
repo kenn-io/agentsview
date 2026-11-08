@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
+  import { Button, Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import GradeDistribution
@@ -37,9 +37,12 @@
 {#snippet error()}
   <div class="error">
     {analytics.errors.signals}
-    <button class="retry-btn" onclick={() => analytics.fetchSignals()}>
-      {m.shared_retry()}
-    </button>
+    <Button
+      size="sm"
+      surface="soft"
+      label={m.shared_retry()}
+      onclick={() => analytics.fetchSignals()}
+    />
   </div>
 {/snippet}
 
@@ -272,16 +275,7 @@
     gap: 8px;
   }
   .status .error {
-    justify-content: center;
-    padding: 24px;
-  }
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
+    padding: 12px;
   }
   .empty {
     color: var(--text-muted);

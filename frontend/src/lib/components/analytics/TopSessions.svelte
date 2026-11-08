@@ -77,11 +77,6 @@
     router.navigateToSession(id);
   }
 
-  const supportsOutputTokens = $derived(
-    analytics.summary?.total_output_tokens !== undefined &&
-      analytics.summary?.token_reporting_sessions !== undefined,
-  );
-
   const uncleanCount = $derived(
     (analytics.topSessions?.sessions ?? []).filter(
       (s) => getSessionStatus(s) === "unclean",
@@ -119,15 +114,13 @@
         >
           {m.analytics_top_sessions_by_duration()}
         </button>
-        {#if supportsOutputTokens}
-          <button
-            class="toggle-btn"
-            class:active={analytics.topMetric === "output_tokens"}
-            onclick={() => analytics.setTopMetric("output_tokens")}
-          >
-            {m.analytics_top_sessions_by_output_tokens()}
-          </button>
-        {/if}
+        <button
+          class="toggle-btn"
+          class:active={analytics.topMetric === "output_tokens"}
+          onclick={() => analytics.setTopMetric("output_tokens")}
+        >
+          {m.analytics_top_sessions_by_output_tokens()}
+        </button>
       </div>
     </div>
   </div>
@@ -362,15 +355,10 @@
   .error {
     color: var(--accent-red);
     font-size: 12px;
-    padding: 0 0 12px;
+    padding: 12px;
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-
-  .error:last-child {
-    justify-content: center;
-    padding: 24px;
   }
 
   .retry-btn {

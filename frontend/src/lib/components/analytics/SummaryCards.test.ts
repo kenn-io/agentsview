@@ -24,13 +24,13 @@ describe("SummaryCards", () => {
     const values = () =>
       [...document.querySelectorAll(".card-value")].map((v) => v.textContent?.trim());
     expect(values()).toEqual(["-", "-", "-", "-", "-", "-"]);
-    expect(document.querySelectorAll('[role="status"]')).toHaveLength(1);
-    expect(document.body.textContent).toContain("Loading...");
+    expect(document.querySelector('[role="status"]')?.textContent).toBe("Loading...");
 
     analytics.errors.summary = "summary failed";
     await tick();
     expect(document.querySelector('[role="status"]')).toBeNull();
     expect(document.body.textContent).toContain("summary failed");
+    expect(values()).toEqual(["--", "--", "--", "--", "--", "--"]);
   });
 
   it("keeps the caption on the last accepted summary", async () => {
@@ -55,13 +55,11 @@ describe("SummaryCards", () => {
     const card = () => document.querySelector(".summary-cards .card")!;
     const caption = () =>
       card().querySelector(".card-sub")?.textContent?.replace(/\s/g, " ").trim();
-    expect(caption()).toBe("");
-    expect(card().querySelector(".card-sub")?.classList).toContain("placeholder");
+    expect(caption()).toBeUndefined();
     analytics.summary = data;
     analytics.summaryFilterParams = { from: "2025-11-07", to: "2026-11-06" };
     await tick();
     expect(caption()).toBe("Nov 7, 2025 – Nov 6, 2026 · incl. subagents");
-    expect(card().querySelector(".card-sub")?.classList).not.toContain("placeholder");
 
     analytics.from = "2026-11-01";
     analytics.querying.summary = true;

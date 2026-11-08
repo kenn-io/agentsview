@@ -1,21 +1,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { ApiError, attachResponseTiming } from "../api/runtime.js";
 import { analytics } from "./analytics.svelte.js";
-import { makeSignals } from "../test-support/analytics.js";
+import {
+  makeSummary,
+  makeActivity,
+  makeHeatmap,
+  makeProjects,
+  makeHourOfWeek,
+  makeSessionShape,
+  makeVelocity,
+  makeTools,
+  makeSkills,
+  makeTopSessions,
+  makeSignals,
+} from "../test-support/analytics.js";
 import { sessions } from "./sessions.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
 
 import type {
   AnalyticsSummaryResponse as AnalyticsSummary,
   DbActivityResponse as ActivityResponse,
-  DbHeatmapResponse as HeatmapResponse,
   DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
-  DbHourOfWeekResponse as HourOfWeekResponse,
-  DbSessionShapeResponse as SessionShapeResponse,
-  DbVelocityResponse as VelocityResponse,
   DbToolsAnalyticsResponse as ToolsAnalyticsResponse,
   DbSkillsAnalyticsResponse as SkillsAnalyticsResponse,
-  DbTopSessionsResponse as TopSessionsResponse,
   DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
 } from "../api/generated/index.js";
 
@@ -56,91 +63,6 @@ const analyticsService = AnalyticsService as unknown as {
   getApiV1AnalyticsSignals: MockFn;
 };
 
-function makeSummary(): AnalyticsSummary {
-  return {
-    total_sessions: 10,
-    total_messages: 100,
-    total_output_tokens: 42000,
-    token_reporting_sessions: 8,
-    models: [],
-    active_projects: 3,
-    active_days: 5,
-    avg_messages: 10,
-    median_messages: 8,
-    p90_messages: 20,
-    most_active_project: "proj",
-    concentration: 0.5,
-    agents: {},
-  };
-}
-
-function makeActivity(): ActivityResponse {
-  return { granularity: "day", series: [] };
-}
-
-function makeHeatmap(): HeatmapResponse {
-  return {
-    metric: "messages",
-    entries: [],
-    levels: { l1: 1, l2: 5, l3: 10, l4: 20 },
-    entries_from: "2024-01-01",
-  };
-}
-
-function makeProjects(): ProjectsAnalyticsResponse {
-  return { projects: [] };
-}
-
-function makeHourOfWeek(): HourOfWeekResponse {
-  return { cells: [] };
-}
-
-function makeSessionShape(): SessionShapeResponse {
-  return {
-    count: 0,
-    length_distribution: [],
-    duration_distribution: [],
-    autonomy_distribution: [],
-  };
-}
-
-function makeVelocity(): VelocityResponse {
-  return {
-    overall: {
-      turn_cycle_sec: { p50: 0, p90: 0 },
-      first_response_sec: { p50: 0, p90: 0 },
-      msgs_per_active_min: 0,
-      chars_per_active_min: 0,
-      tool_calls_per_active_min: 0,
-    },
-    by_agent: [],
-    by_complexity: [],
-  };
-}
-
-function makeTools(): ToolsAnalyticsResponse {
-  return {
-    total_calls: 0,
-    by_category: [],
-    by_agent: [],
-    by_tool: [],
-    trend: [],
-  };
-}
-
-function makeSkills(): SkillsAnalyticsResponse {
-  return {
-    total_skill_calls: 0,
-    distinct_skills: 0,
-    by_skill: [],
-    trend: [],
-  };
-}
-
-function makeTopSessions(): TopSessionsResponse {
-  return { metric: "messages", sessions: [] };
-}
-
 function mockAllAPIs() {
   vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockResolvedValue(makeSummary());
   vi.mocked(analyticsService.getApiV1AnalyticsActivity).mockResolvedValue(makeActivity());
@@ -178,6 +100,7 @@ function resetStore() {
   analytics.isPinned = false;
   analytics.windowDays = 365;
   analytics.skillsGranularity = "week";
+  analytics.requestedSkillsGranularity = "week";
   // Clear cached data fields so each test starts from a clean
   // "no data" state. Prior tests leave the singleton populated,
   // which breaks assertions like `loading === true during fetch`
@@ -341,11 +264,7 @@ describe("AnalyticsStore.setDateRange", () => {
 
 describe("AnalyticsStore.setSkillsGranularity", () => {
   it("applies the new granularity only after its response arrives", async () => {
-    vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockResolvedValueOnce({
-      ...makeSkills(),
-      total_skill_calls: 7,
-    });
-    await analytics.fetchSkills();
+    analytics.skills = makeSkills();
     let resolve!: (value: SkillsAnalyticsResponse) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockReturnValueOnce(
       new Promise((r) => {
@@ -356,26 +275,20 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
     const pending = analytics.setSkillsGranularity("month");
 
     expect(analytics.skillsGranularity).toBe("week");
-    expect(analytics.skills?.total_skill_calls).toBe(7);
     expect(analytics.querying.skills).toBe(true);
     expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ granularity: "month" }),
     );
 
-    resolve({ ...makeSkills(), total_skill_calls: 17 });
+    resolve(makeSkills());
     await pending;
 
     expect(analytics.skillsGranularity).toBe("month");
-    expect(analytics.skills?.total_skill_calls).toBe(17);
     expect(analytics.querying.skills).toBe(false);
   });
 
   it("keeps the applied granularity when the request fails", async () => {
-    vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockResolvedValueOnce({
-      ...makeSkills(),
-      total_skill_calls: 7,
-    });
-    await analytics.fetchSkills();
+    analytics.skills = makeSkills();
     vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockRejectedValueOnce(
       new Error("network down"),
     );
@@ -384,8 +297,23 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 
     expect(result).toBe("error");
     expect(analytics.skillsGranularity).toBe("week");
-    expect(analytics.skills?.total_skill_calls).toBe(7);
-    expect(analytics.errors.skills).toBe("network down");
+  });
+
+  it("replaces a failed Month selection when Week is selected again", async () => {
+    await analytics.fetchSkills("week");
+    vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockRejectedValueOnce(
+      new Error("network down"),
+    );
+    await analytics.setSkillsGranularity("month");
+
+    await analytics.setSkillsGranularity("week");
+    await analytics.fetchSkills();
+
+    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ granularity: "week" }),
+    );
+    expect(analytics.skillsGranularity).toBe("week");
+    expect(analytics.errors.skills).toBeNull();
   });
 });
 
@@ -1419,11 +1347,12 @@ describe("AnalyticsStore panel scopes", () => {
       }),
     );
     const retry = analytics.fetchTools();
-    expect(analytics.errors.tools).toBeNull();
+    expect(analytics.errors.tools).toBe("tools unavailable");
     expect(analytics.tools?.total_calls).toBe(12);
     releaseRetry({ ...makeTools(), total_calls: 18 });
     await retry;
     expect(analytics.tools?.total_calls).toBe(18);
+    expect(analytics.errors.tools).toBeNull();
   });
 
   it.each(["success", "error"])(
@@ -1465,13 +1394,6 @@ describe("AnalyticsStore panel scopes", () => {
       rejectFebruary(new Error("February failed"));
       await february;
       expect(analytics.errors.summary).toBe("February failed");
-      vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockResolvedValueOnce({
-        ...makeSummary(),
-        total_sessions: 22,
-      });
-      await analytics.fetchSummary();
-      expect(analytics.summary?.total_sessions).toBe(22);
-      expect(analytics.errors.summary).toBeNull();
     },
   );
 

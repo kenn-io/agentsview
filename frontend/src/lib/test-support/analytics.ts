@@ -1,4 +1,16 @@
-import type { DbSignalsAnalyticsResponse as SignalsAnalyticsResponse } from "../api/generated/index.js";
+import type {
+  AnalyticsSummaryResponse as AnalyticsSummary,
+  DbActivityResponse as ActivityResponse,
+  DbHeatmapResponse as HeatmapResponse,
+  DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
+  DbHourOfWeekResponse as HourOfWeekResponse,
+  DbSessionShapeResponse as SessionShapeResponse,
+  DbVelocityResponse as VelocityResponse,
+  DbToolsAnalyticsResponse as ToolsAnalyticsResponse,
+  DbSkillsAnalyticsResponse as SkillsAnalyticsResponse,
+  DbTopSessionsResponse as TopSessionsResponse,
+  DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
+} from "../api/generated/index.js";
 
 export function makeSignals(): SignalsAnalyticsResponse {
   return {
@@ -52,4 +64,89 @@ export function makeSignals(): SignalsAnalyticsResponse {
     by_project: [],
     calibration: {},
   };
+}
+
+export function makeSummary(): AnalyticsSummary {
+  return {
+    total_sessions: 10,
+    total_messages: 100,
+    total_output_tokens: 42000,
+    token_reporting_sessions: 8,
+    models: [],
+    active_projects: 3,
+    active_days: 5,
+    avg_messages: 10,
+    median_messages: 8,
+    p90_messages: 20,
+    most_active_project: "proj",
+    concentration: 0.5,
+    agents: {},
+  };
+}
+
+export function makeActivity(): ActivityResponse {
+  return { granularity: "day", series: [] };
+}
+
+export function makeHeatmap(): HeatmapResponse {
+  return {
+    metric: "messages",
+    entries: [],
+    levels: { l1: 1, l2: 5, l3: 10, l4: 20 },
+    entries_from: "2024-01-01",
+  };
+}
+
+export function makeProjects(): ProjectsAnalyticsResponse {
+  return { projects: [] };
+}
+
+export function makeHourOfWeek(): HourOfWeekResponse {
+  return { cells: [] };
+}
+
+export function makeSessionShape(): SessionShapeResponse {
+  return {
+    count: 0,
+    length_distribution: [],
+    duration_distribution: [],
+    autonomy_distribution: [],
+  };
+}
+
+export function makeVelocity(): VelocityResponse {
+  return {
+    overall: {
+      turn_cycle_sec: { p50: 0, p90: 0 },
+      first_response_sec: { p50: 0, p90: 0 },
+      msgs_per_active_min: 0,
+      chars_per_active_min: 0,
+      tool_calls_per_active_min: 0,
+    },
+    by_agent: [],
+    by_complexity: [],
+  };
+}
+
+export function makeTools(): ToolsAnalyticsResponse {
+  return {
+    total_calls: 0,
+    by_category: [],
+    by_agent: [],
+    by_tool: [],
+    trend: [],
+  };
+}
+
+export function makeSkills(): SkillsAnalyticsResponse {
+  return {
+    total_skill_calls: 0,
+    distinct_skills: 0,
+    by_skill: [],
+    trend: [],
+  };
+}
+
+export function makeTopSessions(): TopSessionsResponse {
+  return { metric: "messages", sessions: [] };
 }

@@ -71,6 +71,7 @@ class AnalyticsStore {
   windowDays: number = $state(ANALYTICS_DEFAULT_WINDOW_DAYS);
   granularity: Granularity = $state("day");
   skillsGranularity: Granularity = $state("week");
+  requestedSkillsGranularity: Granularity = "week";
   metric: HeatmapMetric = $state("messages");
   selectedDate: string | null = $state(null);
   selectedActivityRange: { from: string; to: string } | null = $state(null);
@@ -489,11 +490,13 @@ class AnalyticsStore {
     const v = ++this.versions[panel];
     const signal = this.nextAbortSignal(panel);
     const scope = refreshScopeKey(params);
-    if (this.scopes[panel] !== scope) this[panel] = null;
+    if (this.scopes[panel] !== scope) {
+      this[panel] = null;
+      this.errors[panel] = null;
+    }
     this.scopes[panel] = scope;
     this.querying[panel] = true;
     this.loading[panel] = !hasExistingData();
-    this.errors[panel] = null;
     const started = performance.now();
     const liveQuery = this.currentLiveQuery;
     const liveStep = liveQuery.start(panel, started);
@@ -661,7 +664,9 @@ class AnalyticsStore {
     );
   }
 
-  // Keep every project visible so the selected project has context.
+  // Projects chart always shows all projects (no project
+  // filter) so the selected project can be highlighted in
+  // context rather than shown in isolation.
   async fetchProjects(): Promise<FetchResult> {
     const params = this.filterParams({ includeProject: false });
     return await this.executeFetch(
@@ -735,7 +740,8 @@ class AnalyticsStore {
     );
   }
 
-  async fetchSkills(granularity: Granularity = this.skillsGranularity): Promise<FetchResult> {
+  async fetchSkills(granularity: Granularity = this.requestedSkillsGranularity): Promise<FetchResult> {
+    this.requestedSkillsGranularity = granularity;
     const scopeParams = this.filterParams();
     const params = { ...scopeParams, granularity };
     return await this.executeFetch(
@@ -914,7 +920,6 @@ class AnalyticsStore {
   }
 
   async setSkillsGranularity(g: Granularity): Promise<FetchResult> {
-    if (this.skillsGranularity === g) return "ok";
     return await this.fetchSkills(g);
   }
 

@@ -605,15 +605,10 @@
   .error {
     color: var(--accent-red);
     font-size: 12px;
-    padding: 0 0 12px;
+    padding: 12px;
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-
-  .error:last-child {
-    justify-content: center;
-    padding: 24px;
   }
 
   .retry-btn {

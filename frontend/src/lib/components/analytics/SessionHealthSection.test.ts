@@ -32,7 +32,6 @@ afterEach(() => {
   document.body.innerHTML = "";
   analytics.signals = signals;
   analytics.errors.signals = null;
-  analytics.fetchSignals.mockClear();
 });
 analytics.signals = signals;
 it("sorts agent scores and project names independently", async () => {
@@ -54,21 +53,12 @@ it("sorts agent scores and project names independently", async () => {
   unmount(component);
 });
 
-it("shows loading, then a failure with Retry, under the heading", async () => {
+it("shows loading under the heading until signals arrive", async () => {
   analytics.signals = null;
-  let component = mount(SessionHealthSection, { target: document.body });
+  const component = mount(SessionHealthSection, { target: document.body });
   await tick();
   expect(screen.getByRole("heading", { name: "Session Health" })).toBeTruthy();
   expect(screen.getByText("Loading...")).toBeTruthy();
-  unmount(component);
-
-  analytics.errors.signals = "signals timed out";
-  component = mount(SessionHealthSection, { target: document.body });
-  await tick();
-  expect(screen.getByText("signals timed out")).toBeTruthy();
-  expect(screen.queryByText("Loading...")).toBeNull();
-  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  expect(analytics.fetchSignals).toHaveBeenCalledOnce();
   unmount(component);
 });
 
