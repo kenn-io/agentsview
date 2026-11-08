@@ -17,8 +17,9 @@ const (
 	hookLine          = `if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi`
 	hookScript        = "#!/bin/sh\n" + hookLine + "\n"
 	// mergedHookLine ends an existing commit-msg hook. It stamps after the
-	// hook's own edits and keeps the status of the hook's last command.
-	mergedHookLine = `agentsview_status=$?; if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi; exit "$agentsview_status"`
+	// hook's own edits, then restores the previous command's status without
+	// exiting, so a fall-through keeps that status and a final exit still runs.
+	mergedHookLine = `agentsview_status=$?; if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi; (exit "$agentsview_status")`
 )
 
 func hookPath(repoDir, name string) (string, error) {

@@ -345,6 +345,14 @@ func TestGitHookInstallInstructions(t *testing.T) {
 			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nprintf 'validation failed\\n' >&2\nfalse\n"), 0o755))
 		}},
+		{name: "commit-msg that exits with failure after success", steps: 2, rejects: true, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			t.Helper()
+			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nprintf 'validation failed\\n' >&2\nexit 42\n"), 0o755))
+		}},
+		{name: "commit-msg that exits with success after failure", steps: 2, setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
+			t.Helper()
+			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nfalse\nexit 0\n"), 0o755))
+		}},
 		{name: "commit-msg that rewrites the message", steps: 2, rewrites: "Rewritten by hook", setup: func(t *testing.T, _ *gitTrailerFixture, hooks string) {
 			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nprintf 'Rewritten by hook\\n' > \"$1\"\n"), 0o755))
@@ -395,7 +403,21 @@ func TestGitHookInstallInstructions(t *testing.T) {
 				case "append":
 					data, err := os.ReadFile(step.path)
 					require.NoError(t, err)
-					require.NoError(t, os.WriteFile(step.path, append(data, step.text+"\n"...), 0o755))
+					// "Before any final exit" puts the line above a closing exit.
+					lines := strings.SplitAfter(strings.TrimSuffix(string(data), "\n"), "\n")
+					at := len(lines)
+					if strings.HasPrefix(strings.TrimSpace(lines[at-1]), "exit") {
+						at--
+					}
+					head := strings.Join(lines[:at], "")
+					if !strings.HasSuffix(head, "\n") {
+						head += "\n"
+					}
+					merged := head + step.text + "\n" + strings.Join(lines[at:], "")
+					if !strings.HasSuffix(merged, "\n") {
+						merged += "\n"
+					}
+					require.NoError(t, os.WriteFile(step.path, []byte(merged), 0o755))
 				case "chmod":
 					require.NoError(t, os.Chmod(step.path, 0o755))
 				}

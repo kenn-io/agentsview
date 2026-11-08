@@ -114,11 +114,11 @@ if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$
 ```
 
 Put the `commit-msg` line last, before any final `exit`, so it stamps after your
-hook's edits. It keeps the status of your hook's last command, so a failing
-check still rejects the commit:
+hook's edits. It keeps the status of your hook's last command and doesn't exit,
+so a failing check still rejects the commit and a final `exit` still decides:
 
 ```sh
-agentsview_status=$?; if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi; exit "$agentsview_status"
+agentsview_status=$?; if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi; (exit "$agentsview_status")
 ```
 
 To remove the hooks, delete the installed `prepare-commit-msg` and `commit-msg`
