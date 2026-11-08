@@ -20970,7 +20970,8 @@ func (e *Engine) applyIDPrefixToSessionIDs(ids []string) []string {
 }
 
 // applyRemoteRewrites rewrites stored source paths and, when configured,
-// prefixes session IDs for remote sync.
+// prefixes session IDs for remote sync. Parent IDs resolve to the host that
+// archived the parent; see remoteParentResolver.resolve.
 func (e *Engine) applyRemoteRewrites(
 	s *db.Session, msgs []db.Message,
 ) {
@@ -20991,12 +20992,25 @@ func (e *Engine) applyRemoteRewritesContext(
 		return nil
 	}
 	s.ID = applyIDPrefixToID(e.idPrefix, s.ID)
+	parents := remoteParentResolver{
+		e: e, stores: e.remoteParentStores(), childID: s.ID,
+	}
 	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
-		p := applyIDPrefixToID(e.idPrefix, *s.ParentSessionID)
+		p, err := parents.resolve(
+			ctx, *s.ParentSessionID, storedEffectiveParent,
+		)
+		if err != nil {
+			return err
+		}
 		s.ParentSessionID = &p
 	}
 	if s.ParserParentSessionID != nil && *s.ParserParentSessionID != "" {
-		p := applyIDPrefixToID(e.idPrefix, *s.ParserParentSessionID)
+		p, err := parents.resolve(
+			ctx, *s.ParserParentSessionID, storedParserParent,
+		)
+		if err != nil {
+			return err
+		}
 		s.ParserParentSessionID = &p
 	}
 	for i := range msgs {

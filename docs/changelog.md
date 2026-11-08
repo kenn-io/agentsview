@@ -288,6 +288,12 @@ The latest release is
 
 **Bug fixes**
 
+- A session pulled from one remote host now links to its parent when the parent
+  was archived from another host or from this machine. Before, the link pointed
+  at a parent ID on the source host that did not exist, so the session showed up
+  without its parent. A later full reparse keeps a parent link that already
+  resolved. When two or more other hosts hold the same parent ID, AgentsView
+  does not guess and keeps the source-host link.
 - Roborev test-value reviews, look-ahead reviews, fix plans, rebase fixes, and
   non-PR review summaries are now hidden as automated sessions, like other
   roborev runs. The session list and analytics stopped counting them as your
