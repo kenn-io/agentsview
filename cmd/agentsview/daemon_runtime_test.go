@@ -1921,7 +1921,7 @@ func TestDaemonRuntime_ReadOnlyPersisted(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 
-	path, err := WriteDaemonRuntime(dir, host, port, "test", true)
+	path, err := WriteDaemonRuntimeWithAuthAndNoSync(&daemonLifetime{Persistent: true}, dir, host, port, "test", "", true, false, false, nil)
 	require.NoError(t, err)
 
 	rec := readRuntimeRecord(t, path)

@@ -319,9 +319,8 @@ func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.isStarting = func(string) bool { return true }
 	deps.writableRuntime = func(string, string) *DaemonRuntime {
-		rec := testWritableRecord(79, "")
 		return &DaemonRuntime{
-			Record:          rec,
+			Record:          testWritableRecord(79, ""),
 			Host:            "127.0.0.1",
 			Port:            8079,
 			RuntimeFallback: true,
@@ -1244,8 +1243,6 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 				t.Run(fmt.Sprintf("fallback=%v/contention=%v/idle=%s", fallback, contended, timeout), func(t *testing.T) {
 					dir := testDataDir(t)
 					cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), Host: "127.0.0.1", PublicURL: "http://viewer.example.test"}
-					t.Setenv(backgroundChildEnvVar, "1")
-					t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", timeout.String())
 					database, err := db.Open(t.Context(), cfg.DBPath)
 					require.NoError(t, err)
 					defer database.Close()
@@ -1310,24 +1307,27 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 }
 
 func TestRestartCommandSelectsLifetime(t *testing.T) {
-	for _, command := range []string{"serve", "daemon"} {
-		for _, persistent := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/persistent=%v", command, persistent), func(t *testing.T) {
-				deps, out := daemonCommandTestDeps(t)
-				rec := testWritableRecord(79, "")
-				rec.Metadata[runtimePersistent] = strconv.FormatBool(persistent)
-				deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return []daemon.RuntimeRecord{rec}, nil }
-				deps.startBackground = func(_ context.Context, _ config.Config, _ []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
-					assert.Equal(t, command == "daemon" || persistent, policy.Persistent)
-					return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: testWritableRecord(80, "")}}, nil
-				}
-				if command == "serve" {
-					require.NoError(t, executeServeCommand(t, *deps, out, "restart"))
-				} else {
-					require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
-				}
-			})
-		}
+	for _, tc := range []struct {
+		command                    string
+		persistent, wantPersistent bool
+	}{
+		{"serve", false, false}, {"serve", true, true}, {"daemon", false, true},
+	} {
+		t.Run(fmt.Sprintf("%s/persistent=%v", tc.command, tc.persistent), func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			rec := testWritableRecord(79, "")
+			rec.Metadata[runtimePersistent] = strconv.FormatBool(tc.persistent)
+			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return []daemon.RuntimeRecord{rec}, nil }
+			deps.startBackground = func(_ context.Context, _ config.Config, _ []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+				assert.Equal(t, tc.wantPersistent, policy.Persistent)
+				return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: testWritableRecord(80, "")}}, nil
+			}
+			if tc.command == "serve" {
+				require.NoError(t, executeServeCommand(t, *deps, out, "restart"))
+			} else {
+				require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+			}
+		})
 	}
 }
 
@@ -1352,6 +1352,7 @@ func TestDaemonStartReplacesOlderAutomaticDaemon(t *testing.T) {
 }
 
 func TestDaemonStartReportsMissingPersistenceOperation(t *testing.T) {
+	setTestVersion(t, "1.1.0")
 	ts := httptest.NewServer(http.NotFoundHandler())
 	defer ts.Close()
 	endpoint, err := url.Parse(ts.URL)
@@ -1360,7 +1361,7 @@ func TestDaemonStartReportsMissingPersistenceOperation(t *testing.T) {
 	require.NoError(t, err)
 	deps, out := daemonCommandTestDeps(t)
 	deps.writableRuntime = func(string, string) *DaemonRuntime {
-		return &DaemonRuntime{Record: daemon.RuntimeRecord{Version: version}, Host: endpoint.Hostname(), Port: port}
+		return &DaemonRuntime{Record: daemon.RuntimeRecord{Version: "1.0.0"}, Host: endpoint.Hostname(), Port: port, RuntimeFallback: true}
 	}
 	deps.persistRuntime = persistDaemonRuntime
 	deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {

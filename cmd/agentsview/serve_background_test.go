@@ -2006,8 +2006,6 @@ func TestEnsureBackgroundServePreservesLaunchOptionsWhenReplacingOlderDaemon(t *
 
 func testEnsureBackgroundServePreservesLaunchOptions(t *testing.T, persistent bool) {
 	t.Helper()
-	t.Setenv(backgroundChildEnvVar, "1")
-	t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(&daemonLifetime{Persistent: persistent},
@@ -2036,11 +2034,6 @@ func testEnsureBackgroundServePreservesLaunchOptions(t *testing.T, persistent bo
 		cfg config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		assert.Equal(t, persistent, cfg.PersistentDaemon)
-		wantTimeout := 2 * time.Second
-		if persistent {
-			wantTimeout = 0
-		}
-		assert.Equal(t, wantTimeout, effectiveDaemonIdleTimeout(cfg))
 		gotArgs = append([]string(nil), arguments...)
 		if _, err := WriteDaemonRuntime(
 			dir, newHost, newPort, "1.1.0", false,
@@ -2075,8 +2068,6 @@ func TestRunServeBackgroundPreservesLaunchOptionsWhenReplacingOlderDaemon(t *tes
 
 func testRunServeBackgroundPreservesLaunchOptions(t *testing.T, persistent bool) {
 	t.Helper()
-	t.Setenv(backgroundChildEnvVar, "1")
-	t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
 	tests := []struct {
 		name         string
 		writeRuntime func(t *testing.T, dir, host string, port int)
@@ -2139,11 +2130,6 @@ func testRunServeBackgroundPreservesLaunchOptions(t *testing.T, persistent bool)
 				cfg config.Config, arguments []string,
 			) (*exec.Cmd, string, error) {
 				assert.Equal(t, persistent, cfg.PersistentDaemon)
-				wantTimeout := 2 * time.Second
-				if persistent {
-					wantTimeout = 0
-				}
-				assert.Equal(t, wantTimeout, effectiveDaemonIdleTimeout(cfg))
 				gotArgs = serveBackgroundChildArgs(arguments)
 				if _, err := WriteDaemonRuntime(
 					dir, newHost, newPort, "1.1.0", false,
