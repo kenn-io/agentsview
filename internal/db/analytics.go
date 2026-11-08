@@ -3455,26 +3455,31 @@ type velocityAccumulator struct {
 	sessions       int
 }
 
-// processSessionVelocity updates every accumulator in accums with one
-// session's turn cycles, first response, and throughput contribution.
-// Shared by GetAnalyticsVelocity (which tracks overall/byAgent/
-// byComplexity) and GetSessionStats (which tracks a single overall).
-//
-// Caller must pass len(msgs) >= 2 in ordinal order. The function
-// itself bumps each accumulator's sessions counter.
-func processSessionVelocity(
-	accums []*velocityAccumulator,
-	msgs []TimingMessage,
-	toolCount int,
-) {
+// SessionVelocity is one session's contribution to velocity analytics.
+// It depends only on the session's own messages, so a store can compute it
+// once when it writes the session and reuse it for every filter.
+type SessionVelocity struct {
+	// Messages is the number of timing rows, valid or not.
+	Messages int
+	// TurnCycles holds each user-to-assistant gap in seconds, in
+	// conversation order.
+	TurnCycles []float64
+	// FirstResponse is the gap from the first user message to the first
+	// assistant message after it, or nil when either is missing.
+	FirstResponse  *float64
+	ActiveSeconds  float64
+	AssistantChars int
+}
+
+// ComputeSessionVelocity reduces one session's timing rows, in ordinal
+// order, to its velocity contribution.
+func ComputeSessionVelocity(msgs []TimingMessage) SessionVelocity {
 	const maxCycleSec = 1800.0
 	// Shared with the Top Sessions "active duration" SQL so the two
 	// "active" definitions stay in lockstep.
 	const maxGapSec = ActiveGapCapSec
 
-	for _, a := range accums {
-		a.sessions++
-	}
+	v := SessionVelocity{Messages: len(msgs)}
 
 	// Turn cycles: user→assistant transitions
 	for i := 1; i < len(msgs); i++ {
@@ -3486,9 +3491,7 @@ func processSessionVelocity(
 		if prev.Role == "user" && cur.Role == "assistant" {
 			delta := cur.Time.Sub(prev.Time).Seconds()
 			if delta > 0 && delta <= maxCycleSec {
-				for _, a := range accums {
-					a.turnCycles = append(a.turnCycles, delta)
-				}
+				v.TurnCycles = append(v.TurnCycles, delta)
 			}
 		}
 	}
@@ -3517,20 +3520,13 @@ func processSessionVelocity(
 		// Clamp negative deltas to 0: ordinal order is
 		// authoritative, so a negative delta means clock skew,
 		// not a missing response.
-		if delta < 0 {
-			delta = 0
-		}
-		for _, a := range accums {
-			a.firstResponses = append(a.firstResponses, delta)
-		}
+		v.FirstResponse = new(max(delta, 0))
 	}
 
-	// Active minutes and throughput
-	activeSec := 0.0
-	asstChars := 0
+	// Active time and throughput
 	for i, m := range msgs {
 		if m.Role == "assistant" {
-			asstChars += m.ContentLength
+			v.AssistantChars += m.ContentLength
 		}
 		if i > 0 && msgs[i-1].Valid && m.Valid {
 			gap := m.Time.Sub(msgs[i-1].Time).Seconds()
@@ -3538,15 +3534,42 @@ func processSessionVelocity(
 				if gap > maxGapSec {
 					gap = maxGapSec
 				}
-				activeSec += gap
+				v.ActiveSeconds += gap
 			}
 		}
 	}
-	activeMins := activeSec / 60.0
-	if activeMins > 0 {
-		for _, a := range accums {
-			a.totalMsgs += len(msgs)
-			a.totalChars += asstChars
+	return v
+}
+
+// processSessionVelocity updates every accumulator in accums with one
+// session's turn cycles, first response, and throughput contribution.
+// Shared by GetAnalyticsVelocity (which tracks overall/byAgent/
+// byComplexity) and GetSessionStats (which tracks a single overall).
+//
+// Caller must pass len(msgs) >= 2 in ordinal order. The function
+// itself bumps each accumulator's sessions counter.
+func processSessionVelocity(
+	accums []*velocityAccumulator,
+	msgs []TimingMessage,
+	toolCount int,
+) {
+	addSessionVelocity(accums, ComputeSessionVelocity(msgs), toolCount)
+}
+
+// addSessionVelocity adds one session's contribution to every accumulator.
+func addSessionVelocity(
+	accums []*velocityAccumulator, v SessionVelocity, toolCount int,
+) {
+	activeMins := v.ActiveSeconds / 60.0
+	for _, a := range accums {
+		a.sessions++
+		a.turnCycles = append(a.turnCycles, v.TurnCycles...)
+		if v.FirstResponse != nil {
+			a.firstResponses = append(a.firstResponses, *v.FirstResponse)
+		}
+		if activeMins > 0 {
+			a.totalMsgs += v.Messages
+			a.totalChars += v.AssistantChars
 			a.totalToolCalls += toolCount
 			a.activeMinutes += activeMins
 		}
@@ -3752,6 +3775,17 @@ type VelocitySession struct {
 
 // BuildVelocityResponse aggregates timing and tool counts by agent and complexity.
 func BuildVelocityResponse(sessionIDs []string, sessionMap map[string]VelocitySession, sessionMsgs map[string][]TimingMessage, toolCountMap map[string]int) VelocityResponse {
+	velocities := make(map[string]SessionVelocity, len(sessionMsgs))
+	for sid, msgs := range sessionMsgs {
+		velocities[sid] = ComputeSessionVelocity(msgs)
+	}
+	return BuildVelocityResponseFromSessions(sessionIDs, sessionMap, velocities, toolCountMap)
+}
+
+// BuildVelocityResponseFromSessions aggregates per-session velocity
+// contributions and tool counts by agent and complexity. A session missing
+// from velocities, or with fewer than two timing rows, contributes nothing.
+func BuildVelocityResponseFromSessions(sessionIDs []string, sessionMap map[string]VelocitySession, velocities map[string]SessionVelocity, toolCountMap map[string]int) VelocityResponse {
 	// Process per-session metrics
 	overall := &velocityAccumulator{}
 	byAgent := make(map[string]*velocityAccumulator)
@@ -3759,8 +3793,8 @@ func BuildVelocityResponse(sessionIDs []string, sessionMap map[string]VelocitySe
 
 	for _, sid := range sessionIDs {
 		info := sessionMap[sid]
-		msgs := sessionMsgs[sid]
-		if len(msgs) < 2 {
+		velocity := velocities[sid]
+		if velocity.Messages < 2 {
 			continue
 		}
 
@@ -3774,11 +3808,11 @@ func BuildVelocityResponse(sessionIDs []string, sessionMap map[string]VelocitySe
 			byComplexity[compKey] = &velocityAccumulator{}
 		}
 
-		processSessionVelocity(
+		addSessionVelocity(
 			[]*velocityAccumulator{
 				overall, byAgent[agentKey], byComplexity[compKey],
 			},
-			msgs, toolCountMap[sid],
+			velocity, toolCountMap[sid],
 		)
 	}
 

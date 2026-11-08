@@ -38,7 +38,9 @@ type AnalyticsBackend interface {
 	FormatTime(any) string
 	// DuckDB binds captured IDs; ClickHouse reselects by filter to stay under its statement size cap.
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
-	VelocityMessages(ctx context.Context, ids []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error)
+	// VelocitySessions returns each selected session's velocity contribution
+	// over its messages without Claude hooks.
+	VelocitySessions(ctx context.Context, ids []string, f db.AnalyticsFilter, loc *time.Location) (map[string]db.SessionVelocity, error)
 	VelocityToolCounts(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
 	// VisitSessionIDSets calls visit with SQL for a parenthesized relation of
 	// ids, either a placeholder list or a subquery, and the arguments it
@@ -99,6 +101,9 @@ type AnalyticsSession struct {
 	RunawayToolLoopCount        int
 	PushVersion                 uint64 // ClickHouse cache version; zero for DuckDB.
 	PushFingerprint             string // DuckDB cache version; empty means uncached.
+	// FrustrationMarkers is the count ClickHouse push stored on the
+	// session; nil when the backend has none and must count them.
+	FrustrationMarkers *int
 }
 
 func (s *Analytics) analyticsSessionsModelTimeFiltered(

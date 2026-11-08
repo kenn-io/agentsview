@@ -121,7 +121,9 @@ transactions. Per batch of changed sessions (100 by default, set by the target's
    table and for `usage_messages`, limited to rows whose sort key has no row
    at `v` or later. Its materialized view never sees deletes, so a shorter
    republished session would otherwise leave obsolete usage rows in the
-   mirror.
+   mirror. Tool result events and tool calls go before messages, so a failure
+   between deletes never leaves calls whose copied message fields name a
+   deleted message.
 1. Insert session rows with fingerprint and `source_archive_id`.
 
 The delete removes only keys the session no longer has, such as messages cut
@@ -486,6 +488,73 @@ changed, and reads prepare at most a fiftieth of what they read. On a
 300,000-row test table, a 5,000-row delta added about 0.13 seconds to the first
 read after a push. Deleted sessions' rows stay until the next
 rebuild, and reads skip them. The view's 15-minute schedule is unchanged.
+
+## Dashboard facts
+
+The Analytics panels used to rebuild per-session numbers from `messages` and
+`tool_calls` on every load. On a mirror of about 107,000 sessions, 2.5 million
+messages, and 1.7 million tool calls, that meant FINAL scans of both tables for
+Activity, a transfer of every message's role, time, and length for Velocity, a
+join of every tool call to its message for Tools and Skills, and, after each
+serve restart, a 22 s scan of every user prompt's text for Signals.
+
+Push already holds each session's messages and tool calls, so it computes these
+numbers once and stores them on the session row (`dashboard_facts.go`):
+
+| Column | Counts | Replaces the scan in |
+| --- | --- | --- |
+| `fact_user_messages` | user rows that are not system rows or tool results | Activity, Session Shape autonomy |
+| `fact_assistant_messages`, `fact_thinking_messages` | assistant rows, rows with thinking | Activity |
+| `fact_tool_use_messages` | assistant rows with tool use | Session Shape autonomy |
+| `fact_tool_calls` | tool calls | Activity, Velocity |
+| `fact_frustration_markers` | prompts `signals.IsFrustrationMarker` flags | Signals |
+| `fact_velocity_*` | the session's `db.SessionVelocity` over messages without Claude hooks | Velocity |
+
+`stored_message_count` already gives the message total. Each tool call row also
+carries its message's `message_timestamp` and `message_model`, so Tools and
+Skills group calls without joining `messages`.
+
+**Reads fall back per row.** A sessions row whose `dashboard_facts_version` is
+not `dashboardFactsVersion`, or a tool call row whose `message_facts` is false,
+came from an older writer. Reads split each panel into a part that reads facts
+and a part that scans messages for exactly those sessions or calls, then
+combine them. The scan part prunes by session ID, so it reads nothing once
+every row carries facts. Results never depend on the backfill finishing.
+
+**Facts match the scan they replace.** Each fact uses the scan's predicate and
+the same Go function the scan feeds (`IsFrustrationMarker`,
+`db.ComputeSessionVelocity`). Velocity facts use timestamps truncated to
+microseconds, as `DateTime64(6)` stores them, so turn cycles match a scan of the
+stored rows exactly. `TestDashboardFactsMatchMessageScans` compares every
+affected panel with facts, with some sessions scanned, and with all scanned.
+While a push is between its inserts and its session row, the facts describe the
+published session version and a scan would read the newer messages; both
+settle when the session row lands.
+
+**Backfill is one full push.** A push that finds rows of its archive below the
+current facts version, or without `stored_message_count`, runs one full push
+(`publishing stored session counts`) and repeats it until one finishes without
+errors. Bump `dashboardFactsVersion` when a fact's definition changes.
+
+**FINAL stays on.** The panels that used facts now read `sessions` with FINAL
+instead of `messages` and `tool_calls`, which removes most of FINAL's cost
+from them.
+
+**Rejected alternatives.**
+
+- Partitioning the large tables and setting
+  `do_not_merge_across_partitions_select_final`. ClickHouse cannot add a
+  partition key in place, so every large table would be copied, and every
+  version of a row must stay in one partition.
+- Storing the frustration count in SQLite as quality signal version 8. That
+  recomputes every session's signals and republishes every replica, for one
+  count only ClickHouse needs to precompute.
+- Porting `IsFrustrationMarker` to ClickHouse SQL. Regex and Unicode case
+  folding differ between Go and ClickHouse, and the scan would still read every
+  prompt.
+
+SQLite, PostgreSQL, and DuckDB keep their scans; only the ClickHouse layout
+changed.
 
 ## Kept reads
 

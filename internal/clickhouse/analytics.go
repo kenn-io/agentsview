@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -62,7 +63,8 @@ func (s *Store) loadAnalyticsSessions(
 
 func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []any) ([]readbase.AnalyticsSession, error) {
 	rows, err := s.queryContext(ctx, `
-		SELECT `+readbase.AnalyticsSessionColumns+`, push_version
+		SELECT `+readbase.AnalyticsSessionColumns+`, push_version,
+			if(`+chFactsKnown+`, fact_frustration_markers, NULL)
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -70,7 +72,9 @@ func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "clickhouse", formatDBTime, true, false)
+	return readbase.ScanAnalyticsSessions(rows, "clickhouse", formatDBTime, readbase.AnalyticsSessionExtras{
+		PushVersion: true, FrustrationMarkers: true,
+	})
 }
 
 // analyticsSessionMemoKey names a session listing by predicate and
@@ -192,10 +196,14 @@ func chAnalyticsToolMessageJoin(
 }
 
 func (s analyticsSQL) Autonomy(ctx context.Context, _ []string, f db.AnalyticsFilter) (map[string]int, error) {
-	sessions := chAnalyticsSessionSet(f)
+	known, knownArgs, unknown := chAnalyticsFactSets(f)
 
-	sessionIn, args := sessions.in("session_id")
+	sessionIn, args := unknown.in("session_id")
 	rows, err := s.QueryContext(ctx, `
+		SELECT s.id, s.fact_user_messages, s.fact_tool_use_messages
+		FROM sessions s
+		WHERE `+known+`
+		UNION ALL
 		SELECT session_id,
 			toInt64(countIf(role = 'user' AND is_system = false
 				AND COALESCE(source_subtype, '') != 'tool_result')) AS user_count,
@@ -203,7 +211,7 @@ func (s analyticsSQL) Autonomy(ctx context.Context, _ []string, f db.AnalyticsFi
 		FROM messages
 		WHERE `+sessionIn+`
 		GROUP BY session_id`,
-		args...,
+		slices.Concat(knownArgs, args)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying clickhouse autonomy: %w", err)
@@ -254,6 +262,17 @@ func chAnalyticsSessionSet(f db.AnalyticsFilter) chSessionSet {
 	return chSessionSetFromWhere(where, args)
 }
 
+// chAnalyticsFactSets splits the sessions chAnalyticsSessionSet selects by
+// whether their dashboard facts are current. known is a WHERE clause over
+// the alias `s` for the sessions whose facts a read can use; unknown selects
+// the rest, whose messages the read still scans.
+func chAnalyticsFactSets(f db.AnalyticsFilter) (known string, knownArgs []any, unknown chSessionSet) {
+	where, args := chBuildAnalyticsWhere(
+		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
+	return where + " AND s." + chFactsKnown, args,
+		chSessionSetFromWhere(where+" AND NOT s."+chFactsKnown, slices.Clone(args))
+}
+
 // chAnalyticsToolCallMessagesSQL selects the message columns tool call
 // analytics join, limited to the selected sessions so the join hashes those
 // sessions' messages rather than every message. The join keys on session
@@ -278,9 +297,52 @@ func analyticsSessionIDsContext(ctx context.Context, ids []string) (context.Cont
 	return chdriver.Context(ctx, chdriver.WithExternalTable(table)), "(SELECT id FROM analytics_session_ids)", nil
 }
 
-func (s analyticsSQL) VelocityMessages(ctx context.Context, _ []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
-	sessions := chAnalyticsSessionSet(f)
+func (s analyticsSQL) VelocitySessions(ctx context.Context, _ []string, f db.AnalyticsFilter, loc *time.Location) (map[string]db.SessionVelocity, error) {
+	known, knownArgs, unknown := chAnalyticsFactSets(f)
 
+	out, err := s.knownVelocities(ctx, known, knownArgs)
+	if err != nil {
+		return nil, err
+	}
+	scanned, err := s.scanVelocityMessages(ctx, unknown, loc)
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(out, readbase.SessionVelocities(scanned))
+	return out, nil
+}
+
+// knownVelocities reads the stored velocity facts of the sessions known
+// selects.
+func (s analyticsSQL) knownVelocities(ctx context.Context, known string, args []any) (map[string]db.SessionVelocity, error) {
+	rows, err := s.QueryContext(ctx, `
+		SELECT s.id, s.fact_velocity_messages, s.fact_velocity_turn_cycles,
+			s.fact_velocity_first_response, s.fact_velocity_active_seconds,
+			s.fact_velocity_assistant_chars
+		FROM sessions s
+		WHERE `+known, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying clickhouse velocity facts: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]db.SessionVelocity)
+	for rows.Next() {
+		var id string
+		var v db.SessionVelocity
+		if err := rows.Scan(&id, &v.Messages, &v.TurnCycles, &v.FirstResponse, &v.ActiveSeconds, &v.AssistantChars); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse velocity facts: %w", err)
+		}
+		out[id] = v
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating clickhouse velocity facts: %w", err)
+	}
+	return out, nil
+}
+
+// scanVelocityMessages reads the velocity timing rows of the sessions in
+// sessions.
+func (s analyticsSQL) scanVelocityMessages(ctx context.Context, sessions chSessionSet, loc *time.Location) (map[string][]db.TimingMessage, error) {
 	out := make(map[string][]db.TimingMessage)
 	sessionIn, args := sessions.in("session_id")
 	rows, err := s.QueryContext(ctx, `
@@ -298,30 +360,26 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, _ []string, f db.Ana
 }
 
 func (s analyticsSQL) VelocityToolCounts(ctx context.Context, _ []string, f db.AnalyticsFilter) (map[string]int, error) {
-	sessions := chAnalyticsSessionSet(f)
+	known, knownArgs, unknown := chAnalyticsFactSets(f)
 
 	out := make(map[string]int)
-	sessionIn, args := sessions.in("session_id")
+	sessionIn, args := unknown.in("session_id")
 	rows, err := s.QueryContext(ctx, `
+		SELECT s.id, s.fact_tool_calls
+		FROM sessions s
+		WHERE `+known+` AND s.fact_tool_calls > 0
+		UNION ALL
 		SELECT session_id, toInt64(COUNT(*))
 		FROM tool_calls
 		WHERE `+sessionIn+`
 		GROUP BY session_id`,
-		args...,
+		slices.Concat(knownArgs, args)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying clickhouse velocity tool calls: %w", err)
 	}
 	defer rows.Close()
 	return readbase.ScanAnalyticsVelocityToolCounts(rows, "clickhouse", out)
-}
-
-func chSessionPushVersions(sessions []readbase.AnalyticsSession) map[string]uint64 {
-	versions := make(map[string]uint64, len(sessions))
-	for _, session := range sessions {
-		versions[session.ID] = session.PushVersion
-	}
-	return versions
 }
 
 // frustrationMarkerMemo remembers each session's marker count under the
@@ -357,20 +415,33 @@ func (m *frustrationMarkerMemo) store(id string, pushVersion uint64, count int) 
 	m.counts[id] = frustrationMarkerEntry{pushVersion: pushVersion, count: count}
 }
 
-// chPopulateFrustrationMarkers counts frustration markers for rows whose
-// session version is not memoized. versions maps session IDs to the push
-// version their row was read at; a session absent from it is always scanned.
+// chPopulateFrustrationMarkers fills each row's frustration marker count
+// from the count push stored on its session, else from the memo, else by
+// scanning the session's prompts. sessions are the listing rows were built
+// from; a session absent from it is always scanned.
 func (s *Store) chPopulateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
-	versions map[string]uint64,
+	sessions []readbase.AnalyticsSession,
 ) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	versions := make(map[string]uint64, len(sessions))
+	stored := make(map[string]int)
+	for _, session := range sessions {
+		versions[session.ID] = session.PushVersion
+		if session.FrustrationMarkers != nil {
+			stored[session.ID] = *session.FrustrationMarkers
+		}
+	}
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
+		if count, ok := stored[rows[i].ID]; ok {
+			rows[i].FrustrationMarkerCount = count
+			continue
+		}
 		if version, ok := versions[rows[i].ID]; ok {
 			if count, hit := s.frustrationMarkers.lookup(rows[i].ID, version); hit {
 				rows[i].FrustrationMarkerCount = count

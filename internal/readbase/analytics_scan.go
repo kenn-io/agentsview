@@ -175,7 +175,15 @@ func scanAnalyticsMessageScope(rows *sql.Rows, backend string, formatTime func(a
 	return nil
 }
 
-func ScanAnalyticsSessions(rows *sql.Rows, backend string, formatTime func(any) string, pushVersion, pushFingerprint bool) ([]AnalyticsSession, error) {
+// AnalyticsSessionExtras names the backend columns a session listing
+// selects after AnalyticsSessionColumns, in field order.
+type AnalyticsSessionExtras struct {
+	PushVersion        bool
+	PushFingerprint    bool
+	FrustrationMarkers bool
+}
+
+func ScanAnalyticsSessions(rows *sql.Rows, backend string, formatTime func(any) string, extras AnalyticsSessionExtras) ([]AnalyticsSession, error) {
 	var out []AnalyticsSession
 	for rows.Next() {
 		var r AnalyticsSession
@@ -196,11 +204,14 @@ func ScanAnalyticsSessions(rows *sql.Rows, backend string, formatTime func(any) 
 			&r.DuplicatePromptCount, &r.NoCodeContextCount,
 			&r.RunawayToolLoopCount,
 		}
-		if pushVersion {
+		if extras.PushVersion {
 			dest = append(dest, &r.PushVersion)
 		}
-		if pushFingerprint {
+		if extras.PushFingerprint {
 			dest = append(dest, &r.PushFingerprint)
+		}
+		if extras.FrustrationMarkers {
+			dest = append(dest, &r.FrustrationMarkers)
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scanning %s analytics session: %w", backend, err)
