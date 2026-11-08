@@ -1,20 +1,26 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { ApiError, attachResponseTiming } from "../api/runtime.js";
 import { analytics } from "./analytics.svelte.js";
+import {
+  makeSummary,
+  makeActivity,
+  makeHeatmap,
+  makeProjects,
+  makeHourOfWeek,
+  makeSessionShape,
+  makeVelocity,
+  makeTools,
+  makeSkills,
+  makeTopSessions,
+  makeSignals,
+} from "../test-support/analytics.js";
 import { sessions } from "./sessions.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
 
 import type {
   AnalyticsSummaryResponse as AnalyticsSummary,
-  DbActivityResponse as ActivityResponse,
-  DbHeatmapResponse as HeatmapResponse,
-  DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
-  DbHourOfWeekResponse as HourOfWeekResponse,
-  DbSessionShapeResponse as SessionShapeResponse,
-  DbVelocityResponse as VelocityResponse,
   DbToolsAnalyticsResponse as ToolsAnalyticsResponse,
   DbSkillsAnalyticsResponse as SkillsAnalyticsResponse,
-  DbTopSessionsResponse as TopSessionsResponse,
   DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
 } from "../api/generated/index.js";
 
@@ -55,145 +61,6 @@ const analyticsService = AnalyticsService as unknown as {
   getApiV1AnalyticsSignals: MockFn;
 };
 
-function makeSummary(): AnalyticsSummary {
-  return {
-    total_sessions: 10,
-    total_messages: 100,
-    total_output_tokens: 42000,
-    token_reporting_sessions: 8,
-    models: [],
-    active_projects: 3,
-    active_days: 5,
-    avg_messages: 10,
-    median_messages: 8,
-    p90_messages: 20,
-    most_active_project: "proj",
-    concentration: 0.5,
-    agents: {},
-  };
-}
-
-function makeActivity(): ActivityResponse {
-  return { granularity: "day", series: [] };
-}
-
-function makeHeatmap(): HeatmapResponse {
-  return {
-    metric: "messages",
-    entries: [],
-    levels: { l1: 1, l2: 5, l3: 10, l4: 20 },
-    entries_from: "2024-01-01",
-  };
-}
-
-function makeProjects(): ProjectsAnalyticsResponse {
-  return { projects: [] };
-}
-
-function makeHourOfWeek(): HourOfWeekResponse {
-  return { cells: [] };
-}
-
-function makeSessionShape(): SessionShapeResponse {
-  return {
-    count: 0,
-    length_distribution: [],
-    duration_distribution: [],
-    autonomy_distribution: [],
-  };
-}
-
-function makeVelocity(): VelocityResponse {
-  return {
-    overall: {
-      turn_cycle_sec: { p50: 0, p90: 0 },
-      first_response_sec: { p50: 0, p90: 0 },
-      msgs_per_active_min: 0,
-      chars_per_active_min: 0,
-      tool_calls_per_active_min: 0,
-    },
-    by_agent: [],
-    by_complexity: [],
-  };
-}
-
-function makeTools(): ToolsAnalyticsResponse {
-  return {
-    total_calls: 0,
-    by_category: [],
-    by_agent: [],
-    by_tool: [],
-    trend: [],
-  };
-}
-
-function makeSkills(): SkillsAnalyticsResponse {
-  return {
-    total_skill_calls: 0,
-    distinct_skills: 0,
-    by_skill: [],
-    trend: [],
-  };
-}
-
-function makeTopSessions(): TopSessionsResponse {
-  return { metric: "messages", sessions: [] };
-}
-
-function makeSignals(): SignalsAnalyticsResponse {
-  return {
-    scored_sessions: 0,
-    unscored_sessions: 0,
-    grade_distribution: {},
-    avg_health_score: null,
-    outcome_distribution: {},
-    outcome_confidence_distribution: {},
-    tool_health: {
-      total_failure_signals: 0,
-      total_retries: 0,
-      total_edit_churn: 0,
-      sessions_with_failures: 0,
-      failure_rate: 0,
-    },
-    context_health: {
-      avg_compaction_count: 0,
-      sessions_with_compaction: 0,
-      mid_task_compaction_count: 0,
-      sessions_with_mid_task_compaction: 0,
-      sessions_with_context_data: 0,
-      avg_context_pressure: null,
-      high_pressure_sessions: 0,
-    },
-    quality_health: {
-      computed_sessions: 0,
-      totals: {
-        short_prompt_count: 0,
-        unstructured_start: 0,
-        missing_success_criteria_count: 0,
-        missing_verification_count: 0,
-        duplicate_prompt_count: 0,
-        no_code_context_count: 0,
-        runaway_tool_loop_count: 0,
-        frustration_marker_count: 0,
-      },
-      sessions_with_signal: {
-        short_prompt_count: 0,
-        unstructured_start: 0,
-        missing_success_criteria_count: 0,
-        missing_verification_count: 0,
-        duplicate_prompt_count: 0,
-        no_code_context_count: 0,
-        runaway_tool_loop_count: 0,
-        frustration_marker_count: 0,
-      },
-    },
-    trend: [],
-    by_agent: [],
-    by_project: [],
-    calibration: {},
-  };
-}
-
 function mockAllAPIs() {
   vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockResolvedValue(makeSummary());
   vi.mocked(analyticsService.getApiV1AnalyticsActivity).mockResolvedValue(makeActivity());
@@ -216,6 +83,16 @@ async function loadAnalyticsStore() {
 }
 
 function resetStore() {
+  analytics.cancelInFlightReads();
+  Object.assign(analytics, {
+    skillsRequestGranularity: "week",
+    scopes: {},
+    loadedModelAliases: {},
+  });
+  for (const panel of Object.keys(analytics.errors) as (keyof typeof analytics.errors)[]) {
+    analytics.errors[panel] = null;
+    analytics.loading[panel] = false;
+  }
   analytics.selectedDate = null;
   analytics.selectedActivityRange = null;
   analytics.selectedDow = null;
@@ -317,12 +194,14 @@ describe("AnalyticsStore.selectDate", () => {
     expect(analyticsService.getApiV1AnalyticsHourOfWeek).not.toHaveBeenCalled();
   });
 
-  it("keeps the parent hour-of-week data while a date is selected", () => {
-    const parent = makeHourOfWeek();
-    analytics.hourOfWeek = parent;
+  it("keeps parent hour-of-week data through selecting and clearing a date", async () => {
+    await analytics.fetchHourOfWeek();
+    const parent = analytics.hourOfWeek;
 
     analytics.selectDate("2024-01-15");
 
+    expect(analytics.hourOfWeek).toEqual(parent);
+    analytics.clearDate();
     expect(analytics.hourOfWeek).toEqual(parent);
   });
 
@@ -394,7 +273,7 @@ describe("AnalyticsStore.setDateRange", () => {
 
 describe("AnalyticsStore.setSkillsGranularity", () => {
   it("applies the new granularity only after its response arrives", async () => {
-    analytics.skills = makeSkills();
+    await analytics.fetchSkills("week");
     let resolve!: (value: SkillsAnalyticsResponse) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockReturnValueOnce(
       new Promise((r) => {
@@ -417,8 +296,8 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
     expect(analytics.querying.skills).toBe(false);
   });
 
-  it("keeps the applied granularity when the request fails", async () => {
-    analytics.skills = makeSkills();
+  it("keeps the applied grouping and permits retrying or returning after failure", async () => {
+    await analytics.fetchSkills("week");
     vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockRejectedValueOnce(
       new Error("network down"),
     );
@@ -427,6 +306,15 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 
     expect(result).toBe("error");
     expect(analytics.skillsGranularity).toBe("week");
+    expect(analytics.requestedSkillsGranularity).toBe("month");
+    vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockRejectedValueOnce(
+      new Error("still unavailable"),
+    );
+    await analytics.fetchSkills();
+    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]?.granularity).toBe("month");
+    await analytics.setSkillsGranularity("week");
+    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]?.granularity).toBe("week");
+    expect(analytics.requestedSkillsGranularity).toBe("week");
   });
 });
 
@@ -739,21 +627,6 @@ describe("AnalyticsStore activity range selection", () => {
       expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
     );
   });
-
-  it("does not retain parent summary data when a brushed-range request fails", async () => {
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    analytics.summary = makeSummary();
-    analyticsService.getApiV1AnalyticsSummary.mockRejectedValueOnce(
-      new Error("range request failed"),
-    );
-
-    analytics.setActivitySelection("2024-01-10", "2024-01-12");
-
-    await vi.waitFor(() => {
-      expect(analytics.errors.summary).toBe("range request failed");
-    });
-    expect(analytics.summary).toBeNull();
-  });
 });
 
 describe("AnalyticsStore.clearDate", () => {
@@ -787,16 +660,6 @@ describe("AnalyticsStore.clearDate", () => {
     });
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(expected);
     expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).toEqual(expected);
-  });
-
-  it("keeps the parent hour-of-week data when the date is cleared", () => {
-    analytics.selectedDate = "2024-01-15";
-    const parent = makeHourOfWeek();
-    analytics.hourOfWeek = parent;
-
-    analytics.clearDate();
-
-    expect(analytics.hourOfWeek).toEqual(parent);
   });
 });
 
@@ -930,6 +793,26 @@ describe("AnalyticsStore automated scope params", () => {
 });
 
 describe("AnalyticsStore model filter", () => {
+  it("retains a saved model's group when a new date read fails", async () => {
+    analytics.model = "claude-opus-4-20250514";
+    analyticsService.getApiV1AnalyticsSummary.mockResolvedValueOnce({
+      ...makeSummary(),
+      model_aliases: { "claude-opus-4-20250514": "claude-4" },
+    });
+    await analytics.fetchSummary();
+    analytics.from = "2024-02-01";
+    analyticsService.getApiV1AnalyticsSummary.mockRejectedValueOnce(new Error("Summary timed out"));
+    await analytics.fetchSummary();
+    expect(analytics.summary).toBeNull();
+    expect(analytics.errors.summary).toBe("Summary timed out");
+    expect(analytics.displayedModels).toBe("claude-4");
+    const refresh = vi.spyOn(analytics, "fetchAll");
+    analytics.toggleModel("claude-4");
+    expect(analytics.model).toBe("");
+    await refresh.mock.results[0]!.value;
+    refresh.mockRestore();
+  });
+
   it("requests grouped model rows", async () => {
     await analytics.fetchSummary();
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
@@ -1094,7 +977,7 @@ describe("executeFetch concurrency and error handling", () => {
   });
 
   it("should expose query progress during cached refetches", async () => {
-    analytics.summary = makeSummary();
+    await analytics.fetchSummary();
     let resolve!: (v: AnalyticsSummary) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValue(
       new Promise((r) => {
@@ -1173,19 +1056,39 @@ describe("executeFetch concurrency and error handling", () => {
     expect(analytics.summary?.total_sessions).toBe(99);
     expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
 
-    analytics.from = "2026-02-01";
-    let reject!: (reason: Error) => void;
-    vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
-      new Promise((_resolve, rej) => {
-        reject = rej;
-      }),
+    vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockRejectedValueOnce(
+      new Error("summary unavailable"),
     );
-    const pending = analytics.fetchSummary();
-    expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
-    reject(new Error("summary unavailable"));
-    await pending;
+    await analytics.fetchSummary();
     expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
   });
+
+  it.each(["summary", "tools"] as const)(
+    "clears the %s filter snapshot with its data",
+    async (panel) => {
+      const fetch =
+        panel === "summary" ? () => analytics.fetchSummary() : () => analytics.fetchTools();
+      const read =
+        panel === "summary"
+          ? analyticsService.getApiV1AnalyticsSummary
+          : analyticsService.getApiV1AnalyticsTools;
+      const snapshot = panel === "summary" ? "summaryFilterParams" : "toolsFilterParams";
+      await fetch();
+      expect(analytics[snapshot]).not.toBeNull();
+      analytics.agent = "codex";
+      let release!: (value: unknown) => void;
+      read.mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+      );
+      const pending = fetch();
+      expect(analytics[panel]).toBeNull();
+      expect(analytics[snapshot]).toBeNull();
+      release(panel === "summary" ? makeSummary() : makeTools());
+      await pending;
+    },
+  );
 
   it("should ignore stale error from superseded request", async () => {
     let rejectFirst!: (e: Error) => void;
@@ -1294,17 +1197,14 @@ describe("AnalyticsStore rolling default date range", () => {
     expect(analytics.to).toBe("2026-04-25");
   });
 
-  it("fetchAll re-derives from/to against the current clock while unpinned", async () => {
+  it("fetchAll re-derives its rolling request range", async () => {
     const { analytics } = await loadAnalyticsStore();
-
-    expect(analytics.from).toBe("2025-04-26");
-    expect(analytics.to).toBe("2026-04-25");
-
     vi.setSystemTime(new Date("2026-04-26T12:00:00"));
     await analytics.fetchAll();
-
-    expect(analytics.from).toBe("2025-04-27");
-    expect(analytics.to).toBe("2026-04-26");
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toMatchObject({
+      from: "2025-04-27",
+      to: "2026-04-26",
+    });
   });
 
   it("setDateRange pins and subsequent fetchAll does not roll", async () => {
@@ -1427,5 +1327,41 @@ describe("invalid machine refetches", () => {
     expect(analytics.summary).toBeNull();
     expect(analytics.signals).toBeNull();
     expect(analytics.errors.summary).toBe("unknown machine");
+  });
+});
+
+describe("AnalyticsStore panel scopes", () => {
+  it("keeps the panel error visible while retry is pending", async () => {
+    await analytics.fetchTools();
+
+    vi.mocked(analyticsService.getApiV1AnalyticsTools).mockRejectedValueOnce(
+      new Error("tools unavailable"),
+    );
+    await analytics.fetchTools();
+    expect(analytics.errors.tools).toBe("tools unavailable");
+    let releaseRetry!: (value: ToolsAnalyticsResponse) => void;
+    vi.mocked(analyticsService.getApiV1AnalyticsTools).mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseRetry = resolve;
+      }),
+    );
+    const retry = analytics.fetchTools();
+    expect(analytics.errors.tools).toBe("tools unavailable");
+    releaseRetry(makeTools());
+    await retry;
+  });
+
+  it("passes the selected hour to activity and heatmap requests", async () => {
+    await analytics.fetchAll();
+    analytics.selectHourOfWeek(1, 9);
+    for (const read of [
+      analyticsService.getApiV1AnalyticsActivity,
+      analyticsService.getApiV1AnalyticsHeatmap,
+    ]) {
+      expect(read.mock.lastCall?.[0]).toMatchObject({ dow: 1, hour: 9 });
+    }
+    await vi.waitFor(() =>
+      expect(analytics.querying.activity || analytics.querying.heatmap).toBe(false),
+    );
   });
 });

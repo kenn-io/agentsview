@@ -28,6 +28,7 @@ async function render(props: {
       githubConfigured: true,
       backendAvailable: true,
       onIncludePullRequests: () => {},
+      onRetry: () => {},
       ...props,
     },
   });

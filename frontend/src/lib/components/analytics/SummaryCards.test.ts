@@ -14,9 +14,23 @@ afterEach(() => {
   analytics.summaryFilterParams = null;
   analytics.from = "";
   analytics.querying.summary = false;
+  analytics.errors.summary = null;
 });
 
 describe("SummaryCards", () => {
+  it("shows distinct placeholders while loading and after failure", async () => {
+    component = mount(SummaryCards, { target: document.body });
+    await tick();
+    const values = () =>
+      [...document.querySelectorAll(".card-value")].map((v) => v.textContent?.trim());
+    expect(values()).toEqual(["-", "-", "-", "-", "-", "-"]);
+
+    analytics.errors.summary = "summary failed";
+    await tick();
+    expect(document.body.textContent).toContain("summary failed");
+    expect(values()).toEqual(["--", "--", "--", "--", "--", "--"]);
+  });
+
   it("keeps the caption on the last accepted summary", async () => {
     analytics.summary = null;
     const data = {

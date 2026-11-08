@@ -2,6 +2,7 @@
   import { Card } from "@kenn-io/kit-ui";
   import type { DbStatsOutcomeStats } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
+  import PanelStatus from "./PanelStatus.svelte";
 
   interface Props {
     stats: DbStatsOutcomeStats | null;
@@ -13,6 +14,7 @@
     /** True once the caller has asked for the GitHub lookups too. */
     includePullRequests: boolean;
     onIncludePullRequests: () => void;
+    onRetry: () => void;
   }
 
   let {
@@ -24,6 +26,7 @@
     error,
     includePullRequests,
     onIncludePullRequests,
+    onRetry,
   }: Props = $props();
 
   interface Metric {
@@ -88,7 +91,7 @@
   {:else if unavailable}
     <div class="outcome-empty">{m.analytics_outcome_filters_unsupported()}</div>
   {:else if error}
-    <div class="outcome-error">{error}</div>
+    <PanelStatus hasData={stats !== null} pending={loading} {error} {onRetry} />
   {:else if backendAvailable === undefined || (loading && !stats)}
     <div class="outcome-loading">{m.analytics_outcome_loading()}</div>
   {:else if !stats}
@@ -178,11 +181,6 @@
   .outcome-loading {
     font-size: 11px;
     color: var(--text-muted);
-  }
-
-  .outcome-error {
-    font-size: 11px;
-    color: var(--accent-red);
   }
 
   .outcome-partial {

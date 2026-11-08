@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Card } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import { formatDayRange, m } from "../../i18n/index.js";
 
   function formatNum(n: number): string {
@@ -72,8 +73,8 @@
 <div class="summary-cards">
   {#each cards as card}
     <Card level="default" padding="none" class="card">
-      {#if analytics.errors.summary}
-        <span class="card-value error">--</span>
+      {#if !analytics.summary}
+        <span class="card-value placeholder">{analytics.errors.summary ? "--" : "-"}</span>
         <span class="card-label">{card.label()}</span>
       {:else}
         <span class="card-value">
@@ -91,17 +92,13 @@
   {/each}
 </div>
 
-{#if analytics.errors.summary}
-  <div class="error-bar">
-    <span>{analytics.errors.summary}</span>
-    <button
-      class="retry-btn"
-      onclick={() => analytics.fetchSummary()}
-    >
-      {m.shared_retry()}
-    </button>
-  </div>
-{/if}
+<!-- The placeholder cards stand in for the loading message. -->
+<PanelStatus
+  hasData
+  pending={analytics.querying.summary}
+  error={analytics.errors.summary}
+  onRetry={() => analytics.fetchSummary()}
+/>
 
 <style>
   .summary-cards {
@@ -130,7 +127,7 @@
     line-height: 1.2;
   }
 
-  .card-value.error {
+  .card-value.placeholder {
     color: var(--text-muted);
   }
 
@@ -144,31 +141,5 @@
     font-size: 10px;
     color: var(--text-muted);
     margin-top: 2px;
-  }
-
-  .error-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--bg-surface);
-    border: 1px solid var(--accent-red);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: var(--accent-red);
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid var(--accent-red);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: var(--accent-red);
-    cursor: pointer;
-  }
-
-  .retry-btn:hover {
-    background: var(--accent-red);
-    color: var(--accent-red-foreground);
   }
 </style>

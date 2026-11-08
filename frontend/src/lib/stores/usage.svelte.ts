@@ -1,6 +1,6 @@
 import { excludedModelGroups, groupedModelCsv, toggleGroupedModel } from "../utils/model-groups.js";
 import { m } from "../i18n/index.js";
-import { queryStepFrom, type QueryStep } from "../utils/refresh.js";
+import { queryStepFrom, refreshScopeKey, type QueryStep } from "../utils/refresh.js";
 import { LiveQuery } from "../utils/liveQuery.svelte.js";
 import type { UsagePairwiseDimension } from "../api/types/usage.js";
 import {
@@ -216,11 +216,6 @@ export type UsageMode = "cost" | "token";
 
 function selectionKey(params: UsageParams): string {
   return [params.project_key, params.model, params.agent].join("|");
-}
-
-// active_since follows the clock, so only whether it is set changes the scope.
-function refreshScopeKey(params: UsageParams): string {
-  return JSON.stringify({ ...params, active_since: params.active_since !== undefined });
 }
 
 function summaryForDateRange(

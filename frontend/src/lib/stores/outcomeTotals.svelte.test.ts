@@ -70,6 +70,52 @@ describe("OutcomeTotalsStore", () => {
     expect(store.stats?.prs_opened).toBe(25);
   });
 
+  it.each([false, true])(
+    "retries the failed window with pull requests opted in=%s",
+    async (includePullRequests) => {
+      const response = {
+        outcome_stats: {
+          repos_active: 1,
+          commits: 5,
+          loc_added: 12,
+          loc_removed: 2,
+          files_changed: 3,
+          ...(includePullRequests ? { prs_opened: 2, prs_merged: 1 } : {}),
+        },
+      } as DbSessionStats;
+      const pending = Promise.withResolvers<DbSessionStats>();
+      const fetchStats = vi
+        .fn<FetchStats>()
+        .mockRejectedValueOnce(new Error("Outcome request timed out"))
+        .mockReturnValueOnce(pending.promise);
+      const store = new OutcomeTotalsStore(fetchStats);
+      const window = { since: "2026-03-01T05:00:00.000Z", until: "2026-04-01T04:00:00.000Z" };
+      await (includePullRequests ? store.loadWithPullRequests(window) : store.load(window));
+      const retry = store.retry(window);
+      try {
+        expect(store.loading).toBe(true);
+        expect(store.error).toBe("Outcome request timed out");
+        expect(fetchStats).toHaveBeenCalledTimes(2);
+        expect(fetchStats.mock.lastCall?.[0]).toEqual({
+          since: "2026-03-01T05:00:00.000Z",
+          until: "2026-04-01T04:00:00.000Z",
+          outcomes_only: true,
+          include_git_outcomes: true,
+          include_github_outcomes: includePullRequests,
+        });
+        pending.resolve(response);
+        await retry;
+        expect(store.stats?.commits).toBe(5);
+        expect(store.includePullRequests).toBe(includePullRequests);
+        expect(store.loading).toBe(false);
+        expect(store.error).toBeNull();
+      } finally {
+        pending.resolve(response);
+        await retry;
+      }
+    },
+  );
+
   it("keeps the response's absent outcome block as absent, not as zeros", async () => {
     const fetchStats = vi.fn(async () => ({ generated_at: "2026-09-01T00:00:00Z" }));
     const store = new OutcomeTotalsStore(fetchStats as unknown as FetchStats);

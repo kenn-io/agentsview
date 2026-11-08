@@ -1,6 +1,6 @@
 import { groupedModelCsv, toggleGroupedModel } from "../utils/model-groups.js";
 import { m } from "../i18n/index.js";
-import { queryStepFrom, type QueryStep } from "../utils/refresh.js";
+import { queryStepFrom, refreshScopeKey, type QueryStep } from "../utils/refresh.js";
 import { LiveQuery } from "../utils/liveQuery.svelte.js";
 import type { AutomatedScope } from "../api/types.js";
 import type {
@@ -71,6 +71,8 @@ class AnalyticsStore {
   windowDays: number = $state(ANALYTICS_DEFAULT_WINDOW_DAYS);
   granularity: Granularity = $state("day");
   skillsGranularity: Granularity = $state("week");
+  private skillsRequestGranularity: Granularity = $state("week");
+
   metric: HeatmapMetric = $state("messages");
   selectedDate: string | null = $state(null);
   selectedActivityRange: { from: string; to: string } | null = $state(null);
@@ -89,6 +91,8 @@ class AnalyticsStore {
 
   summary = $state<AnalyticsSummary | null>(null);
   summaryFilterParams = $state<AnalyticsParams | null>(null);
+  // Server-wide model groups, kept when a date-scoped summary read fails.
+  private loadedModelAliases = $state<Record<string, string>>({});
   activity = $state<ActivityResponse | null>(null);
   heatmap = $state<DbHeatmapResponse | null>(null);
   projects = $state<ProjectsAnalyticsResponse | null>(null);
@@ -178,14 +182,13 @@ class AnalyticsStore {
     signals: 0,
   };
   private fetchAllVersion = 0;
-  private activityScope: string | null = null;
+  private scopes: Partial<Record<Panel, string>> = {};
   private abortControllers: Partial<Record<Panel, AbortController>> = {};
   private fetchStartHandler: (() => void) | undefined;
-  // Scope key of the cached `signals`: the Analytics-only filters (model plus
-  // the heatmap drill-down) the cached data was fetched with. Used to drop the
-  // cache when a fetch crosses the Analytics / Quality boundary, where those
-  // filters do not exist.
-  private signalsScope: string | null = null;
+
+  get requestedSkillsGranularity(): Granularity {
+    return this.skillsRequestGranularity;
+  }
 
   get timezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -293,7 +296,7 @@ class AnalyticsStore {
   }
 
   get modelAliases(): Record<string, string> {
-    return this.summary?.model_aliases ?? {};
+    return this.summary?.model_aliases ?? this.loadedModelAliases;
   }
 
   get displayedModels(): string {
@@ -348,7 +351,6 @@ class AnalyticsStore {
 
   clearDate() {
     this.selectedDate = null;
-    this.clearDrilldownData({ preserveHourOfWeek: true });
     void this.fetchSummary();
     void this.fetchProjects();
     void this.fetchSessionShape();
@@ -487,22 +489,21 @@ class AnalyticsStore {
 
   private async executeFetch<T>(
     panel: Panel,
+    params: AnalyticsParams,
     fetchRequest: (options?: { signal?: AbortSignal }) => Promise<T>,
     onSuccess: (data: T) => void,
     hasExistingData: () => boolean = () => false,
   ): Promise<FetchResult> {
     const v = ++this.versions[panel];
     const signal = this.nextAbortSignal(panel);
-    // Only show the skeleton when we don't already have data to
-    // display. Refetches triggered by live events or filter changes
-    // replace data in place instead of flashing to loading state.
-    const isFirstLoad = !hasExistingData();
+    const scope = refreshScopeKey(params);
+    if (this.scopes[panel] !== scope) {
+      this.clearPanel(panel);
+      this.errors[panel] = null;
+    }
+    this.scopes[panel] = scope;
     this.querying[panel] = true;
-    if (isFirstLoad) this.loading[panel] = true;
-    // On refetch, keep any prior error state in place until we have
-    // a definitive result. First-load clears up front so we start
-    // fresh.
-    if (isFirstLoad) this.errors[panel] = null;
+    this.loading[panel] = !hasExistingData();
     const started = performance.now();
     const liveQuery = this.currentLiveQuery;
     const liveStep = liveQuery.start(panel, started);
@@ -531,18 +532,11 @@ class AnalyticsStore {
       }
       status = "error";
       if (this.versions[panel] === v) {
-        // A rejected machine filter invalidates cached results. Other
-        // refetch failures keep existing values visible; first-load
-        // failures still surface.
         if (e instanceof ApiError && e.code === "invalid_machine_filter") {
-          this[panel] = null;
+          this.clearPanel(panel);
           this.signals = null;
-          this.errors[panel] = e.message;
-        } else if (isFirstLoad) {
-          this.errors[panel] = e instanceof Error ? e.message : m.shared_failed_to_load();
-        } else {
-          console.warn(`analytics.${panel} refetch failed:`, e);
         }
+        this.errors[panel] = e instanceof Error ? e.message : m.shared_failed_to_load();
       }
       return "error";
     } finally {
@@ -560,6 +554,12 @@ class AnalyticsStore {
         this.loading[panel] = false;
       }
     }
+  }
+
+  private clearPanel(panel: Panel): void {
+    this[panel] = null;
+    if (panel === "summary") this.summaryFilterParams = null;
+    if (panel === "tools") this.toolsFilterParams = null;
   }
 
   private nextAbortSignal(panel: Panel): AbortSignal {
@@ -638,52 +638,41 @@ class AnalyticsStore {
     const params = { ...this.filterParams(), group_models: true };
     return await this.executeFetch(
       "summary",
+      params,
       (options) => AnalyticsService.getApiV1AnalyticsSummary(params, options),
-      (data) => {
-        this.summary = data;
-        this.summaryFilterParams = params;
-      },
+      (data) => this.applySummary(data, params),
       () => this.summary !== null,
     );
+  }
+
+  private applySummary(data: AnalyticsSummary, params: AnalyticsParams): void {
+    this.summary = data;
+    this.summaryFilterParams = params;
+    this.loadedModelAliases = data.model_aliases ?? {};
   }
 
   // Activity always uses the full date range so the timeline
   // stays visible as context when a date is selected (the
   // selected bar is highlighted instead of re-fetching).
   async fetchActivity(): Promise<FetchResult> {
-    const scope = JSON.stringify([this.from, this.to, this.granularity]);
-    if (this.activity !== null && this.activityScope !== scope) {
-      this.activity = null;
-    }
+    const params = { ...this.baseParams(), granularity: this.granularity };
     return await this.executeFetch(
       "activity",
-      (options) =>
-        AnalyticsService.getApiV1AnalyticsActivity(
-          {
-            ...this.baseParams(),
-            granularity: this.granularity,
-          },
-          options,
-        ),
+      params,
+      (options) => AnalyticsService.getApiV1AnalyticsActivity(params, options),
       (data) => {
         this.activity = data;
-        this.activityScope = scope;
       },
       () => this.activity !== null,
     );
   }
 
   async fetchHeatmap(): Promise<FetchResult> {
+    const params = { ...this.baseParams(), metric: this.metric };
     return await this.executeFetch(
       "heatmap",
-      (options) =>
-        AnalyticsService.getApiV1AnalyticsHeatmap(
-          {
-            ...this.baseParams(),
-            metric: this.metric,
-          },
-          options,
-        ),
+      params,
+      (options) => AnalyticsService.getApiV1AnalyticsHeatmap(params, options),
       (data) => {
         this.heatmap = data;
       },
@@ -695,13 +684,11 @@ class AnalyticsStore {
   // filter) so the selected project can be highlighted in
   // context rather than shown in isolation.
   async fetchProjects(): Promise<FetchResult> {
+    const params = this.filterParams({ includeProject: false });
     return await this.executeFetch(
       "projects",
-      (options) =>
-        AnalyticsService.getApiV1AnalyticsProjects(
-          this.filterParams({ includeProject: false }),
-          options,
-        ),
+      params,
+      (options) => AnalyticsService.getApiV1AnalyticsProjects(params, options),
       (data) => {
         this.projects = data;
       },
@@ -720,6 +707,7 @@ class AnalyticsStore {
     }
     return await this.executeFetch(
       "hourOfWeek",
+      requestParams,
       (options) => AnalyticsService.getApiV1AnalyticsHourOfWeek(requestParams, options),
       (data) => {
         this.hourOfWeek = data;
@@ -729,9 +717,11 @@ class AnalyticsStore {
   }
 
   async fetchSessionShape(): Promise<FetchResult> {
+    const params = this.filterParams();
     return await this.executeFetch(
       "sessionShape",
-      (options) => AnalyticsService.getApiV1AnalyticsSessions(this.filterParams(), options),
+      params,
+      (options) => AnalyticsService.getApiV1AnalyticsSessions(params, options),
       (data) => {
         this.sessionShape = data;
       },
@@ -740,9 +730,11 @@ class AnalyticsStore {
   }
 
   async fetchVelocity(): Promise<FetchResult> {
+    const params = this.filterParams();
     return await this.executeFetch(
       "velocity",
-      (options) => AnalyticsService.getApiV1AnalyticsVelocity(this.filterParams(), options),
+      params,
+      (options) => AnalyticsService.getApiV1AnalyticsVelocity(params, options),
       (data) => {
         this.velocity = data;
       },
@@ -754,6 +746,7 @@ class AnalyticsStore {
     const params = this.filterParams();
     return await this.executeFetch(
       "tools",
+      params,
       (options) => AnalyticsService.getApiV1AnalyticsTools(params, options),
       (data) => {
         this.tools = data;
@@ -763,17 +756,16 @@ class AnalyticsStore {
     );
   }
 
-  async fetchSkills(granularity: Granularity = this.skillsGranularity): Promise<FetchResult> {
+  async fetchSkills(
+    granularity: Granularity = this.requestedSkillsGranularity,
+  ): Promise<FetchResult> {
+    this.skillsRequestGranularity = granularity;
+    const scopeParams = this.filterParams();
+    const params = { ...scopeParams, granularity };
     return await this.executeFetch(
       "skills",
-      (options) =>
-        AnalyticsService.getApiV1AnalyticsSkills(
-          {
-            ...this.filterParams(),
-            granularity,
-          },
-          options,
-        ),
+      scopeParams,
+      (options) => AnalyticsService.getApiV1AnalyticsSkills(params, options),
       (data) => {
         this.skills = data;
         this.skillsGranularity = granularity;
@@ -783,16 +775,11 @@ class AnalyticsStore {
   }
 
   async fetchTopSessions(): Promise<FetchResult> {
+    const params = { ...this.filterParams(), metric: this.topMetric };
     return await this.executeFetch(
       "topSessions",
-      (options) =>
-        AnalyticsService.getApiV1AnalyticsTopSessions(
-          {
-            ...this.filterParams(),
-            metric: this.topMetric,
-          },
-          options,
-        ),
+      params,
+      (options) => AnalyticsService.getApiV1AnalyticsTopSessions(params, options),
       (data) => {
         this.topSessions = data;
       },
@@ -802,29 +789,11 @@ class AnalyticsStore {
 
   async fetchSignals(opts: { includeModel?: boolean } = {}): Promise<FetchResult> {
     const includeModel = opts.includeModel ?? true;
-    // `signals` is a cache shared by the Analytics page and the Quality page.
-    // Key it by the filters that exist on Analytics but not Quality: the model
-    // and the heatmap drill-down (date/day/hour), which fetchSignalsForQuality
-    // clears. When this fetch's scope differs from the cached one, drop the
-    // cache so another scope's signals are never shown while the fetch is in
-    // flight or retained if it fails; a matching scope keeps the in-place
-    // refetch behavior used for filter changes shared by both pages.
-    const scope = JSON.stringify([
-      includeModel ? this.model : "",
-      this.selectedDate,
-      this.selectedActivityRange?.from ?? null,
-      this.selectedActivityRange?.to ?? null,
-      this.selectedDow,
-      this.selectedHour,
-    ]);
-    if (this.signals !== null && this.signalsScope !== scope) {
-      this.signals = null;
-    }
-    this.signalsScope = scope;
+    const params = this.filterParams({ includeModel });
     return await this.executeFetch(
       "signals",
-      (options) =>
-        AnalyticsService.getApiV1AnalyticsSignals(this.filterParams({ includeModel }), options),
+      params,
+      (options) => AnalyticsService.getApiV1AnalyticsSignals(params, options),
       (data) => {
         this.signals = data;
       },
@@ -893,7 +862,6 @@ class AnalyticsStore {
   setActivitySelection(from: string, to: string) {
     this.selectedDate = null;
     this.selectedActivityRange = { from, to };
-    this.clearDrilldownData();
     sessions.applyPanelDateFilters({ date_from: from, date_to: to }, null);
     sessions.activeSessionId = null;
     void sessions.load();
@@ -911,7 +879,6 @@ class AnalyticsStore {
   clearActivitySelection() {
     if (this.selectedActivityRange === null) return;
     this.selectedActivityRange = null;
-    this.clearDrilldownData();
     this.restoreSessionsParentRange();
     void this.fetchSummary();
     void this.fetchProjects();
@@ -945,7 +912,6 @@ class AnalyticsStore {
     } else {
       this.selectedDate = date;
     }
-    this.clearDrilldownData({ preserveHourOfWeek: !hadActivityRange });
     void this.fetchSummary();
     void this.fetchProjects();
     if (hadActivityRange) void this.fetchHourOfWeek(this.baseParams({ includeTime: false }));
@@ -966,28 +932,12 @@ class AnalyticsStore {
     void sessions.load();
   }
 
-  private clearDrilldownData({
-    preserveHourOfWeek = false,
-  }: { preserveHourOfWeek?: boolean } = {}) {
-    this.summary = null;
-    this.projects = null;
-    if (!preserveHourOfWeek) this.hourOfWeek = null;
-    this.sessionShape = null;
-    this.velocity = null;
-    this.tools = null;
-    this.toolsFilterParams = null;
-    this.skills = null;
-    this.topSessions = null;
-    this.signals = null;
-  }
-
   setGranularity(g: Granularity) {
     this.granularity = g;
     void this.fetchActivity();
   }
 
   async setSkillsGranularity(g: Granularity): Promise<FetchResult> {
-    if (this.skillsGranularity === g) return "ok";
     return await this.fetchSkills(g);
   }
 

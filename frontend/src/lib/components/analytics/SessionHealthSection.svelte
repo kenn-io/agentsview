@@ -7,6 +7,7 @@
   import OutcomeDistribution
     from "./OutcomeDistribution.svelte";
   import HealthTrend from "./HealthTrend.svelte";
+  import PanelStatus from "./PanelStatus.svelte";
   import { m } from "../../i18n/index.js";
 
   import type { DbSignalsAgentRow, DbSignalsProjectRow } from "../../api/generated/index.js";
@@ -34,6 +35,15 @@
   }
 </script>
 
+{#snippet status()}
+  <PanelStatus
+    hasData
+    pending={analytics.querying.signals}
+    error={analytics.errors.signals}
+    onRetry={() => analytics.fetchSignals()}
+  />
+{/snippet}
+
 {#if visible && signals}
   <div class="health-section">
     <div class="section-header">
@@ -48,6 +58,7 @@
         })}
       </span>
     </div>
+    {@render status()}
 
     <div class="health-summary-cards">
       <Card level="default" padding="none" class="card">
@@ -216,6 +227,16 @@
         </div>
       </Card>
     </div>
+  </div>
+{:else if analytics.errors.signals}
+  <!-- Hidden while loading, since an empty result hides the section. -->
+  <div class="health-section">
+    <div class="section-header">
+      <h3 class="section-title">{m.analytics_session_health_title()}</h3>
+    </div>
+    <Card level="default" padding="none">
+      {@render status()}
+    </Card>
   </div>
 {/if}
 
