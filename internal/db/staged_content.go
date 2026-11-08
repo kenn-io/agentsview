@@ -171,7 +171,7 @@ func stagedSessionContentDigestTx(ctx context.Context,
 	h := sha256.New()
 	rows, err := tx.QueryContext(ctx, `
 		SELECT ordinal, role, content, thinking_text,
-		       dialogue_text IS NOT NULL, COALESCE(dialogue_text, ''), COALESCE(timestamp, ''),
+		       dialogue_text IS NOT NULL OR dialogue_is_content, COALESCE(`+sqliteDialogueExprBare+`, ''), COALESCE(timestamp, ''),
 		       has_thinking, has_tool_use, content_length, is_system, model,
 		       reasoning_effort, token_usage, context_tokens, output_tokens,
 		       has_context_tokens, has_output_tokens,

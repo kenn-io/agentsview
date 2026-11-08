@@ -296,8 +296,9 @@ func (db *DB) MessageFlagsFingerprints(ctx context.Context,
 	return out, nil
 }
 
-// MessageDialogueFingerprints hashes classified dialogue in ordinal order.
-// Sessions with no classified rows have an empty fingerprint.
+// MessageDialogueFingerprints hashes stored dialogue in ordinal order: the
+// non-NULL dialogue_text values that StoredDialogue writes to every backend.
+// Sessions with no stored dialogue have an empty fingerprint.
 func (db *DB) MessageDialogueFingerprints(ctx context.Context, sessionIDs []string) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
@@ -878,8 +879,8 @@ func MessageComparisonRow(m Message, normalizeTimestamp func(string) string) Mes
 	appendContentHashFingerprintRow(&contentHash, m.Ordinal, m.ContentLength, m.Content)
 	appendRoleTimeFingerprintRow(&roleTime, m.Ordinal, m.Role, m.Timestamp, normalizeTimestamp)
 	flagsFingerprintRow{ordinal: m.Ordinal, isSystem: m.IsSystem, hasThinking: m.HasThinking, hasToolUse: m.HasToolUse, thinkingText: m.ThinkingText}.appendTo(&flags)
-	if m.DialogueText != nil {
-		EncodeMessageDialogueFingerprint(&dialogue, m.Ordinal, *m.DialogueText)
+	if stored, _ := StoredDialogue(m.Content, m.ThinkingText, m.DialogueText); stored != nil {
+		EncodeMessageDialogueFingerprint(&dialogue, m.Ordinal, *stored)
 	}
 	tokenFingerprintRow{
 		ordinal: m.Ordinal, model: m.Model, reasoningEffort: m.ReasoningEffort, providerID: m.ProviderID, tokenUsage: string(m.TokenUsage),

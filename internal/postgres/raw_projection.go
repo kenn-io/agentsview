@@ -416,25 +416,37 @@ func loadRawPayloadBytes(ctx context.Context, tx *sql.Tx, id string, payload []b
 		}
 		state.apply(&p.Signals)
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT ordinal, dialogue_text FROM raw_message_dialogue WHERE session_id=$1`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT ordinal, dialogue_text, is_content FROM raw_message_dialogue WHERE session_id=$1`, id)
 	if err != nil {
 		return p, err
 	}
 	defer rows.Close()
-	dialogue := make(map[int]*string)
+	type storedDialogue struct {
+		text      string
+		isContent bool
+	}
+	dialogue := make(map[int]storedDialogue)
 	for rows.Next() {
 		var ordinal int
-		var text string
-		if err := rows.Scan(&ordinal, &text); err != nil {
+		var stored storedDialogue
+		if err := rows.Scan(&ordinal, &stored.text, &stored.isContent); err != nil {
 			return p, err
 		}
-		dialogue[ordinal] = &text
+		dialogue[ordinal] = stored
 	}
 	if err := rows.Err(); err != nil {
 		return p, err
 	}
 	for i := range p.Messages {
-		p.Messages[i].DialogueText = dialogue[p.Messages[i].Ordinal]
+		stored, ok := dialogue[p.Messages[i].Ordinal]
+		switch {
+		case !ok:
+			p.Messages[i].DialogueText = nil
+		case stored.isContent:
+			p.Messages[i].DialogueText = new(p.Messages[i].Content)
+		default:
+			p.Messages[i].DialogueText = new(stored.text)
+		}
 	}
 	return p, nil
 }

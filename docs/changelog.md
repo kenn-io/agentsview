@@ -161,6 +161,17 @@ The latest release is
   avoiding three extra list requests and loading hundreds of child sessions.
   Its counted stderr notice and stdout stay unchanged. Older daemons that omit
   the optional counts still return sessions without the notice.
+- The local archive and every mirror store a message's text once when its
+  searchable dialogue is the same as the message itself. Before, about a quarter
+  of messages kept a second full copy for search. On a local archive with 1.05
+  million messages the messages table shrank from 3.0 GiB to 2.0 GiB, and a
+  full-scan message search went from 0.53 s to 0.43 s. On a 100,000-message
+  ClickHouse sample, the messages table shrank by a third and message search
+  read 39% less data. Search results do not change. The first start after
+  upgrading rewrites the archive's copies in a few seconds; the freed space is
+  reused by later writes, and the archive file shrinks only after a `VACUUM`.
+  PostgreSQL and ClickHouse rewrite existing rows once on their next push,
+  ClickHouse in the background, and DuckDB mirrors rebuild on their next push.
 
 - ClickHouse mirrors stop growing without bound from stored usage prices. A push
   now prices the mirror again only when the rates of a model in its usage

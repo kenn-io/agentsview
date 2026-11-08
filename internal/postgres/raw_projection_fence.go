@@ -55,7 +55,7 @@ func NewRawProjectionStore(ctx context.Context, database *sql.DB, options RawPro
 	if err := CheckSchemaCompat(ctx, database); err != nil {
 		return nil, fmt.Errorf("hosted schema requires owner provisioning: %w", err)
 	}
-	_, err := database.ExecContext(ctx, `SELECT s.provenance_kind,s.raw_group_id,s.raw_content_revision,j.projection_generation,j.projection_selected,c.recency_state FROM sessions s CROSS JOIN raw_ingest_jobs j CROSS JOIN raw_content_revisions c LIMIT 0`)
+	_, err := database.ExecContext(ctx, `SELECT s.provenance_kind,s.raw_group_id,s.raw_content_revision,j.projection_generation,j.projection_selected,c.recency_state,d.is_content FROM sessions s CROSS JOIN raw_ingest_jobs j CROSS JOIN raw_content_revisions c CROSS JOIN raw_message_dialogue d LIMIT 0`)
 	if err != nil {
 		return nil, fmt.Errorf("raw projection schema requires owner provisioning: %w", err)
 	}

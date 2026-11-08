@@ -90,7 +90,7 @@ func conversationColumnsForMode(mode string) string {
 
 func conversationBodyColumn(mode string) string {
 	if mode == "visible" {
-		return "COALESCE(m.dialogue_text,'')"
+		return "COALESCE(" + sqliteDialogueExprM + ",'')"
 	}
 	return "m.content"
 }
