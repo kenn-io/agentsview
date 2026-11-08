@@ -339,7 +339,7 @@ func TestSessionListReportsCombinedDefaultExclusions(t *testing.T) {
 	root.SetErr(&stderr)
 	root.SetArgs([]string{"session", "list", "--json", "--include-children"})
 	require.NoError(t, root.Execute())
-	assert.Contains(t, stderr.String(), "Use --include-one-shot --include-automated to include them.")
+	assert.Equal(t, "Excluded 2 sessions by default: 1 one-shot, 1 child. Use --include-one-shot --include-automated to include them.\n", stderr.String())
 	visible := decodeCLIJSON[cliSessionList](t, stdout.String())
 	assert.Empty(t, visible.Sessions)
 	out, err := executeCommand(newRootCommand(), "session", "list", "--json", "--include-one-shot", "--include-automated", "--include-children")
@@ -401,7 +401,7 @@ func TestSessionListChildCountLowerBoundNotice(t *testing.T) {
 	assert.Equal(t, "Excluded at least 2 child sessions by default. Use --include-children to include them.", notice)
 }
 
-func TestSessionListSeparatesFlatAndChildRetries(t *testing.T) {
+func TestSessionListOneShotContinuationWithProjectFilter(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSessionsWithOpts(t, dataDir,
 		sessionSeed{id: "parent", project: "selected"},

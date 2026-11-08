@@ -73,7 +73,7 @@ func CountSessionExclusions(ctx context.Context, q messageRowsQuerier, f Session
 
 // LoadChildren preserves flat counts and the visible page if the probe fails.
 func (c *SessionExclusionCounts) LoadChildren(ctx context.Context, q messageRowsQuerier, f SessionFilter, dialect QueryDialect, visible int) {
-	if c == nil || f.ExclusionCounts == nil || !*f.ExclusionCounts || f.HasAnnotationFilter() {
+	if c == nil || f.ExclusionCounts == nil || !*f.ExclusionCounts || f.IDs != nil || f.HasAnnotationFilter() {
 		return
 	}
 	query, args := buildSessionExclusionChildrenSQL(f, dialect)

@@ -33,6 +33,7 @@ func TestListSessionsIDsHTTP(t *testing.T) {
 	}{
 		{"raw", "ids=codex:shared", []string{"codex:shared", "node-a~codex:shared", "node-b~codex:shared"}},
 		{"qualified", "ids=node-a~codex:shared", []string{"node-a~codex:shared"}},
+		{"child with exclusion counts", "ids=node-b~codex:shared&exclusion_counts=true", []string{"node-b~codex:shared"}},
 		{"unknown", "ids=missing", []string{}},
 		{"intersection", "ids=codex:shared&project=app", []string{"codex:shared", "node-a~codex:shared"}},
 		{"duplicates whitespace", "ids=" + url.QueryEscape(" codex:shared , node-a~codex:shared,missing,codex:shared"), []string{"codex:shared", "node-a~codex:shared", "node-b~codex:shared"}},
@@ -49,6 +50,9 @@ func TestListSessionsIDsHTTP(t *testing.T) {
 				ids = append(ids, s.ID)
 			}
 			assert.ElementsMatch(t, tt.want, ids)
+			if strings.Contains(tt.query, "exclusion_counts=true") {
+				assert.Equal(t, &db.SessionExclusionCounts{}, page.ExclusionCounts)
+			}
 		})
 	}
 	for _, ids := range []string{"", ",", "codex:shared,", ",codex:shared", "codex:shared, ,missing", "openclaw:main:bad\r\nid", strings.Repeat("x,", 100) + "x"} {
