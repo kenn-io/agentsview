@@ -25,6 +25,7 @@ const signals = {
 const analytics = vi.hoisted(() => ({
   signals: null as unknown,
   errors: { signals: null as string | null },
+  querying: { signals: false },
   fetchSignals: vi.fn(),
 }));
 vi.mock("../../stores/analytics.svelte.js", () => ({ analytics }));
@@ -50,15 +51,6 @@ it("sorts agent scores and project names independently", async () => {
   await fireEvent.click(within(projects!).getByRole("button", { name: "Project" }));
   expect(names(projects!)).toEqual(["project-alpha", "project-zeta"]);
   expect(names(agents!)).toEqual(["zeta", "alpha"]);
-  unmount(component);
-});
-
-it("shows loading under the heading until signals arrive", async () => {
-  analytics.signals = null;
-  const component = mount(SessionHealthSection, { target: document.body });
-  await tick();
-  expect(screen.getByRole("heading", { name: "Session Health" })).toBeTruthy();
-  expect(screen.getByText("Loading...")).toBeTruthy();
   unmount(component);
 });
 

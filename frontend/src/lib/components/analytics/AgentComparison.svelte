@@ -1,5 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import { router } from "../../stores/router.svelte.js";
   import { m } from "../../i18n/index.js";
 
@@ -92,32 +93,23 @@
     { panel: "tools", fetch: () => analytics.fetchTools() },
   ] as const;
   const failed = $derived(sources.filter((s) => analytics.errors[s.panel]));
-  const missing = $derived(sources.filter((s) => analytics[s.panel] === null));
+  const ready = $derived(sources.every((s) => analytics[s.panel] !== null));
 </script>
 
 <div class="agent-comparison">
   <h3 class="chart-title">{m.analytics_agent_comparison_title()}</h3>
 
-  {#if failed.length > 0}
-    <div class="error">
-      {analytics.errors[failed[0]!.panel]}
-      <button
-        class="retry-btn"
-        onclick={() => failed.forEach((s) => s.fetch())}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {/if}
-  {#if missing.length > 0}
-    {#if missing.some((s) => !analytics.errors[s.panel])}
-      <div class="empty">{m.analytics_loading()}</div>
-    {/if}
-  {:else if agents.length < 2}
+  <PanelStatus
+    hasData={ready}
+    pending={failed.some((s) => analytics.querying[s.panel])}
+    error={failed[0] ? analytics.errors[failed[0].panel] : null}
+    onRetry={() => failed.forEach((s) => s.fetch())}
+  />
+  {#if ready && agents.length < 2}
     <div class="empty">
       {m.analytics_agent_comparison_empty()}
     </div>
-  {:else}
+  {:else if ready}
     <div class="comparison-table">
       <div class="table-header">
         <span class="col-agent">{m.analytics_col_agent()}</span>
@@ -233,23 +225,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

@@ -651,7 +651,7 @@ describe("AnalyticsPage panel failures", () => {
       expect(comparison().querySelector(".comparison-table")).toBeNull();
       analytics.errors[source] = `${source} failed`;
       await flushEffects();
-      comparison().querySelector<HTMLButtonElement>(".retry-btn")!.click();
+      comparison().querySelector<HTMLButtonElement>(".error button")!.click();
       await vi.waitFor(() =>
         expect(comparison().querySelector(".comparison-table")).not.toBeNull(),
       );
@@ -723,25 +723,33 @@ describe("AnalyticsPage panel failures", () => {
       const month = [...document.querySelectorAll<HTMLButtonElement>(".trend-header button")].find(
         (b) => b.textContent?.trim() === "Month",
       )!;
+      const trend = () => document.querySelector(".trend-container")!.textContent;
+      expect(trend()).toContain("review");
       month.click();
+      await flushEffects();
+      expect(month.classList).toContain("active");
+      expect(trend()).not.toContain("review");
       await vi.waitFor(() =>
         expect(document.querySelector(selector)!.textContent).toContain("Month failed"),
       );
+      expect(month.classList).toContain("active");
+      expect(trend()).not.toContain("review");
       let release!: (value: typeof data) => void;
       skills.mockReturnValueOnce(
         new Promise((resolve) => {
           release = resolve;
         }),
       );
-      document.querySelector<HTMLButtonElement>(`${selector} .retry-btn`)!.click();
+      const retry = document.querySelector<HTMLButtonElement>(`${selector} .error button`)!;
+      retry.click();
       await flushEffects();
+      expect(retry.classList).toContain("kit-button--busy");
       expect(skills.mock.lastCall?.[0]?.granularity).toBe("month");
-      expect(analytics.skillsGranularity).toBe("week");
       expect(document.querySelector(".skills-container")!.textContent).toContain("7 calls");
-      expect(document.querySelector(".trend-container")!.textContent).toContain("review");
+      expect(trend()).not.toContain("review");
       release(data);
       await vi.waitFor(() => expect(analytics.skillsGranularity).toBe("month"));
-      expect(month.classList).toContain("active");
+      expect(trend()).toContain("review");
       expect(document.querySelector(selector)!.textContent).not.toContain("Month failed");
     },
   );

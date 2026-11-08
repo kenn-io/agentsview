@@ -8,6 +8,7 @@
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import type { DbToolCategoryCount as ToolCategoryCount } from "../../api/generated/index.js";
   import { getLocale, m } from "../../i18n/index.js";
 
@@ -238,17 +239,13 @@
     {/if}
   </div>
 
-  {#if analytics.errors.tools}
-    <div class="error">
-      {analytics.errors.tools}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchTools()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {/if}
+  <PanelStatus
+    hasData={analytics.tools !== null}
+    pending={analytics.querying.tools}
+    error={analytics.errors.tools}
+    onRetry={() => analytics.fetchTools()}
+    loadingLabel={m.analytics_tool_usage_loading()}
+  />
   {#if categories.length > 0}
     <div class="sections">
       {#if toolRows.length > 0}
@@ -391,8 +388,6 @@
     {/if}
   {:else if analytics.tools}
     <div class="empty">{m.analytics_tool_usage_empty()}</div>
-  {:else if !analytics.errors.tools}
-    <div class="empty">{m.analytics_tool_usage_loading()}</div>
   {/if}
 </div>
 
@@ -651,14 +646,6 @@
     gap: 8px;
   }
 
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
-  }
   @media (max-width: 640px) {
     .evidence-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
     .evidence-count { text-align: left; }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
+  import { Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import GradeDistribution
@@ -7,6 +7,7 @@
   import OutcomeDistribution
     from "./OutcomeDistribution.svelte";
   import HealthTrend from "./HealthTrend.svelte";
+  import PanelStatus from "./PanelStatus.svelte";
   import { m } from "../../i18n/index.js";
 
   import type { DbSignalsAgentRow, DbSignalsProjectRow } from "../../api/generated/index.js";
@@ -34,16 +35,13 @@
   }
 </script>
 
-{#snippet error()}
-  <div class="error">
-    {analytics.errors.signals}
-    <Button
-      size="sm"
-      surface="soft"
-      label={m.shared_retry()}
-      onclick={() => analytics.fetchSignals()}
-    />
-  </div>
+{#snippet status()}
+  <PanelStatus
+    hasData
+    pending={analytics.querying.signals}
+    error={analytics.errors.signals}
+    onRetry={() => analytics.fetchSignals()}
+  />
 {/snippet}
 
 {#if visible && signals}
@@ -60,9 +58,7 @@
         })}
       </span>
     </div>
-    {#if analytics.errors.signals}
-      {@render error()}
-    {/if}
+    {@render status()}
 
     <div class="health-summary-cards">
       <Card level="default" padding="none" class="card">
@@ -232,19 +228,14 @@
       </Card>
     </div>
   </div>
-{:else if !signals || analytics.errors.signals}
+{:else if analytics.errors.signals}
+  <!-- Hidden while loading, since an empty result hides the section. -->
   <div class="health-section">
     <div class="section-header">
       <h3 class="section-title">{m.analytics_session_health_title()}</h3>
     </div>
     <Card level="default" padding="none">
-      <div class="status">
-        {#if analytics.errors.signals}
-          {@render error()}
-        {:else}
-          <div class="empty">{m.analytics_loading()}</div>
-        {/if}
-      </div>
+      {@render status()}
     </Card>
   </div>
 {/if}
@@ -265,23 +256,6 @@
   .section-subtitle {
     font-size: 12px;
     color: var(--text-muted);
-  }
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 0 0 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .status .error {
-    padding: 12px;
-  }
-  .empty {
-    color: var(--text-muted);
-    font-size: 12px;
-    padding: 24px;
-    text-align: center;
   }
   .health-summary-cards {
     display: grid;

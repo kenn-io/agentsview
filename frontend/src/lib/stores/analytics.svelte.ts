@@ -496,7 +496,7 @@ class AnalyticsStore {
     const signal = this.nextAbortSignal(panel);
     const scope = refreshScopeKey(params);
     if (this.scopes[panel] !== scope) {
-      this[panel] = null;
+      this.clearPanel(panel);
       this.errors[panel] = null;
     }
     this.scopes[panel] = scope;
@@ -531,7 +531,7 @@ class AnalyticsStore {
       status = "error";
       if (this.versions[panel] === v) {
         if (e instanceof ApiError && e.code === "invalid_machine_filter") {
-          this[panel] = null;
+          this.clearPanel(panel);
           this.signals = null;
         }
         this.errors[panel] = e instanceof Error ? e.message : m.shared_failed_to_load();
@@ -552,6 +552,12 @@ class AnalyticsStore {
         this.loading[panel] = false;
       }
     }
+  }
+
+  private clearPanel(panel: Panel): void {
+    this[panel] = null;
+    if (panel === "summary") this.summaryFilterParams = null;
+    if (panel === "tools") this.toolsFilterParams = null;
   }
 
   private nextAbortSignal(panel: Panel): AbortSignal {
@@ -647,7 +653,7 @@ class AnalyticsStore {
     const params = { ...this.baseParams(), granularity: this.granularity };
     return await this.executeFetch(
       "activity",
-      { ...params, dow: undefined, hour: undefined },
+      params,
       (options) => AnalyticsService.getApiV1AnalyticsActivity(params, options),
       (data) => {
         this.activity = data;
@@ -660,7 +666,7 @@ class AnalyticsStore {
     const params = { ...this.baseParams(), metric: this.metric };
     return await this.executeFetch(
       "heatmap",
-      { ...params, dow: undefined, hour: undefined },
+      params,
       (options) => AnalyticsService.getApiV1AnalyticsHeatmap(params, options),
       (data) => {
         this.heatmap = data;
@@ -745,7 +751,9 @@ class AnalyticsStore {
     );
   }
 
-  async fetchSkills(granularity: Granularity = this.requestedSkillsGranularity): Promise<FetchResult> {
+  async fetchSkills(
+    granularity: Granularity = this.requestedSkillsGranularity,
+  ): Promise<FetchResult> {
     this.skillsRequestGranularity = granularity;
     const scopeParams = this.filterParams();
     const params = { ...scopeParams, granularity };

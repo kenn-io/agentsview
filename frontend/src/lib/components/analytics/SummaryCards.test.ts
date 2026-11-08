@@ -18,17 +18,15 @@ afterEach(() => {
 });
 
 describe("SummaryCards", () => {
-  it("shows placeholders and one loading status until the summary arrives", async () => {
+  it("shows placeholders until the summary arrives", async () => {
     component = mount(SummaryCards, { target: document.body });
     await tick();
     const values = () =>
       [...document.querySelectorAll(".card-value")].map((v) => v.textContent?.trim());
     expect(values()).toEqual(["-", "-", "-", "-", "-", "-"]);
-    expect(document.querySelector('[role="status"]')?.textContent).toBe("Loading...");
 
     analytics.errors.summary = "summary failed";
     await tick();
-    expect(document.querySelector('[role="status"]')).toBeNull();
     expect(document.body.textContent).toContain("summary failed");
     expect(values()).toEqual(["--", "--", "--", "--", "--", "--"]);
   });

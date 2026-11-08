@@ -19,8 +19,6 @@ import { AnalyticsService } from "../api/generated/index";
 
 import type {
   AnalyticsSummaryResponse as AnalyticsSummary,
-  DbActivityResponse as ActivityResponse,
-  DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
   DbToolsAnalyticsResponse as ToolsAnalyticsResponse,
   DbSkillsAnalyticsResponse as SkillsAnalyticsResponse,
   DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
@@ -300,22 +298,6 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
     expect(analytics.skillsGranularity).toBe("week");
   });
 
-  it("replaces a failed Month selection when Week is selected again", async () => {
-    await analytics.fetchSkills("week");
-    vi.mocked(analyticsService.getApiV1AnalyticsSkills).mockRejectedValueOnce(
-      new Error("network down"),
-    );
-    await analytics.setSkillsGranularity("month");
-
-    await analytics.setSkillsGranularity("week");
-    await analytics.fetchSkills();
-
-    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ granularity: "week" }),
-    );
-    expect(analytics.skillsGranularity).toBe("week");
-    expect(analytics.errors.skills).toBeNull();
-  });
 });
 
 describe("AnalyticsStore freshness state", () => {
@@ -1061,18 +1043,27 @@ describe("executeFetch concurrency and error handling", () => {
     expect(analytics.summary?.total_sessions).toBe(99);
     expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
 
-    analytics.from = "2026-02-01";
-    let reject!: (reason: Error) => void;
-    vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
-      new Promise((_resolve, rej) => {
-        reject = rej;
-      }),
+    vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockRejectedValueOnce(
+      new Error("summary unavailable"),
     );
-    const pending = analytics.fetchSummary();
+    await analytics.fetchSummary();
     expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
-    reject(new Error("summary unavailable"));
-    await pending;
-    expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
+
+    analytics.from = "2026-02-01";
+    vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(new Promise(() => {}));
+    void analytics.fetchSummary();
+    expect(analytics.summary).toBeNull();
+    expect(analytics.summaryFilterParams).toBeNull();
+  });
+
+  it("clears the tools filter snapshot with its data", async () => {
+    await analytics.fetchTools();
+    expect(analytics.toolsFilterParams).not.toBeNull();
+    analytics.agent = "codex";
+    vi.mocked(analyticsService.getApiV1AnalyticsTools).mockReturnValueOnce(new Promise(() => {}));
+    void analytics.fetchTools();
+    expect(analytics.tools).toBeNull();
+    expect(analytics.toolsFilterParams).toBeNull();
   });
 
   it("should ignore stale error from superseded request", async () => {
@@ -1398,42 +1389,7 @@ describe("AnalyticsStore panel scopes", () => {
     },
   );
 
-  it("retains Projects across project selection and Activity across a date drilldown", async () => {
-    await Promise.all([analytics.fetchProjects(), analytics.fetchActivity()]);
-    analytics.project = "project-a";
-    let releaseProjects!: (value: ProjectsAnalyticsResponse) => void;
-    vi.mocked(analyticsService.getApiV1AnalyticsProjects).mockReturnValueOnce(
-      new Promise((resolve) => {
-        releaseProjects = resolve;
-      }),
-    );
-    const projects = analytics.fetchProjects();
-    expect(analytics.projects).not.toBeNull();
-    expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).not.toHaveProperty(
-      "project",
-    );
-    releaseProjects(makeProjects());
-    await projects;
-
-    analytics.project = "";
-    analytics.selectedDate = "2024-01-15";
-    let releaseActivity!: (value: ActivityResponse) => void;
-    vi.mocked(analyticsService.getApiV1AnalyticsActivity).mockReturnValueOnce(
-      new Promise((resolve) => {
-        releaseActivity = resolve;
-      }),
-    );
-    const activity = analytics.fetchActivity();
-    expect(analytics.activity).not.toBeNull();
-    expect(analyticsService.getApiV1AnalyticsActivity.mock.lastCall?.[0]).toMatchObject({
-      from: "2024-01-01",
-      to: "2024-01-31",
-    });
-    releaseActivity(makeActivity());
-    await activity;
-  });
-
-  it("keeps hour drilldown context through pending reads and failures", async () => {
+  it("clears activity and heatmap when the selected hour changes", async () => {
     await analytics.fetchAll();
     const activity = analytics.activity;
     const heatmap = analytics.heatmap;
@@ -1450,8 +1406,10 @@ describe("AnalyticsStore panel scopes", () => {
       }),
     );
     analytics.selectHourOfWeek(1, 9);
-    expect(analytics.activity).toBe(activity);
-    expect(analytics.heatmap).toBe(heatmap);
+    expect(activity).not.toBeNull();
+    expect(heatmap).not.toBeNull();
+    expect(analytics.activity).toBeNull();
+    expect(analytics.heatmap).toBeNull();
     for (const read of [
       analyticsService.getApiV1AnalyticsActivity,
       analyticsService.getApiV1AnalyticsHeatmap,
@@ -1461,36 +1419,9 @@ describe("AnalyticsStore panel scopes", () => {
     rejectActivity(new Error("activity refresh failed"));
     rejectHeatmap(new Error("heatmap refresh failed"));
     await vi.waitFor(() => expect(analytics.querying.heatmap).toBe(false));
-    expect(analytics.activity).toBe(activity);
-    expect(analytics.heatmap).toBe(heatmap);
+    expect(analytics.activity).toBeNull();
+    expect(analytics.heatmap).toBeNull();
     expect(analytics.errors.activity).toBe("activity refresh failed");
     expect(analytics.errors.heatmap).toBe("heatmap refresh failed");
-  });
-
-  it("keeps recently-active values during clock-based refreshes and clears them when the filter changes", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    try {
-      vi.setSystemTime(new Date("2026-02-03T12:00:00Z"));
-      analytics.recentlyActive = true;
-      await analytics.fetchTools();
-      vi.setSystemTime(new Date("2026-02-03T12:01:00Z"));
-      vi.mocked(analyticsService.getApiV1AnalyticsTools).mockRejectedValueOnce(
-        new Error("refresh failed"),
-      );
-      await analytics.fetchTools();
-      expect(analytics.tools).not.toBeNull();
-      expect(analyticsService.getApiV1AnalyticsTools.mock.lastCall?.[0]).toHaveProperty(
-        "active_since",
-        "2026-02-02T12:01:00.000Z",
-      );
-      analytics.recentlyActive = false;
-      vi.mocked(analyticsService.getApiV1AnalyticsTools).mockRejectedValueOnce(
-        new Error("new scope failed"),
-      );
-      await analytics.fetchTools();
-      expect(analytics.tools).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

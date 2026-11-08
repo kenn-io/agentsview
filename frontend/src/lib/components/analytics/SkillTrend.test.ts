@@ -358,7 +358,7 @@ describe("SkillTrend", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Failed to load");
-    document.querySelector<HTMLButtonElement>(".retry-btn")!.click();
+    document.querySelector<HTMLButtonElement>(".error button")!.click();
     await tick();
 
     expect(retrySpy).toHaveBeenCalledOnce();

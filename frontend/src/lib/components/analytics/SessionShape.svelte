@@ -1,5 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import { router } from "../../stores/router.svelte.js";
   import type { DbDistributionBucket as DistributionBucket } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
@@ -81,17 +82,12 @@
     </div>
   </div>
 
-  {#if analytics.errors.sessionShape}
-    <div class="error">
-      {analytics.errors.sessionShape}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchSessionShape()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {/if}
+  <PanelStatus
+    hasData={analytics.sessionShape !== null}
+    pending={analytics.querying.sessionShape}
+    error={analytics.errors.sessionShape}
+    onRetry={() => analytics.fetchSessionShape()}
+  />
   {#if activeBuckets.length > 0}
     <div class="bar-chart">
       {#each activeBuckets as bucket}
@@ -123,8 +119,6 @@
     {/if}
   {:else if analytics.sessionShape}
     <div class="empty">{m.shared_no_data_for_period()}</div>
-  {:else if !analytics.errors.sessionShape}
-    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 
@@ -239,23 +233,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

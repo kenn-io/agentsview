@@ -1,5 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import {
     sessions,
     getSessionStatus,
@@ -125,17 +126,12 @@
     </div>
   </div>
 
-  {#if analytics.errors.topSessions}
-    <div class="error">
-      {analytics.errors.topSessions}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchTopSessions()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {/if}
+  <PanelStatus
+    hasData={analytics.topSessions !== null}
+    pending={analytics.querying.topSessions}
+    error={analytics.errors.topSessions}
+    onRetry={() => analytics.fetchTopSessions()}
+  />
   {#if analytics.topSessions && analytics.topSessions.sessions.length > 0}
     <div class="session-list">
       {#each analytics.topSessions.sessions as session, i}
@@ -179,8 +175,6 @@
     </div>
   {:else if analytics.topSessions}
     <div class="empty">{m.shared_no_sessions_in_range()}</div>
-  {:else if !analytics.errors.topSessions}
-    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 
@@ -350,23 +344,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

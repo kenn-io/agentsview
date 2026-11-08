@@ -1,5 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import type { DbVelocityOverview as VelocityOverview, DbVelocityBreakdown as VelocityBreakdown } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
@@ -55,17 +56,12 @@
     </div>
   </div>
 
-  {#if analytics.errors.velocity}
-    <div class="error">
-      {analytics.errors.velocity}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchVelocity()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {/if}
+  <PanelStatus
+    hasData={analytics.velocity !== null}
+    pending={analytics.querying.velocity}
+    error={analytics.errors.velocity}
+    onRetry={() => analytics.fetchVelocity()}
+  />
   {#if velocity}
     {#if activeTab === "overall"}
       {@const o = velocity.overall}
@@ -145,8 +141,6 @@
     {:else}
       <div class="empty">{m.analytics_velocity_no_breakdown()}</div>
     {/if}
-  {:else if !analytics.errors.velocity}
-    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 
@@ -267,23 +261,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

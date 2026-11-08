@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Chart, Layer, Rect, Text } from "layerchart";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import { getLocale, m } from "../../i18n/index.js";
 
   const CELL_GAP = 2;
@@ -163,17 +164,12 @@
 </script>
 
 <div class="how-container">
-  {#if analytics.errors.hourOfWeek}
-    <div class="error">
-      {analytics.errors.hourOfWeek}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchHourOfWeek()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {/if}
+  <PanelStatus
+    hasData={analytics.hourOfWeek !== null}
+    pending={analytics.querying.hourOfWeek}
+    error={analytics.errors.hourOfWeek}
+    onRetry={() => analytics.fetchHourOfWeek()}
+  />
   {#if grid}
     <div class="how-chart" bind:clientWidth={availableWidth}>
       <Chart
@@ -257,8 +253,6 @@
     {/if}
   {:else if analytics.hourOfWeek}
     <div class="empty">{m.shared_no_data_for_period()}</div>
-  {:else if !analytics.errors.hourOfWeek}
-    <div class="empty">{m.analytics_loading()}</div>
   {/if}
 </div>
 
@@ -328,23 +322,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

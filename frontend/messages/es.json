@@ -590,7 +590,6 @@
   "shared_other": "Otro",
   "shared_no_branch": "(sin rama)",
   "shared_unknown": "desconocido",
-  "analytics_loading": "Cargando...",
   "analytics_refresh": "Actualizar analíticas",
   "analytics_export_csv": "Exportar CSV",
   "analytics_activity_by_day_hour": "Actividad por día y hora",
