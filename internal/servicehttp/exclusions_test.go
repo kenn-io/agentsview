@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -25,6 +26,7 @@ func TestListExclusionCounts(t *testing.T) {
 				calls++
 				assert.Equal(t, "/api/v1/sessions", r.URL.Path)
 				assert.Equal(t, tc.scope, r.URL.Query().Get("exclusion_counts"))
+				assert.Equal(t, tc.scope != "", r.URL.Query().Has("exclusion_counts"))
 				if tc.scope == "" {
 					_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
 					return
@@ -36,13 +38,9 @@ func TestListExclusionCounts(t *testing.T) {
 			page, err := b.List(t.Context(), service.ListFilter{ExclusionCounts: tc.scope})
 			require.NoError(t, err)
 			assert.Equal(t, 1, calls)
-			if tc.scope == "" {
-				assert.Nil(t, page.ExclusionCounts)
-				return
+			if tc.scope != "" {
+				assert.Equal(t, &db.SessionExclusionCounts{OneShot: 2, Automated: 3, Children: 4, ChildrenLowerBound: true}, page.ExclusionCounts)
 			}
-			require.NotNil(t, page.ExclusionCounts)
-			assert.Equal(t, 4, page.ExclusionCounts.Children)
-			assert.True(t, page.ExclusionCounts.ChildrenLowerBound)
 		})
 	}
 }
