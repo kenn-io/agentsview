@@ -21,49 +21,42 @@ import (
 // conversation that started a sub-agent conversation. Both providers read
 // them through loadAntigravitySummaries. Discovery turns the workspace into
 // source CWD authority and parsing applies the parent. Each source's
-// fingerprint covers both, so a full sync reparses exactly the conversations
-// whose store facts changed. A store write routes only the conversations
-// whose archived values differ from what the store now says (see
-// SummaryStoreExpectations).
+// fingerprint covers both, so a store-only change reparses the conversation
+// on the next full sync. Store writes are not routed on their own: a missed
+// or failed read is corrected by a later sync.
 
 // antigravitySummary is what one conversation's summary row says outside its
 // transcript.
 type antigravitySummary struct {
 	// workspace is the first workspace folder as a local path, or "" when
 	// that folder is not local. hasWorkspace reports whether any folder is
-	// named, and workspaceRecorded whether the store records workspaces.
-	workspace         string
-	hasWorkspace      bool
-	workspaceRecorded bool
+	// named.
+	workspace    string
+	hasWorkspace bool
 	// parentID is the canonical ID of the conversation that started this
 	// one, or "".
 	parentID string
 }
 
 // antigravitySummaries is one read of a root's summary store. err is set when
-// the store exists but cannot be read. missing is set when the store does not
-// exist and was not read before in this process, so it may have been removed.
+// the store exists but cannot be read.
 type antigravitySummaries struct {
-	byID    map[string]antigravitySummary
-	err     error
-	missing bool
+	byID map[string]antigravitySummary
+	err  error
 }
 
 // cwdResolution describes what the store knows about a conversation's local
 // working directory. A conversation the store does not list, or lists with no
-// workspace folder, leaves the parsed value alone; an unreadable store keeps
-// the stored one.
+// workspace folder, leaves the parsed value. An unreadable store keeps the
+// stored value until a later read succeeds.
 func (s antigravitySummaries) cwdResolution(id string) SourceCwdResolution {
-	if s.err != nil || s.missing {
+	if s.err != nil {
 		return SourceCwdResolution{State: SourceCwdUnavailable}
 	}
-	summary, listed := s.byID[id]
+	summary := s.byID[id]
 	switch {
-	case !listed || !summary.workspaceRecorded:
-		return SourceCwdResolution{}
 	case !summary.hasWorkspace:
-		// A listed row without a folder means the conversation has none.
-		return SourceCwdResolution{State: SourceCwdNone}
+		return SourceCwdResolution{}
 	case summary.workspace == "":
 		return SourceCwdResolution{State: SourceCwdAmbiguous}
 	}
@@ -79,9 +72,10 @@ func (s antigravitySummaries) parent(id string) string {
 	return parent
 }
 
-// writeFingerprint adds what a readable store says about id to a source
-// fingerprint. A conversation the store does not list adds nothing, so
-// roots without a store keep their fingerprints.
+// writeFingerprint adds what the store says about id to a source fingerprint.
+// A conversation the store does not list adds nothing, so roots without a
+// store keep their fingerprints. An unreadable store lists nothing, so the
+// conversation reparses again once the store reads.
 func (s antigravitySummaries) writeFingerprint(w io.Writer, id string) error {
 	summary, ok := s.byID[id]
 	if !ok {
@@ -100,41 +94,28 @@ type antigravitySummariesSnapshot struct {
 
 var antigravitySummariesNow = time.Now
 
-// Discovery, fingerprints, change routing, and parsing all ask for the same
-// store, so one read serves them while the store's container state holds.
-// Matching markers can hide a write, so a cached read expires.
+// Discovery, fingerprints, and parsing all ask for the same store, so one
+// read serves them while the store's container state holds. Matching markers
+// can hide a write, so a cached read expires. Failed reads are not cached.
 var antigravitySummariesCache = struct {
 	sync.Mutex
 	stores map[string]antigravitySummariesSnapshot
 }{stores: make(map[string]antigravitySummariesSnapshot)}
 
-// loadAntigravitySummaries reads the summary store under root. While a store
-// that was read before cannot be read or has disappeared, its last good read
-// stands in, so an outage neither changes fingerprints nor clears stored
-// workspaces and parents.
+// loadAntigravitySummaries reads the summary store under root.
 func loadAntigravitySummaries(ctx context.Context, root string) antigravitySummaries {
 	path := filepath.Join(root, AntigravitySummariesDBName)
 	state, exists := StatSQLiteContainerState(path)
 	antigravitySummariesCache.Lock()
 	defer antigravitySummariesCache.Unlock()
 	now := antigravitySummariesNow()
-	prior, cached := antigravitySummariesCache.stores[path]
-	if cached && exists && prior.state == state &&
-		now.Sub(prior.readAt) < SQLiteContainerDigestVerifyInterval {
+	if prior, ok := antigravitySummariesCache.stores[path]; ok && exists &&
+		prior.state == state && now.Sub(prior.readAt) < SQLiteContainerDigestVerifyInterval {
 		return prior.summaries
 	}
 	summaries := readAntigravitySummaries(ctx, path)
-	if ctx.Err() != nil {
-		return antigravitySummaries{err: ctx.Err()}
-	}
-	if (summaries.err != nil || !exists) && cached && prior.summaries.err == nil {
-		// A damaged store may not even report a container state, and a
-		// removed one reads as empty, so the last good read stands in until
-		// a read succeeds again.
-		return prior.summaries
-	}
-	if !exists {
-		summaries.missing = summaries.err == nil
+	if !exists || summaries.err != nil {
+		delete(antigravitySummariesCache.stores, path)
 		return summaries
 	}
 	// Remote imports extract stores into fresh temp roots; bound what stays cached.
@@ -201,8 +182,7 @@ func readAntigravitySummaries(ctx context.Context, path string) antigravitySumma
 			continue
 		}
 		summary := antigravitySummary{
-			parentID:          canonicalAgyCascadeID(strings.TrimSpace(parentID)),
-			workspaceRecorded: hasWorkspaces,
+			parentID: canonicalAgyCascadeID(strings.TrimSpace(parentID)),
 		}
 		if first := gjson.Get(uris, "0"); first.Type == gjson.String {
 			summary.workspace = antigravityWorkspacePath(first.Str)
@@ -247,82 +227,4 @@ func antigravityWorkspacePath(uri string) string {
 
 func isASCIILetter(b byte) bool {
 	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
-}
-
-// IsAntigravitySummariesStore reports whether path is an Antigravity summary
-// store or its WAL.
-func IsAntigravitySummariesStore(path string) bool {
-	return strings.TrimSuffix(filepath.Base(path), "-wal") == AntigravitySummariesDBName
-}
-
-// antigravitySummariesPath reports whether path is root's summary store or
-// its WAL. The -shm index is never data; see ChangedPathRelevance.
-func antigravitySummariesPath(root, path string) bool {
-	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
-	return ok && IsAntigravitySummariesStore(rel) && filepath.Dir(rel) == "."
-}
-
-// SummaryStoreExpectation is what a parse would store for one session whose
-// conversation a summary store lists.
-type SummaryStoreExpectation struct {
-	Source    SourceRef
-	SessionID string
-	// CwdKnown reports whether the store decides the session's working
-	// directory; Cwd is then the value a parse stores.
-	Cwd      string
-	CwdKnown bool
-	// ParentKnown reports whether the store can decide the session's parent;
-	// ParentSessionID is then the store's parent, or "" for none.
-	ParentSessionID string
-	ParentKnown     bool
-	// ResolveParent, when set, returns the parent a parse actually stores,
-	// which a source the parser reads first can override. It is called only
-	// when the store's parent disagrees with the archive.
-	ResolveParent func() (string, error)
-}
-
-// ArchivedSourcePathLister names every source path a session may have been
-// archived from, such as a conversation that moved between a brain
-// transcript and its database.
-type ArchivedSourcePathLister interface {
-	ArchivedSourcePaths(source SourceRef) []string
-}
-
-// SummaryStoreExpectationLister lists, for a summary store write, every
-// session its conversations feed, with the values a parse would store. The
-// engine routes the sessions whose archived values differ, so a store write
-// reparses only what it changed, whatever the process saw before.
-type SummaryStoreExpectationLister interface {
-	SummaryStoreExpectations(ctx context.Context, storePath string) ([]SummaryStoreExpectation, error)
-}
-
-// summaryExpectation describes source's session from the store's facts.
-func summaryExpectation(source SourceRef, sessionID, parentID string, parentKnown bool) SummaryStoreExpectation {
-	expectation := SummaryStoreExpectation{
-		Source: source, SessionID: sessionID, ParentSessionID: parentID, ParentKnown: parentKnown,
-	}
-	switch source.CwdResolution.State {
-	case SourceCwdResolved:
-		expectation.Cwd, expectation.CwdKnown = source.CwdResolution.Path, true
-	case SourceCwdNone, SourceCwdAmbiguous, SourceCwdRemote:
-		expectation.CwdKnown = true
-	case SourceCwdUnspecified, SourceCwdUnavailable:
-		// The store does not decide this session's working directory.
-	}
-	return expectation
-}
-
-// AntigravitySummarySessionRoot returns the configured root that owns an
-// archived session path of agent, so a store write in one root never routes a
-// same-ID session archived from another.
-func AntigravitySummarySessionRoot(agent AgentType, path string) (string, bool) {
-	if agent == AgentAntigravity {
-		return AntigravitySessionRoot(path)
-	}
-	if agent == AgentAntigravityCLI {
-		root := filepath.Dir(filepath.Dir(filepath.Clean(path)))
-		_, ok := antigravityCLISessionIDForPath(root, path)
-		return root, ok
-	}
-	return "", false
 }

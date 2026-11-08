@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -75,18 +74,11 @@ func (p *antigravityCLIProvider) ChangedPathRelevance(
 			continue
 		}
 		rel, ok := relUnder(root, filepath.Clean(req.Path))
-		if ok && (antigravityConversationIndexPath(rel) ||
-			rel == AntigravitySummariesDBName+"-shm") {
+		if ok && antigravityConversationIndexPath(rel) {
 			return ChangedPathNonData, nil
 		}
 	}
 	return ChangedPathUnclassified, nil
-}
-
-func (p *antigravityCLIProvider) SummaryStoreExpectations(
-	ctx context.Context, storePath string,
-) ([]SummaryStoreExpectation, error) {
-	return p.sources.summaryStoreExpectations(ctx, storePath)
 }
 
 func (p *antigravityCLIProvider) FindSource(
@@ -435,12 +427,6 @@ func (s antigravityCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				DebounceKey:  string(AgentAntigravityCLI) + ":workspace-cache:" + root,
 			},
 			WatchRoot{
-				Path:         root,
-				Recursive:    false,
-				IncludeGlobs: []string{AntigravitySummariesDBName, AntigravitySummariesDBName + "-wal"},
-				DebounceKey:  string(AgentAntigravityCLI) + ":summaries:" + root,
-			},
-			WatchRoot{
 				Path:         filepath.Join(root, "implicit"),
 				Recursive:    false,
 				IncludeGlobs: []string{"*.pb", "*.trajectory.json"},
@@ -527,11 +513,6 @@ func (s antigravityCLISourceSet) Fingerprint(
 		return SourceFingerprint{}, errors.New("antigravity cli source path unavailable")
 	}
 	key := firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.Path)
-	if summaries := loadAntigravitySummaries(ctx, src.Root); summaries.err != nil {
-		// Without a good read the stored workspace and parent cannot be
-		// checked, so the session stays as archived and is retried.
-		return SourceFingerprint{}, fmt.Errorf("read %s: %w", AntigravitySummariesDBName, summaries.err)
-	}
 	info, err := AntigravityCLIFileInfo(src.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -549,59 +530,6 @@ func (s antigravityCLISourceSet) Fingerprint(
 		MTimeNS: info.ModTime().UnixNano(),
 		Hash:    hash,
 	}, nil
-}
-
-// summaryStoreExpectations lists the sessions of every conversation the store
-// at storePath names, with the values a parse would store. A conversation can
-// feed two sessions: its conversations/ source and its implicit/ source.
-func (s antigravityCLISourceSet) summaryStoreExpectations(
-	ctx context.Context, storePath string,
-) ([]SummaryStoreExpectation, error) {
-	var expectations []SummaryStoreExpectation
-	for _, root := range s.roots {
-		if !antigravitySummariesPath(root, storePath) {
-			continue
-		}
-		summaries := loadAntigravitySummaries(ctx, root)
-		if summaries.err != nil {
-			return nil, summaries.err
-		}
-		projects := buildAntigravityCLIProjectMap(root)
-		for id := range summaries.byID {
-			parent := ""
-			if p := summaries.parent(id); p != "" {
-				parent = antigravityCLIIDPrefix + p
-			}
-			for _, rawID := range []string{id, antigravityImplicitTag + id} {
-				path := s.findSourceFile(root, rawID)
-				if path == "" {
-					continue
-				}
-				source, ok := s.sourceRefWithProjects(root, path, "", projects, false)
-				if !ok {
-					continue
-				}
-				expectation := summaryExpectation(source, antigravityCLIIDPrefix+rawID, parent, true)
-				sidecar := strings.TrimSuffix(path, filepath.Ext(path)) + ".trajectory.json"
-				if _, err := os.Stat(sidecar); !errors.Is(err, fs.ErrNotExist) {
-					// A reader sidecar's parent wins over the store's when the
-					// sidecar parses and names one, as in parseSessionWithStatus.
-					expectation.ResolveParent = func() (string, error) {
-						p, ok := antigravityCLISidecarParent(sidecar, id)
-						switch {
-						case !ok:
-							return parent, nil
-						case p == "":
-							return "", nil
-						}
-						return antigravityCLIIDPrefix + p, nil
-					}
-				}
-				expectations = append(expectations, expectation)
-			}
-		}
-	}
-	return expectations, ctx.Err()
 }
 
 func (s antigravityCLISourceSet) sourceFromRef(
@@ -637,10 +565,6 @@ func (s antigravityCLISourceSet) sourcesForChangedPath(
 	}
 	if samePath(path, filepath.Join(root, "cache", "last_conversations.json")) {
 		return s.sourcesForHistoryChange(root, req)
-	}
-	if antigravitySummariesPath(root, path) {
-		// The engine routes store writes through SummaryStoreExpectations.
-		return nil
 	}
 	if sourcePath, id, ok := antigravityCLISourcePathForEvent(root, path); ok {
 		if source, ok := s.sourceRef(root, sourcePath, s.projectForID(root, id), true); ok {

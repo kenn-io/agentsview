@@ -2274,17 +2274,6 @@ func (e *Engine) classifyProviderChangedPath(
 		if watermarkContainer != "" {
 			watermarkPreState, watermarkPreStateOK = statSQLiteContainerState(watermarkContainer)
 		}
-		// An Antigravity summary store write reparses only the sessions whose
-		// archived workspace or parent differs from the store; titles
-		// reconcile separately. The comparison does not depend on the watch
-		// root, so it runs once.
-		summaryStore := (agentType == parser.AgentAntigravity || agentType == parser.AgentAntigravityCLI) &&
-			parser.IsAntigravitySummariesStore(path)
-		var summarySources []parser.SourceRef
-		var summaryErr error
-		if summaryStore {
-			summarySources, summaryErr = e.summaryStoreChangedSources(ctx, provider, path)
-		}
 		for _, watchRoot := range watchRoots {
 			request := parser.ChangedPathRequest{
 				Path:      path,
@@ -2323,12 +2312,10 @@ func (e *Engine) classifyProviderChangedPath(
 					}
 				}
 			}
-			var sources []parser.SourceRef
-			if summaryStore {
-				sources, err = summarySources, summaryErr
-			} else {
-				sources, err = provider.SourcesForChangedPath(ctx, request)
-			}
+			sources, err := provider.SourcesForChangedPath(
+				ctx,
+				request,
+			)
 			if e.changedPathListedHook != nil {
 				e.changedPathListedHook(path)
 			}
@@ -11379,10 +11366,9 @@ func (e *Engine) collectAndBatchWithOptions(
 		// Filtered files are deliberately not skip-cached: a later
 		// allow-list change must be able to pick them up again.
 		sourceCwd := sourceCwdDecision{
-			resolution:    r.sourceCwdResolution,
-			storedCwd:     r.sourceCwdStored,
-			storedOK:      r.sourceCwdStoredOK,
-			archivedPaths: r.sourceCwdArchivedPaths,
+			resolution: r.sourceCwdResolution,
+			storedCwd:  r.sourceCwdStored,
+			storedOK:   r.sourceCwdStoredOK,
 		}
 		allowed, vetoed := e.splitResultsByCwdFilter(r.results, sourceCwd)
 		stats.cwdFilteredSessions += vetoed
@@ -12112,8 +12098,6 @@ type processResult struct {
 	sourceCwdStoredOK   bool
 	sourceCwdPath       string
 	sourceCwdAgent      parser.AgentType
-	// sourceCwdArchivedPaths carries sourceCwdDecision.archivedPaths.
-	sourceCwdArchivedPaths []string
 	// staged carries the scratch staging sink for a Codex full parse that
 	// took the streaming path. The collector moves it onto the pending
 	// write (and into pendingStaged for release after the batch commits);
@@ -12524,7 +12508,6 @@ func (e *Engine) processProviderFile(
 		result.sourceCwdResolution = cwdDecision.resolution
 		result.sourceCwdStored = cwdDecision.storedCwd
 		result.sourceCwdStoredOK = cwdDecision.storedOK
-		result.sourceCwdArchivedPaths = cwdDecision.archivedPaths
 		result.sourceCwdPath = cwdPath
 		result.sourceCwdAgent = cwdAgent
 	}()
@@ -12661,29 +12644,6 @@ func (e *Engine) processProviderFile(
 	cwdAgent = source.Provider
 	if cwdAgent == "" {
 		cwdAgent = file.Agent
-	}
-	if lister, ok := provider.(parser.ArchivedSourcePathLister); ok {
-		for _, path := range lister.ArchivedSourcePaths(source) {
-			if e.pathRewriter != nil {
-				path = e.pathRewriter(path)
-			}
-			if path != cwdPath {
-				cwdDecision.archivedPaths = append(cwdDecision.archivedPaths, path)
-			}
-		}
-	}
-	if providerSemantics.UnavailableCwdKeepsArchivedSession &&
-		cwdDecision.resolution.State == parser.SourceCwdUnavailable {
-		paths := append([]string{cwdPath}, cwdDecision.archivedPaths...)
-		keep, err := e.archivedSessionHasSourceMetadata(ctx, paths, cwdAgent)
-		if err != nil {
-			return processResult{err: err}, true
-		}
-		if keep {
-			return markSourceFailure(file, processResult{err: fmt.Errorf(
-				"%s: session metadata unavailable; keeping the archived session", cwdPath,
-			)}, failurecache.Identity{}, false), true
-		}
 	}
 	explicitForce := e.forceParseBypassesCache(file) || file.ForceFullParse
 	forceSourceCwdParse := cwdDecision.forceParse
@@ -13650,7 +13610,6 @@ func (e *Engine) processProviderFile(
 		sourceCwdResolution:      cwdDecision.resolution,
 		sourceCwdStored:          cwdDecision.storedCwd,
 		sourceCwdStoredOK:        cwdDecision.storedOK,
-		sourceCwdArchivedPaths:   cwdDecision.archivedPaths,
 	}
 	if (file.Agent == parser.AgentOmnigent ||
 		file.Agent == parser.AgentCursorIDE) && cacheSkip && cleanCache &&
@@ -14984,9 +14943,6 @@ type sourceCwdDecision struct {
 	storedCwd  string
 	storedOK   bool
 	forceParse bool
-	// archivedPaths are other paths the provider may have archived the
-	// source's sessions under, such as before a move between files.
-	archivedPaths []string
 }
 
 type sourceCwdReader interface {
@@ -15078,18 +15034,14 @@ func (e *Engine) reconcileFilteredSourceCwd(ctx context.Context,
 		if id == "" || agent == "" || path == "" {
 			continue
 		}
-		// The session may still be archived under a path the conversation
-		// moved from, so each candidate path is matched by identity.
-		for _, candidate := range append([]string{path}, decision.archivedPaths...) {
-			key := sourceCwdSessionKey{id: id, path: candidate, agent: agent}
-			if e.deferredSourceCwd != nil {
-				e.deferredSourceCwd.mu.Lock()
-				e.deferredSourceCwd.sessions[key] = target
-				e.deferredSourceCwd.mu.Unlock()
-				continue
-			}
+		key := sourceCwdSessionKey{id: id, path: path, agent: agent}
+		if e.deferredSourceCwd != nil {
+			e.deferredSourceCwd.mu.Lock()
+			e.deferredSourceCwd.sessions[key] = target
+			e.deferredSourceCwd.mu.Unlock()
+		} else {
 			updated, err := e.db.UpdateSessionCwdByIdentity(ctx,
-				id, candidate, agent, target,
+				id, path, agent, target,
 			)
 			if err != nil {
 				return changed, err
@@ -22042,10 +21994,9 @@ func (e *Engine) processAndWriteSessionFile(
 		changed, reconcileErr := e.reconcileFilteredSourceCwd(ctx,
 			res.results,
 			sourceCwdDecision{
-				resolution:    res.sourceCwdResolution,
-				storedCwd:     res.sourceCwdStored,
-				storedOK:      res.sourceCwdStoredOK,
-				archivedPaths: res.sourceCwdArchivedPaths,
+				resolution: res.sourceCwdResolution,
+				storedCwd:  res.sourceCwdStored,
+				storedOK:   res.sourceCwdStoredOK,
 			},
 		)
 		if reconcileErr != nil {

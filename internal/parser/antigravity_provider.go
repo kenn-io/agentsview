@@ -100,23 +100,6 @@ func (p *antigravityProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
-func (p *antigravityProvider) ArchivedSourcePaths(source SourceRef) []string {
-	src, ok := p.sources.sourceFromRef(source)
-	if !ok {
-		return nil
-	}
-	return []string{
-		filepath.Join(src.Root, "conversations", src.ID+".db"),
-		antigravityBrainTranscriptPath(src.Root, src.ID),
-	}
-}
-
-func (p *antigravityProvider) SummaryStoreExpectations(
-	ctx context.Context, storePath string,
-) ([]SummaryStoreExpectation, error) {
-	return p.sources.summaryStoreExpectations(ctx, storePath)
-}
-
 func (p *antigravityProvider) Fingerprint(
 	ctx context.Context,
 	source SourceRef,
@@ -384,11 +367,6 @@ func (s antigravitySourceSet) SourcesForChangedPath(
 		if req.WatchRoot != "" && !antigravityWatchRootMatches(root, req.WatchRoot) {
 			continue
 		}
-		if antigravitySummariesPath(root, req.Path) {
-			// The engine routes store writes through SummaryStoreExpectations,
-			// and titles reconcile separately.
-			return nil, nil
-		}
 		source, ok := s.sourceForChangedPath(ctx, root, req.Path)
 		if ok {
 			return []SourceRef{source}, nil
@@ -461,11 +439,6 @@ func (s antigravitySourceSet) Fingerprint(
 		return SourceFingerprint{}, err
 	}
 	summaries := loadAntigravitySummaries(ctx, src.Root)
-	if summaries.err != nil {
-		// Without a good read the stored workspace and parent cannot be
-		// checked, so the session stays as archived and is retried.
-		return SourceFingerprint{}, fmt.Errorf("read %s: %w", AntigravitySummariesDBName, summaries.err)
-	}
 	hash, err := antigravityCompositeHashWithExtra(
 		src.Path,
 		antigravityIDECompanionPaths(src.Path),
@@ -579,38 +552,6 @@ func (s antigravitySourceSet) resolveSource(
 	return antigravitySource{Root: root, Path: path, ID: id}, true
 }
 
-// summaryStoreExpectations lists the session of every conversation the store
-// at storePath names, with the values a parse would store.
-func (s antigravitySourceSet) summaryStoreExpectations(
-	ctx context.Context, storePath string,
-) ([]SummaryStoreExpectation, error) {
-	var expectations []SummaryStoreExpectation
-	for _, root := range s.roots {
-		if !antigravitySummariesPath(root, storePath) {
-			continue
-		}
-		summaries := loadAntigravitySummaries(ctx, root)
-		if summaries.err != nil {
-			return nil, summaries.err
-		}
-		for id := range summaries.byID {
-			src, ok := s.resolveSource(root, s.findSourceFile(root, id), false)
-			if !ok {
-				continue
-			}
-			parent := ""
-			if p := summaries.parent(id); p != "" {
-				parent = antigravityIDPrefix + p
-			}
-			// Only the store names an app or IDE parent.
-			expectations = append(expectations, summaryExpectation(
-				s.newSourceRef(ctx, src), antigravityIDPrefix+id, parent, true,
-			))
-		}
-	}
-	return expectations, ctx.Err()
-}
-
 // newSourceRef builds the source for one conversation. Its working directory
 // comes from the workspace the summary store records. A remote root keeps
 // that workspace only as a project hint, because it names a folder on
@@ -622,11 +563,6 @@ func (s antigravitySourceSet) newSourceRef(ctx context.Context, src antigravityS
 	if s.remote || antigravityRemoteRoot(s.remoteRoots, src.Root) {
 		project = summaries.byID[src.ID].workspace
 		resolution = SourceCwdResolution{State: SourceCwdRemote}
-		if summaries.err != nil || summaries.missing {
-			// A remote cwd stays empty either way, but its project and parent
-			// also came from the store, so they must not be cleared.
-			resolution = SourceCwdResolution{State: SourceCwdUnavailable}
-		}
 	}
 	return SourceRef{
 		Provider:       AgentAntigravity,
@@ -737,13 +673,10 @@ func antigravityProviderCapabilities() Capabilities {
 			Model:                CapabilitySupported,
 		},
 		// The fingerprint covers the summary store's workspace and parent,
-		// which change without touching the conversation's own files. A
-		// store that is missing or unreadable leaves archived sessions as
-		// they are, since a reparse would clear both.
+		// which change without touching the conversation's own files.
 		Sync: ProviderSyncSemantics{
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
-			UnavailableCwdKeepsArchivedSession:  true,
 		},
 	}
 }

@@ -17,7 +17,6 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentAntigravity: {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
-			UnavailableCwdKeepsArchivedSession:  true,
 		},
 		AgentAntigravityCLI: {
 			FingerprintHashInCacheKey:           true,

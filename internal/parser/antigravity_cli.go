@@ -1699,25 +1699,6 @@ type agyTrajectoryParseResult struct {
 	parentCascadeID string
 }
 
-// antigravityCLISidecarParent reports the parent parseSessionWithStatus takes
-// from a reader sidecar for conversation id. ok is false when the sidecar
-// would not parse or names no parent, so the parser falls back to the summary
-// store. A sidecar naming the conversation itself yields no parent.
-func antigravityCLISidecarParent(path, id string) (parent string, ok bool) {
-	traj, err := decodeAntigravityCLITrajectory(path)
-	if err != nil {
-		return "", false
-	}
-	parent = parseAgyReaderParentCascadeID(traj.AgyReader)
-	if parent == "" {
-		return "", false
-	}
-	if strings.EqualFold(parent, id) {
-		return "", true
-	}
-	return parent, true
-}
-
 func parseAgyReaderParentCascadeID(raw jsontext.Value) string {
 	if len(raw) == 0 {
 		return ""
@@ -1762,37 +1743,27 @@ func canonicalAgyCascadeID(value string) string {
 // The read is size-capped (maxTrajectorySidecarBytes) and unknown step
 // types are silently skipped further down. No content from the sidecar
 // is executed or echoed back over any outbound channel.
-// decodeAntigravityCLITrajectory reads and decodes a sidecar within the size
-// cap. A sidecar it rejects is one parseAntigravityCLITrajectory rejects.
-func decodeAntigravityCLITrajectory(trajectoryPath string) (agyTrajectory, error) {
+func parseAntigravityCLITrajectory(
+	trajectoryPath string,
+	executors []antigravityExecutorMetadata,
+) (agyTrajectoryParseResult, error) {
 	f, err := os.Open(trajectoryPath)
 	if err != nil {
-		return agyTrajectory{}, err
+		return agyTrajectoryParseResult{}, err
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxTrajectorySidecarBytes+1))
 	if err != nil {
-		return agyTrajectory{}, err
+		return agyTrajectoryParseResult{}, err
 	}
 	if int64(len(data)) > maxTrajectorySidecarBytes {
-		return agyTrajectory{}, fmt.Errorf(
+		return agyTrajectoryParseResult{}, fmt.Errorf(
 			"trajectory sidecar %s exceeds %d-byte cap",
 			trajectoryPath, maxTrajectorySidecarBytes,
 		)
 	}
 	var traj agyTrajectory
 	if err := json.Unmarshal(data, &traj); err != nil {
-		return agyTrajectory{}, err
-	}
-	return traj, nil
-}
-
-func parseAntigravityCLITrajectory(
-	trajectoryPath string,
-	executors []antigravityExecutorMetadata,
-) (agyTrajectoryParseResult, error) {
-	traj, err := decodeAntigravityCLITrajectory(trajectoryPath)
-	if err != nil {
 		return agyTrajectoryParseResult{}, err
 	}
 
