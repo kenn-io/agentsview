@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"os"
@@ -96,6 +97,42 @@ func TestExportPushMaximumCanonicalSessionID(t *testing.T) {
 	source := &exportPushFixtureSource{snapshot: exportPushSnapshot{SessionID: id, Agent: agent, Payload: []byte("snapshot"), Messages: 1}}
 	var status bytes.Buffer
 	require.NoError(t, runExportPush(t.Context(), source, id, agent, true, filepath.Join(t.TempDir(), "snapshot.json"), &status))
+}
+
+func TestExportPushRejectsInvalidCanonicalSessionIDs(t *testing.T) {
+	for _, tc := range []struct{ agent, id string }{
+		{"pi", "selected"},
+		{"pi", "pi:"},
+		{"claude", "claude:selected"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			source := &exportPushFixtureSource{snapshot: exportPushSnapshot{SessionID: tc.id, Agent: tc.agent, Payload: []byte("snapshot"), Messages: 1}}
+			path := filepath.Join(t.TempDir(), "snapshot.json")
+			var status bytes.Buffer
+			require.Error(t, runExportPush(t.Context(), source, tc.id, tc.agent, true, path, &status))
+			_, err := os.Stat(path)
+			require.True(t, os.IsNotExist(err))
+		})
+	}
+}
+
+func TestExportPushJSONSuccess(t *testing.T) {
+	source := &exportPushFixtureSource{snapshot: exportPushSnapshot{SessionID: "pi:selected", Agent: "pi", Payload: []byte("snapshot"), Messages: 1}}
+	cmd := newExportPushCommandWithSource(source)
+	var out, diagnostics bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&diagnostics)
+	cmd.SetArgs([]string{"pi:selected", "--agent", "pi", "--snapshot-prefix", "--output", filepath.Join(t.TempDir(), "snapshot.json"), "--format", "json"})
+	require.NoError(t, cmd.ExecuteContext(t.Context()))
+	var got struct {
+		SessionID      string `json:"session_id"`
+		Status         string `json:"status"`
+		SnapshotPrefix bool   `json:"snapshot_prefix"`
+	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
+	require.Equal(t, "pi:selected", got.SessionID)
+	require.Equal(t, "exported", got.Status)
+	require.True(t, got.SnapshotPrefix)
 }
 
 func TestExportPushDefaultUnavailableDoesNotCreateOutput(t *testing.T) {
