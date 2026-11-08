@@ -228,18 +228,16 @@ func restartDaemonAfterUpdate(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("finding current executable: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, exe, restartDaemonAfterUpdateArgs(cfg, stopResult)...)
-	cmd.Env = append(os.Environ(), "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("serve --background: %w: %s", err, strings.TrimSpace(string(out)))
-	}
+	commands := [][]string{restartDaemonAfterUpdateArgs(cfg, stopResult)}
 	if stopResult.Persistent {
-		rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
-		if rt == nil {
-			return errors.New("updated daemon did not publish a writable runtime")
+		commands = append(commands, []string{"daemon", "start"})
+	}
+	for _, args := range commands {
+		cmd := exec.CommandContext(ctx, exe, args...)
+		cmd.Env = append(os.Environ(), "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%s: %w: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(string(out)))
 		}
-		return persistDaemonRuntime(ctx, cfg, rt)
 	}
 	return nil
 }
