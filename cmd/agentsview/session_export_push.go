@@ -92,7 +92,7 @@ func runExportPush(ctx context.Context, source exportPushSource, id, agent strin
 		return errors.New("export-push: --snapshot-prefix must acknowledge the captured point and any unknown tail")
 	}
 	if output == "" || id == "" || len(id) > 160 || strings.ContainsAny(id, "~/\\\x00\r\n\t ") {
-		return errors.New("export-push: exact canonical session ID and new --output file are required")
+		return errors.New("export-push: provide the exact session ID and a new --output file")
 	}
 	snapshot, err := source.Capture(ctx, id, agent)
 	if err != nil {
@@ -107,7 +107,7 @@ func runExportPush(ctx context.Context, source exportPushSource, id, agent strin
 	canonical := id
 	if snapshot.Agent != "claude" {
 		if !strings.HasPrefix(id, snapshot.Agent+":") || len(id) <= len(snapshot.Agent)+1 {
-			return errors.New("export-push: require exact canonical session ID")
+			return errors.New("export-push: use the full agent:<native-id> session ID")
 		}
 	} else if strings.Contains(canonical, ":") {
 		return errors.New("export-push: Claude session ID must be unprefixed")
