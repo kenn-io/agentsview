@@ -1035,12 +1035,6 @@ func computeCacheEconomics(stats *SessionStats, rows []sessionStatsRow, facts se
 	if len(claudeIDs) == 0 {
 		return nil
 	}
-	perSession := make(map[string]*sessionCacheTotals, len(claudeIDs))
-	for _, id := range claudeIDs {
-		perSession[id] = facts.session(id).cache
-	}
-	var err error
-
 	ce := &StatsCacheEconomics{
 		ClaudeOnly: true,
 		CacheHitRatio: CacheHitRatioDistribution{
@@ -1052,18 +1046,13 @@ func computeCacheEconomics(stats *SessionStats, rows []sessionStatsRow, facts se
 		denominatorSum int64
 		dollarsSpent   money.Money
 		dollarsNoCache money.Money
+		err            error
 	)
-	// Iterate in session-id order so floating-point sums stay
-	// deterministic across runs; Go's map iteration order is
-	// randomised and (a+b)+c != a+(b+c) in IEEE 754.
-	keys := make([]string, 0, len(perSession))
-	for k := range perSession {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		totals, ok := perSession[k]
-		if !ok || totals == nil {
+	// Keep summation in session-ID order for deterministic results.
+	sort.Strings(claudeIDs)
+	for _, id := range claudeIDs {
+		totals := facts.session(id).cache
+		if totals == nil {
 			continue
 		}
 		denom := totals.inputTok + totals.cacheReadT +
