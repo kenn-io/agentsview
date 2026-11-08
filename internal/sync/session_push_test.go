@@ -72,10 +72,12 @@ func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
 	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
 	t.Cleanup(engine.Close)
 	jobs := make(chan syncJob, 1)
-	jobs <- syncJob{agent: parser.AgentCursor, path: "fixture-source", processResult: {results: []parser.ParseResult{
+	job := syncJob{agent: parser.AgentCursor, path: "fixture-source"}
+	job.results = []parser.ParseResult{
 		{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentCursor, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "replacement"}}},
 		{Session: parser.ParsedSession{ID: "independent", Agent: parser.AgentCursor, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "independent content"}}},
-	}}}
+	}
+	jobs <- job
 	close(jobs)
 	stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
 	assert.Zero(t, stats.Failed)
@@ -98,10 +100,10 @@ func TestSessionPushReservedExclusionDoesNotBlockSourceMember(t *testing.T) {
 	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
 	t.Cleanup(engine.Close)
 	jobs := make(chan syncJob, 1)
-	jobs <- syncJob{agent: parser.AgentVibe, path: "fixture-source", processResult: {
-		excludedSessionIDs: []string{"reserved"},
-		results:            []parser.ParseResult{{Session: parser.ParsedSession{ID: "canonical", Agent: parser.AgentVibe, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "canonical content"}}}},
-	}}
+	job := syncJob{agent: parser.AgentVibe, path: "fixture-source"}
+	job.excludedSessionIDs = []string{"reserved"}
+	job.results = []parser.ParseResult{{Session: parser.ParsedSession{ID: "canonical", Agent: parser.AgentVibe, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "canonical content"}}}}
+	jobs <- job
 	close(jobs)
 	stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
 	assert.Zero(t, stats.Failed)
