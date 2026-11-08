@@ -55,7 +55,7 @@ it("sorts agent scores and project names independently", async () => {
   unmount(component);
 });
 
-it("keeps scored results beside a refresh failure", async () => {
+it("keeps scored results beside a refresh failure and retries a first-load failure", async () => {
   analytics.errors.signals = "refresh failed";
   const component = mount(SessionHealthSection, { target: document.body });
   await tick();

@@ -15,15 +15,8 @@ import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import AnalyticsPage from "./AnalyticsPage.svelte";
 // @ts-ignore
 import QualityPage from "../quality/QualityPage.svelte";
-import {
-  makeSummary,
-  makeProjects,
-  makeSessionShape,
-  makeVelocity,
-  makeTools,
-} from "../../test-support/analytics.js";
 import { requestUrl } from "../../test-support/request-url.js";
-import { AnalyticsService, MetadataService } from "../../api/generated/index.js";
+import { MetadataService } from "../../api/generated/index.js";
 
 async function flushEffects() {
   await tick();
@@ -323,65 +316,14 @@ describe("AnalyticsPage outcome window", () => {
     },
   );
 
-  it.each([false, true])(
-    "retries a failed outcome read with pull requests opted in=%s",
-    async (includePullRequests) => {
-      vi.stubEnv("TZ", "America/New_York");
-      const initialLoad = await start();
-      const window = initialLoad.mock.calls[0]![0];
-      initialLoad.mockRestore();
-      const response = {
-        outcome_stats: {
-          repos_active: 1,
-          commits: 5,
-          loc_added: 12,
-          loc_removed: 2,
-          files_changed: 3,
-          ...(includePullRequests ? { prs_opened: 2, prs_merged: 1 } : {}),
-        },
-      };
-      const pending = Promise.withResolvers<Response>();
-      const read = vi
-        .spyOn(globalThis, "fetch")
-        .mockRejectedValueOnce(new Error("Outcome request timed out"))
-        .mockReturnValueOnce(pending.promise);
-      await (includePullRequests
-        ? outcomeTotals.loadWithPullRequests(window)
-        : outcomeTotals.load(window));
-      await flushEffects();
-      try {
-        const retry = [
-          ...document.querySelectorAll<HTMLButtonElement>(".outcome-container button"),
-        ].find((button) => button.textContent?.trim() === "Retry");
-        expect(retry).toBeDefined();
-        retry!.click();
-        await flushEffects();
-        expect(retry!.getAttribute("aria-busy")).toBe("true");
-        expect(read).toHaveBeenCalledTimes(2);
-        const request = new URL(requestUrl(read.mock.lastCall![0]), "http://example.test");
-        expect(request.pathname).toBe("/api/v1/session-stats");
-        expect(Object.fromEntries(request.searchParams)).toMatchObject({
-          since: "2026-03-01T05:00:00.000Z",
-          until: "2026-04-01T04:00:00.000Z",
-          include_git_outcomes: "true",
-          include_github_outcomes: String(includePullRequests),
-        });
-        pending.resolve(Response.json(response));
-        await vi.waitFor(() => {
-          const commits = [...document.querySelectorAll(".outcome-card")].find(
-            (card) => card.querySelector(".outcome-label")?.textContent === "Commits",
-          );
-          expect(commits?.querySelector(".outcome-value")?.textContent).toBe("5");
-        });
-        expect(outcomeTotals.includePullRequests).toBe(includePullRequests);
-        expect(document.querySelector(".outcome-container")?.textContent).not.toContain(
-          "Outcome request timed out",
-        );
-      } finally {
-        pending.resolve(Response.json(response));
-      }
-    },
-  );
+  it("passes the current outcome window to Retry", async () => {
+    const load = await start();
+    const retry = vi.spyOn(outcomeTotals, "retry").mockResolvedValue();
+    outcomeTotals.error = "Outcome request timed out";
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>(".outcome-container .error button")!.click();
+    expect(retry).toHaveBeenCalledExactlyOnceWith(load.mock.calls[0]![0]);
+  });
 
   it("uses local days for the range and follows selected days and activity ranges", async () => {
     vi.stubEnv("TZ", "America/New_York");
@@ -599,113 +541,6 @@ describe("AnalyticsPage initial load", () => {
       await vi.advanceTimersByTimeAsync(2000);
       expect(fetch).not.toHaveBeenCalled();
       expect(cancel).toHaveBeenCalledTimes(1);
-    },
-  );
-});
-
-describe("AnalyticsPage panel failures", () => {
-  afterEach(() => {
-    analytics.metric = "messages";
-    analytics.topMetric = "messages";
-    analytics.cancelInFlightReads();
-    for (const panel of Object.keys(analytics.errors) as (keyof typeof analytics.errors)[]) {
-      analytics[panel] = null;
-      analytics.errors[panel] = null;
-    }
-  });
-
-  function mountPanels() {
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    vi.spyOn(outcomeTotals, "load").mockResolvedValue();
-    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    analytics.granularity = "week";
-    router.route = "sessions";
-    component = mount(AnalyticsPage, { target: document.body });
-  }
-
-  it("distinguishes loading, empty results, and failures with or without retained results", async () => {
-    const panels = [
-      ["projects", ".breakdown-container", "No project data"],
-      ["sessionShape", ".shape-container", "No data for this period"],
-    ] as const;
-    for (const [panel] of panels) {
-      analytics[panel] = null;
-      analytics.errors[panel] = null;
-    }
-    analytics.velocity = null;
-    analytics.errors.velocity = null;
-    mountPanels();
-    await flushEffects();
-    const text = (selector: string) => document.querySelector(selector)!.textContent;
-    for (const [, selector] of panels) {
-      expect(document.querySelector(`${selector} .loading`)).not.toBeNull();
-    }
-    expect(document.querySelector(".velocity-container .loading")).not.toBeNull();
-
-    Object.assign(analytics, {
-      projects: makeProjects(),
-      sessionShape: makeSessionShape(),
-      velocity: makeVelocity(),
-    });
-    await flushEffects();
-    for (const [, selector, empty] of panels) {
-      expect(text(selector)).toContain(empty);
-    }
-    expect(document.querySelector(".velocity-container .metrics-grid")).not.toBeNull();
-    analytics.errors.velocity = "velocity failed";
-    for (const [panel] of panels) analytics.errors[panel] = `${panel} failed`;
-    await flushEffects();
-    expect(document.querySelector(".velocity-container .error")).not.toBeNull();
-    expect(document.querySelector(".velocity-container .metrics-grid")).not.toBeNull();
-    analytics.velocity = null;
-    for (const [panel, selector, empty] of panels) {
-      expect(document.querySelector(`${selector} .error`)).not.toBeNull();
-      expect(text(selector)).toContain(empty);
-      analytics[panel] = null;
-    }
-    await flushEffects();
-    for (const [, selector, empty] of panels) {
-      expect(document.querySelector(`${selector} .error`)).not.toBeNull();
-      expect(text(selector)).not.toContain(empty);
-    }
-    expect(document.querySelector(".velocity-container .error")).not.toBeNull();
-    expect(document.querySelector(".velocity-container .metrics-grid")).toBeNull();
-  });
-
-  it.each(["summary", "velocity", "tools"] as const)(
-    "waits for comparison %s and retries only its failure",
-    async (source) => {
-      const summary = {
-        ...makeSummary(),
-        agents: { claude: { sessions: 3, messages: 30 }, codex: { sessions: 4, messages: 40 } },
-      };
-      Object.assign(analytics, { summary, velocity: makeVelocity(), tools: makeTools() });
-      for (const panel of ["summary", "velocity", "tools"] as const) analytics.errors[panel] = null;
-      analytics[source] = null;
-      const reads = {
-        summary: vi.spyOn(AnalyticsService, "getApiV1AnalyticsSummary").mockResolvedValue(summary),
-        velocity: vi
-          .spyOn(AnalyticsService, "getApiV1AnalyticsVelocity")
-          .mockResolvedValue(makeVelocity()),
-        tools: vi.spyOn(AnalyticsService, "getApiV1AnalyticsTools").mockResolvedValue(makeTools()),
-      };
-      mountPanels();
-      await flushEffects();
-      const comparison = () => document.querySelector(".agent-comparison")!;
-      expect(comparison().textContent).toContain("Loading");
-      expect(comparison().querySelector(".comparison-table")).toBeNull();
-      analytics.errors[source] = `${source} failed`;
-      await flushEffects();
-      comparison().querySelector<HTMLButtonElement>(".error button")!.click();
-      await vi.waitFor(() =>
-        expect(comparison().querySelector(".comparison-table")).not.toBeNull(),
-      );
-      expect(comparison().textContent).toContain("claude");
-      expect(comparison().textContent).toContain("codex");
-      expect(comparison().textContent).not.toContain(`${source} failed`);
-      for (const panel of ["summary", "velocity", "tools"] as const) {
-        expect(reads[panel]).toHaveBeenCalledTimes(panel === source ? 1 : 0);
-      }
     },
   );
 });

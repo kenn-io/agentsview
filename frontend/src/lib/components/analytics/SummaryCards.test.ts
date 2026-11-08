@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("SummaryCards", () => {
-  it("shows placeholders until the summary arrives", async () => {
+  it("shows distinct placeholders while loading and after failure", async () => {
     component = mount(SummaryCards, { target: document.body });
     await tick();
     const values = () =>

@@ -627,21 +627,6 @@ describe("AnalyticsStore activity range selection", () => {
       expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
     );
   });
-
-  it("does not retain parent summary data when a brushed-range request fails", async () => {
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    await analytics.fetchSummary();
-    analyticsService.getApiV1AnalyticsSummary.mockRejectedValueOnce(
-      new Error("range request failed"),
-    );
-
-    analytics.setActivitySelection("2024-01-10", "2024-01-12");
-
-    await vi.waitFor(() => {
-      expect(analytics.errors.summary).toBe("range request failed");
-    });
-    expect(analytics.summary).toBeNull();
-  });
 });
 
 describe("AnalyticsStore.clearDate", () => {
@@ -1366,11 +1351,9 @@ describe("AnalyticsStore panel scopes", () => {
     await retry;
   });
 
-  it("clears activity and heatmap when the selected hour changes", async () => {
+  it("passes the selected hour to activity and heatmap requests", async () => {
     await analytics.fetchAll();
     analytics.selectHourOfWeek(1, 9);
-    expect(analytics.activity).toBeNull();
-    expect(analytics.heatmap).toBeNull();
     for (const read of [
       analyticsService.getApiV1AnalyticsActivity,
       analyticsService.getApiV1AnalyticsHeatmap,

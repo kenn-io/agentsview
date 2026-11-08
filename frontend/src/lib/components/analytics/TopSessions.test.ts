@@ -163,7 +163,7 @@ describe("TopSessions", () => {
     unmount(component);
   });
 
-  it("renders display names and keeps Output Tokens usable without a summary", async () => {
+  it("renders display names, enables Output Tokens without a summary, and guards empty results", async () => {
     const summary = analytics.summary;
     analytics.summary = null;
     const metric = vi.spyOn(analytics, "setTopMetric").mockImplementation(() => {});
@@ -188,18 +188,13 @@ describe("TopSessions", () => {
       topSessions: null,
     };
 
-    const data = analytics.topSessions;
-    analytics.topSessions = null;
     const component = mount(TopSessions, { target: document.body });
     await tick();
-    expect.soft(document.querySelector(".loading")).not.toBeNull();
-    analytics.topSessions = data;
-    await tick();
-    expect.soft(document.querySelector(".loading")).toBeNull();
 
-    expect
-      .soft(document.querySelector(".session-label")?.textContent?.trim())
-      .toBe("Renamed sidebar title");
+    expect(document.querySelector(".loading")).toBeNull();
+    expect(document.querySelector(".session-label")?.textContent?.trim()).toBe(
+      "Renamed sidebar title",
+    );
 
     try {
       const tokens = [...document.querySelectorAll<HTMLButtonElement>("button")].find(

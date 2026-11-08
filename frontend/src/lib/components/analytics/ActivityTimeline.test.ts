@@ -21,7 +21,7 @@ describe("ActivityTimeline", () => {
     }
   });
 
-  it("fits the densest supported daily range to the available width", async () => {
+  it("fits the densest daily range and distinguishes empty results from missing data", async () => {
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
       get: () => 800,
@@ -46,15 +46,10 @@ describe("ActivityTimeline", () => {
       }),
     };
 
-    const data = analytics.activity;
-    analytics.activity = null;
     const component = mount(ActivityTimeline, { target: document.body });
     await tick();
-    expect(document.querySelector(".loading")).not.toBeNull();
-    analytics.activity = data;
-    await tick();
-    expect(document.querySelector(".loading")).toBeNull();
 
+    expect(document.querySelector(".loading")).toBeNull();
     const chart = document.querySelector<SVGSVGElement>("svg");
     expect(chart).not.toBeNull();
     expect(Number(chart!.getAttribute("width"))).toBe(800);

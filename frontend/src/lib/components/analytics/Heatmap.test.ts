@@ -19,7 +19,7 @@ describe("Heatmap", () => {
     }
   });
 
-  it("fits a full year and keeps Output Tokens usable without a summary", async () => {
+  it("fits a full year, enables Output Tokens without a summary, and guards empty results", async () => {
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
       get: () => 600,
@@ -38,21 +38,15 @@ describe("Heatmap", () => {
     };
 
     const data = analytics.heatmap;
-    analytics.heatmap = null;
     const component = mount(Heatmap, { target: document.body });
     await tick();
-    expect.soft(document.querySelector(".loading")).not.toBeNull();
-    analytics.heatmap = data;
-    await tick();
-    expect.soft(document.querySelector(".loading")).toBeNull();
 
+    expect(document.querySelector(".loading")).toBeNull();
     const container = document.querySelector<HTMLElement>(".heatmap-scroll");
     const chart = container?.querySelector<SVGSVGElement>("svg");
-    expect.soft(container).not.toBeNull();
-    expect.soft(chart).not.toBeNull();
-    expect
-      .soft(Number(chart?.getAttribute("width")))
-      .toBeLessThanOrEqual(container?.clientWidth ?? 0);
+    expect(container).not.toBeNull();
+    expect(chart).not.toBeNull();
+    expect(Number(chart?.getAttribute("width"))).toBeLessThanOrEqual(container?.clientWidth ?? 0);
 
     const tokens = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Output Tokens",

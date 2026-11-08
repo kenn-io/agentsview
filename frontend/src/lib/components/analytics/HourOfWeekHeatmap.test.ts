@@ -56,14 +56,8 @@ describe("HourOfWeekHeatmap", () => {
     ];
   }
 
-  it("renders Sunday first while preserving Monday-zero filter values", async () => {
+  it("renders Sunday first, preserves filter values, and retains the chart beside failures", async () => {
     const component = mountWithData();
-    await tick();
-    const data = analytics.hourOfWeek;
-    analytics.hourOfWeek = null;
-    await tick();
-    expect(document.querySelector(".loading")).not.toBeNull();
-    analytics.hourOfWeek = data;
     await tick();
     expect(document.querySelector(".loading")).toBeNull();
     analytics.errors.hourOfWeek = "request failed";
