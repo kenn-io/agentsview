@@ -576,9 +576,6 @@ func (s *Store) activityReportCandidateSource(
 		defer terminalRows.Close()
 		var terminal []activity.IntervalCandidate
 		for terminalRows.Next() {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 			candidate, scanErr := scanCandidate(terminalRows)
 			if scanErr != nil {
 				terminalRows.Close()
@@ -646,7 +643,7 @@ func (s *Store) activityReportCandidateSource(
 					return err
 				}
 			}
-			return rows.Err()
+			return nil
 		}
 		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
