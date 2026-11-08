@@ -1754,6 +1754,16 @@ test.describe('Settings', () => {
           phase: 'embedding',
           rate_per_second: 10,
           running: true,
+          setup: {
+            action: '',
+            busy: false,
+            downloaded_bytes: 0,
+            enabled: true,
+            installing: false,
+            missing_bytes: 0,
+            provider: 'built-in',
+            total_bytes: 0,
+          },
           started_at: startedAt,
           total: 1000,
         }),
@@ -1790,10 +1800,10 @@ test.describe('Settings', () => {
     await embeddingsSection.scrollIntoViewIfNeeded();
     await expect(
       embeddingsSection.getByRole('progressbar', {
-        name: 'Embedding progress',
+        name: 'Search by meaning setup',
       })
     ).toBeVisible();
-    await expect(embeddingsSection.getByText(/^ETA /)).toBeVisible({
+    await expect(embeddingsSection.getByText(/^Indexing 360 of 1,000 text sections · .* left/)).toBeVisible({
       timeout: 5_000,
     });
 
