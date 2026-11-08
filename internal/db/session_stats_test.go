@@ -2805,13 +2805,8 @@ func TestGetSessionStatsReleasesBulkLaneBeforeOutcomeLookups(t *testing.T) {
 
 func TestGetSessionStats_OutcomesOnly(t *testing.T) {
 	skipIfNoGit(t)
-	statsIsolateGit(t)
 	d := testDB(t)
-	repo := t.TempDir()
-	statsInitRepoAt(t, repo)
-	for i := range 3 {
-		statsCommitFile(t, repo, "file.txt", strings.Repeat("line\n", i+1), "fixture")
-	}
+	repo := statsOutcomeRepo(t)
 	excluded := t.TempDir()
 	statsInitRepoAt(t, excluded)
 	statsCommitFile(t, excluded, "file.txt", "excluded\n", "excluded")
