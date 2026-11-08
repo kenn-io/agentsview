@@ -30,11 +30,7 @@ func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(conte
 			if sized, ok := any(value).(interface{ Bytes() int64 }); ok {
 				return sized.Bytes()
 			}
-			encoded, err := json.Marshal(value)
-			if err != nil {
-				return DefaultMaxBytes + 1
-			}
-			return int64(len(encoded))
+			return JSONBytes(value)
 		}
 	})
 	if values, ok := r.memo.Get(slot, version); ok {
@@ -50,6 +46,15 @@ func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(conte
 		}
 		return value, err
 	})
+}
+
+// JSONBytes sizes a public result, exceeding the cache cap on encoding errors.
+func JSONBytes(value any) int64 {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return DefaultMaxBytes + 1
+	}
+	return int64(len(encoded))
 }
 
 // Clear drops all finished values.

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"encoding/json/v2"
 	"unsafe"
 
 	"go.kenn.io/agentsview/internal/kept"
@@ -9,11 +8,7 @@ import (
 
 // Bytes includes the immutable side data omitted from the public response.
 func (r DailyUsageResult) Bytes() int64 {
-	encoded, err := json.Marshal(r)
-	if err != nil {
-		return kept.DefaultMaxBytes + 1
-	}
-	n := int64(len(encoded))
+	n := kept.JSONBytes(r)
 	if r.Pairwise != nil {
 		n += int64(unsafe.Sizeof(*r.Pairwise))
 		for _, entries := range []map[string]UsagePairwiseValue{r.Pairwise.Models, r.Pairwise.Projects} {

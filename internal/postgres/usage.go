@@ -2175,11 +2175,9 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 		Totals:        totals,
 		SessionCounts: sessionCounts,
 	}
-	if f.Breakdowns {
-		result.Pairwise = pgDailyPairwiseSides(accum, sessionCosts, sessionIDs, inexactModels, inexactProjects)
-		if result.Bytes() > kept.DefaultMaxBytes {
-			result.Pairwise = nil
-		}
+	result.Pairwise = pgDailyPairwiseSides(accum, sessionCosts, sessionIDs, inexactModels, inexactProjects)
+	if result.Bytes() > kept.DefaultMaxBytes {
+		result.Pairwise = nil
 	}
 	return result, nil
 }
@@ -2559,7 +2557,9 @@ func pgDailyPairwiseSides(accum map[pgDailyUsageKey]*pgDailyUsageBucket, costs m
 			add(sides.Models, key.model, &pgDailyUsageBucket{}, estimated)
 			if sessionID != "" {
 				member(sides.Models, key.model, sessionID)
-				member(sides.Projects, key.project, sessionID)
+				if key.project != "" {
+					member(sides.Projects, key.project, sessionID)
+				}
 			}
 		}
 	}
