@@ -1094,7 +1094,7 @@ describe("executeFetch concurrency and error handling", () => {
   });
 
   it("should expose query progress during cached refetches", async () => {
-    analytics.summary = makeSummary();
+    await analytics.fetchSummary();
     let resolve!: (v: AnalyticsSummary) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValue(
       new Promise((r) => {
@@ -1144,7 +1144,7 @@ describe("executeFetch concurrency and error handling", () => {
     expect(analytics.errors.summary).toBe("Failed to load");
   });
 
-  it("ignores stale summary data and keeps accepted params after a failed refetch", async () => {
+  it("ignores stale summary data and clears accepted params when filters change", async () => {
     let resolveFirst!: (v: AnalyticsSummary) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
       new Promise((r) => {
@@ -1181,10 +1181,13 @@ describe("executeFetch concurrency and error handling", () => {
       }),
     );
     const pending = analytics.fetchSummary();
-    expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
+    expect(analytics.summary).toBeNull();
+    expect(analytics.summaryFilterParams).toBeNull();
     reject(new Error("summary unavailable"));
     await pending;
-    expect(analytics.summaryFilterParams).toMatchObject({ from: "2026-01-01", to: "2026-01-31" });
+    expect(analytics.summary).toBeNull();
+    expect(analytics.summaryFilterParams).toBeNull();
+    expect(analytics.errors.summary).toBe("summary unavailable");
   });
 
   it("should ignore stale error from superseded request", async () => {
@@ -1427,5 +1430,156 @@ describe("invalid machine refetches", () => {
     expect(analytics.summary).toBeNull();
     expect(analytics.signals).toBeNull();
     expect(analytics.errors.summary).toBe("unknown machine");
+  });
+});
+
+describe("AnalyticsStore panel scopes", () => {
+  it("applies successful panels while tools are pending, then reports and retries a failed refresh", async () => {
+    let releaseTools!: (value: ToolsAnalyticsResponse) => void;
+    vi.mocked(analyticsService.getApiV1AnalyticsTools).mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseTools = resolve;
+      }),
+    );
+    const refresh = analytics.fetchAll();
+    await vi.waitFor(() => {
+      expect(analytics.summary?.total_sessions).toBe(10);
+    });
+    expect(analytics.loading.tools).toBe(true);
+    expect(analytics.tools).toBeNull();
+    releaseTools({ ...makeTools(), total_calls: 12 });
+    await refresh;
+
+    vi.mocked(analyticsService.getApiV1AnalyticsTools).mockRejectedValueOnce(
+      new Error("tools unavailable"),
+    );
+    await analytics.fetchTools();
+    expect(analytics.tools?.total_calls).toBe(12);
+    expect(analytics.errors.tools).toBe("tools unavailable");
+    let releaseRetry!: (value: ToolsAnalyticsResponse) => void;
+    vi.mocked(analyticsService.getApiV1AnalyticsTools).mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseRetry = resolve;
+      }),
+    );
+    const retry = analytics.fetchTools();
+    expect(analytics.errors.tools).toBeNull();
+    expect(analytics.tools?.total_calls).toBe(12);
+    releaseRetry({ ...makeTools(), total_calls: 18 });
+    await retry;
+    expect(analytics.tools?.total_calls).toBe(18);
+  });
+
+  it.each(["success", "error"])(
+    "ignores a late January %s after changing to February and another agent",
+    async (late) => {
+      analytics.applyDateRange("2026-01-01", "2026-01-31");
+      analytics.agent = "claude";
+      await analytics.fetchSummary();
+      let resolveJanuary!: (value: AnalyticsSummary) => void;
+      let rejectJanuary!: (error: Error) => void;
+      vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
+        new Promise((resolve, reject) => {
+          resolveJanuary = resolve;
+          rejectJanuary = reject;
+        }),
+      );
+      const january = analytics.fetchSummary();
+      analytics.applyDateRange("2026-02-01", "2026-02-28");
+      analytics.agent = "codex";
+      let rejectFebruary!: (error: Error) => void;
+      vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectFebruary = reject;
+        }),
+      );
+      const february = analytics.fetchSummary();
+      expect(analytics.summary).toBeNull();
+      expect(analytics.summaryFilterParams).toBeNull();
+      expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toMatchObject({
+        from: "2026-02-01",
+        to: "2026-02-28",
+        agent: "codex",
+      });
+      if (late === "success") resolveJanuary({ ...makeSummary(), total_sessions: 77 });
+      else rejectJanuary(new Error("January failed"));
+      await january;
+      expect(analytics.summary).toBeNull();
+      expect(analytics.errors.summary).toBeNull();
+      expect(analytics.loading.summary).toBe(true);
+      rejectFebruary(new Error("February failed"));
+      await february;
+      expect(analytics.errors.summary).toBe("February failed");
+      vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockResolvedValueOnce({
+        ...makeSummary(),
+        total_sessions: 22,
+      });
+      await analytics.fetchSummary();
+      expect(analytics.summary?.total_sessions).toBe(22);
+      expect(analytics.errors.summary).toBeNull();
+    },
+  );
+
+  it("retains Projects across project selection and Activity across a date drilldown", async () => {
+    await Promise.all([analytics.fetchProjects(), analytics.fetchActivity()]);
+    analytics.project = "project-a";
+    let releaseProjects!: (value: ProjectsAnalyticsResponse) => void;
+    vi.mocked(analyticsService.getApiV1AnalyticsProjects).mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseProjects = resolve;
+      }),
+    );
+    const projects = analytics.fetchProjects();
+    expect(analytics.projects).not.toBeNull();
+    expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).not.toHaveProperty(
+      "project",
+    );
+    releaseProjects(makeProjects());
+    await projects;
+
+    analytics.project = "";
+    analytics.selectedDate = "2024-01-15";
+    let releaseActivity!: (value: ActivityResponse) => void;
+    vi.mocked(analyticsService.getApiV1AnalyticsActivity).mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseActivity = resolve;
+      }),
+    );
+    const activity = analytics.fetchActivity();
+    expect(analytics.activity).not.toBeNull();
+    expect(analyticsService.getApiV1AnalyticsActivity.mock.lastCall?.[0]).toMatchObject({
+      from: "2024-01-01",
+      to: "2024-01-31",
+    });
+    releaseActivity(makeActivity());
+    await activity;
+  });
+
+  it("keeps recently-active values during clock-based refreshes and clears them when the filter changes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-02-03T12:00:00Z"));
+      analytics.recentlyActive = true;
+      await analytics.fetchTools();
+      vi.setSystemTime(new Date("2026-02-03T12:01:00Z"));
+      vi.mocked(analyticsService.getApiV1AnalyticsTools).mockRejectedValueOnce(
+        new Error("refresh failed"),
+      );
+      await analytics.fetchTools();
+      expect(analytics.tools).not.toBeNull();
+      expect(analyticsService.getApiV1AnalyticsTools.mock.lastCall?.[0]).toHaveProperty(
+        "active_since",
+        "2026-02-02T12:01:00.000Z",
+      );
+      analytics.recentlyActive = false;
+      vi.mocked(analyticsService.getApiV1AnalyticsTools).mockRejectedValueOnce(
+        new Error("new scope failed"),
+      );
+      await analytics.fetchTools();
+      expect(analytics.tools).toBeNull();
+      expect(analytics.toolsFilterParams).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
