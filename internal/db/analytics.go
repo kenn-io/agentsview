@@ -3341,7 +3341,7 @@ func (db *DB) queryVelocityMsgs(
 	query := `SELECT session_id, ordinal, role,
 		COALESCE(timestamp, ''), content_length
 		FROM messages
-		WHERE session_id IN ` + ph + `
+		WHERE ` + ExcludeClaudeHooksSQL("source_subtype") + ` AND session_id IN ` + ph + `
 		ORDER BY session_id, ordinal`
 
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -5396,7 +5396,8 @@ func sqliteActiveDurationExpr(sessionIDCol string) string {
 				) AS delta_ms
 			FROM messages m2
 				WHERE m2.session_id = %[2]s
-			) inner2)`, ActiveGapCapMs, sessionIDCol)
+					AND %[3]s
+			) inner2)`, ActiveGapCapMs, sessionIDCol, ExcludeClaudeHooksSQL("m2.source_subtype"))
 }
 
 // GetAnalyticsTopSessions returns the top 10 sessions by the

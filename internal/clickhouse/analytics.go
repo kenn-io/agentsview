@@ -277,7 +277,7 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, _ []string, f db.Ana
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
-		WHERE `+sessionIn+`
+		WHERE `+db.ExcludeClaudeHooksSQL("source_subtype")+` AND `+sessionIn+`
 		ORDER BY session_id, ordinal`,
 		args...,
 	)

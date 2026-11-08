@@ -64,6 +64,7 @@
     tool: m.header_transcript_blocks_tool(),
     code: m.header_transcript_blocks_code(),
     system: m.header_transcript_blocks_system(),
+    hook: m.header_transcript_blocks_hook(),
   });
 
   const ROLE_LABELS: Record<MessageRole, string> = $derived({

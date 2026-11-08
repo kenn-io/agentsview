@@ -651,17 +651,26 @@ func generateExportHTML(
 			roleClass = m.Role
 		}
 		extraClass := ""
-		if m.Role == "assistant" && isThinkingOnly(m.Content) {
+		label := exportHookLabel(m)
+		if label == "" && m.Role == "assistant" && isThinkingOnly(m.Content) {
 			extraClass = " thinking-only"
+		}
+		role := m.Role
+		var contentHTML string
+		if label != "" {
+			role = label
+			contentHTML = html.EscapeString(m.Content)
+		} else {
+			contentHTML = formatContentForExport(m.Content)
 		}
 
 		data.Messages[i] = exportMessage{
 			Ordinal:       m.Ordinal,
 			RoleClass:     roleClass,
 			ExtraClass:    extraClass,
-			Role:          m.Role,
+			Role:          role,
 			Timestamp:     formatTimestamp(m.Timestamp),
-			ContentHTML:   template.HTML(formatContentForExport(m.Content)),
+			ContentHTML:   template.HTML(contentHTML),
 			FocusedHidden: !focusedVisible[m.Ordinal],
 		}
 	}
@@ -671,6 +680,24 @@ func generateExportHTML(
 		return fmt.Sprintf("template error: %s", err)
 	}
 	return b.String()
+}
+
+func exportHookLabel(msg db.Message) string {
+	if !msg.IsSystem {
+		return ""
+	}
+	if msg.SourceType == "system" && msg.SourceSubtype == "stop_hook_summary" {
+		return "Stop hook summary"
+	}
+	if msg.SourceType == "attachment" {
+		switch msg.SourceSubtype {
+		case "hook_success", "hook_additional_context":
+			return "Hook output"
+		case "hook_cancelled":
+			return "Hook cancelled"
+		}
+	}
+	return ""
 }
 
 func filterExportHTMLMessages(msgs []db.Message) []db.Message {
