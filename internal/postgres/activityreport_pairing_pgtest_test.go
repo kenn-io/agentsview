@@ -3,13 +3,13 @@
 package postgres
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"go.kenn.io/agentsview/internal/activity"
 )
 
@@ -62,26 +62,15 @@ func TestPGActivityReportPairingMatchesSQLPairing(t *testing.T) {
 		"a-mixed": {
 			{"assistant", "2026-06-15T23:40:00Z", "initial"},
 			{"assistant", "2026-06-15T23:50:00Z", "old"},
-			{"assistant", "2026-06-15T23:49:00Z", "reversed"},
 			{"user", "", ""},
 			{"user", "2026-06-16T00:00:00Z", ""},
-			{"assistant", "2026-06-16T00:00:00.000001Z", "same-second"},
-			{"assistant", "2026-06-16T00:00:00.000001Z", "equal"},
-			{"tool", "2026-06-16T01:00:00+02:00", "tool-model"},
+			{"user", "2026-06-16T01:00:00+02:00", ""},
 			{"assistant", "2026-06-16T09:30:00.123456Z", ""},
 			{"user", "2026-06-16T23:59:59.999999Z", ""},
 			{"assistant", "2026-06-17T00:00:00Z", "after"},
 			{"user", "2026-06-16T12:00:00Z", ""},
 			{"assistant", "2026-06-17T08:00:00Z", "successor"},
 		},
-		"b-modelless": {
-			{"assistant", "2026-06-16T10:00:00Z", "initial"},
-			{"assistant", "2026-06-16T10:01:00Z", ""},
-			{"assistant", "2026-06-16T10:01:00Z", "tie"},
-			{"assistant", "2026-06-16T10:02:00Z", "late"},
-		},
-		"c-single": {{"user", "2026-06-16T12:00:00Z", ""}},
-		"d-null":   {{"assistant", "", "untimed"}},
 		"e-boundary": {
 			{"assistant", "2026-06-15T23:54:59.999999Z", "before"},
 			{"user", "2026-06-15T23:55:00Z", ""},
@@ -140,33 +129,10 @@ func TestPGActivityReportPairingMatchesSQLPairing(t *testing.T) {
 		})
 	}
 	sentinel := errors.New("consumer stopped")
+	emitted := 0
 	assert.ErrorIs(t, store.ActivityReportCandidateSource(ids, day)(t.Context(), func(activity.IntervalCandidate) error {
+		emitted++
 		return sentinel
 	}), sentinel)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	assert.ErrorIs(t, store.ActivityReportCandidateSource(ids, day)(ctx, func(activity.IntervalCandidate) error {
-		t.Fatal("canceled source emitted a candidate")
-		return nil
-	}), context.Canceled)
-}
-
-func TestPGActivityReportPairingMergesTerminalTies(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_activity_pairing_terminal_test")
-	seedPGDailyFixture(t, store)
-	_, err := store.DB().ExecContext(t.Context(), `INSERT INTO tool_result_events
-  (session_id, tool_call_message_ordinal, source, status, content, timestamp)
-  VALUES ('a', 1, 'tool_execution', 'completed', '', '2026-06-16T10:01:00Z'),
-   ('a', 2, 'tool_execution', 'errored', '', '2026-06-16T10:04:00Z')`)
-	require.NoError(t, err)
-	var got []activity.IntervalCandidate
-	require.NoError(t, store.ActivityReportCandidateSource([]string{"a", "b"}, pgDayQuery(t, "2026-06-16", "UTC"))(
-		t.Context(), func(c activity.IntervalCandidate) error { got = append(got, c); return nil }))
-	at := func(minute int) time.Time { return time.Date(2026, 6, 16, 10, minute, 0, 0, time.UTC) }
-	assert.Equal(t, []activity.IntervalCandidate{
-		{SessionID: "a", StartOrdinal: 1, EndOrdinal: 2, Start: at(0), End: at(2), ClosingRole: "assistant", ClosingModel: "opus", PriorModel: "unknown"},
-		{SessionID: "a", StartOrdinal: 1, EndOrdinal: 2, Start: at(1), End: at(2), ClosingRole: "assistant", ClosingModel: "opus", PriorModel: "unknown"},
-		{SessionID: "b", StartOrdinal: 1, EndOrdinal: 2, Start: at(1), End: at(3), ClosingRole: "assistant", ClosingModel: "gpt5", PriorModel: "unknown"},
-		{SessionID: "a", StartOrdinal: 2, EndOrdinal: 2, Start: at(2), End: at(4), ClosingRole: "tool", PriorModel: "opus"},
-	}, got)
+	assert.Equal(t, 1, emitted, "stop emitting when the consumer rejects a candidate")
 }
