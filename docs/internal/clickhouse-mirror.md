@@ -326,6 +326,18 @@ in one transaction and writes them to `usage_session_snapshots` as one versioned
 snapshot. A retry of a failed batch reuses the payload it already loaded, so one
 push version never mixes two archive states.
 
+**Views keep the query in the code.** `CREATE MATERIALIZED VIEW IF NOT EXISTS`
+leaves an existing view alone, so a mirror created by an older release would
+keep that release's query. Each view therefore carries a comment with a hash of
+its query. Every schema step compares the live comment with the code's and, when
+they differ, runs `ALTER TABLE ... MODIFY QUERY` and then updates the comment.
+`MODIFY QUERY` replaces the query in place without stopping inserts, so no
+insert runs without the view and no derived rows go missing. It keeps the view's
+source table, columns, and clauses (`TO`, `REFRESH`); a change to those needs a
+new view. `usage_messages_mv`, `terminal_event_snapshots_mv`, and
+`prepare_usage` use this check. For `prepare_usage` it also catches a change to
+the refresh settings, which the `prepared_usage` table comment does not cover.
+
 **Refreshed table.** The refreshable materialized view `prepare_usage` turns the
 snapshots into `prepared_usage` every 15 minutes, and a push starts a refresh
 once one is due; see "When a push rebuilds" below. Rows are sorted by their

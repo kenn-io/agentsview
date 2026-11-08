@@ -3,8 +3,11 @@
 package clickhouse
 
 import (
+	"fmt"
 	"testing"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -99,4 +102,68 @@ func TestClickHouseTerminalSnapshotBackfill(t *testing.T) {
 	require.ErrorContains(t, CheckSchemaCompat(ctx, store.DB()), "terminal event backfill is incomplete")
 	require.NoError(t, ensureTerminalEventSnapshots(ctx, store.DB()))
 	require.NoError(t, CheckSchemaCompat(ctx, store.DB()))
+}
+
+// A mirror created before the view filtered tool_result_events to the
+// inserted sessions keeps that view, and every session insert then reads the
+// whole table. The schema step must swap in the filtered query, and the
+// snapshots must not change.
+func TestClickHouseTerminalSnapshotViewUpgrade(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newPushedStore(t)
+	ctx := t.Context()
+	conn := store.DB()
+	const unrelated = 200_000
+	for _, query := range []string{
+		"DROP VIEW terminal_event_snapshots_mv",
+		// The definition an older release created, as a production mirror
+		// still runs it.
+		`CREATE MATERIALIZED VIEW terminal_event_snapshots_mv TO terminal_event_snapshots AS
+   SELECT s.id AS session_id, s.push_version AS push_version, max(tre.timestamp) AS last_terminal_at,
+   toUInt128(s.push_version) * 2 + 1 AS revision
+   FROM sessions s LEFT JOIN tool_result_events tre ON tre.session_id = s.id AND tre.push_version = s.push_version
+   AND tre.source = 'tool_execution' AND tre.status IN ('completed', 'errored')
+   GROUP BY s.id, s.push_version`,
+		fmt.Sprintf(`INSERT INTO tool_result_events
+   (session_id,tool_call_message_ordinal,call_index,event_index,source,status,timestamp,push_version)
+   SELECT concat('unrelated-', toString(number %% 1000)), number, 0, 0, 'tool_execution', 'completed',
+   parseDateTime64BestEffort('2026-01-20T12:00:00Z'), 1 FROM numbers(%d)`, unrelated),
+	} {
+		_, err := conn.ExecContext(ctx, query)
+		require.NoError(t, err)
+	}
+	var database string
+	require.NoError(t, conn.QueryRowContext(ctx, "SELECT currentDatabase()").Scan(&database))
+	// publish pushes one session with one terminal event and returns the
+	// rows its session insert read, the view's reads included.
+	publish := func(id string) uint64 {
+		comment := database + "." + id
+		_, err := conn.ExecContext(ctx, `INSERT INTO tool_result_events
+   (session_id,tool_call_message_ordinal,call_index,event_index,source,status,timestamp,push_version)
+   VALUES (?,0,0,0,'tool_execution','completed',parseDateTime64BestEffort('2026-01-11T12:00:00Z'),1)`, id)
+		require.NoError(t, err)
+		logged := chdriver.Context(ctx, chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
+		_, err = conn.ExecContext(logged, `INSERT INTO sessions
+   (id,agent,project,started_at,ended_at,message_count,push_version)
+   VALUES (?,'codex',?,parseDateTime64BestEffort('2026-01-01T12:00:00Z'),
+   parseDateTime64BestEffort('2026-01-01T12:30:00Z'),1,1)`, id, id)
+		require.NoError(t, err)
+		var last string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"SELECT toString(last_terminal_at) FROM terminal_event_snapshots WHERE session_id = ?", id).Scan(&last))
+		assert.Equal(t, "2026-01-11 12:00:00.000000", last)
+		_, err = conn.ExecContext(ctx, "SYSTEM FLUSH LOGS")
+		require.NoError(t, err)
+		// The connection inserts asynchronously, so the view runs in the
+		// flush, which the log records as a separate entry with the comment.
+		var read uint64
+		require.NoError(t, conn.QueryRowContext(ctx, `SELECT sum(read_rows) FROM system.query_log
+   WHERE type = 'QueryFinish' AND log_comment = ?`, comment).Scan(&read))
+		return read
+	}
+	stale := publish("terminal-view-stale")
+	require.GreaterOrEqual(t, stale, uint64(unrelated), "the stale view must read every event, or the check below proves nothing")
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+	current := publish("terminal-view-current")
+	assert.Less(t, current, uint64(unrelated/10), "the updated view must read only the inserted session's events")
 }

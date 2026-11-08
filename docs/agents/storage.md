@@ -1159,10 +1159,12 @@ own metadata, which is why the docs below call the database a mirror.
   `usage_messages` rows count at or above it, because messages land before the
   session row is published, and `terminal_event_snapshots` rows match it
   exactly. A materialized view runs inside the insert and reads joined tables
-  in full, so filter a joined table to the inserted block's sessions. Views
-  never see deletes; `deleteMirrorSessions` clears the derived tables. Startup
-  backfills record completion in `sync_metadata` only after finishing, never
-  modify source tables, and must stay safe to repeat. See the
+  in full, so filter a joined table to the inserted block's sessions. Create
+  and update long-lived views through `ensureView`, which replaces the query of
+  a view an older release created. Views never see deletes;
+  `deleteMirrorSessions` clears the derived tables. Startup backfills record
+  completion in `sync_metadata` only after finishing, never modify source
+  tables, and must stay safe to repeat. See the
   [Activity report reads](../internal/clickhouse-mirror.md#activity-report-reads)
   design section.
 - Activity report queries receive the selected session IDs as the
