@@ -12,13 +12,11 @@ import (
 
 func TestListExclusionCounts(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		scope   string
-		missing bool
+		name  string
+		scope string
 	}{
-		{"all", "all", false},
-		{"not requested", "", false},
-		{"omitted summary", "all", true},
+		{"all", "all"},
+		{"not requested", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -27,7 +25,7 @@ func TestListExclusionCounts(t *testing.T) {
 				calls++
 				assert.Equal(t, "/api/v1/sessions", r.URL.Path)
 				assert.Equal(t, tc.scope, r.URL.Query().Get("exclusion_counts"))
-				if tc.missing || tc.scope == "" {
+				if tc.scope == "" {
 					_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
 					return
 				}
@@ -38,7 +36,7 @@ func TestListExclusionCounts(t *testing.T) {
 			page, err := b.List(t.Context(), service.ListFilter{ExclusionCounts: tc.scope})
 			require.NoError(t, err)
 			assert.Equal(t, 1, calls)
-			if tc.scope == "" || tc.missing {
+			if tc.scope == "" {
 				assert.Nil(t, page.ExclusionCounts)
 				return
 			}

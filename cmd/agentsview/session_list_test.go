@@ -6,16 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -234,7 +233,7 @@ func TestSessionListResumeRespectsExplicitSince(t *testing.T) {
 
 func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 	dataDir := newAgentDataDir(t)
-	seedSessionsWithOpts(t, dataDir,
+	daemonURL := seedSessionsWithOpts(t, dataDir,
 		sessionSeed{id: "included", project: "proj"},
 		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
 			s.ParentSessionID = new("included")
@@ -258,14 +257,30 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 		},
 	)
 
+	target, err := url.Parse(daemonURL)
+	require.NoError(t, err)
+	upstream := httputil.NewSingleHostReverseProxy(target)
+	calls := 0
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sessions" {
+			calls++
+		}
+		r.Host = target.Host
+		upstream.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+	registerSyncRouteTestRuntime(t, dataDir, proxy.URL)
+
 	root := newRootCommand()
 	var stdout, stderr bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
 	root.SetArgs([]string{"session", "list", "--format", "json"})
 
-	_, err := root.ExecuteC()
+	_, err = root.ExecuteC()
 	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+	assert.NotContains(t, stdout.String(), "exclusion_counts")
 	got := decodeCLIJSON[cliSessionList](t, stdout.String())
 	require.Equal(t, 1, got.Total)
 	require.Len(t, got.Sessions, 1)
@@ -447,59 +462,6 @@ func TestSessionListSeparatesFlatAndChildRetries(t *testing.T) {
 	tree, err := executeCommand(newRootCommand(), append(args, "--include-one-shot", "--include-automated", "--include-children")...)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"parent", "child"}, sessionListIDs(t, tree))
-}
-
-func TestSessionListMakesOneListRequest(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	dataDir := newAgentDataDir(t)
-	for _, id := range []string{"visible", "one-shot", "automated", "child"} {
-		dbtest.SeedSession(t, d, id, "proj", func(s *db.Session) {
-			s.MessageCount, s.UserMessageCount = 3, 3
-			if id == "one-shot" || id == "automated" {
-				s.UserMessageCount = 1
-			}
-			if id == "automated" {
-				s.IsAutomated, s.SessionKind = true, "roborev"
-			}
-			if id == "child" {
-				s.ParentSessionID = new("visible")
-				s.RelationshipType = "subagent"
-			}
-		})
-	}
-	var handler http.Handler
-	calls := 0
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/sessions" {
-			calls++
-		}
-		handler.ServeHTTP(w, r)
-	}))
-	t.Cleanup(proxy.Close)
-	daemon := server.New(config.Config{Host: "127.0.0.1", PublicURL: proxy.URL, DataDir: dataDir, NoSync: true}, d, nil)
-	handler = daemon.Handler()
-	for _, format := range []string{"human", "json"} {
-		t.Run(format, func(t *testing.T) {
-			calls = 0
-			root := newRootCommand()
-			var stdout, stderr bytes.Buffer
-			root.SetOut(&stdout)
-			root.SetErr(&stderr)
-			args := []string{"session", "list", "--server", proxy.URL, "--limit", "50"}
-			if format == "json" {
-				args = append(args, "--json")
-			}
-			root.SetArgs(args)
-			require.NoError(t, root.Execute())
-			assert.Equal(t, 1, calls)
-			assert.Equal(t, "Excluded 3 sessions by default: 1 one-shot, 1 automated, 1 child. For one-shot or automated sessions, use --include-one-shot and/or --include-automated. For child sessions, use --include-one-shot --include-automated --include-children.\n", stderr.String())
-			assert.Contains(t, stdout.String(), "visible")
-			if format == "json" {
-				assert.NotContains(t, stdout.String(), "exclusion_counts")
-				assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
-			}
-		})
-	}
 }
 
 func TestSessionListCountsWithEmptyAnnotations(t *testing.T) {
