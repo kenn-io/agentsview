@@ -687,71 +687,68 @@ describe("AnalyticsPage panel failures", () => {
     expect(top).toHaveBeenCalledWith("output_tokens");
   });
 
-  it(
-    "keeps a failed Month selection in the trend while retaining skill totals",
-    async () => {
-      const selector = ".trend-container";
-      analytics.skillsGranularity = "week";
-      const data = {
-        ...makeSkills(),
-        total_skill_calls: 7,
-        distinct_skills: 1,
-        by_skill: [
-          {
-            skill_name: "review",
-            call_count: 7,
-            session_count: 1,
-            pct: 100,
-            last_used_at: "2026-01-01",
-            agent_breakdown: [],
-            project_breakdown: [],
-          },
-        ],
-        trend: [{ date: "2026-01-01", by_skill: { review: 7 } }],
-      };
-      const skills = vi
-        .spyOn(AnalyticsService, "getApiV1AnalyticsSkills")
-        .mockResolvedValueOnce(data)
-        .mockRejectedValueOnce(new Error("Month failed"));
-      mountPanels();
-      await flushEffects();
-      await analytics.fetchSkills("week");
-      await flushEffects();
-      const month = [...document.querySelectorAll<HTMLButtonElement>(".trend-header button")].find(
-        (b) => b.textContent?.trim() === "Month",
-      )!;
-      const trend = () => document.querySelector(".trend-container")!.textContent;
-      expect(trend()).toContain("review");
-      month.click();
-      await flushEffects();
-      expect(month.classList).toContain("active");
-      expect(trend()).not.toContain("review");
-      expect(document.querySelector(".skills-container")!.textContent).toContain("7 calls");
-      await vi.waitFor(() =>
-        expect(document.querySelector(selector)!.textContent).toContain("Month failed"),
-      );
-      expect(document.querySelector(".skills-container")!.textContent).not.toContain("Month failed");
-      expect(document.querySelector(".skills-container .error button")).toBeNull();
-      expect(month.classList).toContain("active");
-      expect(trend()).not.toContain("review");
-      let release!: (value: typeof data) => void;
-      skills.mockReturnValueOnce(
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-      );
-      const retry = document.querySelector<HTMLButtonElement>(`${selector} .error button`)!;
-      retry.click();
-      await flushEffects();
-      expect(skills.mock.lastCall?.[0]?.granularity).toBe("month");
-      expect(document.querySelector(".skills-container")!.textContent).toContain("7 calls");
-      expect(trend()).not.toContain("review");
-      release(data);
-      await vi.waitFor(() => expect(analytics.skillsGranularity).toBe("month"));
-      expect(trend()).toContain("review");
-      expect(document.querySelector(selector)!.textContent).not.toContain("Month failed");
-    },
-  );
+  it("keeps a failed Month selection in the trend while retaining skill totals", async () => {
+    const selector = ".trend-container";
+    analytics.skillsGranularity = "week";
+    const data = {
+      ...makeSkills(),
+      total_skill_calls: 7,
+      distinct_skills: 1,
+      by_skill: [
+        {
+          skill_name: "review",
+          call_count: 7,
+          session_count: 1,
+          pct: 100,
+          last_used_at: "2026-01-01",
+          agent_breakdown: [],
+          project_breakdown: [],
+        },
+      ],
+      trend: [{ date: "2026-01-01", by_skill: { review: 7 } }],
+    };
+    const skills = vi
+      .spyOn(AnalyticsService, "getApiV1AnalyticsSkills")
+      .mockResolvedValueOnce(data)
+      .mockRejectedValueOnce(new Error("Month failed"));
+    mountPanels();
+    await flushEffects();
+    await analytics.fetchSkills("week");
+    await flushEffects();
+    const month = [...document.querySelectorAll<HTMLButtonElement>(".trend-header button")].find(
+      (b) => b.textContent?.trim() === "Month",
+    )!;
+    const trend = () => document.querySelector(".trend-container")!.textContent;
+    expect(trend()).toContain("review");
+    month.click();
+    await flushEffects();
+    expect(month.classList).toContain("active");
+    expect(trend()).not.toContain("review");
+    expect(document.querySelector(".skills-container")!.textContent).toContain("7 calls");
+    await vi.waitFor(() =>
+      expect(document.querySelector(selector)!.textContent).toContain("Month failed"),
+    );
+    expect(document.querySelector(".skills-container")!.textContent).not.toContain("Month failed");
+    expect(document.querySelector(".skills-container .error button")).toBeNull();
+    expect(month.classList).toContain("active");
+    expect(trend()).not.toContain("review");
+    let release!: (value: typeof data) => void;
+    skills.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const retry = document.querySelector<HTMLButtonElement>(`${selector} .error button`)!;
+    retry.click();
+    await flushEffects();
+    expect(skills.mock.lastCall?.[0]?.granularity).toBe("month");
+    expect(document.querySelector(".skills-container")!.textContent).toContain("7 calls");
+    expect(trend()).not.toContain("review");
+    release(data);
+    await vi.waitFor(() => expect(analytics.skillsGranularity).toBe("month"));
+    expect(trend()).toContain("review");
+    expect(document.querySelector(selector)!.textContent).not.toContain("Month failed");
+  });
 });
 
 describe("AnalyticsPage sidebar controls", () => {
