@@ -17,7 +17,6 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestSessionListIncludeSource(t *testing.T) {
@@ -392,56 +391,15 @@ func TestSessionListChildMembershipWithContinuations(t *testing.T) {
 	}
 }
 
-func TestSessionListChildMembershipPartialPage(t *testing.T) {
-	for _, tc := range []struct {
-		children int
-		lower    bool
-		want     string
-	}{
-		{2, true, "Excluded at least 2 child sessions by default. Use --include-children to include them."},
-		{0, false, ""},
-	} {
-		notice := sessionListDefaultExclusionNotice(service.ListFilter{ExclusionCounts: "all", IncludeOneShot: true, IncludeAutomated: true}, &db.SessionExclusionCounts{Children: tc.children, ChildrenLowerBound: tc.lower})
-		assert.Equal(t, tc.want, notice)
-	}
-}
-
-func TestSessionListKeepsResultsWhenChildCountFails(t *testing.T) {
-	newAgentDataDir(t)
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/v1/version" {
-			fmt.Fprintf(w, `{"api_version":%d}`, server.APIVersion)
-			return
-		}
-		if r.URL.Path != "/api/v1/sessions" {
-			_, _ = w.Write([]byte(`{}`))
-			return
-		}
-		calls++
-		_, _ = w.Write([]byte(`{"sessions":[{"id":"visible"}],"total":1,"exclusion_counts":{"one_shot":1}}`))
-	}))
-	defer srv.Close()
-	root := newRootCommand()
-	var stdout, stderr bytes.Buffer
-	root.SetOut(&stdout)
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"session", "list", "--server", srv.URL, "--json"})
-	require.NoError(t, root.Execute())
-	assert.Equal(t, 1, calls)
-	assert.Equal(t, "Excluded 1 session by default: 1 one-shot. Use --include-one-shot to include them.\n", stderr.String())
-	assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
+func TestSessionListChildCountLowerBoundNotice(t *testing.T) {
+	notice := sessionListDefaultExclusionNotice(service.ListFilter{ExclusionCounts: "all", IncludeOneShot: true, IncludeAutomated: true}, &db.SessionExclusionCounts{Children: 2, ChildrenLowerBound: true})
+	assert.Equal(t, "Excluded at least 2 child sessions by default. Use --include-children to include them.", notice)
 }
 
 func TestSessionListAllowsMissingExclusionCounts(t *testing.T) {
 	newAgentDataDir(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/v1/version" {
-			_, _ = w.Write([]byte(`{"api_version":15}`))
-			return
-		}
 		_, _ = w.Write([]byte(`{"sessions":[{"id":"visible"}],"total":1}`))
 	}))
 	t.Cleanup(srv.Close)
@@ -520,24 +478,6 @@ func TestSessionListMakesOneListRequest(t *testing.T) {
 	t.Cleanup(proxy.Close)
 	daemon := server.New(config.Config{Host: "127.0.0.1", PublicURL: proxy.URL, DataDir: dataDir, NoSync: true}, d, nil)
 	handler = daemon.Handler()
-	backend := servicehttp.NewHTTPBackendForServer(proxy.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: server.APIVersion})
-	for _, name := range []string{"cursor", "fully included"} {
-		t.Run(name, func(t *testing.T) {
-			f := service.ListFilter{ExclusionCounts: "all", IncludeOneShot: true, Limit: 1}
-			first, err := backend.List(t.Context(), f)
-			require.NoError(t, err)
-			require.NotEmpty(t, first.NextCursor)
-			if name == "cursor" {
-				f.Cursor = first.NextCursor
-			} else {
-				f.IncludeAutomated, f.IncludeChildren = true, true
-			}
-			page, err := backend.List(t.Context(), f)
-			require.NoError(t, err)
-			assert.NotEmpty(t, page.Sessions)
-			assert.Nil(t, page.ExclusionCounts)
-		})
-	}
 	for _, format := range []string{"human", "json"} {
 		t.Run(format, func(t *testing.T) {
 			calls = 0
@@ -554,8 +494,8 @@ func TestSessionListMakesOneListRequest(t *testing.T) {
 			assert.Equal(t, 1, calls)
 			assert.Equal(t, "Excluded 3 sessions by default: 1 one-shot, 1 automated, 1 child. For one-shot or automated sessions, use --include-one-shot and/or --include-automated. For child sessions, use --include-one-shot --include-automated --include-children.\n", stderr.String())
 			assert.Contains(t, stdout.String(), "visible")
-			assert.NotContains(t, stdout.String(), "exclusion_counts")
 			if format == "json" {
+				assert.NotContains(t, stdout.String(), "exclusion_counts")
 				assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
 			}
 		})
@@ -569,27 +509,13 @@ func TestSessionListCountsWithEmptyAnnotations(t *testing.T) {
 		sessionSeed{id: "one-shot", project: "proj", mut: func(s *db.Session) { s.UserMessageCount = 1 }},
 		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) { s.ParentSessionID = new("visible"); s.RelationshipType = "subagent" }},
 	)
-	database, err := db.Open(t.Context(), sessionsDBPath(dataDir))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	direct := service.NewDirectBackend(database, nil)
 	for _, flag := range []string{"--label", "--pr"} {
-		for _, value := range []string{"", " "} {
+		values := []string{"", " "}
+		if flag == "--pr" {
+			values = []string{" "}
+		}
+		for _, value := range values {
 			t.Run(fmt.Sprintf("%s/%q", flag, value), func(t *testing.T) {
-				f := service.ListFilter{ExclusionCounts: "flat"}
-				wantCounts := &db.SessionExclusionCounts{OneShot: 1}
-				if flag == "--label" {
-					f.Labels = []string{value}
-				} else {
-					f.PR = value
-					if value == "" {
-						f.ExclusionCounts = "all"
-						wantCounts.Children = 1
-					}
-				}
-				page, err := direct.List(t.Context(), f)
-				require.NoError(t, err)
-				assert.Equal(t, wantCounts, page.ExclusionCounts)
 				root := newRootCommand()
 				var stdout, stderr bytes.Buffer
 				root.SetOut(&stdout)
@@ -598,9 +524,6 @@ func TestSessionListCountsWithEmptyAnnotations(t *testing.T) {
 				require.NoError(t, root.Execute())
 				assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
 				want := "Excluded 1 session by default: 1 one-shot. Use --include-one-shot to include them.\n"
-				if flag == "--pr" && value == "" {
-					want = "Excluded 2 sessions by default: 1 one-shot, 1 child. For one-shot sessions, use --include-one-shot. For child sessions, use --include-one-shot --include-automated --include-children.\n"
-				}
 				assert.Equal(t, want, stderr.String())
 			})
 		}

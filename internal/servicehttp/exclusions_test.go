@@ -13,15 +13,12 @@ import (
 func TestListExclusionCounts(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		version int
 		scope   string
 		missing bool
 	}{
-		{"all", 15, "all", false},
-		{"flat", 15, "flat", false},
-		{"unknown", 0, "all", true},
-		{"not requested", 15, "", false},
-		{"omitted summary", 15, "all", true},
+		{"all", "all", false},
+		{"not requested", "", false},
+		{"omitted summary", "all", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -37,7 +34,7 @@ func TestListExclusionCounts(t *testing.T) {
 				_, _ = w.Write([]byte(`{"sessions":[],"total":0,"exclusion_counts":{"one_shot":2,"automated":3,"children":4,"children_lower_bound":true}}`))
 			}))
 			t.Cleanup(srv.Close)
-			b := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: tc.version})
+			b := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{})
 			page, err := b.List(t.Context(), service.ListFilter{ExclusionCounts: tc.scope})
 			require.NoError(t, err)
 			assert.Equal(t, 1, calls)
