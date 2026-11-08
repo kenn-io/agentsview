@@ -1,7 +1,3 @@
----
-last_edited: 2026-10-31
----
-
 # agentsview
 
 Browse, search, and track costs across your AI coding agents. Your session
