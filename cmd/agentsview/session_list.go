@@ -147,11 +147,8 @@ func newSessionListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			notice, err := sessionListDefaultExclusionNotice(
+			notice := sessionListDefaultExclusionNotice(
 				f, list.ExclusionCounts)
-			if err != nil {
-				return err
-			}
 			list.ExclusionCounts = nil
 			if notice != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), notice)
@@ -250,12 +247,9 @@ func newSessionListCommand() *cobra.Command {
 	return cmd
 }
 
-func sessionListDefaultExclusionNotice(f service.ListFilter, counts *db.SessionExclusionCounts) (string, error) {
-	if f.ExclusionCounts == "" {
-		return "", nil
-	}
-	if counts == nil {
-		return "", fmt.Errorf("server omitted requested session exclusion counts; restart or upgrade the server")
+func sessionListDefaultExclusionNotice(f service.ListFilter, counts *db.SessionExclusionCounts) string {
+	if f.ExclusionCounts == "" || counts == nil {
+		return ""
 	}
 	hiddenOneShot, hiddenAutomated, hiddenChildren := counts.OneShot, counts.Automated, counts.Children
 	lowerBound := ""
@@ -264,7 +258,7 @@ func sessionListDefaultExclusionNotice(f service.ListFilter, counts *db.SessionE
 	}
 	hiddenTotal := hiddenOneShot + hiddenAutomated + hiddenChildren
 	if hiddenTotal == 0 {
-		return "", nil
+		return ""
 	}
 
 	var hiddenParts []string
@@ -307,7 +301,7 @@ func sessionListDefaultExclusionNotice(f service.ListFilter, counts *db.SessionE
 	if hiddenChildren > 0 && flatFlags != "" && !f.IncludeChildren {
 		guidance = fmt.Sprintf("For %s sessions, use %s. For child sessions, use %s.", strings.Join(flatClasses, " or "), flatFlags, strings.Join(flagParts, separator))
 	}
-	return fmt.Sprintf("Excluded %s. %s", summary, guidance), nil
+	return fmt.Sprintf("Excluded %s. %s", summary, guidance)
 }
 
 func pluralSession(n int) string {

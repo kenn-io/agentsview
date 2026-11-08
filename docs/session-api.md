@@ -267,6 +267,8 @@ automated counts, or `exclusion_counts=all` to include the bounded child count.
 The optional `exclusion_counts` response contains `one_shot`, `automated`,
 `children`, and `children_lower_bound`. Cursor pages and fully included lists
 omit it. Other API callers leave this parameter unset to avoid the extra work.
+Servers that omit the summary still return a usable page; the CLI then omits
+the exclusion notice.
 
 Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
 unique whole display label. Exact ID/alias lists take precedence over a

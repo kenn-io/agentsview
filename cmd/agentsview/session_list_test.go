@@ -401,8 +401,7 @@ func TestSessionListChildMembershipPartialPage(t *testing.T) {
 		{2, true, "Excluded at least 2 child sessions by default. Use --include-children to include them."},
 		{0, false, ""},
 	} {
-		notice, err := sessionListDefaultExclusionNotice(service.ListFilter{ExclusionCounts: "all", IncludeOneShot: true, IncludeAutomated: true}, &db.SessionExclusionCounts{Children: tc.children, ChildrenLowerBound: tc.lower})
-		require.NoError(t, err)
+		notice := sessionListDefaultExclusionNotice(service.ListFilter{ExclusionCounts: "all", IncludeOneShot: true, IncludeAutomated: true}, &db.SessionExclusionCounts{Children: tc.children, ChildrenLowerBound: tc.lower})
 		assert.Equal(t, tc.want, notice)
 	}
 }
@@ -435,19 +434,25 @@ func TestSessionListKeepsResultsWhenChildCountFails(t *testing.T) {
 	assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
 }
 
-func TestSessionListRejectsMissingExclusionCounts(t *testing.T) {
+func TestSessionListAllowsMissingExclusionCounts(t *testing.T) {
 	newAgentDataDir(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/api/v1/version" {
-			fmt.Fprintf(w, `{"api_version":%d}`, server.APIVersion)
+			_, _ = w.Write([]byte(`{"api_version":15}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"sessions":[{"id":"visible"}],"total":1}`))
 	}))
 	t.Cleanup(srv.Close)
-	_, err := executeCommand(newRootCommand(), "session", "list", "--server", srv.URL, "--json")
-	require.ErrorContains(t, err, "server omitted requested session exclusion counts")
+	root := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"session", "list", "--server", srv.URL, "--json"})
+	require.NoError(t, root.Execute())
+	assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
+	assert.Empty(t, stderr.String())
 }
 
 func TestSessionListSeparatesFlatAndChildRetries(t *testing.T) {
@@ -564,9 +569,27 @@ func TestSessionListCountsWithEmptyAnnotations(t *testing.T) {
 		sessionSeed{id: "one-shot", project: "proj", mut: func(s *db.Session) { s.UserMessageCount = 1 }},
 		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) { s.ParentSessionID = new("visible"); s.RelationshipType = "subagent" }},
 	)
+	database, err := db.Open(t.Context(), sessionsDBPath(dataDir))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	direct := service.NewDirectBackend(database, nil)
 	for _, flag := range []string{"--label", "--pr"} {
 		for _, value := range []string{"", " "} {
 			t.Run(fmt.Sprintf("%s/%q", flag, value), func(t *testing.T) {
+				f := service.ListFilter{ExclusionCounts: "flat"}
+				wantCounts := &db.SessionExclusionCounts{OneShot: 1}
+				if flag == "--label" {
+					f.Labels = []string{value}
+				} else {
+					f.PR = value
+					if value == "" {
+						f.ExclusionCounts = "all"
+						wantCounts.Children = 1
+					}
+				}
+				page, err := direct.List(t.Context(), f)
+				require.NoError(t, err)
+				assert.Equal(t, wantCounts, page.ExclusionCounts)
 				root := newRootCommand()
 				var stdout, stderr bytes.Buffer
 				root.SetOut(&stdout)

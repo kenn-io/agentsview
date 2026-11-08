@@ -304,10 +304,6 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 
 // Probe only when the backend has no version so unfiltered lists need no extra request.
 func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
-	return b.requireAPIVersion(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters")
-}
-
-func (b *httpBackend) requireAPIVersion(ctx context.Context, minimum int, feature string) error {
 	version := b.apiVersion
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
@@ -316,11 +312,11 @@ func (b *httpBackend) requireAPIVersion(ctx context.Context, minimum int, featur
 		}
 		version = capabilities.APIVersion
 	}
-	if version < minimum {
+	if version < service.SessionAnnotationsAPIVersion {
 		return fmt.Errorf(
-			"server API version %d does not support %s; "+
+			"server API version %d does not support session labels, parent links, or their filters; "+
 				"restart or upgrade the server",
-			version, feature,
+			version,
 		)
 	}
 	return nil
@@ -329,11 +325,7 @@ func (b *httpBackend) requireAPIVersion(ctx context.Context, minimum int, featur
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
-	if f.ExclusionCounts != "" {
-		if err := b.requireAPIVersion(ctx, service.SessionExclusionCountsAPIVersion, "session exclusion counts"); err != nil {
-			return nil, err
-		}
-	} else if len(f.Labels) > 0 || f.PR != "" {
+	if len(f.Labels) > 0 || f.PR != "" {
 		if err := b.requireSessionAnnotations(ctx); err != nil {
 			return nil, err
 		}

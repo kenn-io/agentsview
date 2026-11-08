@@ -48,12 +48,8 @@ func BuildSessionExclusionCountsSQL(f SessionFilter, dialect QueryDialect) (stri
 	return "SELECT " + strings.Join([]string{visible, oneShot, automated}, ", ") + " FROM sessions WHERE " + where, b.Args()
 }
 
-type sessionExclusionQuerier interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}
-
 // CountSessionExclusions executes the shared aggregate for every list backend.
-func CountSessionExclusions(ctx context.Context, q sessionExclusionQuerier, f SessionFilter, dialect QueryDialect) (int, *SessionExclusionCounts, error) {
+func CountSessionExclusions(ctx context.Context, q messageRowsQuerier, f SessionFilter, dialect QueryDialect) (int, *SessionExclusionCounts, error) {
 	query, args := BuildSessionExclusionCountsSQL(f, dialect)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -79,7 +75,7 @@ func CountSessionExclusions(ctx context.Context, q sessionExclusionQuerier, f Se
 }
 
 // LoadChildren preserves flat counts and the visible page if the probe fails.
-func (c *SessionExclusionCounts) LoadChildren(ctx context.Context, q sessionExclusionQuerier, f SessionFilter, dialect QueryDialect, visible int) {
+func (c *SessionExclusionCounts) LoadChildren(ctx context.Context, q messageRowsQuerier, f SessionFilter, dialect QueryDialect, visible int) {
 	if c == nil || f.ExclusionCounts != "all" || f.HasAnnotationFilter() {
 		return
 	}

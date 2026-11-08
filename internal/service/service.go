@@ -429,9 +429,6 @@ type SessionList struct {
 // and pull request filters; older daemons ignore them.
 const SessionAnnotationsAPIVersion = 11
 
-// SessionExclusionCountsAPIVersion is the first daemon with list summaries.
-const SessionExclusionCountsAPIVersion = 16
-
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.
 type ListFilter struct {
