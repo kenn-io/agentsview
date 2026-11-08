@@ -76,6 +76,9 @@ type AntigravityCLIParseStatus struct {
 	// messages instead. Sync can store the fallback while leaving
 	// data_version stale so the next pass retries.
 	NeedsRetry bool
+	// SummariesUnread is true when the summary store could not be read
+	// for the parent.
+	SummariesUnread bool
 }
 
 // parseSessionWithStatus parses one CLI session into the canonical
@@ -419,7 +422,9 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	if parentCascadeID == "" {
 		// Without the reader sidecar, the summary store still names the
 		// conversation that started a sub-agent conversation.
-		parentCascadeID = loadAntigravitySummaries(ctx, root).parent(id)
+		summaries := loadAntigravitySummaries(ctx, root)
+		status.SummariesUnread = summaries.err != nil
+		parentCascadeID = summaries.parent(id)
 	}
 	if parentCascadeID != "" && !strings.EqualFold(parentCascadeID, id) {
 		sess.ParentSessionID = antigravityCLIIDPrefix + parentCascadeID

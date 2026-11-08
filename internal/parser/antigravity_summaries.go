@@ -33,6 +33,8 @@ type antigravitySummary struct {
 	// named.
 	workspace    string
 	hasWorkspace bool
+	// workspaceRecorded reports whether the store records workspaces at all.
+	workspaceRecorded bool
 	// parentID is the canonical ID of the conversation that started this
 	// one, or "".
 	parentID string
@@ -55,8 +57,12 @@ func (s antigravitySummaries) cwdResolution(id string) SourceCwdResolution {
 	}
 	summary := s.byID[id]
 	switch {
-	case !summary.hasWorkspace:
+	case !summary.workspaceRecorded:
 		return SourceCwdResolution{}
+	case !summary.hasWorkspace:
+		// The row names no folder, so the conversation has none. This
+		// clears a stored cwd even when a cwd allow-list filters the parse.
+		return SourceCwdResolution{State: SourceCwdNone}
 	case summary.workspace == "":
 		return SourceCwdResolution{State: SourceCwdAmbiguous}
 	}
@@ -94,9 +100,16 @@ type antigravitySummariesSnapshot struct {
 
 var antigravitySummariesNow = time.Now
 
+// antigravitySummariesFailureRetry is how long a failed read stands for the
+// same store. It spans the reads of one sync pass, so a locked store is not
+// waited on once per conversation, and is short enough that the next pass
+// reads again.
+const antigravitySummariesFailureRetry = 15 * time.Second
+
 // Discovery, fingerprints, and parsing all ask for the same store, so one
 // read serves them while the store's container state holds. Matching markers
-// can hide a write, so a cached read expires. Failed reads are not cached.
+// can hide a write, so a cached read expires, and a failed read expires
+// sooner.
 var antigravitySummariesCache = struct {
 	sync.Mutex
 	stores map[string]antigravitySummariesSnapshot
@@ -109,12 +122,20 @@ func loadAntigravitySummaries(ctx context.Context, root string) antigravitySumma
 	antigravitySummariesCache.Lock()
 	defer antigravitySummariesCache.Unlock()
 	now := antigravitySummariesNow()
-	if prior, ok := antigravitySummariesCache.stores[path]; ok && exists &&
-		prior.state == state && now.Sub(prior.readAt) < SQLiteContainerDigestVerifyInterval {
-		return prior.summaries
+	if prior, ok := antigravitySummariesCache.stores[path]; ok && prior.state == state {
+		ttl := SQLiteContainerDigestVerifyInterval
+		if prior.summaries.err != nil {
+			ttl = antigravitySummariesFailureRetry
+		}
+		if now.Sub(prior.readAt) < ttl {
+			return prior.summaries
+		}
 	}
 	summaries := readAntigravitySummaries(ctx, path)
-	if !exists || summaries.err != nil {
+	if ctx.Err() != nil {
+		return summaries
+	}
+	if !exists && summaries.err == nil {
 		delete(antigravitySummariesCache.stores, path)
 		return summaries
 	}
@@ -182,7 +203,8 @@ func readAntigravitySummaries(ctx context.Context, path string) antigravitySumma
 			continue
 		}
 		summary := antigravitySummary{
-			parentID: canonicalAgyCascadeID(strings.TrimSpace(parentID)),
+			parentID:          canonicalAgyCascadeID(strings.TrimSpace(parentID)),
+			workspaceRecorded: hasWorkspaces,
 		}
 		if first := gjson.Get(uris, "0"); first.Type == gjson.String {
 			summary.workspace = antigravityWorkspacePath(first.Str)
@@ -227,4 +249,14 @@ func antigravityWorkspacePath(uri string) string {
 
 func isASCIILetter(b byte) bool {
 	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
+}
+
+// antigravityFingerprintHolds reports whether a parse that could not read
+// the summary store may still be recorded under the fingerprint taken before
+// it. That holds when the fingerprint saw the same unreadable store. When the
+// store was readable then, the parse lacks values the fingerprint covered, so
+// its source hash is left unset and the next sync reparses it.
+func antigravityFingerprintHolds(ctx context.Context, p Provider, req ParseRequest) bool {
+	current, err := p.Fingerprint(ctx, req.Source)
+	return err == nil && current.Hash == req.Fingerprint.Hash
 }

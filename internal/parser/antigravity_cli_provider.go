@@ -142,7 +142,8 @@ func (p *antigravityCLIProvider) Parse(
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
-	if req.Fingerprint.Hash != "" {
+	if req.Fingerprint.Hash != "" &&
+		(!status.SummariesUnread || antigravityFingerprintHolds(ctx, p, req)) {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
 	result := ParseResultOutcome{

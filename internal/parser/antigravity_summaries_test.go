@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,7 +89,8 @@ func TestAntigravityProviderSummaryResolutionStates(t *testing.T) {
 					summaryTestID: {ParentID: summaryTestID},
 				})
 			},
-			want: SourceCwdUnspecified,
+			// A row naming no folder means the conversation has none.
+			want: SourceCwdNone,
 		},
 		"store predates the workspace and parent columns": {
 			store: func(t *testing.T, root string) {
@@ -151,12 +153,16 @@ func TestAntigravityProviderSummaryResolutionStates(t *testing.T) {
 			require.Len(t, discovered, 1)
 			assert.Equal(t, SourceCwdResolution{State: tc.want}, discovered[0].CwdResolution)
 			assert.Empty(t, discovered[0].ProjectHint)
-			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
+			fingerprint, err := provider.Fingerprint(t.Context(), discovered[0])
+			require.NoError(t, err)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0], Fingerprint: fingerprint})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
-			assert.Empty(t, outcome.Results[0].Result.Session.Cwd)
-			assert.Empty(t, outcome.Results[0].Result.Session.Project)
-			assert.Empty(t, outcome.Results[0].Result.Session.ParentSessionID)
+			session := outcome.Results[0].Result.Session
+			assert.Empty(t, session.Cwd)
+			assert.Empty(t, session.Project)
+			assert.Empty(t, session.ParentSessionID)
+			assert.Equal(t, fingerprint.Hash, session.File.Hash)
 		})
 	}
 }
@@ -443,9 +449,10 @@ func fileURI(path string) string {
 	return u.String()
 }
 
-// A read that fails while another process holds the store is not cached:
-// once the lock is released, the next read succeeds although the store's
-// file did not change.
+// A read that fails while another process holds the store stands only for
+// the rest of a sync pass: later reads in the pass reuse the failure instead
+// of waiting on the lock again, and a read after the failure window succeeds
+// once the lock is released, although the store's file did not change.
 func TestAntigravitySummariesRetryAfterTransientLock(t *testing.T) {
 	root := t.TempDir()
 	store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
@@ -459,13 +466,67 @@ func TestAntigravitySummariesRetryAfterTransientLock(t *testing.T) {
 	_, err = conn.ExecContext(t.Context(), "BEGIN EXCLUSIVE")
 	require.NoError(t, err)
 
+	now := time.Now()
+	clock := now
+	prev := antigravitySummariesNow
+	antigravitySummariesNow = func() time.Time { return clock }
+	t.Cleanup(func() { antigravitySummariesNow = prev })
+
 	locked := loadAntigravitySummaries(t.Context(), root)
 	require.Error(t, locked.err, "an exclusively locked store cannot be read")
 
 	_, err = conn.ExecContext(t.Context(), "ROLLBACK")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
+	assert.Error(t, loadAntigravitySummaries(t.Context(), root).err, "the same pass reuses the failure")
+
+	clock = now.Add(antigravitySummariesFailureRetry + time.Second)
 	recovered := loadAntigravitySummaries(t.Context(), root)
 	require.NoError(t, recovered.err)
 	assert.Equal(t, "/tmp/ws-proj", recovered.byID[summaryTestID].workspace)
+}
+
+// A store that can be read when the source is fingerprinted but not when it
+// is parsed leaves the parse without the parent the fingerprint covered. The
+// session is still published, but without the source hash, so the next sync
+// reparses it. A store that is unreadable at both points keeps the hash.
+func TestAntigravityStoreOutageAfterFingerprint(t *testing.T) {
+	tests := map[string]struct {
+		agent AgentType
+		id    string
+		write func(t *testing.T, root, id string)
+	}{
+		"app and IDE": {AgentAntigravity, summaryTestID, writeAntigravityIDEProviderFixture},
+		"CLI":         {AgentAntigravityCLI, summaryTestCLIID, writeAntigravityCLIProviderFixture},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			tc.write(t, root, tc.id)
+			store := testjsonl.WriteAntigravitySummaries(t, root, map[string]testjsonl.AntigravitySummary{
+				tc.id: {WorkspaceURIs: `["file:///tmp/ws-proj"]`, ParentID: summaryTestParent},
+			})
+			provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
+			require.True(t, ok)
+			discovered, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			source := antigravitySourceAt(t, discovered, filepath.Join(root, "conversations", tc.id+".db"))
+			readable, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+
+			mustWrite(t, store, []byte("not a sqlite database, long enough to fill a header page"))
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source, Fingerprint: readable})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			assert.Empty(t, outcome.Results[0].Result.Session.ParentSessionID)
+			assert.Empty(t, outcome.Results[0].Result.Session.File.Hash)
+
+			unreadable, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+			outcome, err = provider.Parse(t.Context(), ParseRequest{Source: source, Fingerprint: unreadable})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			assert.Equal(t, unreadable.Hash, outcome.Results[0].Result.Session.File.Hash)
+		})
+	}
 }

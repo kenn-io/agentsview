@@ -129,7 +129,10 @@ func (p *antigravityProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.Path, err)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	project := req.Source.ProjectHint
+	// The parse reads the store itself rather than trusting what discovery
+	// saw.
+	summaries := loadAntigravitySummaries(ctx, src.Root)
+	project := summaries.byID[src.ID].workspace
 	if project != "" {
 		// A remote workspace names a folder on another machine, so its
 		// project comes from the path text alone, as for the CLI provider.
@@ -159,12 +162,13 @@ func (p *antigravityProvider) Parse(
 	if req.Source.CwdResolution.State == SourceCwdResolved {
 		sess.Cwd = req.Source.CwdResolution.Path
 	}
-	if parent := loadAntigravitySummaries(ctx, src.Root).parent(src.ID); parent != "" {
+	if parent := summaries.parent(src.ID); parent != "" {
 		sess.ParentSessionID = antigravityIDPrefix + parent
 		sess.RelationshipType = RelSubagent
 	}
 	applyAntigravityTitle(ctx, sess, src)
-	if req.Fingerprint.Hash != "" {
+	if req.Fingerprint.Hash != "" &&
+		(summaries.err == nil || antigravityFingerprintHolds(ctx, p, req)) {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
 	return ParseOutcome{
