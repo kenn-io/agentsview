@@ -776,7 +776,7 @@ func TestWriteDaemonRuntimeFailurePreservesUpdateLaunchArgs(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Mkdir(runtimePath, 0o700))
 
-	_, err = WriteDaemonRuntimeWithAuthAndNoSync(
+	_, err = WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dir, host, port, "test", "https://viewer.example/base", false, true, true, new(port),
 	)
 	require.Error(t, err)
@@ -817,7 +817,7 @@ func TestWriteDaemonRuntimeFailurePreservesManagedCaddyIdentity(t *testing.T) {
 	caddyCreateTime, ok := processCreateTimeMillis(os.Getpid())
 	require.True(t, ok)
 
-	_, err = WriteDaemonRuntimeWithAuthAndNoSync(
+	_, err = WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dir, host, port, "test", "", false, false, false, nil, os.Getpid(),
 	)
 	require.Error(t, err)
@@ -1039,7 +1039,7 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	endpoint := newPingDaemon(t)
 
-	path, err := WriteDaemonRuntimeWithAuthAndNoSync(
+	path, err := WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dir, endpoint.Host, endpoint.Port, "1.0.0", "", false, true, true, nil,
 	)
 	require.NoError(t, err)
@@ -1921,10 +1921,12 @@ func TestDaemonRuntime_ReadOnlyPersisted(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 
-	path, err := WriteDaemonRuntime(dir, host, port, "test", true)
+	path, err := WriteDaemonRuntimeWithAuthAndNoSync(&daemonLifetime{Persistent: true}, dir, host, port, "test", "", true, false, false, nil)
 	require.NoError(t, err)
 
 	rec := readRuntimeRecord(t, path)
+	assert.NotContains(t, rec.Metadata, runtimePersistent)
+	assert.NotContains(t, rec.Metadata, runtimeIdleTimeout)
 	assert.Equal(t, "true", rec.Metadata[runtimeReadOnly])
 	assert.Equal(t, strconv.Itoa(port), rec.Metadata[runtimePort])
 	assert.Equal(t, "test", rec.Version)
@@ -1962,4 +1964,73 @@ func TestBasePathDaemonDiscoveryAndAPITransport(t *testing.T) {
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
 		})
 	}
+}
+
+func TestDaemonRuntimePublishesLifetime(t *testing.T) {
+	for _, lifetime := range []daemonLifetime{{IdleTimeout: 2 * time.Second}, {Persistent: true}} {
+		t.Run(strconv.FormatBool(lifetime.Persistent), func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			path, err := WriteDaemonRuntimeWithAuthAndNoSync(&lifetime, dir, "127.0.0.1", 8080, "test", "", false, false, false, nil)
+			require.NoError(t, err)
+			rt := daemonRuntimeFromRecord(readRuntimeRecord(t, path))
+			assert.Equal(t, lifetime.Persistent, rt.Persistent)
+			require.NotNil(t, rt.IdleTimeout)
+			assert.Equal(t, lifetime.IdleTimeout, *rt.IdleTimeout)
+		})
+	}
+}
+
+func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
+	for _, persistent := range []bool{false, true} {
+		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
+			// A configured zero timeout does not imply explicit persistence.
+			dir := runtimeTestDir(t)
+			MarkDaemonStarting(dir)
+			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+			writer := newStartupStateWriter(dir, time.Now)
+			writer.state.Persistent = persistent
+			writer.state.IdleTimeout = "0s"
+			writer.SetPhase("starting HTTP server")
+			host, port := testPingServer(t)
+			path, err := runtimeStore(dir).Path(os.Getpid())
+			require.NoError(t, err)
+			require.NoError(t, os.Mkdir(path, 0o700))
+			_, err = WriteDaemonRuntimeWithAuthAndNoSync(nil, dir, host, port, "test", "", false, false, false, nil)
+			require.Error(t, err)
+			rt := FindWritableDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			assert.Equal(t, persistent, rt.Persistent)
+			require.NotNil(t, rt.IdleTimeout)
+			assert.Zero(t, *rt.IdleTimeout)
+			oldStop := stopDaemonRuntimeForUpgrade
+			stopDaemonRuntimeForUpgrade = func(context.Context, config.Config, *DaemonRuntime) error { return nil }
+			t.Cleanup(func() { stopDaemonRuntimeForUpgrade = oldStop })
+			result, err := stopWritableDaemonsForUpdate(t.Context(), config.Config{DataDir: dir})
+			require.NoError(t, err)
+			assert.True(t, result.Stopped)
+			assert.Equal(t, persistent, result.Persistent)
+		})
+	}
+}
+
+func TestFailedFallbackPromotionPreservesAutomaticLifetime(t *testing.T) {
+	dir := runtimeTestDir(t)
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	writer := newStartupStateWriter(dir, time.Now)
+	writer.state.IdleTimeout = "2s"
+	writer.SetPhase("starting HTTP server")
+	host, port := testPingServer(t)
+	path, err := runtimeStore(dir).Path(os.Getpid())
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(path, 0o700))
+	_, err = WriteDaemonRuntimeWithAuthAndNoSync(nil, dir, host, port, "test", "", false, false, false, nil)
+	require.Error(t, err)
+	require.NoError(t, os.Mkdir(filepath.Join(dir, startupStateFileName+".tmp"), 0o700))
+	require.Error(t, publishPersistentDaemon(dir))
+	rt := FindWritableDaemonRuntime(dir)
+	require.NotNil(t, rt)
+	assert.False(t, rt.Persistent)
+	require.NotNil(t, rt.IdleTimeout)
+	assert.Equal(t, 2*time.Second, *rt.IdleTimeout)
 }

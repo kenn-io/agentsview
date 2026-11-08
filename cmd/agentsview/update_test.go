@@ -5,14 +5,17 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/update"
 )
 
@@ -32,6 +35,7 @@ func TestPerformUpdateWithDaemonLifecycleRestartsStoppedDaemon(t *testing.T) {
 			assert.Equal(t, cfg.DataDir, got.DataDir)
 			return updateDaemonStopResult{
 				Stopped:          true,
+				Persistent:       true,
 				Host:             "127.0.0.1",
 				Port:             18080,
 				RequireAuth:      true,
@@ -49,6 +53,7 @@ func TestPerformUpdateWithDaemonLifecycleRestartsStoppedDaemon(t *testing.T) {
 			assert.Equal(t, 18080, stop.Port)
 			assert.True(t, stop.RequireAuth)
 			assert.True(t, stop.RequireAuthKnown)
+			assert.True(t, stop.Persistent)
 			return nil
 		},
 	)
@@ -230,7 +235,7 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 			first, _, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, 0, nil)
 			require.NoError(t, err)
 			require.Equal(t, "http://viewer.example.test:8080", first.PublicURL)
-			_, err = WriteDaemonRuntimeWithAuthAndNoSync(
+			_, err = WriteDaemonRuntimeWithAuthAndNoSync(nil,
 				dir, first.Host, first.Port, "test", first.PublicURL, false, false, false, new(port),
 			)
 			require.NoError(t, err)
@@ -416,6 +421,51 @@ func TestUpdateCheckGivesPackageManagerGuidance(t *testing.T) {
 			} else {
 				assert.NotContains(t, out, "manages this installation")
 			}
+		})
+	}
+}
+
+func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
+	for _, persistent := range []bool{false, true} {
+		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
+			dir := testDataDir(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
+			t.Setenv("DO_NOT_TRACK", "1")
+			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "0s")
+			var disabled []string
+			for _, def := range parser.Registry {
+				if def.FileBased || def.EnvVar != "" {
+					disabled = append(disabled, strconv.Quote(string(def.Type)))
+				}
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("disabled_agents = ["+strings.Join(disabled, ",")+"]\n"+"host = \"127.0.0.1\"\nport = 0\nno_browser = true\nno_sync = true\ndisable_update_check = true\n[vector]\nenabled = false\n"), 0o600))
+			cfg := config.Config{DataDir: dir}
+			t.Cleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+				defer cancel()
+				_, err := stopWritableDaemonsForUpdate(cleanupCtx, cfg)
+				assert.NoError(t, err)
+			})
+			args := []string{"serve", "--background", "--no-sync"}
+			out, err := exec.CommandContext(ctx, os.Args[0], args...).CombinedOutput()
+			require.NoError(t, err, string(out))
+			if persistent {
+				out, err = exec.CommandContext(ctx, os.Args[0], "daemon", "start").CombinedOutput()
+				require.NoError(t, err, string(out))
+			}
+			rt := FindWritableDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			stopped, err := stopWritableDaemonsForUpdate(ctx, cfg)
+			require.NoError(t, err)
+			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
+			require.NoError(t, restartDaemonAfterUpdate(ctx, cfg, stopped))
+			rt = FindWritableDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			assert.Equal(t, persistent, rt.Persistent)
+			time.Sleep(5 * time.Second) //nolint:kennlint // sleeptest: the child process uses the real clock for its two-second idle exit.
+			assert.Equal(t, persistent, FindWritableDaemonRuntime(dir) != nil)
 		})
 	}
 }

@@ -164,8 +164,9 @@ type Server struct {
 	// (e.g. "/agentsview"). When set, all routes are served
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
-	basePath string
-	idle     *IdleTracker
+	basePath      string
+	idle          *IdleTracker
+	persistDaemon func() error
 
 	ingestionFreshness IngestionFreshness
 
@@ -1051,7 +1052,7 @@ func archiveWriteRequest(r *http.Request) bool {
 		return !startupOnly
 	case "/api/v1/recall/import":
 		return r.URL.Query().Get("dry_run") != "true"
-	case "/api/v1/settings", "/api/v1/recall/query", "/api/v1/commits/sessions", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
+	case "/api/v1/daemon/persist", "/api/v1/settings", "/api/v1/recall/query", "/api/v1/commits/sessions", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
 		return false
 	}
 	for _, prefix := range []string{"/api/v1/config/", "/api/v1/telemetry/", "/api/v1/remote-sync/", "/api/v1/embeddings/", "/api/v1/raw-sync/uploads", "/api/v1/import/claude-ai/sync/results/"} {
@@ -1844,3 +1845,8 @@ func logMiddleware(next http.Handler) http.Handler {
 
 // WithRawSyncTenant binds every raw credential/token identity before route work.
 func WithRawSyncTenant(tenant string) Option { return func(s *Server) { s.rawSyncTenant = tenant } }
+
+// WithDaemonPersistence installs the writable local daemon's lifetime publisher.
+func WithDaemonPersistence(publish func() error) Option {
+	return func(s *Server) { s.persistDaemon = publish }
+}

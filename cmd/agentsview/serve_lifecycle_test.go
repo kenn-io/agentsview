@@ -804,3 +804,23 @@ func TestStopTargetConfirmedRejectsReusedPID(t *testing.T) {
 		Service: daemonService,
 	}, ""))
 }
+
+func TestServeStatusLinesLifetime(t *testing.T) {
+	for _, tc := range []struct {
+		timeout time.Duration
+		want    string
+	}{
+		{20 * time.Minute, "Exits after 20m idle"},
+		{0, "Stays running until agentsview daemon stop"},
+		{2 * time.Second, "Exits after 2s idle"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			rt := &DaemonRuntime{Record: testWritableRecord(79, ""), IdleTimeout: &tc.timeout}
+			lines := serveStatusLines(rt)
+			require.Greater(t, len(lines), 2)
+			assert.Equal(t, "  "+tc.want, lines[1])
+		})
+	}
+	rt := &DaemonRuntime{Record: testWritableRecord(79, "")}
+	assert.Contains(t, serveStatusLines(rt)[1], "pid:")
+}
