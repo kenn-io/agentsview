@@ -29,6 +29,13 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,
 		},
+		// Open Interpreter shares the Codex provider, so it must share its
+		// semantics.
+		AgentInterpreter: {
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+			SkipCacheFreshWithoutStoredRow:      true,
+		},
 		// TraeX shares the Codex provider, so it must share its semantics.
 		AgentTraeX: {
 			FingerprintHashInCacheKey:           true,
