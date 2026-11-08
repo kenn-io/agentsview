@@ -57,7 +57,6 @@ func newExportPushCommandWithSource(source exportPushSource) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "export-push <session-id>", Short: "export one exact archived snapshot without uploading", GroupID: groupData,
 		Long: "Export one exact canonical archive ID. Claude IDs are unprefixed; other agents use agent:<native-id>.\n" +
-			"This does not promise a complete running session.\n" +
 			"Known truncated, malformed, summary-only or uncaptured data is refused. Separately stored parent/child/sibling sessions are excluded; text already embedded in the selected session remains for review.\n" +
 			"Does not sync source data, require upload credentials, or upload. The receiver keeps its first accepted snapshot for this session, even if later issues are closed.\n" +
 			"Snapshot export is unavailable in this build.",
@@ -89,7 +88,7 @@ func runExportPush(ctx context.Context, source exportPushSource, id, agent strin
 		return err
 	}
 	if !prefix {
-		return errors.New("export-push: --snapshot-prefix must acknowledge the captured point and any unknown tail")
+		return errors.New("export-push: pass --snapshot-prefix to acknowledge that later turns may be missing")
 	}
 	if output == "" || id == "" || len(id) > 1024 || strings.ContainsAny(id, "~/\\\x00\r\n\t ") {
 		return errors.New("export-push: provide the exact session ID and a new --output file")
@@ -114,7 +113,7 @@ func runExportPush(ctx context.Context, source exportPushSource, id, agent strin
 	}
 	// Report scope BEFORE publishing. No transcript bytes, paths or provider
 	// errors are emitted. Unknown coverage is never upgraded to final completion.
-	if _, err = fmt.Fprintln(status, "Frozen snapshot through its captured point; may omit later turns (unknown tail). First accepted receiver snapshot remains immutable."); err != nil {
+	if _, err = fmt.Fprintln(status, "Snapshot may omit later turns (unknown tail). The receiver keeps its first accepted snapshot, even if later issues are closed."); err != nil {
 		return err
 	}
 	if err = publishExportPush(ctx, output, snapshot.Payload); err != nil {
