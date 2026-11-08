@@ -297,18 +297,16 @@ func analyticsSessionIDsContext(ctx context.Context, ids []string) (context.Cont
 	return chdriver.Context(ctx, chdriver.WithExternalTable(table)), "(SELECT id FROM analytics_session_ids)", nil
 }
 
-func (s analyticsSQL) VelocitySessions(ctx context.Context, _ []string, f db.AnalyticsFilter, loc *time.Location) (map[string]db.SessionVelocity, error) {
-	known, knownArgs, unknown := chAnalyticsFactSets(f)
+func (s analyticsSQL) VelocitySessions(ctx context.Context, ids []string, f db.AnalyticsFilter, loc *time.Location) (map[string]db.SessionVelocity, error) {
+	known, knownArgs, _ := chAnalyticsFactSets(f)
 
 	out, err := s.knownVelocities(ctx, known, knownArgs)
 	if err != nil {
 		return nil, err
 	}
-	scanned, err := s.scanVelocityMessages(ctx, unknown, loc)
-	if err != nil {
+	if err := s.scanMissingVelocities(ctx, ids, out, loc); err != nil {
 		return nil, err
 	}
-	maps.Copy(out, readbase.SessionVelocities(scanned))
 	return out, nil
 }
 
@@ -340,23 +338,39 @@ func (s analyticsSQL) knownVelocities(ctx context.Context, known string, args []
 	return out, nil
 }
 
-// scanVelocityMessages reads the velocity timing rows of the sessions in
-// sessions.
-func (s analyticsSQL) scanVelocityMessages(ctx context.Context, sessions chSessionSet, loc *time.Location) (map[string][]db.TimingMessage, error) {
-	out := make(map[string][]db.TimingMessage)
-	sessionIn, args := sessions.in("session_id")
+// scanMissingVelocities adds to out the velocity of each selected session
+// the facts read did not return, computed from its messages. It works from
+// what that read returned rather than asking again which facts are current,
+// so a push that publishes a session's facts between the two reads cannot
+// leave the session out of both.
+func (s analyticsSQL) scanMissingVelocities(ctx context.Context, ids []string, out map[string]db.SessionVelocity, loc *time.Location) error {
+	missing := slices.DeleteFunc(slices.Clone(ids), func(id string) bool {
+		_, ok := out[id]
+		return ok
+	})
+	if len(missing) == 0 {
+		return nil
+	}
+	ctx, ph, err := analyticsSessionIDsContext(ctx, missing)
+	if err != nil {
+		return err
+	}
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
-		WHERE `+db.ExcludeClaudeHooksSQL("source_subtype")+` AND `+sessionIn+`
-		ORDER BY session_id, ordinal`,
-		args...,
-	)
+		WHERE `+db.ExcludeClaudeHooksSQL("source_subtype")+` AND session_id IN `+ph+`
+		ORDER BY session_id, ordinal`)
 	if err != nil {
-		return nil, fmt.Errorf("querying clickhouse velocity messages: %w", err)
+		return fmt.Errorf("querying clickhouse velocity messages: %w", err)
 	}
 	defer rows.Close()
-	return readbase.ScanAnalyticsVelocityMessages(rows, "clickhouse", formatDBTime, loc, out)
+	scanned, err := readbase.ScanAnalyticsVelocityMessages(
+		rows, "clickhouse", formatDBTime, loc, make(map[string][]db.TimingMessage))
+	if err != nil {
+		return err
+	}
+	maps.Copy(out, readbase.SessionVelocities(scanned))
+	return nil
 }
 
 func (s analyticsSQL) VelocityToolCounts(ctx context.Context, _ []string, f db.AnalyticsFilter) (map[string]int, error) {

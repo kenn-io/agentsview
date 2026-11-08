@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -190,4 +191,45 @@ func TestDashboardFactsMatchMessageScans(t *testing.T) {
 	// An hour filter selects sessions by message time, so only the
 	// unfiltered panels can do without messages.
 	assert.Equal(t, withFacts, read()[0], "facts alone answer every panel")
+}
+
+// A push can publish a session's facts after the Velocity read finds the
+// session without them and before it scans the sessions it did not find.
+// The session must still reach the Velocity response.
+func TestVelocityKeepsSessionPublishedBetweenReads(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local := dbtest.OpenTestDB(t)
+	msgs := []db.Message{
+		fixtureMessage("velocity-race", 0, "user", "add the export", "2026-03-02T15:00:00Z"),
+		fixtureMessage("velocity-race", 1, "assistant", "added it", "2026-03-02T15:00:30Z"),
+	}
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:  fixtureSession("velocity-race", "facts", msgs[0].Content, "2026-03-02T15:00:00Z", len(msgs)),
+		Messages: msgs, DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	dsn, database := chtest.FreshDatabase(t)
+	_, err = newTestSync(t, local, Target{URL: dsn, Database: database}, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	conn := chtest.Open(t, dsn, database)
+	setFactsVersion := func(version int) {
+		t.Helper()
+		_, err := conn.ExecContext(ctx,
+			"ALTER TABLE sessions UPDATE dashboard_facts_version = ? WHERE id = 'velocity-race' SETTINGS mutations_sync = 2",
+			version)
+		require.NoError(t, err)
+	}
+
+	reads := analyticsSQL{NewStoreFromDB(conn)}
+	known, knownArgs, _ := chAnalyticsFactSets(db.AnalyticsFilter{From: "2026-03-01", To: "2026-03-03"})
+	setFactsVersion(0)
+	velocities, err := reads.knownVelocities(ctx, known, knownArgs)
+	require.NoError(t, err)
+	require.NotContains(t, velocities, "velocity-race", "the facts read runs before the push publishes")
+	setFactsVersion(dashboardFactsVersion)
+	require.NoError(t, reads.scanMissingVelocities(ctx, []string{"velocity-race"}, velocities, time.UTC))
+	got := velocities["velocity-race"]
+	assert.Equal(t, 2, got.Messages)
+	assert.Equal(t, []float64{30}, got.TurnCycles)
 }
