@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -17,7 +16,7 @@ import (
 // Facts and their nested maps and slices are immutable after publication.
 // Root and Claude parts are filled only when the current selection needs them.
 type sessionStatsFacts struct {
-	id, transcript, created   string
+	id                        string
 	revision                  int64
 	root, claude              bool
 	toolCalls, assistantTurns int
@@ -42,7 +41,7 @@ func (facts sessionStatsFactsByID) session(id string) *sessionStatsFacts {
 }
 
 func (f *sessionStatsFacts) size() int64 {
-	size := int64(unsafe.Sizeof(*f)) + 208 + int64(len(f.id)+len(f.transcript)+len(f.created))
+	size := int64(unsafe.Sizeof(*f)) + 208 + int64(len(f.id))
 	size += int64(cap(f.velocity.turnCycles)+cap(f.velocity.firstResponses)) * 8
 	size += int64(unsafe.Sizeof(sessionCacheTotals{}))
 	for key := range f.tools {
@@ -83,12 +82,29 @@ func (m *sessionStatsFactsMemo) Lookup(generation uint64, version string) []*ses
 	return rows
 }
 
-func (m *sessionStatsFactsMemo) Store(generation uint64, version string, rows []*sessionStatsFacts) {
+func (m *sessionStatsFactsMemo) Store(generation uint64, version string, rows, previous []*sessionStatsFacts) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if generation == m.generation {
-		m.rows.Put("facts", version, rows)
+	if generation != m.generation {
+		return
 	}
+	selected := make(map[string]bool, len(rows))
+	retained := slices.Clone(rows)
+	var size int64
+	for _, fact := range rows {
+		selected[fact.id] = true
+		size += fact.size()
+	}
+	for _, fact := range previous {
+		if !selected[fact.id] {
+			retained = append(retained, fact)
+			size += fact.size()
+		}
+	}
+	if size > m.rows.MaxBytes {
+		retained = rows
+	}
+	m.rows.Put("facts", version, retained)
 }
 
 func (m *sessionStatsFactsMemo) Swap(swap func()) {
@@ -115,15 +131,13 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var identity string
-	var pricingRevision int64
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM archive_metadata WHERE key='database_id'),''),COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key='usage_pricing_revision'),0)`).Scan(&identity, &pricingRevision)
+	identity, pricingRevision, err := databaseIDAndUsagePricingRevisionFrom(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
 	version := fmt.Sprintf("%s|%d", identity, pricingRevision)
 	var previous []*sessionStatsFacts
-	if memo != nil && strings.TrimSpace(identity) != "" {
+	if memo != nil && identity != "" {
 		previous = memo.Lookup(generation, version)
 	}
 	old := make(sessionStatsFactsByID, len(previous))
@@ -149,14 +163,14 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 	var missing, rootMiss, claudeMiss []string
 	err = queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
-		rows, e := tx.QueryContext(ctx, `SELECT s.id,COALESCE(c.revision,0),s.transcript_revision,s.created_at FROM sessions s LEFT JOIN usage_session_changes c ON c.session_id=s.id WHERE s.id IN `+ph, args...)
+		rows, e := tx.QueryContext(ctx, `SELECT s.id,COALESCE(c.revision,0) FROM sessions s LEFT JOIN usage_session_changes c ON c.session_id=s.id WHERE s.id IN `+ph, args...)
 		if e != nil {
 			return e
 		}
 		defer rows.Close()
 		for rows.Next() {
 			f := &sessionStatsFacts{}
-			if e = rows.Scan(&f.id, &f.revision, &f.transcript, &f.created); e != nil {
+			if e = rows.Scan(&f.id, &f.revision); e != nil {
 				return e
 			}
 			facts[f.id] = f
@@ -175,7 +189,7 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 		}
 		hit := old[id]
 		root, claude := rootIDs[id], rootIDs[id] && agents[id] == "claude"
-		if hit != nil && hit.revision == f.revision && hit.transcript == f.transcript && hit.created == f.created && (!root || hit.root) && (!claude || hit.claude) {
+		if hit != nil && hit.revision == f.revision && (!root || hit.root) && (!claude || hit.claude) {
 			facts[id] = hit
 			publish = append(publish, hit)
 			continue
@@ -230,8 +244,8 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, roots, all []sessionSta
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	if memo != nil && strings.TrimSpace(identity) != "" {
-		memo.Store(generation, version, publish)
+	if memo != nil && identity != "" {
+		memo.Store(generation, version, publish, previous)
 	}
 	return facts, nil
 }

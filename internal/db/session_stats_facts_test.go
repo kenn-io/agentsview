@@ -55,12 +55,16 @@ func equalStatsFacts(t *testing.T, want, got *SessionStats) {
 
 func TestSessionStatsFactsChanges(t *testing.T) {
 	t.Parallel()
-	for _, change := range []string{"warm", "append", "replace", "usage", "committed usage", "recreate", "new", "agent", "project", "visibility", "relationship", "pricing", "agent filter", "narrow window", "wide window", "timezone", "empty"} {
+	for _, change := range []string{"warm", "append", "replace", "legacy replace", "usage", "committed usage", "recreate", "new", "agent", "project", "visibility", "relationship", "pricing", "agent filter", "narrow window", "wide window", "timezone", "empty"} {
 		t.Run(change, func(t *testing.T) {
 			t.Parallel()
 			d := testDB(t)
 			seedStatsFacts(t, d)
 			f := factsFilter
+			if change == "legacy replace" {
+				_, err := d.getWriter().Exec(t.Context(), "DELETE FROM usage_session_changes")
+				require.NoError(t, err)
+			}
 			if change == "committed usage" {
 				messages := statsFactMessages("session", 30)
 				messages[1].TokenUsage = nil
@@ -72,7 +76,7 @@ func TestSessionStatsFactsChanges(t *testing.T) {
 			switch change {
 			case "append":
 				require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: 2, Role: "user", Content: "again", Timestamp: "2026-06-16T10:02:00Z"}, {SessionID: "session", Ordinal: 3, Role: "assistant", Content: "done", Timestamp: "2026-06-16T10:03:00Z"}}))
-			case "replace":
+			case "replace", "legacy replace":
 				require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", statsFactMessages("session", 50)))
 			case "usage":
 				m := statsFactMessages("session", 30)
@@ -299,27 +303,78 @@ func TestSessionStatsFactsCacheOneHour(t *testing.T) {
 }
 
 func TestSessionStatsFactsWarmSkipsTranscriptReads(t *testing.T) {
+	for _, filter := range []string{"agent", "window"} {
+		t.Run(filter, func(t *testing.T) {
+			d := testDB(t)
+			seedStatsFacts(t, d)
+			_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET started_at='2026-06-20T10:00:00Z' WHERE id='codex'")
+			require.NoError(t, err)
+			want, err := d.GetSessionStats(t.Context(), factsFilter)
+			require.NoError(t, err)
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, conn.Raw(func(raw any) error {
+				raw.(interface {
+					RegisterAuthorizer(func(int, string, string, string) int)
+				}).RegisterAuthorizer(func(op int, table, column, _ string) int {
+					if op == sqlite3.SQLITE_READ && ((table == "messages" && column == "token_usage") || (table == "tool_calls" && column == "category")) {
+						return sqlite3.SQLITE_DENY
+					}
+					return sqlite3.SQLITE_OK
+				})
+				return nil
+			}))
+			require.NoError(t, conn.Close())
+			narrow := factsFilter
+			if filter == "agent" {
+				narrow.Agent = "codex"
+			} else {
+				narrow.Since = "2026-06-17"
+			}
+			selected, err := d.GetSessionStats(t.Context(), narrow)
+			require.NoError(t, err)
+			assert.Equal(t, 1, selected.Totals.SessionsAll)
+			got, err := d.GetSessionStats(t.Context(), factsFilter)
+			require.NoError(t, err)
+			equalStatsFacts(t, want, got)
+		})
+	}
+}
+
+func TestSessionStatsFactsWriteReadsOnlyChangedSession(t *testing.T) {
 	d := testDB(t)
 	seedStatsFacts(t, d)
-	want, err := d.GetSessionStats(t.Context(), factsFilter)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "codex", statsFactMessages("codex", 50)))
+	_, err := d.GetSessionStats(t.Context(), factsFilter)
 	require.NoError(t, err)
 	d.rawReader().SetMaxOpenConns(1)
+	reads := map[string]int{}
 	conn, err := d.getReader().Conn(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(interface {
-			RegisterAuthorizer(func(int, string, string, string) int)
-		}).RegisterAuthorizer(func(op int, table, column, _ string) int {
-			if op == sqlite3.SQLITE_READ && ((table == "messages" && column == "token_usage") || (table == "tool_calls" && column == "category")) {
-				return sqlite3.SQLITE_DENY
+		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("coalesce", func(values ...any) any {
+			if len(values) == 2 && values[1] == "" {
+				if timestamp, ok := values[0].(string); ok {
+					reads[timestamp]++
+				}
 			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
+			for _, value := range values {
+				if bytes, ok := value.([]byte); ok && bytes == nil {
+					continue
+				}
+				if value != nil {
+					return value
+				}
+			}
+			return nil
+		}, false)
 	}))
 	require.NoError(t, conn.Close())
-	// Temporal still reads timestamps while retained facts skip message usage.
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", statsFactMessages("session", 40)))
 	got, err := d.GetSessionStats(t.Context(), factsFilter)
 	require.NoError(t, err)
-	equalStatsFacts(t, want, got)
+	assert.Positive(t, reads["2026-06-16T10:00:40Z"])
+	assert.Zero(t, reads["2026-06-16T10:00:50Z"])
+	equalStatsFacts(t, freshStatsFacts(t, d, factsFilter), got)
 }
