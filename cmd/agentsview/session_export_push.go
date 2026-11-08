@@ -58,7 +58,7 @@ func newExportPushCommandWithSource(source exportPushSource) *cobra.Command {
 		Use: "export-push <session-id>", Short: "export one exact archived snapshot without uploading", GroupID: groupData,
 		Long: "Export one session by its full ID. Claude IDs are unprefixed; other agents use agent:<native-id>.\n" +
 			"Known truncated, malformed, summary-only or uncaptured data is refused. Separately stored parent/child/sibling sessions are excluded; text already embedded in the selected session remains for review.\n" +
-			"Does not sync source data, require upload credentials, or upload. The receiver keeps its first accepted snapshot for this session, even if later issues are closed.\n" +
+			"Does not sync source data, require upload credentials, or upload. The receiver keeps its first accepted snapshot, even if the session continues.\n" +
 			"Snapshot export is unavailable in this build.",
 		Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -113,7 +113,7 @@ func runExportPush(ctx context.Context, source exportPushSource, id, agent strin
 	}
 	// Report scope BEFORE publishing. No transcript bytes, paths or provider
 	// errors are emitted. Unknown coverage is never upgraded to final completion.
-	if _, err = fmt.Fprintln(status, "Snapshot may omit later turns (unknown tail). The receiver keeps its first accepted snapshot, even if later issues are closed."); err != nil {
+	if _, err = fmt.Fprintln(status, "Snapshot may omit later turns (unknown tail). The receiver keeps its first accepted snapshot, even if the session continues."); err != nil {
 		return err
 	}
 	if err = publishExportPush(ctx, output, snapshot.Payload); err != nil {
