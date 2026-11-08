@@ -81,6 +81,7 @@ export class OutcomeTotalsStore {
           exclude_project: window.excludeProject,
           include_one_shot: window.includeOneShot,
           include_automated: window.includeAutomated,
+          outcomes_only: true,
           include_git_outcomes: true,
           include_github_outcomes: withPullRequests,
         },
