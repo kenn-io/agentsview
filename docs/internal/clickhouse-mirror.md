@@ -327,14 +327,15 @@ snapshot. A retry of a failed batch reuses the payload it already loaded, so one
 push version never mixes two archive states.
 
 **Refreshed table.** The refreshable materialized view `prepare_usage` turns the
-snapshots into `prepared_usage` every 15 minutes, and every push starts a
-refresh. Rows are sorted by their stored UTC time, so a day read touches only
-that day's granules. Each row stores its price model, price key, and a copy of
-its price record, stamped with the pricing digest it was priced under. The table
-comment names the query that built it; a table built by another query is dropped
-and rebuilt on the next schema step, and a rebuild that stopped halfway finishes
-on the next start. The schema step adds a missing projection only with the
-refresh stopped, and always starts it again.
+snapshots into `prepared_usage` every 15 minutes, and a push starts a refresh
+once one is due; see "When a push rebuilds" below. Rows are sorted by their
+stored UTC time, so a day read touches only that day's granules. Each row stores
+its price model, price key, and a copy of its price record, stamped with the
+pricing digest it was priced under. The table comment names the query that built
+it; a table built by another query is dropped and rebuilt on the next schema
+step, and a rebuild that stopped halfway finishes on the next start. The schema
+step adds a missing projection only with the refresh stopped, and always starts
+it again.
 
 **Refresh without a table exchange.** Every refresh of the view ends with
 `EXCHANGE TABLES`, which ClickHouse runs as a `renameat2` call with the
@@ -365,17 +366,17 @@ only while a lock exists and the newest one is not retired. A database that can
 swap tables has no lock. A push there that finds the view missing, as while a
 schema step recreates it, never rebuilds.
 
-Each push in rebuild mode rebuilds the table itself before it returns. It runs
-the view's query into a new `prepared_usage_build_<n>` table and moves that
-table's parts into `prepared_usage` with `REPLACE PARTITION`, which replaces all
-the parts at once. Readers see the previous rows or the new ones, never a mix,
-and read them as they read rows the view prepared. A push skips its rebuild when
-the stored stamp equals the current one, both before and after it takes the
-lock. After publishing, the holder rebuilds once more if the snapshots changed
-meanwhile. If they changed again, it logs that and leaves the rest to the next
-push. Without the view, nothing refreshes on a schedule, and a failed rebuild
-waits for the next push. Because `prepared_usage` is then not a refreshable
-view's target, native backups include its rows without
+Each push in rebuild mode rebuilds the table itself before it returns, once a
+rebuild is due. It runs the view's query into a new `prepared_usage_build_<n>`
+table and moves that table's parts into `prepared_usage` with `REPLACE
+PARTITION`, which replaces all the parts at once. Readers see the previous rows
+or the new ones, never a mix, and read them as they read rows the view prepared.
+A push checks that a rebuild is due both before and after it takes the lock.
+After publishing, the holder rebuilds once more if the snapshots that changed
+meanwhile make one due. If they make one due again, it logs that and leaves the
+rest to the next push. Without the view, nothing refreshes on a schedule, and a
+failed rebuild waits for the next push. Because `prepared_usage` is then not a
+refreshable view's target, native backups include its rows without
 `backup_data_from_refreshable_materialized_view_targets`.
 
 Rebuilds take turns, as the view's refreshes do. A read checks freshness and
@@ -441,6 +442,26 @@ empties the delta. Before the first refresh, or while a session lacks a current
 snapshot, reads use raw rows. When the stored price copies no longer match the
 price records, for example after the records were cleared, reads keep the
 prepared rows and price them through the per-request join.
+
+**When a push rebuilds.** Because reads stay exact while the table is behind, a
+rebuild only changes what reads cost, and it rewrites the whole table. On a
+mirror whose data directory is on NFS, rebuilding on every push wrote the whole
+table hundreds of times a day. A push therefore rebuilds, or starts the view's
+refresh, only when one of these holds:
+
+- The table is empty.
+- The pricing digest changed, or the price record count fell below the stored
+  one, so the stored price copies no longer serve reads.
+- The rows reads prepare themselves reach one `chPreparedUsageBehindShare`
+  (one-fiftieth) of the stored rows.
+
+The push counts those rows with the delta query's own normalization, over the
+snapshots that no stored row was derived from, so a snapshot that prepares no
+rows counts nothing. A rebuild then rewrites at most fifty times the rows that
+changed, and reads prepare at most a fiftieth of what they read. On a
+300,000-row test table, a 5,000-row delta added about 0.13 seconds to the first
+read after a push. Deleted sessions' rows stay until the next
+rebuild, and reads skip them. The view's 15-minute schedule is unchanged.
 
 ## Kept reads
 
