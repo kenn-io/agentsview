@@ -277,6 +277,11 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 	}
 	incumbent := deps.writableRuntime(cfg.DataDir, cfg.AuthToken)
 	if incumbent != nil && (incumbent.RuntimeFallback || !shouldReplaceDaemonRuntime(incumbent, version)) {
+		if !incumbent.RuntimeFallback {
+			if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
+				return fmt.Errorf("daemon start: %w", err)
+			}
+		}
 		if !incumbent.Persistent {
 			if err := deps.persistRuntime(ctx, cfg, incumbent); err != nil {
 				return err
@@ -929,7 +934,7 @@ func persistDaemonRuntime(ctx context.Context, cfg config.Config, rt *DaemonRunt
 	}
 	resp, err := client.PostAPIV1DaemonPersistWithResponse(ctx)
 	if resp != nil && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("daemon start: daemon version %s could not confirm persistence with CLI version %s (HTTP %d); run agentsview daemon restart to reload saved configuration", rt.Record.Version, version, resp.StatusCode)
+		return fmt.Errorf("daemon start: persistence request failed (HTTP %d %s; daemon %s, CLI %s): %s; run agentsview daemon restart to reload saved configuration", resp.StatusCode, http.StatusText(resp.StatusCode), rt.Record.Version, version, strings.TrimSpace(string(resp.Body)))
 	}
 	if err != nil {
 		return fmt.Errorf("daemon start: confirming persistence: %w", err)

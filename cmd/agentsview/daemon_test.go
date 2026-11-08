@@ -1372,3 +1372,68 @@ func TestDaemonStartReportsMissingPersistenceOperation(t *testing.T) {
 	require.ErrorContains(t, err, "HTTP 404")
 	require.ErrorContains(t, err, "agentsview daemon restart")
 }
+
+func TestDaemonStartRejectsMultipleWritersBeforeReuse(t *testing.T) {
+	requirePOSIXSignals(t, "requires a long-lived child process")
+	setTestVersion(t, "1.0.0")
+	for _, persistent := range []bool{false, true} {
+		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			host, port := testPingServer(t)
+			first := daemonRuntimeRecord(host, port, withRuntimeVersion("1.0.0"))
+			first.Metadata[runtimePersistent] = strconv.FormatBool(persistent)
+			_, err := writeRuntimeRecordForTest(dir, first)
+			require.NoError(t, err)
+			otherPID := startSleepProcess(t)
+			_, err = writeRuntimeRecordForTest(dir, daemonRuntimeRecord("127.0.0.1", 9101, withRuntimePID(otherPID)))
+			require.NoError(t, err)
+			require.NotNil(t, FindWritableDaemonRuntime(dir))
+			deps, out := daemonCommandTestDeps(t)
+			deps.resolveDataDir = func() (string, error) { return dir, nil }
+			deps.mkdirAll = os.MkdirAll
+			deps.loadConfig = func() (config.Config, error) { return config.Config{DataDir: dir}, nil }
+			deps.writableRuntime = func(dir, token string) *DaemonRuntime { return FindWritableDaemonRuntime(dir, token) }
+			promoted := false
+			deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error { promoted = true; return nil }
+			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+				require.FailNow(t, "multiple writers must be rejected before launch")
+				return backgroundLaunchResult{}, nil
+			}
+			err = runDaemonStart(t.Context(), out, *deps)
+			require.ErrorContains(t, err, "multiple writable agentsview daemons")
+			require.ErrorContains(t, err, strconv.Itoa(os.Getpid()))
+			require.ErrorContains(t, err, strconv.Itoa(otherPID))
+			assert.False(t, promoted)
+		})
+	}
+}
+
+func TestPersistDaemonRuntimeReportsRequestFailure(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		cause  string
+		want   string
+	}{
+		{http.StatusInternalServerError, "publishing lifetime: disk full", "HTTP 500 Internal Server Error"},
+		{http.StatusServiceUnavailable, "daemon is draining", "HTTP 503 Service Unavailable"},
+		{http.StatusUnauthorized, "authentication required", "HTTP 401 Unauthorized"},
+	} {
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/api/v1/daemon/persist", r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprintf(w, `{"error":%q}`, tc.cause)
+			}))
+			defer ts.Close()
+			endpoint, err := url.Parse(ts.URL)
+			require.NoError(t, err)
+			port, err := strconv.Atoi(endpoint.Port())
+			require.NoError(t, err)
+			err = persistDaemonRuntime(t.Context(), config.Config{}, &DaemonRuntime{Record: daemon.RuntimeRecord{Version: version}, Host: endpoint.Hostname(), Port: port})
+			require.ErrorContains(t, err, tc.want)
+			require.ErrorContains(t, err, tc.cause)
+		})
+	}
+}
