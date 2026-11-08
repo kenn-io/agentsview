@@ -2716,7 +2716,8 @@ content is refused. Sparse ordinals and references to filtered usage carriers
 alone are valid and do not establish missing turns. Embedded mixed-purpose
 selected text is retained for review; no silent redaction occurs.
 
-The output is a new exclusive 0600 file, at most 64 MiB, with partial output
+The output is a new exclusive private file (0600 on Unix, protected user DACL
+on Windows), at most 64 MiB, with partial output
 removed on write failure or cancellation. Existing files are never overwritten.
 The command reports the exact-byte SHA-256 and byte count. Keep those bytes
 for explicit relay consent and retries. AgentsView retains the first accepted

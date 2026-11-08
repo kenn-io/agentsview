@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/safefileio"
 	"hegel.dev/go/hegel"
 )
 
@@ -62,6 +63,7 @@ func TestExportPushPrefixConsentAndRefusals(t *testing.T) {
 		})
 	}
 }
+
 func TestExportPushExactBytesExclusivePrivateOutput(t *testing.T) {
 	// Markers represent already codec-validated bytes: selected mixed-purpose
 	// tool content remains visible; no content is redacted after consent.
@@ -75,15 +77,17 @@ func TestExportPushExactBytesExclusivePrivateOutput(t *testing.T) {
 	require.Equal(t, selected, got)
 	require.Contains(t, string(got), "mixed-purpose-tool-result")
 	require.NotContains(t, string(got), "separately-stored-parent-text")
-	info, err := os.Stat(path)
+	file, err := safefileio.OpenCurrentUserFile(path)
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	require.NoError(t, safefileio.ValidatePrivateCurrentUserFile(file))
+	require.NoError(t, file.Close())
 	require.Contains(t, out.String(), "unknown tail")
 	require.Error(t, runExportPush(t.Context(), source, "pi:selected", "pi", true, path, &out))
 	got, err = os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, selected, got)
 }
+
 func TestExportPushDefaultUnavailableDoesNotCreateOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 	cmd := newExportPushCommand()

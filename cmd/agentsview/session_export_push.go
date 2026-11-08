@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/ctxio"
+	"go.kenn.io/kit/safefileio"
 )
 
 const exportPushMaxBytes = 64 << 20
@@ -45,9 +46,11 @@ func (unavailableExportPushSource) Capture(ctx context.Context, _, _ string) (ex
 	}
 	return exportPushSnapshot{}, errors.New("codec integration unavailable")
 }
+
 func newExportPushCommand() *cobra.Command {
 	return newExportPushCommandWithSource(unavailableExportPushSource{})
 }
+
 func newExportPushCommandWithSource(source exportPushSource) *cobra.Command {
 	var agent, output string
 	var prefix bool
@@ -80,6 +83,7 @@ func newExportPushCommandWithSource(source exportPushSource) *cobra.Command {
 	registerFormatFlags(cmd.Flags())
 	return cmd
 }
+
 func runExportPush(ctx context.Context, source exportPushSource, id, agent string, prefix bool, output string, status io.Writer) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -120,11 +124,12 @@ func runExportPush(ctx context.Context, source exportPushSource, id, agent strin
 	_, err = fmt.Fprintf(status, "Exported session=%s snapshot_sha256=%s snapshot_bytes=%d\n", id, hex.EncodeToString(digest[:]), len(snapshot.Payload))
 	return err
 }
+
 func publishExportPush(ctx context.Context, path string, payload []byte) (err error) {
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600) //nolint:gosec // explicit exclusive output
+	file, err := safefileio.CreatePrivateFile(path)
 	if err != nil {
 		return errors.New("export-push: output must be a new file")
 	}
@@ -136,9 +141,6 @@ func publishExportPush(ctx context.Context, path string, payload []byte) (err er
 			_ = os.Remove(path)
 		}
 	}()
-	if err = file.Chmod(0600); err != nil {
-		return err
-	}
 	if _, err = io.Copy(file, ctxio.Reader{Context: ctx, Reader: bytes.NewReader(payload)}); err != nil {
 		return errors.New("export-push: output interrupted; partial file removed")
 	}
