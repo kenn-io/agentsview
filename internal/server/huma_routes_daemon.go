@@ -22,8 +22,6 @@ func (s *Server) humaPersistDaemon(_ context.Context, _ *emptyInput) (*jsonOutpu
 	if err := s.persistDaemon(); err != nil {
 		return nil, apiError(http.StatusInternalServerError, err.Error())
 	}
-	if !s.idle.DisableShutdown() {
-		return nil, apiError(http.StatusServiceUnavailable, "server is shutting down")
-	}
+	s.idle.DisableShutdown()
 	return &jsonOutput[map[string]bool]{Body: map[string]bool{"persistent": true}}, nil
 }

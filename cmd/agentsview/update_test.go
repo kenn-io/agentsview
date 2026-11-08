@@ -444,7 +444,7 @@ func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
 				child := exec.CommandContext(t.Context(), "sleep", "2")
 				require.NoError(t, child.Start())
 				t.Cleanup(func() { _ = child.Process.Kill() })
-				return child, "", nil
+				return child, filepath.Join(dir, "serve.log"), nil
 			}
 			require.NoError(t, restartDaemonAfterUpdate(t.Context(), config.Config{DataDir: dir}, updateDaemonStopResult{Persistent: persistent, Host: host, Port: port, ExplicitPort: &port, NoSync: true, RequireAuthKnown: true}))
 			assert.True(t, launched)

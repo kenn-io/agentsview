@@ -545,7 +545,7 @@ func writeDaemonStartResult(w io.Writer, result backgroundLaunchResult, restarte
 }
 
 func backgroundResultError(err error, result backgroundLaunchResult) error {
-	if result.LogPath != "" && !result.errorIncludesLogPath {
+	if err != nil && result.LogPath != "" && !result.errorIncludesLogPath {
 		return fmt.Errorf("%w\nLogs: %s", err, result.LogPath)
 	}
 	return err

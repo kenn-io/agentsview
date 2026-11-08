@@ -58,7 +58,6 @@ func TestDaemonPersistencePublicationFailureKeepsIdleExit(t *testing.T) {
 		w = httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, req)
 		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-		assert.False(t, tracker.DisableShutdown())
 	})
 }
 
