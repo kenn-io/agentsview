@@ -37,6 +37,10 @@ releases and upgrade notes.
 - **Find the session you need.** Search transcripts, narrow by label, project,
   or linked pull request, and inspect tool effectiveness with transcript
   evidence.
+- **Learn from what went wrong.** The opt-in
+  [Friction Log](https://agentsview.io/docs/configuration/#friction-log)
+  reviews changed sessions in the background after each sync, surfaces
+  recurring friction patterns, and files them as Kata issues.
 - **Track token usage and cost.** Daily cost reports, per-model breakdowns,
   and per-session statistics across all your agents, computed with
   prompt-caching-aware pricing.
