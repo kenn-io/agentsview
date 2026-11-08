@@ -129,6 +129,16 @@ func TestExportPushCancellationPublishesNoFile(t *testing.T) {
 	require.True(t, os.IsNotExist(err))
 }
 
+func TestExportPushCreateErrorsDistinguishExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "existing.json")
+	require.NoError(t, os.WriteFile(existing, []byte("original"), 0o600))
+	require.ErrorContains(t, publishExportPush(t.Context(), existing, []byte("snapshot")), "output must be a new file")
+	err := publishExportPush(t.Context(), filepath.Join(dir, "missing", "snapshot.json"), []byte("snapshot"))
+	require.ErrorContains(t, err, "cannot create the output file")
+	require.NotContains(t, err.Error(), dir)
+}
+
 type exportPushFailingOutput struct {
 	stage string
 	cause error

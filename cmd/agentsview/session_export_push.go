@@ -131,7 +131,10 @@ func publishExportPush(ctx context.Context, path string, payload []byte) (err er
 	}
 	file, err := safefileio.CreatePrivateFile(path)
 	if err != nil {
-		return errors.New("export-push: output must be a new file")
+		if errors.Is(err, os.ErrExist) {
+			return errors.New("export-push: output must be a new file")
+		}
+		return errors.New("export-push: cannot create the output file")
 	}
 	err = writeExportPushContent(ctx, file, payload)
 	if err != nil {
