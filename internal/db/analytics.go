@@ -3541,21 +3541,6 @@ func ComputeSessionVelocity(msgs []TimingMessage) SessionVelocity {
 	return v
 }
 
-// processSessionVelocity updates every accumulator in accums with one
-// session's turn cycles, first response, and throughput contribution.
-// Shared by GetAnalyticsVelocity (which tracks overall/byAgent/
-// byComplexity) and GetSessionStats (which tracks a single overall).
-//
-// Caller must pass len(msgs) >= 2 in ordinal order. The function
-// itself bumps each accumulator's sessions counter.
-func processSessionVelocity(
-	accums []*velocityAccumulator,
-	msgs []TimingMessage,
-	toolCount int,
-) {
-	addSessionVelocity(accums, ComputeSessionVelocity(msgs), toolCount)
-}
-
 // addSessionVelocity adds one session's contribution to every accumulator.
 func addSessionVelocity(
 	accums []*velocityAccumulator, v SessionVelocity, toolCount int,
@@ -3764,7 +3749,7 @@ func (db *DB) GetAnalyticsVelocity(
 		}
 	}
 
-	return BuildVelocityResponse(sessionIDs, sessionMap, sessionMsgs, toolCountMap), nil
+	return BuildVelocityResponseFromSessions(sessionIDs, sessionMap, SessionVelocities(sessionMsgs), toolCountMap), nil
 }
 
 // VelocitySession supplies the metadata used for velocity breakdowns.
@@ -3773,13 +3758,14 @@ type VelocitySession struct {
 	MessageCount int
 }
 
-// BuildVelocityResponse aggregates timing and tool counts by agent and complexity.
-func BuildVelocityResponse(sessionIDs []string, sessionMap map[string]VelocitySession, sessionMsgs map[string][]TimingMessage, toolCountMap map[string]int) VelocityResponse {
-	velocities := make(map[string]SessionVelocity, len(sessionMsgs))
-	for sid, msgs := range sessionMsgs {
-		velocities[sid] = ComputeSessionVelocity(msgs)
+// SessionVelocities reduces each session's timing rows to its velocity
+// contribution.
+func SessionVelocities(msgs map[string][]TimingMessage) map[string]SessionVelocity {
+	out := make(map[string]SessionVelocity, len(msgs))
+	for sid, timings := range msgs {
+		out[sid] = ComputeSessionVelocity(timings)
 	}
-	return BuildVelocityResponseFromSessions(sessionIDs, sessionMap, velocities, toolCountMap)
+	return out
 }
 
 // BuildVelocityResponseFromSessions aggregates per-session velocity
