@@ -41,7 +41,7 @@ func (s *Store) loadAnalyticsSessions(
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, false, true)
+	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{PushFingerprint: true})
 }
 
 func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -166,10 +166,10 @@ func (s analyticsSQL) Autonomy(ctx context.Context, ids []string, _ db.Analytics
 	return readbase.ScanAnalyticsAutonomy(rows, "duckdb")
 }
 
-func (s analyticsSQL) VelocityMessages(ctx context.Context, ids []string, _ db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
+func (s analyticsSQL) VelocitySessions(ctx context.Context, ids []string, _ db.AnalyticsFilter, loc *time.Location) (map[string]db.SessionVelocity, error) {
 	out := make(map[string][]db.TimingMessage)
 	if len(ids) == 0 {
-		return out, nil
+		return nil, nil
 	}
 	ph, args := db.InPlaceholders(ids)
 	rows, err := s.QueryContext(ctx, `
@@ -183,7 +183,11 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, ids []string, _ db.A
 		return nil, fmt.Errorf("querying duckdb velocity messages: %w", err)
 	}
 	defer rows.Close()
-	return readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
+	msgs, err := readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
+	if err != nil {
+		return nil, err
+	}
+	return readbase.SessionVelocities(msgs), nil
 }
 
 func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db.AnalyticsFilter) (map[string]int, error) {

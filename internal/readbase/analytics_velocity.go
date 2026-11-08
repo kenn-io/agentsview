@@ -44,15 +44,15 @@ func (s *Analytics) GetAnalyticsVelocity(
 		}
 	}
 
-	var sessionMsgs map[string][]db.TimingMessage
+	var velocities map[string]db.SessionVelocity
 	if strings.TrimSpace(f.Model) != "" {
 		scope, err := s.ResolveMessageScope(ctx, sessionIDs, f, false)
 		if err != nil {
 			return db.VelocityResponse{}, err
 		}
-		sessionMsgs = scope.TimingBySession()
+		velocities = SessionVelocities(scope.TimingBySession())
 	} else {
-		sessionMsgs, err = s.backend.VelocityMessages(
+		velocities, err = s.backend.VelocitySessions(
 			ctx, sessionIDs, f, analyticsLocation(f.Timezone),
 		)
 	}
@@ -71,5 +71,15 @@ func (s *Analytics) GetAnalyticsVelocity(
 		return db.VelocityResponse{}, err
 	}
 
-	return db.BuildVelocityResponse(sessionIDs, sessionInfo, sessionMsgs, toolCounts), nil
+	return db.BuildVelocityResponseFromSessions(sessionIDs, sessionInfo, velocities, toolCounts), nil
+}
+
+// SessionVelocities reduces each session's timing rows to its velocity
+// contribution.
+func SessionVelocities(msgs map[string][]db.TimingMessage) map[string]db.SessionVelocity {
+	out := make(map[string]db.SessionVelocity, len(msgs))
+	for sid, timings := range msgs {
+		out[sid] = db.ComputeSessionVelocity(timings)
+	}
+	return out
 }

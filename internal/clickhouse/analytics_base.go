@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
@@ -103,10 +104,12 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 	bucketExpr := chAnalyticsBucketExpr("local_date", granularity)
 	queryArgs := append([]any{}, localDateArgs...)
 	queryArgs = append(queryArgs, args...)
-	if _, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect()); len(modelArgs) > 0 {
-		queryArgs = append(queryArgs, modelArgs...)
-		queryArgs = append(queryArgs, modelArgs...)
+	modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect())
+	if modelPred == "" {
+		return chActivityBucketsFromFactsSQL(where, localDate, bucketExpr), queryArgs
 	}
+	queryArgs = append(queryArgs, modelArgs...)
+	queryArgs = append(queryArgs, modelArgs...)
 	return `
 		WITH filtered_sessions AS (
 			SELECT s.id, s.message_count, ` + localDate + ` AS local_date
@@ -167,13 +170,121 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 		queryArgs
 }
 
+// chActivityBucketsFromFactsSQL is ActivityBucketsSQL without a model
+// filter. Sessions with current dashboard facts contribute their stored
+// counts; only the rest join messages and tool_calls, so a mirror whose
+// rows all carry facts reads neither table. Its arguments are the local
+// date arguments, then the session filter's.
+func chActivityBucketsFromFactsSQL(where, localDate, bucketExpr string) string {
+	return `
+		WITH filtered_sessions AS (
+			SELECT s.id, ` + localDate + ` AS local_date,
+				s.` + chFactsKnown + ` AS facts_known,
+				ifNull(s.stored_message_count, 0) AS fact_messages,
+				s.fact_user_messages, s.fact_assistant_messages,
+				s.fact_thinking_messages, s.fact_tool_calls
+			FROM sessions s
+			WHERE ` + where + `
+		),
+		session_rows AS (
+			SELECT ` + bucketExpr + ` AS bucket,
+				toInt64(COUNT(*)) AS sessions,
+				toInt64(sumIf(fact_messages, facts_known)) AS messages,
+				toInt64(sumIf(fact_user_messages, facts_known)) AS user_messages,
+				toInt64(sumIf(fact_assistant_messages, facts_known)) AS assistant_messages,
+				toInt64(sumIf(fact_thinking_messages, facts_known)) AS thinking_messages,
+				toInt64(sumIf(fact_tool_calls, facts_known)) AS tool_calls
+			FROM filtered_sessions
+			GROUP BY bucket
+		),
+		message_rows AS (
+			SELECT ` + bucketExpr + ` AS bucket,
+				toInt64(COUNT(*)) AS messages,
+				toInt64(countIf(m.role = 'user' AND m.is_system = false
+					AND COALESCE(m.source_subtype, '') != 'tool_result')) AS user_messages,
+				toInt64(countIf(m.role = 'assistant')) AS assistant_messages,
+				toInt64(countIf(m.has_thinking = true)) AS thinking_messages
+			FROM filtered_sessions fs
+			JOIN (
+				SELECT session_id, role, is_system, source_subtype, has_thinking
+				FROM messages
+				WHERE session_id IN (SELECT id FROM filtered_sessions WHERE NOT facts_known)
+			) m ON m.session_id = fs.id
+			GROUP BY bucket
+		),
+		tool_rows AS (
+			SELECT ` + bucketExpr + ` AS bucket, toInt64(COUNT(*)) AS tool_calls
+			FROM filtered_sessions fs
+			JOIN (
+				SELECT session_id
+				FROM tool_calls
+				WHERE session_id IN (SELECT id FROM filtered_sessions WHERE NOT facts_known)
+			) tc ON tc.session_id = fs.id
+			GROUP BY bucket
+		)
+		SELECT bucket,
+			toInt64(sum(sessions)) AS sessions,
+			toInt64(sum(messages)) AS messages,
+			toInt64(sum(user_messages)) AS user_messages,
+			toInt64(sum(assistant_messages)) AS assistant_messages,
+			toInt64(sum(thinking_messages)) AS thinking_messages,
+			toInt64(sum(tool_calls)) AS tool_calls
+		FROM (
+			SELECT bucket, sessions, messages, user_messages,
+				assistant_messages, thinking_messages, tool_calls
+			FROM session_rows
+			UNION ALL
+			SELECT bucket, toInt64(0) AS sessions, messages, user_messages,
+				assistant_messages, thinking_messages, toInt64(0) AS tool_calls
+			FROM message_rows
+			UNION ALL
+			SELECT bucket, toInt64(0) AS sessions, toInt64(0) AS messages,
+				toInt64(0) AS user_messages, toInt64(0) AS assistant_messages,
+				toInt64(0) AS thinking_messages, tool_calls
+			FROM tool_rows
+		) combined
+		GROUP BY bucket
+		ORDER BY bucket`
+}
+
 func (s analyticsSQL) ActivityAgentsSQL(f db.AnalyticsFilter, granularity string) (string, []any) {
 	where, args := chBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
 	localDate, localDateArgs := chAnalyticsLocalDateExpr(
 		"COALESCE(s.started_at, s.created_at)", f)
 	bucketExpr := chAnalyticsBucketExpr("local_date", granularity)
-	_, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect())
+	modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect())
+	if modelPred == "" {
+		// Sessions with current facts count their stored messages; the
+		// rest join messages. HAVING drops the zero rows stored counts
+		// add, which the join never produces.
+		return `
+		WITH filtered_sessions AS (
+			SELECT s.id, s.agent, ` + localDate + ` AS local_date,
+				s.` + chFactsKnown + ` AS facts_known,
+				ifNull(s.stored_message_count, 0) AS fact_messages
+			FROM sessions s
+			WHERE ` + where + `
+		)
+		SELECT bucket, agent, toInt64(sum(messages)) AS messages
+		FROM (
+			SELECT ` + bucketExpr + ` AS bucket, agent, fact_messages AS messages
+			FROM filtered_sessions
+			WHERE facts_known
+			UNION ALL
+			SELECT ` + bucketExpr + ` AS bucket, fs.agent AS agent, toInt64(COUNT(*)) AS messages
+			FROM filtered_sessions fs
+			JOIN (
+				SELECT session_id
+				FROM messages
+				WHERE session_id IN (SELECT id FROM filtered_sessions WHERE NOT facts_known)
+			) m ON m.session_id = fs.id
+			GROUP BY bucket, agent
+		) combined
+		GROUP BY bucket, agent
+		HAVING messages > 0
+		ORDER BY bucket, agent`, slices.Concat(localDateArgs, args)
+	}
 	return readbase.AnalyticsActivityAgentsSQL(where, args, localDate, localDateArgs, bucketExpr, readbase.AnalyticsMessageFilterClause("m.model", f.Model, db.ClickHouseQueryDialect()), modelArgs, db.ClickHouseQueryDialect())
 }
 
@@ -219,17 +330,9 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 	if err != nil {
 		return err
 	}
-	modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect())
-	args := slices.Clone(modelArgs)
-	for _, predicate := range db.ToolSelectionPredicates("tc", "s.quality_signal_version", f, func(value string) string { args = append(args, value); return "?" }) {
-		if modelPred != "" {
-			modelPred += " AND "
-		}
-		modelPred += predicate
-	}
-	from, to := readbase.AnalyticsWindowBounds(f)
-	windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
-	args = append(args, windowArgs...)
+	pred, args := chToolVisitPredicates(f, true)
+	// Evidence links to a call's message, so it keeps one row per minute.
+	group, timestamp, groupArgs := chToolVisitGroup(f, f.ToolMetric == "")
 	// An unmatched join reads ordinal 0, so only calls whose message exists supply the ordinal.
 	// final=1 makes messages unique on (session_id, ordinal), so LEFT ANY
 	// returns the same rows as LEFT ALL without a list of matches per key.
@@ -238,23 +341,16 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 	// default hash join over a year of sessions.
 	query := `SELECT tc.session_id, tc.category,
 			trim(COALESCE(tc.tool_name, '')), toInt64(COUNT(*)),
-			MAX(m.timestamp), minOrNullIf(m.ordinal, m.session_id != '')` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
+			MAX(` + timestamp + `), minOrNullIf(tc.message_ordinal, tc.message_facts OR m.session_id != '')` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
 			FROM tool_calls tc
-			JOIN (SELECT id, quality_signal_version FROM sessions WHERE id IN ` + ph + `) s ON s.id = tc.session_id
-			LEFT ANY JOIN (` + chAnalyticsToolCallMessagesSQL + ph + `) m
-				ON m.session_id = tc.session_id
-				AND m.ordinal = tc.message_ordinal
-			WHERE tc.session_id IN ` + ph
-	if modelPred != "" {
-		query += `
-			AND ` + modelPred
-	}
-	query += readbase.AnalyticsAndClause(windowPred)
-	query += `
+			JOIN (SELECT id, quality_signal_version, COALESCE(started_at, created_at) AS session_ts
+				FROM sessions WHERE id IN ` + ph + `) s ON s.id = tc.session_id
+			` + chToolMessageJoin(ph) + `
+			WHERE tc.session_id IN ` + ph + readbase.AnalyticsAndClause(pred) + `
 			GROUP BY tc.session_id, tc.category,
-				trim(COALESCE(tc.tool_name, '')), toStartOfMinute(m.timestamp)
+				trim(COALESCE(tc.tool_name, '')), ` + group + `
 			SETTINGS join_algorithm = 'partial_merge'`
-	rows, qErr := s.store.queryContext(ctx, query, args...)
+	rows, qErr := s.store.queryContext(ctx, query, slices.Concat(args, groupArgs)...)
 	if qErr != nil {
 		return qErr
 	}
@@ -262,27 +358,83 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 	return readbase.ScanAnalyticsTools(rows, "clickhouse", formatDBTime, emit)
 }
 
+// chToolMessageTimestamp and chToolMessageModel read a tool call's message
+// fields from the call when push copied them there, else from the joined
+// message.
+const (
+	chToolMessageTimestamp = "if(tc.message_facts, tc.message_timestamp, m.timestamp)"
+	chToolMessageModel     = "if(tc.message_facts, tc.message_model, m.model)"
+)
+
+// chToolMessageJoin left-joins the messages of tool calls that lack copied
+// message fields. It reads only the sessions that still have such calls,
+// so it reads no messages once every call carries its fields. Under FINAL
+// a call matches at most one message, so ANY keeps one row per key.
+func chToolMessageJoin(ids string) string {
+	return `LEFT ANY JOIN (` + chAnalyticsToolCallMessagesSQL + `(
+				SELECT DISTINCT session_id FROM tool_calls
+				WHERE session_id IN ` + ids + ` AND NOT message_facts)) m
+				ON m.session_id = tc.session_id
+				AND m.ordinal = tc.message_ordinal`
+}
+
+// chToolVisitGroup returns the time part of a tool or skill visit's GROUP
+// BY, the timestamp each row reports, and the GROUP BY's arguments. Rows
+// group by minute when perMinute is false or an hour or weekday filter
+// needs the time. Otherwise they group by the local date of the call, or
+// of its session when the call has no time, and report the latest of
+// those times: the Go side resolves each row to that same date and
+// range-filters it, and every total it builds sums over rows, so the
+// response matches the per-minute rows while ClickHouse sends far fewer.
+func chToolVisitGroup(f db.AnalyticsFilter, byDate bool) (group, timestamp string, args []any) {
+	if !byDate || f.HasTimeFilter() {
+		return "toStartOfMinute(" + chToolMessageTimestamp + ")", chToolMessageTimestamp, nil
+	}
+	used := "COALESCE(" + chToolMessageTimestamp + ", s.session_ts)"
+	date, dateArgs := chAnalyticsLocalDateExpr(used, f)
+	return date, used, dateArgs
+}
+
+// chToolVisitPredicates returns the model, tool selection, and window
+// predicates of a tool or skill visit read. toolSelection adds the tool
+// metric predicates.
+func chToolVisitPredicates(f db.AnalyticsFilter, toolSelection bool) (string, []any) {
+	pred, args := readbase.AnalyticsCSVPredicate(chToolMessageModel, f.Model, db.ClickHouseQueryDialect())
+	args = slices.Clone(args)
+	preds := []string{}
+	if pred != "" {
+		preds = append(preds, pred)
+	}
+	if toolSelection {
+		preds = append(preds, db.ToolSelectionPredicates("tc", "s.quality_signal_version", f, func(value string) string { args = append(args, value); return "?" })...)
+	}
+	from, to := readbase.AnalyticsWindowBounds(f)
+	if windowPred, windowArgs := chAnalyticsMessageWindowPred(chToolMessageTimestamp, from, to); windowPred != "" {
+		preds = append(preds, windowPred)
+		args = append(args, windowArgs...)
+	}
+	return strings.Join(preds, " AND "), args
+}
+
 func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error {
 	ctx, ph, err := analyticsSessionIDsContext(ctx, ids)
 	if err != nil {
 		return err
 	}
-	modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect())
-	from, to := readbase.AnalyticsWindowBounds(f)
-	windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
-	args := slices.Concat(modelArgs, windowArgs)
+	pred, args := chToolVisitPredicates(f, false)
+	group, timestamp, groupArgs := chToolVisitGroup(f, true)
 	rows, qErr := s.store.queryContext(ctx,
 		`SELECT tc.session_id, trim(COALESCE(tc.skill_name, '')),
-			toInt64(COUNT(*)), MAX(m.timestamp)
+			toInt64(COUNT(*)), MAX(`+timestamp+`)
 			FROM tool_calls tc
-			LEFT JOIN (`+chAnalyticsToolCallMessagesSQL+ph+`) m
-				ON m.session_id = tc.session_id
-				AND m.ordinal = tc.message_ordinal
+			JOIN (SELECT id, COALESCE(started_at, created_at) AS session_ts
+				FROM sessions WHERE id IN `+ph+`) s ON s.id = tc.session_id
+			`+chToolMessageJoin(ph)+`
 			WHERE tc.session_id IN `+ph+`
 				AND trim(COALESCE(tc.skill_name, '')) != ''
-				`+readbase.AnalyticsAndClause(modelPred)+readbase.AnalyticsAndClause(windowPred)+`
+				`+readbase.AnalyticsAndClause(pred)+`
 			GROUP BY tc.session_id, trim(COALESCE(tc.skill_name, '')),
-				toStartOfMinute(m.timestamp)`, args...)
+				`+group, slices.Concat(args, groupArgs)...)
 	if qErr != nil {
 		return qErr
 	}
@@ -373,7 +525,7 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered boo
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
 
 func (s analyticsSQL) PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []readbase.AnalyticsSession) error {
-	return s.store.chPopulateFrustrationMarkers(ctx, rows, chSessionPushVersions(sessions))
+	return s.store.chPopulateFrustrationMarkers(ctx, rows, sessions)
 }
 
 func (s *Store) GetAnalyticsSummary(

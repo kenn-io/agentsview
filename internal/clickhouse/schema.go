@@ -17,7 +17,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -63,6 +63,8 @@ const (
 	tNullTime      = "Nullable(DateTime64(6, 'UTC'))"
 	tVersion       = "UInt64"
 	tFloatArray    = "Array(Float32)"
+	tFloat64Array  = "Array(Float64)"
+	tLowString     = "LowCardinality(String)"
 	tStringArray   = "Array(String)"
 	pushVersionCol = "push_version"
 )
@@ -248,6 +250,22 @@ var mirrorTables = []tableSpec{
 			col("agentsview_push_fingerprint", tString),
 			col("source_archive_id", tString),
 			col("stored_message_count", tNullInt),
+			// Dashboard facts: per-session counts push derives from the
+			// messages it writes, valid only on rows whose
+			// dashboard_facts_version is dashboardFactsVersion. See
+			// dashboard_facts.go.
+			col("dashboard_facts_version", tInt),
+			col("fact_user_messages", tInt),
+			col("fact_assistant_messages", tInt),
+			col("fact_thinking_messages", tInt),
+			col("fact_tool_use_messages", tInt),
+			col("fact_tool_calls", tInt),
+			col("fact_frustration_markers", tInt),
+			col("fact_velocity_messages", tInt),
+			col("fact_velocity_turn_cycles", tFloat64Array),
+			col("fact_velocity_first_response", tNullFloat),
+			col("fact_velocity_active_seconds", tFloat),
+			col("fact_velocity_assistant_chars", tInt),
 		},
 		orderBy: []string{"id"},
 	},
@@ -479,6 +497,13 @@ var mirrorTables = []tableSpec{
 			col("result_content", tString),
 			col("subagent_session_id", tString),
 			col("file_path", tString),
+			// The parent message's timestamp and model, copied at push so
+			// tool analytics need not join messages. message_facts marks
+			// rows that carry them; older rows read the message instead.
+			col("message_timestamp", tNullTime),
+			// A mirror holds a few dozen model names across millions of calls.
+			col("message_model", tLowString),
+			col("message_facts", tBool),
 		},
 		orderBy: []string{"session_id", "message_ordinal", "call_index"},
 	},

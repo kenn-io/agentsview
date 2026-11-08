@@ -31,6 +31,15 @@ without dialogue, and needs a role that can update the ClickHouse schema. Until
 the schema has `messages.dialogue_text`, reads fail with a schema compatibility
 error naming that column.
 
+The Analytics panels for Activity, Session Shape, Velocity, Tools, Skills, and
+Signals read per-session counts that push stores with each session, so they no
+longer scan every message on each load. The first push from each archive after
+upgrading is a full push that re-sends every session in the mirror scope to
+store those counts, reported as `publishing stored session counts`. Until it
+finishes, panels count the remaining sessions from their messages, with the
+same results. Serve reports a missing-column error until a push from the new
+binary has updated the schema.
+
 Commit lookups return the copied links and prompts.
 The first push after upgrading is a full push to copy existing commit links.
 A deleted session remains visible as a missing record. Project filters use the

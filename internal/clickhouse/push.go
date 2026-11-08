@@ -24,9 +24,12 @@ const sessionPushBatchSize = 100
 const idBatchSize = 500
 
 // dependentTables are the per-session tables replaced on every push, in
-// insert order. Deletes run in the same order.
+// delete order. Tool calls and their result events go before messages: a
+// push that fails between two deletes then leaves messages without calls,
+// never calls whose copied message ordinal and timestamp name a message
+// that is gone.
 var dependentTables = []string{
-	"messages", "tool_calls", "tool_result_events", "usage_events",
+	"tool_result_events", "tool_calls", "messages", "usage_events",
 	"session_plan_usage", "secret_findings", "commit_links", "pinned_messages",
 }
 
@@ -117,14 +120,17 @@ func (s *Sync) pushWithOptions(
 	if !full && meta[s.archiveKey(messageDialogueReadyKeyBase)] == "" {
 		full, reason = true, "preparing message dialogue"
 	}
-	// Rows from before stored_message_count, or from an older writer, read as unknown until a full push republishes them.
+	// Rows from before stored_message_count or the current dashboard facts,
+	// or from an older writer, read as unknown until a full push
+	// republishes them.
 	repairing := meta[s.archiveKey(storedCountRepairKeyBase)] != ""
 	if !repairing {
 		var unknown uint64
 		if err := conn.QueryRowContext(ctx,
-			"SELECT count() FROM sessions WHERE source_archive_id = ? AND stored_message_count IS NULL", s.archiveID,
+			"SELECT count() FROM sessions WHERE source_archive_id = ? AND (stored_message_count IS NULL OR dashboard_facts_version != ?)",
+			s.archiveID, dashboardFactsVersion,
 		).Scan(&unknown); err != nil {
-			return result, fmt.Errorf("reading clickhouse sessions without stored message counts: %w", err)
+			return result, fmt.Errorf("reading clickhouse sessions without stored counts: %w", err)
 		}
 		if unknown > 0 {
 			// Republishing fills the NULLs before every session lands, so keep repairing until a push finishes cleanly.
@@ -135,7 +141,7 @@ func (s *Sync) pushWithOptions(
 		}
 	}
 	if !full && repairing {
-		full, reason = true, "publishing stored message counts"
+		full, reason = true, "publishing stored session counts"
 	}
 	localDeletion, err := s.local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
@@ -1021,7 +1027,7 @@ func insertSQL(spec tableSpec) string {
 
 func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) []any {
 	sess := p.session
-	return []any{
+	row := []any{
 		sess.ID, sess.Project, sess.ProjectAssigned,
 		db.MirroredSessionMachine(sess, s.machine), sess.Agent,
 		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
@@ -1052,8 +1058,9 @@ func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) 
 		int64(sess.SecretLeakCount), sess.SecretsRulesVersion,
 		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
 		lastMessageAt(p.messages), fingerprint, s.archiveID,
-		int64(len(p.messages)), version,
+		int64(len(p.messages)),
 	}
+	return append(append(row, computeDashboardFacts(p.messages).row()...), version)
 }
 
 func lastMessageAt(msgs []db.Message) *time.Time {
@@ -1100,6 +1107,7 @@ func toolCallRow(m db.Message, tc db.ToolCall, callIndex int, version uint64) []
 		tc.ToolUseID, tc.InputJSON, tc.SkillName, int64(length),
 		stored,
 		tc.SubagentSessionID, tc.FilePath,
+		timeValue(m.Timestamp), m.Model, true,
 		version,
 	}
 }
