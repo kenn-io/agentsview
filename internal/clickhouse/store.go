@@ -37,7 +37,10 @@ var errNotImplemented = errors.New("not implemented for the ClickHouse backend")
 // without FINAL in the query text.
 type Store struct {
 	readbase.MirrorStubs
-	conn          *sql.DB
+	conn *sql.DB
+	// pages serves the session list, sidebar filters, and one-session reads
+	// apart from conn's dashboard and Usage scans; see pageMaxOpenConns.
+	pages         *sql.DB
 	cursorMu      sync.RWMutex
 	cursorSecret  []byte
 	customPricing map[string]config.CustomModelRate
@@ -127,13 +130,20 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 		}
 		return nil, fmt.Errorf("checking clickhouse Activity metadata access: %w", err)
 	}
-	return NewStoreFromDB(conn), nil
+	pages, err := openPages(ctx, t)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	s := NewStoreFromDB(conn)
+	s.pages = pages
+	return s, nil
 }
 
-// NewStoreFromDB wraps an already open connection. The caller owns the
-// connection's compatibility checks.
+// NewStoreFromDB wraps an already open connection, which serves page reads
+// too. The caller owns the connection's compatibility checks.
 func NewStoreFromDB(conn *sql.DB) *Store {
-	s := &Store{conn: conn}
+	s := &Store{conn: conn, pages: conn}
 	s.usageVersions.tables = map[string]usageTableVersion{}
 	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
 	s.sessionAggregateRows.Size = aggregateRowBytes
@@ -155,6 +165,9 @@ func (s *Store) Close() error {
 		s.stopBackground()
 		s.keeping.Wait()
 		s.closeErr = s.conn.Close()
+		if s.pages != s.conn {
+			s.closeErr = errors.Join(s.closeErr, s.pages.Close())
+		}
 	})
 	return s.closeErr
 }
@@ -165,6 +178,15 @@ func (s *Store) queryContext(ctx context.Context, query string, args ...any) (*s
 
 func (s *Store) queryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	return s.conn.QueryRowContext(ctx, query, args...)
+}
+
+// pageQueryContext runs a page read on the pages pool.
+func (s *Store) pageQueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return s.pages.QueryContext(ctx, query, args...)
+}
+
+func (s *Store) pageQueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return s.pages.QueryRowContext(ctx, query, args...)
 }
 
 func (s *Store) ReadOnly() bool { return true }

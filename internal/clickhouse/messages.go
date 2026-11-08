@@ -14,7 +14,7 @@ import (
 const revisionCol = `(SELECT any(transcript_revision) FROM sessions WHERE id = ?)`
 
 func (s *Store) GetResumeModelCounts(ctx context.Context, sessionID string) ([]db.ModelCount, error) {
-	rows, err := s.queryContext(ctx, `
+	rows, err := s.pageQueryContext(ctx, `
 		SELECT model, toInt64(COUNT(*))
 		FROM messages
 		WHERE session_id = ?
@@ -68,7 +68,7 @@ func scanMessages(rows db.MessageRows) ([]db.Message, error) {
 }
 
 func (s *Store) queryTurnRows(ctx context.Context, sess *db.Session) ([]db.TurnRow, error) {
-	rows, err := s.queryContext(ctx, `
+	rows, err := s.pageQueryContext(ctx, `
 		SELECT id, ordinal, timestamp, has_tool_use,
 			role, is_system,
 			CASE WHEN `+db.ClickHouseSystemPrefixSQL("content", "role")+` THEN false ELSE true END,
@@ -119,7 +119,7 @@ func (s *Store) queryTurnRows(ctx context.Context, sess *db.Session) ([]db.TurnR
 // completed execution event through pre-aggregated subqueries; ClickHouse
 // does not evaluate the correlated scalar subqueries the other stores use.
 func (s *Store) queryCallRows(ctx context.Context, sessionID string) ([]db.CallRow, error) {
-	rows, err := s.queryContext(ctx, `
+	rows, err := s.pageQueryContext(ctx, `
 		SELECT tc.message_id, tc.tool_use_id,
 			tc.tool_name, tc.category, tc.skill_name,
 			tc.subagent_session_id, tc.input_json,
