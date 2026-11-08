@@ -24,6 +24,7 @@ func (f SessionFilter) WantsExclusionCounts() bool {
 // BuildSessionExclusionCountsSQL counts the visible and expanded selections in
 // one statement. Each count retains its selective predicates and tree joins.
 func BuildSessionExclusionCountsSQL(f SessionFilter, dialect QueryDialect) (string, []any) {
+	f = f.withSelectionDefaults(f.IDs != nil || f.HasAnnotationFilter())
 	b := NewQueryBuilder(dialect, 0)
 	count := func(filter SessionFilter) string {
 		return "(SELECT " + dialect.SignedAggregate("COUNT(*)") + " FROM sessions WHERE " + buildSessionFilterWithBuilder(filter, b, "") + ")"

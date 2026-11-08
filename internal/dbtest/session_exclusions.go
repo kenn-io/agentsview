@@ -63,6 +63,15 @@ func AssertSessionExclusionCounts(t *testing.T, store db.Store) {
 			f.ExclusionCounts = "flat"
 			f.PR = db.PRFilter{Repository: "example/project", Number: 1}
 		}, 5, 0, 0, 0},
+		{"explicit IDs", func(f *db.SessionFilter) { f.IDs = []string{"visible", "one-shot", "automated"} }, 3, 0, 0, 0},
+		{"explicit IDs one-shot", func(f *db.SessionFilter) {
+			f.IDs = []string{"visible", "one-shot", "automated"}
+			f.OneShotFilterSet = true
+		}, 2, 1, 0, 0},
+		{"explicit IDs automated", func(f *db.SessionFilter) {
+			f.IDs = []string{"visible", "one-shot", "automated"}
+			f.AutomatedFilterSet = true
+		}, 2, 0, 1, 0},
 		{"restricted", func(f *db.SessionFilter) {
 			f.Machine = "exclusion-machine"
 			f.Date = "2024-01-01"

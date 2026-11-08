@@ -27993,12 +27993,7 @@ type DBSession = db.Session
 
 type DBSessionCommitList = db.SessionCommitList
 
-type DBSessionExclusionCounts struct {
-	Automated          int64 `json:"automated"`
-	Children           int64 `json:"children"`
-	ChildrenLowerBound bool  `json:"children_lower_bound"`
-	OneShot            int64 `json:"one_shot"`
-}
+type DBSessionExclusionCounts = db.SessionExclusionCounts
 
 type DBSessionExternalParent = db.SessionExternalParent
 
