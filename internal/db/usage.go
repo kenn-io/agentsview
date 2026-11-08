@@ -1798,7 +1798,7 @@ type UsagePairwiseSides struct {
 // Side combines raw ranking values, including session unions for model groups.
 // A filtered read must supply values whose totals cannot be derived exactly.
 func (s *UsagePairwiseSides) Side(dimension string, values []string) (DailyUsageResult, bool) {
-	if s == nil || dimension != "model" && dimension != "project" {
+	if s == nil {
 		return DailyUsageResult{}, false
 	}
 	entries := s.Models
@@ -1807,12 +1807,7 @@ func (s *UsagePairwiseSides) Side(dimension string, values []string) (DailyUsage
 	}
 	var result DailyUsageResult
 	sessions := make(map[string]struct{})
-	selected := make(map[string]bool)
 	for _, value := range values {
-		if selected[value] {
-			continue
-		}
-		selected[value] = true
 		entry := entries[value]
 		if entry.Inexact {
 			return DailyUsageResult{}, false

@@ -2173,10 +2173,12 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 		Daily:         daily,
 		Totals:        totals,
 		SessionCounts: sessionCounts,
-		Pairwise:      pgDailyPairwiseSides(accum, sessionCosts, sessionIDs, inexactModels, inexactProjects),
 	}
-	if result.Bytes() > 64<<20 {
-		result.Pairwise = nil
+	if f.Breakdowns {
+		result.Pairwise = pgDailyPairwiseSides(accum, sessionCosts, sessionIDs, inexactModels, inexactProjects)
+		if result.Bytes() > 64<<20 {
+			result.Pairwise = nil
+		}
 	}
 	return result, nil
 }
@@ -2543,24 +2545,20 @@ func pgDailyPairwiseSides(accum map[accumKey]*bucket, costs map[string]sessionCo
 			add(sides.Projects, key.project, b, b.cost)
 		}
 	}
+	// Sessions arrive in order, so a repeat is always the list's last entry.
+	member := func(entries map[string]db.UsagePairwiseValue, name, sessionID string) {
+		value := entries[name]
+		if n := len(value.Sessions); n == 0 || value.Sessions[n-1] != sessionID {
+			value.Sessions = append(value.Sessions, sessionID)
+			entries[name] = value
+		}
+	}
 	for _, sessionID := range sessionIDs {
-		cost := costs[sessionID]
-		models, projects := make(map[string]bool), make(map[string]bool)
-		for key, estimated := range cost.estimated {
+		for key, estimated := range costs[sessionID].estimated {
 			add(sides.Models, key.model, &bucket{}, estimated)
-			models[key.model], projects[key.project] = true, true
-		}
-		if sessionID == "" {
-			continue
-		}
-		for _, entry := range []struct {
-			values map[string]db.UsagePairwiseValue
-			names  map[string]bool
-		}{{sides.Models, models}, {sides.Projects, projects}} {
-			for name := range entry.names {
-				value := entry.values[name]
-				value.Sessions = append(value.Sessions, sessionID)
-				entry.values[name] = value
+			if sessionID != "" {
+				member(sides.Models, key.model, sessionID)
+				member(sides.Projects, key.project, sessionID)
 			}
 		}
 	}
