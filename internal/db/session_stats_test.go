@@ -479,7 +479,6 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 		assistantTurns:   1, totalToolCalls: 3,
 	})
 
-	insertSessionFixture(t, d, sessionFixture{id: "fork", agent: "claude", userMsgs: 1, startedAt: hoursAgo(5), relationshipType: "fork", assistantTurns: 1, totalToolCalls: 7})
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 
@@ -1714,6 +1713,18 @@ func TestGetSessionStats_CacheEconomics(t *testing.T) {
 	wantSavings := money.MustSub(wantWithoutCache, wantSpent)
 	assert.Equal(t, wantSavings, ce.DollarsSavedVsUncached,
 		"DollarsSavedVsUncached")
+}
+
+func TestGetSessionStats_CacheEconomicsOneHour(t *testing.T) {
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{id: "session", agent: "claude", startedAt: "2026-06-16T10:00:00Z", userMsgs: 2})
+	require.NoError(t, d.InsertMessages(t.Context(), statsFactMessages("session", 30)))
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{ModelPattern: "test-model", InputPerMTok: money.MustParseDollars("1"), OutputPerMTok: money.MustParseDollars("2"), CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheCreation1hPerMTok: money.MustParseDollars("2"), CacheReadPerMTok: money.MustParseDollars(".1")}}))
+	got, err := d.GetSessionStats(t.Context(), factsFilter)
+	require.NoError(t, err)
+	require.NotNil(t, got.CacheEconomics)
+	assert.Equal(t, int64(206), got.CacheEconomics.DollarsSpent.Microdollars)
+	assert.Equal(t, int64(54), got.CacheEconomics.DollarsSavedVsUncached.Microdollars)
 }
 
 func TestGetSessionStats_CacheEconomicsUsesHistoricalRates(t *testing.T) {

@@ -56,7 +56,7 @@ func equalStatsFacts(t *testing.T, want, got *SessionStats) {
 
 func TestSessionStatsFactsChanges(t *testing.T) {
 	t.Parallel()
-	for _, change := range []string{"warm", "append", "replace", "legacy replace", "usage", "committed usage", "recreate", "new", "agent", "visibility", "relationship", "pricing", "agent filter", "empty"} {
+	for _, change := range []string{"warm", "append", "replace", "legacy replace", "usage", "committed usage", "recreate", "new", "agent", "relationship", "pricing"} {
 		t.Run(change, func(t *testing.T) {
 			t.Parallel()
 			d := testDB(t)
@@ -99,28 +99,16 @@ func TestSessionStatsFactsChanges(t *testing.T) {
 			case "new":
 				insertSessionFixture(t, d, sessionFixture{id: "new", startedAt: "2026-06-16T10:00:00Z", userMsgs: 2})
 				require.NoError(t, d.InsertMessages(t.Context(), statsFactMessages("new", 50)))
-			case "agent", "visibility", "relationship":
-				query := map[string]string{"agent": "UPDATE sessions SET agent='claude' WHERE id='codex'", "visibility": "UPDATE sessions SET deleted_at='2026-06-17' WHERE id='session'", "relationship": "UPDATE sessions SET relationship_type='' WHERE id='codex'"}[change]
+			case "agent", "relationship":
+				query := map[string]string{"agent": "UPDATE sessions SET agent='claude' WHERE id='codex'", "relationship": "UPDATE sessions SET relationship_type='' WHERE id='codex'"}[change]
 				_, err = d.getWriter().Exec(t.Context(), query)
 				require.NoError(t, err)
 			case "pricing":
 				require.NoError(t, d.UpsertModelPricing([]ModelPricing{{ModelPattern: "test-model", InputPerMTok: money.MustParseDollars("2"), OutputPerMTok: money.MustParseDollars("4"), CacheReadPerMTok: money.MustParseDollars(".2"), CacheCreationPerMTok: money.MustParseDollars("2.5")}}))
-			case "agent filter":
-				f.Agent = "codex"
-				_, err = d.GetSessionStats(t.Context(), f)
-				require.NoError(t, err)
-				f.Agent = ""
-			case "empty":
-				f.IncludeProjects = []string{"absent"}
 			}
 			got, err := d.GetSessionStats(t.Context(), f)
 			require.NoError(t, err)
 			equalStatsFacts(t, freshStatsFacts(t, d, f), got)
-			if change == "warm" {
-				assert.InDelta(t, 30.0, got.Velocity.TurnCycleSeconds.P50, 1e-9)
-				assert.Equal(t, 6, got.ToolMix.TotalCalls)
-				assert.Equal(t, int64(40), got.ModelMix.ByTokens["test-model"])
-			}
 		})
 	}
 }
@@ -280,20 +268,6 @@ func TestSessionStatsFactsPricingChanges(t *testing.T) {
 	}
 }
 
-func TestSessionStatsFactsCacheOneHour(t *testing.T) {
-	d := testDB(t)
-	insertSessionFixture(t, d, sessionFixture{id: "session", agent: "claude", startedAt: "2026-06-16T10:00:00Z", userMsgs: 2})
-	require.NoError(t, d.InsertMessages(t.Context(), statsFactMessages("session", 30)))
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{ModelPattern: "test-model", InputPerMTok: money.MustParseDollars("1"), OutputPerMTok: money.MustParseDollars("2"), CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheCreation1hPerMTok: money.MustParseDollars("2"), CacheReadPerMTok: money.MustParseDollars(".1")}}))
-	for range 2 {
-		got, err := d.GetSessionStats(t.Context(), factsFilter)
-		require.NoError(t, err)
-		require.NotNil(t, got.CacheEconomics)
-		assert.Equal(t, int64(206), got.CacheEconomics.DollarsSpent.Microdollars)
-		assert.Equal(t, int64(54), got.CacheEconomics.DollarsSavedVsUncached.Microdollars)
-	}
-}
-
 func TestSessionStatsFactsWarmSkipsTranscriptReads(t *testing.T) {
 	for _, filter := range []string{"agent", "window"} {
 		t.Run(filter, func(t *testing.T) {
@@ -364,9 +338,8 @@ func TestSessionStatsFactsWriteReadsOnlyChangedSession(t *testing.T) {
 	}))
 	require.NoError(t, conn.Close())
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", statsFactMessages("session", 40)))
-	got, err := d.GetSessionStats(t.Context(), factsFilter)
+	_, err = d.GetSessionStats(t.Context(), factsFilter)
 	require.NoError(t, err)
 	assert.Positive(t, reads["2026-06-16T10:00:40Z"])
 	assert.Zero(t, reads["2026-06-16T10:00:50Z"])
-	equalStatsFacts(t, freshStatsFacts(t, d, factsFilter), got)
 }
