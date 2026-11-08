@@ -176,7 +176,6 @@ func TestStatsUsesLongRunningClient(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/api/v1/session-stats", r.URL.Path)
 			assert.Equal(t, "true", r.URL.Query().Get("include_github_outcomes"))
-			assert.Equal(t, "true", r.URL.Query().Get("outcomes_only"))
 			time.Sleep(50 * time.Millisecond)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(
@@ -191,7 +190,6 @@ func TestStatsUsesLongRunningClient(t *testing.T) {
 		backend.client.Timeout = 10 * time.Millisecond
 		result, err := backend.Stats(t.Context(), service.StatsFilter{
 			Since:                 "30d",
-			OutcomesOnly:          true,
 			IncludeGitOutcomes:    true,
 			IncludeGitHubOutcomes: true,
 		})

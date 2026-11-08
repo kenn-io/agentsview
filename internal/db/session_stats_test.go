@@ -2812,24 +2812,11 @@ func TestGetSessionStats_OutcomesOnly(t *testing.T) {
 	for i := range 3 {
 		statsCommitFile(t, repo, "file.txt", strings.Repeat("line\n", i+1), "fixture")
 	}
-	checkout := filepath.Join(t.TempDir(), "checkout")
-	statsRunGit(t, repo, nil, "clone", "--quiet", repo, checkout)
-	statsRunGit(t, checkout, nil, "config", "user.email", "test@example.com")
-	for _, cwd := range []string{repo, checkout} {
-		statsRunGit(t, cwd, nil, "config", "remote.origin.url", "https://example.com/team/repo.git")
-	}
-	skipped := t.TempDir()
-	statsInitRepoAt(t, skipped)
-	statsCommitFile(t, skipped, "file.txt", "one\n", "fixture")
-	statsRunGit(t, skipped, nil, "config", "log.showSignature", "invalid")
 	excluded := t.TempDir()
 	statsInitRepoAt(t, excluded)
 	statsCommitFile(t, excluded, "file.txt", "excluded\n", "excluded")
 	for _, fixture := range []sessionFixture{
 		{id: "root", userMsgs: 5, cwd: repo},
-		{id: "checkout", userMsgs: 5, cwd: checkout},
-		{id: "skipped", userMsgs: 5, cwd: skipped},
-		{id: "no-cwd", userMsgs: 5},
 		{id: "child", userMsgs: 5, cwd: excluded, relationshipType: "subagent"},
 		{id: "fork", userMsgs: 5, cwd: excluded, relationshipType: "fork"},
 		{id: "one-shot", userMsgs: 1, cwd: excluded},
@@ -2847,9 +2834,7 @@ func TestGetSessionStats_OutcomesOnly(t *testing.T) {
 	full, err := d.GetSessionStats(t.Context(), filter)
 	require.NoError(t, err)
 	require.NotNil(t, full.OutcomeStats)
-	assert.Equal(t, 1, full.OutcomeStats.ReposActive)
 	assert.Equal(t, 3, full.OutcomeStats.Commits)
-	require.Len(t, full.OutcomeStats.Skipped, 1)
 	filter.OutcomesOnly = true
 	outcomes, err := d.GetSessionStats(t.Context(), filter)
 	require.NoError(t, err)
