@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	"go.kenn.io/kit/atomicfile"
 )
 
 func (s *Server) registerDaemonRoutes() {
@@ -17,9 +19,12 @@ func (s *Server) humaPersistDaemon(_ context.Context, _ *emptyInput) (*jsonOutpu
 	if s.persistDaemon == nil {
 		return nil, apiError(http.StatusNotImplemented, "daemon lifetime is unavailable on this server")
 	}
-	if err := s.persistDaemon(); err != nil {
+	err := s.persistDaemon()
+	if err == nil || errors.Is(err, atomicfile.ErrPublished) {
+		s.idle.DisableShutdown()
+	}
+	if err != nil {
 		return nil, apiError(http.StatusInternalServerError, err.Error())
 	}
-	s.idle.DisableShutdown()
 	return &jsonOutput[map[string]bool]{Body: map[string]bool{"persistent": true}}, nil
 }
