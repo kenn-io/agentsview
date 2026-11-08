@@ -99,6 +99,7 @@ describe("OutcomeTotalsStore", () => {
         expect(fetchStats.mock.lastCall?.[0]).toEqual({
           since: "2026-03-01T05:00:00.000Z",
           until: "2026-04-01T04:00:00.000Z",
+          outcomes_only: true,
           include_git_outcomes: true,
           include_github_outcomes: includePullRequests,
         });
