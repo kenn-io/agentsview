@@ -14,11 +14,9 @@ import (
 )
 
 // Facts and their nested maps and slices are immutable after publication.
-// Root and Claude parts are filled only when the current selection needs them.
 type sessionStatsFacts struct {
 	id                        string
 	revision                  int64
-	root, claude              bool
 	toolCalls, assistantTurns int
 	tools                     map[string]int
 	models                    map[string]int64
@@ -201,7 +199,7 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, filter StatsFilter, fro
 		}
 		hit := old[id]
 		root, claude := rootIDs[id], rootIDs[id] && agents[id] == "claude"
-		if hit != nil && hit.revision == f.revision && (!root || hit.root) && (!claude || hit.claude) {
+		if hit != nil && hit.revision == f.revision {
 			facts[id] = hit
 			publish = append(publish, hit)
 			continue
@@ -209,8 +207,6 @@ func (db *DB) readSessionStatsFacts(ctx context.Context, filter StatsFilter, fro
 		f.tools = map[string]int{}
 		f.models = map[string]int64{}
 		f.skills = map[string]struct{}{}
-		f.root = root
-		f.claude = claude
 		missing = append(missing, id)
 		if root {
 			rootMiss = append(rootMiss, id)
