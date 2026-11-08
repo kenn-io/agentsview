@@ -881,6 +881,7 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
+	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
@@ -4887,7 +4888,8 @@ func openAndInit(
 
 	db := &DB{
 		path: path, usageCache: newUsageCacheManager(path),
-		activityKept: newActivityKeptMemo(),
+		activityKept:      newActivityKeptMemo(),
+		sessionStatsFacts: newSessionStatsFactsMemo(),
 	}
 	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
@@ -5718,7 +5720,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
-		db.frustrationMemo.Swap(func() { oldReader = db.reader.Swap(reader) })
+		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })
 	})
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a

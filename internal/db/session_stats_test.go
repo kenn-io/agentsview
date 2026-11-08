@@ -469,17 +469,23 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 		id: "root", agent: "claude", userMsgs: 10, messageCount: 20,
 		startedAt: hoursAgo(5), durationMin: 100,
 		totalOutputTok: 1000, hasTotalOutputToks: true,
+		assistantTurns: 1, totalToolCalls: 2,
 	})
 	insertSessionFixture(t, d, sessionFixture{
 		id: "agent-x", agent: "claude", userMsgs: 1, messageCount: 5,
 		startedAt: hoursAgo(5), durationMin: 8,
 		totalOutputTok: 400, hasTotalOutputToks: true,
 		relationshipType: "subagent",
+		assistantTurns:   1, totalToolCalls: 3,
 	})
 
+	insertSessionFixture(t, d, sessionFixture{id: "fork", agent: "claude", userMsgs: 1, startedAt: hoursAgo(5), relationshipType: "fork", assistantTurns: 1, totalToolCalls: 7})
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 
+	assert.Equal(t, 5, stats.ToolMix.TotalCalls)
+	assert.InDelta(t, 2.0, stats.Distributions.ToolsPerTurn.ScopeAll.Mean, 1e-9)
+	assert.Zero(t, stats.Velocity.TurnCycleSeconds.P50)
 	// Additive totals include the subagent.
 	assert.Equal(t, 2, stats.Totals.SessionsAll, "sessions_all")
 	assert.Equal(t, 25, stats.Totals.MessagesTotal, "messages_total")
