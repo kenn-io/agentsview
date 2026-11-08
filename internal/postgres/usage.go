@@ -1574,7 +1574,7 @@ func (s *Store) GetDailyUsage(
 	})
 }
 
-type accumKey struct {
+type pgDailyUsageKey struct {
 	date       string
 	project    string
 	agent      string
@@ -1582,15 +1582,15 @@ type accumKey struct {
 	model      string
 	providerID string
 }
-type bucket struct {
+type pgDailyUsageBucket struct {
 	inputTok  int
 	outputTok int
 	cacheCr   int
 	cacheRd   int
 	cost      money.Money
 }
-type sessionCost struct {
-	estimated     map[accumKey]money.Money
+type pgDailyUsageSessionCost struct {
+	estimated     map[pgDailyUsageKey]money.Money
 	authoritative *money.Money
 }
 
@@ -1616,8 +1616,8 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 	}
 	defer rows.Close()
 
-	accum := make(map[accumKey]*bucket)
-	sessionCosts := make(map[string]sessionCost)
+	accum := make(map[pgDailyUsageKey]*pgDailyUsageBucket)
+	sessionCosts := make(map[string]pgDailyUsageSessionCost)
 	useAuthoritativeCost := !f.HasModelFilter()
 	seen := make(map[activity.UsageDedupToken]int)
 	type dimensionPair struct{ project, model string }
@@ -1689,14 +1689,14 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 				"summing pg daily usage cache savings: %w", priceErr)
 		}
 
-		key := accumKey{
+		key := pgDailyUsageKey{
 			date: date, project: r.project,
 			agent: r.agent, machine: r.machine, model: r.model,
 			providerID: r.providerID,
 		}
 		b, ok := accum[key]
 		if !ok {
-			b = &bucket{}
+			b = &pgDailyUsageBucket{}
 			accum[key] = b
 		}
 		b.inputTok += inputTok
@@ -1706,7 +1706,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 
 		sc := sessionCosts[r.sessionID]
 		if sc.estimated == nil {
-			sc.estimated = make(map[accumKey]money.Money)
+			sc.estimated = make(map[pgDailyUsageKey]money.Money)
 		}
 		sc.estimated[key], priceErr = money.Add(sc.estimated[key], cost)
 		if priceErr != nil {
@@ -1733,7 +1733,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 	for _, sessionID := range sessionIDs {
 		sc := sessionCosts[sessionID]
 		if sc.authoritative != nil {
-			keys := make([]accumKey, 0, len(sc.estimated))
+			keys := make([]pgDailyUsageKey, 0, len(sc.estimated))
 			for key := range sc.estimated {
 				keys = append(keys, key)
 			}
@@ -1767,7 +1767,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 			for i, key := range keys {
 				b := accum[key]
 				if b == nil {
-					b = &bucket{}
+					b = &pgDailyUsageBucket{}
 					accum[key] = b
 				}
 				b.cost, err = money.Add(b.cost, costs[i])
@@ -1780,7 +1780,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 			for key, cost := range sc.estimated {
 				b := accum[key]
 				if b == nil {
-					b = &bucket{}
+					b = &pgDailyUsageBucket{}
 					accum[key] = b
 				}
 				b.cost, err = money.Add(b.cost, cost)
@@ -1945,20 +1945,20 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 	}
 
 	type dayMaps struct {
-		models   map[string]bucket
-		projects map[string]bucket
-		agents   map[string]bucket
-		machines map[string]bucket
+		models   map[string]pgDailyUsageBucket
+		projects map[string]pgDailyUsageBucket
+		agents   map[string]pgDailyUsageBucket
+		machines map[string]pgDailyUsageBucket
 	}
 	days := make(map[string]*dayMaps, 64)
 	for key, b := range accum {
 		dm, ok := days[key.date]
 		if !ok {
 			dm = &dayMaps{
-				models:   make(map[string]bucket, 4),
-				projects: make(map[string]bucket, 8),
-				agents:   make(map[string]bucket, 4),
-				machines: make(map[string]bucket, 4),
+				models:   make(map[string]pgDailyUsageBucket, 4),
+				projects: make(map[string]pgDailyUsageBucket, 8),
+				agents:   make(map[string]pgDailyUsageBucket, 4),
+				machines: make(map[string]pgDailyUsageBucket, 4),
 			}
 			days[key.date] = dm
 		}
@@ -2521,7 +2521,7 @@ WHERE `+where, pb.args...).Scan(&count)
 
 // pgDailyPairwiseSides folds the ranking's existing buckets, preserving its
 // allocated project costs and the pre-allocation estimates model filters use.
-func pgDailyPairwiseSides(accum map[accumKey]*bucket, costs map[string]sessionCost, sessionIDs []string, inexactModels, inexactProjects map[string]bool) *db.UsagePairwiseSides {
+func pgDailyPairwiseSides(accum map[pgDailyUsageKey]*pgDailyUsageBucket, costs map[string]pgDailyUsageSessionCost, sessionIDs []string, inexactModels, inexactProjects map[string]bool) *db.UsagePairwiseSides {
 	sides := &db.UsagePairwiseSides{Models: make(map[string]db.UsagePairwiseValue), Projects: make(map[string]db.UsagePairwiseValue)}
 	for model, inexact := range inexactModels {
 		sides.Models[model] = db.UsagePairwiseValue{Inexact: inexact}
@@ -2529,7 +2529,7 @@ func pgDailyPairwiseSides(accum map[accumKey]*bucket, costs map[string]sessionCo
 	for project, inexact := range inexactProjects {
 		sides.Projects[project] = db.UsagePairwiseValue{Inexact: inexact}
 	}
-	add := func(entries map[string]db.UsagePairwiseValue, name string, b *bucket, cost money.Money) {
+	add := func(entries map[string]db.UsagePairwiseValue, name string, b *pgDailyUsageBucket, cost money.Money) {
 		value := entries[name]
 		value.Totals.InputTokens += b.inputTok
 		value.Totals.OutputTokens += b.outputTok
@@ -2556,7 +2556,7 @@ func pgDailyPairwiseSides(accum map[accumKey]*bucket, costs map[string]sessionCo
 	}
 	for _, sessionID := range sessionIDs {
 		for key, estimated := range costs[sessionID].estimated {
-			add(sides.Models, key.model, &bucket{}, estimated)
+			add(sides.Models, key.model, &pgDailyUsageBucket{}, estimated)
 			if sessionID != "" {
 				member(sides.Models, key.model, sessionID)
 				member(sides.Projects, key.project, sessionID)

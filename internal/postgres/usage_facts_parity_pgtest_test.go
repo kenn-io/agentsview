@@ -308,6 +308,8 @@ func completeUsageParity(
 	if err != nil {
 		return fmt.Errorf("remote GetDailyUsage: %w", err)
 	}
+	// Compare public results; Pairwise holds backend-specific read metadata.
+	localDaily.Pairwise, remoteDaily.Pairwise = nil, nil
 	if !reflect.DeepEqual(localDaily, remoteDaily) {
 		return fmt.Errorf("complete daily result differs")
 	}

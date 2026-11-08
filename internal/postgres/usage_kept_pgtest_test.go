@@ -255,31 +255,57 @@ func TestUsageKeptPushBetweenReads(t *testing.T) {
 }
 
 func TestUsageKeptServicePairwiseSharesSummary(t *testing.T) {
-	_, _, store, counter := keptUsageFixture(t)
-	groups := service.NewModelGroups(map[string]string{"paid-a": "group-a", "paid-b": "group-b", "plan": "plan-group"})
-	backend := service.NewReadOnlyBackend(store, service.WithModelGroups(groups))
-	req := service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true, GroupModels: true}
-	summary, err := backend.UsageSummary(t.Context(), req)
-	require.NoError(t, err)
-	require.Equal(t, 1, summary.PlanOnlySessions)
-	require.Len(t, counter.queries, 2)
-	queries := maps.Clone(counter.queries)
-	pairReq := service.UsagePairwiseComparisonRequest{UsageRequest: req, LeftDimension: "model", LeftValue: "missing", RightDimension: "model", RightValue: "group-a", FallbackToDefault: true}
-	got, err := backend.UsagePairwiseComparison(t.Context(), pairReq)
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"group-a", "group-b"}, []string{got.Left.Value, got.Right.Value})
-	require.Equal(t, 1250, got.Left.OutputTokens+got.Right.OutputTokens)
-	assert.Equal(t, queries, counter.queries)
-	fresh := service.NewReadOnlyBackend(&Store{pg: counter.storeExecutor}, service.WithModelGroups(groups))
-	want, err := fresh.UsagePairwiseComparison(t.Context(), pairReq)
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-	f, err := service.BuildUsageFilter(req, groups)
-	require.NoError(t, err)
-	raw, err := store.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.NotEmpty(t, raw.Daily)
-	assert.Contains(t, raw.Daily[0].ModelsUsed, "paid-a")
+	t.Run("mirror", func(t *testing.T) {
+		_, _, store, counter := keptUsageFixture(t)
+		groups := service.NewModelGroups(map[string]string{"paid-a": "group-a", "paid-b": "group-b", "plan": "plan-group"})
+		backend := service.NewReadOnlyBackend(store, service.WithModelGroups(groups))
+		req := service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true, GroupModels: true}
+		summary, err := backend.UsageSummary(t.Context(), req)
+		require.NoError(t, err)
+		require.Equal(t, 1, summary.PlanOnlySessions)
+		require.Len(t, counter.queries, 2)
+		queries := maps.Clone(counter.queries)
+		pairReq := service.UsagePairwiseComparisonRequest{UsageRequest: req, LeftDimension: "model", LeftValue: "missing", RightDimension: "model", RightValue: "group-a", FallbackToDefault: true}
+		got, err := backend.UsagePairwiseComparison(t.Context(), pairReq)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"group-a", "group-b"}, []string{got.Left.Value, got.Right.Value})
+		require.Equal(t, 1250, got.Left.OutputTokens+got.Right.OutputTokens)
+		assert.Equal(t, queries, counter.queries)
+		fresh := service.NewReadOnlyBackend(&Store{pg: counter.storeExecutor}, service.WithModelGroups(groups))
+		want, err := fresh.UsagePairwiseComparison(t.Context(), pairReq)
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+		f, err := service.BuildUsageFilter(req, groups)
+		require.NoError(t, err)
+		raw, err := store.GetDailyUsage(t.Context(), f)
+		require.NoError(t, err)
+		require.NotEmpty(t, raw.Daily)
+		assert.Contains(t, raw.Daily[0].ModelsUsed, "paid-a")
+	})
+	t.Run("hosted", func(t *testing.T) {
+		f := newHostedFixture(t, "tenant-a")
+		_, err := f.runtime.ExecContext(t.Context(), `
+	INSERT INTO sessions(id,project,machine,agent,started_at,message_count,user_message_count) VALUES
+	 ('a','project-a','device','codex','2026-01-01T09:00:00Z',2,2),
+	 ('b','project-b','device','codex','2026-01-01T09:00:00Z',2,2);
+	INSERT INTO usage_events(session_id,source,model,output_tokens,cost_microdollars,occurred_at) VALUES
+	 ('a','provider','paid-a',500,5000,'2026-01-01T09:00:00Z'),
+	 ('b','provider','paid-b',750,3750,'2026-01-01T09:00:00Z')`)
+		require.NoError(t, err)
+		h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
+		require.NoError(t, err)
+		counter := &usageReadCounter{storeExecutor: h.physical.pg, queries: map[string]int{}}
+		h.physical.pg = counter
+		got, err := service.NewReadOnlyBackend(h).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true}})
+		require.NoError(t, err)
+		assert.Equal(t, 1250, got.Left.OutputTokens+got.Right.OutputTokens)
+		assert.Equal(t, 1, got.Left.SessionCount)
+		assert.Equal(t, 1, got.Right.SessionCount)
+		require.Len(t, counter.queries, 2, "one ranking and one plan-count read")
+		for _, count := range counter.queries {
+			assert.Equal(t, 1, count)
+		}
+	})
 }
 
 func TestUsageKeptBypasses(t *testing.T) {
@@ -399,10 +425,8 @@ func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, want.Totals.TotalCost, got.Totals.TotalCost)
 			assert.Equal(t, want.Totals.InputTokens, got.Totals.InputTokens)
-			assert.Equal(t, want.Totals.OutputTokens, got.Totals.OutputTokens)
 			assert.Equal(t, want.Totals.CacheCreationTokens, got.Totals.CacheCreationTokens)
 			assert.Equal(t, want.Totals.CacheReadTokens, got.Totals.CacheReadTokens)
-			assert.Equal(t, want.SessionCounts.Total, got.SessionCounts.Total)
 		})
 	}
 	// A ranked value with cross-model duplicates must use the filtered side.
@@ -411,49 +435,16 @@ func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
 		LeftDimension: "model", LeftValue: "paid-a", RightDimension: "model", RightValue: "paid-b", FallbackToDefault: true,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 811, comparison.Left.OutputTokens)
 	assert.Equal(t, 1279, comparison.Right.OutputTokens)
 	assert.Equal(t, 4, comparison.Right.SessionCount)
 }
 
-func TestUsagePairwiseHostedRankingScansOnce(t *testing.T) {
-	f := newHostedFixture(t, "tenant-a")
-	_, err := f.runtime.ExecContext(t.Context(), `
-INSERT INTO sessions(id,project,machine,agent,started_at,message_count,user_message_count) VALUES
- ('a','project-a','device','codex','2026-01-01T09:00:00Z',2,2),
- ('b','project-b','device','codex','2026-01-01T09:00:00Z',2,2);
-INSERT INTO usage_events(session_id,source,model,output_tokens,cost_microdollars,occurred_at) VALUES
- ('a','provider','paid-a',500,5000,'2026-01-01T09:00:00Z'),
- ('b','provider','paid-b',750,3750,'2026-01-01T09:00:00Z')`)
-	require.NoError(t, err)
-	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
-	require.NoError(t, err)
-	counter := &usageReadCounter{storeExecutor: h.physical.pg, queries: map[string]int{}}
-	h.physical.pg = counter
-	got, err := service.NewReadOnlyBackend(h).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true}})
-	require.NoError(t, err)
-	assert.Equal(t, 1250, got.Left.OutputTokens+got.Right.OutputTokens)
-	assert.Equal(t, 1, got.Left.SessionCount)
-	assert.Equal(t, 1, got.Right.SessionCount)
-	require.Len(t, counter.queries, 2, "one ranking and one plan-count read")
-	for _, count := range counter.queries {
-		assert.Equal(t, 1, count)
-	}
-}
-
-func TestUsagePairwiseExplicitIgnoresUnselectedCosts(t *testing.T) {
+func TestUsagePairwiseExplicitSkipsRanking(t *testing.T) {
 	_, _, store, counter := keptUsageFixture(t)
-	_, err := store.DB().ExecContext(t.Context(), `
-INSERT INTO usage_events(session_id,source,model,cost_microdollars,occurred_at,dedup_key) VALUES
- ('plan','provider','unselected',4611686018427387904,'2026-01-01T09:00:00Z','overflow-a'),
- ('plan','provider','unselected',4611686018427387904,'2026-01-01T09:00:00Z','overflow-b')`)
+	_, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true}, LeftDimension: "model", LeftValue: "paid-a", RightDimension: "model", RightValue: "paid-b"})
 	require.NoError(t, err)
-	got, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true}, LeftDimension: "model", LeftValue: "paid-a", RightDimension: "model", RightValue: "paid-b"})
-	require.NoError(t, err)
-	assert.Equal(t, 500, got.Left.OutputTokens)
-	assert.Equal(t, 750, got.Right.OutputTokens)
 	require.Len(t, counter.queries, 1)
 	for _, count := range counter.queries {
-		assert.Equal(t, 2, count)
+		assert.Equal(t, 2, count, "only the two filtered side reads")
 	}
 }

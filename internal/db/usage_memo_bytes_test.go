@@ -2,7 +2,7 @@ package db_test
 
 import (
 	"context"
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,10 +30,15 @@ func TestTopSessionMemoCountsGroupMetadata(t *testing.T) {
 }
 
 func TestDailyUsageMemoCountsPairwiseSides(t *testing.T) {
-	result := db.DailyUsageResult{Pairwise: &db.UsagePairwiseSides{Models: map[string]db.UsagePairwiseValue{
-		"model-a": {Sessions: []string{strings.Repeat("s", 64<<20)}},
-	}}}
-	assert.Greater(t, result.Bytes(), int64(64<<20))
+	sessions := make([]string, 8192)
+	for i := range sessions {
+		sessions[i] = fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+	}
+	models := make(map[string]db.UsagePairwiseValue, 256)
+	for i := range 256 {
+		models[fmt.Sprintf("model-%d", i)] = db.UsagePairwiseValue{Sessions: sessions}
+	}
+	result := db.DailyUsageResult{Pairwise: &db.UsagePairwiseSides{Models: models}}
 	var reads kept.Reads[db.DailyUsageResult]
 	loads := 0
 	for range 2 {
