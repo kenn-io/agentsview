@@ -20,7 +20,7 @@ import (
 func TestSessionPushServeExtendsBoundedUploadReadDeadline(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "secret"
-	s.httpReadTimeout = 100 * time.Millisecond
+	s.httpReadTimeout = time.Second
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	deadlines := make(chan time.Time, 16)
@@ -53,7 +53,7 @@ func TestSessionPushServeExtendsBoundedUploadReadDeadline(t *testing.T) {
 	request.ContentLength = int64(len(payload))
 	request.Header.Set("Authorization", "Bearer secret")
 	request.Header.Set("Content-Type", "application/json")
-	response := make(chan *http.Response, 1)
+	response := make(chan int, 1)
 	requestErr := make(chan error, 1)
 	go func() {
 		result, err := http.DefaultClient.Do(request)
@@ -61,7 +61,8 @@ func TestSessionPushServeExtendsBoundedUploadReadDeadline(t *testing.T) {
 			requestErr <- err
 			return
 		}
-		response <- result
+		defer result.Body.Close()
+		response <- result.StatusCode
 	}()
 	defer writer.Close()
 	defer reader.Close()
@@ -81,7 +82,10 @@ waitForUploadDeadline:
 			require.FailNow(t, "session push did not extend the real connection read deadline")
 		}
 	}
-	time.Sleep(200 * time.Millisecond)
+	// Wait past the server's original deadline to prove the extension works.
+	timer := time.NewTimer(1100 * time.Millisecond)
+	defer timer.Stop()
+	<-timer.C
 	_, err = writer.Write(payload[1:])
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
@@ -89,9 +93,8 @@ waitForUploadDeadline:
 	select {
 	case err := <-requestErr:
 		require.FailNowf(t, "test failed", "slow valid session push failed: %v", err)
-	case result := <-response:
-		defer result.Body.Close()
-		assert.Equal(t, http.StatusOK, result.StatusCode)
+	case status := <-response:
+		assert.Equal(t, http.StatusOK, status)
 	case <-time.After(3 * time.Second):
 		require.FailNow(t, "slow valid session push did not finish")
 	}

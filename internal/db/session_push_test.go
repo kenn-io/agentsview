@@ -350,16 +350,13 @@ func TestLoadSessionPushDataCoherentSnapshotDuringWrites(t *testing.T) {
 	close(start)
 	for range 24 {
 		session, data, err := d.LoadSessionPushData(ctx, "snapshot", smallArtifactExportLoadLimits())
-		if err != nil {
-			t.Errorf("loading session push snapshot: %v", err)
+		if !assert.NoError(t, err, "loading session push snapshot") {
 			break
 		}
-		if session == nil {
-			t.Error("loaded session push snapshot is nil")
+		if !assert.NotNil(t, session, "loaded session push snapshot") {
 			break
 		}
-		if len(data.Messages) != 1 {
-			t.Errorf("got %d messages in session push snapshot, want 1", len(data.Messages))
+		if !assert.Len(t, data.Messages, 1) {
 			break
 		}
 		assert.Equal(t, Ptr(data.Messages[0].Content), session.FirstMessage)

@@ -234,7 +234,9 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		nested.resultEvents += preflight.nested.resultEvents
 		decodedBytes += int64(len(segment.NDJSON))
 	}
-	if err := validateImportedClosure(m, messages); err != nil {
+	// Provider-authoritative counters can include removed carriers or exclude
+	// retained ones; validate graph coordinates independently of those counts.
+	if err := validateImportedClosureCounts(m, messages, false); err != nil {
 		return zero, noWrite, err
 	}
 	for _, event := range m.UsageEvents {

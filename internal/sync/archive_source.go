@@ -78,7 +78,7 @@ func (e *Engine) filterReservedSourceMembers(ctx context.Context, res *processRe
 	} else if !errors.Is(err, db.ErrSessionPushConflict) || res.incremental != nil {
 		return false, err
 	} else if sourceRequiresAtomicDAGCompletion(agent, len(res.results)) {
-		return false, fmt.Errorf("atomic source contains a reserved session: %v", err)
+		return false, errors.New("atomic source contains a reserved session")
 	}
 	kept := make([]parser.ParseResult, 0, len(res.results))
 	for _, result := range res.results {
@@ -93,13 +93,25 @@ func (e *Engine) filterReservedSourceMembers(ctx context.Context, res *processRe
 		}
 		kept = append(kept, result)
 	}
-	if len(kept) == len(res.results) {
-		return false, db.ErrSessionPushConflict // e.g. an excluded ID is reserved
-	}
-	if len(kept) == 0 {
-		if len(res.excludedSessionIDs) > 0 || len(res.sourceMissingMembers) > 0 {
-			return false, errors.New("reserved source also contains other members")
+	excluded := make([]string, 0, len(res.excludedSessionIDs))
+	for _, id := range res.excludedSessionIDs {
+		checkID := applyIDPrefixToID(e.idPrefix, id)
+		if checkID == "" {
+			excluded = append(excluded, id)
+			continue
 		}
+		if err := e.db.CheckArchiveSessionProvenance(ctx, db.Session{ID: checkID}, nil); err != nil {
+			if errors.Is(err, db.ErrSessionPushConflict) {
+				continue
+			}
+			return false, err
+		}
+		excluded = append(excluded, id)
+	}
+	if len(kept) == len(res.results) && len(excluded) == len(res.excludedSessionIDs) {
+		return false, db.ErrSessionPushConflict
+	}
+	if len(kept) == 0 && len(excluded) == 0 && len(res.sourceMissingMembers) == 0 {
 		return true, nil
 	}
 	partial := *res

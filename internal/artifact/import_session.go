@@ -226,7 +226,11 @@ func validateImportedManifest(
 }
 
 func validateImportedClosure(m manifest, messages []db.Message) error {
-	if m.Session.MessageCount != len(messages) {
+	return validateImportedClosureCounts(m, messages, true)
+}
+
+func validateImportedClosureCounts(m manifest, messages []db.Message, checkCounts bool) error {
+	if checkCounts && m.Session.MessageCount != len(messages) {
 		return errors.New("manifest message count does not match segment messages")
 	}
 	if m.Session.UserMessageCount < 0 ||
@@ -244,7 +248,7 @@ func validateImportedClosure(m manifest, messages []db.Message) error {
 			userMessageCount++
 		}
 	}
-	if m.Session.UserMessageCount != userMessageCount {
+	if checkCounts && m.Session.UserMessageCount != userMessageCount {
 		return errors.New(
 			"manifest user message count does not match segment messages",
 		)

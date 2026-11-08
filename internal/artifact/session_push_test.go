@@ -71,6 +71,29 @@ func TestSessionPushSparseOrdinalsAndToolResultCarrier(t *testing.T) {
 	assert.Equal(t, 5, *write.UsageEvents[0].MessageOrdinal)
 }
 
+func TestSessionPushGooseAuthoritativeCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		count    int
+		messages []db.Message
+	}{
+		{"retained carrier", 3, []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 1, Role: "user", Content: "approval required"}, {Ordinal: 2, Role: "assistant", Content: "answer"}}},
+		{"removed carrier", 3, []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 2, Role: "assistant", Content: "answer"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := db.Session{ID: "goose:sample", Agent: "goose", Machine: "source", MessageCount: tc.count, UserMessageCount: 1}
+			packet, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{Messages: tc.messages})
+			require.NoError(t, err)
+			_, write, err := DecodeSessionPush(packet)
+			require.NoError(t, err)
+			assert.Equal(t, 3, write.Session.MessageCount)
+			assert.Equal(t, 1, write.Session.UserMessageCount)
+			require.Len(t, write.Messages, len(tc.messages))
+			assert.Equal(t, "answer", write.Messages[len(write.Messages)-1].Content)
+		})
+	}
+}
+
 func TestSessionPushCanceledContext(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
