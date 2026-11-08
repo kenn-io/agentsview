@@ -56,8 +56,7 @@ func (s *Analytics) models(ctx context.Context, ids []string) ([]string, error) 
 	}
 	models := map[string]bool{}
 	err := s.backend.VisitSessionIDSets(ctx, ids, func(ctx context.Context, idSet string, args []any) error {
-		query, args := analyticsModelsSQL(idSet, args)
-		rows, err := s.backend.QueryContext(ctx, query, args...)
+		rows, err := s.backend.QueryContext(ctx, analyticsModelsSQL(idSet), args...)
 		if err != nil {
 			return fmt.Errorf("querying %s analytics models: %w", s.name, err)
 		}
@@ -96,8 +95,7 @@ func (s *Analytics) filteredModels(ctx context.Context, ids []string, f db.Analy
 		}
 	}
 	err := s.backend.VisitSessionIDSets(ctx, unique, func(ctx context.Context, idSet string, args []any) error {
-		query, args := analyticsModelTimesSQL(idSet, args)
-		rows, err := s.backend.QueryContext(ctx, query, args...)
+		rows, err := s.backend.QueryContext(ctx, analyticsModelTimesSQL(idSet), args...)
 		if err != nil {
 			return fmt.Errorf("querying %s filtered analytics models: %w", s.name, err)
 		}

@@ -97,9 +97,10 @@ func seedIDSetMirror(tb testing.TB, sessions, messagesPerSession, soloModels int
 
 // TestAnalyticsIDSetReadsMatchSQLite covers the analytics reads that take
 // the selected session IDs as one set: the summary model list with and
-// without a time filter, and tool counts under a model filter. The mirror
-// holds more sessions than one placeholder batch, so every read must carry
-// the whole selection in one statement.
+// without a time filter, and tool counts under a model filter. Each read
+// selects more sessions than one placeholder batch and must return what
+// SQLite returns. BenchmarkAnalyticsIDSetReads reports how many statements
+// the reads run.
 func TestAnalyticsIDSetReadsMatchSQLite(t *testing.T) {
 	t.Parallel()
 	sessions := readbase.MaxSQLVars + 300

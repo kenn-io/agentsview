@@ -56,20 +56,20 @@ func AnalyticsActivityAgentsSQL(where string, args []any, localDate string, loca
 		ORDER BY bucket, fs.agent`, queryArgs
 }
 
-func analyticsModelsSQL(idSet string, args []any) (string, []any) {
+func analyticsModelsSQL(idSet string) string {
 	return `
 			SELECT DISTINCT model
 			FROM messages
 			WHERE session_id IN ` + idSet + `
-				AND COALESCE(model, '') <> ''`, args
+				AND COALESCE(model, '') <> ''`
 }
 
-func analyticsModelTimesSQL(idSet string, args []any) (string, []any) {
+func analyticsModelTimesSQL(idSet string) string {
 	return `
 			SELECT model, timestamp
 			FROM messages
 			WHERE session_id IN ` + idSet + `
-				AND COALESCE(model, '') <> ''`, args
+				AND COALESCE(model, '') <> ''`
 }
 
 func analyticsSignalMessagesSQL(ids []string) (string, []any) {
