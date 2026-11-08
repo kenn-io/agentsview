@@ -78,7 +78,7 @@ func newExportPushCommandWithSource(source exportPushSource) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&agent, "agent", "", "require exact stored agent; does not resolve session IDs")
-	cmd.Flags().BoolVar(&prefix, "snapshot-prefix", false, "acknowledge the captured prefix and any unknown tail")
+	cmd.Flags().BoolVar(&prefix, "snapshot-prefix", false, "acknowledge that later session turns may be missing")
 	cmd.Flags().StringVar(&output, "output", "", "new exclusive 0600 snapshot file")
 	registerFormatFlags(cmd.Flags())
 	return cmd
