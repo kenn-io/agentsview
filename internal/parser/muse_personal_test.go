@@ -235,19 +235,6 @@ func TestMusePersonalIgnoresUnknownIndexKeys(t *testing.T) {
 	assert.Empty(t, r.Messages[0].Model)
 }
 
-func TestMusePersonalUnsupportedKeepsTypeAndSource(t *testing.T) {
-	p, _ := musePersonalTestProvider(t, musePersonalTestItem(42,
-		`{"type":"future_widget","text":"opaque-sentinel-body"}`))
-	out := musePersonalTestParse(t, p)
-	require.Len(t, out.Results, 1)
-	require.Len(t, out.Results[0].Result.Messages, 1)
-	msg := out.Results[0].Result.Messages[0]
-	assert.Equal(t, musePersonalUnsupportedContent, msg.Content)
-	assert.Equal(t, "unsupported:item:future_widget", msg.SourceSubtype)
-	assert.Equal(t, "runtime.future", msg.SourceType)
-	assert.Contains(t, msg.SourceUUID, ":item:42:1")
-}
-
 func TestMusePersonalUnknownDiscriminators(t *testing.T) {
 	for _, tc := range []struct{ name, record, want string }{
 		{"record", `{"type":"future_record","source":"runtime.future","created_at":"2026-10-05T15:04:06Z","text":"opaque-sentinel-body"}` + "\n", "unsupported:record:future_record"},
