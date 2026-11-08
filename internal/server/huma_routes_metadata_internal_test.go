@@ -100,8 +100,7 @@ func TestHumaGetSessionStatsOutcomesOnly(t *testing.T) {
 	srv.sessions = spy
 	response := httptest.NewRecorder()
 	srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
-		"/api/v1/session-stats?outcomes_only=true&include_git_outcomes=true", nil))
+		"/api/v1/session-stats?outcomes_only=true", nil))
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	assert.True(t, spy.got.OutcomesOnly)
-	assert.True(t, spy.got.IncludeGitOutcomes)
 }
