@@ -881,6 +881,7 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
+	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
@@ -1208,6 +1209,7 @@ func (db *DB) requireWritable() error {
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
 	db.effectivePricing = nil
+	db.invalidateSessionStatsFacts()
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
@@ -1221,6 +1223,7 @@ func (db *DB) SetEffectivePricing(
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		db.effectivePricing[model] = rates
 	}
+	db.invalidateSessionStatsFacts()
 }
 
 // SetEmptyCatalogPricing installs in-memory rates that are used only when the
@@ -1233,6 +1236,7 @@ func (db *DB) SetEmptyCatalogPricing(
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		db.emptyCatalogPricing[model] = rates
 	}
+	db.invalidateSessionStatsFacts()
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
@@ -4887,7 +4891,8 @@ func openAndInit(
 
 	db := &DB{
 		path: path, usageCache: newUsageCacheManager(path),
-		activityKept: newActivityKeptMemo(),
+		activityKept:      newActivityKeptMemo(),
+		sessionStatsFacts: newSessionStatsFactsMemo(),
 	}
 	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
@@ -5718,7 +5723,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
-		db.frustrationMemo.Swap(func() { oldReader = db.reader.Swap(reader) })
+		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })
 	})
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a

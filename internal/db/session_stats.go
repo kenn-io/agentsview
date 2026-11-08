@@ -76,13 +76,16 @@ func (db *DB) GetSessionStats(
 	// metrics. A second, subagent-inclusive load supplies the additive
 	// token/session totals, where subagent spend is real and belongs in
 	// the headline numbers.
-	rows, err := db.loadSessionsInWindow(ctx, f, from, to, false)
+	rows, rowsWithSubagents, facts, err := db.readSessionStatsFacts(ctx, f, from, to)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading session statistics facts: %w", err)
 	}
-	rowsWithSubagents, err := db.loadSessionsInWindow(ctx, f, from, to, true)
-	if err != nil {
-		return nil, err
+	for _, set := range [][]sessionStatsRow{rows, rowsWithSubagents} {
+		for i := range set {
+			fact := facts.session(set[i].id)
+			set[i].totalToolCalls = fact.toolCalls
+			set[i].assistantTurns = fact.assistantTurns
+		}
 	}
 
 	stats := newSessionStats(f, tz, from, to, days)
@@ -110,25 +113,20 @@ func (db *DB) GetSessionStats(
 	for _, r := range rowsWithSubagents {
 		sessionIDsAll = append(sessionIDsAll, r.id)
 	}
-	accum, err := populateVelocityAccumulator(
-		ctx, db, sessionIDs, tz,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("populating velocity accumulator: %w", err)
+	accum := &velocityAccumulator{}
+	for _, id := range sessionIDs {
+		v := facts.session(id).velocity
+		accum.turnCycles = append(accum.turnCycles, v.turnCycles...)
+		accum.firstResponses = append(accum.firstResponses, v.firstResponses...)
+		accum.totalMsgs += v.totalMsgs
+		accum.activeMinutes += v.activeMinutes
 	}
 	computeVelocity(stats, accum)
-
-	if err := db.computeToolAndModelMix(
-		ctx, stats, sessionIDsAll,
-	); err != nil {
-		return nil, fmt.Errorf(
-			"computing tool/model mix: %w", err,
-		)
-	}
+	computeToolAndModelMix(stats, sessionIDsAll, facts)
 
 	computeAgentPortfolio(stats, rowsWithSubagents, rows)
 
-	if err := db.computeCacheEconomics(ctx, stats, rows); err != nil {
+	if err := computeCacheEconomics(stats, rows, facts); err != nil {
 		return nil, fmt.Errorf(
 			"computing cache economics: %w", err,
 		)
@@ -142,9 +140,7 @@ func (db *DB) GetSessionStats(
 
 	computeOutcomes(stats, rows)
 
-	if err := db.computeAdoption(ctx, stats, rows); err != nil {
-		return nil, fmt.Errorf("computing adoption: %w", err)
-	}
+	computeAdoption(stats, rows, facts)
 
 	release()
 	release = nil
@@ -299,94 +295,85 @@ func sessionsInWindowWhere(f StatsFilter, from, to time.Time, includeSubagents b
 //
 // Both mix maps are always non-nil so the JSON output keeps stable
 // keys when the window contains no sessions.
-func (db *DB) computeToolAndModelMix(
-	ctx context.Context, stats *SessionStats, sessionIDs []string,
-) error {
+func computeToolAndModelMix(stats *SessionStats, sessionIDs []string, facts sessionStatsFactsByID) {
 	stats.ToolMix.ByCategory = map[string]int{}
 	stats.ModelMix.ByTokens = map[string]int64{}
-	if len(sessionIDs) == 0 {
-		return nil
+	for _, id := range sessionIDs {
+		fact := facts.session(id)
+		for category, count := range fact.tools {
+			stats.ToolMix.ByCategory[category] += count
+			stats.ToolMix.TotalCalls += count
+		}
+		for model, count := range fact.models {
+			stats.ModelMix.ByTokens[model] += count
+		}
 	}
-
-	if err := queryChunked(sessionIDs,
-		func(chunk []string) error {
-			return db.accumulateToolMix(ctx, stats, chunk)
-		}); err != nil {
-		return err
-	}
-
-	return queryChunked(sessionIDs,
-		func(chunk []string) error {
-			return db.accumulateModelMix(ctx, stats, chunk)
-		})
 }
 
-// accumulateToolMix folds one chunk of session IDs into
-// stats.ToolMix. Each row in tool_calls increments the matching
+// accumulateToolMix fills each session's tool facts for one chunk of IDs.
+// Each row in tool_calls increments that session's matching
 // category bucket and the total counter; empty-string categories are
 // silently grouped under "" so the total stays consistent with
 // GetAnalyticsTools.
-func (db *DB) accumulateToolMix(
-	ctx context.Context, stats *SessionStats, sessionIDs []string,
+func accumulateToolMix(
+	ctx context.Context, reader messageRowsQuerier, facts sessionStatsFactsByID, sessionIDs []string,
 ) error {
 	ph, args := InPlaceholders(sessionIDs)
-	q := `SELECT category, COUNT(*)
+	q := `SELECT session_id, category, COUNT(*)
 		FROM tool_calls
 		WHERE session_id IN ` + ph + `
-		GROUP BY category`
-	rows, err := db.getReader().QueryContext(ctx, q, args...)
+		GROUP BY session_id, category`
+	rows, err := reader.QueryContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("querying tool_calls mix: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var category string
+		var id, category string
 		var count int
-		if err := rows.Scan(&category, &count); err != nil {
+		if err := rows.Scan(&id, &category, &count); err != nil {
 			return fmt.Errorf("scanning tool_calls mix: %w", err)
 		}
-		stats.ToolMix.ByCategory[category] += count
-		stats.ToolMix.TotalCalls += count
+		facts.session(id).tools[category] += count
+		facts.session(id).toolCalls += count
 	}
 	return rows.Err()
 }
 
-// accumulateModelMix folds one chunk of session IDs into
-// stats.ModelMix. Token contribution is messages.output_tokens summed
-// per model — the per-message cost column, matching the spec's
-// "model_mix.by_tokens reflects total output tokens per model".
+// accumulateModelMix fills each session's model facts for one chunk of IDs.
+// Token contribution is messages.output_tokens summed per session and model.
 //
 // Eligibility mirrors usageMessageEligibility (internal/db/usage.go):
 // rows without parsed token_usage and rows tagged as "<synthetic>" are
 // excluded so model_mix never disagrees with the dollar/usage views.
 // Messages with zero output_tokens are also dropped since they cannot
 // move the by_tokens distribution.
-func (db *DB) accumulateModelMix(
-	ctx context.Context, stats *SessionStats, sessionIDs []string,
+func accumulateModelMix(
+	ctx context.Context, reader messageRowsQuerier, facts sessionStatsFactsByID, sessionIDs []string,
 ) error {
 	ph, args := InPlaceholders(sessionIDs)
-	q := `SELECT model, COALESCE(SUM(output_tokens), 0)
+	q := `SELECT session_id, model, COALESCE(SUM(output_tokens), 0)
 		FROM messages
 		WHERE session_id IN ` + ph + `
 			AND token_usage != ''
 			AND model != ''
 			AND model != '<synthetic>'
-		GROUP BY model`
-	rows, err := db.getReader().QueryContext(ctx, q, args...)
+		GROUP BY session_id, model`
+	rows, err := reader.QueryContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("querying model mix: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var model string
+		var id, model string
 		var total int64
-		if err := rows.Scan(&model, &total); err != nil {
+		if err := rows.Scan(&id, &model, &total); err != nil {
 			return fmt.Errorf("scanning model mix: %w", err)
 		}
 		if total == 0 {
 			continue
 		}
-		stats.ModelMix.ByTokens[model] += total
+		facts.session(id).models[model] += total
 	}
 	return rows.Err()
 }
@@ -563,44 +550,25 @@ type sessionStatsRow struct {
 // Matches the analytics.go convention: exclude subagent/fork rows
 // and soft-deleted rows, require non-empty message_count, and bound
 // by started_at within [from, to).
-func (db *DB) loadSessionsInWindow(
-	ctx context.Context, f StatsFilter, from, to time.Time,
+func loadSessionsInWindow(
+	ctx context.Context, reader messageRowsQuerier, f StatsFilter, from, to time.Time,
 	includeSubagents bool,
 ) ([]sessionStatsRow, error) {
 	where, args := sessionsInWindowWhere(f, from, to, includeSubagents)
 
-	// The tool-call / assistant-turn subqueries keep the per-session
-	// projection self-contained: one row per session, no separate
-	// merge step. Correlated subqueries are cheap here because
-	// idx_tool_calls_session and idx_messages_session_role already
-	// narrow the scan to the session's rows.
-	// Project the started_at the rest of the pipeline reads (with
-	// the created_at fallback baked in) so downstream code never has
-	// to revisit the COALESCE. assistant_turns excludes system rows
-	// (Claude compact-boundary summaries, etc.) so they don't inflate
-	// the denominator of the tools-per-turn distribution.
-	// has_total_output_tokens is projected so agent_portfolio's
-	// by_tokens accumulator can guard against zeroed-out token rows.
 	query := `SELECT s.id, s.agent, s.project,
 		COALESCE(NULLIF(s.started_at, ''), s.created_at) AS effective_started_at,
 		s.ended_at,
 		s.message_count, s.user_message_count,
 		s.total_output_tokens, s.has_total_output_tokens,
 		s.peak_context_tokens, s.has_peak_context_tokens,
-		COALESCE((SELECT COUNT(*) FROM tool_calls tc
-			WHERE tc.session_id = s.id), 0) AS total_tool_calls,
-		COALESCE((SELECT COUNT(*) FROM messages m
-			WHERE m.session_id = s.id
-				AND m.role = 'assistant'
-				AND m.is_system = 0),
-			0) AS assistant_turns,
 		s.outcome, COALESCE(s.health_grade, ''),
 		s.tool_retry_count, s.compaction_count, s.edit_churn_count,
 		COALESCE(s.cwd, ''),
 		s.is_automated
 		FROM sessions s WHERE ` + where
 
-	sqlRows, err := db.getReader().QueryContext(ctx, query, args...)
+	sqlRows, err := reader.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"querying sessions for stats window: %w", err,
@@ -620,7 +588,6 @@ func (db *DB) loadSessionsInWindow(
 			&r.messageCount, &r.userMessageCount,
 			&r.totalOutputTokens, &hasTotalTokens,
 			&r.peakContextTokens, &hasPeak,
-			&r.totalToolCalls, &r.assistantTurns,
 			&r.outcome, &r.healthGrade,
 			&r.toolRetryCount, &r.compactionCount, &r.editChurnCount,
 			&r.cwd,
@@ -1059,31 +1026,11 @@ type sessionCacheTotals struct {
 // counterfactual where the workload never cached), then subtracts
 // dollars_spent. A missing pricing row zeroes out that model's
 // contribution — the same graceful-degrade behaviour as GetDailyUsage.
-func (db *DB) computeCacheEconomics(
-	ctx context.Context, stats *SessionStats,
-	rows []sessionStatsRow,
-) error {
+func computeCacheEconomics(stats *SessionStats, rows []sessionStatsRow, facts sessionStatsFactsByID) error {
 	claudeIDs := collectClaudeSessionIDs(rows)
 	if len(claudeIDs) == 0 {
 		return nil
 	}
-
-	pricing, err := db.loadPricingMap(ctx)
-	if err != nil {
-		return fmt.Errorf("loading pricing: %w", err)
-	}
-	rateResolver := export.NewPricingResolver(pricing)
-
-	perSession := make(map[string]*sessionCacheTotals, len(claudeIDs))
-	if err := queryChunked(claudeIDs,
-		func(chunk []string) error {
-			return db.accumulateCacheTotals(
-				ctx, chunk, rateResolver, perSession,
-			)
-		}); err != nil {
-		return err
-	}
-
 	ce := &StatsCacheEconomics{
 		ClaudeOnly: true,
 		CacheHitRatio: CacheHitRatioDistribution{
@@ -1095,18 +1042,13 @@ func (db *DB) computeCacheEconomics(
 		denominatorSum int64
 		dollarsSpent   money.Money
 		dollarsNoCache money.Money
+		err            error
 	)
-	// Iterate in session-id order so floating-point sums stay
-	// deterministic across runs; Go's map iteration order is
-	// randomised and (a+b)+c != a+(b+c) in IEEE 754.
-	keys := make([]string, 0, len(perSession))
-	for k := range perSession {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		totals, ok := perSession[k]
-		if !ok || totals == nil {
+	// Keep summation in session-ID order for deterministic results.
+	sort.Strings(claudeIDs)
+	for _, id := range claudeIDs {
+		totals := facts.session(id).cache
+		if totals == nil {
 			continue
 		}
 		denom := totals.inputTok + totals.cacheReadT +
@@ -1165,8 +1107,8 @@ func collectClaudeSessionIDs(rows []sessionStatsRow) []string {
 // perSession. Messages with empty token_usage or empty model are
 // skipped — they match usageMessageEligibility's filter and keep the
 // dollar numbers consistent with GetDailyUsage.
-func (db *DB) accumulateCacheTotals(
-	ctx context.Context, sessionIDs []string,
+func accumulateCacheTotals(
+	ctx context.Context, reader messageRowsQuerier, sessionIDs []string,
 	pricing *export.PricingResolver,
 	perSession map[string]*sessionCacheTotals,
 ) error {
@@ -1184,7 +1126,7 @@ func (db *DB) accumulateCacheTotals(
 			AND model != ''
 			AND model != '<synthetic>'
 		ORDER BY session_id, ordinal`
-	sqlRows, err := db.getReader().QueryContext(ctx, q, args...)
+	sqlRows, err := reader.QueryContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("querying cache tokens: %w", err)
 	}
@@ -1499,51 +1441,44 @@ func computeOutcomes(s *SessionStats, rows []sessionStatsRow) {
 //     recorded on rows with tool_name = "Skill". The schema already
 //     normalises skill_name as a dedicated column (see schema.sql), so
 //     no JSON parsing is required.
-func (db *DB) computeAdoption(
-	ctx context.Context, stats *SessionStats, rows []sessionStatsRow,
-) error {
+func computeAdoption(stats *SessionStats, rows []sessionStatsRow, facts sessionStatsFactsByID) {
 	claudeIDs := collectClaudeSessionIDs(rows)
 	if len(claudeIDs) == 0 {
-		return nil
+		return
 	}
-	planModeSessions := map[string]struct{}{}
 	skillNames := map[string]struct{}{}
-	var totalSubagents int
-	if err := queryChunked(claudeIDs,
-		func(chunk []string) error {
-			return db.accumulateAdoption(
-				ctx, chunk,
-				planModeSessions, skillNames, &totalSubagents,
-			)
-		}); err != nil {
-		return err
+	var planModeSessions, totalSubagents int
+	for _, id := range claudeIDs {
+		fact := facts.session(id)
+		if fact.planMode {
+			planModeSessions++
+		}
+		totalSubagents += fact.subagents
+		for skill := range fact.skills {
+			skillNames[skill] = struct{}{}
+		}
 	}
+
 	n := float64(len(claudeIDs))
 	stats.Adoption = &StatsAdoption{
 		ClaudeOnly:          true,
-		PlanModeRate:        float64(len(planModeSessions)) / n,
+		PlanModeRate:        float64(planModeSessions) / n,
 		SubagentsPerSession: float64(totalSubagents) / n,
 		DistinctSkills:      len(skillNames),
 	}
-	return nil
 }
 
 // accumulateAdoption folds one chunk of Claude session IDs into the
 // three per-window accumulators. One pass over tool_calls scans only
 // the three tool_name values the adoption metrics need; a
 // single-column skill_name projection keeps the result set narrow.
-func (db *DB) accumulateAdoption(
-	ctx context.Context, sessionIDs []string,
-	planModeSessions map[string]struct{},
-	skillNames map[string]struct{},
-	totalSubagents *int,
-) error {
+func accumulateAdoption(ctx context.Context, reader messageRowsQuerier, sessionIDs []string, facts sessionStatsFactsByID) error {
 	ph, args := InPlaceholders(sessionIDs)
 	q := `SELECT session_id, tool_name, COALESCE(skill_name, '')
 		FROM tool_calls
 		WHERE session_id IN ` + ph + `
 			AND tool_name IN ('ExitPlanMode', 'Task', 'Agent', 'Skill')`
-	rows, err := db.getReader().QueryContext(ctx, q, args...)
+	rows, err := reader.QueryContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("querying adoption tool_calls: %w", err)
 	}
@@ -1555,12 +1490,12 @@ func (db *DB) accumulateAdoption(
 		}
 		switch toolName {
 		case "ExitPlanMode":
-			planModeSessions[sessionID] = struct{}{}
+			facts.session(sessionID).planMode = true
 		case "Task", "Agent":
-			*totalSubagents++
+			facts.session(sessionID).subagents++
 		case "Skill":
 			if skillName != "" {
-				skillNames[skillName] = struct{}{}
+				facts.session(sessionID).skills[skillName] = struct{}{}
 			}
 		}
 	}
