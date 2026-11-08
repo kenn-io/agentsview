@@ -679,32 +679,17 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 		require.Empty(t, state.changed)
 		require.Empty(t, state.stale)
 	}
-	parts := func() []string {
-		t.Helper()
-		var names []string
-		rows, err := store.DB().QueryContext(ctx, `SELECT name FROM system.parts
-			WHERE database = currentDatabase() AND table = 'prepared_usage' AND active ORDER BY name`)
-		require.NoError(t, err)
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			require.NoError(t, rows.Scan(&name))
-			names = append(names, name)
-		}
-		require.NoError(t, rows.Err())
-		return names
-	}
 	locks := func() []string {
 		t.Helper()
 		return preparedUsageTables(t, store.DB(), "prepared_usage_rebuild_lock")
 	}
 	push()
-	built := parts()
+	built := preparedUsageParts(t, store)
 	require.NotEmpty(t, built)
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	require.Equal(t, built, parts(), "a push that changed nothing must keep the prepared rows")
+	require.Equal(t, built, preparedUsageParts(t, store), "a push that changed nothing must keep the prepared rows")
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_2 released"}, locks(),
 		"a push that changed nothing must not take the rebuild lock")
 
@@ -725,7 +710,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	result, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	require.Equal(t, built, parts(), "a push must not rebuild while another holds the lock")
+	require.Equal(t, built, preparedUsageParts(t, store), "a push must not rebuild while another holds the lock")
 	state, err := store.preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{usagePriceRoundID}, state.changed)
@@ -1028,6 +1013,23 @@ func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 	require.False(t, acquired, "the successor's lock is still held")
 }
 
+// preparedUsageParts lists the active parts of prepared_usage by name.
+func preparedUsageParts(t *testing.T, store *Store) []string {
+	t.Helper()
+	rows, err := store.DB().QueryContext(t.Context(), `SELECT name FROM system.parts
+		WHERE database = currentDatabase() AND table = 'prepared_usage' AND active ORDER BY name`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+	require.NoError(t, rows.Err())
+	return names
+}
+
 // preparedUsageTables lists the tables other than prepared_usage whose names
 // start with prefix, each with the status in its rebuild lock comment, which
 // is empty for tables that are not locks.
@@ -1147,21 +1149,6 @@ func TestPreparedUsageRebuildWaitsForEnoughChange(t *testing.T) {
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
 	syncer := newTestSync(t, local, Target{URL: dsn, Database: database}, storage.PusherOptions{})
 	store := NewStoreFromDB(syncer.conn)
-	parts := func() []string {
-		t.Helper()
-		var names []string
-		rows, err := store.DB().QueryContext(ctx, `SELECT name FROM system.parts
-			WHERE database = currentDatabase() AND table = 'prepared_usage' AND active ORDER BY name`)
-		require.NoError(t, err)
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			require.NoError(t, rows.Scan(&name))
-			names = append(names, name)
-		}
-		require.NoError(t, rows.Err())
-		return names
-	}
 	changed := func() []string {
 		t.Helper()
 		state, err := store.preparedUsageState(ctx)
@@ -1171,28 +1158,30 @@ func TestPreparedUsageRebuildWaitsForEnoughChange(t *testing.T) {
 	}
 	pushPreparedUsage(t, syncer)
 	require.Empty(t, changed())
-	built := parts()
+	built := preparedUsageParts(t, store)
 	require.NotEmpty(t, built)
 
 	republishRoundSession(t, local, 100)
 	pushPreparedUsage(t, syncer)
-	require.Equal(t, built, parts(), "a push below the limit must not rewrite prepared usage")
+	require.Equal(t, built, preparedUsageParts(t, store), "a push below the limit must not rewrite prepared usage")
 	require.Equal(t, []string{usagePriceRoundID}, changed())
 
 	writeLongUsageSession(t, local, 1000)
 	pushPreparedUsage(t, syncer)
-	rebuilt := parts()
+	rebuilt := preparedUsageParts(t, store)
 	require.NotEqual(t, built, rebuilt, "a push past the limit must rebuild prepared usage")
 	require.Empty(t, changed())
 
+	// Leave a delta below the limit pending, so the price rebuild must clear
+	// it as well.
 	republishRoundSession(t, local, 200)
 	pushPreparedUsage(t, syncer)
-	require.Equal(t, rebuilt, parts())
+	require.Equal(t, rebuilt, preparedUsageParts(t, store))
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "claude-test", InputPerMTok: money.MustParseDollars("4"), OutputPerMTok: money.MustParseDollars("16"),
 	}}))
 	pushPreparedUsage(t, syncer)
-	require.NotEqual(t, rebuilt, parts(), "a price change must rebuild prepared usage")
+	require.NotEqual(t, rebuilt, preparedUsageParts(t, store), "a price change must rebuild prepared usage")
 	require.Empty(t, changed())
 }
 
