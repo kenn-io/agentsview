@@ -14,9 +14,8 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-// TestAnalyticsToolsCountsEveryCallInAMessage pins the tool visits join to
-// one row per tool call. Several calls share one message row, so a join that
-// keeps one row per key on both sides would count them once.
+// TestAnalyticsToolsCountsEveryCallInAMessage checks that every tool call
+// counts when several calls share one message.
 func TestAnalyticsToolsCountsEveryCallInAMessage(t *testing.T) {
 	t.Parallel()
 	local := dbtest.OpenTestDB(t)

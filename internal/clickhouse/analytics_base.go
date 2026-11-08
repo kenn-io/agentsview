@@ -233,7 +233,6 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 	// An unmatched join reads ordinal 0, so only calls whose message exists supply the ordinal.
 	// final=1 makes messages unique on (session_id, ordinal), so LEFT ANY
 	// returns the same rows as LEFT ALL without a list of matches per key.
-	// Do not use INNER ANY: under a hash join it keeps one call per message.
 	// Both tables are sorted on session_id and the message ordinal, and
 	// partial_merge used 15-21% less CPU and 11% less memory than the
 	// default hash join over a year of sessions.
