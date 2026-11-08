@@ -1622,7 +1622,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 	seen := make(map[activity.UsageDedupToken]int)
 	type dimensionPair struct{ project, model string }
 	dimensions := make(map[dimensionPair]int)
-	var dimensionValues []dimensionPair
+	dimensionValues := make([]dimensionPair, 0)
 	inexactModels, inexactProjects := make(map[string]bool), make(map[string]bool)
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
