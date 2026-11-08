@@ -2951,7 +2951,9 @@ func TestFreshBackgroundServeIgnoresInheritedPersistence(t *testing.T) {
 	host, port := testPingServer(t)
 	old := startServeBackgroundProcessForRun
 	t.Cleanup(func() { startServeBackgroundProcessForRun = old })
+	launched := false
 	startServeBackgroundProcessForRun = func(ctx context.Context, cfg config.Config, args []string) (*exec.Cmd, string, error) {
+		launched = true
 		assert.False(t, cfg.PersistentDaemon, "fresh background serve must remain automatic")
 		_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil, dir, host, port, version, "", false, false, true, nil)
 		require.NoError(t, err)
@@ -2961,4 +2963,5 @@ func TestFreshBackgroundServeIgnoresInheritedPersistence(t *testing.T) {
 		return child, "", nil
 	}
 	runServeBackground(t.Context(), config.Config{DataDir: dir, Host: host, Port: port}, []string{"serve", "--background"}, serveReplacementOptions{})
+	assert.True(t, launched)
 }

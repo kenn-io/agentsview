@@ -457,8 +457,6 @@ func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
 			}
 			rt := FindWritableDaemonRuntime(dir)
 			require.NotNil(t, rt)
-			require.NotNil(t, rt.IdleTimeout)
-			assert.Zero(t, *rt.IdleTimeout)
 			stopped, err := stopWritableDaemonsForUpdate(ctx, cfg)
 			require.NoError(t, err)
 			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")

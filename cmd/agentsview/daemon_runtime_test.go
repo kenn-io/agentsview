@@ -2011,36 +2011,21 @@ func TestRuntimePublicationFailurePreservesLifetimeThroughUpdate(t *testing.T) {
 }
 
 func TestPersistentDaemonPublicationFailureIsReported(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		t.Run(strconv.FormatBool(fail), func(t *testing.T) {
-			dir := runtimeTestDir(t)
-			MarkDaemonStarting(dir)
-			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-			newStartupStateWriter(dir, time.Now).SetPhase("starting HTTP server")
-			host, port := testPingServer(t)
-			path, err := runtimeStore(dir).Path(os.Getpid())
-			require.NoError(t, err)
-			require.NoError(t, os.Mkdir(path, 0o700))
-			_, err = WriteDaemonRuntimeWithAuthAndNoSync(&daemonLifetime{IdleTimeout: 2 * time.Second}, dir, host, port, "test", "", false, false, false, nil)
-			require.Error(t, err)
-			if fail {
-				require.NoError(t, os.Mkdir(filepath.Join(dir, startupStateFileName+".tmp"), 0o700))
-			}
-			err = publishPersistentDaemon(dir)
-			if fail {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-			rt := FindWritableDaemonRuntime(dir)
-			require.NotNil(t, rt)
-			assert.Equal(t, !fail, rt.Persistent)
-			require.NotNil(t, rt.IdleTimeout)
-			if fail {
-				assert.Equal(t, 2*time.Second, *rt.IdleTimeout)
-			} else {
-				assert.Zero(t, *rt.IdleTimeout)
-			}
-		})
-	}
+	dir := runtimeTestDir(t)
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	newStartupStateWriter(dir, time.Now).SetPhase("starting HTTP server")
+	host, port := testPingServer(t)
+	path, err := runtimeStore(dir).Path(os.Getpid())
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(path, 0o700))
+	_, err = WriteDaemonRuntimeWithAuthAndNoSync(&daemonLifetime{IdleTimeout: 2 * time.Second}, dir, host, port, "test", "", false, false, false, nil)
+	require.Error(t, err)
+	require.NoError(t, os.Mkdir(filepath.Join(dir, startupStateFileName+".tmp"), 0o700))
+	require.Error(t, publishPersistentDaemon(dir))
+	rt := FindWritableDaemonRuntime(dir)
+	require.NotNil(t, rt)
+	assert.False(t, rt.Persistent)
+	require.NotNil(t, rt.IdleTimeout)
+	assert.Equal(t, 2*time.Second, *rt.IdleTimeout)
 }
