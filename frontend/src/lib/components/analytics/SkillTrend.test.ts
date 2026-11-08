@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import SkillTrend from "./SkillTrend.svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
+import { AnalyticsService } from "../../api/generated/index.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 
@@ -318,30 +319,51 @@ describe("SkillTrend", () => {
     await unmount(component);
   });
 
-  it("requests granularity changes through the shared picker", async () => {
-    const fetchSpy = vi.spyOn(analytics, "fetchSkills").mockResolvedValue("ok");
+  it("requests granularity through the picker and hides the previous trend after failure", async () => {
     const component = mountWithData();
-    await tick();
-
-    const monthBtn = [...document.querySelectorAll<HTMLButtonElement>(".trend-header button")].find(
-      (b) => b.textContent?.trim() === "Month",
-    );
-    expect(monthBtn).toBeTruthy();
-    monthBtn!.click();
-    await tick();
-
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    expect(fetchSpy).toHaveBeenCalledWith("month");
-
-    await unmount(component);
+    const data = analytics.skills!;
+    const read = vi.spyOn(AnalyticsService, "getApiV1AnalyticsSkills").mockResolvedValue(data);
+    await analytics.fetchSkills("week");
+    const fetchSpy = vi.spyOn(analytics, "fetchSkills");
+    read.mockRejectedValueOnce(new Error("Month failed"));
+    try {
+      await tick();
+      const monthBtn = [
+        ...document.querySelectorAll<HTMLButtonElement>(".trend-header button"),
+      ].find((b) => b.textContent?.trim() === "Month");
+      expect(monthBtn).toBeTruthy();
+      monthBtn!.click();
+      await vi.waitFor(() => expect(document.body.textContent).toContain("Month failed"));
+      expect(fetchSpy).toHaveBeenCalledExactlyOnceWith("month");
+      expect(document.querySelector(".chart")).toBeNull();
+    } finally {
+      await analytics.fetchSkills("week");
+      await unmount(component);
+    }
   });
 
-  it("renders empty state", async () => {
+  it("renders loading, empty results, and failures with or without retained results", async () => {
     analytics.skills = skillsResponse([]);
+    const data = analytics.skills;
+    analytics.skills = null;
     const component = mount(SkillTrend, { target: document.body });
     await tick();
 
+    expect(document.body.textContent).toMatch(/Loading/);
+    analytics.skills = data;
+    await tick();
     expect(document.body.textContent).toContain("No skill usage data");
+
+    analytics.errors.skills = "request failed";
+    await tick();
+    expect(document.body.textContent).toContain("request failed");
+    expect(document.body.textContent).toContain("No skill usage data");
+    expect(document.querySelector(".error button")?.textContent).toContain("Retry");
+    analytics.skills = null;
+    await tick();
+    expect(document.body.textContent).toContain("request failed");
+    expect(document.body.textContent).not.toContain("No skill usage data");
+    expect(document.body.textContent).not.toMatch(/Loading/);
 
     await unmount(component);
   });

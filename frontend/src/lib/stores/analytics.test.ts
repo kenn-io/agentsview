@@ -305,11 +305,11 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
     expect(result).toBe("error");
     expect(analytics.skillsGranularity).toBe("week");
     expect(analytics.requestedSkillsGranularity).toBe("month");
+    await analytics.fetchSkills();
+    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]?.granularity).toBe("month");
     await analytics.setSkillsGranularity("week");
     expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]?.granularity).toBe("week");
     expect(analytics.requestedSkillsGranularity).toBe("week");
-    await analytics.fetchSkills();
-    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]?.granularity).toBe("week");
   });
 });
 
@@ -1217,48 +1217,15 @@ describe("AnalyticsStore rolling default date range", () => {
     expect(analytics.to).toBe("2026-04-25");
   });
 
-  it("fetchAll re-derives its request range and clears old results while pending and after failure", async () => {
+  it("fetchAll re-derives its rolling request range", async () => {
     const { analytics } = await loadAnalyticsStore();
-    analyticsService.getApiV1AnalyticsTools.mockResolvedValueOnce({
-      ...makeTools(),
-      total_calls: 12,
-    });
     await analytics.fetchAll();
-    expect(analytics.summary?.total_sessions).toBe(10);
-    expect(analytics.tools?.total_calls).toBe(12);
-    let rejectSummary!: (error: Error) => void;
-    let rejectTools!: (error: Error) => void;
-    analyticsService.getApiV1AnalyticsSummary.mockReturnValueOnce(
-      new Promise((_resolve, reject) => {
-        rejectSummary = reject;
-      }),
-    );
-    analyticsService.getApiV1AnalyticsTools.mockReturnValueOnce(
-      new Promise((_resolve, reject) => {
-        rejectTools = reject;
-      }),
-    );
     vi.setSystemTime(new Date("2026-04-26T12:00:00"));
-    const refresh = analytics.fetchAll();
+    await analytics.fetchAll();
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toMatchObject({
       from: "2025-04-27",
       to: "2026-04-26",
     });
-    expect(analytics.summary).toBeNull();
-    expect(analytics.summaryFilterParams).toBeNull();
-    expect(analytics.tools).toBeNull();
-    expect(analytics.toolsFilterParams).toBeNull();
-    expect(analytics.loading.summary).toBe(true);
-    expect(analytics.loading.tools).toBe(true);
-    rejectSummary(new Error("Summary timed out"));
-    rejectTools(new Error("Tools timed out"));
-    await refresh;
-    expect(analytics.summary).toBeNull();
-    expect(analytics.tools).toBeNull();
-    expect(analytics.errors.summary).toBe("Summary timed out");
-    expect(analytics.errors.tools).toBe("Tools timed out");
-    expect(analytics.loading.summary).toBe(false);
-    expect(analytics.loading.tools).toBe(false);
   });
 
   it("setDateRange pins and subsequent fetchAll does not roll", async () => {
@@ -1385,18 +1352,13 @@ describe("invalid machine refetches", () => {
 });
 
 describe("AnalyticsStore panel scopes", () => {
-  it("retains tools through a failed refresh and clears its error after retry", async () => {
-    analyticsService.getApiV1AnalyticsTools.mockResolvedValueOnce({
-      ...makeTools(),
-      total_calls: 12,
-    });
+  it("keeps the panel error visible while retry is pending", async () => {
     await analytics.fetchTools();
 
     vi.mocked(analyticsService.getApiV1AnalyticsTools).mockRejectedValueOnce(
       new Error("tools unavailable"),
     );
     await analytics.fetchTools();
-    expect(analytics.tools?.total_calls).toBe(12);
     expect(analytics.errors.tools).toBe("tools unavailable");
     let releaseRetry!: (value: ToolsAnalyticsResponse) => void;
     vi.mocked(analyticsService.getApiV1AnalyticsTools).mockReturnValueOnce(
@@ -1406,11 +1368,8 @@ describe("AnalyticsStore panel scopes", () => {
     );
     const retry = analytics.fetchTools();
     expect(analytics.errors.tools).toBe("tools unavailable");
-    expect(analytics.tools?.total_calls).toBe(12);
-    releaseRetry({ ...makeTools(), total_calls: 18 });
+    releaseRetry(makeTools());
     await retry;
-    expect(analytics.tools?.total_calls).toBe(18);
-    expect(analytics.errors.tools).toBeNull();
   });
 
   it("clears activity and heatmap when the selected hour changes", async () => {

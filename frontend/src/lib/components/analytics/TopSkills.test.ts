@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import TopSkills from "./TopSkills.svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
+import { AnalyticsService } from "../../api/generated/index.js";
 import { ui } from "../../stores/ui.svelte.js";
 
 describe("TopSkills", () => {
@@ -84,6 +85,20 @@ describe("TopSkills", () => {
     expect(document.body.textContent).toContain("2");
     expect(document.body.textContent).toContain("29%");
     expect(document.body.textContent).toContain("Projects: agentsview: 4, notes: 3");
+    const data = analytics.skills!;
+    const read = vi.spyOn(AnalyticsService, "getApiV1AnalyticsSkills").mockResolvedValue(data);
+    await analytics.fetchSkills("week");
+    read.mockRejectedValueOnce(new Error("Month failed"));
+    try {
+      await analytics.fetchSkills("month");
+      await tick();
+      expect(document.body.textContent).toContain("9 calls");
+      expect(document.body.textContent).not.toContain("Month failed");
+      expect(document.querySelector(".error button")).toBeNull();
+    } finally {
+      await analytics.fetchSkills("week");
+    }
+
     await unmount(component);
   });
 
@@ -102,17 +117,33 @@ describe("TopSkills", () => {
     await unmount(component);
   });
 
-  it("renders empty state", async () => {
+  it("renders loading, empty results, and failures with or without retained results", async () => {
     analytics.skills = {
       total_skill_calls: 0,
       distinct_skills: 0,
       by_skill: [],
       trend: [],
     };
+    const data = analytics.skills;
+    analytics.skills = null;
     const component = mount(TopSkills, { target: document.body });
     await tick();
 
+    expect(document.body.textContent).toMatch(/Loading/);
+    analytics.skills = data;
+    await tick();
     expect(document.body.textContent).toContain("No skill usage data");
+
+    analytics.errors.skills = "request failed";
+    await tick();
+    expect(document.body.textContent).toContain("request failed");
+    expect(document.body.textContent).toContain("No skill usage data");
+    expect(document.querySelector(".error button")?.textContent).toContain("Retry");
+    analytics.skills = null;
+    await tick();
+    expect(document.body.textContent).toContain("request failed");
+    expect(document.body.textContent).not.toContain("No skill usage data");
+    expect(document.body.textContent).not.toMatch(/Loading/);
 
     await unmount(component);
   });

@@ -18,11 +18,13 @@ describe("Heatmap", () => {
     }
   });
 
-  it("fits a full year of cells inside the card", async () => {
+  it("fits a full year and keeps Output Tokens usable without a summary", async () => {
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
       get: () => 600,
     });
+    analytics.summary = null;
+    const metric = vi.spyOn(analytics, "setMetric").mockImplementation(() => {});
     analytics.heatmap = {
       metric: "messages",
       entries_from: "2025-08-21",
@@ -42,6 +44,13 @@ describe("Heatmap", () => {
     expect(container).not.toBeNull();
     expect(chart).not.toBeNull();
     expect(Number(chart!.getAttribute("width"))).toBeLessThanOrEqual(container!.clientWidth);
+
+    const tokens = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Output Tokens",
+    );
+    expect(tokens).toBeDefined();
+    tokens!.click();
+    expect(metric).toHaveBeenCalledWith("output_tokens");
 
     unmount(component);
   });

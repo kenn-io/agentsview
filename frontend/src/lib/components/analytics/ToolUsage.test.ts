@@ -116,7 +116,7 @@ describe("ToolUsage", () => {
     await unmount(component);
   });
 
-  it("renders empty state without tool rows", async () => {
+  it("renders empty results and failures with or without retained results", async () => {
     analytics.tools = {
       total_calls: 0,
       by_category: [],
@@ -130,10 +130,20 @@ describe("ToolUsage", () => {
 
     expect(document.body.textContent).toContain("No tool usage data");
 
+    analytics.errors.tools = "request failed";
+    await tick();
+    expect(document.body.textContent).toContain("request failed");
+    expect(document.body.textContent).toContain("No tool usage data");
+    expect(document.querySelector(".error button")?.textContent).toContain("Retry");
+    analytics.tools = null;
+    await tick();
+    expect(document.body.textContent).toContain("request failed");
+    expect(document.body.textContent).not.toContain("No tool usage data");
+    expect(document.body.textContent).not.toMatch(/Loading/);
+
     await unmount(component);
   });
   function seedRates() {
-    analytics.loading = { ...analytics.loading, tools: false };
     analytics.tools = {
       total_calls: 7,
       by_category: [{ category: "Grep", count: 7, pct: 100 }],
