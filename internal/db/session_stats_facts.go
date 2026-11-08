@@ -114,6 +114,12 @@ func (m *sessionStatsFactsMemo) Swap(swap func()) {
 	m.rows.DeleteSlots(func(string) bool { return true })
 }
 
+func (db *DB) invalidateSessionStatsFacts() {
+	if db.sessionStatsFacts != nil {
+		db.sessionStatsFacts.Swap(func() {})
+	}
+}
+
 func (db *DB) readSessionStatsFacts(ctx context.Context, filter StatsFilter, from, to time.Time) ([]sessionStatsRow, []sessionStatsRow, sessionStatsFactsByID, error) {
 	var generation uint64
 	memo := db.sessionStatsFacts

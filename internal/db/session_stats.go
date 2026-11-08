@@ -140,9 +140,7 @@ func (db *DB) GetSessionStats(
 
 	computeOutcomes(stats, rows)
 
-	if err := computeAdoption(stats, rows, facts); err != nil {
-		return nil, fmt.Errorf("computing adoption: %w", err)
-	}
+	computeAdoption(stats, rows, facts)
 
 	release()
 	release = nil
@@ -1443,18 +1441,17 @@ func computeOutcomes(s *SessionStats, rows []sessionStatsRow) {
 //     recorded on rows with tool_name = "Skill". The schema already
 //     normalises skill_name as a dedicated column (see schema.sql), so
 //     no JSON parsing is required.
-func computeAdoption(stats *SessionStats, rows []sessionStatsRow, facts sessionStatsFactsByID) error {
+func computeAdoption(stats *SessionStats, rows []sessionStatsRow, facts sessionStatsFactsByID) {
 	claudeIDs := collectClaudeSessionIDs(rows)
 	if len(claudeIDs) == 0 {
-		return nil
+		return
 	}
-	planModeSessions := map[string]struct{}{}
 	skillNames := map[string]struct{}{}
-	var totalSubagents int
+	var planModeSessions, totalSubagents int
 	for _, id := range claudeIDs {
 		fact := facts.session(id)
 		if fact.planMode {
-			planModeSessions[id] = struct{}{}
+			planModeSessions++
 		}
 		totalSubagents += fact.subagents
 		for skill := range fact.skills {
@@ -1465,11 +1462,10 @@ func computeAdoption(stats *SessionStats, rows []sessionStatsRow, facts sessionS
 	n := float64(len(claudeIDs))
 	stats.Adoption = &StatsAdoption{
 		ClaudeOnly:          true,
-		PlanModeRate:        float64(len(planModeSessions)) / n,
+		PlanModeRate:        float64(planModeSessions) / n,
 		SubagentsPerSession: float64(totalSubagents) / n,
 		DistinctSkills:      len(skillNames),
 	}
-	return nil
 }
 
 // accumulateAdoption folds one chunk of Claude session IDs into the

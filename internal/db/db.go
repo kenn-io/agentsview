@@ -1209,9 +1209,7 @@ func (db *DB) requireWritable() error {
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
 	db.effectivePricing = nil
-	if db.sessionStatsFacts != nil {
-		db.sessionStatsFacts.Swap(func() {})
-	}
+	db.invalidateSessionStatsFacts()
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
@@ -1225,9 +1223,7 @@ func (db *DB) SetEffectivePricing(
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		db.effectivePricing[model] = rates
 	}
-	if db.sessionStatsFacts != nil {
-		db.sessionStatsFacts.Swap(func() {})
-	}
+	db.invalidateSessionStatsFacts()
 }
 
 // SetEmptyCatalogPricing installs in-memory rates that are used only when the
@@ -1240,9 +1236,7 @@ func (db *DB) SetEmptyCatalogPricing(
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		db.emptyCatalogPricing[model] = rates
 	}
-	if db.sessionStatsFacts != nil {
-		db.sessionStatsFacts.Swap(func() {})
-	}
+	db.invalidateSessionStatsFacts()
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
