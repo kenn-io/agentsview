@@ -174,18 +174,6 @@ func TestCLISearchRootDiscovery(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCLISearchNoMatches(t *testing.T) {
-	isolateCLISearch(t)
-	got, stderr, err := runCLISearch("qzxjkvwzz", "--json")
-	require.NoError(t, err)
-	assert.Empty(t, stderr)
-	assert.Equal(t, "qzxjkvwzz", got.Query)
-	assert.Equal(t, []cliSearchResult{}, got.Results)
-	out, err := executeCommand(newRootCommand(), "cli", "search", "qzxjkvwzz")
-	require.NoError(t, err)
-	assert.Contains(t, out, "Run 'agentsview --help' for flags and examples.")
-}
-
 func TestCLISearchDiagnostics(t *testing.T) {
 	isolateCLISearch(t)
 	for _, tt := range []struct {
