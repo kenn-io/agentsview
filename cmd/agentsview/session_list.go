@@ -137,11 +137,9 @@ func newSessionListCommand() *cobra.Command {
 			}
 			defer cleanup()
 
-			if f.Cursor == "" && !(f.IncludeOneShot && f.IncludeAutomated && f.IncludeChildren) {
-				f.ExclusionCounts = "flat"
-				if len(f.Labels) == 0 && f.PR == "" && (!f.IncludeChildren || !f.IncludeOneShot && !f.IncludeAutomated) {
-					f.ExclusionCounts = "all"
-				}
+			f.ExclusionCounts = "flat"
+			if len(f.Labels) == 0 && f.PR == "" && (!f.IncludeChildren || !f.IncludeOneShot && !f.IncludeAutomated) {
+				f.ExclusionCounts = "all"
 			}
 			list, err := svc.List(cmd.Context(), f)
 			if err != nil {
