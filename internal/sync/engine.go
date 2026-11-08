@@ -5943,6 +5943,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	}
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
+	// Share S3 Codex parent downloads across every reconciliation page.
+	ctx, closeS3ParentCache := withS3CodexParentCache(ctx)
+	defer closeS3ParentCache()
 	defer func() {
 		if cleanupErr := closeProviderCache(); cleanupErr != nil {
 			stats.Aborted = true
@@ -10590,6 +10593,9 @@ func (e *Engine) startWorkers(
 	jobs := make(chan parser.DiscoveredFile, buffer)
 	results := make(chan syncJob, buffer)
 	runtimeMetrics := reconciliationRuntimeMetricsFor(ctx)
+	// Children of one S3 Codex parent reuse its download while the pool
+	// runs; a caller that already scoped a cache to its pass keeps it.
+	ctx, closeS3ParentCache := withS3CodexParentCache(ctx)
 	emitResult := func(result syncJob) {
 		if runtimeMetrics != nil {
 			runtimeMetrics.workerQueued(1)
@@ -10629,6 +10635,7 @@ func (e *Engine) startWorkers(
 		}
 		close(jobs)
 		wg.Wait()
+		closeS3ParentCache()
 		close(results)
 	}()
 	return results

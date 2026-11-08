@@ -1762,6 +1762,11 @@ with the existing per-agent parser, records the original `s3://` URI as
 `file_path`, and removes the temporary file. No persistent local mirror is
 created.
 
+Codex forks and subagents also need their parent's rollouts to filter replayed
+turns. A sync downloads each parent once and shares it with every child it
+processes. It keeps about 512 MiB of recent parent rollouts in a temporary
+directory and removes that directory when the sync ends.
+
 Credentials and endpoint configuration use standard AWS-style environment
 variables:
 
