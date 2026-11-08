@@ -34,6 +34,7 @@ func NewWatchBatchAccumulator(
 }
 
 func (a *WatchBatchAccumulator) Add(batch WatchBatch) {
+	a.pending.reasons |= batch.Reasons
 	if a.pending.fullSync {
 		a.pending.lostEvents = a.pending.lostEvents || batch.LostEvents
 		return

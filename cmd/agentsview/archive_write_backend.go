@@ -1173,6 +1173,9 @@ func generatedWatchBatch(batch *syncpkg.WatchBatch) *apiclient.SyncWatchBatch {
 		return nil
 	}
 	out := &apiclient.SyncWatchBatch{Paths: batch.Paths, ReconcileRoots: batch.ReconcileRoots, FullSync: new(batch.FullSync), LostEvents: new(batch.LostEvents)}
+	if batch.Reasons != 0 {
+		out.Reasons = new(int64(batch.Reasons))
+	}
 	for _, rename := range batch.Renames {
 		out.Renames = append(out.Renames, apiclient.SyncWatchRename{Path: rename.Path, Root: new(rename.Root), Agent: new(rename.Agent), ItemType: new(int32(rename.ItemType))})
 	}

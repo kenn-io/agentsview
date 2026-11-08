@@ -7,6 +7,11 @@ export interface SyncWatchBatch {
   full_sync?: boolean;
   lost_events?: boolean;
   paths?: string[];
+  /**
+   * @minimum 0
+   * @maximum 4294967295
+   */
+  reasons?: number;
   reconcile_roots?: string[];
   renames?: SyncWatchRename[];
 }

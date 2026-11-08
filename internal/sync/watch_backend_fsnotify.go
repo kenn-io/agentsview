@@ -592,7 +592,7 @@ func (b *fsnotifyBackend) forwardNativeError(err error) bool {
 		b.requireRuntimePolling(b.recursiveRootsSnapshot())
 		b.reinstallShallowWatches()
 		select {
-		case b.events <- backendEvent{Op: backendOpFullSync}:
+		case b.events <- backendEvent{Op: backendOpFullSync, Reasons: watchReasonBackendEventLoss}:
 			return true
 		case <-b.stop:
 			return false

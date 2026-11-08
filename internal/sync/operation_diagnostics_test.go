@@ -94,12 +94,12 @@ func TestRecoveryDiagnosticsAccumulateAcrossPages(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, []map[string]string{
 				{
-					"operation": id, "kind": "reconciliation", "agent": "all",
+					"operation": id, "kind": "reconciliation", "agent": "all", "reasons": "none",
 					"roots": "0", "paths": "0", "lost_events": "true", "full": "true",
 					"state": "started", "phase": "waiting", "elapsed": "duration",
 				},
 				{
-					"operation": id, "kind": "reconciliation", "agent": "all",
+					"operation": id, "kind": "reconciliation", "agent": "all", "reasons": "none",
 					"roots": "0", "paths": "0", "lost_events": "true", "full": "true",
 					"state": "finished", "phase": "finalizing", "elapsed": "duration",
 					"lock_wait": "duration", "running": "duration", "canceled": "false",
@@ -189,7 +189,8 @@ func TestWatcherDiagnosticsPreservePostSyncError(t *testing.T) {
 	logs := captureOperationLogs(t)
 	sentinel := errors.New("post-sync work failed")
 	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{
-		Paths: []string{filepath.Join(root, "project", ids[0]+".jsonl")},
+		Paths:   []string{filepath.Join(root, "project", ids[0]+".jsonl")},
+		Reasons: watchReasonCallbackRetry,
 	}, nil, func() error { return sentinel })
 	require.ErrorIs(t, err, sentinel)
 	records := operationLogRecords(t, logs.take())
@@ -197,12 +198,12 @@ func TestWatcherDiagnosticsPreservePostSyncError(t *testing.T) {
 	id := records[0]["operation"]
 	assert.Equal(t, []map[string]string{
 		{
-			"operation": id, "kind": "watcher", "agent": "all",
+			"operation": id, "kind": "watcher", "agent": "all", "reasons": "callback_retry",
 			"roots": "0", "paths": "1", "lost_events": "false", "full": "false",
 			"state": "started", "phase": "waiting", "elapsed": "duration",
 		},
 		{
-			"operation": id, "kind": "watcher", "agent": "all",
+			"operation": id, "kind": "watcher", "agent": "all", "reasons": "callback_retry",
 			"roots": "0", "paths": "1", "lost_events": "false", "full": "false",
 			"state": "finished", "phase": "post_sync", "elapsed": "duration",
 			"lock_wait": "duration", "running": "duration", "canceled": "false",
@@ -248,7 +249,7 @@ func TestMaintenanceLockOwnersAppearInWaitingDiagnostics(t *testing.T) {
 			require.NoError(t, err)
 			require.NotZero(t, ownerID, "every engine lock owner must register an operation")
 			assert.Equal(t, map[string]string{
-				"operation": strconv.FormatUint(waiter.id, 10), "kind": "reconciliation", "agent": "all",
+				"operation": strconv.FormatUint(waiter.id, 10), "kind": "reconciliation", "agent": "all", "reasons": "none",
 				"roots": "0", "paths": "0", "lost_events": "false", "full": "false",
 				"state": "heartbeat", "phase": "waiting", "elapsed": "duration",
 				"lock_wait": "duration", "running": "duration", "canceled": "false",
@@ -319,7 +320,7 @@ func TestSyncOperationHeartbeatReportsOwnerAndStops(t *testing.T) {
 			}
 		}
 		assert.Equal(t, []map[string]string{{
-			"operation": strconv.FormatUint(waiter.id, 10), "kind": "reconciliation", "agent": "all",
+			"operation": strconv.FormatUint(waiter.id, 10), "kind": "reconciliation", "agent": "all", "reasons": "none",
 			"roots": "0", "paths": "0", "lost_events": "false", "full": "false",
 			"state": "heartbeat", "phase": "waiting", "elapsed": "duration",
 			"lock_wait": "duration", "running": "duration", "canceled": "false",
@@ -391,7 +392,7 @@ func TestSyncOperationCancellationKeepsExclusiveWorkUnchanged(t *testing.T) {
 			require.NotEmpty(t, records)
 			id := records[0]["operation"]
 			finished := map[string]string{
-				"operation": id, "kind": "exclusive", "agent": "all",
+				"operation": id, "kind": "exclusive", "agent": "all", "reasons": "none",
 				"roots": "0", "paths": "0", "lost_events": "false", "full": "false",
 				"state": "finished", "phase": tc.wantPhase, "elapsed": "duration",
 				"lock_wait": "duration", "running": "duration", "canceled": strconv.FormatBool(tc.canceled),
@@ -405,7 +406,7 @@ func TestSyncOperationCancellationKeepsExclusiveWorkUnchanged(t *testing.T) {
 			}
 			assert.Equal(t, []map[string]string{
 				{
-					"operation": id, "kind": "exclusive", "agent": "all",
+					"operation": id, "kind": "exclusive", "agent": "all", "reasons": "none",
 					"roots": "0", "paths": "0", "lost_events": "false", "full": "false",
 					"state": "started", "phase": "waiting", "elapsed": "duration",
 				},

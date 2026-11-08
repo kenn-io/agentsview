@@ -155,6 +155,7 @@ type backendEvent struct {
 	Op        backendOp
 	ItemType  backendItemType
 	Lifecycle backendLifecycleToken
+	Reasons   WatchSyncReasons
 }
 
 type backendLifecycleGate interface {
@@ -187,7 +188,7 @@ type watchBackend interface {
 // lifecycle acknowledgement token.
 type directBackendEventSink interface {
 	TryAccumulate(func(add func(backendEvent) bool) bool) bool
-	RetainAuthoritative(backendLifecycleToken)
+	RetainAuthoritative(backendLifecycleToken, WatchSyncReasons)
 }
 
 // directEventBackend is implemented by backends whose native delivery already

@@ -25,6 +25,7 @@ type syncOperationScope struct {
 	paths      int
 	lostEvents bool
 	full       bool
+	reasons    WatchSyncReasons
 }
 
 type syncOperationDiagnostics struct {
@@ -200,9 +201,9 @@ func (op *syncOperation) writeLog(ctx context.Context, state string, err error) 
 		agent = "all"
 	}
 	message := fmt.Sprintf(
-		"sync operation: pid=%d operation=%d kind=%s agent=%s roots=%d paths=%d lost_events=%t full=%t state=%s phase=%s elapsed=%s",
+		"sync operation: pid=%d operation=%d kind=%s agent=%s roots=%d paths=%d lost_events=%t full=%t reasons=%s state=%s phase=%s elapsed=%s",
 		os.Getpid(), op.id, op.scope.kind, agent, op.scope.roots, op.scope.paths,
-		op.scope.lostEvents, op.scope.full, state, progress.phase,
+		op.scope.lostEvents, op.scope.full, op.scope.reasons, state, progress.phase,
 		now.Sub(op.started).Round(time.Millisecond),
 	)
 	if state == "started" {

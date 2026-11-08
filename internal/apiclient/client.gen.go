@@ -31500,12 +31500,18 @@ type SyncWatchBatch struct {
 	FullSync       *bool             `json:"full_sync,omitempty"`
 	LostEvents     *bool             `json:"lost_events,omitempty"`
 	Paths          []string          `json:"paths,omitempty"`
+	Reasons        *int64            `json:"reasons,omitempty" validate:"omitempty,gte=0,lte=4294967295"`
 	ReconcileRoots []string          `json:"reconcile_roots,omitempty"`
 	Renames        []SyncWatchRename `json:"renames,omitempty"`
 }
 
 func (s SyncWatchBatch) Validate() error {
 	var errors runtime.ValidationErrors
+	if s.Reasons != nil {
+		if err := typesValidator.Var(s.Reasons, "omitempty,gte=0,lte=4294967295"); err != nil {
+			errors = errors.Append("Reasons", err)
+		}
+	}
 	for i, item := range s.Renames {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {

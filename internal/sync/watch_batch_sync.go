@@ -104,6 +104,22 @@ func (e *watchBatchApplyError) WatchRetryBatch() WatchBatch {
 	return retry
 }
 
+func watchBatchErrorWithReasons(err error, reasons WatchSyncReasons) error {
+	if err == nil || reasons == 0 {
+		return err
+	}
+	retryErr, ok := errors.AsType[WatchRetryError](err)
+	if !ok {
+		return err
+	}
+	retry := retryErr.WatchRetryBatch()
+	if retry.Reasons&reasons == reasons {
+		return err
+	}
+	retry.Reasons |= reasons
+	return &watchBatchApplyError{cause: err, retry: retry}
+}
+
 func watchBatchDeferOnlyError(err error) bool {
 	_, hasPaths := errors.AsType[interface {
 		error
@@ -200,6 +216,7 @@ func composeWatchBatchErrors(phases ...error) error {
 		combined.ReconcileRoots = append(combined.ReconcileRoots, batch.ReconcileRoots...)
 		combined.FullSync = combined.FullSync || batch.FullSync
 		combined.LostEvents = combined.LostEvents || batch.LostEvents
+		combined.Reasons |= batch.Reasons
 	}
 	if combined.FullSync {
 		combined.Paths = nil
@@ -298,7 +315,8 @@ func ApplyWatchBatch(
 	engine WatchBatchSyncer,
 	batch WatchBatch,
 	recovery *WatchRecoveryScope,
-) error {
+) (err error) {
+	defer func() { err = watchBatchErrorWithReasons(err, batch.Reasons) }()
 	if err := ValidateWatchBatch(batch, recovery); err != nil {
 		return err
 	}
@@ -397,7 +415,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 	ctx = context.WithValue(ctx, nativeTitleRetryContextKey{}, &titleRetry)
 	op := e.beginSyncOperation(ctx, syncOperationScope{
 		kind: "watcher", roots: len(batch.ReconcileRoots), paths: len(batch.Paths),
-		lostEvents: batch.LostEvents, full: batch.FullSync,
+		lostEvents: batch.LostEvents, full: batch.FullSync, reasons: batch.reconciliationReasons(),
 	})
 	e.syncMu.Lock()
 	op.acquiredLock()
@@ -405,6 +423,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 		if len(titleRetry.Paths) > 0 {
 			err = composeWatchBatchErrors(err, &watchBatchApplyError{cause: errors.New("native title reconciliation failed"), retry: titleRetry})
 		}
+		err = watchBatchErrorWithReasons(err, batch.Reasons)
 		e.clearCurrentProgress()
 		op.finish(ctx, err)
 		e.syncMu.Unlock()

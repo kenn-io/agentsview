@@ -2243,6 +2243,7 @@ to one process and restart from the beginning when that process restarts.
 | --- | --- |
 | `kind`, `agent`, `roots`, `paths` | Operation type, requested provider and counts of explicitly requested roots and paths. `agent=all` means the request does not select one provider. |
 | `lost_events`, `full` | Whether the request reports lost events or explicitly requests full coverage. |
+| `reasons` | Stable, comma-separated causes of watcher reconciliation, or `none` when no cause was recorded. Multiple causes can appear when batches merge or retry. |
 | `phase` | The current stage, such as waiting, discovery, processing, persistence or finalization. |
 | `elapsed`, `lock_wait`, `running` | Total elapsed time, time before acquiring the engine lock, and time since acquiring it. Running time includes any post-sync work within the same lock interval. |
 | `active_operation`, `active_kind`, `active_running` | The observed engine-lock owner's operation ID, kind and time since acquisition. Maintenance without lifecycle records uses its Go function identifier as the kind. `active_operation=0 active_kind=none` means no owner was observed at that instant; the lock can be free or transferring between owners. |
@@ -2254,8 +2255,14 @@ to one process and restart from the beginning when that process restarts.
 The diagnostics do not log source paths, session IDs, prompts or transcript
 contents. They do not change recovery, retry or cancellation decisions. Every
 engine-lock acquisition registers its owner, including maintenance and legacy
-entry points without operation lifecycle records. Detailed source counters cover reconciliation; other
-operation types can report `total_known=false` throughout.
+entry points without operation lifecycle records. Detailed source counters cover
+reconciliation; other operation types can report `total_known=false` throughout.
+
+Watcher full-sync requests also report `lost_events` and `reasons`. A request
+with `pending overflows=0` can still follow backend event loss, fallback startup
+or native recovery. Reasons distinguish pending entry and byte limits, backend
+event loss, fallback buffering, stream failures and recovery transitions.
+Callback retries retain the original causes and add `callback_retry`.
 
 ### Friction Log
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/archivepush"
 	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/config"
@@ -27,6 +28,25 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 	"go.kenn.io/kit/stacktest"
 )
+
+func TestGeneratedWatchBatchPreservesReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		reasons syncpkg.WatchSyncReasons
+		want    *int64
+	}{
+		{name: "none"},
+		{name: "combined", reasons: 32 | 64, want: new(int64(96))},
+		{name: "unknown bits", reasons: 1 << 31, want: new(int64(2147483648))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			batch := syncpkg.WatchBatch{FullSync: true, LostEvents: true, Reasons: tc.reasons}
+			assert.Equal(t, &apiclient.SyncWatchBatch{
+				FullSync: new(true), LostEvents: new(true), Reasons: tc.want,
+			}, generatedWatchBatch(&batch))
+		})
+	}
+}
 
 // TestDaemonPushHeartbeat pins the daemon-delegated push's client-side
 // output: an immediate delegation announcement, elapsed-time heartbeats

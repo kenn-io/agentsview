@@ -8797,6 +8797,11 @@ components:
           items:
             type: string
           type: array
+        reasons:
+          format: int64
+          maximum: 4294967295
+          minimum: 0
+          type: integer
         reconcile_roots:
           items:
             type: string
