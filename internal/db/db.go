@@ -955,6 +955,12 @@ type DB struct {
 		waitCount    int64
 		waitDuration time.Duration
 	}
+
+	// memberFreshnessPages counts ListVirtualContainerMemberFreshnessPage
+	// calls so tests can pin how many pages a sync pass reads. Serving readers
+	// reuse prepared statements, so a SQLite authorizer sees one compilation
+	// per query shape rather than one per page.
+	memberFreshnessPages atomic.Int64
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the
@@ -1008,34 +1014,32 @@ func (r *readerHandle) Query(ctx context.Context,
 	query string, args ...any,
 ) (*sql.Rows, error) {
 	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
-	rows, err := r.current().QueryContext(ctx, query, args...)
-	return rows, err
+	unlock := sync.OnceFunc(r.owner.connMu.RUnlock)
+	defer unlock()
+	ctx = context.WithValue(ctx, readerQueryUnlockKey{}, unlock)
+	return r.current().QueryContext(ctx, query, args...)
 }
 
 func (r *readerHandle) QueryContext(
 	ctx context.Context, query string, args ...any,
 ) (*sql.Rows, error) {
-	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
-	rows, err := r.current().QueryContext(ctx, query, args...)
-	return rows, err
+	return r.Query(ctx, query, args...)
 }
 
 func (r *readerHandle) QueryRow(ctx context.Context,
 	query string, args ...any,
 ) *sql.Row {
 	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
+	unlock := sync.OnceFunc(r.owner.connMu.RUnlock)
+	defer unlock()
+	ctx = context.WithValue(ctx, readerQueryUnlockKey{}, unlock)
 	return r.current().QueryRowContext(ctx, query, args...)
 }
 
 func (r *readerHandle) QueryRowContext(
 	ctx context.Context, query string, args ...any,
 ) *sql.Row {
-	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
-	return r.current().QueryRowContext(ctx, query, args...)
+	return r.QueryRow(ctx, query, args...)
 }
 
 func (r *readerHandle) BeginTx(

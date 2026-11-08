@@ -12202,6 +12202,10 @@ func TestProviderStoredFreshnessDecision(t *testing.T) {
 	}
 }
 
+// countSessionFileHashReads counts statement compilations that read
+// sessions.file_hash. Serving readers cache prepared statements, so repeated
+// executions of the same SQL count once: use it to tell whether a path reads
+// the hash at all, not how many times it runs a query.
 func countSessionFileHashReads(t *testing.T, archive *db.DB) *atomic.Int32 {
 	t.Helper()
 	reads := &atomic.Int32{}

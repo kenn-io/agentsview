@@ -191,6 +191,10 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
   the default benchmark package set.
 - `BenchmarkGetStats` — the repeatedly polled sidebar totals over 10k sessions.
   Computes all totals together so a refresh scans filtered sessions once.
+- `BenchmarkArchiveSessionReads` — session metadata, full session details, and
+  20-message pages through the serving reader pool. The fixture has 10k
+  sessions and 400 stored messages; setup and the first query stay outside the
+  timed loop.
 - `BenchmarkGetDailyUsage` — usage aggregation over 100k message rows. The usage
   aggregate implementation keeps this benchmark name so the gate compares it
   with the merge-base request path. Its warm cases must scan no normalized
