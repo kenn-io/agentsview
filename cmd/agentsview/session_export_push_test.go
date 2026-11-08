@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,14 @@ func TestExportPushExactBytesExclusivePrivateOutput(t *testing.T) {
 	got, err = os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, selected, got)
+}
+
+func TestExportPushMaximumCanonicalSessionID(t *testing.T) {
+	agent := strings.Repeat("a", 32)
+	id := agent + ":" + strings.Repeat("b", 128)
+	source := &exportPushFixtureSource{snapshot: exportPushSnapshot{SessionID: id, Agent: agent, Payload: []byte("snapshot"), Messages: 1}}
+	var status bytes.Buffer
+	require.NoError(t, runExportPush(t.Context(), source, id, agent, true, filepath.Join(t.TempDir(), "snapshot.json"), &status))
 }
 
 func TestExportPushDefaultUnavailableDoesNotCreateOutput(t *testing.T) {
