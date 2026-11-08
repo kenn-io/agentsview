@@ -572,6 +572,7 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
+	ExclusionCounts string // empty, flat, or all; opt-in first-page summary
 	// IDs selects rows directly. Nil preserves discovery defaults; an empty
 	// non-nil slice matches nothing. Raw IDs expand over literal tilde suffixes.
 	IDs []string
@@ -701,9 +702,10 @@ func buildCanonicalRootWhere(includeOrphans bool) string {
 
 // SessionPage is a page of session results.
 type SessionPage struct {
-	Sessions   []Session `json:"sessions"`
-	NextCursor string    `json:"next_cursor,omitempty"`
-	Total      int       `json:"total"`
+	ExclusionCounts *SessionExclusionCounts `json:"exclusion_counts,omitempty"`
+	Sessions        []Session               `json:"sessions"`
+	NextCursor      string                  `json:"next_cursor,omitempty"`
+	Total           int                     `json:"total"`
 }
 
 type SidebarSessionIndexRow struct {
@@ -769,7 +771,16 @@ func (db *DB) ListSessions(
 	// Total count applies filters but not cursor. To avoid
 	// re-counting on every pagination request, newer cursors carry
 	// the first-page total and we reuse it here.
-	if total <= 0 {
+	var exclusions *SessionExclusionCounts
+	if f.WantsExclusionCounts() {
+		exclusions = &SessionExclusionCounts{}
+		query, countArgs := BuildSessionExclusionCountsSQL(f, dialect)
+		var oneShot, automated int
+		if err := db.getReader().QueryRowContext(ctx, query, countArgs...).Scan(&total, &oneShot, &automated); err != nil {
+			return SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
+		}
+		exclusions.SetExpandedTotals(total, oneShot, automated)
+	} else if total <= 0 {
 		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + where
 		if err := db.getReader().QueryRowContext(
 			ctx, countQuery, args...,
@@ -815,7 +826,16 @@ func (db *DB) ListSessions(
 		return SessionPage{}, err
 	}
 
-	return BuildSessionPage(sessions, total, f, rs, db.EncodeCursor), nil
+	if exclusions != nil && f.ExclusionCounts == "all" {
+		query, childArgs := BuildSessionExclusionChildrenSQL(f, dialect)
+		if rows, err := db.getReader().QueryContext(ctx, query, childArgs...); err == nil {
+			_ = exclusions.ReadChildren(rows, f, total)
+			rows.Close()
+		}
+	}
+	page := BuildSessionPage(sessions, total, f, rs, db.EncodeCursor)
+	page.ExclusionCounts = exclusions
+	return page, nil
 }
 
 // HasVisibleSession reports whether the default sidebar has a session to show.

@@ -113,6 +113,7 @@ type SessionListFilters = sessionFilterInput
 
 // Batch selection belongs only to the session list, not sidebar discovery.
 type listSessionsInput struct {
+	ExclusionCounts string `query:"exclusion_counts" enum:"flat,all" doc:"Include default-exclusion counts; all also samples hidden children. First page only."`
 	SessionListFilters
 	IDs    string `query:"ids" doc:"Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply."`
 	IDsSet bool
@@ -297,6 +298,7 @@ func (s *Server) humaListSessions(
 	if err != nil {
 		return nil, err
 	}
+	filter.ExclusionCounts = in.ExclusionCounts
 	if in.IDsSet {
 		filter.IDs, err = parseSessionIDs(in.IDs)
 		if err != nil {

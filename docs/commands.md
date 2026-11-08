@@ -2119,6 +2119,11 @@ every remaining include flag to use together. Child counts use one bounded page;
 a positive count from a partial page says `at least N`. Stdout, including
 `--format json`, keeps its existing shape for pipelines.
 
+A first-page `session list` that reports exclusions requires daemon API 16 or
+later when using an explicit `--server`. Upgrade or restart that daemon if the
+CLI reports an older API. Cursor pages and lists with all three `--include-*`
+flags avoid this requirement.
+
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from
 `default_pg` plus `[pg.NAME]` are sync configuration only; they do not change
 the default read path. Read commands use local SQLite unless `--pg` is supplied,

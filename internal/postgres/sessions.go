@@ -395,7 +395,16 @@ func (s *Store) ListSessions(
 		total = cur.Total
 	}
 
-	if total <= 0 {
+	var exclusions *db.SessionExclusionCounts
+	if f.WantsExclusionCounts() {
+		exclusions = &db.SessionExclusionCounts{}
+		query, countArgs := db.BuildSessionExclusionCountsSQL(f, s.sessionDialect())
+		var oneShot, automated int
+		if err := s.pg.QueryRowContext(ctx, query, countArgs...).Scan(&total, &oneShot, &automated); err != nil {
+			return db.SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
+		}
+		exclusions.SetExpandedTotals(total, oneShot, automated)
+	} else if total <= 0 {
 		countQ := "SELECT COUNT(*) FROM sessions WHERE " +
 			where
 		if err := s.pg.QueryRowContext(
@@ -443,7 +452,16 @@ func (s *Store) ListSessions(
 		return db.SessionPage{}, err
 	}
 
-	return db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor), nil
+	if exclusions != nil && f.ExclusionCounts == "all" {
+		query, childArgs := db.BuildSessionExclusionChildrenSQL(f, s.sessionDialect())
+		if rows, err := s.pg.QueryContext(ctx, query, childArgs...); err == nil {
+			_ = exclusions.ReadChildren(rows, f, total)
+			rows.Close()
+		}
+	}
+	page := db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor)
+	page.ExclusionCounts = exclusions
+	return page, nil
 }
 
 // GetSidebarSessionIndex returns the skinny session rows needed by

@@ -50,3 +50,16 @@ func TestEnsureSchemaAddsAnnotationColumnsToOlderMirror(t *testing.T) {
 	assert.Nil(t, got.Labels)
 	assert.Nil(t, got.PRLinks)
 }
+
+func TestSessionExclusionCounts(t *testing.T) {
+	t.Parallel()
+	local, target := seedFixture(t)
+	dbtest.SeedSessionExclusions(t, local)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	dbtest.AssertSessionExclusionCounts(t, store)
+}

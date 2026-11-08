@@ -645,6 +645,10 @@ func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, http.MethodGet, r.Method)
 			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/api/v1/version" {
+				fmt.Fprintf(w, `{"api_version":%d}`, server.APIVersion)
+				return
+			}
 			if r.URL.Path == "/api/v1/machines" {
 				_, _ = w.Write([]byte(`{"machine_labels":{}}`))
 				return
@@ -655,7 +659,7 @@ func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
 				"sessions": [
 					{"id":"remote-session","project":"remote","agent":"claude"}
 				],
-				"total": 1
+				"total": 1, "exclusion_counts": {}
 			}`))
 		}))
 	defer ts.Close()
@@ -731,7 +735,11 @@ func TestSessionList_ServerFlagDoesNotSendConfigAuthToken(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) {
 			assert.Empty(t, r.Header.Get("Authorization"))
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+			if r.URL.Path == "/api/v1/version" {
+				fmt.Fprintf(w, `{"api_version":%d}`, server.APIVersion)
+				return
+			}
+			_, _ = w.Write([]byte(`{"sessions":[],"total":0,"exclusion_counts":{}}`))
 		}))
 	defer ts.Close()
 
@@ -747,7 +755,11 @@ func TestSessionList_ServerFlagDoesNotLoadLocalConfig(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+			if r.URL.Path == "/api/v1/version" {
+				fmt.Fprintf(w, `{"api_version":%d}`, server.APIVersion)
+				return
+			}
+			_, _ = w.Write([]byte(`{"sessions":[],"total":0,"exclusion_counts":{}}`))
 		}))
 	defer ts.Close()
 
@@ -765,7 +777,11 @@ func TestSessionList_ServerTokenSendsBearer(t *testing.T) {
 			assert.Equal(t, "Bearer remote-secret",
 				r.Header.Get("Authorization"))
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+			if r.URL.Path == "/api/v1/version" {
+				fmt.Fprintf(w, `{"api_version":%d}`, server.APIVersion)
+				return
+			}
+			_, _ = w.Write([]byte(`{"sessions":[],"total":0,"exclusion_counts":{}}`))
 		}))
 	defer ts.Close()
 

@@ -137,15 +137,22 @@ func newSessionListCommand() *cobra.Command {
 			}
 			defer cleanup()
 
+			if f.Cursor == "" && !(f.IncludeOneShot && f.IncludeAutomated && f.IncludeChildren) {
+				f.ExclusionCounts = "flat"
+				if len(f.Labels) == 0 && f.PR == "" && (!f.IncludeChildren || !f.IncludeOneShot && !f.IncludeAutomated) {
+					f.ExclusionCounts = "all"
+				}
+			}
 			list, err := svc.List(cmd.Context(), f)
 			if err != nil {
 				return err
 			}
 			notice, err := sessionListDefaultExclusionNotice(
-				cmd.Context(), svc, f, list.Total)
+				f, list.ExclusionCounts)
 			if err != nil {
 				return err
 			}
+			list.ExclusionCounts = nil
 			if notice != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), notice)
 			}
@@ -243,66 +250,17 @@ func newSessionListCommand() *cobra.Command {
 	return cmd
 }
 
-func sessionListDefaultExclusionNotice(
-	ctx context.Context,
-	svc service.SessionService,
-	f service.ListFilter,
-	visibleTotal int,
-) (string, error) {
-	if f.Cursor != "" || (f.IncludeOneShot && f.IncludeAutomated && f.IncludeChildren) {
+func sessionListDefaultExclusionNotice(f service.ListFilter, counts *db.SessionExclusionCounts) (string, error) {
+	if f.ExclusionCounts == "" {
 		return "", nil
 	}
-
-	hiddenOneShot := 0
-	if !f.IncludeOneShot {
-		withOneShot := sessionListCountFilter(f)
-		withOneShot.IncludeOneShot = true
-		withOneShot.IncludeAutomated = f.IncludeAutomated
-		list, err := svc.List(ctx, withOneShot)
-		if err != nil {
-			return "", fmt.Errorf(
-				"counting one-shot session exclusions: %w", err)
-		}
-		hiddenOneShot = hiddenSessionCount(list.Total, visibleTotal)
+	if counts == nil {
+		return "", fmt.Errorf("server omitted requested session exclusion counts; restart or upgrade the server")
 	}
-
-	hiddenAutomated := 0
-	if !f.IncludeAutomated {
-		withAutomated := sessionListCountFilter(f)
-		withAutomated.IncludeOneShot = f.IncludeOneShot
-		withAutomated.IncludeAutomated = true
-		list, err := svc.List(ctx, withAutomated)
-		if err != nil {
-			return "", fmt.Errorf(
-				"counting automated session exclusions: %w", err)
-		}
-		hiddenAutomated = hiddenSessionCount(list.Total, visibleTotal)
-	}
-
-	hiddenChildren := 0
+	hiddenOneShot, hiddenAutomated, hiddenChildren := counts.OneShot, counts.Automated, counts.Children
 	lowerBound := ""
-	// Annotation filters already select matching children. Tree expansion adds
-	// context outside those matches.
-	if len(f.Labels) == 0 && f.PR == "" && (!f.IncludeChildren || !f.IncludeOneShot && !f.IncludeAutomated) {
-		all := sessionListCountFilter(f)
-		all.IncludeChildren, all.IncludeOneShot, all.IncludeAutomated = true, true, true
-		if !f.IncludeChildren {
-			all.Limit = db.MaxSessionLimit
-		}
-		if list, err := svc.List(ctx, all); err == nil {
-			if f.IncludeChildren {
-				hiddenChildren = max(0, hiddenSessionCount(list.Total, visibleTotal)-hiddenOneShot-hiddenAutomated)
-			} else {
-				for _, session := range list.Sessions {
-					if session.RelationshipType == "subagent" || session.RelationshipType == "fork" {
-						hiddenChildren++
-					}
-				}
-				if hiddenChildren > 0 && (list.NextCursor != "" || list.Total > len(list.Sessions)) {
-					lowerBound = "at least "
-				}
-			}
-		}
+	if counts.ChildrenLowerBound {
+		lowerBound = "at least "
 	}
 	hiddenTotal := hiddenOneShot + hiddenAutomated + hiddenChildren
 	if hiddenTotal == 0 {
@@ -350,19 +308,6 @@ func sessionListDefaultExclusionNotice(
 		guidance = fmt.Sprintf("For %s sessions, use %s. For child sessions, use %s.", strings.Join(flatClasses, " or "), flatFlags, strings.Join(flagParts, separator))
 	}
 	return fmt.Sprintf("Excluded %s. %s", summary, guidance), nil
-}
-
-func sessionListCountFilter(f service.ListFilter) service.ListFilter {
-	f.Cursor = ""
-	f.Limit = 1
-	return f
-}
-
-func hiddenSessionCount(expandedTotal, visibleTotal int) int {
-	if expandedTotal <= visibleTotal {
-		return 0
-	}
-	return expandedTotal - visibleTotal
 }
 
 func pluralSession(n int) string {

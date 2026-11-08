@@ -51,12 +51,16 @@ func TestSessionListJSONDegradesWhenMachineCatalogUnavailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, r *http.Request,
 	) {
+		if r.URL.Path == "/api/v1/version" {
+			writeJSONResponse(w, `{"api_version":16}`)
+			return
+		}
 		if r.URL.Path == "/api/v1/machines" {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, `{"error":"catalog unavailable"}`)
 			return
 		}
-		writeJSONResponse(w, `{"sessions":[{"id":"remote-session","machine":"machine-key"}],"total":1}`)
+		writeJSONResponse(w, `{"sessions":[{"id":"remote-session","machine":"machine-key"}],"total":1,"exclusion_counts":{}}`)
 	}))
 	t.Cleanup(server.Close)
 	root := newRootCommand()
@@ -107,11 +111,15 @@ func TestSessionListHumanSkipsMachineCatalog(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, r *http.Request,
 	) {
+		if r.URL.Path == "/api/v1/version" {
+			writeJSONResponse(w, `{"api_version":16}`)
+			return
+		}
 		if r.URL.Path == "/api/v1/machines" {
 			machineRequests++
 			return
 		}
-		writeJSONResponse(w, `{"sessions":[],"total":0}`)
+		writeJSONResponse(w, `{"sessions":[],"total":0,"exclusion_counts":{}}`)
 	}))
 	t.Cleanup(server.Close)
 

@@ -2932,6 +2932,26 @@ components:
       required:
         - commits
       type: object
+    DbSessionExclusionCounts:
+      additionalProperties: false
+      properties:
+        automated:
+          format: int64
+          type: integer
+        children:
+          format: int64
+          type: integer
+        children_lower_bound:
+          type: boolean
+        one_shot:
+          format: int64
+          type: integer
+      required:
+        - one_shot
+        - automated
+        - children
+        - children_lower_bound
+      type: object
     DbSessionExternalParent:
       additionalProperties: false
       properties:
@@ -2977,6 +2997,8 @@ components:
     DbSessionPage:
       additionalProperties: false
       properties:
+        exclusion_counts:
+          $ref: "#/components/schemas/DbSessionExclusionCounts"
         next_cursor:
           type: string
         sessions:
@@ -7701,6 +7723,8 @@ components:
     ServiceSessionList:
       additionalProperties: false
       properties:
+        exclusion_counts:
+          $ref: "#/components/schemas/DbSessionExclusionCounts"
         next_cursor:
           type: string
         sessions:
@@ -20101,6 +20125,16 @@ paths:
     get:
       operationId: get-api-v1-sessions
       parameters:
+        - description: Include default-exclusion counts; all also samples hidden children. First page only.
+          explode: false
+          in: query
+          name: exclusion_counts
+          schema:
+            description: Include default-exclusion counts; all also samples hidden children. First page only.
+            enum:
+              - flat
+              - all
+            type: string
         - description: Filter by project
           explode: false
           in: query

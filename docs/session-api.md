@@ -262,6 +262,12 @@ redirecting or piping structured output remains safe. The JSON `total` continues
 to describe the filtered result, not the excluded sessions. Use the
 `--include-*` flags to opt back in.
 
+The list endpoint accepts `exclusion_counts=flat` to return hidden one-shot and
+automated counts, or `exclusion_counts=all` to include the bounded child count.
+The optional `exclusion_counts` response contains `one_shot`, `automated`,
+`children`, and `children_lower_bound`. Cursor pages and fully included lists
+omit it. Other API callers leave this parameter unset to avoid the extra work.
+
 Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
 unique whole display label. Exact ID/alias lists take precedence over a
 same-spelled label. Otherwise, the complete input is matched against labels,

@@ -108,3 +108,14 @@ func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 	assert.Equal(t, []string{"role=lead", "ticket=example-a"}, got.Labels)
 	require.Len(t, got.PRLinks, 1)
 }
+
+func TestSessionExclusionCounts(t *testing.T) {
+	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_session_exclusions_test")
+	dbtest.SeedSessionExclusions(t, local)
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store, err := NewStore(ctx, testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	dbtest.AssertSessionExclusionCounts(t, store)
+}

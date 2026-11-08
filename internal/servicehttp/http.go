@@ -304,6 +304,10 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 
 // Probe only when the backend has no version so unfiltered lists need no extra request.
 func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
+	return b.requireAPIVersion(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters")
+}
+
+func (b *httpBackend) requireAPIVersion(ctx context.Context, minimum int, feature string) error {
 	version := b.apiVersion
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
@@ -312,11 +316,11 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 		}
 		version = capabilities.APIVersion
 	}
-	if version < service.SessionAnnotationsAPIVersion {
+	if version < minimum {
 		return fmt.Errorf(
-			"server API version %d does not support session labels, parent links, or their filters; "+
+			"server API version %d does not support %s; "+
 				"restart or upgrade the server",
-			version,
+			version, feature,
 		)
 	}
 	return nil
@@ -325,7 +329,14 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
-	if len(f.Labels) > 0 || f.PR != "" {
+	if f.Cursor != "" || f.IncludeOneShot && f.IncludeAutomated && f.IncludeChildren {
+		f.ExclusionCounts = ""
+	}
+	if f.ExclusionCounts != "" {
+		if err := b.requireAPIVersion(ctx, service.SessionExclusionCountsAPIVersion, "session exclusion counts"); err != nil {
+			return nil, err
+		}
+	} else if len(f.Labels) > 0 || f.PR != "" {
 		if err := b.requireSessionAnnotations(ctx); err != nil {
 			return nil, err
 		}
@@ -352,6 +363,9 @@ func (b *httpBackend) List(
 	if err != nil {
 		return nil, err
 	}
+	if f.ExclusionCounts != "" && out.ExclusionCounts == nil {
+		return nil, errors.New("server omitted requested session exclusion counts; restart or upgrade the server")
+	}
 	for i := range out.Sessions {
 		out.Sessions[i].WebURL = b.sessionWebURL(out.Sessions[i].ID)
 	}
@@ -363,6 +377,9 @@ func (b *httpBackend) List(
 // server-side parser in internal/server/sessions.go.
 func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, error) {
 	q := &apiclient.GetAPIV1SessionsQuery{}
+	if f.ExclusionCounts != "" {
+		q.ExclusionCounts = new(apiclient.GetAPIV1SessionsQueryExclusionCounts(f.ExclusionCounts))
+	}
 	if f.IDs != nil {
 		ids, err := encodeSessionIDs(f.IDs)
 		if err != nil {

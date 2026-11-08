@@ -266,6 +266,9 @@ func persistedHeuristics(s *db.Session) signals.HeuristicSignals {
 func (b *directBackend) List(
 	ctx context.Context, f ListFilter,
 ) (*SessionList, error) {
+	if f.ExclusionCounts != "" && f.ExclusionCounts != "flat" && f.ExclusionCounts != "all" {
+		return nil, errors.New("list: exclusion_counts must be flat or all")
+	}
 	for _, d := range []string{f.Date, f.DateFrom, f.DateTo} {
 		if d != "" && !timeutil.IsValidDate(d) {
 			return nil, fmt.Errorf(
@@ -323,9 +326,10 @@ func (b *directBackend) List(
 	}
 	hideStaleSecretCounts(page.Sessions, filter.SecretsRulesVersions)
 	return &SessionList{
-		Sessions:   page.Sessions,
-		NextCursor: page.NextCursor,
-		Total:      page.Total,
+		ExclusionCounts: page.ExclusionCounts,
+		Sessions:        page.Sessions,
+		NextCursor:      page.NextCursor,
+		Total:           page.Total,
 	}, nil
 }
 
@@ -334,6 +338,7 @@ func (b *directBackend) List(
 // transports produce identical SessionFilter values.
 func listFilterToDB(f ListFilter) db.SessionFilter {
 	filter := db.SessionFilter{
+		ExclusionCounts:      f.ExclusionCounts,
 		IDs:                  f.IDs,
 		Project:              f.Project,
 		ExcludeProject:       f.ExcludeProject,
