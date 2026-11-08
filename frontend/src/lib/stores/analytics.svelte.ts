@@ -91,6 +91,8 @@ class AnalyticsStore {
 
   summary = $state<AnalyticsSummary | null>(null);
   summaryFilterParams = $state<AnalyticsParams | null>(null);
+  // Server-wide model groups, kept when a date-scoped summary read fails.
+  private loadedModelAliases = $state<Record<string, string>>({});
   activity = $state<ActivityResponse | null>(null);
   heatmap = $state<DbHeatmapResponse | null>(null);
   projects = $state<ProjectsAnalyticsResponse | null>(null);
@@ -294,7 +296,7 @@ class AnalyticsStore {
   }
 
   get modelAliases(): Record<string, string> {
-    return this.summary?.model_aliases ?? {};
+    return this.summary?.model_aliases ?? this.loadedModelAliases;
   }
 
   get displayedModels(): string {
@@ -638,12 +640,15 @@ class AnalyticsStore {
       "summary",
       params,
       (options) => AnalyticsService.getApiV1AnalyticsSummary(params, options),
-      (data) => {
-        this.summary = data;
-        this.summaryFilterParams = params;
-      },
+      (data) => this.applySummary(data, params),
       () => this.summary !== null,
     );
+  }
+
+  private applySummary(data: AnalyticsSummary, params: AnalyticsParams): void {
+    this.summary = data;
+    this.summaryFilterParams = params;
+    this.loadedModelAliases = data.model_aliases ?? {};
   }
 
   // Activity always uses the full date range so the timeline

@@ -800,6 +800,24 @@ describe("AnalyticsStore automated scope params", () => {
 });
 
 describe("AnalyticsStore model filter", () => {
+  it("retains a saved model's group when a new date read fails", async () => {
+    analytics.model = "claude-opus-4-20250514";
+    analyticsService.getApiV1AnalyticsSummary.mockResolvedValueOnce({
+      ...makeSummary(),
+      model_aliases: { "claude-opus-4-20250514": "claude-4" },
+    });
+    await analytics.fetchSummary();
+    analytics.from = "2024-02-01";
+    analyticsService.getApiV1AnalyticsSummary.mockRejectedValueOnce(new Error("Summary timed out"));
+    await analytics.fetchSummary();
+    expect(analytics.summary).toBeNull();
+    expect(analytics.errors.summary).toBe("Summary timed out");
+    expect(analytics.displayedModels).toBe("claude-4");
+    analytics.toggleModel("claude-4");
+    expect(analytics.model).toBe("");
+    await vi.waitFor(() => expect(analytics.querying.summary).toBe(false));
+  });
+
   it("requests grouped model rows", async () => {
     await analytics.fetchSummary();
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
@@ -1184,6 +1202,47 @@ describe("AnalyticsStore rolling default date range", () => {
 
     expect(analytics.from).toBe("2025-04-27");
     expect(analytics.to).toBe("2026-04-26");
+  });
+
+  it("clears yesterday's results while the rolled range loads and after it fails", async () => {
+    const { analytics } = await loadAnalyticsStore();
+    analyticsService.getApiV1AnalyticsTools.mockResolvedValueOnce({ ...makeTools(), total_calls: 12 });
+    await analytics.fetchAll();
+    expect(analytics.summary?.total_sessions).toBe(10);
+    expect(analytics.tools?.total_calls).toBe(12);
+    let rejectSummary!: (error: Error) => void;
+    let rejectTools!: (error: Error) => void;
+    analyticsService.getApiV1AnalyticsSummary.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectSummary = reject;
+      }),
+    );
+    analyticsService.getApiV1AnalyticsTools.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectTools = reject;
+      }),
+    );
+    vi.setSystemTime(new Date("2026-04-26T12:00:00"));
+    const refresh = analytics.fetchAll();
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toMatchObject({
+      from: "2025-04-27",
+      to: "2026-04-26",
+    });
+    expect(analytics.summary).toBeNull();
+    expect(analytics.summaryFilterParams).toBeNull();
+    expect(analytics.tools).toBeNull();
+    expect(analytics.toolsFilterParams).toBeNull();
+    expect(analytics.loading.summary).toBe(true);
+    expect(analytics.loading.tools).toBe(true);
+    rejectSummary(new Error("Summary timed out"));
+    rejectTools(new Error("Tools timed out"));
+    await refresh;
+    expect(analytics.summary).toBeNull();
+    expect(analytics.tools).toBeNull();
+    expect(analytics.errors.summary).toBe("Summary timed out");
+    expect(analytics.errors.tools).toBe("Tools timed out");
+    expect(analytics.loading.summary).toBe(false);
+    expect(analytics.loading.tools).toBe(false);
   });
 
   it("setDateRange pins and subsequent fetchAll does not roll", async () => {

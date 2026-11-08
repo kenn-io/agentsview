@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Spinner } from "@kenn-io/kit-ui";
+  import { Button } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
 
   interface Props {
@@ -16,20 +16,7 @@
 {#if error}
   <div class="error">
     <span>{error}</span>
-    <!-- The spinner sits beside the label; Button's busy overlay would
-         cover the short "Retry" text. A click while pending is ignored. -->
-    <Button
-      size="sm"
-      surface="soft"
-      label={m.shared_retry()}
-      onclick={() => {
-        if (!pending) onRetry();
-      }}
-    >
-      {#if pending}
-        <span class="retry-spinner" aria-hidden="true"><Spinner size={10} /></span>
-      {/if}
-    </Button>
+    <Button size="sm" surface="soft" label={m.shared_retry()} busy={pending} onclick={onRetry} />
   </div>
 {:else if !hasData}
   <div class="loading" role="status">{loadingLabel}</div>
@@ -46,9 +33,15 @@
     gap: 8px;
   }
 
-  .retry-spinner {
-    display: flex;
-    align-items: center;
+  /* Button's busy spinner would cover and fade the short "Retry" label;
+     set it beside the label instead and keep the label legible. */
+  .error :global(.kit-button > .kit-button__busy) {
+    position: static;
+    order: -1;
+  }
+
+  .error :global(.kit-button.kit-button--busy > .kit-button__label) {
+    opacity: 1;
   }
 
   .loading {

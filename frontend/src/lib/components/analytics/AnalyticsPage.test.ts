@@ -748,7 +748,8 @@ describe("AnalyticsPage panel failures", () => {
       retry.click();
       await flushEffects();
       const callsAfterRetry = skills.mock.calls.length;
-      expect(retry.querySelector(".retry-spinner .kit-spinner")).not.toBeNull();
+      expect(retry.getAttribute("aria-busy")).toBe("true");
+      expect(retry.disabled || retry.getAttribute("aria-disabled") === "true").toBe(true);
       expect(retry.querySelector(".kit-button__label")!.textContent).toBe("Retry");
       retry.click();
       expect(skills).toHaveBeenCalledTimes(callsAfterRetry);
