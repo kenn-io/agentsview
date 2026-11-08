@@ -419,9 +419,10 @@ func (d *SessionDetail) UnmarshalJSON(data []byte) error {
 
 // SessionList mirrors GET /api/v1/sessions.
 type SessionList struct {
-	Sessions   []db.Session `json:"sessions"`
-	NextCursor string       `json:"next_cursor,omitempty"`
-	Total      int          `json:"total"`
+	ExclusionCounts *db.SessionExclusionCounts `json:"exclusion_counts,omitempty"`
+	Sessions        []db.Session               `json:"sessions"`
+	NextCursor      string                     `json:"next_cursor,omitempty"`
+	Total           int                        `json:"total"`
 }
 
 // SessionAnnotationsAPIVersion is the first daemon API that applies label
@@ -431,6 +432,7 @@ const SessionAnnotationsAPIVersion = 11
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.
 type ListFilter struct {
+	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
 	// IDs selects explicit sessions and their host copies; nil uses discovery defaults.
 	IDs []string `json:"ids,omitzero"`
 

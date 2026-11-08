@@ -323,9 +323,10 @@ func (b *directBackend) List(
 	}
 	hideStaleSecretCounts(page.Sessions, filter.SecretsRulesVersions)
 	return &SessionList{
-		Sessions:   page.Sessions,
-		NextCursor: page.NextCursor,
-		Total:      page.Total,
+		ExclusionCounts: page.ExclusionCounts,
+		Sessions:        page.Sessions,
+		NextCursor:      page.NextCursor,
+		Total:           page.Total,
 	}, nil
 }
 
@@ -334,6 +335,7 @@ func (b *directBackend) List(
 // transports produce identical SessionFilter values.
 func listFilterToDB(f ListFilter) db.SessionFilter {
 	filter := db.SessionFilter{
+		ExclusionCounts:      f.ExclusionCounts,
 		IDs:                  f.IDs,
 		Project:              f.Project,
 		ExcludeProject:       f.ExcludeProject,

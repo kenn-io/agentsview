@@ -157,6 +157,11 @@ The latest release is
 
 **Improvements**
 
+- `agentsview session list` counts default exclusions in its page request,
+  avoiding three extra list requests and loading hundreds of child sessions.
+  Its counted stderr notice and stdout stay unchanged. Older daemons that omit
+  the optional counts still return sessions without the notice.
+
 - ClickHouse mirrors stop growing without bound from stored usage prices. A push
   now prices the mirror again only when the rates of a model in its usage
   change, or when a model appears for the first time. Before, any change
