@@ -1098,3 +1098,133 @@ func readPreparedUsage(t *testing.T, store *Store, f db.UsageFilter) preparedUsa
 	require.NoError(t, err)
 	return preparedUsageRead{daily, top, counts}
 }
+
+// preparedUsageLongID names a session whose 300 usage rows make the fixture
+// large enough that republishing one small session stays below the rebuild
+// limit, one fiftieth of the stored rows.
+const preparedUsageLongID = "ch-price-long"
+
+// writeLongUsageSession writes preparedUsageLongID with 300 usage messages,
+// each with input tokens of base plus its ordinal.
+func writeLongUsageSession(t *testing.T, local *db.DB, base int) {
+	t.Helper()
+	messages := make([]db.Message, 0, 300)
+	for i := range 300 {
+		ts := fmt.Sprintf("2026-01-13T%02d:%02d:00.000Z", i/60, i%60)
+		messages = append(messages, usagePriceMessage(preparedUsageLongID, i, ts, "claude-test",
+			fmt.Sprintf(`{"input_tokens":%d,"output_tokens":1}`, base+i)))
+	}
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session:  fixtureSession(preparedUsageLongID, "delta", "long first", "2026-01-13T00:00:00.000Z", len(messages)),
+		Messages: messages, ReplaceMessages: true, DataVersion: 1,
+	}})
+	require.NoError(t, err)
+}
+
+// republishRoundSession changes the usage of the one-row-per-message round
+// session, a change far below the rebuild limit.
+func republishRoundSession(t *testing.T, local *db.DB, inputTokens int) {
+	t.Helper()
+	session, err := local.GetSessionFull(t.Context(), usagePriceRoundID)
+	require.NoError(t, err)
+	messages, err := local.GetAllMessages(t.Context(), usagePriceRoundID)
+	require.NoError(t, err)
+	messages[0].TokenUsage = fmt.Appendf(nil, `{"input_tokens":%d}`, inputTokens)
+	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session: *session, Messages: messages[:1], ReplaceMessages: true, DataVersion: 1,
+	}})
+	require.NoError(t, err)
+}
+
+// Without a table exchange, a push rebuilds prepared usage only once the
+// rows reads prepare themselves reach the limit or prices change. A smaller
+// push writes no prepared rows, and reads cover its sessions from the delta.
+func TestPreparedUsageRebuildWaitsForEnoughChange(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, _ := seedUsagePriceFixture(t)
+	writeLongUsageSession(t, local, 1)
+	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
+	syncer := newTestSync(t, local, Target{URL: dsn, Database: database}, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	parts := func() []string {
+		t.Helper()
+		var names []string
+		rows, err := store.DB().QueryContext(ctx, `SELECT name FROM system.parts
+			WHERE database = currentDatabase() AND table = 'prepared_usage' AND active ORDER BY name`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			require.NoError(t, rows.Scan(&name))
+			names = append(names, name)
+		}
+		require.NoError(t, rows.Err())
+		return names
+	}
+	changed := func() []string {
+		t.Helper()
+		state, err := store.preparedUsageState(ctx)
+		require.NoError(t, err)
+		require.True(t, state.ready)
+		return state.changed
+	}
+	pushPreparedUsage(t, syncer)
+	require.Empty(t, changed())
+	built := parts()
+	require.NotEmpty(t, built)
+
+	republishRoundSession(t, local, 100)
+	pushPreparedUsage(t, syncer)
+	require.Equal(t, built, parts(), "a push below the limit must not rewrite prepared usage")
+	require.Equal(t, []string{usagePriceRoundID}, changed())
+
+	writeLongUsageSession(t, local, 1000)
+	pushPreparedUsage(t, syncer)
+	rebuilt := parts()
+	require.NotEqual(t, built, rebuilt, "a push past the limit must rebuild prepared usage")
+	require.Empty(t, changed())
+
+	republishRoundSession(t, local, 200)
+	pushPreparedUsage(t, syncer)
+	require.Equal(t, rebuilt, parts())
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "claude-test", InputPerMTok: money.MustParseDollars("4"), OutputPerMTok: money.MustParseDollars("16"),
+	}}))
+	pushPreparedUsage(t, syncer)
+	require.NotEqual(t, rebuilt, parts(), "a price change must rebuild prepared usage")
+	require.Empty(t, changed())
+}
+
+// Where the view refreshes prepared usage, a push starts a refresh only
+// under the same limit; the stopped view runs a refresh a push requested
+// once it starts again.
+func TestPreparedUsageViewRefreshWaitsForEnoughChange(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedUsagePriceFixture(t)
+	writeLongUsageSession(t, local, 1)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	execPreparedUsage(t, store, "ALTER TABLE prepare_usage MODIFY REFRESH EVERY 1 DAY", "SYSTEM STOP VIEW prepare_usage")
+	pushPreparedUsage(t, syncer)
+	runPreparedUsageRefresh(t, store)
+	resume := func() []string {
+		t.Helper()
+		execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM WAIT VIEW prepare_usage",
+			"SYSTEM STOP VIEW prepare_usage")
+		state, err := store.preparedUsageState(ctx)
+		require.NoError(t, err)
+		require.True(t, state.ready)
+		return state.changed
+	}
+	require.Empty(t, resume())
+
+	republishRoundSession(t, local, 100)
+	pushPreparedUsage(t, syncer)
+	require.Equal(t, []string{usagePriceRoundID}, resume(), "a push below the limit must not request a refresh")
+
+	writeLongUsageSession(t, local, 1000)
+	pushPreparedUsage(t, syncer)
+	require.Empty(t, resume(), "a push past the limit must request a refresh")
+}

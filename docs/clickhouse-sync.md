@@ -651,14 +651,24 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   step tries one swap of two empty tables, and the server logs that failed
   swap as an `UNSUPPORTED_METHOD` error. The schema step tries it once after
   each server start and reuses the answer until the next restart. While that
-  lock table exists, each push rebuilds the prepared usage table itself before
-  it returns and logs how long the rebuild took. A push that changed nothing
-  skips the rebuild. A push that finds another push rebuilding also skips it
-  and logs which lock that push holds. The running rebuild checks once more
-  after it publishes and rebuilds again for data that arrived meanwhile. A
-  skipped or failed rebuild does not fail the push: usage reads stay correct
-  but slower until a later rebuild succeeds, and the next push tries again.
-  The mirror database keeps one small lock table between pushes.
+  lock table exists, a push rebuilds the prepared usage table itself before it
+  returns once a rebuild is due, and logs why and how long it took; the next
+  item says when a rebuild is due. A push that finds
+  another push rebuilding skips its rebuild and logs which lock that push
+  holds. The running rebuild checks once more after it publishes and rebuilds
+  again if the data that arrived meanwhile makes a rebuild due. A skipped or
+  failed rebuild does not fail the push: usage reads stay correct but slower
+  until a later rebuild succeeds, and the next push tries again. The mirror
+  database keeps one small lock table between pushes.
+- **Prepared usage rebuilds.** Usage reads stay exact while the prepared usage
+  table is behind: they compute the rows of sessions pushed since the last
+  rebuild themselves. A rebuild rewrites the whole table, so a push rebuilds it,
+  or starts the `prepare_usage` view's refresh, only when the table is empty,
+  prices changed, or the rows reads compute themselves reach 20,000 or
+  one-fiftieth of the stored rows, whichever is smaller. Other pushes write
+  nothing to the table. Where the view exists, its 15-minute schedule still
+  refreshes the table. Rows of deleted sessions stay in the table until the
+  next rebuild; reads skip them.
 - **Lock of a stopped push.** A lock expires an hour after its push last renewed
   it, so a push stopped mid-rebuild makes later pushes skip their rebuilds for
   up to an hour. If the skip message names a held lock and you know no push is
