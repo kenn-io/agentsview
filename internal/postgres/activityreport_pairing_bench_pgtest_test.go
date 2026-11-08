@@ -35,9 +35,13 @@ func BenchmarkPGActivityReportPairing(b *testing.B) {
   ANALYZE sessions, messages`)
 	require.NoError(b, err)
 	for _, tc := range []struct{ name, preset string }{
-		{"day", "day"}, {"week", "week"}, {"month", "month"}, {"year", "year"}, {"long-session-narrow", "day"},
+		{"day", "day"}, {"week", "week"}, {"month", "month"}, {"year", "custom"}, {"long-session-narrow", "day"},
 	} {
-		q, err := activity.ResolveQuery(activity.QueryInput{Preset: tc.preset, Date: "2026-06-16", Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+		input := activity.QueryInput{Preset: tc.preset, Date: "2026-06-16", Timezone: "UTC"}
+		if tc.name == "year" {
+			input.From, input.To = "2026-01-01T00:00:00Z", "2027-01-01T00:00:00Z"
+		}
+		q, err := activity.ResolveQuery(input, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 		require.NoError(b, err)
 		rows, err := store.DB().QueryContext(b.Context(), `SELECT id FROM sessions
  WHERE started_at < $2 AND ended_at >= $1 ORDER BY id`, q.RangeStart, q.EffectiveEnd)
