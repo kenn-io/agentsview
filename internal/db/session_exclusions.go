@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 )
@@ -39,7 +40,54 @@ func BuildSessionExclusionCountsSQL(f SessionFilter, dialect QueryDialect) (stri
 		expanded.ExcludeAutomated = false
 		automated = count(expanded)
 	}
-	return "SELECT " + strings.Join([]string{visible, oneShot, automated}, ", ") + " FROM sessions", b.Args()
+	// The shared expanded selection keeps selective filters available to the
+	// query planner without excluding any row counted by an individual case.
+	expanded := f
+	expanded.ExcludeOneShot, expanded.ExcludeAutomated = false, false
+	where := buildSessionFilterWithBuilder(expanded, b, "")
+	return "SELECT " + strings.Join([]string{visible, oneShot, automated}, ", ") + " FROM sessions WHERE " + where, b.Args()
+}
+
+type sessionExclusionQuerier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+// CountSessionExclusions executes the shared aggregate for every list backend.
+func CountSessionExclusions(ctx context.Context, q sessionExclusionQuerier, f SessionFilter, dialect QueryDialect) (int, *SessionExclusionCounts, error) {
+	query, args := BuildSessionExclusionCountsSQL(f, dialect)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, nil, err
+		}
+		return 0, nil, sql.ErrNoRows
+	}
+	var total, oneShot, automated int
+	if err := rows.Scan(&total, &oneShot, &automated); err != nil {
+		return 0, nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, nil, err
+	}
+	counts := &SessionExclusionCounts{}
+	counts.SetExpandedTotals(total, oneShot, automated)
+	return total, counts, nil
+}
+
+// LoadChildren preserves flat counts and the visible page if the probe fails.
+func (c *SessionExclusionCounts) LoadChildren(ctx context.Context, q sessionExclusionQuerier, f SessionFilter, dialect QueryDialect, visible int) {
+	if c == nil || f.ExclusionCounts != "all" || f.HasAnnotationFilter() {
+		return
+	}
+	query, args := BuildSessionExclusionChildrenSQL(f, dialect)
+	if rows, err := q.QueryContext(ctx, query, args...); err == nil {
+		defer rows.Close()
+		_ = c.ReadChildren(rows, f, visible)
+	}
 }
 
 // SetExpandedTotals retains the original nonnegative exclusion differences.

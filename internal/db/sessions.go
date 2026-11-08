@@ -773,13 +773,11 @@ func (db *DB) ListSessions(
 	// the first-page total and we reuse it here.
 	var exclusions *SessionExclusionCounts
 	if f.WantsExclusionCounts() {
-		exclusions = &SessionExclusionCounts{}
-		query, countArgs := BuildSessionExclusionCountsSQL(f, dialect)
-		var oneShot, automated int
-		if err := db.getReader().QueryRowContext(ctx, query, countArgs...).Scan(&total, &oneShot, &automated); err != nil {
+		var err error
+		total, exclusions, err = CountSessionExclusions(ctx, db.getReader(), f, dialect)
+		if err != nil {
 			return SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
 		}
-		exclusions.SetExpandedTotals(total, oneShot, automated)
 	} else if total <= 0 {
 		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + where
 		if err := db.getReader().QueryRowContext(
@@ -826,13 +824,7 @@ func (db *DB) ListSessions(
 		return SessionPage{}, err
 	}
 
-	if exclusions != nil && f.ExclusionCounts == "all" {
-		query, childArgs := BuildSessionExclusionChildrenSQL(f, dialect)
-		if rows, err := db.getReader().QueryContext(ctx, query, childArgs...); err == nil {
-			_ = exclusions.ReadChildren(rows, f, total)
-			rows.Close()
-		}
-	}
+	exclusions.LoadChildren(ctx, db.getReader(), f, dialect, total)
 	page := BuildSessionPage(sessions, total, f, rs, db.EncodeCursor)
 	page.ExclusionCounts = exclusions
 	return page, nil

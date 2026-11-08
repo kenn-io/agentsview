@@ -360,9 +360,6 @@ func (b *httpBackend) List(
 	if err != nil {
 		return nil, err
 	}
-	if f.ExclusionCounts != "" && out.ExclusionCounts == nil {
-		return nil, errors.New("server omitted requested session exclusion counts; restart or upgrade the server")
-	}
 	for i := range out.Sessions {
 		out.Sessions[i].WebURL = b.sessionWebURL(out.Sessions[i].ID)
 	}

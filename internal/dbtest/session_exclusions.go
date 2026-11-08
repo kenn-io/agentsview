@@ -49,6 +49,7 @@ func AssertSessionExclusionCounts(t *testing.T, store db.Store) {
 		{"include automated", func(f *db.SessionFilter) { f.ExcludeAutomated = false }, 3, 1, 0, 1},
 		{"tree", func(f *db.SessionFilter) { f.IncludeChildren = true }, 3, 1, 1, 0},
 		{"label", func(f *db.SessionFilter) { f.ExclusionCounts = "flat"; f.Labels = []string{"exclusion-label"} }, 5, 0, 0, 0},
+		{"label with child summary", func(f *db.SessionFilter) { f.Labels = []string{"exclusion-label"} }, 5, 0, 0, 0},
 		{"label explicit one-shot", func(f *db.SessionFilter) {
 			f.ExclusionCounts = "flat"
 			f.Labels = []string{"exclusion-label"}

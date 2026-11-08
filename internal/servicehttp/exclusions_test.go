@@ -23,7 +23,7 @@ func TestListExclusionCountsVersion(t *testing.T) {
 		{"current", 16, 16, "all", false, false},
 		{"unknown", 0, 0, "all", false, true},
 		{"not requested on old", 15, 15, "", false, false},
-		{"missing summary", 16, 16, "all", true, true},
+		{"omitted summary", 16, 16, "all", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -50,7 +50,7 @@ func TestListExclusionCountsVersion(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, 1, calls)
-			if tc.scope == "" {
+			if tc.scope == "" || tc.missing {
 				assert.Nil(t, page.ExclusionCounts)
 				return
 			}

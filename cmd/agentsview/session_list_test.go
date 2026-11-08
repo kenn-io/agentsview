@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestSessionListIncludeSource(t *testing.T) {
@@ -434,6 +435,21 @@ func TestSessionListKeepsResultsWhenChildCountFails(t *testing.T) {
 	assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
 }
 
+func TestSessionListRejectsMissingExclusionCounts(t *testing.T) {
+	newAgentDataDir(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/version" {
+			fmt.Fprintf(w, `{"api_version":%d}`, server.APIVersion)
+			return
+		}
+		_, _ = w.Write([]byte(`{"sessions":[{"id":"visible"}],"total":1}`))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := executeCommand(newRootCommand(), "session", "list", "--server", srv.URL, "--json")
+	require.ErrorContains(t, err, "server omitted requested session exclusion counts")
+}
+
 func TestSessionListSeparatesFlatAndChildRetries(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSessionsWithOpts(t, dataDir,
@@ -499,6 +515,24 @@ func TestSessionListMakesOneListRequest(t *testing.T) {
 	t.Cleanup(proxy.Close)
 	daemon := server.New(config.Config{Host: "127.0.0.1", PublicURL: proxy.URL, DataDir: dataDir, NoSync: true}, d, nil)
 	handler = daemon.Handler()
+	backend := servicehttp.NewHTTPBackendForServer(proxy.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: server.APIVersion})
+	for _, name := range []string{"cursor", "fully included"} {
+		t.Run(name, func(t *testing.T) {
+			f := service.ListFilter{ExclusionCounts: "all", IncludeOneShot: true, Limit: 1}
+			first, err := backend.List(t.Context(), f)
+			require.NoError(t, err)
+			require.NotEmpty(t, first.NextCursor)
+			if name == "cursor" {
+				f.Cursor = first.NextCursor
+			} else {
+				f.IncludeAutomated, f.IncludeChildren = true, true
+			}
+			page, err := backend.List(t.Context(), f)
+			require.NoError(t, err)
+			assert.NotEmpty(t, page.Sessions)
+			assert.Nil(t, page.ExclusionCounts)
+		})
+	}
 	for _, format := range []string{"human", "json"} {
 		t.Run(format, func(t *testing.T) {
 			calls = 0

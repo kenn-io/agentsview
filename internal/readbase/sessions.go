@@ -75,13 +75,11 @@ func (s Sessions) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sess
 	}
 	var exclusions *db.SessionExclusionCounts
 	if f.WantsExclusionCounts() {
-		exclusions = &db.SessionExclusionCounts{}
-		query, countArgs := db.BuildSessionExclusionCountsSQL(f, dialect)
-		var oneShot, automated int
-		if err := s.backend.QueryRowContext(ctx, query, countArgs...).Scan(&total, &oneShot, &automated); err != nil {
+		var err error
+		total, exclusions, err = db.CountSessionExclusions(ctx, s.backend, f, dialect)
+		if err != nil {
 			return db.SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
 		}
-		exclusions.SetExpandedTotals(total, oneShot, automated)
 	} else if total <= 0 {
 		if err := s.backend.QueryRowContext(ctx,
 			CountSessionsSQL(dialect.SignedAggregate("COUNT(*)"), where), args...,
@@ -114,13 +112,7 @@ func (s Sessions) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sess
 	if err != nil {
 		return db.SessionPage{}, err
 	}
-	if exclusions != nil && f.ExclusionCounts == "all" {
-		query, childArgs := db.BuildSessionExclusionChildrenSQL(f, dialect)
-		if rows, err := s.backend.QueryContext(ctx, query, childArgs...); err == nil {
-			_ = exclusions.ReadChildren(rows, f, total)
-			rows.Close()
-		}
-	}
+	exclusions.LoadChildren(ctx, s.backend, f, dialect, total)
 	page := db.BuildSessionPage(sessions, total, f, rs, s.backend.EncodeCursor)
 	page.ExclusionCounts = exclusions
 	return page, nil
