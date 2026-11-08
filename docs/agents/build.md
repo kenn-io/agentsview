@@ -14,9 +14,9 @@ scheduled checks, and desktop builds. Select labels from
 [GitHub's supported runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 Keep the explicit architecture labels for Linux ARM64 and macOS desktop builds.
 
-The exception is the `CI gate` job in `ci-pr.yml`, which only checks the result
-of the CI run. It runs on the Namespace profile `namespace-profile-linux-1cpu`
-so it does not wait in the GitHub-hosted queue after CI finishes.
+The exceptions are the seconds-long `CI gate`, `changes`, and
+`Sibling pins on main` jobs. They run on the Namespace profile
+`namespace-profile-linux-1cpu` so they do not wait in the GitHub-hosted queue.
 
 Use the local `go-cache-restore` and `go-cache-save` actions for Go caches and
 disable the built-in cache in `actions/setup-go`. Use npm caching in
