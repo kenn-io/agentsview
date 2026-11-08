@@ -182,6 +182,7 @@ func TestExportPushCreateErrorsDistinguishExistingFile(t *testing.T) {
 	require.ErrorContains(t, publishExportPush(t.Context(), existing, []byte("snapshot")), "output must be a new file")
 	err := publishExportPush(t.Context(), filepath.Join(dir, "missing", "snapshot.json"), []byte("snapshot"))
 	require.ErrorContains(t, err, "cannot create the output file")
+	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NotContains(t, err.Error(), dir)
 }
 

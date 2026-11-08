@@ -134,7 +134,7 @@ func publishExportPush(ctx context.Context, path string, payload []byte) (err er
 		if errors.Is(err, os.ErrExist) {
 			return errors.New("export-push: output must be a new file")
 		}
-		return errors.New("export-push: cannot create the output file")
+		return &exportPushCreateError{cause: err}
 	}
 	err = writeExportPushContent(ctx, file, payload)
 	if err != nil {
@@ -142,6 +142,11 @@ func publishExportPush(ctx context.Context, path string, payload []byte) (err er
 	}
 	return err
 }
+
+type exportPushCreateError struct{ cause error }
+
+func (e *exportPushCreateError) Error() string { return "export-push: cannot create the output file" }
+func (e *exportPushCreateError) Unwrap() error { return e.cause }
 
 type exportPushPrivateOutput interface {
 	io.Writer
