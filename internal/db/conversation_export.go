@@ -504,10 +504,21 @@ func projectConversationMessagesTx(tx transactionQueries, sessionID string, msgs
 	}
 	equal := replace && len(old) == len(incoming)
 	for i := range incoming {
-		if equal && !conversationRowsEqual(old[i], incoming[i]) &&
-			!conversationRowGainsSourceID(old[i], incoming[i], counts) {
-			equal = false
+		if !equal || conversationRowsEqual(old[i], incoming[i]) {
+			continue
 		}
+		if !conversationRowGainsSourceID(old[i], incoming[i], counts) {
+			equal = false
+			continue
+		}
+		// A gained ID already held by a kept row or a tombstone needs the
+		// native-identity reconciliation below.
+		var held bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=? AND source_id=?)`,
+			sessionID, incoming[i].sourceID).Scan(&held); err != nil {
+			return err
+		}
+		equal = !held
 	}
 	// Tombstones are absent from old, so only the table can prove a session is new.
 	fresh := len(old) == 0

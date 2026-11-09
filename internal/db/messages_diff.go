@@ -175,6 +175,45 @@ func transcriptMessagesEqual(stored, incoming []Message) bool {
 	return true
 }
 
+// transcriptMessagesGainSourceIDs reports whether incoming repeats stored
+// except that rows stored without a source ID now carry one, and each such ID
+// occurs once in incoming. These are the same messages after a parser starts
+// keeping native IDs, so a caller can update them in place and keep their
+// row IDs, pins, and notes.
+func transcriptMessagesGainSourceIDs(stored, incoming []Message) bool {
+	if len(stored) != len(incoming) {
+		return false
+	}
+	byOrdinal := make(map[int]Message, len(stored))
+	for _, msg := range stored {
+		if _, exists := byOrdinal[msg.Ordinal]; exists {
+			return false
+		}
+		byOrdinal[msg.Ordinal] = msg
+	}
+	counts := messageSourceUUIDCounts(incoming)
+	seen := make(map[int]bool, len(incoming))
+	gained := false
+	for _, msg := range incoming {
+		old, exists := byOrdinal[msg.Ordinal]
+		if !exists || seen[msg.Ordinal] {
+			return false
+		}
+		seen[msg.Ordinal] = true
+		if old.SourceUUID == "" && msg.SourceUUID != "" {
+			if counts[msg.SourceUUID] != 1 {
+				return false
+			}
+			old.SourceUUID = msg.SourceUUID
+			gained = true
+		}
+		if !transcriptMessageEqual(old, msg) {
+			return false
+		}
+	}
+	return gained
+}
+
 func transcriptMessageEqual(a, b Message) bool {
 	comparableTranscriptMessage := func(msg Message) Message {
 		msg.ID = 0
