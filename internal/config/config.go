@@ -294,7 +294,8 @@ type VectorEmbeddingsServerConfig struct {
 	// APIKeyEnv names the environment variable holding the API key.
 	// Empty means anonymous access.
 	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
-	// BatchSize is the number of inputs sent per HTTP call. Default 32.
+	// BatchSize is the number of inputs sent per HTTP call. Default 32, or 8
+	// for a built-in server (no endpoint).
 	BatchSize int `toml:"batch_size" json:"batch_size"`
 	// MaxBatchTokens is the provider's maximum total input tokens per HTTP
 	// call. When set with ModelContextTokens, builds reduce BatchSize so the
@@ -304,9 +305,10 @@ type VectorEmbeddingsServerConfig struct {
 	// build against this server. Sequential requests leave a build
 	// round-trip-bound against remote endpoints, so the default is 4;
 	// servers that process one request at a time simply queue the extras.
+	// A built-in server runs on the CPU, so its default is 1.
 	Concurrency int `toml:"concurrency" json:"concurrency"`
 	// Timeout is a parseable duration string applied to each HTTP
-	// call. Default "30s".
+	// call. Default "30s", or "5m" for a built-in server (no endpoint).
 	Timeout string `toml:"timeout" json:"timeout"`
 	// MaxRetries is the maximum total attempts on retryable errors other than
 	// document-build 429 rate limits, which retry until success or
@@ -368,25 +370,53 @@ func (c VectorEmbeddingsConfig) Server(name string) (string, VectorEmbeddingsSer
 	return name, s, nil
 }
 
+// Transport defaults for a server with an endpoint, which is usually a
+// remote API or a GPU-backed local server.
+const (
+	defaultEmbeddingsBatchSize   = 32
+	defaultEmbeddingsConcurrency = 4
+	defaultEmbeddingsTimeout     = "30s"
+)
+
+// Transport defaults for a built-in server (no endpoint: automatic discovery
+// or local = true). Kit's shared local server runs the model on the CPU,
+// where one full-context input can take seconds, so a request carries fewer
+// inputs, builds send one request at a time, and each request may run longer.
+const (
+	defaultBuiltinEmbeddingsBatchSize   = 8
+	defaultBuiltinEmbeddingsConcurrency = 1
+	defaultBuiltinEmbeddingsTimeout     = "5m"
+)
+
 // normalizedEmbeddingsServers fills each named server's unset transport
-// fields with their defaults (batch_size 32, concurrency 4, timeout "30s",
-// max_retries 3). meta.IsDefined distinguishes "unset" (apply the default)
-// from an explicit zero — an explicit max_retries = 0 disables retries, and
-// an explicit zero batch_size/concurrency stays zero so validation rejects
-// it instead of silently substituting the default.
+// fields with their defaults: batch_size 32, concurrency 4, and timeout
+// "30s" for a server with an endpoint; batch_size 8, concurrency 1, and
+// timeout "5m" for a built-in server; max_retries 3 for both.
+// meta.IsDefined distinguishes "unset" (apply the default) from an explicit
+// zero — an explicit max_retries = 0 disables retries, and an explicit zero
+// batch_size/concurrency stays zero so validation rejects it instead of
+// silently substituting the default.
 func normalizedEmbeddingsServers(
 	servers map[string]VectorEmbeddingsServerConfig, meta toml.MetaData,
 ) map[string]VectorEmbeddingsServerConfig {
 	out := make(map[string]VectorEmbeddingsServerConfig, len(servers))
 	for name, s := range servers {
+		batchSize := defaultEmbeddingsBatchSize
+		concurrency := defaultEmbeddingsConcurrency
+		timeout := defaultEmbeddingsTimeout
+		if s.Endpoint == "" {
+			batchSize = defaultBuiltinEmbeddingsBatchSize
+			concurrency = defaultBuiltinEmbeddingsConcurrency
+			timeout = defaultBuiltinEmbeddingsTimeout
+		}
 		if !meta.IsDefined("vector", "embeddings", "servers", name, "batch_size") {
-			s.BatchSize = 32
+			s.BatchSize = batchSize
 		}
 		if !meta.IsDefined("vector", "embeddings", "servers", name, "concurrency") {
-			s.Concurrency = 4
+			s.Concurrency = concurrency
 		}
 		if s.Timeout == "" {
-			s.Timeout = "30s"
+			s.Timeout = timeout
 		}
 		if !meta.IsDefined("vector", "embeddings", "servers", name, "max_retries") {
 			s.MaxRetries = 3

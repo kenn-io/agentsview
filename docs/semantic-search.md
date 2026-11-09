@@ -62,10 +62,10 @@ default_server = "local"          # server used for query encoding and unnamed b
 [vector.embeddings.servers.local]
 endpoint = "http://localhost:11434/v1"  # OpenAI-compatible base URL; "/embeddings" is appended
 api_key_env = "OPENAI_API_KEY"    # name of an env var holding the key; omit for anonymous access
-batch_size = 32                   # inputs per HTTP call (default 32)
+batch_size = 32                   # inputs per HTTP call (default 32; 8 for a built-in server)
 max_batch_tokens = 120000         # optional provider cap across all inputs in one call
-concurrency = 4                   # documents embedded in parallel during a build (default 4)
-timeout = "30s"                   # per-HTTP-call timeout (default "30s")
+concurrency = 4                   # documents embedded in parallel during a build (default 4; 1 for a built-in server)
+timeout = "30s"                   # per-HTTP-call timeout (default "30s"; "5m" for a built-in server)
 max_retries = 3                   # attempts on 5xx/network errors; 4xx fails fast (default 3)
                                    # document builds retry a 429 until it clears (or the daemon
                                    # shuts down) instead of spending this budget on it; query
@@ -213,6 +213,33 @@ endpoint — so a few requests in flight at once multiply throughput. Servers th
 process one request at a time simply queue the extras; raise the value if your
 endpoint has spare parallel capacity, or set it to 1 to send one request at a
 time.
+
+### Built-in server transport
+
+Kit's shared local server runs the model on the CPU, where one full-length chunk
+can take a few seconds to embed. A built-in server — automatic discovery or a
+server with `local = true` — therefore defaults to `batch_size = 8`,
+`concurrency = 1`, and `timeout = "5m"`. These defaults also apply when
+automatic discovery finds Ollama. A server with an `endpoint`, such as Ollama's
+`http://localhost:11434/v1`, keeps the defaults of 32, 4, and `"30s"`.
+
+To tune the built-in server, name it with `local = true` and set the transport
+fields. Keep the default recipe shown in
+[Named embeddings servers](#named-embeddings-servers):
+
+```toml
+[vector.embeddings.servers.shared]
+local = true
+batch_size = 4
+timeout = "10m"
+```
+
+When a document build request of several inputs times out, AgentsView retries it
+at once as two requests of half the size, and keeps halving while requests time
+out. A single input that times out fails the build with
+`embed request failed: no response within the <timeout> request timeout`; the
+next build retries it. Raise `timeout` or lower `batch_size` if builds keep
+logging `embed request for N inputs timed out`.
 
 ### Role-aware task prefixes
 
@@ -939,7 +966,8 @@ below.
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |
 | `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                                              | CLI: `--scope requires --semantic or --hybrid`; HTTP and MCP accept scope with substring, regex, terms, semantic, and hybrid                                                        |
 | An unattended search or build needs a first local download                                                                      | `local embeddings: run agentsview index embeddings build to approve the first download`; run `agentsview index embeddings build` in the CLI and approve the download. |
-| Embeddings endpoint unreachable or timed out                                                                                    | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                                   |
+| Embeddings endpoint unreachable                                                                                                 | `embed request failed`                                                                                                                                                |
+| Embeddings request timed out                                                                                                    | `embed request failed: no response within the <timeout> request timeout`; see [Built-in server transport](#built-in-server-transport)                                 |
 | Embeddings endpoint returned non-200                                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                           |
 | Embeddings endpoint returned a non-finite or zero-norm vector                                                                   | `[vector.embeddings] invalid embedding at index <n>: ...`; correct the endpoint/cache configuration, then run `agentsview index embeddings build --repair-invalid`    |
 | Embeddings endpoint returned a JSON `null` component                                                                            | `[vector.embeddings] decode response: embedding component <n> is null`; correct the endpoint/cache configuration, then run the targeted repair                        |

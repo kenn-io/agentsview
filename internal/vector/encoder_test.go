@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -311,4 +312,78 @@ func TestEncoderCredentialRejectionIsNotPermanent(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, isPermanentEncodeError(err),
 		"a rejected key must abort the build instead of skipping every document")
+}
+
+// slowBatchServer answers requests of at most maxInputs inputs and holds
+// larger ones until the client gives up, like a CPU server that cannot finish
+// a full batch within the request timeout. It records each request's size.
+func slowBatchServer(t *testing.T, maxInputs int) (*httptest.Server, *[]int, *sync.Mutex) {
+	t.Helper()
+	var mu sync.Mutex
+	var sizes []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req embeddingsRequest
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		sizes = append(sizes, len(req.Input))
+		mu.Unlock()
+		if len(req.Input) > maxInputs {
+			<-r.Context().Done()
+			return
+		}
+		writeJSON(t, w, http.StatusOK, vectorsResponse(len(req.Input), []float32{1, 0, 0}))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &sizes, &mu
+}
+
+func TestEncoderHalvesBatchAfterTimeout(t *testing.T) {
+	srv, sizes, mu := slowBatchServer(t, 2)
+	cfg := testEncoderConfig(srv.URL + "/v1")
+	cfg.Transport.Timeout = time.Second
+	cfg.RetryRateLimits = true
+	enc, err := NewEncoder(cfg, embedconfig.RoleDocument)
+	require.NoError(t, err)
+
+	out, err := enc(t.Context(), []string{"a", "b", "c", "d"})
+	require.NoError(t, err, "a timed-out batch is retried as smaller requests")
+	assert.Len(t, out, 4)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []int{4, 2, 2}, *sizes,
+		"the timed-out batch is split at once instead of retried at the same size")
+}
+
+func TestEncoderNamesRequestTimeout(t *testing.T) {
+	tests := []struct {
+		name            string
+		retryRateLimits bool
+		role            embedconfig.Role
+	}{
+		{name: "document build", retryRateLimits: true, role: embedconfig.RoleDocument},
+		{name: "query", role: embedconfig.RoleQuery},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, sizes, mu := slowBatchServer(t, 0)
+			cfg := testEncoderConfig(srv.URL + "/v1")
+			cfg.Transport.Timeout = time.Second
+			cfg.MaxRetries = 1
+			cfg.RetryRateLimits = tt.retryRateLimits
+			enc, err := NewEncoder(cfg, tt.role)
+			require.NoError(t, err)
+
+			_, err = enc(t.Context(), []string{"alpha"})
+			require.EqualError(t, err, "embed request failed: no response within the 1s request timeout")
+			_, ok := errors.AsType[*embedclient.TransportError](err)
+			assert.True(t, ok, "the timeout keeps its transport error type")
+			assert.False(t, isPermanentEncodeError(err), "a timeout aborts the fill for a later retry")
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, []int{1}, *sizes, "a single input cannot be split further")
+		})
+	}
 }
