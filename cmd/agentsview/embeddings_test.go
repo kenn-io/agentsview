@@ -1552,9 +1552,8 @@ func TestEmbeddingsActivateDispatchesToDaemon(t *testing.T) {
 
 // TestBuildViaDaemonConflictThenPolls drives buildViaDaemon (the daemon
 // build path's core logic) against a fake HTTP server that refuses the
-// first build attempt with 409 and reports Running until the second status
-// poll, asserting the CLI prints the "already running" notice and then the
-// same final summary format the direct path uses.
+// first build attempt with 409 and reports setup and build progress. It checks
+// that the CLI prints the notice and the final summary.
 func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	orig := embeddingsPollInterval
 	embeddingsPollInterval = time.Millisecond
@@ -1571,8 +1570,12 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
 		n := statusCalls.Add(1)
-		status := vector.BuildStatus{Running: n < 2}
-		if n >= 2 {
+		status := vector.BuildStatus{}
+		if n <= 3 {
+			status.Setup = &vector.SetupStatus{Busy: true}
+		} else if n == 4 {
+			status.Running = true
+		} else {
 			status.LastResult = &vector.BuildResult{
 				Activated: true,
 				Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},
@@ -1592,7 +1595,7 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	assert.Contains(t, out.String(), "a build is already running (daemon)")
 	assert.Contains(t, out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0")
 	assert.Contains(t, out.String(), "Generation activated.")
-	assert.GreaterOrEqual(t, statusCalls.Load(), int32(2))
+	assert.GreaterOrEqual(t, statusCalls.Load(), int32(5))
 }
 
 // TestBuildViaDaemonAlwaysSendsIncludeAutomated pins the wire contract for
@@ -1637,37 +1640,51 @@ func TestBuildViaDaemonAlwaysSendsIncludeAutomated(t *testing.T) {
 // non-empty LastError becomes the returned error, so the CLI exits
 // non-zero, matching the direct path's error propagation.
 func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.MarshalWrite(w, map[string]bool{"started": true})
-	})
-	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.MarshalWrite(w, vector.BuildStatus{
-			Running:   false,
-			LastError: "encoder rejected input",
-			LastResult: &vector.BuildResult{
-				Repair: vector.RepairStats{
-					Scanned: true, ScanComplete: true, RemainingKnown: true,
-					Documents: 2, Chunks: 3, Failed: 1, Remaining: 1,
-				},
-				Fill: kitvec.FillStats{Documents: 1, Chunks: 1},
-			},
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	for _, setupError := range []bool{false, true} {
+		t.Run(fmt.Sprintf("setup-error=%t", setupError), func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				_ = json.MarshalWrite(w, map[string]bool{"started": true})
+			})
+			mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				status := vector.BuildStatus{
+					Running:   false,
+					LastError: "encoder rejected input",
+					LastResult: &vector.BuildResult{
+						Repair: vector.RepairStats{
+							Scanned: true, ScanComplete: true, RemainingKnown: true,
+							Documents: 2, Chunks: 3, Failed: 1, Remaining: 1,
+						},
+						Fill: kitvec.FillStats{Documents: 1, Chunks: 1},
+					},
+				}
+				if setupError {
+					status.Setup = &vector.SetupStatus{Error: "setup failed"}
+					status.LastError = ""
+					status.LastResult = nil
+				}
+				_ = json.MarshalWrite(w, status)
+			})
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
 
-	client := embeddingsDaemonClient{baseURL: srv.URL}
-	var out bytes.Buffer
-	err := buildViaDaemon(t.Context(), &out, client, vector.BuildRequest{})
-	require.Error(t, err)
-	assert.Equal(t, "encoder rejected input", err.Error())
-	assert.Contains(t, out.String(), "Repair targets: 2 documents (3 chunks invalidated).")
-	assert.Contains(t, out.String(), "Repair incomplete: 1 failed, 1 remaining.")
-	assert.Contains(t, out.String(), "Embedded 1 documents (1 chunks), skipped 0, stale 0")
+			client := embeddingsDaemonClient{baseURL: srv.URL}
+			var out bytes.Buffer
+			err := buildViaDaemon(t.Context(), &out, client, vector.BuildRequest{})
+			require.Error(t, err)
+			if setupError {
+				assert.ErrorContains(t, err, "setup failed")
+				return
+			}
+			assert.Equal(t, "encoder rejected input", err.Error())
+			assert.Contains(t, out.String(), "Repair targets: 2 documents (3 chunks invalidated).")
+			assert.Contains(t, out.String(), "Repair incomplete: 1 failed, 1 remaining.")
+			assert.Contains(t, out.String(), "Embedded 1 documents (1 chunks), skipped 0, stale 0")
+		})
+	}
 }
 
 // TestDirectListGenerationsVersionMismatchSurfacesRebuildRequired pins the

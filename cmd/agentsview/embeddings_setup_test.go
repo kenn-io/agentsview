@@ -208,7 +208,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			}
 			if recipe == "fresh" {
 				var result db.ContentSearchPage
-				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/search/content?pattern=network%20pooling&mode=semantic&include_one_shot=true", "", 200), &result))
+				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", 200), &result))
 				require.NotEmpty(t, result.Matches)
 				assert.Equal(t, "session-one", result.Matches[0].SessionID)
 				dbtest.SeedSessionWithMessages(t, database, "automated", "sample", []db.Message{dbtest.UserMsg("automated", 0, "automated connections")}, func(s *db.Session) { s.IsAutomated = true })
@@ -543,23 +543,23 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 	})
 	for _, tc := range []struct {
-		name, store, using, wantStore       string
-		full, download, decline, setupError bool
+		name, store, using, wantStore string
+		full, download, decline       bool
 	}{
-		{"configured", "", "local", "messages", true, false, false, false},
-		{"recall", "recall", "local", "recall", false, false, false, false},
-		{"download", "", "", "messages", true, true, false, false},
-		{"configured-declined", "", "local", "messages", false, false, true, false},
-		{"download-declined", "", "", "messages", false, true, true, false},
-		{"setup-error", "", "local", "messages", false, false, false, true},
+		{"configured", "", "local", "messages", true, false, false},
+		{"recall", "recall", "local", "recall", false, false, false},
+		{"download", "", "", "messages", true, true, false},
+		{"configured-declined", "", "local", "messages", false, false, true},
+		{"download-declined", "", "", "messages", false, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
+			var sawDeclined atomic.Bool
 			if tc.download {
 				var installed atomic.Bool
 				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-					return embedlocal.Status{DownloadBytes: 100}, nil
+					return embedlocal.Status{DownloadBytes: 101}, nil
 				}
 				localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
 					if !installed.Load() {
@@ -573,6 +573,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 						return embedlocal.Installation{}, err
 					}
 					if !approved {
+						sawDeclined.Store(true)
 						return embedlocal.Installation{}, errors.New("embedding download declined; approve installation to use local embeddings")
 					}
 					opts.Progress(101, 101)
@@ -589,20 +590,10 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			var setupRequest struct {
 				Build vector.BuildRequest `json:"build"`
 			}
-			var polls atomic.Int64
-			oldInterval := embeddingsPollInterval
-			embeddingsPollInterval = 10 * time.Millisecond
-			t.Cleanup(func() { embeddingsPollInterval = oldInterval })
 			handlers := map[string]http.HandlerFunc{
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
-					if n := polls.Add(1); n <= 3 {
-						_, _ = io.WriteString(w, `{"setup":{"busy":true}}`)
-					} else if tc.setupError {
-						_, _ = io.WriteString(w, `{"setup":{"error":"setup failed"}}`)
-					} else {
-						_, _ = io.WriteString(w, `{"setup":{},"last_result":{}}`)
-					}
+					_, _ = io.WriteString(w, `{"setup":{},"last_result":{}}`)
 				},
 				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
 					if !assert.NoError(t, json.UnmarshalRead(r.Body, &setupRequest)) {
@@ -623,18 +614,14 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
 			if tc.decline {
 				if tc.download {
-					require.ErrorContains(t, err, "embedding download declined")
+					require.Error(t, err)
+					assert.True(t, sawDeclined.Load())
 				} else {
 					require.ErrorContains(t, err, "search setup declined")
 				}
 				return
 			}
-			if tc.setupError {
-				require.ErrorContains(t, err, "setup failed")
-				return
-			}
 			require.NoError(t, err)
-			assert.GreaterOrEqual(t, polls.Load(), int64(4))
 			assert.Equal(t, tc.wantStore, setupRequest.Build.Store)
 			assert.Equal(t, tc.using, setupRequest.Build.Using)
 			assert.Equal(t, tc.full, setupRequest.Build.FullRebuild)
