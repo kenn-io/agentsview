@@ -797,18 +797,37 @@ func pgUsageSnapshotInputFilter(f db.UsageFilter) db.UsageFilter {
 	return db.UsageFilter{From: f.From, To: f.To, Timezone: f.Timezone}
 }
 
+// pgExactUsageUTCWindow returns the first instant of f's first local day and
+// of the day after its last, in UTC. db.FrictionDayBounds resolves a skipped
+// or repeated local midnight to the first instant of that date, so a day
+// before a skipped midnight keeps its last hour. An unparseable date leaves
+// that end of the window open; the padded bounds still apply.
 func pgExactUsageUTCWindow(f db.UsageFilter) (from, to time.Time) {
 	loc := f.Location()
 	if f.From != "" {
-		from, _ = time.ParseInLocation("2006-01-02", f.From, loc)
-	}
-	if f.To != "" {
-		to, _ = time.ParseInLocation("2006-01-02", f.To, loc)
-		if !to.IsZero() {
-			to = to.AddDate(0, 0, 1)
+		if start, _, err := db.FrictionDayBounds(f.From, loc); err == nil {
+			from = start.UTC()
 		}
 	}
-	return from.UTC(), to.UTC()
+	if f.To != "" {
+		if _, end, err := db.FrictionDayBounds(f.To, loc); err == nil {
+			to = end.UTC()
+		}
+	}
+	return from, to
+}
+
+// appendPGExactUsageWindow restricts where to rows whose ts column falls on
+// a local day of f's window; see pgExactUsageUTCWindow.
+func appendPGExactUsageWindow(where, ts string, pb *paramBuilder, f db.UsageFilter) string {
+	from, to := pgExactUsageUTCWindow(f)
+	if !from.IsZero() {
+		where += "\n\t\t\tAND " + ts + " >= " + pb.add(from) + "::timestamptz"
+	}
+	if !to.IsZero() {
+		where += "\n\t\t\tAND " + ts + " < " + pb.add(to) + "::timestamptz"
+	}
+	return where
 }
 
 // pgSnapshotRankedDailyUsageRowsSQL keeps the greatest output snapshot and the
@@ -817,14 +836,7 @@ func pgExactUsageUTCWindow(f db.UsageFilter) (from, to time.Time) {
 func pgSnapshotRankedDailyUsageRowsSQL(
 	pb *paramBuilder, rowsSQL string, f db.UsageFilter, dialect db.QueryDialect,
 ) (string, string) {
-	from, to := pgExactUsageUTCWindow(f)
-	where := "TRUE"
-	if !from.IsZero() {
-		where += "\n\t\t\tAND u.ts >= " + pb.add(from) + "::timestamptz"
-	}
-	if !to.IsZero() {
-		where += "\n\t\t\tAND u.ts < " + pb.add(to) + "::timestamptz"
-	}
+	where := appendPGExactUsageWindow("TRUE", "u.ts", pb, f)
 	filterWhere := appendPGUsageSourceFilterClauses(
 		"TRUE", pb, f, "u.model")
 	filterWhere = appendPGUsageSessionFilterClauses(filterWhere, pb, f, dialect)
@@ -2485,37 +2497,19 @@ WHERE `+where, pb.args...).Scan(&count)
 
 	bounds := pgUsageBoundsForFilter(pb, f)
 	rowsSQL := pgMatchingUsageRowsSQLForBounds(pb, f, bounds, s.sessionDialect())
-
-	rows, err := s.pg.QueryContext(
-		ctx, pgDailyUsageRowSelectFromRows(rowsSQL), pb.args...)
-	if err != nil {
+	// The padded bounds above keep every row whose local date can fall in
+	// the window. The exact instants of the window's first and last local
+	// days keep the rows whose local date does, as the top-sessions read
+	// does, so the count needs no rows outside the database.
+	where := appendPGExactUsageWindow("u.ts IS NOT NULL", "u.ts", pb, f)
+	var count int
+	if err := s.pg.QueryRowContext(ctx, `
+SELECT COUNT(DISTINCT u.session_id)
+FROM (`+rowsSQL+`) u
+WHERE `+where, pb.args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
 	}
-	defer rows.Close()
-
-	loc := f.Location()
-	seen := make(map[string]struct{})
-	for rows.Next() {
-		r, err := scanPGDailyUsageRow(rows)
-		if err != nil {
-			return 0, fmt.Errorf("scanning matching usage session: %w", err)
-		}
-		date := usageDate(r.ts, loc)
-		if date == "" {
-			continue
-		}
-		if f.From != "" && date < f.From {
-			continue
-		}
-		if f.To != "" && date > f.To {
-			continue
-		}
-		seen[r.sessionID] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
-	}
-	return len(seen), nil
+	return count, nil
 }
 
 // pgDailyPairwiseSides folds the ranking's existing buckets, preserving its
