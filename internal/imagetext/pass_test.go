@@ -19,7 +19,7 @@ import (
 	"go.kenn.io/docbank/document/glmocr"
 )
 
-func TestImageTextPassAndSearch(t *testing.T) {
+func TestImageTextPassReusesCachedText(t *testing.T) {
 	ctx := t.Context()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
