@@ -589,7 +589,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			var setupRequest struct {
 				Build vector.BuildRequest `json:"build"`
 			}
-			var accepted atomic.Bool
 			var polls atomic.Int64
 			oldInterval := embeddingsPollInterval
 			embeddingsPollInterval = 10 * time.Millisecond
@@ -597,9 +596,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			handlers := map[string]http.HandlerFunc{
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
-					if !accepted.Load() {
-						_, _ = io.WriteString(w, `{"setup":{"action":"turn-on"}}`)
-					} else if n := polls.Add(1); n <= 3 {
+					if n := polls.Add(1); n <= 3 {
 						_, _ = io.WriteString(w, `{"setup":{"busy":true}}`)
 					} else if tc.setupError {
 						_, _ = io.WriteString(w, `{"setup":{"error":"setup failed"}}`)
@@ -612,7 +609,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 						w.WriteHeader(http.StatusBadRequest)
 						return
 					}
-					accepted.Store(true)
 					w.WriteHeader(http.StatusAccepted)
 					_, _ = io.WriteString(w, `{"started":true}`)
 				},
