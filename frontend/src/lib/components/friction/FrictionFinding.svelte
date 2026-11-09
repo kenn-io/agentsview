@@ -15,7 +15,7 @@
     finding: Finding;
     // Diagnostic producers repeat their identity at the start of the text.
     subjectId?: string;
-    // Interruptions render one row per session with this count.
+    // Interruptions and diagnostics render grouped rows with this count.
     count?: number;
   }
 
@@ -55,7 +55,9 @@
       {/each}
     </span>
   {:else if finding.kind === "diagnostic"}
-    <code>{finding.label}</code><span class="text">{finding.text}</span><span class="text">x{count}</span>
+    <code class="source">{finding.label}</code>
+    <span class="text">{finding.text}</span>
+    <span class="count">{m.friction_diagnostic_count({ count })}</span>
   {:else if finding.kind === "interruption"}
     <span class="text">{m.friction_interruption_count({ count })}</span>
   {:else}
@@ -77,6 +79,9 @@
   }
   .name {
     font-weight: 600;
+  }
+  .count {
+    color: var(--text-muted);
   }
   code {
     font-family: var(--font-mono);

@@ -3005,6 +3005,7 @@
   "friction_section_frustration": "좌절",
   "friction_section_interruptions": "중단",
   "friction_section_diagnostics": "진단",
+  "friction_diagnostic_count": "{count}회",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3023,6 +3024,7 @@
   "friction_kind_pattern": "패턴",
   "friction_kind_frustration": "좌절",
   "friction_kind_interruption": "중단",
+  "friction_kind_diagnostic": "진단",
   "friction_disabled_title": "이 서버에서는 마찰 로그가 꺼져 있습니다",
   "friction_disabled_hint": "이 서버는 다이제스트를 만들지 않습니다. config.toml에서 [friction] enabled = true로 설정하고 데몬을 다시 시작하세요. 읽기 전용 아카이브에서는 다이제스트를 만들 수 없습니다.",
   "friction_markdown_title": "Markdown",

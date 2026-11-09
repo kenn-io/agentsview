@@ -4,8 +4,8 @@
   import FrictionFinding from "./FrictionFinding.svelte";
   import FrictionSessionRef from "./FrictionSessionRef.svelte";
   import {
-    interruptionRows,
     diagnosticRows,
+    interruptionRows,
     isDiagnosticSubject,
     signalDims,
     type FrictionKind,
@@ -33,14 +33,13 @@
     diagnostic: m.friction_section_diagnostics,
   };
 
-  // Interruptions render one row per session with a count, as in the Markdown.
-  const rows = $derived(
-    section.kind === "diagnostic"
-      ? diagnosticRows(section.signals).map((row) => ({ signal: row.first, count: row.count }))
-      : section.kind === "interruption"
-      ? interruptionRows(section.signals).map((row) => ({ signal: row.first, count: row.count }))
-      : section.signals.map((signal) => ({ signal, count: 1 })),
-  );
+  // Interruptions render one row per session and diagnostics one row per
+  // source and message, each with a count, as in the Markdown.
+  const rows = $derived.by(() => {
+    if (section.kind === "interruption") return interruptionRows(section.signals);
+    if (section.kind === "diagnostic") return diagnosticRows(section.signals);
+    return section.signals.map((first) => ({ first, count: 1 }));
+  });
 </script>
 
 <section
@@ -53,28 +52,31 @@
     <span class="count">{section.signals.length}</span>
   </h2>
   <ul class="signal-list">
-    {#each rows as { signal, count }}
+    {#each rows as { first: signal, count }}
       <li class="signal-row" data-kind={signal.kind}>
         <FrictionFinding finding={signal} subjectId={signal.subject_id} {count} />
-        {#if section.kind !== "diagnostic"}<span class="row-context">
-          <FrictionSessionRef
-            subjectId={signal.subject_id}
-            {sessions}
-            diagnostic={isDiagnosticSubject(signal)}
-            ordinal={signal.message_ordinal}
-            dims={signalDims(signal)}
-          />
-          {#if issues[signal.fingerprint]}
-            {@const issue = issues[signal.fingerprint]!}
-            {#if issue.web_url}
-              <a class="row-issue" href={issue.web_url} target="_blank" rel="noopener noreferrer">
-                {issue.qualified_id}
-              </a>
-            {:else}
-              <span class="row-issue">{issue.qualified_id}</span>
+        <!-- Diagnostics have no session to open and are never filed. -->
+        {#if section.kind !== "diagnostic"}
+          <span class="row-context">
+            <FrictionSessionRef
+              subjectId={signal.subject_id}
+              {sessions}
+              diagnostic={isDiagnosticSubject(signal)}
+              ordinal={signal.message_ordinal}
+              dims={signalDims(signal)}
+            />
+            {#if issues[signal.fingerprint]}
+              {@const issue = issues[signal.fingerprint]!}
+              {#if issue.web_url}
+                <a class="row-issue" href={issue.web_url} target="_blank" rel="noopener noreferrer">
+                  {issue.qualified_id}
+                </a>
+              {:else}
+                <span class="row-issue">{issue.qualified_id}</span>
+              {/if}
             {/if}
-          {/if}
-        </span>{/if}
+          </span>
+        {/if}
       </li>
     {/each}
   </ul>

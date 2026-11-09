@@ -3073,6 +3073,7 @@
   "friction_section_frustration": "苛立ち",
   "friction_section_interruptions": "中断",
   "friction_section_diagnostics": "診断",
+  "friction_diagnostic_count": "{count}回",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3091,6 +3092,7 @@
   "friction_kind_pattern": "パターン",
   "friction_kind_frustration": "苛立ち",
   "friction_kind_interruption": "中断",
+  "friction_kind_diagnostic": "診断",
   "friction_disabled_title": "このサーバーではフリクションログがオフです",
   "friction_disabled_hint": "このサーバーはダイジェストを作成しません。config.toml で [friction] enabled = true を設定し、デーモンを再起動してください。読み取り専用のアーカイブではダイジェストを作成できません。",
   "friction_markdown_title": "Markdown",

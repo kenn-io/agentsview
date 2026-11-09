@@ -47,20 +47,32 @@ export function groupSignals(signals: readonly FrictionSignal[]): SignalSection[
   for (const signal of signals) {
     byKind.get(signal.kind)?.push(signal);
   }
+  // Diagnostics come from outside producers, so their section shows only on
+  // days that have some, as in the Markdown.
   return FRICTION_KINDS.filter((kind) => kind !== "diagnostic" || byKind.get(kind)!.length > 0).map(
     (kind) => ({ kind, signals: byKind.get(kind)! }),
   );
 }
 
-export function diagnosticRows(
-  signals: readonly FrictionSignal[],
-): { first: FrictionSignal; count: number }[] {
-  const rows = new Map<string, { first: FrictionSignal; count: number }>();
+export interface DiagnosticRow {
+  count: number;
+  first: FrictionSignal;
+}
+
+// The Markdown digest renders diagnostics as one bullet per exact
+// source/message pair in first-seen order (`x{n}`). The page mirrors that
+// shape; the machine is neither part of the key nor shown.
+export function diagnosticRows(signals: readonly FrictionSignal[]): DiagnosticRow[] {
+  const rows = new Map<string, DiagnosticRow>();
   for (const signal of signals) {
+    if (signal.kind !== "diagnostic") continue;
     const key = JSON.stringify([signal.label, signal.text]);
     const row = rows.get(key);
-    if (row) row.count += 1;
-    else rows.set(key, { first: signal, count: 1 });
+    if (row) {
+      row.count += 1;
+    } else {
+      rows.set(key, { count: 1, first: signal });
+    }
   }
   return [...rows.values()];
 }

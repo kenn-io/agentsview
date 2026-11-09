@@ -3107,6 +3107,7 @@
   "friction_section_frustration": "Narazılıq",
   "friction_section_interruptions": "Kəsintilər",
   "friction_section_diagnostics": "Diaqnostika",
+  "friction_diagnostic_count": "x{count}",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3128,6 +3129,7 @@
   "friction_kind_pattern": "Nümunə",
   "friction_kind_frustration": "Narazılıq",
   "friction_kind_interruption": "Kəsinti",
+  "friction_kind_diagnostic": "Diaqnostika",
   "friction_disabled_title": "Bu serverdə sürtünmə jurnalı söndürülüb",
   "friction_disabled_hint": "Bu server xülasələr yaratmır. config.toml faylında [friction] enabled = true təyin edin və daemonu yenidən başladın. Yalnız oxunan arxiv xülasə yarada bilməz.",
   "friction_markdown_title": "Markdown",

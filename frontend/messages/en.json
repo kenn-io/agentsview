@@ -3105,6 +3105,7 @@
   "friction_section_frustration": "Frustration",
   "friction_section_interruptions": "Interruptions",
   "friction_section_diagnostics": "Diagnostics",
+  "friction_diagnostic_count": "x{count}",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3126,6 +3127,7 @@
   "friction_kind_pattern": "Pattern",
   "friction_kind_frustration": "Frustration",
   "friction_kind_interruption": "Interruption",
+  "friction_kind_diagnostic": "Diagnostic",
   "friction_disabled_title": "Friction Log is off on this server",
   "friction_disabled_hint": "This server does not build digests. Set [friction] enabled = true in config.toml and restart the daemon. A read-only archive cannot build digests.",
   "friction_markdown_title": "Markdown",
