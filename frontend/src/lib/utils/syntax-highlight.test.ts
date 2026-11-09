@@ -86,8 +86,8 @@ describe("highlighting worker", () => {
     const first = highlightToHtml("first", "ts");
     const second = highlightToHtml("second", "typescript");
     expect(requests).toEqual([
-      { id: expect.any(Number), code: "first", lang: "typescript" },
-      { id: expect.any(Number), code: "second", lang: "typescript" },
+      { id: expect.any(Number), code: "first", lang: "typescript", options: {} },
+      { id: expect.any(Number), code: "second", lang: "typescript", options: {} },
     ]);
     for (const { id, code } of requests.toReversed()) {
       worker.onmessage!(new MessageEvent("message", { data: { id, html: code } }));

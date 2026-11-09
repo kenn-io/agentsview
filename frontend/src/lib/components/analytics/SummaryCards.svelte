@@ -75,7 +75,7 @@
 <div class="summary-cards">
   {#each cards as card}
     <StatCard
-      value={card.value()}
+      value={analytics.summary ? card.value() : "-"}
       label={card.label()}
       sub={card.sub?.() ?? ""}
       tier={card.tier}

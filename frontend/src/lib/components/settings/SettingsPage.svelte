@@ -11,6 +11,7 @@
   import { settings } from "../../stores/settings.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl, isRemoteConnection } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
   import AppearanceSettings from "./AppearanceSettings.svelte";

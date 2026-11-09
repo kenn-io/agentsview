@@ -7,6 +7,7 @@ import SettingsPage from "./SettingsPage.svelte";
 import { SettingsService } from "../../api/generated/index";
 import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
+import { router } from "../../stores/router.svelte.js";
 import { initI18n, LOCALE_STORAGE_KEY, setLocale } from "../../i18n/index.js";
 
 vi.mock("../../api/runtime.js", async (importOriginal) => {
@@ -74,7 +75,7 @@ describe("SettingsPage", () => {
       await tick();
       await tick();
       expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
-        "Session Providers",
+        "Session providers",
       );
     } finally {
       unmount(component);
