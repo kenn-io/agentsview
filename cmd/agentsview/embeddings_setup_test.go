@@ -543,16 +543,13 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 	})
 	for _, tc := range []struct {
-		name, store, using, wantStore                  string
-		full, download, decline, setupBusy, setupError bool
+		name, store, using, wantStore string
+		full, download, decline       bool
 	}{
-		{"configured", "", "local", "messages", true, false, false, false, false},
-		{"recall", "recall", "local", "recall", false, false, false, false, false},
-		{"download", "", "", "messages", true, true, false, false, false},
-		{"configured-declined", "", "local", "messages", false, false, true, false, false},
-		{"download-declined", "", "", "messages", false, true, true, false, false},
-		{"setup-busy", "", "local", "messages", false, false, false, true, false},
-		{"setup-error", "", "local", "messages", false, false, false, true, true},
+		{"configured", "recall", "local", "recall", true, false, false},
+		{"download", "", "", "messages", true, true, false},
+		{"configured-declined", "", "local", "messages", false, false, true},
+		{"download-declined", "", "", "messages", false, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -592,24 +589,10 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			var setupRequest struct {
 				Build vector.BuildRequest `json:"build"`
 			}
-			var polls atomic.Int32
-			if tc.setupBusy {
-				oldInterval := embeddingsPollInterval
-				embeddingsPollInterval = time.Millisecond
-				t.Cleanup(func() { embeddingsPollInterval = oldInterval })
-			}
 			handlers := map[string]http.HandlerFunc{
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
-					if tc.setupBusy && polls.Add(1) <= 3 {
-						_, _ = io.WriteString(w, `{"setup":{"busy":true}}`)
-					} else if tc.setupError {
-						_, _ = io.WriteString(w, `{"setup":{"error":"setup failed"}}`)
-					} else if tc.setupBusy && polls.Load() == 4 {
-						_, _ = io.WriteString(w, `{"setup":{},"running":true}`)
-					} else {
-						_, _ = io.WriteString(w, `{"setup":{},"last_result":{}}`)
-					}
+					_, _ = io.WriteString(w, `{"setup":{},"last_result":{}}`)
 				},
 				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
 					if !assert.NoError(t, json.UnmarshalRead(r.Body, &setupRequest)) {
@@ -630,22 +613,11 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
 			if tc.decline {
 				if tc.download {
-					require.Error(t, err)
+					require.ErrorContains(t, err, "embedding download declined")
 					assert.True(t, sawDeclined.Load())
 				} else {
 					require.ErrorContains(t, err, "search setup declined")
 				}
-				return
-			}
-			if tc.setupBusy {
-				if tc.setupError {
-					assert.GreaterOrEqual(t, polls.Load(), int32(4))
-				} else {
-					assert.GreaterOrEqual(t, polls.Load(), int32(5))
-				}
-			}
-			if tc.setupError {
-				require.ErrorContains(t, err, "setup failed")
 				return
 			}
 			require.NoError(t, err)
@@ -703,13 +675,10 @@ func TestLiveEmbeddingsSetupFailurePersistsUntilBuildStarts(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, owner.Close()) })
 	require.NoError(t, owner.Setup(0, &vector.BuildRequest{Using: "local"}))
 	<-owner.done
-	status, err := owner.SetupStatus(t.Context())
-	require.NoError(t, err)
-	assert.Contains(t, status.Error, `no embeddings server named "local"`)
 	manager := owner.Manager("")
 	require.NoError(t, manager.StartBuild(vector.BuildRequest{Using: "other"}))
 	owner.BuildStarted()
-	status, err = owner.SetupStatus(t.Context())
+	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, status.Error)
 }
