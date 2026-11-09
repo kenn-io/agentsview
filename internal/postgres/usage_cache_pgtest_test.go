@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -279,6 +280,75 @@ func TestPGUsageCacheReadOnlyAndRecreatedJournal(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+}
+
+func TestPGUsageCacheUnreadableJournal(t *testing.T) {
+	for _, warm := range []bool{false, true} {
+		name := "initial denial"
+		if warm {
+			name = "permission revoked"
+		}
+		t.Run(name, func(t *testing.T) {
+			_, syncer, owner, _ := keptUsageFixture(t)
+			ctx := t.Context()
+			roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
+			reader, err := NewStore(ctx, roleURL, syncer.schema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			filter := db.UsageFilter{Timezone: "UTC"}
+			if warm {
+				require.NoError(t, reader.ConfigureUsageCache(ctx, t.TempDir(), roleURL, syncer.schema))
+				requireCachedUsageMatchesDirect(t, reader, filter)
+			}
+			var role string
+			require.NoError(t, reader.pg.QueryRowContext(ctx, `SELECT current_user`).Scan(&role))
+			_, err = owner.pg.ExecContext(ctx, `REVOKE SELECT ON usage_session_changes FROM `+role)
+			require.NoError(t, err)
+			_, err = owner.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=5000 WHERE session_id='paid-a'`)
+			require.NoError(t, err)
+			if !warm {
+				require.NoError(t, reader.ConfigureUsageCache(ctx, t.TempDir(), roleURL, syncer.schema))
+			}
+			direct := &Store{pg: reader.pg}
+			want, err := direct.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			got, err := reader.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			wantTop, err := direct.GetTopSessionsByCost(ctx, filter, 20)
+			require.NoError(t, err)
+			gotTop, err := reader.GetTopSessionsByCost(ctx, filter, 20)
+			require.NoError(t, err)
+			require.Equal(t, wantTop, gotTop)
+			wantCounts, err := direct.GetUsageSessionCounts(ctx, filter)
+			require.NoError(t, err)
+			gotCounts, err := reader.GetUsageSessionCounts(ctx, filter)
+			require.NoError(t, err)
+			require.Equal(t, wantCounts, gotCounts)
+			wantMatching, err := direct.GetUsageMatchingSessionCount(ctx, filter)
+			require.NoError(t, err)
+			gotMatching, err := reader.GetUsageMatchingSessionCount(ctx, filter)
+			require.NoError(t, err)
+			require.Equal(t, wantMatching, gotMatching)
+		})
+	}
+}
+
+func TestPGUsageCachePairwiseFallback(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	attachUsageCacheProbe(t, store, t.TempDir())
+	ctx := t.Context()
+	ranking, err := store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true, PairwiseSides: true})
+	require.NoError(t, err)
+	require.Nil(t, ranking.Pairwise)
+	request := service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true}, LeftDimension: "model", LeftValue: "missing", RightDimension: "model", RightValue: "paid-a", FallbackToDefault: true}
+	direct := service.NewReadOnlyBackend(&Store{pg: store.pg})
+	want, err := direct.UsagePairwiseComparison(ctx, request)
+	require.NoError(t, err)
+	got, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Equal(t, 1250, got.Left.OutputTokens+got.Right.OutputTokens)
 }
 
 func TestPGUsageCacheRecapturesMutationDuringExtraction(t *testing.T) {

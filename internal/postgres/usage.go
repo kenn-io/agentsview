@@ -1559,7 +1559,7 @@ type pgDailyUsageSessionCost struct {
 }
 
 func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
-	if cache := s.cachedUsage(); cache != nil {
+	if cache := s.usageCache; cache != nil {
 		result, err := cache.GetDailyUsage(ctx, f)
 		if !directUsageRequired(err) {
 			return result, err
@@ -2162,7 +2162,7 @@ func (s *Store) GetTopSessionsByCost(
 	if limit > 100 {
 		limit = 100
 	}
-	if cache := s.cachedUsage(); cache != nil {
+	if cache := s.usageCache; cache != nil {
 		result, err := cache.GetTopSessionsByCost(ctx, f, limit)
 		if !directUsageRequired(err) {
 			for i := range result {
@@ -2343,7 +2343,7 @@ func (s *Store) readTopSessions(ctx context.Context, f db.UsageFilter) ([]db.Top
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
-	if cache := s.cachedUsage(); cache != nil {
+	if cache := s.usageCache; cache != nil {
 		result, err := cache.GetUsageSessionCounts(ctx, f)
 		if !directUsageRequired(err) {
 			return result, err
@@ -2451,7 +2451,7 @@ func appendPGUsageMatchingActivityClauses(
 func (s *Store) GetUsageMatchingSessionCount(
 	ctx context.Context, f db.UsageFilter,
 ) (int, error) {
-	if cache := s.cachedUsage(); cache != nil {
+	if cache := s.usageCache; cache != nil {
 		result, err := cache.GetUsageMatchingSessionCount(ctx, f)
 		if !directUsageRequired(err) {
 			return result, err

@@ -39,14 +39,14 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	return nil
 }
 
-func (s *Store) cachedUsage() *db.UsageCacheReader {
-	if s.readTx != nil || s.hostedRelations {
-		return nil
-	}
-	return s.usageCache
-}
-
 var errPGUsageCacheUnavailable = errors.New("PostgreSQL usage journal unavailable")
+
+func usageJournalError(err error) error {
+	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
+		return errPGUsageCacheUnavailable
+	}
+	return err
+}
 
 type pgUsageCacheSource struct {
 	*Store
@@ -62,11 +62,8 @@ func usageJournalOID(ctx context.Context, q storeExecutor) (uint32, error) {
 func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db.UsageSourceSnapshot, error) {
 	var snapshot db.UsageSourceSnapshot
 	oid, err := usageJournalOID(ctx, view.pg)
-	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
-		return snapshot, errPGUsageCacheUnavailable
-	}
 	if err != nil {
-		return snapshot, err
+		return snapshot, usageJournalError(err)
 	}
 	snapshot.DatabaseID = fmt.Sprintf("%s|%d", source.target, oid)
 	snapshot.ChangeRevision, err = view.UsageChangeRevision(ctx)
@@ -78,7 +75,7 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 	}
 	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=''), 1)`).Scan(&snapshot.CursorHighWater)
 	if err != nil {
-		return snapshot, err
+		return snapshot, usageJournalError(err)
 	}
 	snapshot.PricingRows, err = view.loadPricingMap(ctx)
 	return snapshot, err
@@ -99,7 +96,7 @@ func (source *pgUsageCacheSource) CaptureUsage(ctx context.Context, request db.U
 	if request.AfterRevision != nil {
 		_, changes, err := view.loadUsageChanges(ctx, *request.AfterRevision)
 		if err != nil {
-			return snapshot, err
+			return snapshot, usageJournalError(err)
 		}
 		snapshot.ChangeIDs = changes
 		selected := slices.Clone(changes)
@@ -165,7 +162,7 @@ func pgCaptureUsageMetadata(ctx context.Context, view *Store, ids []string, filt
    FROM sessions s LEFT JOIN usage_session_changes c ON c.session_id=s.id WHERE s.deleted_at IS NULL AND s.id IN (` + strings.Join(params, ",") + `) ORDER BY s.id`
 			rows, err := view.pg.QueryContext(ctx, query, pb.args...)
 			if err != nil {
-				return fmt.Errorf("capturing PostgreSQL usage metadata: %w", err)
+				return fmt.Errorf("capturing PostgreSQL usage metadata: %w", usageJournalError(err))
 			}
 			defer rows.Close()
 			for rows.Next() {
