@@ -47,6 +47,7 @@ type pgActivityUsageRow struct {
 
 func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Handle[string]) pgActivityUsageRow {
 	input, output, create, read, reasoning := pgDailyUsageRowTokens(r)
+	// Both sources enforce int32 ordinals in messages.ordinal and usage_events.message_ordinal (PostgreSQL INT).
 	// Message cache counts are clamped to MaxPlausibleTokens before narrowing.
 	return pgActivityUsageRow{
 		sessionID: handle(r.sessionID), usageSource: handle(r.usageSource), model: handle(r.model), providerID: handle(r.providerID), agent: handle(r.agent),
