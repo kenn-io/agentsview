@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
 
 	"go.kenn.io/kit/embedclient"
 	"go.kenn.io/kit/embedconfig"
@@ -67,11 +66,7 @@ func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig
 		if setup && fullRebuild {
 			message += " This rebuild re-embeds every document."
 		}
-		approved := confirmScanned(in, out, message)
-		if !approved && setup {
-			return false, errors.New("search setup declined")
-		}
-		return approved, nil
+		return confirmScanned(in, out, message), nil
 	}, progress)
 	return asked, err
 }
@@ -143,31 +138,5 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	if err := client.startSetup(ctx, req); err != nil {
 		return err
 	}
-	if err := pollDaemonSetup(ctx, out, client); err != nil {
-		return err
-	}
 	return pollDaemonBuildStatus(ctx, out, client)
-}
-
-func pollDaemonSetup(ctx context.Context, out io.Writer, client embeddingsDaemonClient) error {
-	for {
-		status, err := client.status(ctx)
-		if err != nil {
-			return err
-		}
-		if status.Setup != nil {
-			setup := status.Setup
-			if setup.Error != "" {
-				return errors.New(setup.Error)
-			}
-			if !setup.Busy {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(embeddingsPollInterval):
-		}
-	}
 }

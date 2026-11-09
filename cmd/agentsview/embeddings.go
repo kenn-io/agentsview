@@ -408,8 +408,6 @@ func vectorDocumentEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSe
 	return set, nil
 }
 
-var errEmbeddingsSetupDaemonRestart = errors.New("restart the daemon with `agentsview daemon restart`, then retry `agentsview index embeddings build` or use Settings → Embeddings → Turn on")
-
 // runEmbeddingsBuild enables search when needed and runs a build through
 // the writable local daemon or directly against the archive.
 func runEmbeddingsBuild(
@@ -418,9 +416,6 @@ func runEmbeddingsBuild(
 	cfg, err := config.LoadReadOnlyFor(config.ScopeVector)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
-	}
-	if err := cfg.ApplyDeploymentAuth(); err != nil {
-		return fmt.Errorf("loading daemon auth: %w", err)
 	}
 	if err := requireEmbeddingsContent(cfg); err != nil {
 		return err
@@ -439,17 +434,7 @@ func runEmbeddingsBuild(
 		if tr.Mode != transportHTTP || tr.ReadOnly {
 			return errors.New("search setup requires a writable daemon; start it with `agentsview daemon start` and retry `agentsview index embeddings build`, or use Settings → Embeddings → Turn on")
 		}
-		if shouldReplaceDaemonRuntime(tr.Runtime, version) {
-			return errEmbeddingsSetupDaemonRestart
-		}
 		client = embeddingsDaemonClient{baseURL: tr.URL, token: cfg.AuthToken, store: daemonEmbeddingStore(spec.Name)}
-		status, err := client.status(ctx)
-		if err != nil {
-			return err
-		}
-		if status.Setup == nil {
-			return errEmbeddingsSetupDaemonRestart
-		}
 		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
 		if err != nil {
 			return err
@@ -729,10 +714,15 @@ func pollDaemonBuildStatus(
 		if err != nil {
 			return err
 		}
-		if !status.Running {
-			return finalizeBuildStatus(out, status)
+		if status.Setup != nil && status.Setup.Error != "" {
+			return errors.New(status.Setup.Error)
 		}
-		progress.print(out, status.Phase, status.Done, status.Total)
+		if status.Setup == nil || !status.Setup.Busy {
+			if !status.Running {
+				return finalizeBuildStatus(out, status)
+			}
+			progress.print(out, status.Phase, status.Done, status.Total)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -1033,16 +1023,20 @@ type daemonAPIError struct {
 
 func (e *daemonAPIError) Error() string { return e.message }
 
+func embeddingsBuildBody(req vector.BuildRequest) *apiclient.EmbeddingsBuildRequest {
+	return &apiclient.EmbeddingsBuildRequest{
+		Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop),
+		RepairInvalid: new(req.RepairInvalid), IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
+	}
+}
+
 func (c embeddingsDaemonClient) startSetup(ctx context.Context, req vector.BuildRequest) error {
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return err
 	}
 	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{
-		Build: &apiclient.EmbeddingsBuildRequest{
-			Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop),
-			RepairInvalid: new(req.RepairInvalid), IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
-		},
+		Build: embeddingsBuildBody(req),
 	}})
 	if response == nil {
 		return err
@@ -1055,11 +1049,7 @@ func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.Build
 	if err != nil {
 		return err
 	}
-	response, err := api.PostAPIV1EmbeddingsBuildWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsBuildRequestOptions{Body: &apiclient.EmbeddingsBuildRequest{
-		Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop), RepairInvalid: new(req.RepairInvalid),
-		// Always send the resolved scope, including an explicit false override.
-		IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
-	}})
+	response, err := api.PostAPIV1EmbeddingsBuildWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsBuildRequestOptions{Body: embeddingsBuildBody(req)})
 	if response == nil {
 		return err
 	}

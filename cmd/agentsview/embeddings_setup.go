@@ -108,7 +108,7 @@ func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 	if store == "" || store == vector.MessageIndexSpec().Name {
 		return v.serving.manager
 	}
-	if store == vector.RecallIndexSpec().Name && v.serving.recallManager != nil {
+	if store == vector.RecallIndexSpec().Name {
 		return v.serving.recallManager
 	}
 	return nil

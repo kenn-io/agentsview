@@ -23,7 +23,6 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/vector"
-	"go.kenn.io/kit/daemon"
 	"go.kenn.io/kit/embedlocal"
 )
 
@@ -574,7 +573,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 						return embedlocal.Installation{}, err
 					}
 					if !approved {
-						return embedlocal.Installation{}, errors.New("download was not approved")
+						return embedlocal.Installation{}, errors.New("embedding download declined; approve installation to use local embeddings")
 					}
 					opts.Progress(101, 101)
 					installed.Store(true)
@@ -604,8 +603,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 						_, _ = io.WriteString(w, `{"setup":{"busy":true}}`)
 					} else if tc.setupError {
 						_, _ = io.WriteString(w, `{"setup":{"error":"setup failed"}}`)
-					} else if n == 4 {
-						_, _ = io.WriteString(w, `{"setup":{}}`)
 					} else {
 						_, _ = io.WriteString(w, `{"setup":{},"last_result":{}}`)
 					}
@@ -629,7 +626,11 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(input), EmbeddingsBuildOptions{Using: tc.using, Store: tc.store, FullRebuild: tc.full})
 			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
 			if tc.decline {
-				require.ErrorContains(t, err, "search setup declined")
+				if tc.download {
+					require.ErrorContains(t, err, "embedding download declined")
+				} else {
+					require.ErrorContains(t, err, "search setup declined")
+				}
 				return
 			}
 			if tc.setupError {
@@ -637,7 +638,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.GreaterOrEqual(t, polls.Load(), int64(5))
+			assert.GreaterOrEqual(t, polls.Load(), int64(4))
 			if tc.full {
 				assert.Contains(t, out.String(), "This rebuild re-embeds every document.")
 			}
@@ -655,45 +656,17 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 }
 
 func TestCLIEmbeddingsSetupRequiresWritableDaemon(t *testing.T) {
-	for _, state := range []string{"absent", "older", "missing status"} {
-		t.Run(state, func(t *testing.T) {
-			setTestHome(t, t.TempDir())
-			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-			setTestVersion(t, "2.0.0")
-			dir := testDataDir(t)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
-			if state != "absent" {
-				serverVersion := "1.0.0"
-				if state == "missing status" {
-					serverVersion = version
-				}
-				mux := http.NewServeMux()
-				mux.Handle("GET /api/ping", daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: serverVersion}))
-				if state == "missing status" {
-					mux.HandleFunc("GET /api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
-						w.Header().Set("Content-Type", "application/json")
-						_, _ = io.WriteString(w, `{"running":false}`)
-					})
-				}
-				srv := httptest.NewServer(mux)
-				t.Cleanup(srv.Close)
-				endpoint := serverEndpoint(t, srv)
-				writeDaemonRuntimeForTest(t, dir, endpoint.Host, endpoint.Port, serverVersion, false)
-			}
-			var out strings.Builder
-			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-			if state == "absent" {
-				require.ErrorContains(t, err, "search setup requires a writable daemon")
-				assert.ErrorContains(t, err, "agentsview daemon start")
-				assert.ErrorContains(t, err, "agentsview index embeddings build")
-				assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
-			} else {
-				require.ErrorIs(t, err, errEmbeddingsSetupDaemonRestart)
-				assert.ErrorContains(t, err, "agentsview daemon restart")
-			}
-			assert.NotContains(t, out.String(), "[y/N]")
-		})
-	}
+	setTestHome(t, t.TempDir())
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	dir := testDataDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
+	var out strings.Builder
+	err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+	require.ErrorContains(t, err, "search setup requires a writable daemon")
+	assert.ErrorContains(t, err, "agentsview daemon start")
+	assert.ErrorContains(t, err, "agentsview index embeddings build")
+	assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
+	assert.NotContains(t, out.String(), "[y/N]")
 }
 
 func TestLiveEmbeddingsSetupFailurePersistsUntilBuildStarts(t *testing.T) {
