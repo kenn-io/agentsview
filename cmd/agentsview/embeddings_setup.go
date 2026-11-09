@@ -150,11 +150,7 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 			return status, setupRequestError(err)
 		}
 	}
-	status, err := embeddingsSetupStatus(ctx, status, cfg)
-	if status.Action == "" {
-		status.Error = ""
-	}
-	return status, err
+	return embeddingsSetupStatus(ctx, status, cfg)
 }
 
 func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupStatus, cfg config.Config) (server.EmbeddingsSetupStatus, error) {
