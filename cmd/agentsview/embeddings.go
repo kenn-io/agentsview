@@ -235,20 +235,13 @@ func parseGenerationID(raw string) (int64, error) {
 // requireVectorEnabled rejects every embeddings subcommand up front when
 // [vector] is not configured, with the exact message the brief specifies.
 func requireVectorEnabled(cfg config.Config) error {
-	if err := requireEmbeddingsContent(cfg); err != nil {
-		return err
+	if cfg.ArchiveContent.UsageOnly() {
+		return fmt.Errorf("%w: embeddings require transcript content", db.ErrArchiveContentExcluded)
 	}
 	if !cfg.Vector.Enabled {
 		return errors.New(
 			"vector search is not enabled: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on",
 		)
-	}
-	return nil
-}
-
-func requireEmbeddingsContent(cfg config.Config) error {
-	if cfg.ArchiveContent.UsageOnly() {
-		return fmt.Errorf("%w: embeddings require transcript content", db.ErrArchiveContentExcluded)
 	}
 	return nil
 }
@@ -413,12 +406,12 @@ func vectorDocumentEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSe
 func runEmbeddingsBuild(
 	ctx context.Context, out io.Writer, in io.Reader, opts EmbeddingsBuildOptions,
 ) error {
-	cfg, err := config.LoadReadOnlyFor(config.ScopeVector)
+	cfg, err := loadDaemonClientConfig(config.ScopeVector)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	if err := requireEmbeddingsContent(cfg); err != nil {
-		return err
+	if cfg.ArchiveContent.UsageOnly() {
+		return requireVectorEnabled(cfg)
 	}
 	spec, err := vectorStoreSpec(opts.Store)
 	if err != nil {
@@ -439,11 +432,6 @@ func runEmbeddingsBuild(
 		if err != nil {
 			return err
 		}
-	} else {
-		cfg, err = loadDaemonClientConfig(config.ScopeVector)
-		if err != nil {
-			return fmt.Errorf("loading config: %w", err)
-		}
 	}
 	includeAutomated := cfg.Vector.IncludeAutomated
 	if opts.IncludeAutomatedSet {
@@ -459,7 +447,9 @@ func runEmbeddingsBuild(
 		return setupEmbeddingsBuild(ctx, out, confirmation, cfg, client, req)
 	}
 	if opts.FullRebuild && !opts.Yes {
-		proceed, err := confirmFullRebuild(ctx, confirmation, out, cfg, includeAutomated, spec.Name)
+		proceed, err := confirmFullRebuild(
+			ctx, confirmation, out, cfg, includeAutomated, spec.Name,
+		)
 		if err != nil {
 			return err
 		}
@@ -468,7 +458,7 @@ func runEmbeddingsBuild(
 			return nil
 		}
 	}
-	if _, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out, false, false, nil); err != nil {
+	if _, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out, false, nil); err != nil {
 		return err
 	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
@@ -676,7 +666,11 @@ func runDirectBuild(
 	}
 }
 
-func runEmbeddingsBuildDaemon(ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest) error {
+// runEmbeddingsBuildDaemon resolves the local daemon and runs the build
+// through its HTTP API.
+func runEmbeddingsBuildDaemon(
+	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
+) error {
 	client, err := resolveEmbeddingsDaemonClient(cfg)
 	if err != nil {
 		return err

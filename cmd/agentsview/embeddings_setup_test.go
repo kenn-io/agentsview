@@ -635,9 +635,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.GreaterOrEqual(t, polls.Load(), int64(4))
-			if tc.full {
-				assert.Contains(t, out.String(), "This rebuild re-embeds every document.")
-			}
 			assert.Equal(t, tc.wantStore, setupRequest.Build.Store)
 			assert.Equal(t, tc.using, setupRequest.Build.Using)
 			assert.Equal(t, tc.full, setupRequest.Build.FullRebuild)

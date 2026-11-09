@@ -51,7 +51,7 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	return localEmbeddingEndpoint(ctx, opts)
 }
 
-func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig, name string, in *bufio.Scanner, out io.Writer, setup, fullRebuild bool, progress func(int64, int64)) (bool, error) {
+func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig, name string, in *bufio.Scanner, out io.Writer, setup bool, progress func(int64, int64)) (bool, error) {
 	_, server, err := c.Server(name)
 	if err != nil {
 		return false, err
@@ -62,9 +62,6 @@ func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig
 		message := fmt.Sprintf("Download approximately %d MB for local semantic search?", (size+999999)/1000000)
 		if setup {
 			message = fmt.Sprintf("Turn on search by meaning? Downloads approximately %d MB once, shared by Kenn apps.", (size+999999)/1000000)
-		}
-		if setup && fullRebuild {
-			message += " This rebuild re-embeds every document."
 		}
 		return confirmScanned(in, out, message), nil
 	}, progress)
@@ -120,7 +117,7 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 		return err
 	}
 	var progress buildProgressPrinter
-	asked, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, req.Using, in, out, true, req.FullRebuild, func(done, total int64) {
+	asked, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, req.Using, in, out, true, func(done, total int64) {
 		progress.printDownload(out, done, total)
 	})
 	if err != nil {
@@ -128,9 +125,6 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	}
 	if !asked {
 		message := fmt.Sprintf("Turn on search by meaning using %s (%s)?", status.Provider, cfg.Vector.Embeddings.Model)
-		if req.FullRebuild {
-			message += " This rebuild re-embeds every document."
-		}
 		if !confirmScanned(in, out, message) {
 			return errors.New("search setup declined")
 		}
