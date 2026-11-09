@@ -353,6 +353,10 @@ func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 					('usage-source-daily-002', 'test-machine', 'proj-b', 'claude',
 					 '2026-03-12T10:01:00Z'::timestamptz, 1, 1)`)
 			require.NoError(t, err, "insert sessions")
+			laterInput := 1000000
+			if requestID == "" {
+				laterInput = 2000000
+			}
 			_, err = store.DB().ExecContext(ctx, `
 				INSERT INTO messages (
 					session_id, ordinal, role, content, timestamp, content_length,
@@ -366,8 +370,9 @@ func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 					('usage-source-daily-002', 0, 'assistant', 'two',
 					 '2026-03-12T10:01:00Z'::timestamptz, 3,
 					 'test-model-source-daily',
-					 '{"input_tokens":1000000,"output_tokens":500000,"cache_creation_input_tokens":250000,"cache_read_input_tokens":250000}',
-					 'msg-1', $1, $2)`, requestID, sourceUUID)
+					 $3,
+					 'msg-1', $1, $2)`, requestID, sourceUUID,
+				fmt.Sprintf(`{"input_tokens":%d,"output_tokens":500000,"cache_creation_input_tokens":250000,"cache_read_input_tokens":250000}`, laterInput))
 			require.NoError(t, err, "insert messages")
 
 			result, err := store.GetDailyUsage(ctx, db.UsageFilter{
@@ -385,6 +390,7 @@ func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 			require.NoError(t, err, "GetTopSessionsByCost")
 			require.Len(t, top, 1)
 			assert.Equal(t, "usage-source-daily-001", top[0].SessionID)
+			assert.Equal(t, 1000000, top[0].InputTokens)
 
 			counts, err := store.GetUsageSessionCounts(ctx, filter)
 			require.NoError(t, err, "GetUsageSessionCounts")
@@ -424,7 +430,7 @@ func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testi
 		) VALUES
 			('claude:daily-streamed', 0, 'assistant', 'partial',
 			 '2026-05-20T10:30:00Z'::timestamptz, 7,
-			 'claude-opus-4-6', '{"input_tokens":1000,"output_tokens":5}',
+			 'partial-model', '{"input_tokens":1000,"output_tokens":5}',
 			 'msg-stream', 'req-stream'),
 			('agent-daily-streamed', 0, 'assistant', 'complete',
 			 '2026-05-20T10:31:00Z'::timestamptz, 8,
@@ -463,30 +469,66 @@ func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testi
 	assert.Equal(t, 1000, top[0].InputTokens)
 	assert.Equal(t, 631, top[0].OutputTokens)
 
-	filtered, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
-		ProjectLabels: []string{"parent-project"},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1000, filtered.Totals.InputTokens)
-	assert.Equal(t, 631, filtered.Totals.OutputTokens,
-		"the attributed parent filter must retain the complete child snapshot")
-
-	filteredTop, err := store.GetTopSessionsByCost(ctx, db.UsageFilter{
-		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
-		ProjectLabels: []string{"parent-project"},
-	}, 10)
-	require.NoError(t, err)
-	require.Len(t, filteredTop, 1)
-	assert.Equal(t, 631, filteredTop[0].OutputTokens)
-
-	childFiltered, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
-		ProjectLabels: []string{"child-project"},
-	})
-	require.NoError(t, err)
-	assert.Zero(t, childFiltered.Totals.OutputTokens,
-		"the source child metadata must not override parent attribution")
+	for _, bounded := range []bool{false, true} {
+		for _, tc := range []struct {
+			name   string
+			filter db.UsageFilter
+			want   bool
+		}{
+			{"parent project", db.UsageFilter{ProjectLabels: []string{"parent-project"}}, true},
+			{"child project", db.UsageFilter{ProjectLabels: []string{"child-project"}}, false},
+			{"parent agent", db.UsageFilter{Agent: "parent-agent"}, true},
+			{"child agent", db.UsageFilter{Agent: "child-agent"}, false},
+			{"parent machine", db.UsageFilter{Machine: "parent-machine"}, true},
+			{"child machine", db.UsageFilter{Machine: "child-machine"}, false},
+			{"winning model", db.UsageFilter{Model: "claude-opus-4-6"}, true},
+			{"winning model and parent project", db.UsageFilter{Model: "claude-opus-4-6", ProjectLabels: []string{"parent-project"}}, true},
+			{"losing model", db.UsageFilter{Model: "partial-model"}, false},
+			{"exclude winning model", db.UsageFilter{ExcludeModel: "claude-opus-4-6"}, false},
+			{"exclude losing model", db.UsageFilter{ExcludeModel: "partial-model"}, true},
+		} {
+			t.Run(fmt.Sprintf("%s/bounded=%t", tc.name, bounded), func(t *testing.T) {
+				filter := tc.filter
+				filter.Timezone = "UTC"
+				wantOutput := 999
+				if bounded {
+					filter.From, filter.To = "2026-05-20", "2026-05-20"
+					wantOutput = 631
+				}
+				wantInput, wantCount := 1000, 1
+				if !tc.want {
+					wantInput, wantOutput, wantCount = 0, 0, 0
+				}
+				daily, err := store.GetDailyUsage(ctx, filter)
+				require.NoError(t, err)
+				assert.Equal(t, wantInput, daily.Totals.InputTokens)
+				assert.Equal(t, wantOutput, daily.Totals.OutputTokens)
+				for _, grouped := range []bool{false, true} {
+					topFilter := filter
+					topFilter.TopSessionsByGroup = grouped
+					top, err := store.GetTopSessionsByCost(ctx, topFilter, 10)
+					require.NoError(t, err)
+					require.Len(t, top, wantCount)
+					if tc.want {
+						assert.Equal(t, "claude:daily-streamed", top[0].SessionID)
+						assert.Equal(t, wantInput, top[0].InputTokens)
+						assert.Equal(t, wantOutput, top[0].OutputTokens)
+						if grouped {
+							assert.Equal(t, "parent-machine", top[0].Machine)
+							assert.Equal(t, "2026-05-20T10:00:00Z", top[0].StartedAt)
+						}
+					}
+				}
+				counts, err := store.GetUsageSessionCounts(ctx, filter)
+				require.NoError(t, err)
+				assert.Equal(t, wantCount, counts.Total)
+				if tc.want {
+					assert.Equal(t, 1, counts.ByProject["parent-project"])
+					assert.NotContains(t, counts.ByProject, "child-project")
+				}
+			})
+		}
+	}
 }
 
 func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
@@ -565,7 +607,7 @@ func TestPGSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 			require.NoError(t, err)
 			pb := &paramBuilder{}
 			rowsSQL := pgUsageRowsSQLWithWhere(pgUsageMessageEligibility, pgUsageEventEligibility)
-			ranked := pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, db.UsageFilter{}, db.PostgresQueryDialect())
+			ranked, _ := pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, db.UsageFilter{}, db.PostgresQueryDialect())
 			var sessionID, attributionSessionID, tokenJSON string
 			err = store.DB().QueryRowContext(t.Context(), `
 				SELECT session_id, snapshot_attribution_session_id, token_usage
@@ -910,53 +952,6 @@ func TestStoreGetTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 	assert.Equal(t, 2, top[0].CacheCreationTokens)
 	assert.Equal(t, 3, top[0].CacheReadTokens)
 	assert.Equal(t, 65, top[0].TotalTokens)
-}
-
-func TestStoreGetUsageSessionCountsFiltersAfterCrossSessionSnapshotSelection(
-	t *testing.T,
-) {
-	_, store := prepareUsageSchema(
-		t, "agentsview_usage_counts_filtered_snapshot_test")
-	ctx := t.Context()
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at,
-			message_count, user_message_count
-		) VALUES
-			('count-parent', 'test-machine', 'parent-project', 'claude',
-			 '2026-05-20T10:00:00Z'::timestamptz, 1, 1),
-			('count-child', 'test-machine', 'child-project', 'claude',
-			 '2026-05-20T10:01:00Z'::timestamptz, 1, 1);
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage, claude_message_id, claude_request_id
-		) VALUES
-			('count-parent', 0, 'assistant', 'partial',
-			 '2026-05-20T10:00:00Z'::timestamptz, 7, 'partial-model',
-			 '{"input_tokens":10,"output_tokens":5}',
-			 'count-message', 'count-request'),
-			('count-child', 0, 'assistant', 'complete',
-			 '2026-05-20T10:01:00Z'::timestamptz, 8, 'complete-model',
-			 '{"input_tokens":1000,"output_tokens":631}',
-			 'count-message', 'count-request')`)
-	require.NoError(t, err)
-
-	partialCounts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
-		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
-		Model: "partial-model",
-	})
-	require.NoError(t, err)
-	assert.Zero(t, partialCounts.Total,
-		"the discarded partial model must not count a session")
-
-	completeParentCounts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
-		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
-		Model: "complete-model", ProjectLabels: []string{"parent-project"},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1, completeParentCounts.Total)
-	assert.Equal(t, 1, completeParentCounts.ByProject["parent-project"])
-	assert.NotContains(t, completeParentCounts.ByProject, "child-project")
 }
 
 func TestStoreGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(

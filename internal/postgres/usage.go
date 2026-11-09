@@ -779,9 +779,9 @@ func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter, hasCursorTable boo
 			rowsSQL += "\n\nUNION ALL\n\n" + cursorRowsSQL
 		}
 	}
-	rowsSQL = pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f, dialect)
+	rowsSQL, filterWhere := pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f, dialect)
 	return pgDailyUsageRowSelectFromSnapshotRowsWithMachine(
-		rowsSQL, f.Breakdowns)
+		rowsSQL, f.Breakdowns) + "\nAND (" + filterWhere + ")"
 }
 
 func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter, includeSessionGroups bool, dialect db.QueryDialect) string {
@@ -789,8 +789,8 @@ func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter, includeSessi
 	rowsSQL := pgDailyUsageRowsSQLForBounds(
 		pb, pgUsageSnapshotInputFilter(f), bounds, dialect,
 	)
-	rowsSQL = pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f, dialect)
-	return pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, false, "u.snapshot_attribution_session_id", true, includeSessionGroups)
+	rowsSQL, filterWhere := pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f, dialect)
+	return pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, false, "u.snapshot_attribution_session_id", true, includeSessionGroups) + "\nAND (" + filterWhere + ")"
 }
 
 func pgUsageSnapshotInputFilter(f db.UsageFilter) db.UsageFilter {
@@ -816,7 +816,7 @@ func pgExactUsageUTCWindow(f db.UsageFilter) (from, to time.Time) {
 // into Go. Rows without complete Claude request identity bypass the window.
 func pgSnapshotRankedDailyUsageRowsSQL(
 	pb *paramBuilder, rowsSQL string, f db.UsageFilter, dialect db.QueryDialect,
-) string {
+) (string, string) {
 	from, to := pgExactUsageUTCWindow(f)
 	where := "TRUE"
 	if !from.IsZero() {
@@ -826,16 +826,21 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 		where += "\n\t\t\tAND u.ts < " + pb.add(to) + "::timestamptz"
 	}
 	filterWhere := appendPGUsageSourceFilterClauses(
-		"TRUE", pb, f, "survivor.model")
+		"TRUE", pb, f, "u.model")
 	filterWhere = appendPGUsageSessionFilterClauses(filterWhere, pb, f, dialect)
+	filterWhere = "u.snapshot_attribution_session_id = '' OR (" +
+		strings.ReplaceAll(filterWhere, "s.", "attributed.") + ")"
 	outputTokens := fmt.Sprintf(`CASE
-				WHEN u.usage_source = 'message' THEN LEAST(GREATEST(COALESCE(
-					CAST(agentsview_json_integer(
-						u.token_usage, ARRAY['output_tokens'], 'output_tokens') AS NUMERIC),
-					0), 0), %[1]d)
-				WHEN u.usage_source = 'session'
-					THEN GREATEST(u.output_tokens, 0)
-				ELSE LEAST(GREATEST(u.output_tokens, 0), %[1]d)
+				WHEN u.claude_message_id = '' OR u.claude_request_id = '' THEN 0
+				ELSE CASE
+					WHEN u.usage_source = 'message' THEN LEAST(GREATEST(COALESCE(
+						CAST(agentsview_json_integer(
+							u.token_usage, ARRAY['output_tokens'], 'output_tokens') AS NUMERIC),
+						0), 0), %[1]d)
+					WHEN u.usage_source = 'session'
+						THEN GREATEST(u.output_tokens, 0)
+					ELSE LEAST(GREATEST(u.output_tokens, 0), %[1]d)
+				END
 			END`, db.MaxPlausibleTokens)
 	webSearchRequests := `CASE
 				WHEN u.usage_source = 'message' THEN GREATEST(COALESCE(
@@ -849,7 +854,7 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 	return fmt.Sprintf(`
 		WITH usage_snapshot_window AS (
 			SELECT u.*, %[1]s AS snapshot_output_tokens,
-				%[5]s AS snapshot_row_web_search_requests
+				%[4]s AS snapshot_row_web_search_requests
 			FROM (%[2]s) u
 			WHERE %[3]s
 		),
@@ -884,12 +889,8 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 			WHERE claude_message_id = '' OR claude_request_id = ''
 		)
 		SELECT survivor.*
-		FROM usage_snapshot_survivors survivor
-		LEFT JOIN sessions s
-			ON s.id = survivor.snapshot_attribution_session_id
-		WHERE survivor.snapshot_attribution_session_id = ''
-			OR (%[4]s)`,
-		outputTokens, rowsSQL, where, filterWhere, webSearchRequests)
+		FROM usage_snapshot_survivors survivor`,
+		outputTokens, rowsSQL, where, webSearchRequests), filterWhere
 }
 
 func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
