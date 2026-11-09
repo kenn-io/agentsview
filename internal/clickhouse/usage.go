@@ -599,7 +599,6 @@ func chPreparedDailyUsageCTE(state preparedUsageState, f db.UsageFilter, include
 // messages and usage events. A single-session read stays raw: prepared
 // usage is ordered by time, not session, and one session is cheap by key.
 func usageCTEFor(state preparedUsageState, f db.UsageFilter, sessionID string) chUsageSource {
-	f.Breakdowns = false // Only daily usage consumes pairwise evidence.
 	if sessionID == "" && state.ready {
 		cte, args := chPreparedUsageCTE(state, f, "")
 		return chUsageSource{cte: cte, args: args, storedPricesDigest: state.pricingDigest}
@@ -885,7 +884,7 @@ func chUsageCTEFromRawSource(
 		}
 	}
 	evidenceSelect := ""
-	if f.Breakdowns {
+	if f.PairwiseSides {
 		evidenceSelect = `,
 				arrayFilter(value -> value != model, groupUniqArray(model) OVER (
 					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
@@ -1379,7 +1378,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	pricedSQL, pricedArgs := chUsagePricedCTE(source, pricingDigest)
 	metadataSelect := ""
 	evidenceSelect := ""
-	if f.Breakdowns && !top {
+	if f.PairwiseSides && !top {
 		evidenceSelect = ", groupUniqArrayArray(inexact_models), groupUniqArrayArray(inexact_projects)"
 	}
 	// Visit rows in time order so the last Copilot-reported total is the session cost.
@@ -1472,7 +1471,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 		if top {
 			targets = append(targets, &r.displayName, &startedAt, &r.groupKey, &r.sessionName, &metadataMachine)
 		}
-		if f.Breakdowns && !top {
+		if f.PairwiseSides && !top {
 			targets = append(targets, &r.inexactModels, &r.inexactProjects)
 		}
 		if err := rows.Scan(targets...); err != nil {
@@ -1683,7 +1682,7 @@ func (s *Store) dailyUsageForCatalog(
 		seenSessions = map[string]db.UsageSessionInfo{}
 	}
 	var sides *db.UsagePairwiseSides
-	if f.Breakdowns {
+	if f.PairwiseSides {
 		sides = &db.UsagePairwiseSides{Models: make(map[string]db.UsagePairwiseValue), Projects: make(map[string]db.UsagePairwiseValue)}
 	}
 	var totalSavings money.Money

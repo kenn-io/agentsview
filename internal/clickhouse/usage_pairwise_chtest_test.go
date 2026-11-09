@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"strings"
 	"testing"
+	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/assert"
@@ -56,7 +57,7 @@ func TestUsagePairwiseRankingReadCounts(t *testing.T) {
 
 func TestUsageReadersSkipPairwiseEvidence(t *testing.T) {
 	t.Parallel()
-	for _, reader := range []string{"top", "counts"} {
+	for _, reader := range []string{"top", "counts", "summary", "friction"} {
 		t.Run(reader, func(t *testing.T) {
 			t.Parallel()
 			store, syncer, _ := newUsagePriceStore(t)
@@ -64,9 +65,14 @@ func TestUsageReadersSkipPairwiseEvidence(t *testing.T) {
 			ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
 			filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
 			var err error
-			if reader == "counts" {
+			switch reader {
+			case "counts":
 				_, err = store.GetUsageSessionCounts(ctx, filter)
-			} else {
+			case "summary":
+				_, err = service.NewReadOnlyBackend(store).UsageSummary(ctx, service.UsageRequest{Timezone: "UTC", Breakdowns: new(true), IncludeOneShot: true})
+			case "friction":
+				_, err = db.FrictionArchiveSpendFrom(ctx, store, "", "", time.UTC)
+			default:
 				_, err = store.GetTopSessionsByCost(ctx, filter, 10)
 			}
 			require.NoError(t, err)
@@ -107,7 +113,7 @@ func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
 					filters["local window"] = db.UsageFilter{Timezone: "America/New_York", From: "2026-01-11", To: "2026-01-11"}
 					for name, f := range filters {
 						t.Run(name, func(t *testing.T) {
-							f.Breakdowns = true
+							f.Breakdowns, f.PairwiseSides = true, true
 							ranking, err := store.GetDailyUsage(t.Context(), f)
 							require.NoError(t, err)
 							require.NotNil(t, ranking.Pairwise)
@@ -159,7 +165,7 @@ func TestUsagePairwiseInexactSides(t *testing.T) {
 			t.Parallel()
 			store, syncer, local := newUsagePriceStore(t)
 			selections := []struct{ dimension, value string }{{"model", "tier-test"}, {"model", "only-dropped"}, {"project", "loser,raw"}, {"project", "absent"}}
-			filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
+			filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
 			if scenario == "duplicates" {
 				seedUsagePairwiseDuplicates(t, local)
 			} else {

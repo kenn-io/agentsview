@@ -99,6 +99,7 @@ type UsageFilter struct {
 	ActiveSince        string // RFC3339 session recency cutoff
 	Termination        string // "", "clean", "unclean", "active", or "stale"
 	Breakdowns         bool   // populate Project/AgentBreakdowns per day
+	PairwiseSides      bool   // request ranking-derived comparison metadata
 	SkipSessionCounts  bool   // skip distinct session counts when callers do not need them
 	TopSessionsByGroup bool   // merge runs by project and group before ranking
 	// TopSessionsSort ranks GetTopSessionsByCost results: ""/"cost"

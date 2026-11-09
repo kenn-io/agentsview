@@ -29,6 +29,10 @@ func TestUsageRowMemoKeyKeepsCustomModelBoundaries(t *testing.T) {
 	d, err := usageRowMemoKeyFor("daily", f, "", "digest", nil)
 	require.NoError(t, err)
 	require.NotEqual(t, c, d)
+	f.PairwiseSides = true
+	e, err := usageRowMemoKeyFor("daily", f, "", "digest", nil)
+	require.NoError(t, err)
+	require.NotEqual(t, d, e)
 }
 
 // A termination filter that compares session times with the current time

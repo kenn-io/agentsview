@@ -1072,7 +1072,7 @@ func (b *directBackend) UsagePairwiseComparison(
 			right = b.modelGroups.Expand(right)
 		}
 		rankingFilter := base
-		rankingFilter.Breakdowns = true
+		rankingFilter.Breakdowns, rankingFilter.PairwiseSides = true, true
 		rankingFilter.SkipSessionCounts = true
 		rankingResult, err := b.db.GetDailyUsage(ctx, rankingFilter)
 		if err != nil {

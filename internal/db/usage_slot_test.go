@@ -10,7 +10,7 @@ import (
 func TestUsageSlot(t *testing.T) {
 	base := db.UsageSlot(db.UsageFilter{}, true)
 	require.NotEmpty(t, base)
-	require.Equal(t, base, db.UsageSlot(db.UsageFilter{ModelAliases: map[string]string{"m": "g"}, SkipSessionCounts: true, TopSessionsSort: "tokens", TopSessionsByGroup: true, TopSessionsTokenTypes: db.UsageTokenTypeOutput}, true))
+	require.Equal(t, base, db.UsageSlot(db.UsageFilter{ModelAliases: map[string]string{"m": "g"}, SkipSessionCounts: true, PairwiseSides: true, TopSessionsSort: "tokens", TopSessionsByGroup: true, TopSessionsTokenTypes: db.UsageTokenTypeOutput}, true))
 	require.NotEqual(t, base, db.UsageSlot(db.UsageFilter{ProjectLabels: []string{}}, true))
 	require.NotEqual(t, base, db.UsageSlot(db.UsageFilter{Breakdowns: true}, true))
 	require.Equal(t, base, db.UsageSlot(db.UsageFilter{Breakdowns: true}, false))
