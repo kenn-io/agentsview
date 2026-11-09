@@ -382,7 +382,7 @@ const chPreparedUsageColumns = `session_id, message_ordinal, ts, pricing_ts, sou
 // chPreparedUsagePricingDigestSQL reads the digest the mirror was last priced
 // under. A push writes every price record for a digest before this key, so a
 // refresh that reads the key joins a complete set of records for it.
-const chPreparedUsagePricingDigestSQL = "(SELECT ifNull(max(value), '') FROM sync_metadata WHERE key = '" +
+const chPreparedUsagePricingDigestSQL = "(SELECT max(value) FROM sync_metadata WHERE key = '" +
 	usagePricedDigestKey + "')"
 
 // chPriceStampSQL counts the price records under the digest the refresh

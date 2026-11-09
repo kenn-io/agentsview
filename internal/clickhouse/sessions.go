@@ -197,7 +197,7 @@ func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated b
 	query := `
 		SELECT
 			` + count + `,
-			COALESCE(SUM(message_count), 0),
+			SUM(message_count),
 			toInt64(COUNT(DISTINCT project)),
 			toInt64(COUNT(DISTINCT machine)),
 			MIN(COALESCE(started_at, created_at)),

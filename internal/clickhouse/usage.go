@@ -28,7 +28,7 @@ import (
 
 const chTimestampSQL = "parseDateTime64BestEffort(?, 6, 'UTC')"
 
-const chUsageDisplayNameSQL = "ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '')"
+const chUsageDisplayNameSQL = "COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id)"
 
 // chLoadPricing reads the mirrored model catalog and layers the reader's
 // custom rates on top. Push passes no custom rates.
@@ -266,7 +266,7 @@ func chUsageRawSQLFromWheres(
 			'' AS source_uuid,
 			if(ue.dedup_key != '',
 				concat(ue.session_id, ':', ue.source, ':', ue.dedup_key),
-				concat(ue.session_id, ':', ue.source, ':id:', toString(ue.id))
+				concat(ue.session_id, ':', ue.source, ':id:', ue.id)
 			) AS usage_dedup_key,
 				ue.input_tokens AS input_tokens, ue.output_tokens AS output_tokens,
 				ue.cache_creation_input_tokens AS cache_create,
@@ -854,10 +854,10 @@ func chUsageCTEFromRawSource(
 				if(attributed.id = '', ranked.machine, attributed.machine) AS machine,
 				if(attributed.id = '', ranked.user_message_count, attributed.user_message_count) AS user_message_count,
 				if(attributed.id = '', ranked.is_automated, attributed.is_automated) AS is_automated,
-				if(attributed.id = '', ranked.display_name, ifNull(COALESCE(
+				if(attributed.id = '', ranked.display_name, COALESCE(
 					attributed.display_name, attributed.session_name,
 					attributed.first_message, attributed.project, attributed.id
-				), '')) AS display_name,
+				)) AS display_name,
 				if(attributed.id = '', ranked.group_key, attributed.group_key) AS group_key,
 				if(attributed.id = '', ranked.session_name, ifNull(attributed.session_name, '')) AS session_name,
 				if(attributed.id = '', ranked.started_at, attributed.started_at) AS started_at,

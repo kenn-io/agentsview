@@ -147,7 +147,7 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	var filled uint64
 	var comment string
 	err := s.queryRowContext(ctx, `SELECT
-		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?)),
+		(SELECT max(toUInt64OrZero(value)) FROM sync_metadata WHERE startsWith(key,?)),
 		ifNull((SELECT comment FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'), '')`,
 		usageSnapshotReadyKeyBase+":").Scan(&filled, &comment)
 	if err != nil {

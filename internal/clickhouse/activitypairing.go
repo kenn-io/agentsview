@@ -183,7 +183,7 @@ func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSess
 	ctes := "WITH candidate_sessions AS (" + candidates.body + ") "
 	const settings = " SETTINGS optimize_move_to_prewhere_if_final=1"
 	rows, err := s.queryContext(ctx, ctes+`SELECT session_id,ordinal,timestamp,role,model,
-		toBool(is_system = false AND COALESCE(source_subtype, '') <> 'tool_result') FROM messages
+		toBool(is_system = false AND source_subtype <> 'tool_result') FROM messages
 		WHERE session_id IN (SELECT id FROM candidate_sessions) ORDER BY session_id,ordinal`+settings, candidates.args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying pairing messages: %w", err)

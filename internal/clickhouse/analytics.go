@@ -206,7 +206,7 @@ func (s analyticsSQL) Autonomy(ctx context.Context, _ []string, f db.AnalyticsFi
 		UNION ALL
 		SELECT session_id,
 			toInt64(countIf(role = 'user' AND is_system = false
-				AND COALESCE(source_subtype, '') != 'tool_result')) AS user_count,
+				AND source_subtype != 'tool_result')) AS user_count,
 			toInt64(countIf(role = 'assistant' AND has_tool_use = true)) AS tool_count
 		FROM messages
 		WHERE `+sessionIn+`
@@ -472,7 +472,7 @@ func (s *Store) chPopulateFrustrationMarkers(
 		ph, args := db.InPlaceholders(chunk)
 		q := `SELECT session_id, content, is_system
 			FROM messages
-			WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN ` + ph
+			WHERE role = 'user' AND source_subtype <> 'tool_result' AND session_id IN ` + ph
 		msgRows, err := s.queryContext(ctx, q, args...)
 		if err != nil {
 			return fmt.Errorf("querying clickhouse frustration markers: %w", err)

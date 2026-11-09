@@ -54,8 +54,8 @@ func (s analyticsSQL) SummarySQL(f db.AnalyticsFilter) (string, []any) {
 		)
 		SELECT
 			toInt64(COUNT(*)) AS total_sessions,
-			COALESCE(SUM(message_count), 0) AS total_messages,
-			COALESCE(sumIf(total_output_tokens, has_total_output_tokens = true), 0) AS total_output_tokens,
+			SUM(message_count) AS total_messages,
+			sumIf(total_output_tokens, has_total_output_tokens = true) AS total_output_tokens,
 			toInt64(countIf(has_total_output_tokens = true)) AS token_reporting_sessions,
 			toInt64(COUNT(DISTINCT project)) AS active_projects,
 			toInt64(COUNT(DISTINCT local_date)) AS active_days,
@@ -126,7 +126,7 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 			SELECT ` + bucketExpr + ` AS bucket,
 				toInt64(COUNT(*)) AS messages,
 				toInt64(countIf(m.role = 'user' AND m.is_system = false
-					AND COALESCE(m.source_subtype, '') != 'tool_result')) AS user_messages,
+					AND m.source_subtype != 'tool_result')) AS user_messages,
 				toInt64(countIf(m.role = 'assistant')) AS assistant_messages,
 				toInt64(countIf(m.has_thinking = true)) AS thinking_messages
 			FROM filtered_sessions fs
@@ -201,7 +201,7 @@ func chActivityBucketsFromFactsSQL(where, localDate, bucketExpr string) string {
 			SELECT ` + bucketExpr + ` AS bucket,
 				toInt64(COUNT(*)) AS messages,
 				toInt64(countIf(m.role = 'user' AND m.is_system = false
-					AND COALESCE(m.source_subtype, '') != 'tool_result')) AS user_messages,
+					AND m.source_subtype != 'tool_result')) AS user_messages,
 				toInt64(countIf(m.role = 'assistant')) AS assistant_messages,
 				toInt64(countIf(m.has_thinking = true)) AS thinking_messages
 			FROM filtered_sessions fs
@@ -340,7 +340,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 	// partial_merge used 15-21% less CPU and 11% less memory than the
 	// default hash join over a year of sessions.
 	query := `SELECT tc.session_id, tc.category,
-			trim(COALESCE(tc.tool_name, '')), toInt64(COUNT(*)),
+			trim(tc.tool_name), toInt64(COUNT(*)),
 			MAX(` + timestamp + `), minOrNullIf(tc.message_ordinal, tc.message_facts OR m.session_id != '')` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
 			FROM tool_calls tc
 			JOIN (SELECT id, quality_signal_version, COALESCE(started_at, created_at) AS session_ts
@@ -348,7 +348,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 			` + chToolMessageJoin(ph) + `
 			WHERE tc.session_id IN ` + ph + readbase.AnalyticsAndClause(pred) + `
 			GROUP BY tc.session_id, tc.category,
-				trim(COALESCE(tc.tool_name, '')), ` + group + `
+				trim(tc.tool_name), ` + group + `
 			SETTINGS join_algorithm = 'partial_merge'`
 	rows, qErr := s.store.queryContext(ctx, query, slices.Concat(args, groupArgs)...)
 	if qErr != nil {
@@ -424,16 +424,16 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 	pred, args := chToolVisitPredicates(f, false)
 	group, timestamp, groupArgs := chToolVisitGroup(f, true)
 	rows, qErr := s.store.queryContext(ctx,
-		`SELECT tc.session_id, trim(COALESCE(tc.skill_name, '')),
+		`SELECT tc.session_id, trim(tc.skill_name),
 			toInt64(COUNT(*)), MAX(`+timestamp+`)
 			FROM tool_calls tc
 			JOIN (SELECT id, COALESCE(started_at, created_at) AS session_ts
 				FROM sessions WHERE id IN `+ph+`) s ON s.id = tc.session_id
 			`+chToolMessageJoin(ph)+`
 			WHERE tc.session_id IN `+ph+`
-				AND trim(COALESCE(tc.skill_name, '')) != ''
+				AND trim(tc.skill_name) != ''
 				`+readbase.AnalyticsAndClause(pred)+`
-			GROUP BY tc.session_id, trim(COALESCE(tc.skill_name, '')),
+			GROUP BY tc.session_id, trim(tc.skill_name),
 				`+group, slices.Concat(args, groupArgs)...)
 	if qErr != nil {
 		return qErr
@@ -450,7 +450,7 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 	where, args := chBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, includeTime)
 	durationSelectExpr := `COALESCE((toUnixTimestamp64Micro(s.ended_at) - toUnixTimestamp64Micro(s.started_at)) / 60000000.0, 0)`
-	activeDurationSelectExpr := "COALESCE(ad.active_duration_min, 0)"
+	activeDurationSelectExpr := "ad.active_duration_min"
 	orderExpr := "s.message_count DESC, s.id ASC"
 	switch metric {
 	case "duration":

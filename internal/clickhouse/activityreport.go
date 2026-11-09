@@ -425,8 +425,8 @@ func clickActivityReportCandidateWhere(
 // chActivityCandidateDigestSQL selects the digest that identifies a set of
 // candidate sessions by their push versions: two independent hash sums,
 // then the count.
-const chActivityCandidateDigestSQL = "toString(sum(sipHash64(s.id, s.push_version))) || ':' || " +
-	"toString(sum(cityHash64(s.id, s.push_version))), count()"
+const chActivityCandidateDigestSQL = "sum(sipHash64(s.id, s.push_version)) || ':' || " +
+	"sum(cityHash64(s.id, s.push_version)), count()"
 
 type activityCandidateDigest struct {
 	hash  string
@@ -1042,7 +1042,7 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 				'' AS source_uuid,
 				if(ue.dedup_key != '',
 					concat(s.id, ':', ue.source, ':', ue.dedup_key),
-					concat(s.id, ':', ue.source, ':id:', toString(ue.id))) AS usage_dedup_key,
+					concat(s.id, ':', ue.source, ':id:', ue.id)) AS usage_dedup_key,
 				ue.input_tokens AS input_tokens,
 				ue.output_tokens AS output_tokens,
 				ue.cache_creation_input_tokens AS cache_create,
