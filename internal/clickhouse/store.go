@@ -49,7 +49,7 @@ type Store struct {
 	// an Activity range read; see readActivityUsageSlices.
 	usageSliceRows int
 	// afterUsageSlices, when set, runs once a sliced range read has read
-	// every slice. Tests use it to refresh prepared usage mid-read.
+	// every slice. Tests use it to change the rows mid-read.
 	afterUsageSlices func()
 	cursorMu         sync.RWMutex
 	cursorSecret     []byte
