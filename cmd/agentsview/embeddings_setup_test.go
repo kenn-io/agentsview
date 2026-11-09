@@ -35,7 +35,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 		onBattery = oldOnBattery
 	})
-	for _, recipe := range []string{"fresh", "automatic", "nomic", "changed-provider"} {
+	for _, recipe := range []string{"fresh", "automatic", "recall", "nomic", "changed-provider"} {
 		t.Run(recipe, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
@@ -79,6 +79,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			raw := map[string]string{
 				"changed-provider": "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\n",
 				"nomic":            "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\n",
+				"recall":           "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\n",
 			}[recipe]
 			if raw != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(raw), 0o600))
@@ -143,7 +144,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				return embeddingRequest(t, ts.Client(), ts.URL, method, path, "application/json", strings.NewReader(body), wantStatus)
 			}
 			statusPath := "/api/v1/embeddings/status"
-			if recipe == "automatic" {
+			if recipe == "recall" {
 				statusPath += "?store=recall"
 			}
 			status := func() vector.BuildStatus {
@@ -165,7 +166,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
 			}
 			body := fmt.Sprintf(`{"approved_bytes":%d}`, shown)
-			if recipe == "automatic" {
+			if recipe == "recall" {
 				body = fmt.Sprintf(`{"approved_bytes":%d,"build":{"store":"recall"}}`, shown)
 			}
 			request("POST", "/api/v1/embeddings/setup", body, 202)
@@ -203,7 +204,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			assert.EqualValues(t, 1, reloads.Load())
 			assert.Empty(t, status().Setup.Action)
 			assert.Equal(t, recipe == "fresh", installs.Load() > 0)
-			if recipe == "automatic" {
+			if recipe == "recall" {
 				assert.Nil(t, owner.Manager("").Status().LastResult)
 			}
 			if recipe == "fresh" {
@@ -597,14 +598,18 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			handlers := map[string]http.HandlerFunc{
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
-					if accepted.Load() && polls.Add(1) == 1 {
-						_, _ = io.WriteString(w, `{"setup":{"busy":true}}`)
-					} else if accepted.Load() && tc.setupError {
-						_, _ = io.WriteString(w, `{"setup":{"error":"setup failed"}}`)
-					} else if accepted.Load() {
-						_, _ = io.WriteString(w, `{"setup":{},"last_result":{}}`)
-					} else {
+					if !accepted.Load() {
 						_, _ = io.WriteString(w, `{"setup":{"action":"turn-on"}}`)
+					} else if n := polls.Add(1); n <= 3 {
+						_, _ = io.WriteString(w, `{"setup":{"busy":true}}`)
+					} else if tc.setupError {
+						_, _ = io.WriteString(w, `{"setup":{"error":"setup failed"}}`)
+					} else if n == 4 {
+						_, _ = io.WriteString(w, `{"setup":{}}`)
+					} else if tc.name == "configured" {
+						_, _ = io.WriteString(w, `{"setup":{},"last_error":"build failed"}`)
+					} else {
+						_, _ = io.WriteString(w, `{"setup":{},"last_result":{}}`)
 					}
 				},
 				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
@@ -633,8 +638,13 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				require.ErrorContains(t, err, "setup failed")
 				return
 			}
-			require.NoError(t, err)
-			assert.GreaterOrEqual(t, polls.Load(), int64(2))
+			if tc.name == "configured" {
+				require.ErrorContains(t, err, "build failed")
+			} else {
+				require.NoError(t, err)
+				assert.Contains(t, out.String(), "Embedded 0 documents")
+			}
+			assert.GreaterOrEqual(t, polls.Load(), int64(5))
 			if tc.full {
 				assert.Contains(t, out.String(), "This rebuild re-embeds every document.")
 			}
@@ -726,7 +736,6 @@ func TestLiveEmbeddingsSetupFailurePersistsUntilBuildStarts(t *testing.T) {
 	manager := owner.Manager("")
 	require.NoError(t, manager.StartBuild(vector.BuildRequest{Using: "other"}))
 	owner.BuildStarted()
-	require.Eventually(t, func() bool { return manager.Status().LastResult != nil }, 10*time.Second, 10*time.Millisecond)
 	status, err = owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, status.Error)
