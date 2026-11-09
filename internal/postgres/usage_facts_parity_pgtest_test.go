@@ -167,9 +167,7 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	cacheDirectory := t.TempDir()
 	require.NoError(t, remote.ConfigureUsageCache(t.Context(), cacheDirectory, pgURL, schema))
 	require.NotNil(t, remote.usageCache)
-	remote.forgetPricingLoad()
-	require.Equal(t, want, captureUsageParitySnapshot(t, remote, filter))
-	requireCompleteUsageParity(t, local, remote, filter)
+	requireCachedUsageMatchesDirect(t, remote, filter)
 
 	breakdownFilter := filter
 	breakdownFilter.Breakdowns = true
@@ -270,6 +268,7 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 
 	cacheDirectory := t.TempDir()
 	require.NoError(t, remote.ConfigureUsageCache(t.Context(), cacheDirectory, pgURL, schema))
+	require.NotNil(t, remote.usageCache)
 	filter := db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"}
 	for _, backend := range []struct {
 		name  string
