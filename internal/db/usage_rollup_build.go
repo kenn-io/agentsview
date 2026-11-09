@@ -101,6 +101,7 @@ type usageRollupBuild struct {
 	Source                     usageSourceVersion
 	FactRevision               int64
 	CursorAfter                int64 // Installed Cursor fact revision, or zero for a full build.
+	ExactAccountRevision       bool
 	ChangeRevision             int64
 	SourcePricing              string
 	Daily                      []usageDailyContribution
@@ -440,9 +441,14 @@ func loadUsageRollupFacts(
 }
 
 func loadCursorUsageRollupBuild(
-	ctx context.Context, conn *sql.Conn, after, highWater int64,
-	location *time.Location, pricing *usagePricingIdentities,
+	ctx context.Context, conn *sql.Conn, after int64,
+	snapshot usageQuerySnapshot, pricing *usagePricingIdentities,
 ) (usageRollupBuild, error) {
+	// External accounts replace a whole generation; their IDs do not bound it.
+	where, args := "source_id > ? AND source_id <= ?", []any{after, snapshot.CursorHighWater}
+	if snapshot.exactAccountRevision {
+		after, where, args = 0, "1", nil
+	}
 	// Cursor rows price at read time, so only the policy identity applies.
 	inputs, pricingHash, err := pricing.forInputs(nil)
 	if err != nil {
@@ -453,17 +459,17 @@ func loadCursorUsageRollupBuild(
 		PricingInputs: inputs, PricingHash: pricingHash,
 		Source: usageSourceVersion{
 			SessionID:  usageRollupCursorSessionID,
-			SyncMarker: strconv.FormatInt(highWater, 10),
+			SyncMarker: strconv.FormatInt(snapshot.CursorHighWater, 10),
 		},
-		FactRevision: highWater,
-		CursorAfter:  after,
+		FactRevision:         snapshot.CursorHighWater,
+		ExactAccountRevision: snapshot.exactAccountRevision,
+		CursorAfter:          after,
 	}
 	rows, err := conn.QueryContext(ctx, `SELECT source_id, agent, timestamp_ms,
 		raw_timestamp, model, input_tokens, output_tokens,
 		cache_creation_tokens, cache_read_tokens, charged_microdollars,
 		is_headless, dedup_key
-		FROM cursor_usage_facts WHERE source_id > ? AND source_id <= ? ORDER BY source_id`,
-		after, highWater)
+		FROM cursor_usage_facts WHERE `+where+` ORDER BY source_id`, args...)
 	if err != nil {
 		return build, err
 	}
@@ -494,7 +500,7 @@ func loadCursorUsageRollupBuild(
 			fact.Fact.TimestampMillis, fact.EffectiveMillis = &value, &value
 		}
 		fact.DedupTimestamp = fact.Fact.RawTimestamp
-		fact.LocalDate = usageRollupLocalDate(fact, location)
+		fact.LocalDate = usageRollupLocalDate(fact, snapshot.location)
 		facts = append(facts, fact)
 	}
 	if err := rows.Err(); err != nil {

@@ -563,7 +563,7 @@ func (c *usageRollupCoordinator) ensureAttempt(
 	if installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
 		cursorBuild, cursorErr := loadCursorUsageRollupBuild(
 			ctx, conn, installs[usageRollupCursorSessionID].FactRevision,
-			snapshot.CursorHighWater, snapshot.location, pricing)
+			snapshot, pricing)
 		if cursorErr != nil {
 			return nil, false, usageRollupMetrics{}, cursorErr
 		}
@@ -594,7 +594,7 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		ctx, conn, identity, snapshot.location, builds, cross)
 	metrics.InstallDuration = time.Since(installStarted)
 	if err != nil {
-		if errors.Is(err, errUsageCacheSourceChanged) {
+		if errors.Is(err, errUsageCacheSourceChanged) && !snapshot.exactAccountRevision {
 			return nil, false, metrics, nil
 		}
 		return nil, false, metrics, err
@@ -606,6 +606,9 @@ func (c *usageRollupCoordinator) ensureAttempt(
 	}
 	if len(stale) != 0 ||
 		installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+		if snapshot.exactAccountRevision {
+			return nil, false, metrics, errUsageCacheSourceChanged
+		}
 		// Another builder installed a different generation of one of these
 		// sessions while this one was building. Its facts are committed, so
 		// the next attempt sees them.
@@ -803,6 +806,11 @@ func installUsageRollupBuilds(
 	defer func() { _ = stmts.Close() }()
 	dates := make(map[string]bool)
 	for _, build := range builds {
+		if build.ExactAccountRevision {
+			if err := verifyUsageAccountRevision(ctx, conn, build.FactRevision); err != nil {
+				return err
+			}
+		}
 		var installID int64
 		var installedFactRevision int64
 		err := stmts.QueryRowContext(ctx, `SELECT id, fact_install_revision

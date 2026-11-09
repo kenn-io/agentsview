@@ -297,7 +297,9 @@ func readUsageRollupExceptions(
 	if to != "" {
 		where += ` AND e.local_date<=` + b.Add(to)
 	}
-	where += ` AND (i.session_id != ` + b.Add(usageRollupCursorSessionID) + ` OR e.fact_index <= ` + b.Add(snapshot.CursorHighWater) + `)`
+	if !snapshot.exactAccountRevision {
+		where += ` AND (i.session_id != ` + b.Add(usageRollupCursorSessionID) + ` OR e.fact_index <= ` + b.Add(snapshot.CursorHighWater) + `)`
+	}
 	rows, err := conn.QueryContext(ctx, `SELECT e.cached_session_id, e.fact_index,
 		e.source_session_id, e.local_date, e.source, e.message_ordinal,
 		e.timestamp_ms, e.timestamp_ns, e.raw_timestamp, e.uses_session_start,

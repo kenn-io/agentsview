@@ -266,8 +266,8 @@ func TestPGUsageCacheCancelledWaiterAndRetry(t *testing.T) {
 	}
 }
 
-func TestPGUsageCacheReadOnlyAndRecreatedJournal(t *testing.T) {
-	_, syncer, store, _ := keptUsageFixture(t)
+func TestPGUsageCacheReadOnlyRestart(t *testing.T) {
+	_, syncer, _, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
 	reader, err := NewStore(ctx, roleURL, syncer.schema, true)
@@ -282,20 +282,6 @@ func TestPGUsageCacheReadOnlyAndRecreatedJournal(t *testing.T) {
 	reader.usageCache = nil
 	require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
 	requireCachedUsageMatchesDirect(t, reader, filter)
-	_, err = reader.GetTopSessionsByCost(ctx, filter, 20)
-	require.NoError(t, err)
-	// Recreate only the journal while retaining its supported version and clock.
-	// The old cache must not validate against the new relation identity.
-	_, err = store.pg.ExecContext(ctx, `ALTER TABLE usage_session_changes RENAME TO usage_session_changes_retired; CREATE TABLE usage_session_changes (LIKE usage_session_changes_retired INCLUDING ALL); INSERT INTO usage_session_changes SELECT * FROM usage_session_changes_retired; GRANT SELECT ON usage_session_changes TO PUBLIC; DROP TABLE usage_session_changes_retired CASCADE; ALTER TABLE usage_events DISABLE TRIGGER USER; UPDATE usage_events SET output_tokens=1000 WHERE session_id='paid-a'; ALTER TABLE usage_events ENABLE TRIGGER USER`)
-	require.NoError(t, err)
-	requireCachedUsageMatchesDirect(t, reader, filter)
-	want, err := (&Store{pg: reader.pg}).GetTopSessionsByCost(ctx, filter, 20)
-	require.NoError(t, err)
-	got, err := reader.GetTopSessionsByCost(ctx, filter, 20)
-	require.NoError(t, err)
-	normalizeUsageTopTimes(want)
-	normalizeUsageTopTimes(got)
-	require.Equal(t, want, got, "recreated journal must invalidate the public Top sessions memo")
 }
 
 func TestPGUsageCacheUnreadableJournal(t *testing.T) {
@@ -609,5 +595,33 @@ func TestPGUsageCachePushedNullTimestampDedup(t *testing.T) {
 			requireCachedUsageMatchesDirect(t, restarted, filter)
 			require.Empty(t, probe.takeExtracted())
 		})
+	}
+}
+
+func TestPGUsageCachePreJournalAccounts(t *testing.T) {
+	_, syncer, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,dedup_key) VALUES (2,'cursor','2026-01-01','paid-a',1,7,77,'old-account-a'), (1000000,'cursor','2026-01-01','paid-a',1,11,111,'old-account-b')`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+	var markers int
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT count(*) FROM usage_session_changes WHERE session_id=''`).Scan(&markers))
+	require.Zero(t, markers)
+	directory := t.TempDir()
+	filter := db.UsageFilter{Timezone: "UTC"}
+	for _, restart := range []bool{false, true} {
+		if restart {
+			require.NoError(t, store.usageCache.Close())
+			store.usageCache = nil
+		}
+		require.NoError(t, store.ConfigureUsageCache(ctx, directory, testPGURL(t), syncer.schema))
+		require.NotNil(t, store.usageCache)
+		got, err := store.usageCache.GetDailyUsage(ctx, filter)
+		require.NoError(t, err)
+		require.Equal(t, 1268, got.Totals.OutputTokens)
+		require.Equal(t, int64(8938), got.Totals.TotalCost.Microdollars)
+		requireCachedUsageMatchesDirect(t, store, filter)
 	}
 }

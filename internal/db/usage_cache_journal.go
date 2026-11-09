@@ -306,12 +306,8 @@ func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, time
 
 func verifyPreparedUsageRollup(ctx context.Context, conn *sql.Conn, key string, prepared usagePreparedWindow) (int64, error) {
 	if prepared.snapshot.exactAccountRevision && prepared.snapshot.CursorHighWater > 0 {
-		var revision int64
-		if err := conn.QueryRowContext(ctx, `SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key=?`, usageCacheMetadataCursorHighWaterMark).Scan(&revision); err != nil {
+		if err := verifyUsageAccountRevision(ctx, conn, prepared.snapshot.CursorHighWater); err != nil {
 			return 0, err
-		}
-		if revision != prepared.snapshot.CursorHighWater {
-			return 0, errUsageCacheSourceChanged
 		}
 	}
 	if prepared.journaled {
@@ -398,4 +394,15 @@ func verifyJournaledUsageRollup(ctx context.Context, conn *sql.Conn, prepared us
 		}
 	}
 	return zone.id, nil
+}
+
+func verifyUsageAccountRevision(ctx context.Context, conn *sql.Conn, expected int64) error {
+	var revision int64
+	if err := conn.QueryRowContext(ctx, `SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key=?`, usageCacheMetadataCursorHighWaterMark).Scan(&revision); err != nil {
+		return err
+	}
+	if revision != expected {
+		return errUsageCacheSourceChanged
+	}
+	return nil
 }
