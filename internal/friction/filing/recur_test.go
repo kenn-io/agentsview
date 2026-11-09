@@ -130,25 +130,30 @@ func TestReopenFromRebuiltDigestWithoutPatternUpdate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := katatest.New(t)
 			f, d := newFiler(t, s, katatest.DefaultProjectName)
-			seedRecurrence(t, d, "2026-09-05", "claude:s1", &tt.live)
-			session, err := d.GetSession(t.Context(), "claude:s1")
+			old := toolError("go: cannot find main module", "claude:s1")
+			sig := toolError("go: cannot find main module", "claude:s2")
+			require.Equal(t, old.Fingerprint(), sig.Fingerprint())
+			seedRecurrenceSignal(t, d, "2026-09-05", old.SubjectID, nil, old)
+			dbtest.SeedSession(t, d, sig.SubjectID, "proj")
+			digest, err := d.GetFrictionDigest(t.Context(), "2026-09-14")
+			require.NoError(t, err)
+			digest.Revision++
+			require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, []db.FrictionDigestSubject{{SubjectID: sig.SubjectID, Date: digest.Date, SubjectKind: "session"}}, nil))
+			session, err := d.GetSession(t.Context(), sig.SubjectID)
 			require.NoError(t, err)
 			applied, err := d.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
-				RulesVersion: friction.RulesVersion, Findings: []db.FrictionFinding{{SessionID: "claude:s1", Kind: string(correction.Kind), Detector: correction.Detector, Fingerprint: correction.Fingerprint(), OccurredAt: &tt.live, RulesVersion: friction.RulesVersion}},
+				RulesVersion: friction.RulesVersion, Findings: []db.FrictionFinding{{SessionID: sig.SubjectID, Kind: string(sig.Kind), Detector: sig.Detector, Fingerprint: sig.Fingerprint(), OccurredAt: &tt.live, RulesVersion: friction.RulesVersion}},
 			})
 			require.NoError(t, err)
 			require.True(t, applied)
 			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-			_, err = f.Link(t.Context(), correction.Fingerprint(), is.UID)
+			_, err = f.Link(t.Context(), sig.Fingerprint(), is.UID)
 			require.NoError(t, err)
-			digest, err := d.GetFrictionDigest(t.Context(), "2026-09-14")
-			require.NoError(t, err)
-			sig := correction
 			sig.OccurredAt = tt.saved
 			digest.SnapshotJSON, err = review.EncodeSnapshot(review.Snapshot{Date: digest.Date, Timezone: "UTC", RulesVersion: friction.RulesVersion, Signals: []friction.Signal{sig}})
 			require.NoError(t, err)
 			digest.Revision++
-			require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, nil, nil))
+			require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, []db.FrictionDigestSubject{{SubjectID: sig.SubjectID, Date: digest.Date, SubjectKind: "session"}}, nil))
 			require.Equal(t, "2026-09-05", patternRow(t, d, sig.Fingerprint()).LastSeenDate)
 
 			n, err := f.Reopen(t.Context(), "2026-09-10", "2026-09-18", nil)
