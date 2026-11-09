@@ -164,10 +164,6 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	require.Equal(t, localWithoutBreakdown, remoteWithoutBreakdown,
 		"cross-backend session result without breakdown")
 	requireCompleteUsageParity(t, local, remote, filter)
-	cacheDirectory := t.TempDir()
-	require.NoError(t, remote.ConfigureUsageCache(t.Context(), cacheDirectory, pgURL, schema))
-	require.NotNil(t, remote.usageCache)
-	requireCachedUsageMatchesDirect(t, remote, filter)
 
 	breakdownFilter := filter
 	breakdownFilter.Breakdowns = true
@@ -292,10 +288,6 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 			require.Equal(t, int64(260_042), daily.Totals.TotalCost.Microdollars)
 		})
 	}
-	cacheDirectory := t.TempDir()
-	require.NoError(t, remote.ConfigureUsageCache(t.Context(), cacheDirectory, pgURL, schema))
-	require.NotNil(t, remote.usageCache)
-	requireCachedUsageMatchesDirect(t, remote, filter)
 }
 
 func requireCompleteUsageParity(

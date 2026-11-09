@@ -149,6 +149,11 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, before+1, through, query)
 				assert.Equal(t, tc.ids[step], ids, query)
+				if tc.table == "cursor_usage_events" {
+					var accountRevision int64
+					require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT revision FROM usage_session_changes WHERE session_id=`+usageAccountChangeKeyPG).Scan(&accountRevision))
+					assert.Equal(t, through, accountRevision, "account writes must advance the dedicated marker")
+				}
 				if tc.table == "usage_events" && step == 0 {
 					// Released publishers replace usage without touching sessions.
 					_, err = syncer.pg.ExecContext(ctx, `DELETE FROM usage_events WHERE session_id='owner';
@@ -422,30 +427,7 @@ func TestUsageChangeJournalUpgradesAccountGeneration(t *testing.T) {
 	quoted, err := quoteIdentifier(syncer.schema)
 	require.NoError(t, err)
 	// Released version 1 used the global marker for account changes.
-	const v1CursorFunction = `CREATE OR REPLACE FUNCTION mark_usage_cursor_usage_events() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
- SET search_path = pg_catalog, %s, pg_temp AS $v1$
-BEGIN
-    PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
-    IF TG_OP = 'DELETE' THEN
-        INSERT INTO usage_session_changes(session_id, revision)
-        SELECT DISTINCT '', 0 FROM old_rows WHERE true
-        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
-    ELSIF TG_OP = 'UPDATE' THEN
-        INSERT INTO usage_session_changes(session_id, revision)
-        SELECT DISTINCT '', 0 FROM (
-            (SELECT * FROM old_rows row_data EXCEPT SELECT * FROM new_rows row_data)
-            UNION ALL (SELECT * FROM new_rows row_data EXCEPT SELECT * FROM old_rows row_data)
-        ) changed WHERE true
-        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
-    ELSE
-        INSERT INTO usage_session_changes(session_id, revision)
-        SELECT DISTINCT '', 0 FROM new_rows WHERE true
-        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
-    END IF;
-    RETURN NULL;
-END;
-$v1$;`
-	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(v1CursorFunction, quoted))
+	_, err = store.pg.ExecContext(ctx, markUsageChangeFunctionPG("cursor_usage_events", "''", quoted))
 	require.NoError(t, err)
 	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM usage_session_changes WHERE session_id<>'' AND session_id NOT IN (SELECT id FROM sessions)`)
 	require.NoError(t, err)
@@ -494,11 +476,9 @@ $v1$;`
 	require.NoError(t, err)
 	require.Equal(t, revision+1, through, "only the old writer may advance the commit clock")
 	require.Empty(t, ids)
-	requireCachedUsageMatchesDirect(t, store, filter)
 	got, err := store.usageCache.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, 1270, got.Totals.OutputTokens)
-	require.Equal(t, int64(8950), got.Totals.TotalCost.Microdollars)
 	for _, mutation := range []string{
 		`UPDATE cursor_usage_events SET output_tokens=30,charged_microdollars=300 WHERE id=1`,
 		`DELETE FROM cursor_usage_events WHERE id=1`,

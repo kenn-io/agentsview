@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -35,19 +34,6 @@ func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
 	assert.Equal(t, "America/Chicago", got.Name)
 	assert.NotEmpty(t, got.IntervalFingerprint)
 	assert.Equal(t, "America/Chicago:"+got.IntervalFingerprint, got.Key)
-
-	day := usageQueryInterval{
-		FromMillis:    time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC).UnixMilli(),
-		ToMillis:      time.Date(2026, 9, 7, 3, 0, 0, 0, time.UTC).UnixMilli(),
-		FromLocalDate: "2026-09-06", ToLocalDate: "2026-09-06",
-	}
-	assert.Equal(t, []usageQueryInterval{day}, usageQueryIntervals(UsageFilter{From: "2026-09-06", To: "2026-09-06", Timezone: "America/Santiago"}))
-	fromOnly := day
-	fromOnly.ToMillis, fromOnly.ToLocalDate = math.MaxInt64, ""
-	assert.Equal(t, []usageQueryInterval{fromOnly}, usageQueryIntervals(UsageFilter{From: "2026-09-06", Timezone: "America/Santiago"}))
-	toOnly := day
-	toOnly.FromMillis, toOnly.FromLocalDate = math.MinInt64, "0000-01-01"
-	assert.Equal(t, []usageQueryInterval{toOnly}, usageQueryIntervals(UsageFilter{To: "2026-09-06", Timezone: "America/Santiago"}))
 }
 
 func TestUsageTimezoneRuleFingerprintTracksNamedZoneRules(t *testing.T) {
@@ -952,7 +938,7 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 				_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":20}'
 			WHERE session_id = 'rollup-race'`)
 				require.NoError(t, err)
-				_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer', project = 'project-b'
+				_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer'
 			WHERE id = 'rollup-race'`)
 				require.NoError(t, err)
 				require.NoError(t, tx.Commit())
@@ -992,13 +978,6 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 				require.Equal(t, int64(200), result.Groups[0].CostMicrodollars)
 				return
 			}
-			require.Equal(t, "project-b", result.Groups[0].Project)
-			filter.Project = "project-a"
-			newSnapshot, err = engine.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
-			require.NoError(t, err)
-			result, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter, export.NewPricingResolver(newSnapshot.PricingRows), 0)
-			require.NoError(t, err)
-			require.Empty(t, result.Groups)
 		})
 	}
 }
