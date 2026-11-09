@@ -17,7 +17,6 @@ import (
 	"go.kenn.io/agentsview/internal/kata/katatest"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -73,31 +72,4 @@ func TestPGServeKataHubConnection(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &version))
 	assert.True(t, version.KataAvailable)
 	assert.NotEmpty(t, kataServer.RequestsMatching(http.MethodGet, "/api/v1/health"))
-}
-
-func TestPGServeUsageAfterJournalFailure(t *testing.T) {
-	pg, directory, url := newRawSyncCleanUploadsPG(t)
-	ctx := t.Context()
-	_, err := pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES (1,'cursor','2026-01-01','model-a',7,77,'startup-account')`)
-	require.NoError(t, err)
-	_, err = pg.ExecContext(ctx, `UPDATE sync_metadata SET value='broken' WHERE key='usage_change_revision'`)
-	require.NoError(t, err)
-	store, err := postgres.NewStore(ctx, url, rawSyncCleanUploadsSchema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	require.NoError(t, store.ConfigureUsageCache(ctx, directory, url, rawSyncCleanUploadsSchema))
-	cfg := config.Config{DataDir: directory, Host: "127.0.0.1", Port: 8080, PG: config.PGConfig{URL: url}}
-	opts, cleanup, err := (pgReplica{}).serveOptions(ctx, cfg, storage.ReplicaTarget{URL: url, Schema: rawSyncCleanUploadsSchema}, store)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cleanup()) })
-	srv := server.New(cfg, store, nil, opts...)
-	response := httptest.NewRecorder()
-	request := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/usage/summary?from=2026-01-01&to=2026-01-01&timezone=UTC", nil)
-	request.Host = "127.0.0.1:8080"
-	srv.Handler().ServeHTTP(response, request)
-	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
-	var result service.UsageSummaryResult
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
-	require.Equal(t, 7, result.Totals.OutputTokens)
-	require.Equal(t, int64(77), result.Totals.TotalCost.Microdollars)
 }

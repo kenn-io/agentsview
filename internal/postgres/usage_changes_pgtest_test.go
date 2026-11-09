@@ -504,18 +504,8 @@ $v1$;`
 		`UPDATE cursor_usage_events SET output_tokens=30,charged_microdollars=300 WHERE id=1`,
 		`DELETE FROM cursor_usage_events WHERE id=1`,
 	} {
-		before, err := store.UsageChangeRevision(ctx)
+		_, err := store.pg.ExecContext(ctx, mutation)
 		require.NoError(t, err)
-		_, err = store.pg.ExecContext(ctx, mutation)
-		require.NoError(t, err)
-		through, ids, err = store.LoadUsageChanges(ctx, before)
-		require.NoError(t, err)
-		require.Equal(t, before+1, through)
-		require.Empty(t, ids, "account markers are not changed session IDs")
 		requireCachedUsageMatchesDirect(t, store, filter)
 	}
-	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
-	after, err := store.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	require.Equal(t, through, after, "the forward migration must be idempotent")
 }

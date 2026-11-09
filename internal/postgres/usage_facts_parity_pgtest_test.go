@@ -266,9 +266,6 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 
-	cacheDirectory := t.TempDir()
-	require.NoError(t, remote.ConfigureUsageCache(t.Context(), cacheDirectory, pgURL, schema))
-	require.NotNil(t, remote.usageCache)
 	filter := db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"}
 	for _, backend := range []struct {
 		name  string
@@ -295,6 +292,13 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 			require.Equal(t, int64(260_042), daily.Totals.TotalCost.Microdollars)
 		})
 	}
+	cacheDirectory := t.TempDir()
+	require.NoError(t, remote.ConfigureUsageCache(t.Context(), cacheDirectory, pgURL, schema))
+	require.NotNil(t, remote.usageCache)
+	daily, err := remote.usageCache.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 59, daily.Totals.InputTokens)
+	require.Equal(t, int64(260_042), daily.Totals.TotalCost.Microdollars)
 }
 
 func requireCompleteUsageParity(

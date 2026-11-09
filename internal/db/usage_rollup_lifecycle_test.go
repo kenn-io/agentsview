@@ -19,6 +19,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
@@ -869,8 +870,18 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			database := testDB(t)
 			seedUsageSnapshotSession(t, database, "rollup-race", "project-a",
 				"2026-08-10T09:00:00Z", 0, 10, "model-a")
-			oldSnapshot, oldFills, cache := prepareUsageRollupTest(t, database)
-			oldSnapshot.exactAccountRevision = external
+			engine := database
+			var source *rollupAccountSource
+			if external {
+				databaseID, err := database.GetDatabaseID(t.Context())
+				require.NoError(t, err)
+				source = &rollupAccountSource{database: database, databaseID: databaseID, revision: 10, output: 10}
+				reader, err := NewUsageCacheReader(t.TempDir(), source)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reader.Close()) })
+				engine = reader.engine
+			}
+			oldSnapshot, oldFills, cache := prepareUsageRollupTest(t, engine)
 			oldRevision := oldFills["rollup-race"].InstallRevision
 			oldBuilt := make(chan struct{})
 			releaseOld := make(chan struct{})
@@ -878,7 +889,9 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			t.Cleanup(release)
 			var blocked atomic.Bool
 			cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
-				if len(builds) != 1 || builds[0].FactRevision != oldRevision ||
+				if !slices.ContainsFunc(builds, func(build usageRollupBuild) bool {
+					return build.SessionID == "rollup-race" && build.FactRevision == oldRevision
+				}) ||
 					!blocked.CompareAndSwap(false, true) {
 					return
 				}
@@ -906,12 +919,14 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":20}'
 		WHERE session_id = 'rollup-race'`)
 			require.NoError(t, err)
-			_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer', project = CASE WHEN ? THEN 'project-b' ELSE project END
-		WHERE id = 'rollup-race'`, external)
+			_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer', project = 'project-b'
+		WHERE id = 'rollup-race'`)
 			require.NoError(t, err)
 			require.NoError(t, tx.Commit())
-			newSnapshot, newFills, _ := prepareUsageRollupTest(t, database)
-			newSnapshot.exactAccountRevision = external
+			if source != nil {
+				source.output = 20
+			}
+			newSnapshot, newFills, _ := prepareUsageRollupTest(t, engine)
 			release()
 			var oldOutcome rollupOutcome
 			select {
@@ -936,16 +951,13 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, result.Groups, 1)
 			require.Equal(t, int64(20), result.Groups[0].OutputTokens)
-			if external {
-				require.Equal(t, "project-b", result.Groups[0].Project)
-				filter.Project = "project-a"
-				newSnapshot, err = database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
-				require.NoError(t, err)
-				newSnapshot.exactAccountRevision = true
-				result, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter, export.NewPricingResolver(newSnapshot.PricingRows), 0)
-				require.NoError(t, err)
-				require.Empty(t, result.Groups)
-			}
+			require.Equal(t, "project-b", result.Groups[0].Project)
+			filter.Project = "project-a"
+			newSnapshot, err = engine.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
+			require.NoError(t, err)
+			result, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter, export.NewPricingResolver(newSnapshot.PricingRows), 0)
+			require.NoError(t, err)
+			require.Empty(t, result.Groups)
 		})
 	}
 }
@@ -1164,9 +1176,33 @@ func effectivePricingRateForTest(
 
 type rollupAccountSource struct {
 	UsageCacheSource
+	database   *DB
+	output     int64
 	databaseID string
 	revision   int64
 	accounts   []UsageSourceAccount
+}
+
+func (s *rollupAccountSource) CaptureUsage(ctx context.Context, request UsageSourceRequest) (UsageSourceSnapshot, error) {
+	snapshot, err := s.database.captureUsageQuery(ctx, request.Filter, usageQueryKindToken)
+	snapshot.CursorHighWater = s.revision
+	return snapshot, err
+}
+
+func (s *rollupAccountSource) StreamUsage(ctx context.Context, ids []string, emit func(string, usagefacts.Fact) error) (UsageSourceSnapshot, error) {
+	for _, id := range ids {
+		if id != "rollup-race" {
+			return UsageSourceSnapshot{}, fmt.Errorf("unexpected source session %q", id)
+		}
+		if err := emit(id, usagefacts.Fact{Source: "message", Model: "model-a", MessageOrdinal: new(0), UsesSessionStart: true, OutputTokens: s.output, TokenEligible: true}); err != nil {
+			return UsageSourceSnapshot{}, err
+		}
+	}
+	return s.CaptureUsage(ctx, UsageSourceRequest{Filter: UsageFilter{Timezone: "UTC"}})
+}
+
+func (s *rollupAccountSource) BuildProjectIdentityMap(ctx context.Context, labels []string) (map[string]export.ProjectMapEntry, error) {
+	return s.database.BuildProjectIdentityMap(ctx, labels)
 }
 
 func (s *rollupAccountSource) ReadUsageAccounts(context.Context) (string, int64, []UsageSourceAccount, error) {

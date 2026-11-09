@@ -174,16 +174,31 @@ func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
 	filter := db.UsageFilter{Timezone: "UTC"}
 	requireCachedUsageMatchesDirect(t, store, filter)
 	probe.takeExtracted()
-	for _, mutation := range []string{
-		`UPDATE cursor_usage_events SET charged_microdollars=500,input_tokens=80 WHERE id=100`,
-		`DELETE FROM cursor_usage_events WHERE id=100; INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,is_headless,dedup_key) VALUES(150,'cursor','2026-01-01','paid-a',40,50,300,false,'three')`,
-		`UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`,
-		`DELETE FROM model_pricing WHERE model_pattern='paid-a'`,
+	var accountReads atomic.Int64
+	probe.beforeAccounts = func(context.Context) error { accountReads.Add(1); return nil }
+	for _, tc := range []struct {
+		mutation string
+		metadata bool
+	}{
+		{`UPDATE cursor_usage_events SET charged_microdollars=500,input_tokens=80 WHERE id=100`, false},
+		{`DELETE FROM cursor_usage_events WHERE id=100; INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,is_headless,dedup_key) VALUES(150,'cursor','2026-01-01','paid-a',40,50,300,false,'three')`, false},
+		{`UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`, true},
+		{`DELETE FROM model_pricing WHERE model_pattern='paid-a'`, true},
+		{`INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('account-journal','project-a','test-machine',now())`, true},
 	} {
-		_, err := store.pg.ExecContext(ctx, mutation)
+		before, err := probe.pgUsageCacheSource.CaptureUsage(ctx, db.UsageSourceRequest{})
+		require.NoError(t, err)
+		accountReads.Store(0)
+		_, err = store.pg.ExecContext(ctx, tc.mutation)
 		require.NoError(t, err)
 		requireCachedUsageMatchesDirect(t, store, filter)
-		require.Empty(t, probe.takeExtracted(), "account or pricing changes must reuse session facts")
+		require.Empty(t, probe.takeExtracted(), "account or metadata changes must reuse session facts")
+		if tc.metadata {
+			after, err := probe.pgUsageCacheSource.CaptureUsage(ctx, db.UsageSourceRequest{})
+			require.NoError(t, err)
+			assert.Equal(t, before.CursorHighWater, after.CursorHighWater, "metadata changes must preserve the account generation")
+			assert.Zero(t, accountReads.Load(), "metadata changes must not copy the account history")
+		}
 	}
 	require.NoError(t, store.usageCache.Close())
 	probe = attachUsageCacheProbe(t, store, directory)
@@ -222,56 +237,36 @@ func TestPGUsageCacheSnapshotPeersAndRanking(t *testing.T) {
 	requireCachedUsageMatchesDirect(t, store, grouped)
 }
 
-func TestPGUsageCacheCancelledWaiterAndRetry(t *testing.T) {
-	for _, closeFill := range []bool{false, true} {
-		t.Run(map[bool]string{false: "extraction retry", true: "close fill"}[closeFill], func(t *testing.T) {
-			_, _, store, _ := keptUsageFixture(t)
-			directory := t.TempDir()
-			probe := attachUsageCacheProbe(t, store, directory)
-			filter := db.UsageFilter{Timezone: "UTC"}
-			if !closeFill {
-				requireCachedUsageMatchesDirect(t, store, filter)
-				_, err := store.pg.ExecContext(t.Context(), `UPDATE usage_events SET output_tokens=1100 WHERE session_id='paid-a'`)
-				require.NoError(t, err)
-				for _, failure := range []error{errors.New("injected remote extraction failure"), context.Canceled, context.DeadlineExceeded} {
-					_, err = store.pg.ExecContext(t.Context(), `UPDATE usage_events SET output_tokens=output_tokens+1 WHERE session_id='paid-a'`)
-					require.NoError(t, err)
-					probe.before = func(context.Context, []string) error { return failure }
-					_, err = store.usageCache.GetDailyUsage(t.Context(), filter)
-					require.ErrorIs(t, err, failure)
-					requireUsageReadsMatch(t, &Store{pg: store.pg}, store, filter)
-				}
-				probe.before = nil
-				requireCachedUsageMatchesDirect(t, store, filter)
-				return
-			}
-			started, release := make(chan struct{}), make(chan struct{})
-			once := sync.Once{}
-			probe.before = func(ctx context.Context, _ []string) error {
-				once.Do(func() { close(started) })
-				select {
-				case <-release:
-					return nil
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-			finishRelease := sync.OnceFunc(func() { close(release) })
-			t.Cleanup(finishRelease)
-			finished := make(chan error, 1)
-			go func() { _, err := store.usageCache.GetDailyUsage(t.Context(), filter); finished <- err }()
-			select {
-			case <-started:
-			case <-time.After(10 * time.Second):
-				t.Fatal("fill did not reach extraction")
-			}
-			require.NoError(t, store.usageCache.Close())
-			require.ErrorIs(t, <-finished, context.Canceled)
-			finishRelease()
-			attachUsageCacheProbe(t, store, directory)
-			requireCachedUsageMatchesDirect(t, store, filter)
-		})
+func TestPGUsageCacheCloseFill(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	directory := t.TempDir()
+	probe := attachUsageCacheProbe(t, store, directory)
+	filter := db.UsageFilter{Timezone: "UTC"}
+	started, release := make(chan struct{}), make(chan struct{})
+	once := sync.Once{}
+	probe.before = func(ctx context.Context, _ []string) error {
+		once.Do(func() { close(started) })
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	finishRelease := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(finishRelease)
+	finished := make(chan error, 1)
+	go func() { _, err := store.usageCache.GetDailyUsage(t.Context(), filter); finished <- err }()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fill did not reach extraction")
+	}
+	require.NoError(t, store.usageCache.Close())
+	require.ErrorIs(t, <-finished, context.Canceled)
+	finishRelease()
+	attachUsageCacheProbe(t, store, directory)
+	requireCachedUsageMatchesDirect(t, store, filter)
 }
 
 func TestPGUsageCacheReadOnlyRestart(t *testing.T) {
@@ -290,45 +285,6 @@ func TestPGUsageCacheReadOnlyRestart(t *testing.T) {
 	reader.usageCache = nil
 	require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
 	requireCachedUsageMatchesDirect(t, reader, filter)
-}
-
-func TestPGUsageCacheUnreadableJournal(t *testing.T) {
-	for _, name := range []string{"initial denial", "permission revoked", "dropped journal"} {
-		t.Run(name, func(t *testing.T) {
-			_, syncer, owner, _ := keptUsageFixture(t)
-			ctx := t.Context()
-			roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
-			reader, err := NewStore(ctx, roleURL, syncer.schema, true)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, reader.Close()) })
-			filter := db.UsageFilter{Timezone: "UTC"}
-			if name != "initial denial" {
-				require.NoError(t, reader.ConfigureUsageCache(ctx, t.TempDir(), roleURL, syncer.schema))
-				requireCachedUsageMatchesDirect(t, reader, filter)
-			}
-			_, err = owner.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=5000 WHERE session_id='paid-a'`)
-			require.NoError(t, err)
-			if name == "dropped journal" {
-				_, err = owner.pg.ExecContext(ctx, `DROP TABLE usage_session_changes CASCADE`)
-			} else {
-				var role string
-				require.NoError(t, reader.pg.QueryRowContext(ctx, `SELECT current_user`).Scan(&role))
-				_, err = owner.pg.ExecContext(ctx, `REVOKE SELECT ON usage_session_changes FROM `+role)
-			}
-			require.NoError(t, err)
-			if name == "initial denial" {
-				require.NoError(t, reader.ConfigureUsageCache(ctx, t.TempDir(), roleURL, syncer.schema))
-			}
-			require.NotNil(t, reader.usageCache, "sync_metadata stays readable when the journal SELECT is denied")
-			_, err = reader.usageCache.GetDailyUsage(ctx, filter)
-			require.ErrorIs(t, err, errPGUsageCacheUnavailable)
-			direct := &Store{pg: reader.pg}
-			for _, grouped := range []bool{false, true} {
-				filter.TopSessionsByGroup = grouped
-				requireUsageReadsMatch(t, direct, reader, filter)
-			}
-		})
-	}
 }
 
 func TestPGUsageCachePairwiseFallback(t *testing.T) {
@@ -367,6 +323,7 @@ func TestPGUsageCacheRecapturesMutationDuringExtraction(t *testing.T) {
 			require.NoError(t, err)
 			probe := attachUsageCacheProbe(t, store, t.TempDir())
 			var once sync.Once
+			var extractions atomic.Int64
 			mutation := func(ctx context.Context) error {
 				var err error
 				change := func() {
@@ -386,7 +343,7 @@ func TestPGUsageCacheRecapturesMutationDuringExtraction(t *testing.T) {
 			if tc.account {
 				probe.beforeAccounts = mutation
 			} else {
-				probe.before = func(ctx context.Context, _ []string) error { return mutation(ctx) }
+				probe.before = func(ctx context.Context, _ []string) error { extractions.Add(1); return mutation(ctx) }
 			}
 			filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 			var got db.DailyUsageResult
@@ -396,6 +353,9 @@ func TestPGUsageCacheRecapturesMutationDuringExtraction(t *testing.T) {
 				got, err = store.usageCache.GetDailyUsage(ctx, filter)
 			}
 			require.NoError(t, err)
+			if tc.name == "unrelated push" {
+				require.Equal(t, int64(1), extractions.Load(), "unrelated writes must reuse the completed extraction")
+			}
 			probe.before, probe.beforeAccounts = nil, nil
 			direct := &Store{pg: store.pg}
 			store.runtimeState().pricingMu.Lock()
@@ -606,71 +566,112 @@ func TestPGUsageCachePushedNullTimestampDedup(t *testing.T) {
 	}
 }
 
-func TestPGUsageCachePreJournalAccounts(t *testing.T) {
-	_, syncer, store, _ := keptUsageFixture(t)
-	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
-	require.NoError(t, err)
-	_, err = store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,dedup_key) VALUES (2,'cursor','2026-01-01','paid-a',1,7,77,'old-account-a'), (1000000,'cursor','2026-01-01','paid-a',1,11,111,'old-account-b')`)
-	require.NoError(t, err)
-	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
-	var markers int
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT count(*) FROM usage_session_changes WHERE session_id=''`).Scan(&markers))
-	require.Zero(t, markers)
-	directory := t.TempDir()
-	filter := db.UsageFilter{Timezone: "UTC"}
-	for _, restart := range []bool{false, true} {
-		if restart {
-			require.NoError(t, store.usageCache.Close())
-			store.usageCache = nil
-		}
-		require.NoError(t, store.ConfigureUsageCache(ctx, directory, testPGURL(t), syncer.schema))
-		require.NotNil(t, store.usageCache)
-		got, err := store.usageCache.GetDailyUsage(ctx, filter)
-		require.NoError(t, err)
-		require.Equal(t, 1268, got.Totals.OutputTokens)
-		require.Equal(t, int64(8938), got.Totals.TotalCost.Microdollars)
-		requireCachedUsageMatchesDirect(t, store, filter)
+func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
+	for _, name := range []string{"initial denial", "permission revoked", "dropped journal", "malformed revision", "cache storage", "extraction failure", "extraction canceled", "extraction deadline", "late journal installation"} {
+		t.Run(name, func(t *testing.T) {
+			_, syncer, owner, _ := keptUsageFixture(t)
+			ctx := t.Context()
+			reader, roleURL := owner, testPGURL(t)
+			if name == "initial denial" || name == "permission revoked" {
+				roleURL = newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
+				var err error
+				reader, err = NewStore(ctx, roleURL, syncer.schema, true)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			}
+			revoke := func() {
+				var role string
+				require.NoError(t, reader.pg.QueryRowContext(ctx, `SELECT current_user`).Scan(&role))
+				_, err := owner.pg.ExecContext(ctx, `REVOKE SELECT ON usage_session_changes FROM `+role)
+				require.NoError(t, err)
+			}
+			if name == "initial denial" {
+				revoke()
+			}
+			if name == "malformed revision" {
+				_, err := owner.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='broken' WHERE key='usage_change_revision'`)
+				require.NoError(t, err)
+			}
+			if name == "late journal installation" {
+				_, err := owner.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+				require.NoError(t, err)
+				_, err = owner.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,dedup_key) VALUES (2,'cursor','2026-01-01','paid-a',1,7,77,'old-account-a'), (1000000,'cursor','2026-01-01','paid-a',1,11,111,'old-account-b')`)
+				require.NoError(t, err)
+			}
+			directory := t.TempDir()
+			var probe *usageCacheProbe
+			extraction := name == "extraction failure" || name == "extraction canceled" || name == "extraction deadline"
+			if extraction || name == "cache storage" {
+				probe = attachUsageCacheProbe(t, reader, directory)
+			} else {
+				require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
+			}
+			configured := reader.usageCache
+			require.NotNil(t, configured)
+			filter := db.UsageFilter{Timezone: "UTC"}
+			if name != "initial denial" && name != "late journal installation" && name != "malformed revision" {
+				requireCachedUsageMatchesDirect(t, reader, filter)
+				_, err := owner.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=5000 WHERE session_id='paid-a'`)
+				require.NoError(t, err)
+			}
+			failure := errPGUsageCacheUnavailable
+			switch name {
+			case "permission revoked":
+				revoke()
+			case "dropped journal":
+				_, err := owner.pg.ExecContext(ctx, `DROP TABLE usage_session_changes CASCADE`)
+				require.NoError(t, err)
+			case "cache storage":
+				paths, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+				require.NoError(t, err)
+				require.Len(t, paths, 1)
+				damaged, err := sql.Open("sqlite3", paths[0])
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, damaged.Close()) })
+				_, err = damaged.ExecContext(ctx, `DROP TABLE usage_rollup_timezones`)
+				require.NoError(t, err)
+				filter.Project, filter.From, filter.To = "project-a", "2026-01-01", "2026-01-01"
+			case "extraction failure", "extraction canceled", "extraction deadline":
+				failure = map[string]error{"extraction failure": errors.New("injected remote extraction failure"), "extraction canceled": context.Canceled, "extraction deadline": context.DeadlineExceeded}[name]
+				probe.before = func(context.Context, []string) error { return failure }
+			}
+			_, err := configured.GetDailyUsage(ctx, filter)
+			if name == "cache storage" || name == "malformed revision" {
+				require.Error(t, err)
+			} else {
+				require.ErrorIs(t, err, failure)
+			}
+			if extraction {
+				// An internal fill cancellation still permits its active caller's live read.
+				got, err := reader.GetDailyUsage(ctx, filter)
+				require.NoError(t, err)
+				require.Equal(t, 5750, got.Totals.OutputTokens)
+				probe.before = nil
+				requireCachedUsageMatchesDirect(t, reader, filter)
+			} else {
+				for _, grouped := range []bool{false, true} {
+					filter.TopSessionsByGroup = grouped
+					requireUsageReadsMatch(t, &Store{pg: reader.pg}, reader, filter)
+				}
+			}
+			if name == "late journal installation" {
+				require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+				require.Same(t, configured, reader.usageCache)
+				for _, restart := range []bool{false, true} {
+					if restart {
+						require.NoError(t, reader.usageCache.Close())
+						reader.usageCache = nil
+						require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
+					}
+					got, err := reader.usageCache.GetDailyUsage(ctx, filter)
+					require.NoError(t, err)
+					require.Equal(t, 1268, got.Totals.OutputTokens)
+					require.Equal(t, int64(8938), got.Totals.TotalCost.Microdollars)
+					requireCachedUsageMatchesDirect(t, reader, filter)
+				}
+			}
+		})
 	}
-}
-
-func TestPGUsageCacheStorageFailureUsesDirectReads(t *testing.T) {
-	_, _, store, _ := keptUsageFixture(t)
-	directory := t.TempDir()
-	attachUsageCacheProbe(t, store, directory)
-	filter := db.UsageFilter{Timezone: "UTC"}
-	requireCachedUsageMatchesDirect(t, store, filter)
-	paths, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
-	require.NoError(t, err)
-	require.Len(t, paths, 1)
-	damaged, err := sql.Open("sqlite3", paths[0])
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, damaged.Close()) })
-	_, err = damaged.ExecContext(t.Context(), `DROP TABLE usage_rollup_timezones`)
-	require.NoError(t, err)
-	filter.Project, filter.From, filter.To = "project-a", "2026-01-01", "2026-01-01"
-	for _, grouped := range []bool{false, true} {
-		filter.TopSessionsByGroup = grouped
-		requireUsageReadsMatch(t, &Store{pg: store.pg}, store, filter)
-	}
-}
-
-func TestPGUsageCacheLateJournalInstallation(t *testing.T) {
-	_, syncer, store, _ := keptUsageFixture(t)
-	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
-	require.NoError(t, err)
-	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-	reader := store.usageCache
-	require.NotNil(t, reader)
-	filter := db.UsageFilter{Timezone: "UTC"}
-	_, err = reader.GetDailyUsage(ctx, filter)
-	require.ErrorIs(t, err, errPGUsageCacheUnavailable)
-	requireUsageReadsMatch(t, &Store{pg: store.pg}, store, filter)
-	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
-	require.Same(t, reader, store.usageCache)
-	requireCachedUsageMatchesDirect(t, store, filter)
-	requireUsageReadsMatch(t, &Store{pg: store.pg}, store, filter)
 }
 
 func TestPGUsageCacheCancelledCallerSkipsDirectRead(t *testing.T) {
@@ -689,34 +690,4 @@ func TestPGUsageCacheCancelledCallerSkipsDirectRead(t *testing.T) {
 	_, err = store.GetUsageMatchingSessionCount(ctx, filter)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, before, counter.queryAttempts.Load(), "cancelled cache requests must not start direct queries")
-}
-
-func TestPGUsageCacheGlobalChangesReuseAccounts(t *testing.T) {
-	_, _, store, _ := keptUsageFixture(t)
-	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',10,100,'account')`)
-	require.NoError(t, err)
-	probe := attachUsageCacheProbe(t, store, t.TempDir())
-	filter := db.UsageFilter{Timezone: "UTC"}
-	requireCachedUsageMatchesDirect(t, store, filter)
-	var accountReads atomic.Int64
-	probe.beforeAccounts = func(context.Context) error { accountReads.Add(1); return nil }
-	for _, tc := range []struct{ name, mutation string }{
-		{"pricing", `UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`},
-		{"identity", `INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('account-journal','project-a','test-machine',now())`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			before, err := probe.pgUsageCacheSource.CaptureUsage(t.Context(), db.UsageSourceRequest{})
-			require.NoError(t, err)
-			accountReads.Store(0)
-			_, err = store.pg.ExecContext(t.Context(), tc.mutation)
-			require.NoError(t, err)
-			requireCachedUsageMatchesDirect(t, store, filter)
-			after, err := probe.pgUsageCacheSource.CaptureUsage(t.Context(), db.UsageSourceRequest{})
-			require.NoError(t, err)
-			require.Greater(t, after.ChangeRevision, before.ChangeRevision)
-			assert.Equal(t, before.CursorHighWater, after.CursorHighWater, "metadata changes must preserve the account generation")
-			assert.Zero(t, accountReads.Load(), "metadata changes must not copy the account history")
-		})
-	}
 }
