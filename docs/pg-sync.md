@@ -35,8 +35,9 @@ Native PostgreSQL also keeps priced Usage rows in `<data-dir>/usage-postgres/`,
 so restarts reuse work and reads refresh sessions and prices changed by a push.
 Existing supported journals need only `SELECT` access. Hosted and borrowed
 transaction readers, CockroachDB, and unavailable journals keep direct reads.
-Repeated source conflicts use a direct read for that request; cache storage
-errors are reported. The cache is disposable and contains no source sessions.
+Repeated source conflicts use a direct read for that request. If the cache
+directory can't be created, the reader uses temporary storage; later cache
+storage errors are reported. The cache is disposable and contains no source sessions.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes

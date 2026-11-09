@@ -127,10 +127,12 @@ func pgUsageCacheCandidates(ctx context.Context, view *Store, filter db.UsageFil
 	if !bounds.bounded() {
 		query = `SELECT id FROM sessions s WHERE s.deleted_at IS NULL ORDER BY id`
 	} else {
-		input := pgUsageSnapshotInputFilter(filter)
-		rowsSQL := pgDailyUsageRowsSQLForBounds(pb, input, bounds, view.sessionDialect())
-		activitySQL := pgMatchingUsageRowsSQLForBounds(pb, input, bounds, view.sessionDialect())
-		query = `SELECT DISTINCT session_id FROM ((` + rowsSQL + `) UNION ALL (` + activitySQL + `)) candidates ORDER BY session_id`
+		// Include session starts for facts whose timestamp falls back to them.
+		// Eligibility and exact local-day bounds stay in the shared fact reader.
+		query = `SELECT DISTINCT session_id FROM (
+SELECT session_id FROM messages WHERE ` + appendPGUsageColumnBounds("TRUE", "timestamp", bounds) + `
+UNION ALL SELECT session_id FROM usage_events WHERE ` + appendPGUsageColumnBounds("TRUE", "occurred_at", bounds) + `
+UNION ALL SELECT id AS session_id FROM sessions WHERE ` + appendPGUsageColumnBounds("TRUE", "started_at", bounds) + `) candidates ORDER BY session_id`
 	}
 	rows, err := view.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
@@ -149,6 +151,8 @@ func pgUsageCacheCandidates(ctx context.Context, view *Store, filter db.UsageFil
 }
 
 func pgCaptureUsageMetadata(ctx context.Context, view *Store, ids []string, filter db.UsageFilter, snapshot *db.UsageSourceSnapshot) error {
+	snapshot.Sessions = slices.Grow(snapshot.Sessions, len(ids))
+	snapshot.Versions = slices.Grow(snapshot.Versions, len(ids))
 	for batch := range slices.Chunk(ids, 512) {
 		if err := func() error {
 			pb := &paramBuilder{}
@@ -248,7 +252,7 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 					cost := row.cost.Int64
 					fact.ReportedCostMicrodollars = &cost
 				}
-				fact.RequestScoped = row.usageSource == "message" || row.messageOrdinal.Valid || usagefacts.SourceIsRequestScoped(row.usageSource)
+				fact.RequestScoped = db.UsageRowIsRequestScoped(row.usageSource, row.messageOrdinal)
 				if err := emit(row.sessionID, fact); err != nil {
 					_ = rows.Close()
 					return err

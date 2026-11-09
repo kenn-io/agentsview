@@ -728,7 +728,8 @@ partitioned by a credential-free target fingerprint and the change journal's
 table identity. Existing supported journals work with SELECT-only roles. Hosted
 and borrowed transaction readers, CockroachDB, and connections without a usable
 journal retain direct reads. Repeated source or publication conflicts use direct
-reads for that request; cache storage failures report an error. Pairwise retains
+reads for that request. Failure to create the cache directory uses temporary
+storage; later cache storage failures report an error. Pairwise retains
 its exactness fallback and can make two extra filtered cache reads.
 
 A first bounded visit fills candidate sessions for its date window. Widening the
