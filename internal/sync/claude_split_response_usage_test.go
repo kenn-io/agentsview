@@ -135,7 +135,7 @@ func TestClaudeSplitResponseUsageCountsOnce(t *testing.T) {
 			assert.Equal(t, 1010, cacheRead)
 
 			daily, err := database.GetDailyUsage(ctx, db.UsageFilter{
-				From: "2026-01-10", To: "2026-01-10",
+				From: "2026-01-10", To: "2026-01-10", Timezone: "UTC",
 			})
 			require.NoError(t, err)
 			assert.Equal(t, 3, daily.Totals.InputTokens)

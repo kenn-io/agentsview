@@ -35,33 +35,60 @@ const usageWebSearchRequestsPath = "server_tool_use.web_search_requests"
 // The two sources are never combined: a message that already reports a
 // nonzero counter is authoritative, so a search can only ever be counted
 // once.
+//
+// A tool result can split one response across several messages that share
+// its message ID. Usage reporting keeps one snapshot per response and the
+// largest search count among them, so every message of the response carries
+// the response's total.
 func annotateClaudeWebSearchRequestsContext(
 	ctx context.Context, messages []ParsedMessage, counts map[string]int,
 ) error {
 	if len(counts) == 0 {
 		return ctx.Err()
 	}
-	for i := range messages {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		msg := &messages[i]
-		if len(msg.TokenUsage) == 0 || len(msg.ToolCalls) == 0 {
-			continue
-		}
-		if usageWebSearchRequests(string(msg.TokenUsage)) > 0 {
-			continue
-		}
+	searches := func(msg *ParsedMessage) (int, error) {
 		total := 0
 		for _, tc := range msg.ToolCalls {
 			if err := ctx.Err(); err != nil {
-				return err
+				return 0, err
 			}
 			if tc.ToolName != claudeWebSearchToolName ||
 				tc.ToolUseID == "" {
 				continue
 			}
 			total += counts[tc.ToolUseID]
+		}
+		return total, nil
+	}
+	responseTotals := make(map[string]int)
+	for i := range messages {
+		msg := &messages[i]
+		if msg.ClaudeMessageID == "" {
+			continue
+		}
+		total, err := searches(msg)
+		if err != nil {
+			return err
+		}
+		responseTotals[msg.ClaudeMessageID] += total
+	}
+	for i := range messages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		msg := &messages[i]
+		if len(msg.TokenUsage) == 0 {
+			continue
+		}
+		if usageWebSearchRequests(string(msg.TokenUsage)) > 0 {
+			continue
+		}
+		total, ok := responseTotals[msg.ClaudeMessageID]
+		if !ok {
+			var err error
+			if total, err = searches(msg); err != nil {
+				return err
+			}
 		}
 		if total <= 0 {
 			continue
