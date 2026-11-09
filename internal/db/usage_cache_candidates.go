@@ -485,6 +485,6 @@ func usageQueryIntervals(filter UsageFilter) []usageQueryInterval {
 	next := to.AddDate(0, 0, 1)
 	return []usageQueryInterval{{
 		FromMillis: math.MinInt64, ToMillis: next.UTC().UnixMilli(),
-		ToLocalDate: filter.To,
+		FromLocalDate: "0000-01-01", ToLocalDate: filter.To,
 	}}
 }
