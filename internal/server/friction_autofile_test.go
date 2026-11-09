@@ -135,6 +135,15 @@ func TestFrictionJobReopensOnHubWithAutoFileOff(t *testing.T) {
 			const date = "2026-09-16"
 			seedFrictionDigest(t, te.db, date)
 			fp := frictionTestSnapshot(date).Signals[0].Fingerprint()
+			dbtest.SeedSession(t, te.db, "claude:s1", "proj")
+			session, err := te.db.GetSession(t.Context(), "claude:s1")
+			require.NoError(t, err)
+			occurred := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+			applied, err := te.db.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
+				RulesVersion: "friction-v1", Findings: []db.FrictionFinding{{SessionID: "claude:s1", Kind: "correction", Detector: "correction.coding", Fingerprint: fp, OccurredAt: &occurred, RulesVersion: "friction-v1"}},
+			})
+			require.NoError(t, err)
+			require.True(t, applied)
 			closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
 			require.NoError(t, te.db.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{

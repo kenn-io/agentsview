@@ -115,7 +115,9 @@ min_sessions = 2 # Optional; file only patterns seen in at least this many sessi
 ```
 
 - On a hub with Kata enabled, the hourly job reopens a linked issue closed as
-  `done` when its pattern appears on a later digest day within `backfill_days`.
+  `done` when its latest digest day is within `backfill_days` and a finding on
+  that day occurred after the close. A finding without a time counts when its
+  digest day is later than the close day.
   It adds a comment with the recurrence and close dates and, when configured,
   a link to the digest. This also runs when automatic filing is off.
 - Each hour, after it builds digests, the Friction Log job files unlinked

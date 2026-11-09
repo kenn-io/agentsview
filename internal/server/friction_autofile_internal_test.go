@@ -1,6 +1,10 @@
 package server
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -113,4 +117,81 @@ func seedAutoFileDigest(t *testing.T, d *db.DB) {
 		Fingerprint: sig.Fingerprint(), Kind: string(sig.Kind), Title: sig.Title(),
 		Date: date, SubjectID: sig.SubjectID, Ordinal: sig.Ordinal, Occurrences: 1,
 	}}))
+}
+
+type failingFrictionStore struct {
+	*db.DB
+	reconcileErr error
+	reopenErr    error
+}
+
+func (s failingFrictionStore) ListFrictionPatterns(ctx context.Context, f db.FrictionPatternFilter) ([]db.FrictionPattern, string, error) {
+	if f.Linked {
+		if s.reopenErr != nil {
+			return nil, "", s.reopenErr
+		}
+		return s.DB.ListFrictionPatterns(ctx, f)
+	}
+	return nil, "", s.reconcileErr
+}
+
+func TestAutoFileContinuesReopeningAfterReconcileError(t *testing.T) {
+	ks := katatest.New(t)
+	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
+	runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }}
+	s := testServer(t, 0, WithFriction(runner, nil), WithKataConn(kata.NewConn(kata.Config{
+		Enabled: true, Hub: true, Endpoint: ks.Endpoint(), Project: katatest.DefaultProjectName,
+	})))
+	s.cfg.Friction.Kata.AutoFile = true
+	s.cfg.Friction.BackfillDays = 7
+	d := s.db.(*db.DB)
+	runner.Store = d
+	seedAutoFileDigest(t, d)
+	reconcileErr := errors.New("reconcile failed")
+	reopenErr := errors.New("reopen failed")
+	s.db = failingFrictionStore{DB: d, reconcileErr: reconcileErr, reopenErr: reopenErr}
+	err := s.autoFileFriction(t.Context())
+	assert.ErrorIs(t, err, reconcileErr)
+	assert.ErrorIs(t, err, reopenErr)
+}
+
+type partialFrictionStore struct {
+	*db.DB
+	failure error
+}
+
+func (s partialFrictionStore) ListFrictionPatterns(ctx context.Context, f db.FrictionPatternFilter) ([]db.FrictionPattern, string, error) {
+	rows, next, err := s.DB.ListFrictionPatterns(ctx, f)
+	if err == nil && f.Kind == "correction" && f.FilingState == "" && !f.Linked {
+		rows = append(rows, db.FrictionPattern{Fingerprint: "missing", Kind: "correction", OccurrenceCount: 0, SessionCount: 1})
+	}
+	return rows, next, err
+}
+
+func (s partialFrictionStore) SaveFrictionFilingState(context.Context, db.FrictionFilingState) error {
+	return s.failure
+}
+
+func TestAutoFileLogsPartialReportAfterError(t *testing.T) {
+	ks := katatest.New(t)
+	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
+	runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }}
+	s := testServer(t, 0, WithFriction(runner, nil), WithKataConn(kata.NewConn(kata.Config{
+		Enabled: true, Hub: true, Endpoint: ks.Endpoint(), Project: katatest.DefaultProjectName,
+	})))
+	s.cfg.Friction.Kata.AutoFile = true
+	s.cfg.Friction.Kata.MinSessions = 1
+	s.cfg.Friction.BackfillDays = 7
+	d := s.db.(*db.DB)
+	runner.Store = d
+	seedAutoFileDigest(t, d)
+	failure := errors.New("filing state failed")
+	s.db = partialFrictionStore{DB: d, failure: failure}
+	var logs bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(old)
+	err := s.autoFileFriction(t.Context())
+	require.ErrorIs(t, err, failure)
+	assert.Contains(t, logs.String(), "automatic filing created 1")
 }

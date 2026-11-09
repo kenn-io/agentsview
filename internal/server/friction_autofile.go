@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -24,8 +25,8 @@ func (s *Server) frictionAutoFileOn() bool {
 	return autoFile && s.frictionRunner != nil && kataCfg.Enabled && kataCfg.Hub
 }
 
-// autoFileFriction is the friction job's automatic filing pass. It does
-// also reopens recurring linked issues when automatic filing is off.
+// autoFileFriction files patterns when auto_file is on and reopens recurring
+// linked issues on every Kata hub.
 func (s *Server) autoFileFriction(ctx context.Context) error {
 	cfg := s.kataConn().Config()
 	if s.frictionRunner == nil || !cfg.Enabled || !cfg.Hub {
@@ -61,14 +62,12 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 			Kinds: policy.FileKinds(), Since: since,
 			MinSessions: policy.FileMinSessions(), MaxNew: frictionAutoFilePerPass,
 		})
-		if err != nil {
-			return err
-		}
 	}
+	reconcileErr := err
 	reopened, err := f.Reopen(ctx, since, runner.Loc)
 	if rep != (filing.ReconcileReport{}) || reopened != 0 {
 		log.Printf("friction: automatic filing created %d, linked %d, will retry %d, needs a person %d, reopened %d",
 			rep.Created, rep.Linked, rep.Retry, rep.NeedsPerson, reopened)
 	}
-	return err
+	return errors.Join(reconcileErr, err)
 }

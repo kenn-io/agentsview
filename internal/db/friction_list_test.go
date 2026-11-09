@@ -91,6 +91,8 @@ func TestListFrictionFindings(t *testing.T) {
 			[]findingKey{{"claude:s1", 0}, {"claude:s1", 1}},
 			"",
 		},
+		{"fingerprint_and_date", FrictionFindingFilter{Fingerprint: "fl1:bbb", Date: "2026-09-14"}, []findingKey{{"claude:s1", 1}}, ""},
+		{"fingerprint_other_date", FrictionFindingFilter{Fingerprint: "fl1:bbb", Date: "2026-09-13"}, []findingKey{}, ""},
 		{"digest_date_other", FrictionFindingFilter{Date: "2026-09-13"}, []findingKey{{"claude:s2", 0}}, ""},
 		{
 			"page_one",

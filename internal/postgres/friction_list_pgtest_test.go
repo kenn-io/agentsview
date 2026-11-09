@@ -142,13 +142,15 @@ func TestFrictionListParity(t *testing.T) {
 	ctx := t.Context()
 
 	findingFilters := map[string]db.FrictionFindingFilter{
-		"all":         {},
-		"kind":        {Kind: "error"},
-		"session":     {SessionID: "claude:s2"},
-		"fingerprint": {Fingerprint: "fl1:bbb"},
-		"date":        {Date: "2026-09-14"},
-		"page_one":    {Limit: 2},
-		"page_two":    {Limit: 2, Cursor: "2"},
+		"all":                    {},
+		"kind":                   {Kind: "error"},
+		"session":                {SessionID: "claude:s2"},
+		"fingerprint":            {Fingerprint: "fl1:bbb"},
+		"date":                   {Date: "2026-09-14"},
+		"fingerprint_and_date":   {Fingerprint: "fl1:bbb", Date: "2026-09-14"},
+		"fingerprint_other_date": {Fingerprint: "fl1:bbb", Date: "2026-09-13"},
+		"page_one":               {Limit: 2},
+		"page_two":               {Limit: 2, Cursor: "2"},
 	}
 	for name, f := range findingFilters {
 		t.Run("findings_"+name, func(t *testing.T) {

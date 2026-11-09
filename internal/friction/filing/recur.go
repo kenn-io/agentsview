@@ -60,7 +60,28 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, loc 
 		return false, nil
 	}
 	closed := is.ClosedAt.In(loc).Format(time.DateOnly)
-	if p.LastSeenDate <= closed {
+	if p.LastSeenDate < closed {
+		return false, nil
+	}
+	filter := db.FrictionFindingFilter{Fingerprint: p.Fingerprint, Date: p.LastSeenDate, Limit: db.MaxFrictionListLimit}
+	found := false
+	for {
+		findings, next, err := f.Store.ListFrictionFindings(ctx, filter)
+		if err != nil {
+			return false, err
+		}
+		for _, finding := range findings {
+			if (finding.OccurredAt != nil && finding.OccurredAt.After(*is.ClosedAt)) || (finding.OccurredAt == nil && p.LastSeenDate > closed) {
+				found = true
+				break
+			}
+		}
+		if found || next == "" {
+			break
+		}
+		filter.Cursor = next
+	}
+	if !found {
 		return false, nil
 	}
 	body := fmt.Sprintf("This pattern recurred on %s after the issue was closed on %s.", p.LastSeenDate, closed)
