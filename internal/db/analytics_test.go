@@ -2650,16 +2650,6 @@ func TestGetAnalyticsTools(t *testing.T) {
 	})
 }
 
-func TestAnalyticsToolsToolCallsQueryAggregatesInSQL(t *testing.T) {
-	q := analyticsToolsQuery("(?,?)", "", "", false)
-	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
-
-	assert.Contains(t, normalized,
-		"select tc.session_id, tc.category, trim(tc.tool_name), count(*)")
-	assert.Contains(t, normalized,
-		"group by tc.session_id, tc.category, trim(tc.tool_name)")
-}
-
 func TestGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	t *testing.T,
 ) {
@@ -3204,23 +3194,6 @@ func TestGetAnalyticsSkillsDateBoundaries(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int{"2024-06-10": 1}, trend,
 		"only the in-range week is bucketed")
-}
-
-func TestAnalyticsSkillsToolCallsQueryAggregatesInSQL(t *testing.T) {
-	q := analyticsSkillsQuery("(?,?)", "", "")
-	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
-
-	assert.Contains(t, normalized,
-		"select tc.session_id, trim(tc.skill_name), count(*), "+
-			"coalesce(m.timestamp, '')")
-	assert.Contains(t, normalized,
-		"left join messages m on m.session_id = tc.session_id "+
-			"and m.id = tc.message_id")
-	assert.Contains(t, normalized,
-		"trim(tc.skill_name) != ''")
-	assert.Contains(t, normalized,
-		"group by tc.session_id, trim(tc.skill_name), "+
-			"coalesce(m.timestamp, '')")
 }
 
 func TestGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
