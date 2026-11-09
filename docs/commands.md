@@ -69,7 +69,9 @@ can still commit when Git retains comments, but gets no trailer. Git doesn't
 tell hooks whether `-s` added a signoff, so when a commit template already ends
 with your own signoff and another hook changes that line, the commit gets no
 trailer. With `core.commentChar=auto`, Git picks its comment character per
-commit, so commits that start from a commit template get no trailer.
+commit and doesn't tell hooks which. The hook then treats lines starting with
+any of `#;@!$%^&|:` as possible comments, so a message made only of such lines
+gets no trailer, and commits that start from a commit template get none either.
 
 AgentsView must be on `PATH`. A missing or failing binary, or a missing,
 invalid, or ambiguous session, leaves the commit message unchanged.

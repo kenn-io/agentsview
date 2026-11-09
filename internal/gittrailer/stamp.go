@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	gitcmd "go.kenn.io/kit/git/cmd"
@@ -94,12 +95,25 @@ func cleanMessage(ctx context.Context, file string) (string, error) {
 		return "", err
 	}
 	message := string(data)
-	if cut := scissorsOffset(message, commentStrings(ctx)); cut >= 0 {
+	comments := commentStrings(ctx)
+	if cut := scissorsOffset(message, comments); cut >= 0 {
 		message = message[:cut]
 	}
 	// Keep the hook's repository environment and the user's Git configuration.
 	out, _, err := (gitcmd.Runner{}).Run(ctx, "", strings.NewReader(message), "stripspace", "--strip-comments")
-	return string(out), err
+	if err != nil || len(comments) == 1 {
+		return string(out), err
+	}
+	// git stripspace only knows "#" in auto mode, and Git records nowhere which
+	// character it picked, so any candidate may start a comment. Dropping them
+	// all can only cost a trailer, never let an empty message through.
+	var kept strings.Builder
+	for line := range strings.Lines(string(out)) {
+		if !slices.ContainsFunc(comments, func(c string) bool { return strings.HasPrefix(line, c) }) {
+			kept.WriteString(line)
+		}
+	}
+	return kept.String(), nil
 }
 
 // scissorsOffset returns where Git cuts the message, or -1. Git cuts at the
