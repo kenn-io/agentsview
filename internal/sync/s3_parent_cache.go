@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	gosync "sync"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // s3CodexParentCacheMaxBytes bounds the disk one sync pass spends keeping
@@ -23,6 +25,11 @@ type s3CodexParentCacheContextKey struct{}
 // download instead of fetching the object again. The files live in a temp
 // directory that is removed when the pass ends; nothing persists across
 // passes, so S3 roots still have no local mirror.
+//
+// Entries are keyed by the object version each child's parent listing
+// reported. A parent that grew after it was cached lists with a new size and
+// ETag, so a child that forked from the newer turns downloads the current
+// parent instead of a copy that ends before its fork point.
 type s3CodexParentCache struct {
 	maxBytes int64
 	tempRoot string // parent of the cache directory; empty means os.TempDir
@@ -31,13 +38,20 @@ type s3CodexParentCache struct {
 	dir     string
 	seq     int
 	bytes   int64
-	entries map[string]*s3CodexParentEntry
+	entries map[s3CodexParentKey]*s3CodexParentEntry
 	recent  *list.List // cached entries, most recently used first
 	closed  bool
 }
 
+// s3CodexParentKey names one version of a parent object, as listed.
+type s3CodexParentKey struct {
+	uri         string
+	size        int64
+	fingerprint string
+}
+
 type s3CodexParentEntry struct {
-	uri   string
+	key   s3CodexParentKey
 	ready chan struct{} // closed once the download finished
 	err   error         // set before ready closes; never changed after
 	path  string        // guarded by mu; empty once evicted
@@ -64,28 +78,31 @@ func s3CodexParentCacheFor(ctx context.Context) *s3CodexParentCache {
 func newS3CodexParentCache(maxBytes int64) *s3CodexParentCache {
 	return &s3CodexParentCache{
 		maxBytes: maxBytes,
-		entries:  make(map[string]*s3CodexParentEntry),
+		entries:  make(map[s3CodexParentKey]*s3CodexParentEntry),
 		recent:   list.New(),
 	}
 }
 
-// materialize writes the object at uri to dst. With a cache, concurrent and
-// later callers for the same uri share one download; without one (or after
-// the pass closed it) the object is fetched straight to dst.
-func (c *s3CodexParentCache) materialize(ctx context.Context, uri, dst string) error {
+// materialize writes the listed object to dst. With a cache, concurrent and
+// later callers for the same object version share one download; without one
+// (or after the pass closed it) the object is fetched straight to dst.
+func (c *s3CodexParentCache) materialize(
+	ctx context.Context, obj parser.S3Object, dst string,
+) error {
 	if c == nil {
-		return downloadS3Object(uri, dst)
+		return downloadS3Object(obj.URI, dst)
 	}
+	key := s3CodexParentKey{uri: obj.URI, size: obj.Size, fingerprint: obj.Fingerprint}
 	for {
 		c.mu.Lock()
 		if c.closed {
 			c.mu.Unlock()
-			return downloadS3Object(uri, dst)
+			return downloadS3Object(obj.URI, dst)
 		}
-		entry := c.entries[uri]
+		entry := c.entries[key]
 		if entry == nil {
-			entry = &s3CodexParentEntry{uri: uri, ready: make(chan struct{})}
-			c.entries[uri] = entry
+			entry = &s3CodexParentEntry{key: key, ready: make(chan struct{})}
+			c.entries[key] = entry
 			c.mu.Unlock()
 			c.fill(entry)
 		} else {
@@ -142,7 +159,7 @@ func (c *s3CodexParentCache) fill(entry *s3CodexParentEntry) {
 	defer close(entry.ready)
 	path, err := c.nextPath()
 	if err == nil {
-		err = downloadS3Object(entry.uri, path)
+		err = downloadS3Object(entry.key.uri, path)
 	}
 	var size int64
 	if err == nil {
@@ -160,7 +177,7 @@ func (c *s3CodexParentCache) fill(entry *s3CodexParentEntry) {
 		if path != "" {
 			_ = os.Remove(path)
 		}
-		delete(c.entries, entry.uri)
+		delete(c.entries, entry.key)
 		entry.err = err
 		return
 	}
@@ -194,7 +211,7 @@ func (c *s3CodexParentCache) nextPath() (string, error) {
 func (c *s3CodexParentCache) evict(entry *s3CodexParentEntry) {
 	_ = os.Remove(entry.path)
 	c.recent.Remove(entry.elem)
-	delete(c.entries, entry.uri)
+	delete(c.entries, entry.key)
 	c.bytes -= entry.size
 	entry.path = ""
 }

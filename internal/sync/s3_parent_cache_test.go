@@ -76,11 +76,11 @@ func TestStartWorkersDownloadsSharedS3CodexParentOnce(t *testing.T) {
 			SourceSize: int64(len(objects[childPath])), SourceMtime: 1,
 		})
 	}
-	oldFindParent := findCodexS3ParentSessionURIs
-	t.Cleanup(func() { findCodexS3ParentSessionURIs = oldFindParent })
-	findCodexS3ParentSessionURIs = func(_, _, gotParent string) []string {
+	oldFindParent := findCodexS3ParentSessionObjects
+	t.Cleanup(func() { findCodexS3ParentSessionObjects = oldFindParent })
+	findCodexS3ParentSessionObjects = func(_, _, gotParent string) []parser.S3Object {
 		require.Equal(t, parentID, gotParent)
-		return []string{parentPath}
+		return []parser.S3Object{{URI: parentPath}}
 	}
 	fetches := countS3Fetches(t, objects)
 
@@ -144,7 +144,7 @@ func TestS3CodexParentCacheMaterialize(t *testing.T) {
 			}
 			for i, uri := range tt.steps {
 				dst := filepath.Join(t.TempDir(), filepath.Base(uri))
-				err := cache.materialize(t.Context(), uri, dst)
+				err := cache.materialize(t.Context(), parser.S3Object{URI: uri}, dst)
 				if uri == missing {
 					require.Error(t, err, "step %d", i)
 					assert.NoFileExists(t, dst)
@@ -189,7 +189,7 @@ func TestS3CodexParentCacheSharesInFlightDownload(t *testing.T) {
 		for i := range callers {
 			go func() {
 				dst := filepath.Join(dir, "child"+string(rune('a'+i)))
-				errs <- cache.materialize(t.Context(), uri, dst)
+				errs <- cache.materialize(t.Context(), parser.S3Object{URI: uri}, dst)
 			}()
 		}
 		// Every caller is now parked on the one download or its result.
@@ -218,14 +218,100 @@ func TestS3CodexParentCacheWaitHonorsContext(t *testing.T) {
 		defer cache.close()
 		dir := t.TempDir()
 		go func() {
-			_ = cache.materialize(t.Context(), uri, filepath.Join(dir, "first"))
+			_ = cache.materialize(t.Context(), parser.S3Object{URI: uri}, filepath.Join(dir, "first"))
 		}()
 		synctest.Wait()
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		err := cache.materialize(ctx, uri, filepath.Join(dir, "second"))
+		err := cache.materialize(ctx, parser.S3Object{URI: uri}, filepath.Join(dir, "second"))
 		require.ErrorIs(t, err, context.Canceled)
 		close(release)
 		synctest.Wait()
 	})
+}
+
+func TestS3CodexParentCacheRefetchesGrownParent(t *testing.T) {
+	const root = "s3://bucket/laptop/raw/codex"
+	const parentID = "11111111-1111-4111-8111-111111111111"
+	const firstChildID = "22222222-2222-4222-8222-222222222222"
+	const secondChildID = "33333333-3333-4333-8333-333333333333"
+	const ts = "2024-01-01T10:00:00Z"
+	parentPath := root + "/2026/08/12/rollout-2026-08-12T00-00-00-" +
+		parentID + ".jsonl"
+	childPath := func(childID string) string {
+		return root + "/2026/08/13/rollout-2026-08-13T00-00-00-" +
+			childID + ".jsonl"
+	}
+	firstTurn := []string{
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "parent-turn-1", ts),
+		testjsonl.CodexMsgJSON("user", "first parent task", ts),
+		testjsonl.CodexMsgJSON("assistant", "first parent answer", ts),
+	}
+	secondTurn := []string{
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "parent-turn-2", ts),
+		testjsonl.CodexMsgJSON("user", "second parent task", ts),
+		testjsonl.CodexMsgJSON("assistant", "second parent answer", ts),
+	}
+	parentMeta := testjsonl.CodexSessionMetaJSON(parentID, "/workspace/project", "codex_cli_rs", ts)
+	child := func(childID string, replayed ...string) string {
+		lines := []string{
+			testjsonl.CodexForkedSessionMetaJSON(childID, parentID, "/workspace/project", "codex_cli_rs", ts),
+			parentMeta,
+		}
+		lines = append(lines, replayed...)
+		lines = append(lines,
+			testjsonl.CodexTurnContextWithIDJSON("gpt-5.5", "child-turn-"+childID, "2024-01-01T10:00:01Z"),
+			testjsonl.CodexMsgJSON("user", "child task "+childID, "2024-01-01T10:00:01Z"),
+			testjsonl.CodexMsgJSON("assistant", "child answer", "2024-01-01T10:00:05Z"),
+		)
+		return testjsonl.JoinJSONL(lines...)
+	}
+	objects := map[string]string{
+		parentPath:              testjsonl.JoinJSONL(append([]string{parentMeta}, firstTurn...)...),
+		childPath(firstChildID): child(firstChildID, firstTurn...),
+		childPath(secondChildID): child(
+			secondChildID, append(append([]string{}, firstTurn...), secondTurn...)...,
+		),
+	}
+	oldFindParent := findCodexS3ParentSessionObjects
+	t.Cleanup(func() { findCodexS3ParentSessionObjects = oldFindParent })
+	findCodexS3ParentSessionObjects = func(_, _, gotParent string) []parser.S3Object {
+		require.Equal(t, parentID, gotParent)
+		// Like a real listing, report the parent's current size.
+		return []parser.S3Object{{URI: parentPath, Size: int64(len(objects[parentPath]))}}
+	}
+	fetches := countS3Fetches(t, objects)
+	discovered := func(childID string) []parser.DiscoveredFile {
+		path := childPath(childID)
+		return []parser.DiscoveredFile{{
+			Agent: parser.AgentCodex, Path: path, Machine: "laptop",
+			SourceSize: int64(len(objects[path])), SourceMtime: 1,
+		}}
+	}
+	firstMessage := func(ctx context.Context, e *Engine, childID string) string {
+		t.Helper()
+		var got string
+		for job := range e.startWorkers(ctx, discovered(childID)) {
+			require.NoError(t, job.err)
+			require.Len(t, job.results, 1)
+			require.NotEmpty(t, job.results[0].Messages)
+			got = job.results[0].Messages[0].Content
+			job.releaseRetention()
+		}
+		return got
+	}
+
+	ctx, closeCache := withS3CodexParentCache(t.Context())
+	t.Cleanup(closeCache)
+	e := &Engine{db: openTestDB(t), machine: "central"}
+	assert.Equal(t, "child task "+firstChildID, firstMessage(ctx, e, firstChildID))
+
+	// The parent keeps running and is uploaded again before a later child,
+	// forked after its second turn, is processed in the same pass.
+	objects[parentPath] = testjsonl.JoinJSONL(
+		append(append([]string{parentMeta}, firstTurn...), secondTurn...)...,
+	)
+	assert.Equal(t, "child task "+secondChildID, firstMessage(ctx, e, secondChildID),
+		"a parent that grew since it was cached must be downloaded again")
+	assert.Equal(t, 2, fetches(parentPath))
 }

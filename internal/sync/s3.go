@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-var findCodexS3ParentSessionURIs = parser.FindCodexS3ParentSessionURIs
+var findCodexS3ParentSessionObjects = parser.FindCodexS3ParentSessionObjects
 
 func s3SessionIDPrefix(machine string) string {
 	if machine == "" {
@@ -148,14 +148,14 @@ func hydrateS3CodexParent(
 	}
 	cache := s3CodexParentCacheFor(ctx)
 	var written []string
-	for _, parentURI := range findCodexS3ParentSessionURIs(
+	for _, parent := range findCodexS3ParentSessionObjects(
 		configuredRoot, childURI, parentID,
 	) {
-		if parentURI == childURI {
+		if parent.URI == childURI {
 			continue
 		}
 		parentPath, ok := hydrateS3CodexParentObject(
-			ctx, cache, tempDir, parentURI, p,
+			ctx, cache, tempDir, parent, p,
 		)
 		if !ok {
 			for _, path := range written {
@@ -170,11 +170,11 @@ func hydrateS3CodexParent(
 
 func hydrateS3CodexParentObject(
 	ctx context.Context, cache *s3CodexParentCache,
-	tempDir, parentURI string, p parser.S3Provider,
+	tempDir string, parent parser.S3Object, p parser.S3Provider,
 ) (string, bool) {
 	relPath, err := safeS3TempRelPath(parser.DiscoveredFile{
 		Agent: parser.AgentCodex,
-		Path:  parentURI,
+		Path:  parent.URI,
 	}, p)
 	if err != nil {
 		return "", false
@@ -183,7 +183,7 @@ func hydrateS3CodexParentObject(
 	if err := os.MkdirAll(filepath.Dir(parentPath), 0o755); err != nil {
 		return "", false
 	}
-	if err := cache.materialize(ctx, parentURI, parentPath); err != nil {
+	if err := cache.materialize(ctx, parent, parentPath); err != nil {
 		return "", false
 	}
 	return parentPath, true
