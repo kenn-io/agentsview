@@ -169,10 +169,14 @@ SELECT
 FROM cursor_usage_events cu
 WHERE %s`
 
-const chUsageMessageEligibility = `
+// chUsageMessageSourceEligibility is the condition a message meets when its
+// usage counts, before the join to its session.
+const chUsageMessageSourceEligibility = `
 			m.token_usage != ''
 			AND m.model != ''
-			AND m.model != '<synthetic>'
+			AND m.model != '<synthetic>'`
+
+const chUsageMessageEligibility = chUsageMessageSourceEligibility + `
 			AND s.deleted_at IS NULL`
 
 const chUsageMatchingMessageSourceEligibility = `
@@ -2693,6 +2697,28 @@ func (s *Store) GetSessionPlanUsage(
 	return p, rows.Err()
 }
 
+// sessionMayHaveUsageRows reports whether the session's usage read can
+// return rows. A session with token totals is assumed to have them. For one
+// without, a probe looks for a message or usage event the read would
+// select; chUsageRawSQL reads no other table for a session's rows. The probe
+// ignores whether the session is deleted, so it can only answer true for a
+// read that turns out empty, never false for one that has rows.
+func (s *Store) sessionMayHaveUsageRows(ctx context.Context, sess *db.Session) (bool, error) {
+	if sess.HasTotalOutputTokens || sess.HasPeakContextTokens {
+		return true, nil
+	}
+	var found uint64
+	if err := s.queryRowContext(ctx, `SELECT count() FROM (
+		SELECT 1 FROM messages m WHERE m.session_id = ? AND `+chUsageMessageSourceEligibility+` LIMIT 1
+		UNION ALL
+		SELECT 1 FROM usage_events ue WHERE ue.session_id = ? AND `+chUsageEventSourceEligibility+` LIMIT 1)`,
+		sess.ID, sess.ID,
+	).Scan(&found); err != nil {
+		return false, fmt.Errorf("probing clickhouse usage rows for %s: %w", sess.ID, err)
+	}
+	return found > 0, nil
+}
+
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
@@ -2700,15 +2726,22 @@ func (s *Store) GetSessionUsage(
 	if err != nil || sess == nil {
 		return nil, err
 	}
-	rateResolver, err := s.loadPricingResolver(ctx)
+	mayHaveRows, err := s.sessionMayHaveUsageRows(ctx, sess)
 	if err != nil {
 		return nil, err
 	}
+	// Without usage rows there is nothing to price: the session's own
+	// token totals and plan usage are the whole response.
+	var rateResolver *export.PricingResolver
 	var breakdownRows []chSessionUsageRow
-	if includeBreakdown {
-		breakdownRows, err = s.sessionUsageRows(ctx, sessionID)
-		if err != nil {
+	if mayHaveRows {
+		if rateResolver, err = s.loadPricingResolver(ctx); err != nil {
 			return nil, err
+		}
+		if includeBreakdown {
+			if breakdownRows, err = s.sessionUsageRows(ctx, sessionID); err != nil {
+				return nil, err
+			}
 		}
 	}
 	// Without the breakdown, its length is counted from the aggregate rows,
@@ -2721,53 +2754,55 @@ func (s *Store) GetSessionUsage(
 	var hasComputedCost, hasReportedCost bool
 	deduplicatedOutputTokens := 0
 	hasRows := false
-	err = s.forEachSessionUsageAggregateRow(
-		ctx, db.UsageFilter{}, sessionID,
-		func(r chUsageAggregateRow) error {
-			deduplicatedOutputTokens += r.snapshotDedupOutput
-			if r.breakdownEntry {
-				breakdownCount++
-			}
-			if r.authoritativeCostRows > 0 {
-				v := money.Money{Microdollars: r.authoritativeCost}
-				authoritativeCost = &v
-			}
-			cost, _, priced, contributes, priceErr := chUsageAggregateResolvedCost(
-				r.model, r.priceModel, r.providerID, chUsagePricingTimestamp(r.pricingTS),
-				r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-				r.billableInput, r.billableOutput, r.billableReason,
-				r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-				r.billableWebSearch,
-				r.explicitCost,
-				r.reportedCostRows > 0,
-				db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
-				rateResolver,
-			)
-			if priceErr != nil {
-				return priceErr
-			}
-			if !contributes {
+	if mayHaveRows {
+		err = s.forEachSessionUsageAggregateRow(
+			ctx, db.UsageFilter{}, sessionID,
+			func(r chUsageAggregateRow) error {
+				deduplicatedOutputTokens += r.snapshotDedupOutput
+				if r.breakdownEntry {
+					breakdownCount++
+				}
+				if r.authoritativeCostRows > 0 {
+					v := money.Money{Microdollars: r.authoritativeCost}
+					authoritativeCost = &v
+				}
+				cost, _, priced, contributes, priceErr := chUsageAggregateResolvedCost(
+					r.model, r.priceModel, r.providerID, chUsagePricingTimestamp(r.pricingTS),
+					r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
+					r.billableInput, r.billableOutput, r.billableReason,
+					r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
+					r.billableWebSearch,
+					r.explicitCost,
+					r.reportedCostRows > 0,
+					db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
+					rateResolver,
+				)
+				if priceErr != nil {
+					return priceErr
+				}
+				if !contributes {
+					return nil
+				}
+				hasRows = true
+				models[r.model] = true
+				totalCost, priceErr = money.Add(totalCost, cost)
+				if priceErr != nil {
+					return fmt.Errorf("summing clickhouse session usage: %w", priceErr)
+				}
+				if r.reportedCostRows > 0 {
+					hasReportedCost = true
+				}
+				if r.billableInput != 0 || r.billableOutput != 0 ||
+					r.billableReason != 0 || r.billableCacheCr != 0 ||
+					r.billableCacheRd != 0 || r.billableWebSearch > 0 {
+					hasComputedCost = true
+				}
+				if !priced {
+					unpriced[r.model] = true
+				}
 				return nil
-			}
-			hasRows = true
-			models[r.model] = true
-			totalCost, priceErr = money.Add(totalCost, cost)
-			if priceErr != nil {
-				return fmt.Errorf("summing clickhouse session usage: %w", priceErr)
-			}
-			if r.reportedCostRows > 0 {
-				hasReportedCost = true
-			}
-			if r.billableInput != 0 || r.billableOutput != 0 ||
-				r.billableReason != 0 || r.billableCacheCr != 0 ||
-				r.billableCacheRd != 0 || r.billableWebSearch > 0 {
-				hasComputedCost = true
-			}
-			if !priced {
-				unpriced[r.model] = true
-			}
-			return nil
-		})
+			})
+	}
 	if err != nil {
 		return nil, err
 	}

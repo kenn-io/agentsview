@@ -503,10 +503,14 @@ SELECT
 FROM cursor_usage_events cu
 WHERE %s`
 
-const duckUsageMessageEligibility = `
+// duckUsageMessageSourceEligibility is the condition a message meets when
+// its usage counts, before the join to its session.
+const duckUsageMessageSourceEligibility = `
 			m.token_usage != ''
 			AND m.model != ''
-			AND m.model != '<synthetic>'
+			AND m.model != '<synthetic>'`
+
+const duckUsageMessageEligibility = duckUsageMessageSourceEligibility + `
 			AND s.deleted_at IS NULL`
 
 // duckUsageMatchingMessageSourceEligibility is the message-only half of
@@ -2060,6 +2064,27 @@ func (s *Store) GetSessionPlanUsage(
 	return p, rows.Err()
 }
 
+// sessionMayHaveUsageRows reports whether the session's usage read can
+// return rows. A session with token totals is assumed to have them. For one
+// without, a probe looks for a message or usage event the read would
+// select; duckUsageRawSQL reads no other table for a session's rows. The
+// probe ignores whether the session is deleted, so it can only answer true
+// for a read that turns out empty, never false for one that has rows.
+func (s *Store) sessionMayHaveUsageRows(ctx context.Context, sess *db.Session) (bool, error) {
+	if sess.HasTotalOutputTokens || sess.HasPeakContextTokens {
+		return true, nil
+	}
+	var found bool
+	if err := s.queryRowContext(ctx, `SELECT
+		EXISTS (SELECT 1 FROM messages m WHERE m.session_id = ? AND `+duckUsageMessageSourceEligibility+`)
+		OR EXISTS (SELECT 1 FROM usage_events ue WHERE ue.session_id = ? AND `+duckUsageEventSourceEligibility+`)`,
+		sess.ID, sess.ID,
+	).Scan(&found); err != nil {
+		return false, fmt.Errorf("probing duckdb usage rows for %s: %w", sess.ID, err)
+	}
+	return found, nil
+}
+
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
@@ -2067,19 +2092,27 @@ func (s *Store) GetSessionUsage(
 	if err != nil || sess == nil {
 		return nil, err
 	}
-	rateResolver, err := s.loadPricingResolver(ctx)
+	mayHaveRows, err := s.sessionMayHaveUsageRows(ctx, sess)
 	if err != nil {
 		return nil, err
 	}
+	// Without usage rows there is nothing to price: the session's own
+	// token totals and plan usage are the whole response.
+	var rateResolver *export.PricingResolver
 	var breakdownRows []duckSessionUsageRow
 	breakdownCount := 0
-	if includeBreakdown {
-		breakdownRows, err = s.sessionUsageRows(ctx, sessionID)
-	} else {
-		breakdownCount, err = s.sessionUsageRowCount(ctx, sessionID)
-	}
-	if err != nil {
-		return nil, err
+	if mayHaveRows {
+		if rateResolver, err = s.loadPricingResolver(ctx); err != nil {
+			return nil, err
+		}
+		if includeBreakdown {
+			breakdownRows, err = s.sessionUsageRows(ctx, sessionID)
+		} else {
+			breakdownCount, err = s.sessionUsageRowCount(ctx, sessionID)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	models := map[string]bool{}
 	unpriced := map[string]bool{}
@@ -2094,53 +2127,55 @@ func (s *Store) GetSessionUsage(
 	// contribute, so neither cost-only rows nor token-bearing rows
 	// can flip it when the session flags are false.
 	hasRows := false
-	err = s.forEachSessionUsageAggregateRow(
-		ctx, db.UsageFilter{}, sessionID,
-		func(r duckUsageAggregateRow) error {
-			deduplicatedOutputTokens += r.snapshotDedupOutput
-			if r.authoritativeCostRows > 0 {
-				v := money.Money{Microdollars: r.authoritativeCost}
-				authoritativeCost = &v
-			}
-			cost, _, priced, contributes, priceErr := duckUsageAggregateResolvedCost(
-				r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
-				r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-				r.billableInput, r.billableOutput, r.billableReason,
-				r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-				r.billableWebSearch,
-				r.explicitCost,
-				r.reportedCostRows > 0,
-				db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
-				rateResolver,
-			)
-			if priceErr != nil {
-				return priceErr
-			}
-			// Cost-only copilot-reported carrier rows never contribute, so
-			// they must not surface as token data or a model, matching the
-			// SQLite and PostgreSQL session usage paths.
-			if !contributes {
+	if mayHaveRows {
+		err = s.forEachSessionUsageAggregateRow(
+			ctx, db.UsageFilter{}, sessionID,
+			func(r duckUsageAggregateRow) error {
+				deduplicatedOutputTokens += r.snapshotDedupOutput
+				if r.authoritativeCostRows > 0 {
+					v := money.Money{Microdollars: r.authoritativeCost}
+					authoritativeCost = &v
+				}
+				cost, _, priced, contributes, priceErr := duckUsageAggregateResolvedCost(
+					r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
+					r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
+					r.billableInput, r.billableOutput, r.billableReason,
+					r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
+					r.billableWebSearch,
+					r.explicitCost,
+					r.reportedCostRows > 0,
+					db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
+					rateResolver,
+				)
+				if priceErr != nil {
+					return priceErr
+				}
+				// Cost-only copilot-reported carrier rows never contribute, so
+				// they must not surface as token data or a model, matching the
+				// SQLite and PostgreSQL session usage paths.
+				if !contributes {
+					return nil
+				}
+				hasRows = true
+				models[r.model] = true
+				totalCost, priceErr = money.Add(totalCost, cost)
+				if priceErr != nil {
+					return fmt.Errorf("summing duckdb session usage: %w", priceErr)
+				}
+				if r.reportedCostRows > 0 {
+					hasReportedCost = true
+				}
+				if r.billableInput != 0 || r.billableOutput != 0 ||
+					r.billableReason != 0 || r.billableCacheCr != 0 ||
+					r.billableCacheRd != 0 || r.billableWebSearch > 0 {
+					hasComputedCost = true
+				}
+				if !priced {
+					unpriced[r.model] = true
+				}
 				return nil
-			}
-			hasRows = true
-			models[r.model] = true
-			totalCost, priceErr = money.Add(totalCost, cost)
-			if priceErr != nil {
-				return fmt.Errorf("summing duckdb session usage: %w", priceErr)
-			}
-			if r.reportedCostRows > 0 {
-				hasReportedCost = true
-			}
-			if r.billableInput != 0 || r.billableOutput != 0 ||
-				r.billableReason != 0 || r.billableCacheCr != 0 ||
-				r.billableCacheRd != 0 || r.billableWebSearch > 0 {
-				hasComputedCost = true
-			}
-			if !priced {
-				unpriced[r.model] = true
-			}
-			return nil
-		})
+			})
+	}
 	if err != nil {
 		return nil, err
 	}

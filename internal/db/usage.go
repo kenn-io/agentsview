@@ -3278,12 +3278,6 @@ func (db *DB) getSessionUsageLegacy(
 		return nil, nil
 	}
 
-	pricing, err := db.loadPricingMap(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("loading pricing: %w", err)
-	}
-	rateResolver := export.NewPricingResolver(pricing)
-
 	query := usageRowSelect() + ` AND u.session_id = ?
 		ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC,
@@ -3318,6 +3312,15 @@ func (db *DB) getSessionUsageLegacy(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session usage rows: %w", err)
+	}
+	// A session without usage rows has nothing to price.
+	var rateResolver *export.PricingResolver
+	if len(usageRows) > 0 {
+		pricing, err := db.loadPricingMap(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("loading pricing: %w", err)
+		}
+		rateResolver = export.NewPricingResolver(pricing)
 	}
 	snapshotRows := make([]activity.UsageRow, len(usageRows))
 	for i, r := range usageRows {
