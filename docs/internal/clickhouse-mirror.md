@@ -602,9 +602,9 @@ SQLite and PostgreSQL keep their scans in Go, which skip system rows in SQL.
 DuckDB judges plain prompts in SQL the same way; only the ClickHouse layout
 changed.
 
-**Go judges each prompt in a few passes.** SQLite, PostgreSQL, and DuckDB send
-every prompt of a session their memo misses to `IsFrustrationMarker`, and
-ClickHouse sends the prompts it cannot judge in SQL. The memo lives in memory,
+**Go judges each prompt in a few passes.** SQLite and PostgreSQL send every
+prompt of a session their memo misses to `IsFrustrationMarker`, and DuckDB and
+ClickHouse send the prompts they cannot judge in SQL. The memo lives in memory,
 so the first Signals load after a restart judges every prompt in range. The
 function strips code fences once. One pass then builds the normalized prompt and
 counts the capitalized words, and another finds the first phrase literal. The
