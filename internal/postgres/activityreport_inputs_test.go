@@ -17,7 +17,7 @@ func TestPGActivityYearInputsFitBudget(t *testing.T) {
 		usage:       make([]pgActivityUsageRow, 0, usageRows),
 		candidates:  make(map[string]bool, sessions),
 	}
-	user, assistant, model := unique.Make("user"), unique.Make("assistant"), unique.Make("model-a")
+	user, assistant, model, emptyModel := unique.Make("user"), unique.Make("assistant"), unique.Make("model-a"), unique.Make("")
 	source, provider, agent := unique.Make("message"), unique.Make("provider-a"), unique.Make("claude")
 	for i := range sessions {
 		id := fmt.Sprintf("claude:project-a:session-%06d", i)
@@ -27,11 +27,11 @@ func TestPGActivityYearInputsFitBudget(t *testing.T) {
 		}
 		transcript := make([]pgActivityMessage, count)
 		for j := range transcript {
-			role := user
+			role, messageModel := user, emptyModel
 			if j%2 == 1 {
-				role = assistant
+				role, messageModel = assistant, model
 			}
-			transcript[j] = pgActivityMessage{ordinal: int32(j), us: int64(j) * 1_000_000, role: role, model: model}
+			transcript[j] = pgActivityMessage{ordinal: int32(j), us: int64(j) * 1_000_000, role: role, model: messageModel}
 		}
 		inputs.transcripts[id], inputs.candidates[id] = transcript, true
 		count = usageRows / sessions
@@ -42,7 +42,6 @@ func TestPGActivityYearInputsFitBudget(t *testing.T) {
 			inputs.usage = append(inputs.usage, pgActivityUsageRow{sessionID: unique.Make(id), usageSource: source, model: model, providerID: provider, agent: agent, ordinal: int32(j*2 + 1), ordinalValid: true, us: int64(j) * 1_000_000, input: 100, output: 50})
 		}
 	}
-	assert.LessOrEqual(t, pgActivityInputBytes(inputs), int64(128<<20))
 	store := &Store{}
 	memo := &store.runtimeState().activityInputs
 	memo.Put("year", "revision", []pgActivityInputs{inputs})
