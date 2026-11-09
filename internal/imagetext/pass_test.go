@@ -58,54 +58,83 @@ func TestImageTextPassReusesCachedText(t *testing.T) {
 	require.Equal(t, 1, requests)
 }
 
-func TestImageTextFailureAndRetry(t *testing.T) {
-	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	requests := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		w.Header().Set("Content-Type", "application/json")
-		if requests == 1 {
-			fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[]]}`, glmocr.DefaultDeploymentFingerprint)
-		} else {
-			fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"retry succeeded"}]]}`, glmocr.DefaultDeploymentFingerprint)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
-	require.NoError(t, err)
-	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
-	require.NoError(t, err)
-	manager := Manager{DB: d, Client: client}
-	png := []byte("\x89PNG\r\n\x1a\nsynthetic")
-	content := fmt.Sprintf(`[{"type":"file","uri":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read", ResultContent: content}}}}))
-	err = manager.Run(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 1, requests)
-	err = manager.Run(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 1, requests)
-	var failures int
-	var retry string
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures,retry_at FROM image_text_cache`).Scan(&failures, &retry))
-	require.Equal(t, 1, failures)
-	require.NotEmpty(t, retry)
-	require.NotEqual(t, "9999-12-31T23:59:59Z", retry)
-	raw, err := sql.Open("sqlite3", d.Path())
-	require.NoError(t, err)
-	_, err = raw.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	err = manager.Run(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 2, requests)
-	var succeeded int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded FROM image_text_cache`).Scan(&succeeded))
-	require.Equal(t, 1, succeeded)
+func TestImageTextFailureClassification(t *testing.T) {
+	for _, name := range []string{"service error", "corrupt offloaded asset", "invalid inline bytes"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.Header().Set("Content-Type", "application/json")
+				if name == "service error" && requests == 1 {
+					fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[]]}`, glmocr.DefaultDeploymentFingerprint)
+				} else {
+					fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"retry succeeded"}]]}`, glmocr.DefaultDeploymentFingerprint)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
+			require.NoError(t, err)
+			client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
+			require.NoError(t, err)
+			manager := Manager{DB: d, Client: client}
+			png := []byte("\x89PNG\r\n\x1a\nimage")
+			content := fmt.Sprintf(`[{"type":"file","uri":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
+			var path string
+			if name == "corrupt offloaded asset" {
+				dir := t.TempDir()
+				d.SetAssetsDir(dir)
+				ref, _, err := assets.Put(dir, "image/png", png)
+				require.NoError(t, err)
+				path = filepath.Join(dir, strings.TrimPrefix(ref, "asset://"))
+				corrupt := append([]byte(nil), png...)
+				corrupt[len(corrupt)-1] ^= 1
+				require.NoError(t, os.WriteFile(path, corrupt, 0600))
+				content = fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
+			} else if name == "invalid inline bytes" {
+				content = `[{"type":"input_image","image_url":"data:image/png;base64,dGhpcyBpcyBub3QgYSBwbmc="}]`
+			}
+			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
+			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+			require.NoError(t, manager.Run(ctx))
+			var failures int
+			var retry string
+			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures,retry_at FROM image_text_cache`).Scan(&failures, &retry))
+			require.Equal(t, 1, failures)
+			if name == "invalid inline bytes" {
+				require.Zero(t, requests)
+				require.Equal(t, "9999-12-31T23:59:59Z", retry)
+				return
+			}
+			require.NotEmpty(t, retry)
+			require.NotEqual(t, "9999-12-31T23:59:59Z", retry)
+			if name == "service error" {
+				require.Equal(t, 1, requests)
+				require.NoError(t, manager.Run(ctx))
+				require.Equal(t, 1, requests)
+			} else {
+				require.Zero(t, requests)
+				require.NoError(t, os.WriteFile(path, png, 0600))
+			}
+			raw, err := sql.Open("sqlite3", d.Path())
+			require.NoError(t, err)
+			_, err = raw.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
+			require.NoError(t, err)
+			require.NoError(t, raw.Close())
+			require.NoError(t, manager.Run(ctx))
+			if name == "service error" {
+				require.Equal(t, 2, requests)
+			} else {
+				require.Equal(t, 1, requests)
+			}
+			var succeeded int
+			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded FROM image_text_cache`).Scan(&succeeded))
+			require.Equal(t, 1, succeeded)
+		})
+	}
 }
 
 func TestImageTextProcessorKey(t *testing.T) {
@@ -226,56 +255,8 @@ func TestImageTextCachesEmptyNormalizedOutput(t *testing.T) {
 	require.Equal(t, 1, succeeded)
 }
 
-func TestImageTextRetriesRepairedAsset(t *testing.T) {
-	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	dir := t.TempDir()
-	d.SetAssetsDir(dir)
-	png := []byte("\x89PNG\r\n\x1a\nimage")
-	ref, _, err := assets.Put(dir, "image/png", png)
-	require.NoError(t, err)
-	path := filepath.Join(dir, strings.TrimPrefix(ref, "asset://"))
-	corrupt := append([]byte(nil), png...)
-	corrupt[len(corrupt)-1] ^= 1
-	require.NoError(t, os.WriteFile(path, corrupt, 0600))
-	content := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "image", Project: "demo", Agent: "test", MessageCount: 1}))
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	requests := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
-	}))
-	t.Cleanup(srv.Close)
-	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
-	require.NoError(t, err)
-	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
-	require.NoError(t, err)
-	manager := Manager{DB: d, Client: client}
-	require.NoError(t, manager.Run(ctx))
-	require.Zero(t, requests)
-	var retry string
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
-	require.NotEmpty(t, retry)
-	require.NotEqual(t, "9999-12-31T23:59:59Z", retry)
-	require.NoError(t, os.WriteFile(path, png, 0600))
-	raw, err := sql.Open("sqlite3", d.Path())
-	require.NoError(t, err)
-	_, err = raw.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	require.NoError(t, manager.Run(ctx))
-	require.Equal(t, 1, requests)
-	var succeeded int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded FROM image_text_cache`).Scan(&succeeded))
-	require.Equal(t, 1, succeeded)
-}
-
 func TestImageTextTerminalBecomesEligible(t *testing.T) {
-	for _, name := range []string{"new occurrence", "changed media type", "invalid bytes"} {
+	for _, name := range []string{"new occurrence", "changed media type"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
 			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
@@ -284,9 +265,6 @@ func TestImageTextTerminalBecomesEligible(t *testing.T) {
 			encoded := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage"))
 			gif := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/gif;base64,%s"}]`, encoded)
 			png := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, encoded)
-			if name == "invalid bytes" {
-				gif = `[{"type":"input_image","image_url":"data:image/png;base64,dGhpcyBpcyBub3QgYSBwbmc="}]`
-			}
 			requests := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
@@ -306,9 +284,6 @@ func TestImageTextTerminalBecomesEligible(t *testing.T) {
 			var retry string
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
 			require.Equal(t, "9999-12-31T23:59:59Z", retry)
-			if name == "invalid bytes" {
-				return
-			}
 			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "session", Ordinal: 2, Role: "assistant", Content: "append"}}))
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
 			require.Equal(t, "9999-12-31T23:59:59Z", retry)

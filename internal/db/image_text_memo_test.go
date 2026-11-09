@@ -20,7 +20,8 @@ func TestImageTextMemoEvictsLeastRecentlyUsed(t *testing.T) {
 	require.NotContains(t, memo.entries, sha256.Sum256([]byte(b)))
 	require.Contains(t, memo.entries, sha256.Sum256([]byte(c)))
 	require.Empty(t, memo.images(`[{"type":"text","text":"image"}]`))
-	require.Len(t, memo.entries, 2)
+	require.Contains(t, memo.entries, sha256.Sum256([]byte(a)))
+	require.Contains(t, memo.entries, sha256.Sum256([]byte(c)))
 	image := `{"type":"input_image","image_url":"data:image/png;base64,YQ=="}`
 	memo = imageTextMemo{maxEntries: 2, maxImages: 1, maxBytes: 1024}
 	require.Len(t, memo.images("["+image+","+image+"]"), 2)

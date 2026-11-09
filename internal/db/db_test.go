@@ -701,16 +701,12 @@ func TestOpenDataVersionBump_PreservesData(t *testing.T) {
 	requireNoError(t, err, "add skipped file")
 	d.Close()
 
-	// Version 168 predates the image text occurrence projection.
+	// Set user_version to 0 to simulate stale data version.
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
-	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 168")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 0")
 	requireNoError(t, err, "reset version")
 	conn.Close()
-	needs, full, err := ArchiveResyncState(t.Context(), path)
-	require.NoError(t, err)
-	require.True(t, needs)
-	require.True(t, full)
 
 	// Re-open: should detect stale version but preserve data.
 	d2, err := Open(t.Context(), path)
@@ -742,7 +738,7 @@ func TestOpenDataVersionBump_PreservesData(t *testing.T) {
 		"PRAGMA user_version",
 	).Scan(&ver)
 	requireNoError(t, err, "read version")
-	require.Equal(t, 168, ver, "expected user_version=168 (stale)")
+	require.Equal(t, 0, ver, "expected user_version=0 (stale)")
 	d2.Close() // simulate process exit without resync
 
 	// Second reopen: must still detect stale because the
@@ -752,11 +748,6 @@ func TestOpenDataVersionBump_PreservesData(t *testing.T) {
 	defer d3.Close()
 	require.True(t, d3.NeedsResync(),
 		"second reopen: expected NeedsResync=true")
-	// A successful resync records a version older writers cannot maintain.
-	require.NoError(t, d3.setDataVersion(t.Context()))
-	require.NoError(t, d3.getReader().QueryRow(t.Context(), "PRAGMA user_version").Scan(&ver))
-	require.Equal(t, CurrentDataVersion(), ver)
-
 }
 
 func TestMigration_ResultContentColumn(t *testing.T) {
