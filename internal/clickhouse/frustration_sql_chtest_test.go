@@ -93,7 +93,7 @@ func shippedContent(t *testing.T, store *Store, ids []string) map[string]bool {
 }
 
 // Prompts at each rule's edge. Plain prompts, ASCII plus the symbols in
-// chPlainPromptSymbols, are judged in ClickHouse and never sent back;
+// signals.PlainPromptSymbols, are judged in ClickHouse and never sent back;
 // the rest are sent back with their content and judged in Go.
 func TestFrustrationMarkerScanCountsEdgeCases(t *testing.T) {
 	t.Parallel()

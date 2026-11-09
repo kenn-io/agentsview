@@ -1,48 +1,12 @@
 package clickhouse
 
-import (
-	"fmt"
-	"strings"
-	"unicode"
-
-	"go.kenn.io/agentsview/internal/signals"
-)
-
-// chPlainPromptSymbols are the non-ASCII runes a prompt may contain and
-// still have its frustration marker decided in ClickHouse. Each is a
-// symbol, punctuation, format, or private-use rune: not a letter, not
-// whitespace, and unchanged by lowercasing. Over such a prompt the regular
-// expressions ClickHouse runs (RE2, UTF-8, ASCII \b) see the same words,
-// spaces, and boundaries signals.IsFrustrationMarker sees in Go. Prompts
-// with any other non-ASCII rune go to Go. The set covers the dashes,
-// quotes, arrows, check marks, box drawing, and emoji common in prompts.
-var chPlainPromptSymbols = &unicode.RangeTable{
-	R16: []unicode.Range16{
-		{Lo: 0x00A1, Hi: 0x00A9, Stride: 1},
-		{Lo: 0x00AB, Hi: 0x00B4, Stride: 1},
-		{Lo: 0x00B6, Hi: 0x00B9, Stride: 1},
-		{Lo: 0x00BB, Hi: 0x00BF, Stride: 1},
-		{Lo: 0x00D7, Hi: 0x00F7, Stride: 0x20},
-		{Lo: 0x200B, Hi: 0x2027, Stride: 1},
-		{Lo: 0x202A, Hi: 0x202E, Stride: 1},
-		{Lo: 0x2030, Hi: 0x205E, Stride: 1},
-		{Lo: 0x2060, Hi: 0x206F, Stride: 1},
-		{Lo: 0x2190, Hi: 0x23FF, Stride: 1},
-		{Lo: 0x2500, Hi: 0x27BF, Stride: 1},
-		{Lo: 0x2B00, Hi: 0x2BFF, Stride: 1},
-		{Lo: 0xE000, Hi: 0xF8FF, Stride: 1},
-		{Lo: 0xFE00, Hi: 0xFE0F, Stride: 1},
-	},
-	R32: []unicode.Range32{
-		{Lo: 0x1F000, Hi: 0x1FAFF, Stride: 1},
-	},
-}
+import "go.kenn.io/agentsview/internal/signals"
 
 // chFrustrationPromptsSQL reads the prompts of the sessions in the set its
 // %s names. A plain prompt, valid UTF-8 made of ASCII and
-// chPlainPromptSymbols, is decided in ClickHouse: it comes back only when
-// it is a marker, with empty content. Any other prompt comes back with its
-// content for signals.IsFrustrationMarker. Prompts are the rows the
+// signals.PlainPromptSymbols, is decided in ClickHouse: it comes back only
+// when it is a marker, with empty content. Any other prompt comes back with
+// its content for signals.IsFrustrationMarker. Prompts are the rows the
 // signals scan reads: user rows that are neither system rows nor tool
 // results.
 //
@@ -94,34 +58,10 @@ var chFrustrationPromptsArgs = []any{
 	signals.CodeFencePattern,
 	// The ASCII runes unicode.IsSpace accepts.
 	`[\t\n\v\f\r ]+`,
-	chOtherPromptRunePattern(),
+	signals.NonPlainRunePattern(),
 	signals.FrustrationMinBytes,
 	signals.FrustrationPhrasePattern,
 	signals.FrustrationCapsMinWords,
 	signals.FrustrationCapsMinWords,
 	signals.FrustrationCapsRatio,
-}
-
-// chOtherPromptRunePattern matches a rune that is neither ASCII nor in
-// chPlainPromptSymbols.
-func chOtherPromptRunePattern() string {
-	var b strings.Builder
-	b.WriteString(`[^\x00-\x7F`)
-	add := func(lo, hi, stride uint32) {
-		if stride == 1 {
-			fmt.Fprintf(&b, `\x{%X}-\x{%X}`, lo, hi)
-			return
-		}
-		for r := lo; r <= hi; r += stride {
-			fmt.Fprintf(&b, `\x{%X}`, r)
-		}
-	}
-	for _, r := range chPlainPromptSymbols.R16 {
-		add(uint32(r.Lo), uint32(r.Hi), uint32(r.Stride))
-	}
-	for _, r := range chPlainPromptSymbols.R32 {
-		add(r.Lo, r.Hi, r.Stride)
-	}
-	b.WriteString(`]`)
-	return b.String()
 }

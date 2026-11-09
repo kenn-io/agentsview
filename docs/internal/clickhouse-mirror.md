@@ -566,8 +566,9 @@ when it is a marker, without its text. Over such text ClickHouse's RE2 and Go's
 `regexp` see the same letters, spaces, and word boundaries, so the SQL follows
 `IsFrustrationMarker` step by step with the same pattern and thresholds, which
 `internal/signals` exports. Any other prompt, including invalid UTF-8, comes
-back with its text and Go judges it. A unit test checks every symbol in the set
-against Go's Unicode tables. ClickHouse tests compare the counts with
+back with its text and Go judges it. The set is `signals.PlainPromptSymbols`,
+which DuckDB shares (see `internal/duckdb/README.md`), and a unit test checks
+every symbol in it against Go's Unicode tables. ClickHouse tests compare the counts with
 `IsFrustrationMarker` on edge cases and on a random corpus, and require that
 only prompts outside the set come back with text.
 
@@ -597,8 +598,9 @@ peaks near 290 MiB, with the same per-session counts.
   those words, so on the production mirror such a filter dropped almost none of
   the 4.25 GiB of prompt text.
 
-SQLite, PostgreSQL, and DuckDB keep their scans in Go, which skip system rows
-in SQL; only the ClickHouse layout changed.
+SQLite and PostgreSQL keep their scans in Go, which skip system rows in SQL.
+DuckDB judges plain prompts in SQL the same way; only the ClickHouse layout
+changed.
 
 ## Kept reads
 

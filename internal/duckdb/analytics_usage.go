@@ -223,8 +223,7 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	cache := s.path != ""
 	idx := make(map[string]int, len(rows))
-	placeholders := make([]string, 0, len(rows))
-	args := make([]any, 0, len(rows))
+	ids := make([]string, 0, len(rows))
 	for i := range rows {
 		if version := versions[rows[i].ID]; cache && version != "" {
 			if count, ok := s.frustrationMemo.Lookup(frustrationMemoGeneration, rows[i].ID, version); ok {
@@ -233,32 +232,27 @@ func (s *Store) duckPopulateFrustrationMarkers(
 			}
 		}
 		idx[rows[i].ID] = i
-		placeholders = append(placeholders, "?")
-		args = append(args, rows[i].ID)
+		ids = append(ids, rows[i].ID)
 	}
-	if len(args) == 0 {
+	if len(ids) == 0 {
 		return nil
 	}
-	q := `SELECT session_id, content
-		FROM messages
-		WHERE role = 'user' AND source_subtype <> 'tool_result'
-			AND NOT is_system AND session_id IN (` +
-		strings.Join(placeholders, ",") + `)`
-	msgRows, err := s.queryContext(ctx, q, args...)
+	msgRows, err := s.queryContext(ctx, duckFrustrationPromptsSQL, duckFrustrationPromptsArgs(ids)...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb frustration markers: %w", err)
 	}
 	defer msgRows.Close()
 	for msgRows.Next() {
 		var sessionID, content string
-		if err := msgRows.Scan(&sessionID, &content); err != nil {
+		var decided bool
+		if err := msgRows.Scan(&sessionID, &decided, &content); err != nil {
 			return fmt.Errorf("scanning duckdb frustration marker: %w", err)
 		}
 		i, ok := idx[sessionID]
 		if !ok {
 			continue
 		}
-		if signals.IsFrustrationMarker(content) {
+		if decided || signals.IsFrustrationMarker(content) {
 			rows[i].FrustrationMarkerCount++
 		}
 	}
