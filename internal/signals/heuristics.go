@@ -39,15 +39,36 @@ type HeuristicSignals struct {
 	RunawayToolLoopCount        int
 }
 
+// CodeFencePattern matches one fenced code block. Replacing every match
+// with a space is how IsFrustrationMarker strips pasted code.
+const CodeFencePattern = "(?s)```.*?```"
+
+// FrustrationPhrasePattern is the regular expression IsFrustrationMarker
+// matches against a normalized prompt: lowercased, code fences replaced by
+// a space, whitespace runs collapsed to one space, and trimmed. It uses
+// RE2 syntax, so a store whose regular expressions are RE2 can apply it
+// unchanged.
+const FrustrationPhrasePattern = `(?i)(!{3,}|\?{3,}|\b(?:wtf|come on|why won't|this is broken|doesn't work|does not work|still broken|same error|you broke|fucking|fuck)\b)`
+
+// Thresholds of IsFrustrationMarker. A prompt whose normalized form is
+// shorter than FrustrationMinBytes is never a marker. Otherwise it is one
+// when it matches FrustrationPhrasePattern, or when, after code fences are
+// stripped, it has at least FrustrationCapsMinWords words and words of two
+// or more letters, and at least FrustrationCapsRatio of those longer words
+// are all capitals.
+const (
+	FrustrationMinBytes     = 10
+	FrustrationCapsMinWords = 3
+	FrustrationCapsRatio    = 0.4
+)
+
 var (
-	codeFenceRe = regexp.MustCompile("(?s)```.*?```")
+	codeFenceRe = regexp.MustCompile(CodeFencePattern)
 	fileRefRe   = regexp.MustCompile(
 		`(?i)(?:^|[\s"'` + "`" + `])(?:\.{0,2}/)?[a-z0-9_.-]+(?:/[a-z0-9_. -]+)+|[a-z0-9_.-]+\.(?:go|ts|tsx|js|jsx|py|rs|java|kt|rb|php|cs|cpp|c|h|hpp|sql|svelte|vue|css|scss|html|json|ya?ml|toml|md|sh|zsh|bash)`,
 	)
 	bulletRe            = regexp.MustCompile(`(?m)^\s*(?:[-*+]|\d+\.)\s+\S+`)
-	frustrationPhraseRe = regexp.MustCompile(
-		`(?i)(!{3,}|\?{3,}|\b(?:wtf|come on|why won't|this is broken|doesn't work|does not work|still broken|same error|you broke|fucking|fuck)\b)`,
-	)
+	frustrationPhraseRe = regexp.MustCompile(FrustrationPhrasePattern)
 )
 
 var controlPrompts = map[string]struct{}{
@@ -96,13 +117,13 @@ func AnalyzeHeuristics(in HeuristicInput) HeuristicSignals {
 // fenced code first so pasted logs do not become tone signals.
 func IsFrustrationMarker(content string) bool {
 	normalized := normalizePrompt(content)
-	if len(normalized) < 10 {
+	if len(normalized) < FrustrationMinBytes {
 		return false
 	}
 	if mayContainFrustrationPhrase(normalized) && frustrationPhraseRe.MatchString(normalized) {
 		return true
 	}
-	return capsWordRatio(content, 3) >= 0.4
+	return capsWordRatio(content, FrustrationCapsMinWords) >= FrustrationCapsRatio
 }
 
 // mayContainFrustrationPhrase reports whether frustrationPhraseRe can match

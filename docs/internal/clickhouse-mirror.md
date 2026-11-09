@@ -557,6 +557,29 @@ errors. Bump `dashboardFactsVersion` when a fact's definition changes.
 instead of `messages` and `tool_calls`, which removes most of FINAL's cost
 from them.
 
+**The Signals scan judges most prompts in ClickHouse.** For sessions without a
+current `fact_frustration_markers`, Signals runs one query
+(`chFrustrationPromptsSQL`) with the session IDs as an external table. A prompt
+made only of ASCII and a fixed set of symbols (dashes, quotes, arrows, check
+marks, box drawing, emoji, private use) is judged in SQL and comes back only
+when it is a marker, without its text. Over such text ClickHouse's RE2 and Go's
+`regexp` see the same letters, spaces, and word boundaries, so the SQL follows
+`IsFrustrationMarker` step by step with the same pattern and thresholds, which
+`internal/signals` exports. Any other prompt, including invalid UTF-8, comes
+back with its text and Go judges it. A unit test checks every symbol in the set
+against Go's Unicode tables. ClickHouse tests compare the counts with
+`IsFrustrationMarker` on edge cases and on a random corpus, and require that
+only prompts outside the set come back with text.
+
+The query reads without FINAL, because FINAL would merge the text of every
+message in the sessions, assistant replies included. A subquery with
+`final = 1` finds the newest version of each prompt from key and filter
+columns, and the outer read takes text for those versions only. On the
+production mirror, for the 6,811 sessions of one Signals load, the old chunked
+scan ran 8 queries that read 10.6 GiB, sent 1.13 GiB to Go, and peaked at
+1.21 GiB of memory per query. The new query reads 3.3 GiB, sends 1.6 MiB, and
+peaks near 290 MiB, with the same per-session counts.
+
 **Rejected alternatives.**
 
 - Partitioning the large tables and setting
@@ -566,12 +589,16 @@ from them.
 - Storing the frustration count in SQLite as quality signal version 8. That
   recomputes every session's signals and republishes every replica, for one
   count only ClickHouse needs to precompute.
-- Porting `IsFrustrationMarker` to ClickHouse SQL. Regex and Unicode case
-  folding differ between Go and ClickHouse, and the scan would still read every
-  prompt.
+- Porting all of `IsFrustrationMarker` to ClickHouse SQL. Unicode letters,
+  spaces, and case folding differ between Go and ClickHouse, so only prompts in
+  the shared alphabet above are judged in SQL.
+- Filtering prompts in SQL with a looser test that keeps every possible
+  marker, such as matching the phrase words alone. Long pasted prompts contain
+  those words, so on the production mirror such a filter dropped almost none of
+  the 4.25 GiB of prompt text.
 
-SQLite, PostgreSQL, and DuckDB keep their scans; only the ClickHouse layout
-changed.
+SQLite, PostgreSQL, and DuckDB keep their scans in Go, which skip system rows
+in SQL; only the ClickHouse layout changed.
 
 ## Kept reads
 
