@@ -8,6 +8,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"hash"
 	"maps"
 	"slices"
 	"sort"
@@ -2490,11 +2491,14 @@ func usageVersionKey(table, pricingDigest string) string {
 	return table
 }
 
-// usageRowsVersion probes only tables whose parts changed. If parts move
-// during the probe or the probe fails, the read is served uncached. The
-// version names only pricingDigest's price records: hashing every digest's
-// records read the whole table, which took two minutes on a mirror holding
-// hundreds of digests.
+// usageRowsVersion names the rows of the tables as of the request's parts
+// snapshot. The sessions, snapshot, and price record tables are followed
+// by finalRows trackers, whose checks read only the keys new parts hold;
+// the other, small tables are hashed again when their parts change. If
+// parts move during the probe or the probe fails, the read is served
+// uncached. The version names only pricingDigest's price records: hashing
+// every digest's records read the whole table, which took two minutes on a
+// mirror holding hundreds of digests.
 func (s *Store) usageRowsVersion(ctx context.Context, tables []string, pricingDigest string) (string, bool, error) {
 	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	if !ok {
@@ -2503,40 +2507,114 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string, pricingDi
 			return "", false, err
 		}
 	}
-	// The fill mutex shares a probe with concurrent requests, which recheck
-	// the kept digests after acquiring it.
+	// The mutex shares a probe with concurrent requests, which recheck the
+	// kept state after acquiring it.
 	s.usageVersions.Lock()
 	defer s.usageVersions.Unlock()
+	identities, ok := s.usageIdentitiesLocked(ctx, snapshot, tables, pricingDigest)
+	if !ok {
+		return "", false, nil
+	}
+	return tableValuesFingerprint(tables, func(table string) string { return identities[table] }), true, nil
+}
+
+// usageIdentitiesLocked returns each table's row identity as of snapshot,
+// keeping what it read. It reports false, keeping nothing, when a probe
+// fails or the parts move while it reads. The caller holds usageVersions.
+func (s *Store) usageIdentitiesLocked(
+	ctx context.Context, snapshot partsSnapshot, tables []string, pricingDigest string,
+) (map[string]string, bool) {
 	var changed []string
+	var trackers []*finalRows
+	var changes []*finalRowsChange
 	for _, table := range tables {
+		if f := s.finalRowsTracker(table, pricingDigest); f != nil {
+			change, err := s.prepareFinalRows(ctx, f, snapshot[table])
+			if err != nil {
+				s.logUsageReadiness(fmt.Sprintf("row identity probe failed, serving uncached: %v", err))
+				return nil, false
+			}
+			trackers, changes = append(trackers, f), append(changes, change)
+			continue
+		}
 		kept, exists := s.usageVersions.tables[usageVersionKey(table, pricingDigest)]
-		if !exists || kept.parts != snapshot[table] {
+		if !exists || kept.parts != snapshot[table].digest {
 			changed = append(changed, table)
 		}
 	}
+	var read []string
 	if len(changed) > 0 {
-		identities, err := s.readUsageRowIdentities(ctx, changed, pricingDigest)
-		if err != nil {
+		var err error
+		if read, err = s.readUsageRowIdentities(ctx, changed, pricingDigest); err != nil {
 			s.logUsageReadiness(fmt.Sprintf("row identity probe failed, serving uncached: %v", err))
-			return "", false, nil
+			return nil, false
 		}
+	}
+	if len(changed) > 0 || slices.ContainsFunc(changes, func(c *finalRowsChange) bool { return c != nil }) {
 		fresh, err := s.readPartsSnapshot(ctx)
 		if err != nil {
 			s.logUsageReadiness(fmt.Sprintf("parts recheck failed, serving uncached: %v", err))
-			return "", false, nil
+			return nil, false
 		}
 		for _, table := range tables {
-			if fresh[table] != snapshot[table] {
-				return "", false, nil
+			if fresh[table].digest != snapshot[table].digest {
+				return nil, false
 			}
 		}
-		for i, table := range changed {
-			s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{snapshot[table], identities[i]}
+	}
+	identities := make(map[string]string, len(tables))
+	for i, f := range trackers {
+		if changes[i] != nil {
+			f.apply(changes[i])
+		}
+		identities[f.spec.table] = f.identity()
+	}
+	for i, table := range changed {
+		s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{snapshot[table].digest, read[i]}
+	}
+	for _, table := range tables {
+		if _, ok := identities[table]; !ok {
+			identities[table] = s.usageVersions.tables[usageVersionKey(table, pricingDigest)].identity
 		}
 	}
-	return tableValuesFingerprint(tables, func(table string) string {
-		return s.usageVersions.tables[usageVersionKey(table, pricingDigest)].identity
-	}), true, nil
+	return identities, true
+}
+
+// maxPriceTrackers bounds the pricing digests whose price records are
+// tracked: the catalog digest prepared rows and reads share, the empty
+// digest of the session counts, and the catalog digest a change replaced.
+const maxPriceTrackers = 3
+
+// finalRowsTracker returns the tracker of table's rows, or nil for a table
+// hashed whole. The caller holds usageVersions.
+func (s *Store) finalRowsTracker(table, pricingDigest string) *finalRows {
+	v := &s.usageVersions
+	switch table {
+	case sessionsFinalTable.table:
+		if v.sessions == nil {
+			v.sessions = &finalRows{spec: sessionsFinalTable}
+		}
+		return v.sessions
+	case snapshotsFinalTable.table:
+		if v.snapshots == nil {
+			v.snapshots = &finalRows{spec: snapshotsFinalTable}
+		}
+		return v.snapshots
+	case pricesFinalTable.table:
+		v.priceOrder = slices.DeleteFunc(v.priceOrder, func(d string) bool { return d == pricingDigest })
+		v.priceOrder = append(v.priceOrder, pricingDigest)
+		f, ok := v.prices[pricingDigest]
+		if !ok {
+			f = &finalRows{spec: pricesFinalTable, digest: pricingDigest}
+			v.prices[pricingDigest] = f
+		}
+		if len(v.priceOrder) > maxPriceTrackers {
+			delete(v.prices, v.priceOrder[0])
+			v.priceOrder = v.priceOrder[1:]
+		}
+		return f
+	}
+	return nil
 }
 
 func chUsageRowHashSQL(columns string) string {
@@ -2612,7 +2690,7 @@ func (s *Store) tablePartsFingerprint(ctx context.Context, tables []string) (str
 	if len(tables) == 0 {
 		tables = slices.Collect(maps.Keys(snapshot))
 	}
-	return tableValuesFingerprint(tables, func(table string) string { return snapshot[table] }), nil
+	return tableValuesFingerprint(tables, func(table string) string { return snapshot[table].digest }), nil
 }
 
 func tableValuesFingerprint(tables []string, value func(string) string) string {
@@ -2624,30 +2702,58 @@ func tableValuesFingerprint(tables []string, value func(string) string) string {
 	return hex.EncodeToString(sum.Sum(nil))
 }
 
-// partsSnapshot maps each table to a digest of its active parts.
-type partsSnapshot map[string]string
+// partsSnapshot maps each table to its active parts.
+type partsSnapshot map[string]tableParts
+
+// tableParts lists one table's active parts and a digest of their names and
+// files.
+type tableParts struct {
+	digest string
+	parts  []partInfo
+}
 
 type partsSnapshotKey struct{}
 
 // readPartsSnapshot reads the active parts of every table in one query.
 func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
-	rows, err := s.queryContext(ctx, `SELECT table,
-		hex(SHA256(toString(arraySort(groupArray((name, hash_of_all_files))))))
-		FROM system.parts WHERE database = currentDatabase() AND active GROUP BY table`)
+	rows, err := s.queryContext(ctx, `SELECT table, name, partition_id, min_block_number, max_block_number,
+		data_version, rows, hash_of_all_files
+		FROM system.parts WHERE database = currentDatabase() AND active ORDER BY table, name`)
 	if err != nil {
 		return nil, fmt.Errorf("reading clickhouse parts: %w", err)
 	}
 	defer rows.Close()
 	snapshot := partsSnapshot{}
+	digests := map[string]hash.Hash{}
 	for rows.Next() {
-		var table, digest string
-		if err := rows.Scan(&table, &digest); err != nil {
+		var table, files string
+		var p partInfo
+		var dataVersion uint64
+		if err := rows.Scan(&table, &p.name, &p.partition, &p.minBlock, &p.maxBlock, &dataVersion, &p.rows, &files); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse parts: %w", err)
 		}
-		snapshot[table] = digest
+		// A part's data version is its first block until a mutation
+		// rewrites it.
+		if int64(dataVersion) != p.minBlock {
+			p.mutation = int64(dataVersion)
+		}
+		tp := snapshot[table]
+		tp.parts = append(tp.parts, p)
+		snapshot[table] = tp
+		sum, ok := digests[table]
+		if !ok {
+			sum = sha256.New()
+			digests[table] = sum
+		}
+		fmt.Fprintf(sum, "%s\x00%s\x00", p.name, files)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating clickhouse parts: %w", err)
+	}
+	for table, sum := range digests {
+		tp := snapshot[table]
+		tp.digest = hex.EncodeToString(sum.Sum(nil))
+		snapshot[table] = tp
 	}
 	return snapshot, nil
 }
