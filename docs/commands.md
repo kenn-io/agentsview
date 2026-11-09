@@ -1,12 +1,12 @@
 ---
-last_edited: 2026-11-04
+last_edited: 2026-11-09
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
 
 ## Start from help
 
-On `main` (unreleased), `agentsview --help` includes a numbered workflow for
+`agentsview --help` includes a numbered workflow for
 syncing sources, finding sessions, reading transcripts, and checking usage.
 It explains session IDs, backend selection, output streams, exit codes, and
 environment variables. Run `agentsview source list --json` for the provider
@@ -18,7 +18,7 @@ commands include examples and describe their limits.
 
 ## Recover from CLI errors
 
-On `main` (unreleased), failed commands print `fatal: <message>` followed by
+Failed commands print `fatal: <message>` followed by
 `hint: <next step>` on stderr. The hint names CLI commands, flags, or settings.
 Unknown commands and flags point to the relevant command's `--help`.
 
@@ -77,7 +77,7 @@ their per-host summary and add recovery advice.
 
 ### Find a command by task
 
-On `main` (unreleased), describe a task to get up to five matching commands:
+Describe a task to get up to five matching commands:
 
 ```bash
 agentsview cli search "show token cost for a conversation"
@@ -128,6 +128,9 @@ launch paths.
 | `classifier ...` (recovery only)           | `index classifier ...` (recovery only)                             |
 | `parse-diff`                               | `archive diff`                                                     |
 | `token-use ID` (already deprecated)        | `session usage ID --json`                                          |
+
+Keep using `agentsview usage grok <csv>` to import xAI billing files. Its
+deprecation notice names `report usage grok`, which does not exist in 0.47.0.
 
 `session prune` operates on the local archive. It rejects the session group's
 inherited `--server`, `--server-token-file`, `--pg`, `--json`, and `--format`
@@ -1039,7 +1042,7 @@ ______________________________________________________________________
 
 ### `agentsview db repair-projects`
 
-Available in source builds after 0.46.1. Preview corrections for temporary
+Available in 0.47.0 and later. Preview corrections for temporary
 worktree project names using repository URLs already saved in the archive:
 
 ```bash
