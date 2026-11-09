@@ -22,7 +22,7 @@ type CannedFrictionReviewInput struct {
 	Revision     int                        `json:"revision"`
 	Summary      map[string]any             `json:"summary"`
 	TopPatterns  []CannedFrictionPattern    `json:"top_patterns"`
-	Diagnostics  []CannedFrictionDiagnostic `json:"diagnostics,omitempty"`
+	Diagnostics  []friction.DiagnosticGroup `json:"diagnostics,omitempty"`
 	P0Alerts     []CannedFrictionP0         `json:"p0_alerts"`
 }
 
@@ -38,12 +38,6 @@ type CannedFrictionPattern struct {
 	DigestSessions    int    `json:"digest_sessions"`
 	FirstSeenDate     string `json:"first_seen_date"`
 	Recurring         bool   `json:"recurring"`
-}
-
-type CannedFrictionDiagnostic struct {
-	Source  string `json:"source"`
-	Message string `json:"message"`
-	Count   int    `json:"count"`
 }
 
 // CannedFrictionP0 is one P0 alert: a tool failing across sessions.
