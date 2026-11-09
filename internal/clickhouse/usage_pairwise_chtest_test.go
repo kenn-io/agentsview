@@ -36,6 +36,29 @@ func TestUsagePairwiseDefaultReadsRankingOnce(t *testing.T) {
 	assert.Equal(t, uint64(1), queries)
 }
 
+func TestUsageTopSessionsSkipsPairwiseEvidence(t *testing.T) {
+	t.Parallel()
+	store, syncer, local := newUsagePriceStore(t)
+	comment := "top-without-pairwise-" + syncer.target.Database
+	ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
+	filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
+	got, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	want, err := local.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	normalizeSQLiteTopSessions(t, want)
+	assert.Equal(t, want, got)
+	_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+	require.NoError(t, err)
+	var queries, evidenceQueries uint64
+	require.NoError(t, store.conn.QueryRowContext(t.Context(), `
+		SELECT count(), countIf(position(query, 'inexact_models') > 0)
+		FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ?
+		AND position(query, 'FROM usage_classified') > 0`, comment).Scan(&queries, &evidenceQueries))
+	assert.Equal(t, uint64(1), queries)
+	assert.Zero(t, evidenceQueries)
+}
+
 func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []bool{false, true} {

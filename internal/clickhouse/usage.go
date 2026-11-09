@@ -1353,7 +1353,9 @@ func (s *Store) forEachDailyUsageGroupRow(
 	}
 	var source chUsageSource
 	if top {
-		source = usageCTEFor(state, f, "")
+		topFilter := f
+		topFilter.Breakdowns = false
+		source = usageCTEFor(state, topFilter, "")
 	} else {
 		source, err = s.dailyUsageCTE(ctx, state, f)
 		if err != nil {
@@ -1378,7 +1380,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	pricedSQL, pricedArgs := chUsagePricedCTE(source, pricingDigest)
 	metadataSelect := ""
 	evidenceSelect := ""
-	if f.Breakdowns {
+	if f.Breakdowns && !top {
 		evidenceSelect = ", groupUniqArrayArray(inexact_models), groupUniqArrayArray(inexact_projects)"
 	}
 	// Visit rows in time order so the last Copilot-reported total is the session cost.
@@ -1471,7 +1473,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 		if top {
 			targets = append(targets, &r.displayName, &startedAt, &r.groupKey, &r.sessionName, &metadataMachine)
 		}
-		if f.Breakdowns {
+		if f.Breakdowns && !top {
 			targets = append(targets, &r.inexactModels, &r.inexactProjects)
 		}
 		if err := rows.Scan(targets...); err != nil {
