@@ -1,6 +1,7 @@
 package signals
 
 import (
+	"bytes"
 	"encoding/json/v2"
 	"fmt"
 	"regexp"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // HeuristicMessage is the message subset needed by deterministic
@@ -115,41 +117,93 @@ func AnalyzeHeuristics(in HeuristicInput) HeuristicSignals {
 // reference Coach frustration rules: repeated punctuation, high
 // caps-word ratio, or direct hostile/frustrated language. It strips
 // fenced code first so pasted logs do not become tone signals.
+//
+// Signals runs it over every prompt in range after each restart, so it
+// reads each prompt in few passes: one strips fences, one builds the
+// normalized form and counts capitalized words, and one looks for every
+// phrase literal. The regular expression runs only from the first literal.
 func IsFrustrationMarker(content string) bool {
-	normalized := normalizePrompt(content)
+	withoutCode := stripCodeFences(content)
+	var words capsWords
+	normalized := appendNormalizedPrompt(make([]byte, 0, len(withoutCode)), withoutCode, &words)
 	if len(normalized) < FrustrationMinBytes {
 		return false
 	}
-	if mayContainFrustrationPhrase(normalized) && frustrationPhraseRe.MatchString(normalized) {
+	if start := frustrationPhraseStart(normalized); start >= 0 && frustrationPhraseRe.Match(normalized[start:]) {
 		return true
 	}
-	return capsWordRatio(content, FrustrationCapsMinWords) >= FrustrationCapsRatio
+	return words.ratio(FrustrationCapsMinWords) >= FrustrationCapsRatio
 }
 
-// mayContainFrustrationPhrase reports whether frustrationPhraseRe can match
-// normalized. Every alternative of the expression requires one of
+// frustrationPhraseStart returns where frustrationPhraseRe must start
+// reading normalized to find any match it has, or -1 when it has none.
+//
+// Every alternative of the expression requires one of
 // frustrationPhraseLowercase, so checking them first skips the expression
 // for the common prompt that cannot match; the expression is an unanchored
-// alternation that the Go engine runs as a full NFA over the whole prompt,
-// which dominates signals analytics for long prompts. normalized is already
-// lowercase, and the expression matches with simple case folding, under
-// which long s (U+017F) is the only lowercase non-ASCII rune that folds to
-// an ASCII letter. Replacing it with s makes a plain substring search exact.
-func mayContainFrustrationPhrase(normalized string) bool {
-	normalized = strings.ReplaceAll(normalized, "\u017f", "s")
-	for _, literal := range frustrationPhraseLowercase {
-		if strings.Contains(normalized, literal) {
-			return true
+// alternation that the Go engine runs as a full NFA, which dominates signals
+// analytics for long prompts. normalized is already lowercase, and the
+// expression matches with simple case folding, under which long s (U+017F)
+// is the only lowercase non-ASCII rune that folds to an ASCII letter.
+//
+// Without long s, every match therefore begins at an occurrence of a
+// literal, so none begins before the first one. Starting one byte earlier
+// keeps the byte that decides the leading word boundary; a cut multibyte
+// rune reads as U+FFFD, which is no more a word character than the rune.
+// With long s, the literals are searched in a copy where it is s, and the
+// expression reads all of normalized.
+func frustrationPhraseStart(normalized []byte) int {
+	if bytes.Contains(normalized, longS) {
+		if firstFrustrationLiteral(bytes.ReplaceAll(normalized, longS, []byte("s"))) < 0 {
+			return -1
+		}
+		return 0
+	}
+	i := firstFrustrationLiteral(normalized)
+	if i <= 0 {
+		return i
+	}
+	return i - 1
+}
+
+// firstFrustrationLiteral returns the offset of the first occurrence of
+// any of frustrationPhraseLowercase in s, or -1.
+func firstFrustrationLiteral(s []byte) int {
+	for i := 0; i+1 < len(s); i++ {
+		pair := uint16(s[i])<<8 | uint16(s[i+1])
+		if frustrationPhrasePairs[pair>>6]&(1<<(pair&63)) == 0 {
+			continue
+		}
+		for _, literal := range frustrationPhraseByFirstByte[s[i]] {
+			if len(s)-i >= len(literal) && string(s[i:i+len(literal)]) == literal {
+				return i
+			}
 		}
 	}
-	return false
+	return -1
 }
+
+var longS = []byte("\u017f")
 
 var frustrationPhraseLowercase = []string{
 	"!!!", "???", "wtf", "come on", "why won't", "this is broken",
 	"doesn't work", "does not work", "still broken", "same error",
 	"you broke", "fuck",
 }
+
+// frustrationPhraseByFirstByte lists frustrationPhraseLowercase by first
+// byte, and frustrationPhrasePairs is a bit set of their first two bytes.
+// One scan of a prompt checks every literal, comparing only where the pair
+// matches; most letters start no pair, which keeps the scan's branches
+// predictable.
+var frustrationPhraseByFirstByte, frustrationPhrasePairs = func() (index [256][]string, pairs [1 << 10]uint64) {
+	for _, literal := range frustrationPhraseLowercase {
+		index[literal[0]] = append(index[literal[0]], literal)
+		pair := uint16(literal[0])<<8 | uint16(literal[1])
+		pairs[pair>>6] |= 1 << (pair & 63)
+	}
+	return index, pairs
+}()
 
 // CountFrustrationMarkers counts user prompts that indicate the
 // session is going badly. This is an analytics marker, not a
@@ -285,8 +339,8 @@ func parsePromptTime(raw string) (time.Time, bool) {
 
 func normalizePrompt(content string) string {
 	withoutCode := stripCodeFences(content)
-	lower := strings.ToLower(strings.TrimSpace(withoutCode))
-	return collapseWhitespace(lower)
+	var words capsWords
+	return string(appendNormalizedPrompt(make([]byte, 0, len(withoutCode)), withoutCode, &words))
 }
 
 // stripCodeFences replaces every fenced block with one space, matching
@@ -318,26 +372,62 @@ func stripCodeFences(content string) string {
 	return b.String()
 }
 
-func collapseWhitespace(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	inSpace := false
-	wrote := false
-	for _, r := range s {
-		if unicode.IsSpace(r) {
-			if wrote {
-				inSpace = true
+// appendNormalizedPrompt appends s lowercased, with each run of
+// whitespace collapsed to one space and the ends trimmed, and counts the
+// words of s in words. The text equals strings.ToLower followed by
+// collapsing whitespace, in one pass: a byte that is not valid UTF-8
+// becomes U+FFFD, as strings.ToLower writes it.
+func appendNormalizedPrompt(dst []byte, s string, words *capsWords) []byte {
+	inSpace, wrote := false, false
+	for i := 0; i < len(s); {
+		if c := s[i]; c < utf8.RuneSelf {
+			i++
+			switch {
+			case 'a' <= c && c <= 'z':
+				words.letters++
+				words.hasLower = true
+			case 'A' <= c && c <= 'Z':
+				words.letters++
+				words.hasUpper = true
+				c += 'a' - 'A'
+			case c == ' ' || '\t' <= c && c <= '\r':
+				words.end()
+				inSpace = wrote
+				continue
+			default:
+				words.end()
 			}
+			if inSpace {
+				dst = append(dst, ' ')
+				inSpace = false
+			}
+			dst = append(dst, c)
+			wrote = true
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		if unicode.IsLetter(r) {
+			words.letters++
+			words.hasLower = words.hasLower || unicode.IsLower(r)
+			words.hasUpper = words.hasUpper || unicode.IsUpper(r)
+		} else {
+			words.end()
+		}
+		r = unicode.ToLower(r)
+		if unicode.IsSpace(r) {
+			inSpace = wrote
 			continue
 		}
 		if inSpace {
-			b.WriteByte(' ')
+			dst = append(dst, ' ')
 			inSpace = false
 		}
-		b.WriteRune(r)
+		dst = utf8.AppendRune(dst, r)
 		wrote = true
 	}
-	return b.String()
+	words.end()
+	return dst
 }
 
 func promptTokens(normalized string) []string {
@@ -354,39 +444,37 @@ func promptTokens(normalized string) []string {
 	return tokens
 }
 
-func capsWordRatio(content string, minWords int) float64 {
-	withoutCode := stripCodeFences(content)
-	words := strings.FieldsFunc(withoutCode, func(r rune) bool {
-		return !unicode.IsLetter(r)
-	})
-	if len(words) < minWords {
+// capsWords counts the words of a prompt, where a word is a run of
+// letters, and tracks the word being read.
+type capsWords struct {
+	words, total, caps int
+	letters            int
+	hasLower, hasUpper bool
+}
+
+// end closes the current word, if any.
+func (w *capsWords) end() {
+	if w.letters == 0 {
+		return
+	}
+	w.words++
+	if w.letters >= 2 {
+		w.total++
+		if w.hasUpper && !w.hasLower {
+			w.caps++
+		}
+	}
+	w.letters = 0
+	w.hasLower, w.hasUpper = false, false
+}
+
+// ratio returns the share of words with two or more letters that are all
+// capitals, or 0 when there are fewer than minWords words or longer words.
+func (w *capsWords) ratio(minWords int) float64 {
+	if w.words < minWords || w.total < minWords {
 		return 0
 	}
-	total := 0
-	caps := 0
-	for _, word := range words {
-		if len([]rune(word)) < 2 {
-			continue
-		}
-		total++
-		hasLower := false
-		hasUpper := false
-		for _, r := range word {
-			if unicode.IsLower(r) {
-				hasLower = true
-			}
-			if unicode.IsUpper(r) {
-				hasUpper = true
-			}
-		}
-		if hasUpper && !hasLower {
-			caps++
-		}
-	}
-	if total < minWords {
-		return 0
-	}
-	return float64(caps) / float64(total)
+	return float64(w.caps) / float64(w.total)
 }
 
 func isControlPrompt(normalized string) bool {

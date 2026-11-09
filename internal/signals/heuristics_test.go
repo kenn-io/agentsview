@@ -518,28 +518,39 @@ func TestCountFrustrationMarkers(t *testing.T) {
 	assert.Equal(t, 2, CountFrustrationMarkers(msgs))
 }
 
-// The prefilter must never reject a prompt the regular expression flags,
-// including prompts whose letters only match under Unicode case folding.
-func TestFrustrationPrefilterAcceptsEveryRegexMatch(t *testing.T) {
+// Starting the regular expression where frustrationPhraseStart says must
+// find a match exactly when reading the whole prompt does, including
+// prompts whose letters only match under Unicode case folding and literals
+// whose word boundary depends on the rune before them.
+func TestFrustrationPhraseStartKeepsEveryRegexMatch(t *testing.T) {
 	prompts := []string{
 		"WHY WON'T THIS WORK???!!!",
 		"this is broken after the retry",
 		"Come On, it still fails",
 		"doe\u017f not work",       // long s folds to s
 		"you bro\u212ae the build", // Kelvin sign folds to k
+		"wtf\u017f now",            // long s after a literal is no word character
 		"the SAME ERROR shows up",
 		"doesn\u2019t work", // curly apostrophe: regex requires ASCII
 		"Please run the focused test again.",
+		"awtf then wtf",
+		"wtfs and nothing else",
+		"\u00e9wtf is it",
+		"\u4e2dwtf is it",
 		strings.Repeat("a", 5000) + " wtf " + strings.Repeat("b", 5000),
 	}
+	matches := 0
 	for _, prompt := range prompts {
-		normalized := normalizePrompt(prompt)
-		if frustrationPhraseRe.MatchString(normalized) {
-			assert.True(t, mayContainFrustrationPhrase(normalized), prompt)
+		normalized := []byte(normalizePrompt(prompt))
+		want := frustrationPhraseRe.Match(normalized)
+		start := frustrationPhraseStart(normalized)
+		assert.Equal(t, want, start >= 0 && frustrationPhraseRe.Match(normalized[start:]), "%q", prompt)
+		if want {
+			matches++
 		}
 	}
-	assert.True(t, frustrationPhraseRe.MatchString(normalizePrompt("doe\u017f not work")))
-	assert.False(t, mayContainFrustrationPhrase(normalizePrompt("Please run the focused test again.")))
+	assert.Equal(t, 11, matches)
+	assert.Equal(t, -1, frustrationPhraseStart([]byte(normalizePrompt("Please run the focused test again."))))
 }
 
 // After lowercasing, long s is the only non-ASCII rune whose simple fold

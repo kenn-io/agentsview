@@ -602,6 +602,33 @@ SQLite and PostgreSQL keep their scans in Go, which skip system rows in SQL.
 DuckDB judges plain prompts in SQL the same way; only the ClickHouse layout
 changed.
 
+**Go judges each prompt in a few passes.** SQLite, PostgreSQL, and DuckDB send
+every prompt of a session their memo misses to `IsFrustrationMarker`, and
+ClickHouse sends the prompts it cannot judge in SQL. The memo lives in memory,
+so the first Signals load after a restart judges every prompt in range. The
+function strips code fences once. One pass then builds the normalized prompt and
+counts the capitalized words, and another finds the first phrase literal. The
+regular expression starts one byte before that literal, because no match can
+begin earlier. Tests compare the function with its original step-by-step form on
+edge cases, a random corpus, and a fuzz target.
+
+On a scratch SQLite archive of 7,000 sessions with 140,000 prompts (594 MiB of
+prompt text), the first Signals load after a restart fell from 9.2 s to 2.2 s
+with the file in the page cache, and from 10.4 s to 3.3-3.6 s with it evicted.
+Allocation fell from 12.4 GiB to 3.2 GiB, and the count stayed the same. SQLite
+returns the prompt text in 0.42 s; the judge took 8.3 s before and 2.0 s after.
+A load the memo answers takes 15 ms either way.
+
+Rejected for SQLite:
+
+- Storing a marker flag per message, or a count per session, when messages are
+  written. The first load would then read stored numbers. But every path that
+  writes or replaces messages would have to keep them current, and existing
+  archives would need a backfill that judges every prompt once anyway. With the
+  faster judge, the cost it removes is about 2 s once per restart.
+- Judging prompts in SQL. SQLite has no `REGEXP`, and a function registered from
+  Go would run the same Go check behind SQL.
+
 ## Kept reads
 
 Serve keeps the results of recent reads in memory so a repeat request between
