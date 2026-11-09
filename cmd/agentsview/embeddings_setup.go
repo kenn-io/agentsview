@@ -102,6 +102,15 @@ func (v *liveVectorServing) Notify(recall bool) {
 func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	manager := v.managerLocked(store)
+	if manager == nil {
+		return nil
+	}
+	return manager
+}
+
+// managerLocked selects the store manager while v.mu is held.
+func (v *liveVectorServing) managerLocked(store string) *vector.Manager {
 	if v.serving.manager == nil {
 		return nil
 	}
@@ -250,10 +259,11 @@ func (v *liveVectorServing) Setup(approvedBytes int64, build *vector.BuildReques
 		} else {
 			v.setup.Action = ""
 		}
-		manager := v.serving.manager
-		if build != nil && build.Store == vector.RecallIndexSpec().Name {
-			manager = v.serving.recallManager
+		store := ""
+		if build != nil {
+			store = build.Store
 		}
+		manager := v.managerLocked(store)
 		close(v.done)
 		v.mu.Unlock()
 		if err == nil && manager != nil {
@@ -307,14 +317,13 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		v.startSchedulers()
 		v.mu.Unlock()
 	}
-	manager := v.serving.manager
 	req := vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated}
 	if build != nil {
 		req = *build
-		if req.Store == vector.RecallIndexSpec().Name {
-			manager = v.serving.recallManager
-		}
 	}
+	v.mu.Lock()
+	manager := v.managerLocked(req.Store)
+	v.mu.Unlock()
 	err = manager.StartBuild(req)
 	if errors.Is(err, vector.ErrBuildRunning) {
 		return nil
