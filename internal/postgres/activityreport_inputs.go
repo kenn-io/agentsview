@@ -6,10 +6,13 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"time"
+	"unique"
 	"unsafe"
 
 	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // A report owns its maps and slices. Published inputs are immutable; builders
@@ -17,23 +20,59 @@ import (
 // visible to the next visit.
 type pgActivityInputs struct {
 	revision    int64
-	transcripts map[string][]activity.TranscriptMessage
-	usage       []pgDailyUsageScanRow
+	transcripts map[string][]pgActivityMessage
+	usage       []pgActivityUsageRow
 	candidates  map[string]bool
 	changed     []string
 }
 
+// Retained rows keep only the fields Activity consumes. Repeated values use
+// shared handles, and timestamps keep PostgreSQL's microsecond precision.
+type pgActivityMessage struct {
+	ordinal     int32
+	us          int64
+	role, model unique.Handle[string]
+}
+
+type pgActivityUsageRow struct {
+	sessionID, usageSource, model, providerID, agent            unique.Handle[string]
+	claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string
+	us, cost, webSearches                                       int64
+	input, output, cacheCreate, cacheRead, reasoning            int64
+	ordinal, cacheCreate1h                                      int32
+	ordinalValid, costValid, copilotReported, pricingTimeAbsent bool
+}
+
+func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Handle[string]) pgActivityUsageRow {
+	input, output, create, read, reasoning := pgDailyUsageRowTokens(r)
+	return pgActivityUsageRow{
+		sessionID: handle(r.sessionID), usageSource: handle(r.usageSource), model: handle(r.model), providerID: handle(r.providerID), agent: handle(r.agent),
+		claudeMessageID: r.claudeMessageID, claudeRequestID: r.claudeRequestID, sourceUUID: r.sourceUUID, usageDedupKey: r.usageDedupKey,
+		us: r.ts.Time.UnixMicro(), cost: r.cost.Int64,
+		input: int64(input), output: int64(output), cacheCreate: int64(create), cacheRead: int64(read), reasoning: int64(reasoning),
+		ordinal: int32(r.messageOrdinal.Int64), cacheCreate1h: int32(pgUsageRowCacheCreation1hTokens(r.usageSource, r.tokenJSON, create)), webSearches: int64(pgUsageRowWebSearchRequests(r.usageSource, r.tokenJSON)),
+		ordinalValid: r.messageOrdinal.Valid, costValid: r.cost.Valid, copilotReported: r.costSource == db.CopilotReportedCostSource, pricingTimeAbsent: !r.pricingTS.Valid,
+	}
+}
+
 func pgActivityInputBytes(e pgActivityInputs) int64 {
 	size := int64(unsafe.Sizeof(e))
+	shared := map[unique.Handle[string]]struct{}{}
 	for id, messages := range e.transcripts {
-		size += int64(len(id)) + 80 + int64(cap(messages))*int64(unsafe.Sizeof(activity.TranscriptMessage{}))
+		size += int64(len(id)) + 80 + int64(cap(messages))*int64(unsafe.Sizeof(pgActivityMessage{}))
 		for _, m := range messages {
-			size += int64(len(m.Role) + len(m.Model))
+			shared[m.role], shared[m.model] = struct{}{}, struct{}{}
 		}
 	}
-	size += int64(cap(e.usage)) * int64(unsafe.Sizeof(pgDailyUsageScanRow{}))
+	size += int64(cap(e.usage)) * int64(unsafe.Sizeof(pgActivityUsageRow{}))
 	for _, r := range e.usage {
-		size += int64(len(r.sessionID) + len(r.usageSource) + len(r.model) + len(r.providerID) + len(r.tokenJSON) + len(r.costSource) + len(r.claudeMessageID) + len(r.claudeRequestID) + len(r.sourceUUID) + len(r.usageDedupKey) + len(r.project) + len(r.agent) + len(r.machine))
+		size += int64(len(r.claudeMessageID) + len(r.claudeRequestID) + len(r.sourceUUID) + len(r.usageDedupKey))
+		for _, h := range [...]unique.Handle[string]{r.sessionID, r.usageSource, r.model, r.providerID, r.agent} {
+			shared[h] = struct{}{}
+		}
+	}
+	for h := range shared {
+		size += int64(len(h.Value()))
 	}
 	for id := range e.candidates {
 		size += int64(len(id)) + 64
@@ -55,7 +94,7 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 		s.runtimeState().activityInputs.DeleteSlots(func(slot string) bool { return slot == lower+"|"+upper })
 		return nil, err
 	}
-	next := &pgActivityInputs{revision: revision, transcripts: map[string][]activity.TranscriptMessage{}, changed: changed}
+	next := &pgActivityInputs{revision: revision, transcripts: map[string][]pgActivityMessage{}, changed: changed}
 	if ok && revision >= after && len(changed) <= max(64, len(previous[0].candidates)/4) {
 		old := previous[0]
 		dirty := make(map[string]bool, len(changed))
@@ -74,7 +113,7 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 }
 
 // activityTranscriptSource streams uncached sessions through the same reader
-// that fills retained inputs. Its callback may mutate only uncached messages.
+// that fills retained inputs. Its callback may mutate the expanded messages.
 func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inputs *pgActivityInputs, yield func(string, []activity.TranscriptMessage)) error {
 	missing := ids
 	if inputs != nil {
@@ -98,6 +137,15 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 				inputs.transcripts[id] = nil
 			}
 		}
+		handles := map[string]unique.Handle[string]{}
+		handle := func(v string) unique.Handle[string] {
+			h, ok := handles[v]
+			if !ok {
+				h = unique.Make(v)
+				handles[v] = h
+			}
+			return h
+		}
 		finish := func(id string, session []activity.TranscriptMessage) {
 			if len(session) == 0 {
 				return
@@ -105,7 +153,11 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 			if inputs == nil {
 				yield(id, session)
 			} else {
-				inputs.transcripts[id] = slices.Clip(slices.Clone(session))
+				compact := make([]pgActivityMessage, len(session))
+				for i, m := range session {
+					compact[i] = pgActivityMessage{ordinal: int32(m.Ordinal), us: m.At.UnixMicro(), role: handle(m.Role), model: handle(m.Model)}
+				}
+				inputs.transcripts[id] = compact
 			}
 		}
 		var id string
@@ -132,17 +184,23 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 		finish(id, session)
 	}
 	if inputs != nil {
+		var expanded []activity.TranscriptMessage
 		for _, id := range ids {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			yield(id, inputs.transcripts[id])
+			messages := inputs.transcripts[id]
+			expanded = slices.Grow(expanded[:0], len(messages))[:len(messages)]
+			for i, m := range messages {
+				expanded[i] = activity.TranscriptMessage{Ordinal: int(m.ordinal), At: time.UnixMicro(m.us).UTC(), Role: m.role.Value(), Model: m.model.Value()}
+			}
+			yield(id, expanded)
 		}
 	}
 	return nil
 }
 
-func (s *Store) readActivityUsageInputs(ctx context.Context, ids []string, lowerBound, upperBound string) ([]pgDailyUsageScanRow, error) {
+func (s *Store) readActivityUsageInputs(ctx context.Context, ids []string, lowerBound, upperBound string) ([]pgActivityUsageRow, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -164,18 +222,27 @@ func (s *Store) readActivityUsageInputs(ctx context.Context, ids []string, lower
 		return nil, fmt.Errorf("querying activity report usage: %w", err)
 	}
 	defer rows.Close()
-	var out []pgDailyUsageScanRow
+	handles := map[string]unique.Handle[string]{}
+	handle := func(v string) unique.Handle[string] {
+		h, ok := handles[v]
+		if !ok {
+			h = unique.Make(v)
+			handles[v] = h
+		}
+		return h
+	}
+	var out []pgActivityUsageRow
 	for rows.Next() {
 		r, err := scanPGDailyUsageRow(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scanning activity report usage: %w", err)
 		}
-		out = append(out, r)
+		out = append(out, pgCompactActivityUsage(r, handle))
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, upper string, inputs *pgActivityInputs) ([]pgDailyUsageScanRow, error) {
+func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, upper string, inputs *pgActivityInputs) ([]pgActivityUsageRow, error) {
 	if inputs == nil {
 		return s.readActivityUsageInputs(ctx, ids, lower, upper)
 	}
@@ -215,13 +282,13 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 	}
 	// Fresh reads can return unchanged snapshot peers. Remove their prior copies
 	// while preserving multiple identical rows within the fresh result itself.
-	freshRows := make(map[pgDailyUsageScanRow]bool, len(fresh))
+	freshRows := make(map[pgActivityUsageRow]bool, len(fresh))
 	for _, r := range fresh {
 		freshRows[r] = true
 	}
-	merged := make([]pgDailyUsageScanRow, 0, len(inputs.usage)+len(fresh))
+	merged := make([]pgActivityUsageRow, 0, len(inputs.usage)+len(fresh))
 	for _, r := range inputs.usage {
-		if !replaced[r.sessionID] && !freshRows[r] {
+		if !replaced[r.sessionID.Value()] && !freshRows[r] {
 			merged = append(merged, r)
 		}
 	}
@@ -229,12 +296,12 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 	type key struct{ message, request string }
 	keys := map[key]bool{}
 	for _, r := range merged {
-		if selected[r.sessionID] && r.claudeMessageID != "" && r.claudeRequestID != "" {
+		if selected[r.sessionID.Value()] && r.claudeMessageID != "" && r.claudeRequestID != "" {
 			keys[key{r.claudeMessageID, r.claudeRequestID}] = true
 		}
 	}
-	merged = slices.DeleteFunc(merged, func(r pgDailyUsageScanRow) bool {
-		return !selected[r.sessionID] && !keys[key{r.claudeMessageID, r.claudeRequestID}]
+	merged = slices.DeleteFunc(merged, func(r pgActivityUsageRow) bool {
+		return !selected[r.sessionID.Value()] && !keys[key{r.claudeMessageID, r.claudeRequestID}]
 	})
 	inputs.usage = slices.Clip(slices.Clone(merged))
 	inputs.candidates = selected

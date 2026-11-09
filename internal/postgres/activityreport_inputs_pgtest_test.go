@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -55,6 +56,16 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
 	before := pgKeptBuild(t, store, f, q, true)
+	compareFresh := func(got activity.CandidateArtifacts, custom bool) {
+		t.Helper()
+		fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+		require.NoError(t, err)
+		defer fresh.Close()
+		if custom {
+			fresh.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+		}
+		requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	}
 	require.Len(t, counter.transcriptReads, 1)
 	assert.ElementsMatch(t, []string{"a", "b"}, counter.transcriptReads[0])
 	require.Len(t, counter.usageReads, 1)
@@ -75,10 +86,33 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	require.Len(t, counter.usageReads, 2)
 	assert.Equal(t, []string{"a"}, counter.usageReads[1])
 	assert.Equal(t, 1200, changed.Report.Totals.OutputTokens)
-	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
-	pgKeptBuild(t, store, f, q, true)
+	compareFresh(changed, false)
+	compareFresh(pgKeptBuild(t, store, f, q, true), false)
 	assert.Len(t, counter.transcriptReads, 2)
 	assert.Len(t, counter.usageReads, 2)
+	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+	compareFresh(pgKeptBuild(t, store, f, q, true), true)
+	compareFresh(pgKeptBuild(t, store, f, q, true), true)
+	assert.Len(t, counter.transcriptReads, 2)
+	assert.Len(t, counter.usageReads, 2)
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
+		{SessionID: "a", Ordinal: 0, Role: "assistant", Content: "partial", Timestamp: "2026-06-14T10:00:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":5}`), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"},
+	}))
+	pgKeptPush(t, syncer, false)
+	pgKeptBuild(t, store, f, q, true)
+	pgKeptSession(t, local, "peer", "project-a", "2026-06-14")
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "peer", []db.Message{
+		{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":631}`), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"},
+	}))
+	pgKeptPush(t, syncer, false)
+	peer := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 1131, peer.Report.Totals.OutputTokens)
+	compareFresh(peer, true)
+	compareFresh(pgKeptBuild(t, store, f, q, true), true)
+	require.Len(t, counter.transcriptReads, 4)
+	assert.Equal(t, []string{"peer"}, counter.transcriptReads[3])
+	require.Len(t, counter.usageReads, 4)
+	assert.Equal(t, []string{"peer"}, counter.usageReads[3])
 }
 
 func TestPGActivityReportInputClock(t *testing.T) {
