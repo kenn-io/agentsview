@@ -1212,12 +1212,14 @@ func (s *rollupAccountSource) ReadUsageAccounts(context.Context) (string, int64,
 func TestUsageRollupExternalAccountReplacementDuringBuild(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
-	snapshot, _, cache := prepareUsageRollupTest(t, database)
-	snapshot.exactAccountRevision, snapshot.CursorHighWater = true, 10
-	source := &rollupAccountSource{databaseID: snapshot.DatabaseID, revision: 10, accounts: []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, ChargedMicrodollars: 100, DedupKey: "account"}}}
-	database.usageSource = source
-	defer func() { database.usageSource = nil }()
-	require.NoError(t, cache.fill.replaceExternalAccounts(t.Context(), 10))
+	databaseID, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	source := &rollupAccountSource{database: database, databaseID: databaseID, revision: 10, accounts: []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, ChargedMicrodollars: 100, DedupKey: "account"}}}
+	directory := t.TempDir()
+	reader, err := NewUsageCacheReader(directory, source)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	snapshot, _, cache := prepareUsageRollupTest(t, reader.engine)
 	var changed atomic.Bool
 	var replaceErr error
 	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
@@ -1228,19 +1230,20 @@ func TestUsageRollupExternalAccountReplacementDuringBuild(t *testing.T) {
 		}
 	}
 	resolver := export.NewPricingResolver(snapshot.PricingRows)
-	_, _, err := cache.rollup.Ensure(t.Context(), snapshot, nil, resolver)
+	_, _, err = cache.rollup.Ensure(t.Context(), snapshot, nil, resolver)
 	require.True(t, changed.Load())
 	require.NoError(t, replaceErr)
 	require.ErrorIs(t, err, errUsageCacheSourceChanged)
-	snapshot.CursorHighWater = 20
+	snapshot, err = reader.engine.captureUsageQuery(t.Context(), UsageFilter{Timezone: "UTC"}, usageQueryKindToken)
+	require.NoError(t, err)
 	installs, _, err := cache.rollup.Ensure(t.Context(), snapshot, nil, resolver)
 	require.NoError(t, err)
 	for _, reopen := range []bool{false, true} {
 		if reopen {
-			require.NoError(t, database.usageCache.Close())
-			database.usageCache = newUsageCacheManager(database.Path())
-			database.usageCache.attachArchive(database)
-			cache, err = database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+			require.NoError(t, reader.Close())
+			reader, err = NewUsageCacheReader(directory, source)
+			require.NoError(t, err)
+			cache, err = reader.engine.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 			require.NoError(t, err)
 		}
 		result, err := cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, UsageFilter{Timezone: "UTC"}, resolver, 0)

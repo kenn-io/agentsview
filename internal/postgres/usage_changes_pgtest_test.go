@@ -479,10 +479,10 @@ $v1$;`
 		err := store.pg.QueryRowContext(raceCtx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND relation='cursor_usage_events'::regclass AND NOT granted)`, pid).Scan(&blocked)
 		return err == nil && blocked
 	}, 3*time.Second, 10*time.Millisecond, "migration must wait for the old account writer")
-	require.NoError(t, writer.Commit())
-	require.NoError(t, <-done)
 	var revision int64
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+	require.NoError(t, writer.Commit())
+	require.NoError(t, <-done)
 	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
 	var version string
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version))
@@ -492,7 +492,7 @@ $v1$;`
 	require.Equal(t, oid, upgradedOID, "upgrading must preserve the source incarnation")
 	through, ids, err := store.LoadUsageChanges(ctx, revision)
 	require.NoError(t, err)
-	require.Equal(t, revision, through, "upgrading must preserve the commit clock")
+	require.Equal(t, revision+1, through, "only the old writer may advance the commit clock")
 	require.Empty(t, ids)
 	require.Same(t, reader, store.usageCache)
 	requireCachedUsageMatchesDirect(t, store, filter)

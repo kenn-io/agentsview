@@ -159,9 +159,6 @@ func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
 	probe = attachUsageCacheProbe(t, store, directory)
 	requireCachedUsageMatchesDirect(t, store, all)
 	require.Empty(t, probe.takeExtracted())
-	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at) VALUES('activity-midnight','activity-project','test-machine','codex','2026-01-01'); INSERT INTO messages(session_id,ordinal,role,content,timestamp,model) VALUES('activity-midnight',0,'assistant','','2026-01-02 00:30:00+00','activity')`)
-	require.NoError(t, err)
-	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "America/New_York"})
 }
 
 func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
@@ -200,10 +197,6 @@ func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
 			assert.Zero(t, accountReads.Load(), "metadata changes must not copy the account history")
 		}
 	}
-	require.NoError(t, store.usageCache.Close())
-	probe = attachUsageCacheProbe(t, store, directory)
-	requireCachedUsageMatchesDirect(t, store, filter)
-	require.Empty(t, probe.takeExtracted())
 	store.SetCustomPricing(map[string]config.CustomModelRate{"paid-a": {OutputMicrodollarsPerMTok: 23000000}})
 	requireCachedUsageMatchesDirect(t, store, filter)
 	require.NoError(t, store.usageCache.Close())
@@ -437,6 +430,9 @@ func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
 			want, err := direct.GetTopSessionsByCost(ctx, filter, 1)
 			require.NoError(t, err)
 			normalizeUsageTopTimes(want)
+			probe.mu.Lock()
+			before := probe.captures
+			probe.mu.Unlock()
 			public, err := store.GetTopSessionsByCost(ctx, filter, 1)
 			require.NoError(t, err)
 			normalizeUsageTopTimes(public)
@@ -444,7 +440,7 @@ func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
 			probe.mu.Lock()
 			captured := probe.captures
 			probe.mu.Unlock()
-			require.Positive(t, captured, "the public read must reach the configured cache")
+			require.Greater(t, captured, before, "each new selection must reach the configured cache")
 			repeated, err := store.GetTopSessionsByCost(ctx, filter, 1)
 			require.NoError(t, err)
 			normalizeUsageTopTimes(repeated)
@@ -480,6 +476,9 @@ func TestPGUsageCacheChronologicalFractionalTimestamps(t *testing.T) {
 	attachUsageCacheProbe(t, store, t.TempDir())
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	requireCachedUsageMatchesDirect(t, store, filter)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at) VALUES('activity-midnight','activity-project','test-machine','codex','2026-01-01'); INSERT INTO messages(session_id,ordinal,role,content,timestamp,model) VALUES('activity-midnight',0,'assistant','','2026-01-02 00:30:00+00','activity')`)
+	require.NoError(t, err)
+	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "America/New_York"})
 }
 
 func TestPGUsageCacheNullableSessionFilters(t *testing.T) {
