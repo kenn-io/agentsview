@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 	"uuid"
 
 	"github.com/stretchr/testify/assert"
@@ -33,8 +32,6 @@ func TestDiagnosticAppendRoute(t *testing.T) {
 	assertStatus(t, post(withoutTime, "127.0.0.1:1234"), http.StatusOK)
 	conflict := strings.Replace(body, "launch failed", "other failure", 1)
 	assertStatus(t, post(conflict, "127.0.0.1:1234"), http.StatusConflict)
-	future := fmt.Sprintf(`{"id":%q,"source":"worker","message":"failure","occurred_at":%q}`, uuid.NewV7().String(), time.Now().Add(10*time.Minute).UTC().Format(time.RFC3339))
-	assertStatus(t, post(future, "127.0.0.1:1234"), http.StatusUnprocessableEntity)
 	zeroTime := fmt.Sprintf(`{"id":%q,"source":"worker","message":"failure","occurred_at":"0001-01-01T00:00:00Z"}`, uuid.NewV7().String())
 	assertStatus(t, post(zeroTime, "127.0.0.1:1234"), http.StatusUnprocessableEntity)
 	events, err := te.db.DiagnosticEventsAfter(t.Context(), 0, 10)

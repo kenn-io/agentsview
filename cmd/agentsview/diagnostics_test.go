@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"path/filepath"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/stretchr/testify/assert"
@@ -26,6 +27,7 @@ func TestDiagnosticsAppendLocalAndServer(t *testing.T) {
 	var event db.DiagnosticEvent
 	require.NoError(t, json.Unmarshal([]byte(out), &event))
 	assert.Equal(t, id, event.ID)
+	assert.Equal(t, time.Date(2026, 1, 1, 23, 55, 0, 0, time.UTC), event.OccurredAt)
 	d := dbtest.OpenTestDBAt(t, path)
 	ts := localServerProxy(t, d, dataDir, server.WithBasePath(""))
 	out, _, err = runInsightCommand(t, append(args, "--server", ts.URL)...)
