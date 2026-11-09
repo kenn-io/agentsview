@@ -641,9 +641,9 @@ func TestIssueRejectsMismatchedProjectUID(t *testing.T) {
 
 func TestReopenCommentLabel(t *testing.T) {
 	s := katatest.New(t)
-	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	is := s.AddIssue(katatest.Issue{Title: "t", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+	is := s.AddIssue(katatest.Issue{Title: "t", Status: "closed", ClosedReason: "done"})
 	c := readyClient(t, s)
+
 	changed, err := c.Reopen(t.Context(), is.UID)
 	require.NoError(t, err)
 	assert.True(t, changed)
