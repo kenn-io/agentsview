@@ -341,8 +341,8 @@ func TestBuildDate(t *testing.T) {
 			seed(t, d, subject{id: "s1", ended: "2026-09-15T12:00:00Z", findings: []db.FrictionFinding{correction("s1", "no, use the other file please")}})
 			diag := func(id string) friction.Signal {
 				return friction.Signal{
-					Kind: friction.KindError, SubjectID: id, Detector: "error",
-					ToolName: "nightly_check", Text: id + ": check failed", Dims: friction.Dims{Machine: "ci-runner"},
+					Kind: friction.KindDiagnostic, SubjectID: id, SubjectKind: friction.SubjectDiagnostic,
+					Label: "worker", Text: "check failed",
 				}
 			}
 			r.Diagnostics = fakeDiagnostics{sigs: []friction.Signal{diag("run-9:nightly_check"), diag("run-1:nightly_check"), diag("run-5:nightly_check")}}

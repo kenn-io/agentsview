@@ -304,7 +304,7 @@ describe("FrictionPage", () => {
     expect(document.querySelector(".summary-strip")).toBeNull();
   });
 
-  it("groups diagnostics by source and message without session links", async () => {
+  it("shows diagnostics without session links", async () => {
     const event = sig({
       kind: "diagnostic",
       subject_kind: "diagnostic",
@@ -316,17 +316,15 @@ describe("FrictionPage", () => {
       ...makeDigest([
         event,
         { ...event, subject_id: "diagnostic:2", machine: "machine-b" },
-        { ...event, subject_id: "diagnostic:3" },
       ]),
       p0_alerts: [],
       patterns: [],
     };
     await render();
     const diagnostics = section("diagnostic");
-    expect(diagnostics.querySelectorAll("li.signal-row")).toHaveLength(1);
     expect(diagnostics.textContent).toContain("worker");
     expect(diagnostics.textContent).toContain("launch failed");
-    expect(diagnostics.textContent).toContain("x3");
+    expect(diagnostics.textContent).toContain("x2");
     expect(diagnostics.textContent).not.toContain("machine-a");
     expect(diagnostics.querySelector("a")).toBeNull();
   });

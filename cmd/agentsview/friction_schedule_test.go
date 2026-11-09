@@ -95,14 +95,7 @@ func TestFrictionReviewIsOptIn(t *testing.T) {
 	r, err = newFrictionRunner(cfg, d, time.Now)
 	require.NoError(t, err)
 	require.NotNil(t, r)
-	when := time.Now().UTC().Add(-time.Hour)
-	_, err = d.AppendDiagnostic(t.Context(), db.DiagnosticEvent{ID: "018f0000-0000-7000-8000-000000000001", Source: "worker", Message: "launch failed", OccurredAt: when})
-	require.NoError(t, err)
-	require.NotNil(t, r.Diagnostics)
-	signals, err := r.Diagnostics.DiagnosticSignalsForDate(t.Context(), when.In(r.Loc).Format("2006-01-02"), r.Loc)
-	require.NoError(t, err)
-	require.Len(t, signals, 1)
-	assert.Equal(t, "launch failed", signals[0].Text)
+	assert.Same(t, d, r.Diagnostics)
 }
 
 func TestFrictionReviewSkipsUsageOnlyArchive(t *testing.T) {

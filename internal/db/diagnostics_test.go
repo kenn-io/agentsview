@@ -38,10 +38,7 @@ func TestDiagnosticAppendAndDaySelection(t *testing.T) {
 	dates, err := d.FrictionPendingDiagnosticDates(t.Context(), "2026-01-31", time.UTC)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"2026-01-01"}, dates)
-	e.OccurredAt = time.Now().Add(10 * time.Minute)
-	e.ID = uuid.NewV7().String()
-	_, err = d.AppendDiagnostic(t.Context(), e)
-	require.Error(t, err)
+
 }
 
 func TestDiagnosticRejectsUnreplicableValues(t *testing.T) {
@@ -52,6 +49,7 @@ func TestDiagnosticRejectsUnreplicableValues(t *testing.T) {
 		{ID: uuid.NewV7().String(), Source: "work\x00er", Message: "failure"},
 		{ID: uuid.NewV7().String(), Source: "worker", Message: "fail\x00ure"},
 		{ID: uuid.NewV7().String(), Source: "worker", Message: "failure", OccurredAt: badTime},
+		{ID: uuid.NewV7().String(), Source: "worker", Message: "failure", OccurredAt: time.Now().Add(10 * time.Minute)},
 		{ID: uuid.NewV7().String(), Source: "worker", Message: "failure", OccurredAtSupplied: true},
 	} {
 		_, err := d.AppendDiagnostic(t.Context(), e)

@@ -130,6 +130,9 @@ func seedFrictionReviewDigest(t *testing.T, te *testEnv) {
 	te.seedSession(t, "fr-1", "my-app", 4)
 	te.seedSession(t, "fr-2", "my-app", 4)
 	sigs := frictionTestSignals()
+	for _, id := range []string{"event-a", "event-b"} {
+		sigs = append(sigs, friction.Signal{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:" + id, SubjectKind: friction.SubjectDiagnostic, Label: "worker", Text: "launch failed"})
+	}
 	require.NoError(t, replaceTestSessionFriction(ctx, te.db, "fr-1", frictionTestFindings("fr-1", sigs), "hash-fr-1"))
 	require.NoError(t, replaceTestSessionFriction(ctx, te.db, "fr-2", frictionTestFindings("fr-2", sigs), "hash-fr-2"))
 
@@ -236,7 +239,7 @@ func TestGenerateFrictionReviewInsight_SavesAndCaches(t *testing.T) {
 	} {
 		assert.Contains(t, prompt, want)
 	}
-	for _, notWant := range []string{frictionReviewTextMark, frictionReviewEvidMark, frictionFrustMark, `"signals"`, `"fr-3"`} {
+	for _, notWant := range []string{frictionReviewTextMark, frictionReviewEvidMark, frictionFrustMark, `"signals"`, `"fr-3"`, "diagnostic:event-a", `"kind":"diagnostic"`} {
 		assert.NotContains(t, prompt, notWant)
 	}
 
@@ -356,21 +359,4 @@ func TestGenerateFrictionReviewInsight_Validation(t *testing.T) {
 		})
 	}
 	assert.Equal(t, int32(0), calls.Load(), "rejected requests never reach the model")
-}
-
-func TestGenerateFrictionReviewSkipsDiagnostics(t *testing.T) {
-	var calls atomic.Int32
-	var prompt string
-	te := newFrictionReviewEnv(t, &calls, &prompt)
-	sigs := frictionTestSignals()
-	for _, id := range []string{"event-a", "event-b"} {
-		sigs = append(sigs, friction.Signal{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:" + id, SubjectKind: friction.SubjectDiagnostic, Label: "worker", Text: "launch failed"})
-	}
-	require.NoError(t, te.db.SaveFrictionDigest(t.Context(), frictionTestDigest(t, frictionReviewDate, frictionReviewSummary, 2, sigs), nil, nil))
-	w := te.post(t, "/api/v1/insights/generate", frictionReviewRequest)
-	assertStatus(t, w, http.StatusOK)
-	doneInsight(t, w.Body.String())
-	assert.Contains(t, prompt, frictionErrTitle)
-	assert.NotContains(t, prompt, "diagnostic:event-a")
-	assert.NotContains(t, prompt, `"kind":"diagnostic"`)
 }

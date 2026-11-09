@@ -162,7 +162,6 @@ func TestFileLinksTheIssueAnEarlierCreateMade(t *testing.T) {
 }
 
 func TestFileRefusals(t *testing.T) {
-	inbox := friction.Signal{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:event", SubjectKind: friction.SubjectDiagnostic, Label: "worker", Text: "launch failed"}
 	tests := []struct {
 		name        string
 		project     string
@@ -171,13 +170,12 @@ func TestFileRefusals(t *testing.T) {
 	}{
 		{name: "unknown_pattern", project: katatest.DefaultProjectName, fingerprint: "fl1:missing", want: filing.ErrPatternNotFound},
 		{name: "frustration_is_never_filed", project: katatest.DefaultProjectName, fingerprint: frustration.Fingerprint(), want: filing.ErrNotFileable},
-		{name: "diagnostics_are_never_filed", project: katatest.DefaultProjectName, fingerprint: inbox.Fingerprint(), want: filing.ErrNotFileable},
 		{name: "kata_not_ready", project: "no-such-project", fingerprint: correction.Fingerprint(), want: filing.ErrKataNotReady},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := katatest.New(t)
-			f, d := newFiler(t, s, tt.project, correction, frustration, inbox)
+			f, d := newFiler(t, s, tt.project, correction, frustration)
 			_, err := f.File(t.Context(), tt.fingerprint)
 			require.ErrorIs(t, err, tt.want)
 			assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"))

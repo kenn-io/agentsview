@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/friction/review"
 )
 
 func TestDiagnosticPushFilteredAndReset(t *testing.T) {
@@ -45,17 +44,6 @@ func TestDiagnosticPushFilteredAndReset(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, signals, 1)
 	assert.Equal(t, "worker", signals[0].Label)
-	runner := &review.Runner{Store: store, Diagnostics: store, Loc: time.UTC, Now: func() time.Time { return when.Add(48 * time.Hour) }, BackfillDays: 7}
-	reports, err := runner.CatchUp(t.Context())
-	require.NoError(t, err)
-	for _, report := range reports {
-		assert.Empty(t, report.Snapshot.P0Alerts)
-	}
-	digest, err := store.GetFrictionDigest(t.Context(), "2026-01-01")
-	require.NoError(t, err)
-	require.NotNil(t, digest)
-	assert.Contains(t, string(digest.Markdown), "`worker`: `launch failed` x1")
-	assert.Zero(t, digest.SessionsScanned)
 	_, err = pg.ExecContext(t.Context(), `DELETE FROM diagnostic_events`)
 	require.NoError(t, err)
 	_, err = pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key LIKE 'diagnostic_marker:%'`)

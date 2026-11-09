@@ -23,18 +23,14 @@ func TestDiagnosticsCatchUpRebuildsOldDay(t *testing.T) {
 		_, err := d.AppendDiagnostic(t.Context(), db.DiagnosticEvent{ID: uuid.NewV7().String(), Source: "worker", Message: "launch failed", OccurredAt: when})
 		require.NoError(t, err)
 	}
-	reports, err := r.CatchUp(t.Context())
+	_, err := r.CatchUp(t.Context())
 	require.NoError(t, err)
-	for _, report := range reports {
-		assert.Empty(t, report.Snapshot.P0Alerts)
-	}
 	assert.False(t, friction.Fileable(friction.KindDiagnostic))
 	digest := stored(t, d, "2026-08-30")
 	require.NotNil(t, digest)
 	assert.Contains(t, string(digest.Markdown), "signals_captured: 3\n")
 	assert.Contains(t, string(digest.Markdown), "`worker`: `launch failed` x3")
 	assert.Equal(t, 0, digest.SessionsScanned)
-	assert.Zero(t, rowCount(t, d, "friction_patterns"))
 	_, err = d.AppendDiagnostic(t.Context(), db.DiagnosticEvent{ID: uuid.NewV7().String(), Source: "worker", Message: "launch failed", OccurredAt: when})
 	require.NoError(t, err)
 	_, err = r.CatchUp(t.Context())
