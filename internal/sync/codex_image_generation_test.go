@@ -135,10 +135,17 @@ func TestCodexGeneratedImageUpgradeReparsesUnchangedSource(t *testing.T) {
 	database, err := db.OpenIsolated(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	assert.False(t, database.NeedsResync(), "the archive upgrades in place")
+	require.True(t, database.NeedsResync(), "the archive requires a full resync")
 	engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
 	t.Cleanup(engine.Close)
-	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+	stats, err := engine.SyncThenRun(t.Context(), false, nil, func(full bool) error {
+		assert.True(t, full, "startup must select a full resync")
+		return nil
+	})
+	require.NoError(t, err)
+	require.False(t, stats.Aborted)
+	require.Zero(t, stats.Failed)
+	assert.False(t, database.NeedsResync())
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), sessionID))
 	assert.Equal(t, want, resultContent(t, database))
 }
