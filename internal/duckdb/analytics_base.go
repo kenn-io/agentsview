@@ -312,12 +312,11 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 					AND %[2]s
 			) inner2
 		)`, db.ActiveGapCapMs, db.ExcludeClaudeHooksSQL("m2.source_subtype"))
-	activeDurationSelectExpr := activeDurationExpr
 	orderExpr := "s.message_count DESC, s.id ASC"
 	switch metric {
 	case "duration":
 		where += " AND s.started_at IS NOT NULL AND s.ended_at IS NOT NULL AND s.ended_at >= s.started_at"
-		orderExpr = activeDurationSelectExpr + " DESC, s.id ASC"
+		orderExpr = activeDurationExpr + " DESC, s.id ASC"
 	case "output_tokens":
 		where += " AND s.has_total_output_tokens = TRUE"
 		orderExpr = "s.total_output_tokens DESC, s.id ASC"
@@ -326,7 +325,7 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 	query := `
 		SELECT s.id, s.project, s.first_message, s.message_count,
 			s.total_output_tokens, ` + durationSelectExpr + ` AS duration_min,
-			` + activeDurationSelectExpr + ` AS active_duration_min,
+			` + activeDurationExpr + ` AS active_duration_min,
 			s.started_at, s.ended_at, s.termination_status
 		FROM sessions s
 		WHERE ` + where + `
