@@ -328,7 +328,7 @@ describe("SemanticSetupHelp", () => {
     expect(text()).toContain(
       "Semantic search is configured, but the embeddings index hasn't been built",
     );
-    expect(text()).not.toContain("enable [vector] in config.toml");
+    expect(text()).not.toContain(generic);
 
     unmount(component);
   });

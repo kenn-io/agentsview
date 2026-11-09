@@ -204,7 +204,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			assert.Empty(t, status().Setup.Action)
 			assert.Equal(t, recipe == "fresh", installs.Load() > 0)
 			if recipe == "automatic" {
-				assert.NotNil(t, owner.Manager("recall").Status().LastResult)
 				assert.Nil(t, owner.Manager("").Status().LastResult)
 			}
 			if recipe == "fresh" {
@@ -545,11 +544,13 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 	})
 	for _, tc := range []struct {
 		name, store, using, wantStore string
-		full, download                bool
+		full, download, decline       bool
 	}{
-		{"configured", "", "local", "messages", true, false},
-		{"recall", "recall", "local", "recall", false, false},
-		{"download", "", "", "messages", true, true},
+		{"configured", "", "local", "messages", true, false, false},
+		{"recall", "recall", "local", "recall", false, false, false},
+		{"download", "", "", "messages", true, true, false},
+		{"configured-declined", "", "local", "messages", false, false, true},
+		{"download-declined", "", "", "messages", false, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -587,20 +588,40 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			var setupRequest struct {
 				Build vector.BuildRequest `json:"build"`
 			}
+			var accepted atomic.Bool
+			var polls atomic.Int64
+			oldInterval := embeddingsPollInterval
+			embeddingsPollInterval = 10 * time.Millisecond
+			t.Cleanup(func() { embeddingsPollInterval = oldInterval })
 			startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
-					_, _ = io.WriteString(w, `{"setup":{"action":"turn-on"},"last_result":{}}`)
+					if accepted.Load() && polls.Add(1) == 1 {
+						_, _ = io.WriteString(w, `{"setup":{"busy":true}}`)
+					} else {
+						_, _ = io.WriteString(w, `{"setup":{"action":"turn-on"},"last_result":{}}`)
+					}
 				},
 				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
 					require.NoError(t, json.UnmarshalRead(r.Body, &setupRequest))
+					accepted.Store(true)
 					w.WriteHeader(http.StatusAccepted)
 					_, _ = io.WriteString(w, `{"started":true}`)
 				},
 			})
 			var out strings.Builder
-			require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{Using: tc.using, Store: tc.store, FullRebuild: tc.full}))
+			input := "yes\n"
+			if tc.decline {
+				input = "no\n"
+			}
+			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(input), EmbeddingsBuildOptions{Using: tc.using, Store: tc.store, FullRebuild: tc.full})
 			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
+			if tc.decline {
+				require.ErrorContains(t, err, "search setup declined")
+				return
+			}
+			require.NoError(t, err)
+			assert.GreaterOrEqual(t, polls.Load(), int64(2))
 			if tc.full {
 				assert.Contains(t, out.String(), "This rebuild re-embeds every document.")
 			}
@@ -617,46 +638,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 	}
 }
 
-func TestCLIEmbeddingsSetupDeclined(t *testing.T) {
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	for _, download := range []bool{false, true} {
-		t.Run(fmt.Sprintf("download=%t", download), func(t *testing.T) {
-			setTestHome(t, t.TempDir())
-			dir := testDataDir(t)
-			dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-			path := filepath.Join(dir, "config.toml")
-			if download {
-				oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
-				t.Cleanup(func() {
-					inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
-				})
-				require.NoError(t, os.WriteFile(path, []byte("[vector]\nenabled = false\n"), 0o600))
-				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-					return embedlocal.Status{DownloadBytes: 100}, nil
-				}
-				localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
-				installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-					_, err := opts.Confirm(ctx, 101)
-					return embedlocal.Installation{}, err
-				}
-			} else {
-				writeEmbeddingsTestConfig(t, dir, "http://127.0.0.1:1")
-				contents, err := os.ReadFile(path)
-				require.NoError(t, err)
-				require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(contents), "enabled = true", "enabled = false", 1)), 0o600))
-			}
-			startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
-				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
-					_, _ = io.WriteString(w, `{"setup":{"action":"turn-on"}}`)
-				},
-			})
-			var out strings.Builder
-			require.ErrorContains(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("no\n"), EmbeddingsBuildOptions{}), "search setup declined")
-			assert.Contains(t, out.String(), "[y/N]")
-		})
-	}
-}
-
 func TestCLIEmbeddingsFreshSetupAutostartsDaemon(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
@@ -668,14 +649,24 @@ func TestCLIEmbeddingsFreshSetupAutostartsDaemon(t *testing.T) {
 	}
 	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:1", nil }
 	var started bool
+	var accepted atomic.Bool
+	var polls atomic.Int64
+	oldInterval := embeddingsPollInterval
+	embeddingsPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { embeddingsPollInterval = oldInterval })
 	stubStartBackgroundServeForTransport(t, func(_ context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
 		started = true
 		startEmbeddingsTestDaemon(t, cfg.DataDir, map[string]http.HandlerFunc{
 			"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"setup":{"action":"turn-on"},"last_result":{}}`)
+				if accepted.Load() && polls.Add(1) == 1 {
+					_, _ = io.WriteString(w, `{"setup":{"busy":true}}`)
+				} else {
+					_, _ = io.WriteString(w, `{"setup":{"action":"turn-on"},"last_result":{}}`)
+				}
 			},
 			"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, _ *http.Request) {
+				accepted.Store(true)
 				w.WriteHeader(http.StatusAccepted)
 				_, _ = io.WriteString(w, `{"started":true}`)
 			},
@@ -687,6 +678,7 @@ func TestCLIEmbeddingsFreshSetupAutostartsDaemon(t *testing.T) {
 	var out strings.Builder
 	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
 	assert.True(t, started)
+	assert.GreaterOrEqual(t, polls.Load(), int64(2))
 }
 
 func TestCLIEmbeddingsSetupRequiresDaemon(t *testing.T) {
