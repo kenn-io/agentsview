@@ -113,7 +113,7 @@ jobs:
 
       - name: Fetch Go checkers
         if: matrix.linter == 'golangci'
-        run: GOFLAGS="${GOFLAGS:+$GOFLAGS }-n" kit-retry 3 5 make lint-workflow-retries lint-config-check lint-sql
+        run: GOFLAGS="${GOFLAGS:+$GOFLAGS }-n" kit-retry 3 5 make lint-workflow-retries lint-config-check lint-sql lint-huma
 
       - name: Run Go linters
         if: matrix.linter == 'golangci'
@@ -125,10 +125,7 @@ jobs:
 
       - name: Check Huma API contract
         if: matrix.linter == 'golangci'
-        run: |
-          huma=go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b
-          kit-retry 3 5 go run -n "$huma"
-          go run "$huma" -fix=false ./...
+        run: make lint-huma
 
       - name: Save Go caches
         uses: $/.github/actions/go-cache-save
