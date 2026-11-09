@@ -2,6 +2,9 @@ package activity
 
 import (
 	"context"
+	"fmt"
+	"math/rand/v2"
+	"slices"
 	"testing"
 	"time"
 
@@ -130,5 +133,99 @@ func TestAppendClippedTail(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, runs.AppendClipped(nil, "s", tt.start, tt.end))
 		})
+	}
+}
+
+// A stream that leaves out candidates starting at or after the effective
+// end floored to microseconds, as SQLite's does, gives the same report as
+// the runs derived from every candidate and clipped with that bound.
+func TestRunsMatchCandidatesWithMicrosecondStartBound(t *testing.T) {
+	rng := rand.New(rand.NewPCG(5, 8))
+	base := time.Date(2026, 1, 10, 9, 0, 0, 0, time.UTC)
+	ns := func(n int) time.Duration { return time.Duration(n) }
+	for trial := range 300 {
+		var candidates []IntervalCandidate
+		var sessions []SessionMeta
+		for s := range 1 + rng.IntN(6) {
+			id := fmt.Sprintf("s%d", s)
+			sessions = append(sessions, SessionMeta{SessionID: id, IsAutomated: s%3 == 1, IsSubagent: s%3 == 2})
+			at := base.Add(ns(rng.IntN(int(20 * time.Minute))))
+			for range rng.IntN(12) {
+				// Steps of a few microseconds land pieces on the bound.
+				step := ns(rng.IntN(4000))
+				if rng.IntN(3) == 0 {
+					step = ns(rng.IntN(int(6 * time.Minute)))
+				}
+				start := at.Add(step)
+				end := start.Add(ns(rng.IntN(int(7*time.Minute))) - ns(rng.IntN(2000)))
+				if rng.IntN(2) == 0 {
+					at = start
+				}
+				model := []string{"", "a", "b"}[rng.IntN(3)]
+				candidates = append(candidates, IntervalCandidate{
+					SessionID: id, StartOrdinal: rng.IntN(5), Start: start, End: end,
+					ClosingRole: "assistant", ClosingModel: model, PriorModel: "unknown",
+				})
+			}
+		}
+		slices.SortStableFunc(candidates, func(a, b IntervalCandidate) int {
+			if CandidateLess(a, b) {
+				return -1
+			}
+			if CandidateLess(b, a) {
+				return 1
+			}
+			return 0
+		})
+		// End near the activity with a sub-microsecond part, often at a
+		// microsecond some candidate starts in.
+		end := base.Add(ns(rng.IntN(int(25 * time.Minute))))
+		if len(candidates) > 0 {
+			// A candidate's start, or its end, where a trimmed piece starts.
+			c := candidates[rng.IntN(len(candidates))]
+			switch rng.IntN(3) {
+			case 0:
+				end = c.Start.Truncate(time.Microsecond).Add(ns(1 + rng.IntN(999)))
+			case 1:
+				end = c.End.Truncate(time.Microsecond).Add(ns(1 + rng.IntN(999)))
+			}
+		}
+		q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-01-10", Timezone: "UTC", BucketOverride: "5m"}, end)
+		require.NoError(t, err)
+		bound := time.UnixMicro(q.EffectiveEnd.UnixMicro()).UTC()
+
+		var streamed []IntervalCandidate
+		builders := map[string]*SessionRunsBuilder{}
+		for _, c := range candidates {
+			if c.Start.UnixMicro() < q.EffectiveEnd.UnixMicro() {
+				streamed = append(streamed, c)
+			}
+			if builders[c.SessionID] == nil {
+				builders[c.SessionID] = NewSessionRunsBuilder(q.GapCapSeconds)
+			}
+			builders[c.SessionID].Add(c)
+		}
+		var runs []Run
+		for _, session := range sessions {
+			if b := builders[session.SessionID]; b != nil {
+				runs = b.Finish().AppendClippedBefore(runs, session.SessionID, q.RangeStart, q.EffectiveEnd, bound)
+			}
+		}
+		SortRuns(runs)
+		p := runsTestParams(q)
+		p.Partial = q.Partial
+		want, err := BuildCandidateArtifacts(t.Context(), p, sessions, streamed, nil)
+		require.NoError(t, err)
+		got, err := BuildRunArtifactsWithSurvivorUsage(t.Context(), p, sessions,
+			func(_ context.Context, yield func(Run) error) error {
+				for _, run := range runs {
+					if err := yield(run); err != nil {
+						return err
+					}
+				}
+				return nil
+			}, func() ([]UsageRow, error) { return nil, nil })
+		require.NoError(t, err)
+		require.Equal(t, want, got, "trial %d", trial)
 	}
 }

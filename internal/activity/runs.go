@@ -63,7 +63,10 @@ type SessionRuns struct {
 	// precision the aggregator compares candidates at. A run of n pieces
 	// takes n+1 entries.
 	bounds []int64
-	runs   []sessionRun
+	// trimmed marks, by its start's index in bounds, each piece whose
+	// candidate started before it, under an earlier piece of the session.
+	trimmed []uint64
+	runs    []sessionRun
 }
 
 type sessionRun struct {
@@ -74,7 +77,7 @@ type sessionRun struct {
 
 // Bytes estimates the memory the runs hold.
 func (r SessionRuns) Bytes() int64 {
-	return int64(unsafe.Sizeof(r)) + 8*int64(len(r.bounds)) +
+	return int64(unsafe.Sizeof(r)) + 8*int64(len(r.bounds)+len(r.trimmed)) +
 		int64(unsafe.Sizeof(sessionRun{}))*int64(len(r.runs))
 }
 
@@ -110,7 +113,8 @@ func (b *SessionRunsBuilder) Add(c IntervalCandidate) {
 	if end <= start || (b.reached && end <= b.reach) {
 		return
 	}
-	if b.reached && b.reach > start {
+	trimmed := b.reached && b.reach > start
+	if trimmed {
 		start = b.reach
 	}
 	b.reach, b.reached = end, true
@@ -119,18 +123,31 @@ func (b *SessionRunsBuilder) Add(c IntervalCandidate) {
 	if n := len(r.runs); n > 0 && r.runs[n-1].model == model && r.bounds[r.runs[n-1].last] == start {
 		r.bounds = append(r.bounds, end)
 		r.runs[n-1].last++
-		return
+	} else {
+		r.bounds = append(r.bounds, start, end)
+		last := int32(len(r.bounds) - 1)
+		r.runs = append(r.runs, sessionRun{model: model, first: last - 1, last: last})
 	}
-	r.bounds = append(r.bounds, start, end)
-	last := int32(len(r.bounds) - 1)
-	r.runs = append(r.runs, sessionRun{model: model, first: last - 1, last: last})
+	if trimmed {
+		i := len(r.bounds) - 2
+		for len(r.trimmed) <= i/64 {
+			r.trimmed = append(r.trimmed, 0)
+		}
+		r.trimmed[i/64] |= 1 << (i % 64)
+	}
+}
+
+func (r SessionRuns) pieceTrimmed(i int32) bool {
+	return int(i/64) < len(r.trimmed) && r.trimmed[i/64]&(1<<(i%64)) != 0
 }
 
 // Finish returns the session's runs and resets the builder for the next
 // session, keeping its buffers.
 func (b *SessionRunsBuilder) Finish() SessionRuns {
-	runs := SessionRuns{bounds: slices.Clone(b.runs.bounds), runs: slices.Clone(b.runs.runs)}
-	b.runs.bounds, b.runs.runs = b.runs.bounds[:0], b.runs.runs[:0]
+	runs := SessionRuns{
+		bounds: slices.Clone(b.runs.bounds), trimmed: slices.Clone(b.runs.trimmed), runs: slices.Clone(b.runs.runs),
+	}
+	b.runs.bounds, b.runs.trimmed, b.runs.runs = b.runs.bounds[:0], b.runs.trimmed[:0], b.runs.runs[:0]
 	b.reach, b.reached = 0, false
 	return runs
 }
@@ -138,26 +155,42 @@ func (b *SessionRunsBuilder) Finish() SessionRuns {
 // AppendClipped appends the session's runs clipped to [start, end), the
 // range start and effective end of a report, in start order.
 func (r SessionRuns) AppendClipped(out []Run, sessionID string, start, end time.Time) []Run {
+	return r.AppendClippedBefore(out, sessionID, start, end, end)
+}
+
+// AppendClippedBefore is AppendClipped for a candidate stream that also
+// leaves out every candidate starting at or after before, which is at most
+// end. A piece whose candidate started earlier, under an earlier piece of
+// the session, stays even when the piece itself starts at before.
+func (r SessionRuns) AppendClippedBefore(out []Run, sessionID string, start, end, before time.Time) []Run {
 	at := func(i int32) time.Time { return time.UnixMicro(r.bounds[i]).UTC() }
 	for _, run := range r.runs {
-		runStart, runEnd := at(run.first), at(run.last)
+		runStart := at(run.first)
+		if !runStart.Before(end) || runStart.After(before) ||
+			(runStart.Equal(before) && !r.pieceTrimmed(run.first)) {
+			break
+		}
+		// kept counts the pieces left: those starting before both bounds,
+		// and a trimmed piece starting at before. Piece starts increase.
+		pieces := int(run.last - run.first)
+		kept := sort.Search(pieces, func(i int) bool { return !at(run.first + int32(i)).Before(before) })
+		if i := run.first + int32(kept); kept < pieces && at(i).Equal(before) && at(i).Before(end) && r.pieceTrimmed(i) {
+			kept++
+		}
+		runEnd := at(run.first + int32(kept))
 		if !runEnd.After(start) {
 			continue
-		}
-		if !runStart.Before(end) {
-			break
 		}
 		// Clip the way EffectiveIntervalBounds clips each piece.
 		clippedStart, clippedEnd := runStart, runEnd
 		if clippedStart.Before(start) {
 			clippedStart = start
 		}
-		tail := at(run.last - 1)
+		tail := at(run.first + int32(kept) - 1)
 		if clippedEnd.After(end) {
 			clippedEnd = end
 			// The last piece left is the last that starts before the end.
-			pieces := int(run.last - run.first)
-			i := sort.Search(pieces, func(i int) bool { return !at(run.first + int32(i)).Before(end) })
+			i := sort.Search(kept, func(i int) bool { return !at(run.first + int32(i)).Before(end) })
 			tail = at(run.first + int32(i) - 1)
 		}
 		if !clippedEnd.After(clippedStart) {

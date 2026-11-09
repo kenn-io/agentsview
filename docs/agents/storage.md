@@ -876,25 +876,33 @@ because a cached fingerprint merely looks newer.
 
 ### Activity report index
 
-SQLite keeps paired candidates in memory per session and range start, with
-separate limits of 200,000 candidates and 4,096 entries. A full cache measured
-64.3 MiB of resident Go heap on Windows amd64, using the post-GC
-`runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
-with 36-byte session IDs, 24-byte models, and append-grown slices. Each entry
-also keeps the window's counted user and assistant messages. A report counts
-messages from those entries and from its own pairing scan of the other sessions,
-so it never reads messages a second time. The scan's counted messages live only
-for that build, outside the budgets. Every counted message except a session's
-last starts a candidate, so the candidate budget bounds them too. They add about
-57 bytes each: on Linux amd64 a full cache grew from 48.3 MiB to 59.3 MiB. Empty
-sessions use only the entry budget. A week report then a month report keep
-separate entries for their range starts. Entries run to
-`max(EffectiveEnd, RangeEnd)` and remain valid while the transcript revision and
-session creation time match. Reader swaps clear the entries and reject stores
-from earlier generations. Reports exceeding the entry limit reuse retained hits
-and store up to the cap. Reports exceeding the candidate budget skip storing new
-entries. Warm reads still load session revisions and merge the per-session
-candidates in SQLite's microsecond order.
+SQLite keeps each session's activity runs in memory per session and range
+start, within a 128 MiB budget that also counts each entry's overhead. A run is
+a stretch of touching pieces of one session with one model, each already capped
+at the idle gap and trimmed against the session's earlier activity, as
+`activity.SessionRunsBuilder` derives them from the pairing scan's candidates.
+A report sweeps the runs through `activity.BuildRunArtifactsWithSurvivorUsage`,
+so a refresh pairs only the sessions whose entries miss and sweeps far fewer
+intervals than candidates. On a scratch archive of 100,000 sessions and 2.6
+million candidates over seven months, the kept runs took 73 MiB, and a refresh
+with ten changed sessions spent 163 ms pairing instead of 106 s and 168 ms
+sweeping instead of 949 ms. The first report after a start still pairs every
+session.
+
+Each entry also keeps the window's counted user and assistant messages. A
+message stored at a whole microsecond with an offset from -13:59 to +14:00 keeps
+only its time, because the message counter's padded stored-string bounds pick
+the same messages as the range does; any other message keeps its stored
+timestamp. A report counts messages from those entries, so it never reads
+messages a second time. A week report then a month report keep separate entries
+for their range starts. Entries run to `max(EffectiveEnd, RangeEnd)` and remain
+valid while the transcript revision and session creation time match. The
+candidate stream leaves out candidates that start at or after the effective end
+floored to microseconds, so runs keep one bit per piece that says whether an
+earlier piece trimmed it, and clipping keeps a trimmed piece that starts in that
+microsecond. Reader swaps clear the entries and reject stores from earlier
+generations. A report whose new entries alone exceed the budget stores none of
+them. Warm reads still load session revisions.
 
 Activity session selection checks terminal tool-execution events even when a
 session's `ended_at` predates the report. Keep the partial
