@@ -864,6 +864,7 @@ func TestUsageRollupConnectedSnapshotChangeRebuildsOnlyChangedSession(t *testing
 }
 
 func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
+	t.Parallel()
 	for _, external := range []bool{false, true} {
 		t.Run(fmt.Sprintf("external=%t", external), func(t *testing.T) {
 			t.Parallel()
@@ -912,7 +913,7 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			select {
 			case <-oldBuilt:
 			case <-time.After(10 * time.Second):
-				t.Fatal("old rollup did not reach publication")
+				require.FailNow(t, "old rollup did not reach publication")
 			}
 			tx, err := database.getWriter().BeginTx(t.Context(), nil)
 			require.NoError(t, err)
@@ -932,7 +933,7 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			select {
 			case oldOutcome = <-oldDone:
 			case <-time.After(10 * time.Second):
-				t.Fatal("old rollup did not finish")
+				require.FailNow(t, "old rollup did not finish")
 			}
 			if external {
 				require.ErrorIs(t, oldOutcome.err, errUsageCacheSourceChanged)
