@@ -624,6 +624,8 @@ type TranscriptMessage struct {
 	At          time.Time
 	Role, Model string
 	Starts      bool
+	// Counted is storage eligibility, independent of the report window.
+	Counted bool
 }
 
 // AppendTranscriptPairs pairs each window message of one session with

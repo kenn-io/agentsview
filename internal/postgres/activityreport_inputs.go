@@ -86,7 +86,9 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 		}
 	}
 	if len(missing) > 0 {
-		rows, err := s.pg.QueryContext(ctx, `SELECT session_id, ordinal, role, timestamp, model
+		rows, err := s.pg.QueryContext(ctx, `SELECT session_id, ordinal, role, timestamp, model,
+ role IN ('user', 'assistant') AND is_system = false
+ AND COALESCE(source_subtype, '') <> 'tool_result'
  FROM messages WHERE session_id = ANY($1) AND timestamp IS NOT NULL
  ORDER BY session_id, ordinal`, pgx.QueryExecModeDescribeExec, missing)
 		if err != nil {
@@ -116,7 +118,7 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 			}
 			var next string
 			var m activity.TranscriptMessage
-			if err := rows.Scan(&next, &m.Ordinal, &m.Role, &m.At, &m.Model); err != nil {
+			if err := rows.Scan(&next, &m.Ordinal, &m.Role, &m.At, &m.Model, &m.Counted); err != nil {
 				return fmt.Errorf("scanning pg activity report message: %w", err)
 			}
 			if id != next {
