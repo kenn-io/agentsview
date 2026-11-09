@@ -353,15 +353,13 @@ func TestDarwinWatcherFileLifecycleAndNativeLatency(t *testing.T) {
 
 func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T) {
 	type observation struct {
-		streams            int
-		roots              int
-		logicalRoots       int
-		shallowRoots       int
-		nativeDescriptors  int
-		appendPaths        int
-		appendRenames      int
-		replacementPaths   int
-		replacementRenames int
+		streams           int
+		roots             int
+		logicalRoots      int
+		shallowRoots      int
+		nativeDescriptors int
+		appendPaths       int
+		appendRenames     int
 	}
 	var observations []observation
 	for _, tc := range []struct {
@@ -489,17 +487,21 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			assert.False(t, replacementBatch.FullSync)
 			assert.Empty(t, replacementBatch.ReconcileRoots,
 				"atomic file replacement must remain a changed-path sync")
-			got.replacementPaths = len(replacementBatch.Paths)
-			got.replacementRenames = len(replacementBatch.Renames)
-			assert.Positive(t, got.replacementPaths+got.replacementRenames,
-				"atomic replacement must emit bounded changed-path work")
-			assert.LessOrEqual(t, got.replacementPaths+got.replacementRenames, 2,
-				"one atomic replacement must not fan out with cold archive cardinality")
+			// FSEvents can deliver the temporary file's create and rename in
+			// separate events within this batch. A path may therefore appear
+			// in both Paths and Renames; their combined count depends on native
+			// coalescing, not archive size. Bound the affected paths instead.
+			allowedPaths := []string{tempPath, changedPath}
+			assert.Subset(t, allowedPaths, replacementBatch.Paths,
+				"atomic replacement must not include cold archive paths")
+			assert.LessOrEqual(t, len(replacementBatch.Paths), 2)
+			assert.LessOrEqual(t, len(replacementBatch.Renames), 2)
 			for _, rename := range replacementBatch.Renames {
-				if rename.Path == changedPath {
-					assert.Equal(t, ItemIsFile, rename.ItemType)
-				}
+				assert.Contains(t, allowedPaths, rename.Path,
+					"atomic replacement must not include cold archive paths")
+				assert.Equal(t, ItemIsFile, rename.ItemType)
 			}
+
 			assert.Never(t, func() bool {
 				select {
 				case batch := <-batches:
@@ -522,7 +524,7 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 	}
 	require.Len(t, observations, 2)
 	assert.Equal(t, observations[0], observations[1],
-		"recursive native state and append/replacement work must not scale with cold files or directories")
+		"recursive native state and append work must not scale with cold files or directories")
 }
 
 func TestDarwinWatcherDirectoryRenameCarriesFullSyncMetadata(t *testing.T) {
