@@ -1,6 +1,6 @@
 ---
 title: Kata
-description: Connect AgentsView to a Kata issue tracker as an optional spoke
+description: Connect AgentsView to a Kata issue tracker and file Friction Log patterns as issues
 ---
 
 AgentsView can connect to a [Kata](https://github.com/kenn-io/kata) issue

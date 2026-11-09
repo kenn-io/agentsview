@@ -35,13 +35,13 @@ Use the MCP server when you want a coding assistant to answer questions such as:
 The tools are read-only. They expose session history and usage data, but they do
 not mutate the archive or resync files directly.
 
-Every tool explicitly declares read-only, non-destructive, and idempotent
-hints. `search_content` and `query_recall` are open-world because their semantic
-search modes can send queries to the configured embedding provider.
-`get_session_file_references` is also open-world because it queries the configured
-Docbank service. The other tools advertise a closed environment of archived data
-and bundled guides.
-These hints help clients classify calls; they do not authorize access.
+Every tool explicitly declares read-only, non-destructive, and idempotent hints.
+`search_content` and `query_recall` are open-world because their semantic search
+modes can send queries to the configured embedding provider.
+`get_session_file_references` is also open-world because it queries the
+configured Docbank service. The other tools advertise a closed environment of
+archived data and bundled guides. These hints help clients classify calls; they
+do not authorize access.
 
 ### Discover running HTTP listeners
 
@@ -105,7 +105,9 @@ client will see these tools:
 The two Friction Log tools appear when the backend stores the Friction Log.
 `get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
 and `format` (`markdown` or `summary`). `list_friction_patterns` accepts `kind`,
-`since`, and `limit` (default 20, max 100). Both report
+`since`, and `limit` (default 20, max 100). Each pattern includes its linked
+[Kata](/docs/kata/) issue as `issue`, or, when automatic filing has not linked
+it, the reason as `filing`. Both tools report
 [Friction Log](/docs/configuration/#friction-log) heuristics, not ground truth.
 
 `list_sessions` accepts `labels` (every listed label must match) and `pr`
@@ -265,21 +267,22 @@ a diagnostic search finds hidden matches. Each entry has `code`, `message`, and
 `retry_with`, the arguments to change while keeping the rest of your request.
 Counts say `more than N` when a bounded probe has more results, or `at least N`
 for semantic and hybrid searches or when activity filtering or candidate limits
-prevent an exact count. Failed probes add
-no hint. Default scope already includes child sessions.
+prevent an exact count. Failed probes add no hint. Default scope already
+includes child sessions.
 
-`next_cursor` is present when another page
-exists. To continue `search_content`, pass `next_cursor` as the numeric `cursor`
-and echo the returned RFC3339 `activity_cutoff` unchanged. The cutoff keeps the
-recent-activity exclusion fixed across pages of an unchanged archive, including
-on older servers. A positive cursor without the cutoff returns a restart error
-when that exclusion applies. Restart without a cursor to obtain both fields.
-`include_active: true` or an explicit `current_session_id` allows numeric-only
-continuation. Archive edits retain the existing offset-pagination behavior.
+`next_cursor` is present when another page exists. To continue `search_content`,
+pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
+`activity_cutoff` unchanged. The cutoff keeps the recent-activity exclusion
+fixed across pages of an unchanged archive, including on older servers. A
+positive cursor without the cutoff returns a restart error when that exclusion
+applies. Restart without a cursor to obtain both fields. `include_active: true`
+or an explicit `current_session_id` allows numeric-only continuation. Archive
+edits retain the existing offset-pagination behavior.
 
-`exclusions.children` reports whether child sessions were excluded, including
-in empty results. It is true for `scope: top` and FTS searches without an exact
-`session_id`. It stays false for `scope: subordinate`, which keeps child sessions.
+`exclusions.children` reports whether child sessions were excluded, including in
+empty results. It is true for `scope: top` and FTS searches without an exact
+`session_id`. It stays false for `scope: subordinate`, which keeps child
+sessions.
 
 SQLite and PostgreSQL search matches also carry `transcript_revision`, captured
 by the same storage query as the evidence. A `revision_bound` response flag says
