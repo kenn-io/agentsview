@@ -599,6 +599,7 @@ func chPreparedDailyUsageCTE(state preparedUsageState, f db.UsageFilter, include
 // messages and usage events. A single-session read stays raw: prepared
 // usage is ordered by time, not session, and one session is cheap by key.
 func usageCTEFor(state preparedUsageState, f db.UsageFilter, sessionID string) chUsageSource {
+	f.Breakdowns = false // Only daily usage consumes pairwise evidence.
 	if sessionID == "" && state.ready {
 		cte, args := chPreparedUsageCTE(state, f, "")
 		return chUsageSource{cte: cte, args: args, storedPricesDigest: state.pricingDigest}
@@ -1353,9 +1354,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	}
 	var source chUsageSource
 	if top {
-		topFilter := f
-		topFilter.Breakdowns = false
-		source = usageCTEFor(state, topFilter, "")
+		source = usageCTEFor(state, f, "")
 	} else {
 		source, err = s.dailyUsageCTE(ctx, state, f)
 		if err != nil {

@@ -16,43 +16,63 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-func TestUsagePairwiseDefaultReadsRankingOnce(t *testing.T) {
+func TestUsagePairwiseEligibleReadsRankingOnce(t *testing.T) {
 	t.Parallel()
-	store, syncer, _ := newUsagePriceStore(t)
-	comment := "pairwise-ranking-" + syncer.target.Database
-	ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
-	backend := service.NewReadOnlyBackend(store)
-	req := service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-12", To: "2026-01-12", Timezone: "UTC", Agent: "hermes", IncludeOneShot: true}}
-	_, err := backend.UsagePairwiseComparison(ctx, req)
-	require.NoError(t, err)
-	_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
-	require.NoError(t, err)
-	var queries uint64
-	require.NoError(t, store.conn.QueryRowContext(t.Context(), `
-		SELECT count() FROM system.query_log
-		WHERE type = 'QueryFinish' AND log_comment = ?
-		AND startsWith(trimLeft(query, ' \n\t\r'), 'WITH usage_raw AS')
-		AND position(query, 'FROM usage_classified') > 0`, comment).Scan(&queries))
-	assert.Equal(t, uint64(1), queries)
+	for _, selected := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "selected"}[selected], func(t *testing.T) {
+			t.Parallel()
+			store, syncer, _ := newUsagePriceStore(t)
+			comment := "pairwise-ranking-" + syncer.target.Database
+			ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
+			backend := service.NewReadOnlyBackend(store)
+			req := service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-12", To: "2026-01-12", Timezone: "UTC", Agent: "hermes", IncludeOneShot: true}}
+			if selected {
+				req.LeftDimension, req.LeftValue = "model", "round-test"
+				req.RightDimension, req.RightValue = "model", "tier-test"
+				req.FallbackToDefault = true
+			}
+			_, err := backend.UsagePairwiseComparison(ctx, req)
+			require.NoError(t, err)
+			_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+			require.NoError(t, err)
+			var queries uint64
+			require.NoError(t, store.conn.QueryRowContext(t.Context(), `
+				SELECT count() FROM system.query_log
+				WHERE type = 'QueryFinish' AND log_comment = ?
+				AND startsWith(trimLeft(query, ' \n\t\r'), 'WITH usage_raw AS')
+				AND position(query, 'FROM usage_classified') > 0`, comment).Scan(&queries))
+			assert.Equal(t, uint64(1), queries)
+		})
+	}
 }
 
-func TestUsageTopSessionsSkipsPairwiseEvidence(t *testing.T) {
+func TestUsageReadersSkipPairwiseEvidence(t *testing.T) {
 	t.Parallel()
-	store, syncer, _ := newUsagePriceStore(t)
-	comment := "top-without-pairwise-" + syncer.target.Database
-	ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
-	filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
-	_, err := store.GetTopSessionsByCost(ctx, filter, 10)
-	require.NoError(t, err)
-	_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
-	require.NoError(t, err)
-	var queries, evidenceQueries uint64
-	require.NoError(t, store.conn.QueryRowContext(t.Context(), `
-		SELECT count(), countIf(position(query, 'inexact_models') > 0)
-		FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ?
-		AND position(query, 'FROM usage_classified') > 0`, comment).Scan(&queries, &evidenceQueries))
-	assert.Equal(t, uint64(1), queries)
-	assert.Zero(t, evidenceQueries)
+	for _, reader := range []string{"top", "counts"} {
+		t.Run(reader, func(t *testing.T) {
+			t.Parallel()
+			store, syncer, _ := newUsagePriceStore(t)
+			comment := reader + "-without-pairwise-" + syncer.target.Database
+			ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
+			filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
+			var err error
+			if reader == "counts" {
+				_, err = store.GetUsageSessionCounts(ctx, filter)
+			} else {
+				_, err = store.GetTopSessionsByCost(ctx, filter, 10)
+			}
+			require.NoError(t, err)
+			_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+			require.NoError(t, err)
+			var queries, evidenceQueries uint64
+			require.NoError(t, store.conn.QueryRowContext(t.Context(), `
+				SELECT count(), countIf(position(query, 'inexact_models') > 0)
+				FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ?
+				AND startsWith(trimLeft(query, ' \n\t\r'), 'WITH usage_raw AS')`, comment).Scan(&queries, &evidenceQueries))
+			assert.Equal(t, uint64(1), queries)
+			assert.Zero(t, evidenceQueries)
+		})
+	}
 }
 
 func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
@@ -163,6 +183,23 @@ func TestUsagePairwiseInexactSides(t *testing.T) {
 			for _, selection := range selections {
 				_, ok := ranking.Pairwise.Side(selection.dimension, []string{selection.value})
 				assert.False(t, ok)
+			}
+			if scenario == "duplicates" {
+				comment := "pairwise-fallback-" + syncer.target.Database
+				ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
+				_, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(ctx, service.UsagePairwiseComparisonRequest{
+					UsageRequest:  service.UsageRequest{From: "2026-01-12", To: "2026-01-12", Timezone: "UTC", IncludeOneShot: true},
+					LeftDimension: "model", LeftValue: "round-test", RightDimension: "model", RightValue: "tier-test", FallbackToDefault: true,
+				})
+				require.NoError(t, err)
+				_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+				require.NoError(t, err)
+				var queries uint64
+				require.NoError(t, store.conn.QueryRowContext(t.Context(), `
+					SELECT count() FROM system.query_log
+					WHERE type = 'QueryFinish' AND log_comment = ?
+					AND position(query, 'FROM usage_classified') > 0`, comment).Scan(&queries))
+				assert.Equal(t, uint64(2), queries, "ranking plus the inexact filtered side")
 			}
 		})
 	}
