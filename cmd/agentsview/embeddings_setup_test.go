@@ -926,4 +926,15 @@ func TestCLIEmbeddingsSetupReportsRemovedServer(t *testing.T) {
 	cfg, err = config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.True(t, cfg.Vector.Enabled)
+
+	current, err := os.ReadFile(path)
+	require.NoError(t, err)
+	updated := strings.Replace(string(current), "[vector.embeddings]", "[vector.embeddings]\ndefault_server = 'other'", 1)
+	updated += fmt.Sprintf("\n[vector.embeddings.servers.local]\nendpoint = %q\n", encoder.URL)
+	require.NoError(t, os.WriteFile(path, []byte(updated), 0o600))
+	out.Reset()
+	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader(""), EmbeddingsBuildOptions{Using: "other"}))
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, status.Error)
 }

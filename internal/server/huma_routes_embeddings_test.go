@@ -460,6 +460,7 @@ func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
 	}
 }
 func (r fakeEmbeddingsRuntime) IncludeAutomated() bool { return r.includeAutomated }
+func (r fakeEmbeddingsRuntime) BuildStarted()          {}
 func (r fakeEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
 	return EmbeddingsSetupStatus{Enabled: true, Busy: r.busy}, nil
 }

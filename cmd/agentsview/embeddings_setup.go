@@ -133,6 +133,14 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 	return v.cfg.Vector.IncludeAutomated
 }
 
+func (v *liveVectorServing) BuildStarted() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.setup.Busy {
+		v.setup.Error = ""
+	}
+}
+
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
 	v.mu.Lock()
 	status, cfg, missingManager := v.setup, v.cfg, v.serving.manager == nil

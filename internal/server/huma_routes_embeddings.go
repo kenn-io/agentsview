@@ -14,6 +14,7 @@ import (
 type EmbeddingsRuntime interface {
 	Manager(store string) EmbeddingsManager
 	IncludeAutomated() bool
+	BuildStarted()
 	SetupStatus(context.Context) (EmbeddingsSetupStatus, error)
 	// Setup approves at most approvedBytes of download, the size the user saw.
 	Setup(approvedBytes int64, build *vector.BuildRequest) error
@@ -190,6 +191,7 @@ func (s *Server) humaEmbeddingsBuild(
 		}
 		return nil, internalError("start embeddings build", err)
 	}
+	s.embeddingsRuntime.BuildStarted()
 	go func() {
 		manager.Wait()
 		release()
