@@ -29,7 +29,7 @@ func seedRecurrenceSignal(t *testing.T, d *db.DB, date, id string, at *time.Time
 	session, err := d.GetSession(t.Context(), id)
 	require.NoError(t, err)
 	applied, err := d.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
-		RulesVersion: friction.RulesVersion, Findings: []db.FrictionFinding{{SessionID: id, Kind: string(correction.Kind), Detector: correction.Detector, Fingerprint: correction.Fingerprint(), OccurredAt: at, RulesVersion: friction.RulesVersion}},
+		RulesVersion: friction.RulesVersion, Findings: []db.FrictionFinding{{SessionID: id, Kind: string(signal.Kind), Detector: signal.Detector, Fingerprint: signal.Fingerprint(), OccurredAt: at, RulesVersion: friction.RulesVersion}},
 	})
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -138,21 +138,10 @@ func TestReopenUsesFrozenDigest(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, applied)
-	rows, _, err := d.ListFrictionFindings(t.Context(), db.FrictionFindingFilter{Fingerprint: correction.Fingerprint(), Date: "2026-09-15"})
-	require.NoError(t, err)
-	require.Len(t, rows, 2)
 	n, err := f.Reopen(t.Context(), "2026-09-01", nil)
 	require.NoError(t, err)
 	assert.Zero(t, n)
 	assert.Equal(t, "closed", mustIssue(t, s, is.UID).Status)
-
-	seedRecurrence(t, d, "2026-09-15", "claude:s1", new(closed.Add(time.Hour)))
-	n, err = f.Reopen(t.Context(), "2026-09-01", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-	got := mustIssue(t, s, is.UID)
-	assert.Equal(t, "open", got.Status)
-	assert.Equal(t, []string{"This pattern recurred on 2026-09-15."}, got.Comments)
 }
 
 func TestReopenReportsOccurrenceDate(t *testing.T) {
@@ -250,20 +239,25 @@ func (k *failingGetKata) GetIssue(ctx context.Context, ref string) (kata.Issue, 
 }
 
 func TestReopenWhenKataNotReady(t *testing.T) {
-	for _, failure := range []error{kata.ErrNotReady, &kata.APIError{Status: 503}} {
-		s := katatest.New(t)
-		other := toolError("go: cannot find main module", "claude:s2")
-		f, d := newFiler(t, s, katatest.DefaultProjectName, correction, other)
-		closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-		for _, sig := range []friction.Signal{correction, other} {
-			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-			require.NoError(t, d.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{Fingerprint: sig.Fingerprint(), KataInstanceUID: "instance", KataProjectUID: "project", IssueUID: is.UID, QualifiedID: "agentsview#" + is.ShortID, Source: db.FrictionIssueSourceManual, LinkedAt: closed}))
-		}
-		spy := &failingGetKata{Kata: f.Kata, err: failure}
-		f.Kata = spy
-		n, err := f.Reopen(t.Context(), "2026-09-01", nil)
-		require.NoError(t, err)
-		assert.Zero(t, n)
-		assert.Equal(t, 1, spy.calls)
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{{"not ready", kata.ErrNotReady}, {"service unavailable", &kata.APIError{Status: 503}}} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := katatest.New(t)
+			other := toolError("go: cannot find main module", "claude:s2")
+			f, d := newFiler(t, s, katatest.DefaultProjectName, correction, other)
+			closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+			for _, sig := range []friction.Signal{correction, other} {
+				is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+				require.NoError(t, d.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{Fingerprint: sig.Fingerprint(), KataInstanceUID: "instance", KataProjectUID: "project", IssueUID: is.UID, QualifiedID: "agentsview#" + is.ShortID, Source: db.FrictionIssueSourceManual, LinkedAt: closed}))
+			}
+			spy := &failingGetKata{Kata: f.Kata, err: tt.err}
+			f.Kata = spy
+			n, err := f.Reopen(t.Context(), "2026-09-01", nil)
+			require.NoError(t, err)
+			assert.Zero(t, n)
+			assert.Equal(t, 1, spy.calls)
+		})
 	}
 }

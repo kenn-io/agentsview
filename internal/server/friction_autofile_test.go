@@ -20,7 +20,6 @@ import (
 
 func seedClosedFrictionIssue(t *testing.T, d *db.DB, s *katatest.Server, fp string) string {
 	t.Helper()
-	dbtest.SeedSession(t, d, "claude:s1", "proj")
 	occurred := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
 	digest, err := d.GetFrictionDigest(t.Context(), "2026-09-14")
 	require.NoError(t, err)
