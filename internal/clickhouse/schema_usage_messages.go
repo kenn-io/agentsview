@@ -1181,10 +1181,22 @@ func releaseRebuildLock(ctx context.Context, conn *sql.DB, generation uint64) er
 // rows of every snapshot that no stored row was derived from, as
 // chPreparedUsageDeltaRowsSQL would select them. The covered snapshots come
 // from the covered_sessions projection, which FINAL would bypass.
+//
+// The count applies chUsageStoredMessageEligibility and
+// chUsageEventEligibility to the array subcolumns those filters read, in one
+// scan. Counting the rows of chPreparedUsageKeyedSQL would read every field
+// of usage_facts through two ARRAY JOIN scans, about four times the bytes.
+// The normalized selection has no join, dedup, or other filter, so these
+// filters alone decide which rows exist.
 func chPreparedUsageBehindSQL() string {
-	return `SELECT count() FROM (` + chPreparedUsageKeyedSQL(`(s.id, s.revision) NOT IN (
+	return `SELECT sum(
+		arrayCount((present, model) -> present != 0 AND model NOT IN ('', '<synthetic>'),
+			s.usage_facts.usage_present, s.usage_facts.model)
+		+ arrayCount(model -> model != '', s.usage_events.model))
+	FROM usage_session_snapshots s
+	WHERE s.deleted_at IS NULL AND (s.id, s.revision) NOT IN (
 		SELECT session_id, snapshot_revision FROM prepared_usage
-		GROUP BY session_id, snapshot_revision SETTINGS final=0)`) + `)`
+		GROUP BY session_id, snapshot_revision SETTINGS final=0)`
 }
 
 // preparedUsageRebuildDue reports whether a push should rebuild prepared_usage

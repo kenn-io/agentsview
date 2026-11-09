@@ -1272,3 +1272,79 @@ func TestPreparedUsageViewRefreshWaitsForEnoughChange(t *testing.T) {
 	pushPreparedUsage(t, syncer)
 	require.Empty(t, resume(), "a push past the limit must request a refresh")
 }
+
+// The rows-behind count a push compares with the rebuild limit must equal
+// the rows reads prepare from the delta: messages and events that pass
+// eligibility, in snapshots no stored row was derived from, skipping trashed
+// sessions.
+func TestPreparedUsageBehindCountMatchesDeltaRows(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	const mixedID, trashedID = "ch-behind-mixed", "ch-behind-trashed"
+	local, syncer, store := newPreparedUsageStore(t)
+	ts := "2026-01-14T00:00:00.000Z"
+	event := func(model, dedupKey string) db.UsageEvent {
+		return db.UsageEvent{Source: "hermes", Model: model, InputTokens: 10, OccurredAt: ts, DedupKey: dedupKey}
+	}
+	withoutUsage := usagePriceMessage(mixedID, 3, ts, "claude-test", "")
+	withoutUsage.TokenUsage = nil
+	writes := []db.SessionBatchWrite{
+		{
+			Session: fixtureSession(mixedID, "delta", "mixed", ts, 4),
+			Messages: []db.Message{
+				usagePriceMessage(mixedID, 0, ts, "claude-test", `{"input_tokens":1}`),
+				usagePriceMessage(mixedID, 1, ts, "", `{"input_tokens":2}`),
+				usagePriceMessage(mixedID, 2, ts, "<synthetic>", `{"input_tokens":3}`),
+				withoutUsage,
+			},
+			UsageEvents: []db.UsageEvent{event("claude-test", "behind-priced"), event("", "behind-no-model")},
+		},
+		{
+			Session:     fixtureSession(trashedID, "delta", "trashed", ts, 1),
+			Messages:    []db.Message{usagePriceMessage(trashedID, 0, ts, "claude-test", `{"input_tokens":4}`)},
+			UsageEvents: []db.UsageEvent{event("claude-test", "behind-trashed")},
+		},
+	}
+	for i := range writes {
+		writes[i].DataVersion = 1
+		writes[i].ReplaceMessages = true
+	}
+	_, err := local.WriteSessionBatchAtomic(ctx, writes)
+	require.NoError(t, err)
+	require.NoError(t, local.SoftDeleteSession(ctx, trashedID))
+	republishRoundSession(t, local, 9)
+	pushPreparedUsage(t, syncer)
+
+	// The snapshots hold the rows eligibility excludes, so the counts below
+	// exercise the filters.
+	type snapshot struct {
+		messages, events uint64
+		trashed          bool
+	}
+	snapshots := map[string]snapshot{}
+	rows, err := store.DB().QueryContext(ctx, `SELECT id, length(usage_facts), length(usage_events),
+		deleted_at IS NOT NULL FROM usage_session_snapshots WHERE id IN (?, ?)`, mixedID, trashedID)
+	require.NoError(t, err)
+	for rows.Next() {
+		var id string
+		var s snapshot
+		require.NoError(t, rows.Scan(&id, &s.messages, &s.events, &s.trashed))
+		snapshots[id] = s
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	require.Equal(t, map[string]snapshot{
+		mixedID:   {messages: 4, events: 2},
+		trashedID: {messages: 1, events: 1, trashed: true},
+	}, snapshots)
+
+	var behind, delta uint64
+	require.NoError(t, store.DB().QueryRowContext(ctx, chPreparedUsageBehindSQL()).Scan(&behind))
+	require.NoError(t, store.DB().QueryRowContext(chdriver.Context(ctx, chdriver.WithParameters(chdriver.Parameters{
+		"usage_changed_sessions": chStringArrayLiteral([]string{mixedID, trashedID, usagePriceRoundID}),
+	})), `SELECT count() FROM (`+chPreparedUsageDeltaRowsSQL()+`)`).Scan(&delta))
+	// One message and one event of the mixed session, and the one message
+	// the round session was republished with.
+	require.EqualValues(t, 3, delta)
+	require.Equal(t, delta, behind)
+}
