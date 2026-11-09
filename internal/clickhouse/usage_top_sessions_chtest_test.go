@@ -128,6 +128,13 @@ func TestTopSessionsGroupedMetadata(t *testing.T) {
 	assert.Equal(t, "other-machine", got[1].Machine)
 	assert.Equal(t, "other-group-project", got[2].Project)
 	assert.Equal(t, "group-metadata-4", got[3].SessionID)
+	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+	var metadataReads uint64
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
+		SELECT count() FROM system.query_log
+		WHERE current_database = currentDatabase() AND type = 'QueryFinish'
+			AND position(query, 'FROM usage_top_sessions') > 0`).Scan(&metadataReads))
+	assert.EqualValues(t, 1, metadataReads, "grouped repeat reads reuse their display metadata")
 	// A group change after a warm read must replace the grouped result.
 	writes[1].Session.GroupKey = "different:job"
 	_, err = local.WriteSessionBatchAtomic(t.Context(), writes[1:2])

@@ -28,6 +28,8 @@ import (
 
 const chTimestampSQL = "parseDateTime64BestEffort(?, 6, 'UTC')"
 
+const chUsageDisplayNameSQL = "ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '')"
+
 // chLoadPricing reads the mirrored model catalog and layers the reader's
 // custom rates on top. Push passes no custom rates.
 func chLoadPricing(
@@ -248,7 +250,7 @@ func chUsageRawSQLFromWheres(
 				CAST(NULL AS Nullable(Int64)) AS cost_microdollars, '' AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
+			`+chUsageDisplayNameSQL+` AS display_name,
 			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
@@ -275,7 +277,7 @@ func chUsageRawSQLFromWheres(
 				ue.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
+			`+chUsageDisplayNameSQL+` AS display_name,
 			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
@@ -439,7 +441,7 @@ func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID
 			p.cost_microdollars AS cost_microdollars, p.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
+			` + chUsageDisplayNameSQL + ` AS display_name,
 			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at,
@@ -2142,8 +2144,8 @@ func (s *Store) GetTopSessionsByCost(
 	if err != nil {
 		return nil, err
 	}
-	// Keep one total per session rather than every usage row: the totals
-	// are all a later read needs, and they are a small fraction of the rows.
+	// Keep one total per session rather than every usage row. Grouped reads
+	// also keep member metadata so repeat reads avoid scanning every title.
 	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, state, "top", f, "", pricing.digest, nil)
 	if err != nil {
 		return nil, err
@@ -2156,17 +2158,20 @@ func (s *Store) GetTopSessionsByCost(
 		if err != nil {
 			return nil, err
 		}
+		if f.TopSessionsByGroup {
+			if err := s.loadTopSessionMetadata(ctx, out); err != nil {
+				return nil, err
+			}
+		}
 		s.topSessionTotals.Put(memoSlot, memoVersion, out)
 	}
 	out = slices.Clone(out)
-	if !f.TopSessionsByGroup {
-		out = db.SortAndLimitTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
-	}
-	if err := s.loadTopSessionMetadata(ctx, out); err != nil {
-		return nil, err
-	}
 	if f.TopSessionsByGroup {
 		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	}
+	out = db.SortAndLimitTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	if err := s.loadTopSessionMetadata(ctx, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -2187,7 +2192,7 @@ func (s *Store) loadTopSessionMetadata(ctx context.Context, entries []db.TopSess
 	}
 	rows, err := s.queryContext(chdriver.Context(ctx, chdriver.WithExternalTable(table)), `
 		SELECT s.id,
-			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), ''),
+			`+chUsageDisplayNameSQL+`,
 			s.started_at, ifNull(s.group_key, ''), ifNull(s.session_name, ''), s.machine
 		FROM sessions s
 		WHERE s.id IN (SELECT id FROM usage_top_sessions)`)
@@ -2201,14 +2206,12 @@ func (s *Store) loadTopSessionMetadata(ctx context.Context, entries []db.TopSess
 		if err := rows.Scan(&id, &displayName, &startedAt, &groupKey, &sessionName, &machine); err != nil {
 			return fmt.Errorf("scanning clickhouse top-session metadata: %w", err)
 		}
-		if i, ok := byID[id]; ok {
-			entry := &entries[i]
-			entry.DisplayName = displayName
-			entry.StartedAt = formatDBTime(startedAt)
-			entry.GroupKey = groupKey
-			entry.SessionName = sessionName
-			entry.Machine = machine
-		}
+		entry := &entries[byID[id]]
+		entry.DisplayName = displayName
+		entry.StartedAt = formatDBTime(startedAt)
+		entry.GroupKey = groupKey
+		entry.SessionName = sessionName
+		entry.Machine = machine
 	}
 	return rows.Err()
 }

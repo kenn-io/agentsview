@@ -558,9 +558,12 @@ changed.
 
 ## Kept reads
 
-Serve keeps the results of recent reads in memory so a repeat request between
-pushes reads no rows from ClickHouse; it still runs the small metadata queries
-that check whether its inputs changed. Each kept read has one slot per selection
+Serve keeps recent read results in memory. Most repeat requests between pushes
+read no data rows; small metadata queries still check whether inputs changed.
+Ungrouped Top sessions requests also reload display metadata for their ranked
+winners. Grouped Top sessions keep member metadata with their totals.
+
+Each kept read has one slot per selection
 (filter, range, and similar inputs), and its key names the rows it read: the
 prepared usage stamp and row identities for fully prepared range reads, the
 candidate sessions and their push versions, or the parts of the tables it
