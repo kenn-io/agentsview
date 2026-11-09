@@ -1,6 +1,7 @@
 import { getLocale, setLocale as setParaglideLocale } from "../paraglide/runtime.js";
+import { m } from "../paraglide/messages.js";
 
-export { m } from "../paraglide/messages.js";
+export { m };
 // Current BCP 47 tag (en / zh-CN / zh-TW / ko / fr / ja / az / es) for kit-ui components that
 // take a `locale` prop, so their date/tooltip formatting follows the app
 // language setting instead of the browser locale.
@@ -79,6 +80,17 @@ export function formatDateTime(
   options: Intl.DateTimeFormatOptions = {},
 ): string {
   return new Intl.DateTimeFormat(getLocale(), options).format(new Date(value));
+}
+
+export function formatDayRange(from: string, to: string, collapseSingleDay = true): string {
+  const options: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
+  const first = formatDateTime(`${from}T00:00:00`, options);
+  return collapseSingleDay && from === to
+    ? first
+    : m.data_workspace_activity_range({
+        first,
+        last: formatDateTime(`${to}T00:00:00`, options),
+      });
 }
 
 export function initI18n() {

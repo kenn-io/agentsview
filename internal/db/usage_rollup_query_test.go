@@ -590,19 +590,19 @@ func TestUsageRollupQueryRejectsDifferentInstallOrPricing(t *testing.T) {
 		SET install_revision = install_revision + 1 WHERE id = ?`, required.ID)
 	require.NoError(t, err)
 
-	_, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, filter, resolver)
+	_, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, filter, resolver, 0)
 	require.ErrorIs(t, err, errUsageCacheSourceChanged)
 	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_installs
 		SET install_revision = ? WHERE id = ?`,
 		required.InstallRevision-1, required.ID)
 	require.NoError(t, err)
-	_, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, filter, resolver)
+	_, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, filter, resolver, 0)
 	require.ErrorIs(t, err, errUsageCacheSourceChanged)
 	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_installs
 		SET install_revision = ?, pricing_hash = 'changed' WHERE id = ?`,
 		required.InstallRevision, required.ID)
 	require.NoError(t, err)
-	_, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, filter, resolver)
+	_, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, filter, resolver, 0)
 	assert.ErrorIs(t, err, errUsageCacheSourceChanged)
 }
 
@@ -634,7 +634,7 @@ func getDailyUsageRollupForTest(
 		t.Context(), snapshot, fills, resolver)
 	require.NoError(t, err)
 	result, err := cache.usageRollupQuery(
-		t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, filter, resolver)
+		t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, filter, resolver, 0)
 	require.NoError(t, err)
 	daily, err := database.assembleDailyUsageFacts(
 		t.Context(), filter, result, resolver)

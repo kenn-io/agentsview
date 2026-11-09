@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -47,6 +48,8 @@ type activityReportBackend struct {
 	read                   map[string]struct{}
 	pricing                []export.EffectivePricingRow
 	pricingDigest          string
+	inputs                 *pgActivityInputs
+	counted                *[]pgActivityCountedMessage
 }
 
 func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
@@ -56,13 +59,28 @@ func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q, b.read, b.pricing, b.pricingDigest)
+	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q, b.read, b.pricing, b.pricingDigest, b.inputs)
+}
+
+func (b activityReportBackend) ActivityReportCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
+	return b.activityReportCandidateSourceWithInputs(ids, q, b.inputs, b.counted)
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
-	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	for _, message := range *b.counted {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		role := "assistant"
+		if message.user {
+			role = "user"
+		}
+		counts.Add(message.sessionID, role, time.UnixMicro(message.timestamp).UTC())
+	}
+	return ctx.Err()
 }
 
 func (s *Store) BuildActivityReportArtifacts(
@@ -125,8 +143,25 @@ func (s *Store) BuildActivityReportArtifacts(
 	if selection != "" {
 		read = make(map[string]struct{}, len(ids))
 	}
+	var inputs *pgActivityInputs
+	var inputVersion string
+	if q.Partial && !s.hostedRelations && s.readTx == nil {
+		inputVersion, err = s.activityKeptVersion(ctx, "")
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if inputVersion != "" {
+			inputs, err = s.activityReportInputs(ctx, inputVersion, lowerBound, upperBound)
+			if err != nil {
+				return activity.CandidateArtifacts{}, err
+			}
+		}
+	}
+	var counted []pgActivityCountedMessage
 	backend := activityReportBackend{
+		counted:       &counted,
 		read:          read,
+		inputs:        inputs,
 		pricing:       pricing,
 		pricingDigest: pricingDigest,
 		Store:         s,
@@ -134,6 +169,14 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating pg activity report")
+	if err == nil && ctx.Err() == nil && inputs != nil {
+		for id := range inputs.transcripts {
+			if !inputs.candidates[id] {
+				delete(inputs.transcripts, id)
+			}
+		}
+		s.runtimeState().activityInputs.Put(lowerBound+"|"+upperBound, inputVersion, []pgActivityInputs{*inputs})
+	}
 	if err == nil && selection != "" {
 		candidates := slices.Clip(slices.Clone(ids))
 		slices.Sort(candidates)
@@ -149,32 +192,11 @@ func (s *Store) BuildActivityReportArtifacts(
 	return artifacts, err
 }
 
-func (s *Store) activityReportMessageCounts(
-	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
-) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	rows, err := s.pg.QueryContext(ctx, `
-		SELECT session_id, role, timestamp FROM messages
-		WHERE session_id = ANY($1)
-			AND role IN ('user', 'assistant') AND is_system = false
-			AND COALESCE(source_subtype, '') <> 'tool_result'
-			AND timestamp >= $2 AND timestamp < $3`, ids, q.RangeStart, q.EffectiveEnd)
-	if err != nil {
-		return fmt.Errorf("querying pg activity message counts: %w", err)
-	}
-	defer rows.Close()
-	counts := activity.NewMessageAccumulator(q, artifacts)
-	for rows.Next() {
-		var sessionID, role string
-		var timestamp time.Time
-		if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
-			return fmt.Errorf("scanning pg activity message counts: %w", err)
-		}
-		counts.Add(sessionID, role, timestamp)
-	}
-	return rows.Err()
+// pgActivityCountedMessage lives only until this report finishes aggregation.
+type pgActivityCountedMessage struct {
+	sessionID string
+	timestamp int64
+	user      bool
 }
 
 // GetSessionUsageRows returns the backend-priced usage rows for the supplied
@@ -419,6 +441,10 @@ func (s *Store) activityReportSessions(
 func (s *Store) activityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
+	return s.activityReportCandidateSourceWithInputs(ids, q, nil, nil)
+}
+
+func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity.Query, inputs *pgActivityInputs, counted *[]pgActivityCountedMessage) activity.CandidateSource {
 	return func(
 		ctx context.Context,
 		yield func(activity.IntervalCandidate) error,
@@ -566,7 +592,7 @@ func (s *Store) activityReportCandidateSource(
 		}
 
 		terminalRows, err := s.pg.QueryContext(
-			ctx, terminalQuery, ids, lower, q.EffectiveEnd,
+			ctx, terminalQuery, pgx.QueryExecModeDescribeExec, ids, lower, q.EffectiveEnd,
 		)
 		if err != nil {
 			return fmt.Errorf("querying pg activity report terminal candidates: %w", err)
@@ -593,68 +619,40 @@ func (s *Store) activityReportCandidateSource(
 			ctx context.Context,
 			yield func(activity.IntervalCandidate) error,
 		) error {
-			query := `SELECT
-				m.session_id, m.ordinal, successor.ordinal,
-				m.timestamp, successor.timestamp,
-				successor.role, successor.model,
-				COALESCE((
-					SELECT prior.model
-					FROM messages prior
-					WHERE prior.session_id = m.session_id
-						AND prior.ordinal <= m.ordinal
-						AND prior.role = 'assistant'
-						AND prior.model != ''
-						AND prior.timestamp IS NOT NULL
-						AND prior.timestamp > (
-							SELECT prior_previous.timestamp
-							FROM messages prior_previous
-							WHERE prior_previous.session_id = prior.session_id
-								AND prior_previous.ordinal < prior.ordinal
-								AND prior_previous.timestamp IS NOT NULL
-							ORDER BY prior_previous.ordinal DESC
-							LIMIT 1
-						)
-					ORDER BY prior.ordinal DESC
-					LIMIT 1
-				), 'unknown')
-			FROM messages m
-			JOIN messages successor
-				ON successor.session_id = m.session_id
-				AND successor.ordinal = (
-					SELECT next.ordinal
-					FROM messages next
-					WHERE next.session_id = m.session_id
-						AND next.ordinal > m.ordinal
-						AND next.timestamp IS NOT NULL
-					ORDER BY next.ordinal
-					LIMIT 1
-				)
-			WHERE m.session_id = ANY($1)
-				AND m.timestamp IS NOT NULL
-				AND m.timestamp >= $2
-				AND m.timestamp < $3
-			ORDER BY m.timestamp, m.session_id, m.ordinal`
-			rows, queryErr := s.pg.QueryContext(
-				ctx, query, ids, lower, q.EffectiveEnd,
-			)
-			if queryErr != nil {
-				return fmt.Errorf(
-					"querying pg activity report candidates: %w", queryErr)
+			var pairs []activity.IntervalCandidate
+			var copyBuffer []activity.TranscriptMessage
+			// pgx truncates SQL timestamp bounds to microseconds.
+			lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
+			countLowerMicro := q.RangeStart.UnixMicro()
+			err := s.activityTranscriptSource(ctx, ids, inputs, func(id string, session []activity.TranscriptMessage) {
+				if inputs != nil {
+					copyBuffer = append(copyBuffer[:0], session...)
+					session = copyBuffer
+				}
+				for i := range session {
+					us := session[i].At.UnixMicro()
+					if counted != nil && session[i].Counted && us >= countLowerMicro && us < upperMicro {
+						*counted = append(*counted, pgActivityCountedMessage{id, us, session[i].Role == "user"})
+					}
+					session[i].Starts = us >= lowerMicro && us < upperMicro
+				}
+				pairs = activity.AppendTranscriptPairs(pairs, id, session)
+			})
+			if err != nil {
+				return err
 			}
-			defer rows.Close()
-			for rows.Next() {
+			sort.Slice(pairs, func(i, j int) bool {
+				return activity.CandidateLess(pairs[i], pairs[j])
+			})
+			for _, candidate := range pairs {
 				if err := ctx.Err(); err != nil {
 					return err
-				}
-				candidate, scanErr := scanCandidate(rows)
-				if scanErr != nil {
-					return scanErr
 				}
 				if err := yield(candidate); err != nil {
 					return err
 				}
 			}
-			return rows.Err()
+			return nil
 		}
 		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
@@ -687,10 +685,14 @@ func activityReportClaudePeerPredicate(sessions, lower, upper string) string {
 // computed after selection so filtered rows do not affect pricing metadata.
 func (s *Store) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
-	read map[string]struct{}, pricing []export.EffectivePricingRow, pricingDigest string,
+	read map[string]struct{}, pricing []export.EffectivePricingRow, pricingDigest string, inputs *pgActivityInputs,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
 
+	raw, err := s.activityUsageInputs(ctx, ids, lowerBound, upperBound, inputs)
+	if err != nil {
+		return nil, nil, err
+	}
 	rateResolver := export.NewPricingResolverWithDigest(pricing, pricingDigest)
 	if len(ids) == 0 {
 		block, err := rateResolver.BuildBlock()
@@ -706,39 +708,8 @@ func (s *Store) activityReportUsage(
 		ts      time.Time
 		ordinal int64
 	}
-	// One text[] parameter names the candidate sessions, so the statement
-	// shape and bind count do not depend on how many sessions the report
-	// selected. The message branch also keeps cross-session Claude peers
-	// whose snapshot keys match a candidate row inside the bounds; those
-	// keys are derived in the query instead of being round-tripped through
-	// Go.
-	pb := &paramBuilder{}
-	candidateSessions := pb.add(ids)
-	peerSessions := pb.add(ids)
-	peerLower := pb.add(lowerBound)
-	peerUpper := pb.add(upperBound)
-	eventSessions := pb.add(ids)
-	lower := pb.add(lowerBound)
-	upper := pb.add(upperBound)
-	rowsSQL := pgDailyUsageRowsSQLWithWhere(
-		"("+pgUsageMessageEligibility+" AND m.session_id = ANY("+candidateSessions+") OR ("+
-			activityReportClaudePeerPredicate(peerSessions, peerLower, peerUpper)+"))",
-		pgUsageEventEligibility+" AND ue.session_id = ANY("+eventSessions+")")
-	query := pgDailyUsageRowSelectFromRows(rowsSQL) + `
-		AND u.ts >= ` + lower + `::timestamptz
-		AND u.ts <= ` + upper + `::timestamptz`
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("querying activity report usage: %w", err)
-	}
-	defer rows.Close()
-	var rowsAcc []ordered
-	for rows.Next() {
-		r, scanErr := scanPGDailyUsageRow(rows)
-		if scanErr != nil {
-			return nil, nil, fmt.Errorf(
-				"scanning activity report usage: %w", scanErr)
-		}
+	rowsAcc := make([]ordered, 0, len(raw))
+	for _, r := range raw {
 		if read != nil {
 			read[r.sessionID] = struct{}{}
 		}
@@ -762,9 +733,6 @@ func (s *Store) activityReportUsage(
 				UsageDedupKey:   r.usageDedupKey,
 			},
 		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("iterating activity report usage: %w", err)
 	}
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {

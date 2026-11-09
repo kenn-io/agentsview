@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS messages (
     content        TEXT NOT NULL,
     thinking_text  TEXT NOT NULL DEFAULT '',
     dialogue_text  TEXT,
+    dialogue_is_content INTEGER NOT NULL DEFAULT 0,
     timestamp      TEXT,
     has_thinking   INTEGER NOT NULL DEFAULT 0,
     has_tool_use   INTEGER NOT NULL DEFAULT 0,
@@ -1468,6 +1469,18 @@ CREATE TABLE IF NOT EXISTS friction_issue_links (
     web_url           TEXT NOT NULL DEFAULT '',
     source            TEXT NOT NULL,
     linked_at         TEXT NOT NULL
+);
+
+-- Why automatic filing has not linked a pattern: a failure to retry, a case
+-- a person must settle, or a link a person removed. Linking clears the row.
+CREATE TABLE IF NOT EXISTS friction_filing_state (
+    fingerprint     TEXT PRIMARY KEY,
+    state           TEXT NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    first_failed_at TEXT,
+    next_attempt_at TEXT,
+    last_error      TEXT NOT NULL DEFAULT '',
+    updated_at      TEXT NOT NULL
 );
 
 -- Durable normalized-artifact import claims. Artifact kinds evolve

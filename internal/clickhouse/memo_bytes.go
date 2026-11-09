@@ -3,7 +3,6 @@ package clickhouse
 import (
 	"unsafe"
 
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -43,15 +42,13 @@ func aggregateRowBytes(r chUsageAggregateRow) int64 {
 
 func dailyUsageRowBytes(r chDailyUsageGroupRow) int64 {
 	return aggregateRowBytes(r.chUsageAggregateRow) + int64(unsafe.Sizeof(r)-unsafe.Sizeof(r.chUsageAggregateRow)) +
-		stringBytes(r.kind, r.contextID, r.priceError)
+		stringBytes(r.kind, r.contextID, r.priceError) +
+		int64(len(r.inexactModels)+len(r.inexactProjects))*int64(unsafe.Sizeof("")) +
+		stringBytes(r.inexactModels...) + stringBytes(r.inexactProjects...)
 }
 
 func usageSessionRowBytes(r chUsageSessionRow) int64 {
 	return int64(unsafe.Sizeof(r)) + stringBytes(r.sessionID, r.project, r.agent)
-}
-
-func topSessionBytes(e db.TopSessionEntry) int64 {
-	return int64(unsafe.Sizeof(e)) + stringBytes(e.SessionID, e.DisplayName, e.Agent, e.Project, e.StartedAt, e.Machine, e.GroupKey, e.GroupLabel, e.SessionName)
 }
 
 func analyticsSessionBytes(r readbase.AnalyticsSession) int64 {

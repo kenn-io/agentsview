@@ -138,8 +138,10 @@ func getToolSequencesDocument(t *testing.T, handler http.Handler, sessionID stri
 	return document
 }
 
-// A push that fails after deleting a shortened transcript's messages can leave
-// their tool calls behind. Evidence links only to messages that still exist.
+// A push from an older writer that failed after deleting a shortened
+// transcript's messages can leave their tool calls behind, without the
+// message fields newer pushes copy onto each call. Evidence links only to
+// messages that still exist.
 func TestToolEvidenceIgnoresOrdinalOfMissingMessage(t *testing.T) {
 	t.Parallel()
 	local := dbtest.OpenTestDB(t)
@@ -174,6 +176,9 @@ func TestToolEvidenceIgnoresOrdinalOfMissingMessage(t *testing.T) {
 	require.Equal(t, 2, before.Sessions[0].SignalTotal)
 
 	conn := chtest.Open(t, dsn, database)
+	_, err = conn.ExecContext(t.Context(),
+		`ALTER TABLE tool_calls UPDATE message_facts = false WHERE session_id = ? SETTINGS mutations_sync = 2`, sessionID)
+	require.NoError(t, err)
 	deleteMessage := func(ordinal int) {
 		t.Helper()
 		_, err := conn.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id = ? AND ordinal = ?`, sessionID, ordinal)

@@ -67,3 +67,14 @@ func TestPushIncrementalMirrorsLabelOnlyChange(t *testing.T) {
 	assert.Len(t, launcher.PRLinks, 1,
 		"clearing labels must not drop the session's pull request links")
 }
+
+func TestSessionExclusionCounts(t *testing.T) {
+	local := newLocalDB(t)
+	dbtest.SeedSessionExclusions(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	_, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, true, nil)
+	require.NoError(t, err)
+	store := openPushedStore(t, path)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	dbtest.AssertSessionExclusionCounts(t, store)
+}

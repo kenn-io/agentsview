@@ -30,6 +30,7 @@ const (
 type ContentSearchFilter struct {
 	Pattern       string
 	Mode          string   // "substring" (default) | "regex" | "fts" | "terms" | "semantic" | "hybrid"
+	KeywordOnly   bool     // internal hybrid keyword leg; skips the semantic index
 	Sources       []string // subset of {"messages","thinking","tool_input","tool_result"}
 	ExcludeSystem bool
 
@@ -1614,18 +1615,24 @@ func (db *DB) searchContentHybrid(
 	if err := ValidateSemanticFilter(f); err != nil {
 		return ContentSearchPage{}, err
 	}
-	searcher := db.getVectorSearcher()
-	if searcher == nil {
-		return ContentSearchPage{}, ErrSemanticUnavailable
+	var searcher VectorSearcher
+	if !f.KeywordOnly {
+		if searcher = db.getVectorSearcher(); searcher == nil {
+			return ContentSearchPage{}, ErrSemanticUnavailable
+		}
 	}
 	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 
 	k := max(f.Limit*4, SemanticOverfetchMin)
-	vecLeg, err := db.hybridVectorLeg(ctx, f, searcher, k)
-	if err != nil {
-		return ContentSearchPage{}, err
+	var vecLeg hybridLeg
+	var err error
+	if searcher != nil {
+		vecLeg, err = db.hybridVectorLeg(ctx, f, searcher, k)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
 	}
 	ftsLeg, err := db.hybridFTSLeg(ctx, f, searcher, k)
 	if err != nil {
@@ -1762,6 +1769,15 @@ func (db *DB) fetchHybridFTSBatch(
 	return hits, nil
 }
 
+// ResolveHybridMessageUnits returns empty unit refs without a searcher so
+// keyword-only callers derive ranges from the archive.
+func ResolveHybridMessageUnits(ctx context.Context, searcher VectorSearcher, refs []MessageRef) ([]UnitRef, error) {
+	if searcher == nil {
+		return make([]UnitRef, len(refs)), nil
+	}
+	return searcher.ResolveMessageUnits(ctx, refs)
+}
+
 // appendHybridFTSHits resolves one batch of FTS message hits to their
 // containing units, classifies unit-less hits structurally (range and
 // subordinate flag, so the scope filter and the fusion penalty treat them
@@ -1779,7 +1795,7 @@ func (db *DB) appendHybridFTSHits(
 	for i, hit := range hits {
 		refs[i] = MessageRef{SessionID: hit.sessionID, Ordinal: hit.ordinal}
 	}
-	units, err := searcher.ResolveMessageUnits(ctx, refs)
+	units, err := ResolveHybridMessageUnits(ctx, searcher, refs)
 	if err != nil {
 		return fmt.Errorf("resolving fts hits to units: %w", err)
 	}

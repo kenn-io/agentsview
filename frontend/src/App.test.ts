@@ -98,6 +98,7 @@ afterEach(() => {
   router.sessionId = null;
   router.isRootPath = false;
   sessions.activeSessionId = null;
+  sessions.archiveEmpty = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
@@ -693,6 +694,19 @@ describe("App root Sessions landing", () => {
     router.sessionId = null;
     router.isRootPath = true;
   }
+
+  it.each([true, false])("renders the landing view for archive empty %s", async (empty) => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    sessions.archiveEmpty = empty;
+    router.navigate("sessions");
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    expect(document.body.querySelector(".empty-archive-panel") !== null).toBe(empty);
+    expect(document.body.querySelector(".analytics-page") !== null).toBe(!empty);
+  });
 
   it("resets filters without changing the bare root URL or saved value", async () => {
     stubAppDependencies();

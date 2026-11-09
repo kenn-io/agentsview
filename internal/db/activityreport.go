@@ -65,6 +65,7 @@ type activityReportBackend struct {
 	lowerBound, upperBound string
 	read                   *[]string
 	counted                *activityReportCounted
+	usage                  activityUsageWindow
 }
 
 // activityReportCounted holds every counted message the build's pairing
@@ -99,8 +100,8 @@ func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	rows, pricing, read, err := b.activityReportUsage(
-		ctx, ids, b.lowerBound, b.upperBound, q, b.read != nil)
+	rows, pricing, read, err := b.activityReportCachedUsage(
+		ctx, b.usage, ids, b.lowerBound, b.upperBound, q, b.read != nil)
 	if b.read != nil {
 		*b.read = append(*b.read, read...)
 	}
@@ -128,11 +129,12 @@ func (db *DB) BuildActivityReportArtifacts(
 ) (activity.CandidateArtifacts, error) {
 	f.IncludeSubagents = true
 	f.IncludeForks = true
-	release, err := db.acquireBulkRead(ctx)
+	held, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	defer release()
+	release := held
+	defer func() { release() }()
 	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 
 	var selection, version string
@@ -164,6 +166,23 @@ func (db *DB) BuildActivityReportArtifacts(
 	activity.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
+	// A report without candidate sessions reads no usage, so it leaves the
+	// cache alone.
+	var usage activityUsageWindow
+	if len(ids) > 0 {
+		// Filling the usage cache takes its own archive reads. Waiting for
+		// them while holding one could exhaust the bulk-read slots.
+		release()
+		release = func() {}
+		usage, err = db.prepareActivityUsageWindow(ctx, lowerBound, upperBound)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if held, err = db.acquireBulkRead(ctx); err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		release = held
+	}
 
 	var read []string
 	var readSet *[]string
@@ -176,6 +195,7 @@ func (db *DB) BuildActivityReportArtifacts(
 		DB:         db,
 		lowerBound: lowerBound, upperBound: upperBound,
 		counted: &activityReportCounted{},
+		usage:   usage,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating activity report")
@@ -675,41 +695,6 @@ type activityCountedMessage struct {
 	user      bool
 }
 
-// activityPairMessage is one parseable message of a session. starts marks a
-// message inside the pairing window, which may start a pair.
-type activityPairMessage struct {
-	ordinal     int
-	at          time.Time
-	role, model string
-	starts      bool
-}
-
-// appendActivityTranscriptPairs pairs each window message of one session with
-// the next parseable one. The prior model is the latest assistant model whose
-// message is later than the message before it, up to and including the start.
-// Times compare at microseconds, as the reports order them.
-func appendActivityTranscriptPairs(
-	out []activity.IntervalCandidate, sessionID string, ms []activityPairMessage,
-) []activity.IntervalCandidate {
-	prior := "unknown"
-	for i, m := range ms {
-		if i > 0 && m.role == "assistant" && m.model != "" &&
-			m.at.UnixMicro() > ms[i-1].at.UnixMicro() {
-			prior = m.model
-		}
-		if !m.starts || i+1 == len(ms) {
-			continue
-		}
-		next := ms[i+1]
-		out = append(out, activity.IntervalCandidate{
-			SessionID: sessionID, StartOrdinal: m.ordinal, EndOrdinal: next.ordinal,
-			Start: m.at, End: next.at, ClosingRole: next.role,
-			ClosingModel: next.model, PriorModel: prior,
-		})
-	}
-	return out
-}
-
 const activityReportTerminalCandidatesSQL = `WITH
 	session_ids AS (
 		SELECT value AS session_id FROM json_each(?)
@@ -937,45 +922,45 @@ func (db *DB) activityReportCandidateSQL(
 			defer rows.Close()
 			var pairs []activity.IntervalCandidate
 			var sessionID string
-			var session []activityPairMessage
+			var session []activity.TranscriptMessage
 			// Scan targets live outside the loop: Scan takes their addresses,
 			// so per-row variables would each escape to the heap.
 			var id, timestamp string
-			var m activityPairMessage
+			var m activity.TranscriptMessage
 			var countable bool
 			for rows.Next() {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
 				if err := rows.Scan(
-					&id, &m.ordinal, &m.role, &timestamp, &m.model, &countable,
+					&id, &m.Ordinal, &m.Role, &timestamp, &m.Model, &countable,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning activity report message: %w", err)
 				}
 				if id != sessionID {
-					pairs = appendActivityTranscriptPairs(pairs, sessionID, session)
+					pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
 					sessionID, session = id, session[:0]
 				}
 				at, ok := ParseStoredTimestamp(timestamp)
 				if !ok {
 					continue
 				}
-				m.at = at.UTC()
+				m.At = at.UTC()
 				if counted != nil && countable &&
-					(m.role == "user" || m.role == "assistant") &&
-					!m.at.Before(lowerTime) && m.at.Before(upperTime) {
-					counted(id, activityCountedMessage{timestamp, m.role == "user"})
+					(m.Role == "user" || m.Role == "assistant") &&
+					!m.At.Before(lowerTime) && m.At.Before(upperTime) {
+					counted(id, activityCountedMessage{timestamp, m.Role == "user"})
 				}
-				us := m.at.UnixMicro()
-				m.starts = us >= lower && us < upper &&
+				us := m.At.UnixMicro()
+				m.Starts = us >= lower && us < upper &&
 					timestamp >= paddedLower && timestamp < paddedUpper
 				session = append(session, m)
 			}
 			if err := rows.Err(); err != nil {
 				return err
 			}
-			pairs = appendActivityTranscriptPairs(pairs, sessionID, session)
+			pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
 			sort.Slice(pairs, func(i, j int) bool {
 				return activity.CandidateLess(pairs[i], pairs[j])
 			})
@@ -1005,6 +990,8 @@ func (db *DB) ActivityReportCandidateSource(
 // activityReportUsage selects complete snapshots across the padded range,
 // then keeps rows attributed to the candidate sessions. Rows are ordered on
 // parsed instants so mixed RFC3339 representations remain chronological.
+// Reports read the same rows from the usage cache through
+// activityReportCachedUsage; this raw-row path is the tests' oracle.
 func (db *DB) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
 	collectRead bool,
@@ -1365,32 +1352,51 @@ func sqliteActivityReportRowStatus(
 func sqliteActivityReportRowStatusWithWebSearchRequests(
 	r dailyUsageScanRow, webSearches int, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
-	pricedModel, lookup := pricing.ResolveAt(
-		r.model, usageLookupModel(r.model, r.pricingTS),
-		usagePricingTimestamp(r.pricingTS),
-	)
-	var inTok, outTok, crTok, cr1hTok, rdTok int
-	reasoningTok := r.reasoningTokens
+	var tokens activityReportRowTokens
+	tokens.reasoning = r.reasoningTokens
 	if r.usageSource == "message" {
-		inTok, outTok, crTok, rdTok, reasoningTok = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
-		cr1hTok = clampedCacheCreation1hTokens(r.tokenJSON)
+		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead, tokens.reasoning = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		tokens.cacheCreation1h = clampedCacheCreation1hTokens(r.tokenJSON)
 	} else {
-		inTok, outTok, crTok, rdTok = UsageEventRowTokens(
+		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead = UsageEventRowTokens(
 			r.usageSource,
 			r.inputTokens, r.outputTokens,
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
+	return activityReportRowCost(
+		r.model, r.pricingTS, r.providerID, r.cost,
+		UsageRowIsRequestScoped(r.usageSource, r.messageOrdinal),
+		tokens, webSearches, pricing)
+}
 
-	if r.cost.Valid {
-		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
-		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
+// activityReportRowTokens holds one usage row's normalized token counters.
+type activityReportRowTokens struct {
+	input, output, reasoning, cacheCreation, cacheCreation1h, cacheRead int
+}
+
+// activityReportRowCost prices one Activity usage row from its normalized
+// tokens, recording the lookup it used.
+func activityReportRowCost(
+	model, pricingTS, providerID string, reported sql.NullInt64,
+	requestScoped bool, tokens activityReportRowTokens, webSearches int,
+	pricing *export.PricingResolver,
+) (cost money.Money, priced, contributes bool, err error) {
+	pricedModel, lookup := pricing.ResolveAt(
+		model, usageLookupModel(model, pricingTS),
+		usagePricingTimestamp(pricingTS),
+	)
+	inTok, outTok, reasoningTok := tokens.input, tokens.output, tokens.reasoning
+	crTok, cr1hTok, rdTok := tokens.cacheCreation, tokens.cacheCreation1h, tokens.cacheRead
+	if reported.Valid {
+		pricing.RecordResolvedReported(model, pricedModel, lookup)
+		return money.Money{Microdollars: reported.Int64}, true, true, nil
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 && webSearches == 0 {
 		return money.Money{}, true, false, nil
 	}
 	if !lookup.OK {
-		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+		pricing.RecordResolvedComputed(model, pricedModel, lookup)
 		fee, feeErr := export.WebSearchFee(webSearches)
 		if feeErr != nil {
 			return money.Money{}, false, false, feeErr
@@ -1398,27 +1404,26 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 		return fee, false, true, nil
 	}
 	pricedModel, lookup, err = pricing.ResolveBilledAt(
-		r.providerID, r.model, usageLookupModel(r.model, r.pricingTS),
-		usagePricingTimestamp(r.pricingTS))
+		providerID, model, usageLookupModel(model, pricingTS),
+		usagePricingTimestamp(pricingTS))
 	if err != nil {
 		return money.Money{}, false, false, err
 	}
-	requestScoped := UsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(
 		requestScoped,
 		inTok, outTok, reasoningTok, crTok, cr1hTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
-			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
+			fmt.Errorf("pricing activity usage for model %q: %w", model, err)
 	}
 	cost, err = export.AddWebSearchFee(cost, webSearches)
 	if err != nil {
 		return money.Money{}, false, false,
-			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
+			fmt.Errorf("pricing activity usage for model %q: %w", model, err)
 	}
 	RecordComputedUsagePricing(
 		pricing,
-		r.model,
+		model,
 		pricedModel,
 		lookup,
 		requestScoped,

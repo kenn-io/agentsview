@@ -2169,8 +2169,7 @@ func (s *Sync) reconcilePGMissingSessions(
 			return fmt.Errorf("scanning owned pg session for full push reconciliation: %w", err)
 		}
 		ids = append(ids, id)
-		switch agent {
-		case "codex", "traex", "augure-code":
+		if parser.IsCodexFormatAgent(parser.AgentType(agent)) {
 			codexPaths[id] = path
 		}
 	}
@@ -3822,8 +3821,8 @@ func bulkInsertMessages(
 			// bytes (e.g. raw protobuf fragments), which PG
 			// rejects with SQLSTATE 22021.
 			var dialogue any
-			if m.DialogueText != nil {
-				dialogue = sanitizePG(*m.DialogueText)
+			if stored, _ := db.StoredDialogue(m.Content, m.ThinkingText, m.DialogueText); stored != nil {
+				dialogue = sanitizePG(*stored)
 			}
 			args = append(args,
 				sessionID, m.Ordinal, sanitizePG(m.Role),

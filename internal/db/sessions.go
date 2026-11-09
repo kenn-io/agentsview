@@ -237,7 +237,8 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 }
 
 // Version 6 stores per-call tool observations for effectiveness rates.
-const CurrentQualitySignalVersion = 6
+// Version 7 stops calls without retained input from counting as retries.
+const CurrentQualitySignalVersion = 7
 
 // QualitySignals groups persisted deterministic quality-signal
 // columns for API callers while keeping the database representation
@@ -572,6 +573,7 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
+	ExclusionCounts *bool // nil omits the summary; true includes child counts
 	// IDs selects rows directly. Nil preserves discovery defaults; an empty
 	// non-nil slice matches nothing. Raw IDs expand over literal tilde suffixes.
 	IDs []string
@@ -701,9 +703,10 @@ func buildCanonicalRootWhere(includeOrphans bool) string {
 
 // SessionPage is a page of session results.
 type SessionPage struct {
-	Sessions   []Session `json:"sessions"`
-	NextCursor string    `json:"next_cursor,omitempty"`
-	Total      int       `json:"total"`
+	ExclusionCounts *SessionExclusionCounts `json:"exclusion_counts,omitempty"`
+	Sessions        []Session               `json:"sessions"`
+	NextCursor      string                  `json:"next_cursor,omitempty"`
+	Total           int                     `json:"total"`
 }
 
 type SidebarSessionIndexRow struct {
@@ -769,7 +772,14 @@ func (db *DB) ListSessions(
 	// Total count applies filters but not cursor. To avoid
 	// re-counting on every pagination request, newer cursors carry
 	// the first-page total and we reuse it here.
-	if total <= 0 {
+	var exclusions *SessionExclusionCounts
+	if f.WantsExclusionCounts() {
+		var err error
+		total, exclusions, err = CountSessionExclusions(ctx, db.getReader(), f, dialect)
+		if err != nil {
+			return SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
+		}
+	} else if total <= 0 {
 		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + where
 		if err := db.getReader().QueryRowContext(
 			ctx, countQuery, args...,
@@ -815,7 +825,10 @@ func (db *DB) ListSessions(
 		return SessionPage{}, err
 	}
 
-	return BuildSessionPage(sessions, total, f, rs, db.EncodeCursor), nil
+	exclusions.LoadChildren(ctx, db.getReader(), f, dialect, total)
+	page := BuildSessionPage(sessions, total, f, rs, db.EncodeCursor)
+	page.ExclusionCounts = exclusions
+	return page, nil
 }
 
 // HasVisibleSession reports whether the default sidebar has a session to show.
@@ -3866,6 +3879,12 @@ const virtualContainerMemberFreshnessQuery = `SELECT file_path, file_mtime, data
  WHERE file_path %s ? AND file_path < ? || '$' AND source_missing_at IS NULL
  ORDER BY file_path, rowid`
 
+// VirtualContainerMemberFreshnessPages returns how many stored member
+// freshness pages this archive has listed.
+func (db *DB) VirtualContainerMemberFreshnessPages() int64 {
+	return db.memberFreshnessPages.Load()
+}
+
 // ListVirtualContainerMemberFreshnessPage returns the freshness signal for
 // stored sessions whose file_path is a virtual member of the shared container
 // at containerPath ("<containerPath>#<sessionID>"), excluding source-missing
@@ -3892,6 +3911,7 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 	if containerPath == "" || limit <= 0 {
 		return nil, true, nil
 	}
+	db.memberFreshnessPages.Add(1)
 	lower := containerPath + "#"
 	lowerOp := ">="
 	if afterPath > lower {

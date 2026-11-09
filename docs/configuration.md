@@ -59,8 +59,10 @@ choice. To use a different directory, point those variables at a writable
 directory before you start AgentsView.
 
 The desktop app and CLI share a detached local daemon for fresh reads and
-writes. A running daemon owns local SQLite writes for this data directory and
-self-exits after an idle period. Ordinary session commands require the daemon.
+writes. A running daemon owns local SQLite writes for this data directory.
+Automatically started daemons self-exit after an idle period; `daemon start`
+and `daemon restart` stay running until stopped. Ordinary session commands
+require the daemon.
 Dedicated diagnostics, including `db adopt-machine --list` and `doctor sync`,
 can inspect the archive without starting it. Set `AGENTSVIEW_NO_DAEMON=1` when a
 script must never auto-start a daemon; commands that require one will refuse.
@@ -115,9 +117,10 @@ Limits of the narrower policies:
     be present in the archive, use `"usage"`, which stores no transcript text.
 - `"transcripts"` keeps session search, transcript viewing, and tool analytics
     working, but signals and secret findings that read tool inputs or results
-    (tool failure detection, repeated identical calls, secrets inside tool
-    output) see empty payloads. `result_content_blocked_categories` has no
-    additional effect under this policy. Archived RooCode, Kilo Legacy, gptme,
+    see empty payloads. Content-based tool failure detection and secrets inside
+    tool output find nothing, and no calls count as repeated identical calls.
+    `result_content_blocked_categories` has no additional effect under this
+    policy. Archived RooCode, Kilo Legacy, gptme,
     OpenHands, Aider, Codex, TraeX, and Zencoder sessions parsed before data
     version 105 and whose source files are gone cannot be re-parsed, so a
     rebuild drops every row shape those parsers once used for tool output. This
@@ -288,7 +291,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `auth_token`                        | Auto-generated 256-bit bearer token for remote access; overridden by `AGENTSVIEW_AUTH_TOKEN`, or by `AGENTSVIEW_AUTH_TOKEN_FILE` under a [container deployment](#container-deployment)                                                                                                                                                                                                                                                                                           |
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `daemon_idle_timeout`               | Idle timeout for automatically started and `serve --background` writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                               |
 | `sync_idle_after`                   | Pause local collection after this long without client activity; defaults to `"10m"`, with `"0"` disabling the pause                                                                                                                                                                                                                                                                                                                                                              |
 | `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.                                                                                                                       |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
@@ -516,10 +519,10 @@ For a one-off flag override, `agentsview serve --background --host 0.0.0.0`
 remains available, including without auth. Prefer authenticated persistent
 configuration for an always-available remote node.
 
-Detached writable daemons started by `agentsview daemon start`, automatic CLI
-startup, or `agentsview serve --background` exit after `daemon_idle_timeout`
-when idle. Set it to zero on machines that should stay available for HTTP remote
-sync:
+Explicit `agentsview daemon start` and `daemon restart` stay running until
+stopped. Automatic CLI startup and `agentsview serve --background` exit after
+`daemon_idle_timeout` when idle. Set it to zero on machines that should stay
+available for HTTP remote sync:
 
 ```toml
 daemon_idle_timeout = "0s"
@@ -620,6 +623,7 @@ keeps its default directories.
 | OpenClaw              | `~/.openclaw/agents/` and `~/.kimi_openclaw/agents/`                                                                                                             | JSONL per session or SQLite per agent (`agent/openclaw-agent.sqlite`)                                                                                        |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Open Code Review      | `~/.opencodereview/sessions/`                                                                                                                                    | One JSONL file per review under an encoded project directory                                                                                                  |
+| Open Interpreter      | `~/.openinterpreter/sessions/`, `archived_sessions/`                                                                                                             | Codex-format JSONL per session                                                                                                                                |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                                                          |
 | Omnigent              | `~/.omnigent/`                                                                                                                                                   | SQLite `chat.db`, one session per conversation                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
@@ -664,6 +668,15 @@ reads it without writing or migrating the database.
 under the separate `augure-code` agent ID. Set `AUGURE_CODE_SESSIONS_DIR` or
 `agents.augure-code.dirs` for another sessions root. Resume these sessions with
 `augure resume`, not `codex resume`.
+
+**Open Interpreter** reads Codex-format JSONL from
+`~/.openinterpreter/sessions/` and `~/.openinterpreter/archived_sessions/` and
+appears under the separate `open-interpreter` agent ID. Set `INTERPRETER_HOME`
+to move both defaults, as Open Interpreter itself does, or set
+`OPEN_INTERPRETER_SESSIONS_DIR` or `agents.open-interpreter.dirs` for other
+sessions roots. `CODEX_HOME` does not affect these paths. Resume these sessions
+with `interpreter resume`. Sessions are titled by their first prompt; names
+set with Open Interpreter's rename command are not read.
 
 **Augure Desktop 3 beta** reads `state.db` and its `sessions/` sibling from
 `~/.augure-desktop/` on macOS and Linux, or `~/AppData/Local/augure-desktop/` on
@@ -1175,6 +1188,7 @@ export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp
 export OPENCLAW_DIR=~/custom/openclaw
 export OPENCODE_DIR=~/custom/opencode
+export OPEN_INTERPRETER_SESSIONS_DIR=~/custom/openinterpreter/sessions
 export OPENCODEREVIEW_DIR=~/custom/opencodereview/sessions
 export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi
@@ -1389,10 +1403,10 @@ listening in on, that it is listening in on none right now, that live tokens are
 off and why, or that live tokens stopped after a reply AgentsView could not
 read.
 
-A detached daemon normally exits once it has been idle for `daemon_idle_timeout`.
-While AgentsView is listening in on a running chat, the daemon stays up past that
-timeout, for at most 6 hours per chat. A daemon that is shutting down does not
-start listening in on new chats.
+An automatically started daemon normally exits once it has been idle for
+`daemon_idle_timeout`. While AgentsView is listening in on a running chat, the
+daemon stays up past that timeout, for at most 6 hours per chat. A daemon that
+is shutting down does not start listening in on new chats.
 
 Each token update carries the chat's running total, so an update also covers
 every turn that finished before it, back to the last time OpenAI restarted that
@@ -1747,6 +1761,12 @@ matching objects, fetches each changed object to a temporary file, parses it
 with the existing per-agent parser, records the original `s3://` URI as
 `file_path`, and removes the temporary file. No persistent local mirror is
 created.
+
+Codex forks and subagents also need their parent's rollouts to filter replayed
+turns. A sync downloads each parent once and shares it with every child it
+processes. If a parent's object changes during the sync, later children get
+the new version. The sync keeps about 512 MiB of recent parent rollouts in a
+temporary directory and removes that directory when the sync ends.
 
 Credentials and endpoint configuration use standard AWS-style environment
 variables:
@@ -2221,6 +2241,11 @@ enabled = true
 backfill_days = 7
 timezone = "" # Local time on SQLite, UTC on PostgreSQL; or an IANA zone.
 seat_patterns = [] # Optional path globs with one whole-segment {seat} capture.
+
+[friction.kata]
+auto_file = false # The hub files recent patterns to Kata every hour.
+kinds = [] # Kinds to file automatically; empty means all that can be filed.
+min_sessions = 2 # File only patterns seen in at least this many sessions.
 ```
 
 Restart the daemon after changing this setting. When enabled:
@@ -2243,6 +2268,8 @@ An hourly job builds one stored digest per completed local day, catching up
 within `backfill_days` (1–3650, default 7). It never builds today. Set
 `AGENTSVIEW_FRICTION_TZ` to override the configured timezone. Seat patterns label
 digest findings from session paths without changing the stored detections.
+`[friction.kata]` needs `[kata]` enabled on the hub; see
+[File patterns automatically](/docs/kata/#file-patterns-automatically).
 
 Digests keep Markdown, schema 1 summary JSON, frozen findings and usage,
 session membership, and pattern recurrence. SQLite keeps this state through a

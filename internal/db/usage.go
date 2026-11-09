@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -97,6 +99,7 @@ type UsageFilter struct {
 	ActiveSince        string // RFC3339 session recency cutoff
 	Termination        string // "", "clean", "unclean", "active", or "stale"
 	Breakdowns         bool   // populate Project/AgentBreakdowns per day
+	PairwiseSides      bool   // request ranking-derived comparison metadata
 	SkipSessionCounts  bool   // skip distinct session counts when callers do not need them
 	TopSessionsByGroup bool   // merge runs by project and group before ranking
 	// TopSessionsSort ranks GetTopSessionsByCost results: ""/"cost"
@@ -1771,12 +1774,108 @@ type UsageTotals struct {
 
 // DailyUsageResult wraps the daily entries and totals.
 type DailyUsageResult struct {
+	Pairwise      *UsagePairwiseSides               `json:"-"`
 	SchemaVersion int                               `json:"schema_version,omitempty"`
 	Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
 	Projects      map[string]export.ProjectMapEntry `json:"projects"`
 	Daily         []DailyUsageEntry                 `json:"daily"`
 	Totals        UsageTotals                       `json:"totals"`
 	SessionCounts UsageSessionCounts                `json:"sessionCounts,omitempty"`
+}
+
+// UsagePairwiseValue contains a ranking value's totals and distinct sessions.
+// Inexact means filtering can select a duplicate omitted by the ranking.
+type UsagePairwiseValue struct {
+	Totals   UsageTotals
+	Sessions []string
+	Inexact  bool
+}
+
+// UsagePairwiseValues accumulates ranking totals and ordered session memberships.
+type UsagePairwiseValues map[string]UsagePairwiseValue
+
+// AddTotals marks overflowing sums inexact so callers use a filtered read.
+func (values UsagePairwiseValues) AddTotals(name string, totals UsageTotals) {
+	value := values[name]
+	value.Totals.InputTokens += totals.InputTokens
+	value.Totals.OutputTokens += totals.OutputTokens
+	value.Totals.CacheCreationTokens += totals.CacheCreationTokens
+	value.Totals.CacheReadTokens += totals.CacheReadTokens
+	var err error
+	value.Totals.TotalCost, err = money.Add(value.Totals.TotalCost, totals.TotalCost)
+	value.Inexact = value.Inexact || err != nil
+	values[name] = value
+}
+
+// AddSession requires session IDs in sorted order, so adjacent repeats suffice.
+func (values UsagePairwiseValues) AddSession(name, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	value := values[name]
+	if n := len(value.Sessions); n == 0 || value.Sessions[n-1] != sessionID {
+		value.Sessions = append(value.Sessions, sessionID)
+		values[name] = value
+	}
+}
+
+// MarkInexact requires a filtered read for this value.
+func (values UsagePairwiseValues) MarkInexact(name string) {
+	value := values[name]
+	value.Inexact = true
+	values[name] = value
+}
+
+// UsagePairwiseSides is immutable once attached to a daily usage result.
+type UsagePairwiseSides struct {
+	Models, Projects UsagePairwiseValues
+}
+
+// Side combines raw ranking values, including session unions for model groups.
+// A filtered read must supply values whose totals cannot be derived exactly.
+func (s *UsagePairwiseSides) Side(dimension string, values []string) (DailyUsageResult, bool) {
+	if s == nil {
+		return DailyUsageResult{}, false
+	}
+	entries := s.Models
+	if dimension == "project" {
+		entries = s.Projects
+	}
+	var result DailyUsageResult
+	sessions := make(map[string]struct{})
+	for _, value := range values {
+		entry := entries[value]
+		if entry.Inexact {
+			return DailyUsageResult{}, false
+		}
+		t := &result.Totals
+		t.InputTokens += entry.Totals.InputTokens
+		t.OutputTokens += entry.Totals.OutputTokens
+		t.CacheCreationTokens += entry.Totals.CacheCreationTokens
+		t.CacheReadTokens += entry.Totals.CacheReadTokens
+		var err error
+		t.TotalCost, err = money.Add(t.TotalCost, entry.Totals.TotalCost)
+		if err != nil {
+			return DailyUsageResult{}, false
+		}
+		for _, id := range entry.Sessions {
+			sessions[id] = struct{}{}
+		}
+	}
+	result.SessionCounts.Total = len(sessions)
+	return result, true
+}
+
+// Clone copies the slices and maps that usage response builders mutate.
+func (r DailyUsageResult) Clone() DailyUsageResult {
+	r.Daily = slices.Clone(r.Daily)
+	for i := range r.Daily {
+		r.Daily[i].ProjectBreakdowns = slices.Clone(r.Daily[i].ProjectBreakdowns)
+	}
+	r.Projects = maps.Clone(r.Projects)
+	r.SessionCounts.ByProject = maps.Clone(r.SessionCounts.ByProject)
+	r.SessionCounts.ByAgent = maps.Clone(r.SessionCounts.ByAgent)
+	return r
 }
 
 func SanitizeDailyUsageProjectLabelsWithCatalog(

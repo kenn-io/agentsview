@@ -3,8 +3,12 @@ package vector
 import (
 	"context"
 	"encoding/json/v2"
+	"math/rand"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+	"testing/quick"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1001,4 +1005,50 @@ func TestRefreshParkedLeftoverFromInterruptedRunDoesNotCollide(t *testing.T) {
 	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM vector_messages WHERE ordinal < 0`).Scan(&parked))
 	assert.Zero(t, parked, "no parked rows survive a completed full refresh")
+}
+
+// TestDocKeySessionPrefixesMatchOnlyTheirSession pins what lets a store
+// sorted by doc key narrow a session's reads to its key prefixes: every key
+// DocKey builds for a session starts with exactly one of that session's
+// prefixes, and with none of another session's. Components come from a
+// small alphabet heavy in delimiters and escape sequences, so sessions that
+// share a prefix, contain ':' or '%', or equal each other all occur.
+func TestDocKeySessionPrefixesMatchOnlyTheirSession(t *testing.T) {
+	alphabet := []string{"a", "b", ":", "#", "%", "%3A", "o", "r"}
+	component := func(rng *rand.Rand) string {
+		var b strings.Builder
+		for range rng.Intn(4) {
+			b.WriteString(alphabet[rng.Intn(len(alphabet))])
+		}
+		return b.String()
+	}
+	config := &quick.Config{
+		MaxCount: 2000,
+		Rand:     rand.New(rand.NewSource(1)),
+		Values: func(args []reflect.Value, rng *rand.Rand) {
+			args[0] = reflect.ValueOf([]string{"user", "run"}[rng.Intn(2)])
+			args[1] = reflect.ValueOf(component(rng))
+			args[2] = reflect.ValueOf(component(rng))
+			args[3] = reflect.ValueOf(component(rng))
+			args[4] = reflect.ValueOf(rng.Intn(3))
+			args[5] = reflect.ValueOf(1 + rng.Intn(3))
+		},
+	}
+	matches := func(key, sessionID string) int {
+		n := 0
+		for _, p := range DocKeySessionPrefixes(sessionID) {
+			if strings.HasPrefix(key, p) {
+				n++
+			}
+		}
+		return n
+	}
+	assert.NoError(t, quick.Check(func(kind, session, other, uuid string, ordinal, occurrence int) bool {
+		key := DocKey(kind, session, uuid, ordinal, occurrence)
+		ok := assert.Equal(t, 1, matches(key, session), "key %q of session %q", key, session)
+		if other != session {
+			ok = assert.Zero(t, matches(key, other), "key %q of session %q vs %q", key, session, other) && ok
+		}
+		return ok
+	}, config))
 }

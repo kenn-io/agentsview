@@ -262,6 +262,14 @@ redirecting or piping structured output remains safe. The JSON `total` continues
 to describe the filtered result, not the excluded sessions. Use the
 `--include-*` flags to opt back in.
 
+The list endpoint accepts `exclusion_counts=false` to return hidden one-shot and
+automated counts, or `exclusion_counts=true` to include the bounded child count.
+The optional `exclusion_counts` response contains `one_shot`, `automated`,
+`children`, and `children_lower_bound`. Cursor pages and fully included lists
+omit it. Other API callers leave this parameter unset to avoid the extra work.
+Servers that omit the summary still return a usable page; the CLI then omits
+the exclusion notice.
+
 Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
 unique whole display label. Exact ID/alias lists take precedence over a
 same-spelled label. Otherwise, the complete input is matched against labels,
@@ -426,10 +434,14 @@ emitted, separated from the flattened `content` which still contains inline
 
 Promoted `source_subtype` values on `is_system: true` messages: `continuation`,
 `resume`, `interrupted`, `task_notification`, `stop_hook`, `peer_message`,
-`compact_boundary`. `peer_message` is a message another Claude Code session
-sent; its `content` keeps the `<cross-session-message>` wrapper with the
-sender's name. The content may include a framing line before the wrapper and a
-notice after it.
+`compact_boundary`, `hook_success`, `hook_additional_context`, `hook_cancelled`,
+`stop_hook_summary`.
+The three `hook_*` subtypes carry Claude hook output with
+`source_type: "attachment"`. `stop_hook_summary` carries stop hook results with
+`source_type: "system"`.
+`peer_message` is a message another Claude Code session sent; its `content`
+keeps the `<cross-session-message>` wrapper with the sender's name. The content
+may include a framing line before the wrapper and a notice after it.
 
 ______________________________________________________________________
 

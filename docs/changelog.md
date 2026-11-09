@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-06
+last_edited: 2026-11-09
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +10,11 @@ The latest release is
 ## Unreleased
 
 **New features**
+
+- Track Open Interpreter sessions as their own agent. AgentsView reads them from
+  `~/.openinterpreter` (or `INTERPRETER_HOME`) and shows `interpreter resume`
+  commands. Open Interpreter is now a fork of Codex, so its sessions get the
+  same tool calls, token usage, and subagent links as Codex sessions.
 
 - Find the session and prompt behind file lines with `agentsview why path:N-M`,
   or look up a commit with `agentsview why --commit SHA`. The command uses local
@@ -60,11 +65,19 @@ The latest release is
   matched each idea. This needs the semantic search index.
 
 - Friction Log patterns can be filed as Kata issues from the hub, with **File
-  to Kata** on the Friction Log page or `agentsview friction file <fingerprint>`. AgentsView links the issue Kata
+  to Kata** on the Friction Log page or
+  `agentsview friction file <fingerprint>`. AgentsView links the issue Kata
   already holds for a pattern instead of filing a duplicate, masks secrets in
   what it sends, and shows each pattern's issue in `friction patterns`, the API,
   and MCP results. `friction link` and `friction unlink` manage a link by hand.
   See [Kata](/docs/kata/#file-friction-log-patterns).
+
+- The hub can file Friction Log patterns to Kata on its own. With
+  `[friction.kata] auto_file = true`, the hourly Friction Log job files recent
+  unlinked patterns seen in at least two sessions, up to 20 a pass, retries
+  failures for up to 14 days, and leaves a pattern alone after you unlink it.
+  Each unlinked pattern shows why it has no issue.
+  See [File patterns automatically](/docs/kata/#file-patterns-automatically).
 
 - Hosted operators can retry failed raw parse jobs after fixing their cause with
   `pg raw-reparse --repair`. Each bounded batch gives selected failed jobs at
@@ -150,6 +163,26 @@ The latest release is
 
 **Improvements**
 
+- Activity opens faster on PostgreSQL when reports need rebuilding. On a
+  31,000-session test archive, a year opened in about 8.3 s instead of 10.8 s
+  after restarting the app. Message totals reuse the activity read.
+
+- `agentsview session list` counts default exclusions in its page request,
+  avoiding three extra list requests and loading hundreds of child sessions.
+  Its counted stderr notice and stdout stay unchanged. Older daemons that omit
+  the optional counts still return sessions without the notice.
+- The local archive and every mirror store a message's text once when its
+  searchable dialogue is the same as the message itself. Before, about a quarter
+  of messages kept a second full copy for search. On a local archive with 1.05
+  million messages the messages table shrank from 3.0 GiB to 2.0 GiB, and a
+  full-scan message search went from 0.53 s to 0.43 s. On a 100,000-message
+  ClickHouse sample, the messages table shrank by a third and message search
+  read 39% less data. Search results do not change. The first start after
+  upgrading rewrites the archive's copies in a few seconds; the freed space is
+  reused by later writes, and the archive file shrinks only after a `VACUUM`.
+  PostgreSQL and ClickHouse rewrite existing rows once on their next push,
+  ClickHouse in the background, and DuckDB mirrors rebuild on their next push.
+
 - ClickHouse mirrors stop growing without bound from stored usage prices. A push
   now prices the mirror again only when the rates of a model in its usage
   change, or when a model appears for the first time. Before, any change
@@ -189,6 +222,16 @@ The latest release is
   one-year range from 6.0 s to 1.4 s. A report now holds its intervals in memory
   while it sorts them, about 130 bytes each (about 120 MB for that year).
 
+- A busy Activity week opens faster on the local archive the first time it is
+  shown. Activity now reads each message's parsed tokens and duplicate markers
+  from the usage cache that the Usage page already keeps, instead of reading
+  and parsing raw usage from every message again. On a
+  30,000-session test archive with 10,000 sessions in one week, reading that
+  week's usage went from 2.2 s to 0.7 s, and the whole first open from 2.9 s to
+  1.9 s. When the usage cache has never seen those sessions, such as right after
+  an upgrade before the daemon has filled it, Activity fills it first; on that
+  archive that first open took 3.5 s.
+
 - The Activity page counts user and assistant messages from the sessions it
   already holds in memory, so it no longer reads every message twice. On the
   same archive a month's report went from 250 ms to 210 ms when opened again,
@@ -226,6 +269,10 @@ The latest release is
 - Session sidebars on hosted PostgreSQL avoid repeatedly resolving the same
   parent links when counting roots and loading child trees, including pages
   filtered by labels or pull requests.
+
+- On `pg serve`, reopening Usage between pushes and loading the Pairwise ranking
+  after Summary reuse finished results instead of repricing every usage event.
+  The next push or custom pricing change rebuilds them.
 
 - The Recall corpus pane uses the shared page header for its title, description,
   entry count, and refresh control. The title stays a second-level heading under
@@ -267,6 +314,16 @@ The latest release is
 
 **Bug fixes**
 
+- The all-history Usage page no longer fails with an internal error after
+  upgrading a large archive while prices refresh.
+- Archives that use `archive_content = "transcripts"` no longer report retries
+  for every run of three or more calls to the same tool, and runaway-loop
+  detection no longer links failing calls by tool name alone. These archives
+  drop tool inputs, so AgentsView cannot see repeated identical calls in them
+  and now counts none. Health scores rise to match. AgentsView recomputes
+  signals and Friction Log findings for existing sessions in the background
+  after the upgrade, which removes retry-loop and runaway-loop findings built
+  on name matches alone.
 - Roborev test-value reviews, look-ahead reviews, fix plans, rebase fixes, and
   non-PR review summaries are now hidden as automated sessions, like other
   roborev runs. The session list and analytics stopped counting them as your

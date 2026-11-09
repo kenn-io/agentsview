@@ -124,9 +124,9 @@ type RefreshStats struct {
 // source_uuid "dup#2" at its first occurrence would otherwise collide with
 // source_uuid "dup" at its second occurrence.
 func DocKey(kind, sessionID, sourceUUID string, ordinal, occurrence int) string {
-	uuidPrefix, ordinalPrefix := "u:", "o:"
+	uuidPrefix, ordinalPrefix := userUUIDKeyPrefix, userOrdinalKeyPrefix
 	if kind == "run" {
-		uuidPrefix, ordinalPrefix = "r:", "ro:"
+		uuidPrefix, ordinalPrefix = runUUIDKeyPrefix, runOrdinalKeyPrefix
 	}
 	session := escapeDocKeyComponent(sessionID)
 	if sourceUUID != "" {
@@ -137,6 +137,27 @@ func DocKey(kind, sessionID, sourceUUID string, ordinal, occurrence int) string 
 		return uuidPrefix + session + ":" + uuid
 	}
 	return ordinalPrefix + session + ":" + strconv.Itoa(ordinal)
+}
+
+// The kind prefixes DocKey starts every key with.
+const (
+	userUUIDKeyPrefix    = "u:"
+	userOrdinalKeyPrefix = "o:"
+	runUUIDKeyPrefix     = "r:"
+	runOrdinalKeyPrefix  = "ro:"
+)
+
+// DocKeySessionPrefixes returns the prefixes of every key DocKey builds for
+// sessionID, one per kind prefix. A key starts with one of them exactly when
+// DocKey built it for sessionID: the escaped session holds no ':', so the
+// ':' after it ends the session component. Stores sorted by doc key use
+// them to read only one session's key ranges.
+func DocKeySessionPrefixes(sessionID string) [4]string {
+	session := escapeDocKeyComponent(sessionID) + ":"
+	return [4]string{
+		userUUIDKeyPrefix + session, userOrdinalKeyPrefix + session,
+		runUUIDKeyPrefix + session, runOrdinalKeyPrefix + session,
+	}
 }
 
 // escapeDocKeyComponent percent-encodes the characters DocKey uses as

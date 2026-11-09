@@ -210,8 +210,8 @@ func (db *DB) fileBackedSessionCount(
 	return count, nil
 }
 
-// GetStats returns database statistics, counting only root
-// sessions with messages (matching the session list filter).
+// GetStats counts sessions with the sidebar's canonical root rule.
+// Other totals exclude subagents and forks, and include continuations.
 func (db *DB) GetStats(
 	ctx context.Context,
 	excludeOneShot, excludeAutomated bool,
@@ -227,19 +227,18 @@ func (db *DB) GetStats(
 	if excludeAutomated {
 		filter += " AND is_automated = 0"
 	}
-	// Sidebar polling needs all totals for the same rows. Aggregate them
-	// together so each refresh visits the filtered sessions only once.
 	billingStart := "NULL"
 	if db.hasCursorUsageTable(ctx) {
 		billingStart = "(SELECT MIN(occurred_at) FROM cursor_usage_events)"
 	}
-	query := `SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+	count, args := StatsRootCountSQL(SQLiteQueryDialect(), excludeOneShot, excludeAutomated)
+	query := `SELECT ` + count + `, COALESCE(SUM(message_count), 0),
 		COUNT(DISTINCT project), COUNT(DISTINCT machine),
 		MIN(COALESCE(NULLIF(started_at, ''), created_at)), ` + billingStart + `
 		FROM sessions WHERE ` + filter
 
 	var s Stats
-	err := db.getReader().QueryRowContext(ctx, query).Scan(
+	err := db.getReader().QueryRowContext(ctx, query, args...).Scan(
 		&s.SessionCount,
 		&s.MessageCount,
 		&s.ProjectCount,

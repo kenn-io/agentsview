@@ -173,7 +173,7 @@ func applyConversationPolicyGapsTx(ctx context.Context, tx *sql.Tx, where string
 
 const conversationCopyColumns = `session_id,message_id,ordinal,role,timestamp,source_id,digest,text_bytes,gap,deleted,removed`
 
-const refreshConversationMessagesSQL = `SELECT m.session_id,m.ordinal,m.role,m.content,m.dialogue_text,COALESCE(m.timestamp,''),m.source_uuid,
+const refreshConversationMessagesSQL = `SELECT m.session_id,m.ordinal,m.role,m.content,` + sqliteDialogueExprM + `,COALESCE(m.timestamp,''),m.source_uuid,
 	 COALESCE(c.message_id,lower(hex(randomblob(16)))),COALESCE(c.gap,''),COUNT(*) OVER (PARTITION BY m.session_id,m.source_uuid)
 	 FROM (SELECT * FROM messages WHERE role IN ('user','assistant') AND is_system=0 AND source_subtype!='tool_result' AND %s) m
 	 LEFT JOIN conversation_messages c ON c.session_id=m.session_id AND c.ordinal=m.ordinal AND c.removed=0
@@ -308,7 +308,7 @@ func copyConversationSessionStatesTx(ctx context.Context, tx *sql.Tx, where, ses
 // projection rows, reading text from the archived message at the same ordinal.
 func conversationMessagesTx(ctx context.Context, tx *sql.Tx, sessionID string) ([]Message, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT c.ordinal,c.role,c.timestamp,c.source_id,
-	 CASE WHEN c.digest='' THEN '' ELSE COALESCE(m.content,'') END,m.dialogue_text
+	 CASE WHEN c.digest='' THEN '' ELSE COALESCE(m.content,'') END,`+sqliteDialogueExprM+`
 	 FROM main.conversation_messages c LEFT JOIN main.messages m ON m.session_id=c.session_id AND m.ordinal=c.ordinal
 	 WHERE c.session_id=? AND c.removed=0 ORDER BY c.ordinal`, sessionID)
 	if err != nil {

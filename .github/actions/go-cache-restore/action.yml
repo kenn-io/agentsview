@@ -3,6 +3,10 @@ description: >-
   Restore the newest main-saved Go build and module caches for one job group.
   Pair with go-cache-save in the job that owns the group.
 inputs:
+  owner:
+    description: Track entries used by the job that saves this group
+    required: false
+    default: "false"
   group:
     description: Cache group, such as linux-cgo or windows-amd64
     required: true
@@ -52,3 +56,24 @@ runs:
     - name: Record exact cache hit
       shell: bash
       run: echo "GO_CACHE_HIT=${{ steps.restore.outputs.cache-hit }}" >> "$GITHUB_ENV"
+
+    - name: Track cache use
+      if: >-
+        inputs.owner == 'true' && github.event_name == 'push'
+        && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CACHE_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # Go refreshes cache mtimes at most once an hour, so force used entries to refresh.
+        if [ "$RUNNER_OS" = 'macOS' ]; then
+          aged="$(date -v-2H +%Y%m%d%H%M.%S)"
+        else
+          aged="$(date -d '2 hours ago' +%Y%m%d%H%M.%S)"
+        fi
+        source "$CACHE_ACTION_PATH/select-paths.sh"
+        for path in "${paths[@]}"; do
+          find "$path" -mindepth 2 -maxdepth 2 \( -type f -o -type d \) \( -name '*-a' -o -name '*-d' \) -exec touch -t "$aged" {} +
+        done
+        marker="$(mktemp "$RUNNER_TEMP/go-cache-tracking.XXXXXX")"
+        echo "GO_CACHE_TRACKING=$marker" >> "$GITHUB_ENV"

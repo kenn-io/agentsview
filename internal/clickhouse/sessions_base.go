@@ -188,12 +188,13 @@ func (s *Store) GetSessionVersion(ctx context.Context, id string) (int, int64, b
 	return s.sessions().GetSessionVersion(ctx, id)
 }
 
+// Session and transcript reads run on the pages pool; see pageMaxOpenConns.
 func (s sessionsSQL) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return s.queryContext(ctx, query, args...)
+	return s.pageQueryContext(ctx, query, args...)
 }
 
 func (s sessionsSQL) QueryRowContext(ctx context.Context, query string, args ...any) readbase.Row {
-	return s.queryRowContext(ctx, query, args...)
+	return s.pageQueryRowContext(ctx, query, args...)
 }
 
 func (s sessionsSQL) FormatTime(value any) string { return formatDBTime(value) }

@@ -85,6 +85,7 @@ func (s *Store) queryTurnRows(
 			COALESCE(source_subtype, ''), content_length
 		FROM messages
 		WHERE session_id = ?
+			AND `+db.ExcludeClaudeHooksSQL("source_subtype")+`
 		ORDER BY ordinal`,
 		sess.ID,
 	)

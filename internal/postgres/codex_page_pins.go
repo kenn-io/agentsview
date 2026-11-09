@@ -25,8 +25,7 @@ func (s *Sync) migrateCodexPages(
 ) error {
 	threads := make(map[string]db.Session)
 	for _, sess := range batch {
-		switch sess.Agent {
-		case "codex", "traex", "augure-code":
+		if parser.IsCodexFormatAgent(parser.AgentType(sess.Agent)) {
 			prefixEnd := strings.LastIndex(sess.ID, ":") + 1
 			if prefixEnd > 0 {
 				id := sess.ID[:prefixEnd] + parser.CodexThreadIDFromSessionKey(sess.ID[prefixEnd:])

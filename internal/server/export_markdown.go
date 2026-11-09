@@ -278,6 +278,9 @@ func renderMarkdownMessage(
 	if msg.IsSystem {
 		attrs["is_system"] = "true"
 	}
+	if label := exportHookLabel(*msg); label != "" {
+		attrs["label"] = label
+	}
 	if msg.HasThinking {
 		attrs["has_thinking"] = "true"
 	}
@@ -640,6 +643,9 @@ func markdownAgentDisplay(agent string) string {
 }
 
 func parseMarkdownSegments(msg db.Message) []markdownSegment {
+	if exportHookLabel(msg) != "" {
+		return []markdownSegment{{Type: markdownSegmentText, Content: msg.Content}}
+	}
 	matches := extractMarkdownMatches(msg.Content, msg.HasToolUse)
 	segments := buildMarkdownSegments(msg.Content, matches)
 	segments = mergeThinkingSegments(segments)

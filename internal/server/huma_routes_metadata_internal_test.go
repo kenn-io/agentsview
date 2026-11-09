@@ -93,3 +93,14 @@ func TestHumaGetSessionStatsUsesServerGitHubToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "server-token", spy.got.GHToken)
 }
+
+func TestHumaGetSessionStatsOutcomesOnly(t *testing.T) {
+	srv := testServer(t, 30*time.Second)
+	spy := &statsSpyService{}
+	srv.sessions = spy
+	response := httptest.NewRecorder()
+	srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+		"/api/v1/session-stats?outcomes_only=true", nil))
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.True(t, spy.got.OutcomesOnly)
+}

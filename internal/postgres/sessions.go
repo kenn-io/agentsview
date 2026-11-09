@@ -37,6 +37,7 @@ type Store struct {
 // Views never copy locks or start detached work with their transaction.
 type storeRuntime struct {
 	activityKept       kept.Memo[pgActivityKept]
+	activityInputs     kept.Memo[pgActivityInputs]
 	frustrationMarkers db.FrustrationMarkerMemo
 
 	cursorMu     sync.RWMutex
@@ -51,11 +52,17 @@ type storeRuntime struct {
 	// frictionIssueLinksWritable is set when startup proved this role can
 	// write friction_issue_links.
 	frictionIssueLinksWritable atomic.Bool
+	// frictionFilingStatePresent is the same for friction_filing_state.
+	frictionFilingStatePresent atomic.Bool
 
-	pricingMu     sync.Mutex
-	pricingLoadMu sync.Mutex
-	pricingLoad   *pricingLoad
-	customPricing map[string]config.CustomModelRate
+	pricingMu         sync.Mutex
+	pricingLoadMu     sync.Mutex
+	pricingLoad       *pricingLoad
+	customPricing     map[string]config.CustomModelRate
+	pricingGeneration uint64
+	dailyUsage        kept.Reads[db.DailyUsageResult]
+	planUsage         kept.Reads[*db.PlanUsageCountSummary]
+	topUsage          kept.Reads[[]db.TopSessionEntry]
 
 	// vectorMu guards the semantic-search seam. vectorSearcher is the PG
 	// vector searcher wired at pg serve startup when a generation matches
@@ -389,7 +396,14 @@ func (s *Store) ListSessions(
 		total = cur.Total
 	}
 
-	if total <= 0 {
+	var exclusions *db.SessionExclusionCounts
+	if f.WantsExclusionCounts() {
+		var err error
+		total, exclusions, err = db.CountSessionExclusions(ctx, s.pg, f, s.sessionDialect())
+		if err != nil {
+			return db.SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
+		}
+	} else if total <= 0 {
 		countQ := "SELECT COUNT(*) FROM sessions WHERE " +
 			where
 		if err := s.pg.QueryRowContext(
@@ -437,7 +451,10 @@ func (s *Store) ListSessions(
 		return db.SessionPage{}, err
 	}
 
-	return db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor), nil
+	exclusions.LoadChildren(ctx, s.pg, f, s.sessionDialect(), total)
+	page := db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor)
+	page.ExclusionCounts = exclusions
+	return page, nil
 }
 
 // GetSidebarSessionIndex returns the skinny session rows needed by
@@ -930,8 +947,8 @@ func (s *Store) GetChildSessions(
 	return scanPGSessionRows(rows)
 }
 
-// GetStats returns database statistics, counting only root
-// sessions with messages.
+// GetStats counts sessions with the sidebar's canonical root rule.
+// Other totals exclude subagents and forks, and include continuations.
 func (s *Store) GetStats(
 	ctx context.Context,
 	excludeOneShot, excludeAutomated bool,
@@ -947,13 +964,12 @@ func (s *Store) GetStats(
 	if excludeAutomated {
 		filter += " AND is_automated = FALSE"
 	}
-	// Sidebar polling needs all totals for the same rows. Aggregate them
-	// together so each refresh visits the filtered sessions only once.
 	billingStart := "NULL"
 	if pgHasTable(ctx, s.pg, "cursor_usage_events") {
 		billingStart = "(SELECT MIN(occurred_at) FROM cursor_usage_events)"
 	}
-	query := `SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+	count, args := db.StatsRootCountSQL(s.sessionDialect(), excludeOneShot, excludeAutomated)
+	query := `SELECT ` + count + `, COALESCE(SUM(message_count), 0),
 		COUNT(DISTINCT project), COUNT(DISTINCT machine),
 		MIN(COALESCE(started_at, created_at)), ` + billingStart + `
 		FROM sessions WHERE ` + filter
@@ -963,7 +979,7 @@ func (s *Store) GetStats(
 			       message_count,started_at,created_at
 			FROM sessions WHERE ` + filter + `
 		)` + hostedFilteredMachinesCTESQL + `
-		SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+		SELECT ` + count + `, COALESCE(SUM(message_count), 0),
 		       COUNT(DISTINCT project),
 		       (SELECT COUNT(DISTINCT machine) FROM filtered_source_machines),
 		       MIN(COALESCE(started_at, created_at)), ` + billingStart + `
@@ -973,7 +989,7 @@ func (s *Store) GetStats(
 	var st db.Stats
 	var earliest *time.Time
 	var earliestAccount *time.Time
-	err := s.pg.QueryRowContext(ctx, query).Scan(
+	err := s.pg.QueryRowContext(ctx, query, args...).Scan(
 		&st.SessionCount,
 		&st.MessageCount,
 		&st.ProjectCount,

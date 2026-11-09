@@ -96,6 +96,28 @@ async function selectFirstSession(page: Page) {
   await page.waitForTimeout(1000);
 }
 
+// Sessions holding only hook output appear in the sidebar but render
+// no messages, so a scan skips them instead of failing. Waiting for the
+// clicked session's transcript to load, rather than for a timeout,
+// keeps both capture passes choosing the same session.
+async function openSessionWithMessages(item: Locator): Promise<boolean> {
+  const page = item.page();
+  const id = await item.getAttribute('data-session-id');
+  if (!id) throw new Error('session item has no id');
+  await item.click();
+  const list = page.locator('.message-list-scroll');
+  await expect(list).toHaveAttribute('data-messages-session-id', id, { timeout: 10_000 });
+  await expect(list).toHaveAttribute('data-loaded', 'true', { timeout: 10_000 });
+  return page
+    .locator('.message')
+    .first()
+    .waitFor({ timeout: 2_000 })
+    .then(
+      () => true,
+      () => false,
+    );
+}
+
 async function selectRichSession(page: Page) {
   await page.goto('/sessions/' + encodeURIComponent(CORPUS.targets.rich.session_id));
   await page.waitForSelector('.message', { timeout: 10_000 });
@@ -1311,12 +1333,10 @@ test.describe('Command palette', () => {
     );
 
     const setup = palette.locator('.semantic-setup');
-    await expect(setup).toContainText(
-      "Semantic search isn't set up",
-      { timeout: 10_000 }
-    );
-    await expect(setup).toContainText('[vector]');
-    await expect(setup).toContainText('agentsview index embeddings build');
+    await expect(setup).toContainText('Search by meaning', {
+      timeout: 10_000,
+    });
+    await expect(setup.getByRole('button', { name: 'Turn on' })).toBeVisible();
     await snapEl(palette.locator('.palette'), 'semantic-search-setup');
   });
 
@@ -1756,6 +1776,16 @@ test.describe('Settings', () => {
           phase: 'embedding',
           rate_per_second: 10,
           running: true,
+          setup: {
+            action: '',
+            busy: false,
+            downloaded_bytes: 0,
+            enabled: true,
+            installing: false,
+            missing_bytes: 0,
+            provider: 'built-in',
+            total_bytes: 0,
+          },
           started_at: startedAt,
           total: 1000,
         }),
@@ -1792,10 +1822,10 @@ test.describe('Settings', () => {
     await embeddingsSection.scrollIntoViewIfNeeded();
     await expect(
       embeddingsSection.getByRole('progressbar', {
-        name: 'Embedding progress',
+        name: 'Search by meaning setup',
       })
     ).toBeVisible();
-    await expect(embeddingsSection.getByText(/^ETA /)).toBeVisible({
+    await expect(embeddingsSection.getByText(/^Indexing 360 of 1,000 text sections · .* left/)).toBeVisible({
       timeout: 5_000,
     });
 
@@ -2236,8 +2266,7 @@ test.describe('Session Vital Signs', () => {
       'button[aria-label="Show session analysis"], button[aria-label="Hide session analysis"]',
     );
     for (let i = 0; i < limit; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
+      if (!(await openSessionWithMessages(items.nth(i)))) continue;
       await page.waitForTimeout(400);
       if (!(await vitalsBtn.count()) || !(await vitalsBtn.isVisible())) {
         continue;
@@ -2317,8 +2346,7 @@ test.describe('Session intelligence', () => {
     const total = await items.count();
     const limit = Math.min(total, 25);
     for (let i = 0; i < limit; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
+      if (!(await openSessionWithMessages(items.nth(i)))) continue;
       await page.waitForTimeout(400);
       const badge = page.locator('.grade-badge');
       if (
@@ -2345,8 +2373,7 @@ test.describe('Session intelligence', () => {
     const limit = Math.min(total, 30);
     let firstGradedIdx = -1;
     for (let i = 0; i < limit; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
+      if (!(await openSessionWithMessages(items.nth(i)))) continue;
       await page.waitForTimeout(300);
       const badge = page.locator('.grade-badge').first();
       if (!(await badge.count()) || !(await badge.isVisible())) {

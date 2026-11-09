@@ -154,7 +154,9 @@ For an existing deployment, run
 fails startup until provisioning and these grants are complete.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
-into materialized message rows.
+into materialized message rows. Dialogue that repeats a message's content is
+stored once: the retained row is marked instead of holding a second copy, and
+the materialized row stores NULL, which message search reads as the content.
 
 Provisioning keeps `pg_trgm` in `public`, so dropping a tenant or mirror schema
 cannot remove the extension that every tenant's message-search indexes use. It

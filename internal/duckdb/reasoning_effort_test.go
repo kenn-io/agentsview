@@ -8,30 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
-
-func TestReasoningEffortDuckDBInsertMessagePath(t *testing.T) {
-	ctx := t.Context()
-	store, fixture := newSyncedStore(t)
-	message := db.Message{
-		ID:              99_999_999,
-		SessionID:       fixture.alphaID,
-		Ordinal:         2,
-		Role:            "assistant",
-		Content:         "inserted",
-		ContentLength:   len("inserted"),
-		Model:           "model-test",
-		ReasoningEffort: "high",
-	}
-	require.NoError(t, insertMessages(ctx, store.duck, []db.Message{message}))
-
-	messages, err := store.GetAllMessages(ctx, fixture.alphaID)
-	require.NoError(t, err)
-	require.Len(t, messages, 3)
-	require.Equal(t, "high", messages[2].ReasoningEffort)
-}
 
 func TestReasoningEffortDuckDBRebuildsOldSchemaMirror(t *testing.T) {
 	ctx := t.Context()

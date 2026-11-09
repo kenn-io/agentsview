@@ -19,13 +19,21 @@ import (
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
+var claudeHookSubtypeSQL = "('" + strings.Join(parser.ClaudeHookSubtypes(), "', '") + "')"
+
+// ExcludeClaudeHooksSQL excludes imported hooks while retaining other system rows.
+// subtypeColumn is a trusted SQL column reference, optionally qualified.
+func ExcludeClaudeHooksSQL(subtypeColumn string) string {
+	return "COALESCE(" + subtypeColumn + ", '') NOT IN " + claudeHookSubtypeSQL
+}
+
 const (
 	selectMessageCols = `id, session_id, ordinal, role, content,
-		thinking_text, dialogue_text, ` + selectMessageMetadataCols
+		thinking_text, dialogue_text, dialogue_is_content, ` + selectMessageMetadataCols
 
 	// Bounded transcript loaders don't need the search projection.
 	selectTranscriptMessageCols = `id, session_id, ordinal, role, content,
-		thinking_text, NULL AS dialogue_text, ` + selectMessageMetadataCols
+		thinking_text, NULL AS dialogue_text, 0 AS dialogue_is_content, ` + selectMessageMetadataCols
 
 	selectMessageMetadataCols = `COALESCE(timestamp, '') AS timestamp,
 		has_thinking, has_tool_use, content_length,
@@ -37,7 +45,7 @@ const (
 		source_parent_uuid, is_sidechain, is_compact_boundary`
 
 	insertMessageCols = `session_id, ordinal, role, content,
-		thinking_text, dialogue_text,
+		thinking_text, dialogue_text, dialogue_is_content,
 		timestamp, has_thinking, has_tool_use, content_length,
 		is_system,
 		model, reasoning_effort, token_usage, context_tokens, output_tokens, provider_id,
@@ -58,7 +66,7 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 34  // 29 params per row
+	messageInsertRowsPerStmt         = 33  // 30 params per row
 	toolCallInsertRowsPerStmt        = 66  // 15 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 142 // 7 params per row
@@ -1311,7 +1319,7 @@ func insertMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*29)
+		args := make([]any, 0, len(batch)*30)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
@@ -1321,7 +1329,7 @@ func insertMessagesTx(
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 29),
+			multiRowPlaceholders(len(batch), 30),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal
@@ -3383,9 +3391,10 @@ func scanMessages(rows MessageRows) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var tokenUsage string
+		var dialogueIsContent bool
 		err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &m.ThinkingText, &m.DialogueText, &m.Timestamp,
+			&m.Content, &m.ThinkingText, &m.DialogueText, &dialogueIsContent, &m.Timestamp,
 			&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 			&m.IsSystem,
 			&m.Model, &m.ReasoningEffort, &tokenUsage,
@@ -3399,6 +3408,7 @@ func scanMessages(rows MessageRows) ([]Message, error) {
 		if err != nil {
 			return nil, fmt.Errorf("scanning message: %w", err)
 		}
+		restoreDialogue(&m, dialogueIsContent)
 		m.TokenUsage = DecodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)
 	}
@@ -4263,9 +4273,10 @@ func (db *DB) GetMessageByOrdinal(ctx context.Context,
 
 	var m Message
 	var tokenUsage string
+	var dialogueIsContent bool
 	err := row.Scan(
 		&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-		&m.Content, &m.ThinkingText, &m.DialogueText, &m.Timestamp,
+		&m.Content, &m.ThinkingText, &m.DialogueText, &dialogueIsContent, &m.Timestamp,
 		&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 		&m.IsSystem,
 		&m.Model, &m.ReasoningEffort, &tokenUsage,
@@ -4282,6 +4293,7 @@ func (db *DB) GetMessageByOrdinal(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	restoreDialogue(&m, dialogueIsContent)
 	m.TokenUsage = DecodeStoredTokenUsage(tokenUsage)
 	return &m, nil
 }

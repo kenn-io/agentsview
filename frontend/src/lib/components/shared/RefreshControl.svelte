@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RefreshControl as KitRefreshControl } from "@kenn-io/kit-ui";
+  import { RefreshControl as KitRefreshControl, type RefreshReason } from "@kenn-io/kit-ui";
   import { onMount, untrack, type ComponentProps } from "svelte";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import type { LiveQuery } from "../../utils/liveQuery.svelte.js";
@@ -57,18 +57,18 @@
   }: Props = $props();
 
   let overdue = false;
-  function refreshWhenVisible() {
+  function refreshWhenVisible(reason: RefreshReason) {
     if (document.hidden) {
       overdue = true;
       return;
     }
     overdue = false;
-    onRefresh();
+    onRefresh(reason);
   }
 
   onMount(() => {
     const onVisibilityChange = () => {
-      if (!document.hidden && overdue) refreshWhenVisible();
+      if (!document.hidden && overdue) refreshWhenVisible("auto");
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);

@@ -474,38 +474,51 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 }
 
 func TestLoadPricingMapCancelsDBRowsWithCaller(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		block := make(chan struct{})
-		defer close(block)
-		state := &pricingProbeState{
-			rows: [][]driver.Value{{
-				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
-			}},
-			block: block,
-			done:  make(chan struct{}),
-		}
-		pg := newPricingProbeDB(t, state)
-		store := &Store{pg: pg}
+	for _, tc := range []struct {
+		name   string
+		forget bool
+	}{
+		{"current load", false},
+		{"forgotten load", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				block := make(chan struct{})
+				defer close(block)
+				state := &pricingProbeState{
+					rows: [][]driver.Value{{
+						"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+					}},
+					block: block,
+					done:  make(chan struct{}),
+				}
+				pg := newPricingProbeDB(t, state)
+				store := &Store{pg: pg}
 
-		ctx, cancel := context.WithCancel(t.Context())
-		result := make(chan error, 1)
-		go func() {
-			_, err := store.loadPricingMap(ctx)
-			result <- err
-		}()
-		synctest.Wait()
-		require.Equal(t, 1, state.queryCount(), "pricing queries")
+				ctx, cancel := context.WithCancel(t.Context())
+				result := make(chan error, 1)
+				go func() {
+					_, err := store.loadPricingMap(ctx)
+					result <- err
+				}()
+				synctest.Wait()
+				require.Equal(t, 1, state.queryCount(), "pricing queries")
 
-		cancel()
+				if tc.forget {
+					store.forgetPricingLoad()
+				}
+				cancel()
 
-		synctest.Wait()
-		select {
-		case <-state.done:
-		default:
-			require.FailNow(t, "canceled pricing query did not finish")
-		}
-		require.ErrorIs(t, <-result, context.Canceled)
-	})
+				synctest.Wait()
+				select {
+				case <-state.done:
+				default:
+					require.FailNow(t, "canceled pricing query did not finish")
+				}
+				require.ErrorIs(t, <-result, context.Canceled)
+			})
+		})
+	}
 }
 
 func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {

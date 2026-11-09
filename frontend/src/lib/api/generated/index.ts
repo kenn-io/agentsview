@@ -5,6 +5,7 @@ export * as AssetsService from "./assets/assets.ts";
 export * as CodexCloudService from "./codex-cloud/codex-cloud.ts";
 export * as CommitsService from "./commits/commits.ts";
 export * as ConfigService from "./config/config.ts";
+export * as DaemonService from "./daemon/daemon.ts";
 export * as DataService from "./data/data.ts";
 export * as EmbeddingsService from "./embeddings/embeddings.ts";
 export * as ExportService from "./export/export.ts";

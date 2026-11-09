@@ -309,8 +309,9 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 				) AS delta_ms
 				FROM messages m2
 				WHERE m2.session_id = s.id
+					AND %[2]s
 			) inner2
-		)`, db.ActiveGapCapMs)
+		)`, db.ActiveGapCapMs, db.ExcludeClaudeHooksSQL("m2.source_subtype"))
 	activeDurationSelectExpr := "COALESCE(" + activeDurationExpr + ", 0)"
 	orderExpr := "s.message_count DESC, s.id ASC"
 	switch metric {
@@ -366,7 +367,11 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, _ bool) (st
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
 
 func (s analyticsSQL) PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []readbase.AnalyticsSession) error {
-	return s.store.duckPopulateFrustrationMarkers(ctx, rows)
+	versions := make(map[string]string, len(sessions))
+	for _, session := range sessions {
+		versions[session.ID] = session.PushFingerprint
+	}
+	return s.store.duckPopulateFrustrationMarkers(ctx, rows, versions)
 }
 
 func (s *Store) GetAnalyticsSummary(

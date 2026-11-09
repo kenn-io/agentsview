@@ -13,12 +13,12 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-// Parser version 166 did not read the summary store, so an archive it wrote
+// Parser version 167 did not read the summary store, so an archive it wrote
 // holds Antigravity sessions with no parent although their sources are
 // unchanged. Remote mirrors in that state see no change at all. The scoped
 // upgrade must reparse those sources in place.
 func TestAntigravitySummaryUpgradeReparsesUnchangedSources(t *testing.T) {
-	const previousVersion = 166
+	const previousVersion = 167
 	for name, tc := range antigravitySummaryCases() {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -43,14 +43,14 @@ func TestAntigravitySummaryUpgradeReparsesUnchangedSources(t *testing.T) {
 			engine.Close()
 			require.NoError(t, database.Close())
 
-			// Model the archive version 166 wrote: no parent, same file hash.
+			// Model the archive version 167 wrote: no parent, same file hash.
 			archive, err := sql.Open("sqlite3", archivePath)
 			require.NoError(t, err)
 			_, err = archive.ExecContext(t.Context(), `UPDATE sessions SET parent_session_id = NULL,
 				parser_parent_session_id = NULL, relationship_type = '', parser_relationship_type = NULL,
 				data_version = ? WHERE id = ?`, previousVersion, id)
 			require.NoError(t, err)
-			_, err = archive.ExecContext(t.Context(), "PRAGMA user_version = 166")
+			_, err = archive.ExecContext(t.Context(), "PRAGMA user_version = 167")
 			require.NoError(t, err)
 			require.NoError(t, archive.Close())
 

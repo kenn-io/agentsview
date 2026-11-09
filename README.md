@@ -1,7 +1,3 @@
----
-last_edited: 2026-10-31
----
-
 # agentsview
 
 Browse, search, and track costs across your AI coding agents. Your session
@@ -98,16 +94,18 @@ and start one when needed. Dedicated diagnostics such as
 `db adopt-machine --list` and `doctor sync` read the archive without starting
 it. Commands such as `sync`, `usage`, `token-use`, `pg push`, `duckdb push`, and
 `clickhouse push` auto-start the daemon when needed. Daily usage reports read
-saved archive data; run `agentsview source sync` first to include new source changes.
-The server remains running after these commands exit and also serves the web UI.
-For a one-shot sync with no background server, stop the daemon first and run
-`AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.
+saved archive data; run `agentsview source sync` first to include new source
+changes. The server remains running after these commands exit and also serves
+the web UI. For a one-shot sync with no background server, stop the daemon first
+and run `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.
 
 Use `agentsview daemon start` when you want to start the writable SQLite daemon
 explicitly. It loads the normal effective configuration from `config.toml` and
 supported environment variables; `daemon start` and `daemon restart` accept no
-serve-specific flags. Background daemons self-exit after an idle period unless a
-client request or daemon-owned job is active.
+serve-specific flags. `daemon start` and `daemon restart` stay running until
+stopped.
+Automatically started daemons self-exit after an idle period unless a client
+request or daemon-owned job is active.
 
 The existing `agentsview serve --background`, `agentsview serve status`, and
 `agentsview serve stop` commands remain available. Use `serve --background` when
@@ -231,9 +229,9 @@ reverse proxy.
 
 ## Token Usage and Cost Tracking
 
-`agentsview report usage` tracks token consumption and compute costs across **all**
-your coding agents -- not just Claude Code. Reports read from the same local
-SQLite archive that powers the UI.
+`agentsview report usage` tracks token consumption and compute costs across
+**all** your coding agents -- not just Claude Code. Reports read from the same
+local SQLite archive that powers the UI.
 
 ```bash
 # Daily cost summary (default: last 30 days)
@@ -310,9 +308,9 @@ server, or watcher. See
 
 ## Session Stats
 
-`agentsview report stats` emits window-scoped analytics over recorded sessions: totals,
-archetypes (automation vs. quick/standard/deep/marathon), distributions for
-session duration, user-message count, peak context, and tools-per-turn, plus
+`agentsview report stats` emits window-scoped analytics over recorded sessions:
+totals, archetypes (automation vs. quick/standard/deep/marathon), distributions
+for session duration, user-message count, peak context, and tools-per-turn, plus
 cache economics, tool/model/agent mix, and a temporal hourly breakdown. The
 `--format json` output follows a versioned v1 schema (`schema_version: 1`)
 suitable for downstream consumers.
@@ -433,6 +431,7 @@ local Amp thread JSON files.
 | OpenClaw              | `~/.openclaw/agents/`                                                                                                                                                                                                                                |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                                                                                                           |
 | Open Code Review      | `~/.opencodereview/sessions/`                                                                                                                                                                                                                        |
+| Open Interpreter      | `~/.openinterpreter/sessions/`, `~/.openinterpreter/archived_sessions/`                                                                                                                                                                              |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                                                                                                        |
 | OMO                   | `~/.omo/agent/sessions/`                                                                                                                                                                                                                             |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                                                                                                             |
@@ -488,8 +487,9 @@ or `crush.db` files.
 
 Cline support covers the CLI, not the VS Code extension. Augure Code is tracked
 separately from Codex and resumes through the Augure CLI; its proprietary models
-remain unpriced. Augure Desktop support covers version 3 beta and does not
-include remote sync. See
+remain unpriced. Open Interpreter, which is now a Codex fork, is also tracked
+separately and resumes with `interpreter resume`. Augure Desktop support covers
+version 3 beta and does not include remote sync. See
 [session discovery](https://agentsview.io/docs/configuration/#session-discovery)
 for provider details and limits.
 
@@ -622,10 +622,10 @@ Structured sources are additive to existing `agents.copilot.dirs`,
 `agents.claude.dirs`, and other per-agent settings. They label sessions by
 source machine without namespacing native session IDs. Transport source session
 files only -- never copy `sessions.db` or its WAL files. Machine keys are
-captured at first ingestion; ordinary sync and `agentsview source sync --full` preserve
-the stored key. Use a peer's ID from `telemetry-install-id` for remote roots.
-For local roots, omit `machine`, removing any existing hostname setting. Adopted
-old keys remain aliases for existing filters and URLs.
+captured at first ingestion; ordinary sync and `agentsview source sync --full`
+preserve the stored key. Use a peer's ID from `telemetry-install-id` for remote
+roots. For local roots, omit `machine`, removing any existing hostname setting.
+Adopted old keys remain aliases for existing filters and URLs.
 
 See the [Filesystem Session Sync guide](https://agentsview.io/filesystem-sync/)
 for Git, rsync, shared-mount, freshness, and operational guidance.
@@ -650,8 +650,8 @@ AGENTSVIEW_DATA_DIR=/data agentsview replica pg serve --push-watch
 
 Use `--push-watch` to ingest mounted sessions and serve them from PostgreSQL in
 one process; see
-[PostgreSQL Sync](https://agentsview.io/docs/pg-sync/#agentsview-pg-serve) for setup
-and shutdown.
+[PostgreSQL Sync](https://agentsview.io/docs/pg-sync/#agentsview-pg-serve) for
+setup and shutdown.
 
 Opt-in [hosted raw processing](docs/hosted-raw-sync.md) lets `pg serve` parse
 uploaded sources directly into PostgreSQL. It requires explicit tenant/schema
@@ -797,13 +797,13 @@ agentsview replica duckdb serve         # serve web UI from DuckDB (read-only)
 agentsview replica duckdb quack serve   # expose the local DuckDB file over Quack
 ```
 
-`agentsview replica duckdb serve` reads `[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH`. To
-serve from a remote Quack endpoint, set `AGENTSVIEW_DUCKDB_URL` and
-`AGENTSVIEW_DUCKDB_TOKEN` instead. Quack is still a new DuckDB protocol, so
-agentsview keeps conservative defaults: local Quack serving binds to loopback,
-requires a token, and rejects non-loopback plain HTTP unless `--allow-insecure`
-is explicit. For remote use, prefer a TLS URL or put Quack behind an
-authenticated tunnel/proxy.
+`agentsview replica duckdb serve` reads `[duckdb].path` or
+`AGENTSVIEW_DUCKDB_PATH`. To serve from a remote Quack endpoint, set
+`AGENTSVIEW_DUCKDB_URL` and `AGENTSVIEW_DUCKDB_TOKEN` instead. Quack is still a
+new DuckDB protocol, so agentsview keeps conservative defaults: local Quack
+serving binds to loopback, requires a token, and rejects non-loopback plain HTTP
+unless `--allow-insecure` is explicit. For remote use, prefer a TLS URL or put
+Quack behind an authenticated tunnel/proxy.
 
 Backend modes:
 

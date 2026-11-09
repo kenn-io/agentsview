@@ -175,47 +175,65 @@ func TargetFingerprint(t Target) (string, error) {
 	return "v1:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// The pool and thread defaults trade one query's speed for many queries at
+// once: the Analytics page sends 11 requests together, and on a 32-thread
+// host 5 queries at ClickHouse's default of one thread per core already
+// spent seconds each waiting for CPU. Both are starting points to retune
+// per host with the URL's max_open_conns and max_threads parameters; how
+// much kernel time each query thread costs depends on the server's storage.
 const (
-	maxOpenConns    = 5
-	connMaxLifetime = 30 * time.Minute
-	connMaxIdleTime = 5 * time.Minute
-	pingTimeout     = 10 * time.Second
+	// defaultMaxOpenConns lets every Analytics panel's query start at once.
+	defaultMaxOpenConns = 12
+	// pageMaxOpenConns sizes the serve pool kept for the session list,
+	// sidebar filters, and one-session reads, so dashboard and Usage scans
+	// on the main pool never hold up page navigation.
+	pageMaxOpenConns = 4
+	// defaultMaxThreads caps each query's threads so a dozen concurrent
+	// queries share the cores instead of queueing for them.
+	defaultMaxThreads = 8
+	connMaxLifetime   = 30 * time.Minute
+	connMaxIdleTime   = 5 * time.Minute
+	pingTimeout       = 10 * time.Second
 )
 
 // Open connects to the mirror database with the settings every mirror
 // connection needs: final=1 so ReplacingMergeTree deduplication applies to
-// every read without FINAL in query text.
+// every read without FINAL in query text, and the pool and thread limits
+// described above.
 func Open(ctx context.Context, t Target) (*sql.DB, error) {
 	database, err := t.DatabaseName()
 	if err != nil {
 		return nil, err
 	}
-	return openDatabase(ctx, t.URL, database)
+	return openDatabase(ctx, t.URL, database, 0)
+}
+
+// openPages opens the serve pool for page reads; see pageMaxOpenConns.
+func openPages(ctx context.Context, t Target) (*sql.DB, error) {
+	database, err := t.DatabaseName()
+	if err != nil {
+		return nil, err
+	}
+	return openDatabase(ctx, t.URL, database, pageMaxOpenConns)
 }
 
 // OpenForAdmin connects to a database that already exists on the server so
 // EnsureSchema can CREATE the mirror database. The DSN path is often the
 // not-yet-created mirror, so the bootstrap database is `default`.
 func OpenForAdmin(ctx context.Context, t Target) (*sql.DB, error) {
-	return openDatabase(ctx, t.URL, "default")
+	return openDatabase(ctx, t.URL, "default", 0)
 }
 
-func openDatabase(ctx context.Context, dsn, database string) (*sql.DB, error) {
-	opt, err := parseDSN(dsn)
+// openDatabase opens a pool of poolSize connections, or of the URL's
+// max_open_conns (default defaultMaxOpenConns) when poolSize is 0.
+func openDatabase(ctx context.Context, dsn, database string, poolSize int) (*sql.DB, error) {
+	opt, err := connectOptions(dsn, database, poolSize)
 	if err != nil {
-		return nil, fmt.Errorf("parsing clickhouse url: %w", err)
+		return nil, err
 	}
-	opt.Auth.Database = database
-	if opt.Settings == nil {
-		opt.Settings = clickhouse.Settings{}
-	}
-	opt.Settings["final"] = 1
-	opt.MaxOpenConns = maxOpenConns
-	opt.MaxIdleConns = maxOpenConns
-	opt.ConnMaxLifetime = connMaxLifetime
 	conn := clickhouse.OpenDB(opt)
-	conn.SetMaxOpenConns(maxOpenConns)
-	conn.SetMaxIdleConns(maxOpenConns)
+	conn.SetMaxOpenConns(opt.MaxOpenConns)
+	conn.SetMaxIdleConns(opt.MaxIdleConns)
 	conn.SetConnMaxLifetime(connMaxLifetime)
 	conn.SetConnMaxIdleTime(connMaxIdleTime)
 	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
@@ -225,6 +243,32 @@ func openDatabase(ctx context.Context, dsn, database string) (*sql.DB, error) {
 		return nil, fmt.Errorf("connecting to clickhouse at %s: %w", RedactDSN(dsn), err)
 	}
 	return conn, nil
+}
+
+// connectOptions parses dsn and applies the mirror's connection settings.
+// A max_threads or max_open_conns in the URL wins over the default.
+func connectOptions(dsn, database string, poolSize int) (*clickhouse.Options, error) {
+	opt, err := parseDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parsing clickhouse url: %w", err)
+	}
+	opt.Auth.Database = database
+	if opt.Settings == nil {
+		opt.Settings = clickhouse.Settings{}
+	}
+	opt.Settings["final"] = 1
+	if _, ok := opt.Settings["max_threads"]; !ok {
+		opt.Settings["max_threads"] = defaultMaxThreads
+	}
+	switch {
+	case poolSize > 0:
+		opt.MaxOpenConns = poolSize
+	case opt.MaxOpenConns <= 0:
+		opt.MaxOpenConns = defaultMaxOpenConns
+	}
+	opt.MaxIdleConns = opt.MaxOpenConns
+	opt.ConnMaxLifetime = connMaxLifetime
+	return opt, nil
 }
 
 // ClickHouse error codes the mirror inspects.

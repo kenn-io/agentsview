@@ -16,11 +16,9 @@ describe("TopSessions", () => {
     navSpy = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
   });
 
-  let savedLoading: typeof analytics.loading;
   let savedErrors: typeof analytics.errors;
 
   beforeEach(() => {
-    savedLoading = { ...analytics.loading };
     savedErrors = { ...analytics.errors };
   });
 
@@ -29,8 +27,6 @@ describe("TopSessions", () => {
     navSpy.mockRestore();
     analytics.includeOneShot = false;
     analytics.topSessions = null;
-    // @ts-ignore
-    analytics.loading = savedLoading;
     // @ts-ignore
     analytics.errors = savedErrors;
     sessions.filters.includeOneShot = false;
@@ -58,11 +54,6 @@ describe("TopSessions", () => {
           active_duration_min: 5,
         },
       ],
-    };
-    // @ts-ignore — loading is reactive state
-    analytics.loading = {
-      ...analytics.loading,
-      topSessions: false,
     };
     // @ts-ignore
     analytics.errors = {
@@ -172,7 +163,10 @@ describe("TopSessions", () => {
     unmount(component);
   });
 
-  it("renders display names before first-message previews", async () => {
+  it("renders display names, enables Output Tokens without a summary, and guards empty results", async () => {
+    const summary = analytics.summary;
+    analytics.summary = null;
+    const metric = vi.spyOn(analytics, "setTopMetric").mockImplementation(() => {});
     analytics.topSessions = {
       metric: "messages",
       sessions: [
@@ -188,11 +182,6 @@ describe("TopSessions", () => {
         },
       ],
     };
-    // @ts-ignore — loading is reactive state
-    analytics.loading = {
-      ...analytics.loading,
-      topSessions: false,
-    };
     // @ts-ignore
     analytics.errors = {
       ...analytics.errors,
@@ -202,9 +191,33 @@ describe("TopSessions", () => {
     const component = mount(TopSessions, { target: document.body });
     await tick();
 
+    expect(document.querySelector(".loading")).toBeNull();
     expect(document.querySelector(".session-label")?.textContent?.trim()).toBe(
       "Renamed sidebar title",
     );
+
+    try {
+      const tokens = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "By Output Tokens",
+      );
+      expect(tokens).toBeDefined();
+      tokens!.click();
+      expect(metric).toHaveBeenCalledWith("output_tokens");
+    } finally {
+      analytics.summary = summary;
+      metric.mockRestore();
+    }
+
+    analytics.topSessions = { metric: "messages", sessions: [] };
+    await tick();
+    expect(document.body.textContent).toContain("No sessions in range");
+    analytics.errors.topSessions = "request failed";
+    await tick();
+    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.body.textContent).toContain("No sessions in range");
+    analytics.topSessions = null;
+    await tick();
+    expect(document.body.textContent).not.toContain("No sessions in range");
 
     unmount(component);
   });
@@ -225,11 +238,6 @@ describe("TopSessions", () => {
           active_duration_min: 2.5,
         },
       ],
-    };
-    // @ts-ignore — loading is reactive state
-    analytics.loading = {
-      ...analytics.loading,
-      topSessions: false,
     };
     // @ts-ignore
     analytics.errors = {
@@ -290,11 +298,6 @@ describe("TopSessions", () => {
             active_duration_min: 0,
           },
         ],
-      };
-      // @ts-ignore — loading is reactive state
-      analytics.loading = {
-        ...analytics.loading,
-        topSessions: false,
       };
       // @ts-ignore
       analytics.errors = {
@@ -357,11 +360,6 @@ describe("TopSessions", () => {
             termination_status: "clean",
           },
         ],
-      };
-      // @ts-ignore
-      analytics.loading = {
-        ...analytics.loading,
-        topSessions: false,
       };
       // @ts-ignore
       analytics.errors = {

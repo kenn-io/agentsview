@@ -48,6 +48,7 @@ beforeEach(() => {
   settings.saveError = null;
   settings.readOnly = false;
   settings.saving = false;
+  router.params = {};
   dismissFlash();
 });
 
@@ -57,6 +58,30 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("opens Session Providers from the requested panel", async () => {
+    router.params = { panel: "agent-directories" };
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    try {
+      await tick();
+      await tick();
+      expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
+        "Session Providers",
+      );
+    } finally {
+      unmount(component);
+    }
+  });
+
   it("hides full resync for an archive-only database", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},

@@ -22,6 +22,7 @@ const (
 	AgentCodex          AgentType = "codex"
 	AgentTraeX          AgentType = "traex"
 	AgentAugureCode     AgentType = "augure-code"
+	AgentInterpreter    AgentType = "open-interpreter"
 	AgentCopilot        AgentType = "copilot"
 	AgentGemini         AgentType = "gemini"
 	AgentGeminiApps     AgentType = "gemini-apps"
@@ -259,6 +260,30 @@ var Registry = []AgentDef{
 		// No ShallowWatchRootsFunc: that hook exists for Codex's sibling
 		// session_index.jsonl, which Augure does not write (verified: none
 		// exists under ~/.augure).
+	},
+	{
+		// Open Interpreter's Rust rewrite is an open-source fork of codex-rs
+		// that keeps the Codex rollout recorder, so it reuses the Codex parser
+		// through a relabel hook like TraeX. INTERPRETER_HOME replaces
+		// ~/.openinterpreter the way CODEX_HOME replaces ~/.codex; the fork
+		// deliberately ignores CODEX_HOME. Distinct agent because resuming
+		// needs `interpreter resume` and the two products keep separate
+		// session archives.
+		Type:              AgentInterpreter,
+		DisplayName:       "Open Interpreter",
+		EnvVar:            "OPEN_INTERPRETER_SESSIONS_DIR",
+		DefaultRootEnvVar: "INTERPRETER_HOME",
+		ConfigKey:         "open_interpreter_sessions_dirs",
+		DefaultDirs: []string{
+			".openinterpreter/sessions",
+			".openinterpreter/archived_sessions",
+		},
+		IDPrefix:           "open-interpreter:",
+		FileBased:          true,
+		PostAnswerToolWork: true,
+		// No ShallowWatchRootsFunc: session titles from the fork's
+		// session_index.jsonl are read for Codex only, so watching the home
+		// directory would deliver nothing this agent consumes.
 	},
 	{
 		Type:         AgentCopilot,

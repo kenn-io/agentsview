@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -32,7 +33,7 @@ func (s *Store) loadAnalyticsSessions(
 		args = append(args, extraArgs...)
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT `+readbase.AnalyticsSessionColumns+`
+		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, '')
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -40,7 +41,7 @@ func (s *Store) loadAnalyticsSessions(
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, false)
+	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{PushFingerprint: true})
 }
 
 func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -105,15 +106,18 @@ func duckAnalyticsMessageTimeExists(
 		strings.Join(preds, " AND ") + ")", args
 }
 
-func (s analyticsSQL) ToolCountsSQL(ids []string) (string, []any) {
-	ph, args := db.InPlaceholders(ids)
+func (s analyticsSQL) VisitSessionIDSets(ctx context.Context, ids []string, visit func(ctx context.Context, idSet string, args []any) error) error {
+	return readbase.VisitChunkedSessionIDs(ctx, ids, visit)
+}
+
+func (s analyticsSQL) ToolCountsSQL(idSet string, args []any) (string, []any) {
 	return `
 			SELECT tc.session_id, m.model, m.timestamp, COUNT(*)
 			FROM tool_calls tc
 			JOIN messages m
 				ON m.session_id = tc.session_id
 				AND m.id = tc.message_id
-			WHERE tc.session_id IN ` + ph + `
+			WHERE tc.session_id IN ` + idSet + `
 			GROUP BY tc.session_id, m.model, m.timestamp`, args
 }
 
@@ -162,16 +166,16 @@ func (s analyticsSQL) Autonomy(ctx context.Context, ids []string, _ db.Analytics
 	return readbase.ScanAnalyticsAutonomy(rows, "duckdb")
 }
 
-func (s analyticsSQL) VelocityMessages(ctx context.Context, ids []string, _ db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
+func (s analyticsSQL) VelocitySessions(ctx context.Context, ids []string, _ db.AnalyticsFilter, loc *time.Location) (map[string]db.SessionVelocity, error) {
 	out := make(map[string][]db.TimingMessage)
 	if len(ids) == 0 {
-		return out, nil
+		return nil, nil
 	}
 	ph, args := db.InPlaceholders(ids)
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
-		WHERE session_id IN `+ph+`
+		WHERE `+db.ExcludeClaudeHooksSQL("source_subtype")+` AND session_id IN `+ph+`
 		ORDER BY session_id, ordinal`,
 		args...,
 	)
@@ -179,7 +183,11 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, ids []string, _ db.A
 		return nil, fmt.Errorf("querying duckdb velocity messages: %w", err)
 	}
 	defer rows.Close()
-	return readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
+	msgs, err := readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
+	if err != nil {
+		return nil, err
+	}
+	return db.SessionVelocities(msgs), nil
 }
 
 func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db.AnalyticsFilter) (map[string]int, error) {
@@ -202,23 +210,24 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db
 	return readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
 }
 
+// Mirror replacements preserve the memo generation; fingerprints version entries.
+const frustrationMemoGeneration uint64 = 0
+
 func (s *Store) duckPopulateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
+	versions map[string]string,
 ) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	cache := s.path != ""
-	// Pin cached counts and the query start to the same mirror generation.
-	s.handleMu.RLock()
-	generation := s.frustrationMemo.Generation()
 	idx := make(map[string]int, len(rows))
 	placeholders := make([]string, 0, len(rows))
 	args := make([]any, 0, len(rows))
 	for i := range rows {
-		if cache {
-			if count, ok := s.frustrationMemo.Lookup(generation, rows[i].ID, ""); ok {
+		if version := versions[rows[i].ID]; cache && version != "" {
+			if count, ok := s.frustrationMemo.Lookup(frustrationMemoGeneration, rows[i].ID, version); ok {
 				rows[i].FrustrationMarkerCount = count
 				continue
 			}
@@ -228,15 +237,13 @@ func (s *Store) duckPopulateFrustrationMarkers(
 		args = append(args, rows[i].ID)
 	}
 	if len(args) == 0 {
-		s.handleMu.RUnlock()
 		return nil
 	}
 	q := `SELECT session_id, content, is_system
 		FROM messages
 		WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN (` +
 		strings.Join(placeholders, ",") + `)`
-	msgRows, err := queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, q, args...)
-	s.handleMu.RUnlock()
+	msgRows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb frustration markers: %w", err)
 	}
@@ -262,7 +269,9 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	if cache {
 		for id, i := range idx {
-			s.frustrationMemo.Store(generation, id, "", rows[i].FrustrationMarkerCount)
+			if version := versions[id]; version != "" {
+				s.frustrationMemo.Store(frustrationMemoGeneration, id, version, rows[i].FrustrationMarkerCount)
+			}
 		}
 	}
 	return nil
@@ -1302,6 +1311,7 @@ func (s *Store) forEachDailyUsageAggregateRow(
 		FROM usage_localized
 		-- Visit rows in time order so the last Copilot-reported total is the session cost.
 		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, ts ASC, COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC, model ASC, price_model ASC`
+	observeAnalyticsQuery(query)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb daily usage aggregates: %w", err)
@@ -1335,7 +1345,19 @@ func (s *Store) forEachDailyUsageAggregateRow(
 	return nil
 }
 
-func (s *Store) GetDailyUsage(
+func (s *Store) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
+	version := s.keptVersion()
+	if version == "" {
+		return s.readDailyUsage(ctx, f)
+	}
+	slot := db.UsageSlot(f, true)
+	if slot == "" {
+		return s.readDailyUsage(ctx, f)
+	}
+	return db.DailyUsage(ctx, &s.dailyUsage, slot, version, f, s.readDailyUsage)
+}
+
+func (s *Store) readDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
 	rateResolver, err := s.loadPricingResolver(ctx)
@@ -1704,6 +1726,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		-- Visit rows in time order so the last Copilot-reported total is the session cost.
 		ORDER BY session_id ASC, ts ASC, COALESCE(message_ordinal, -1) ASC,
 			source ASC, usage_dedup_key ASC, model ASC, price_model ASC`
+	observeAnalyticsQuery(query)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb session usage aggregates: %w", err)
@@ -1804,8 +1827,23 @@ func (s *Store) sessionUsageRows(
 	return out, rows.Err()
 }
 
-func (s *Store) GetTopSessionsByCost(
-	ctx context.Context, f db.UsageFilter, limit int,
+func (s *Store) GetTopSessionsByCost(ctx context.Context, f db.UsageFilter, limit int) ([]db.TopSessionEntry, error) {
+	out, err := s.topUsage.Do(ctx, db.UsageSlot(f, false), s.keptVersion(), func(ctx context.Context) ([]db.TopSessionEntry, error) {
+		return s.readTopSessionTotals(ctx, f)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if f.TopSessionsByGroup {
+		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	}
+	return db.SortAndLimitTopSessions(
+		slices.Clone(out), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
+	), nil
+}
+
+func (s *Store) readTopSessionTotals(
+	ctx context.Context, f db.UsageFilter,
 ) ([]db.TopSessionEntry, error) {
 	rateResolver, err := s.loadPricingResolver(ctx)
 	if err != nil {
@@ -1871,12 +1909,7 @@ func (s *Store) GetTopSessionsByCost(
 		}
 		out = append(out, a.row)
 	}
-	if f.TopSessionsByGroup {
-		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
-	}
-	return db.SortAndLimitTopSessions(
-		out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
-	), nil
+	return out, nil
 }
 
 func (s *Store) GetUsageSessionCounts(

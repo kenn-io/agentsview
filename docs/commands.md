@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-04
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -74,6 +74,26 @@ and exit 1 when changes or parse failures are found. Remote sync failures keep
 their per-host summary and add recovery advice.
 
 ## Commands
+
+### Find a command by task
+
+On `main` (unreleased), describe a task to get up to five matching commands:
+
+```bash
+agentsview cli search "show token cost for a conversation"
+agentsview cli search list supported providers --limit 3 --json
+```
+
+Search reads the command tree locally. It needs no configuration, database,
+daemon, network connection, or credentials. Results use current command paths;
+hidden legacy commands, help-only groups, browser setup, and interactive
+service installation are omitted. Eligible actions inside groups remain
+searchable.
+
+`--limit` accepts 1–20 (default 5). `--json` and `--format json` return
+`{"query":"...","results":[{"command":"...","summary":"...","usage":"..."}]}`.
+An unmatched task succeeds with an empty `results` array. Text output includes
+a command help hint for flags and examples. Run `agentsview cli` for help.
 
 Root help lists command domains. Run `agentsview source --help`, for example,
 to find the actions in that domain, then `agentsview source sync --help` for
@@ -436,7 +456,9 @@ ______________________________________________________________________
 Manage the writable SQLite server. The daemon provides the web UI, API, session
 sync, and file watchers in one process. `daemon start` launches the same server
 as `serve --background`, using saved configuration and without opening a
-browser. It does not require a separate `serve` command.
+browser. It does not require a separate `serve` command. Unlike
+`serve --background`, which exits after `daemon_idle_timeout` when idle,
+`daemon start` stays running until `daemon stop`.
 
 ```bash
 agentsview daemon start
@@ -445,12 +467,12 @@ agentsview daemon restart
 agentsview daemon stop
 ```
 
-| Command   | Behavior                                                                |
-| --------- | ----------------------------------------------------------------------- |
-| `start`   | Start the daemon, or report the existing writable daemon                |
-| `status`  | Show writable daemon state, URL, PID, version, and uptime               |
-| `restart` | Stop and restart the writable daemon; start it if it is already stopped |
-| `stop`    | Stop the writable daemon, or report that it is already stopped          |
+| Command   | Behavior                                                                   |
+| --------- | -------------------------------------------------------------------------- |
+| `start`   | Start a persistent daemon, or make the running automatic daemon persistent |
+| `status`  | Show writable daemon state, URL, PID, version, and uptime                  |
+| `restart` | Stop and restart the writable daemon; start it if it is already stopped    |
+| `stop`    | Stop the writable daemon, or report that it is already stopped             |
 
 `daemon start` and `daemon restart` load the normal effective configuration from
 `config.toml` and supported environment variables. They accept no serve-specific
@@ -667,10 +689,10 @@ guidance.
 Background servers also act as the shared local daemon for the desktop app and
 CLI. The daemon owns local SQLite writes for its data directory, so common write
 and freshness-sensitive commands proxy to it instead of opening the archive as a
-second writer. A background daemon self-exits after the idle timeout when no
-external request or daemon-owned job is active. Periodic sync and file-watcher
-work prevent exit while they run, but do not keep the daemon alive forever by
-themselves.
+second writer. An automatically started daemon self-exits after the idle timeout
+when no external request or daemon-owned job is active. Periodic sync and
+file-watcher work prevent exit while they run, but do not keep the daemon alive
+forever by themselves.
 
 `sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
 pause.
@@ -2094,9 +2116,9 @@ searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
-those sessions before `--limit`. Semantic and hybrid results can be scoped with
-`--scope top|all|subordinate` (default `all`) to include or exclude sidechain
-and subagent content — see
+those sessions before `--limit`. Hybrid returns keyword matches with a note
+while the embedding index is unavailable. Semantic and hybrid
+results can be scoped with `--scope top|all|subordinate` (default `all`) to include or exclude sidechain and subagent content — see
 [Semantic Search](/docs/semantic-search/#scoping-results-scope). HTTP and MCP
 also accept `scope` for substring and regex searches. CLI lexical searches use
 `--include-children` instead. The human-readable table includes an `AGE` column derived from each match's
@@ -2118,6 +2140,10 @@ Child counts include sessions hidden by several defaults; the notice lists
 every remaining include flag to use together. Child counts use one bounded page;
 a positive count from a partial page says `at least N`. Stdout, including
 `--format json`, keeps its existing shape for pipelines.
+
+An older daemon can return sessions without exclusion counts. The CLI lists
+those sessions and omits the exclusion notice. Cursor pages and lists with all
+three `--include-*` flags also omit the notice.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from
 `default_pg` plus `[pg.NAME]` are sync configuration only; they do not change
@@ -2584,6 +2610,7 @@ agentsview help
 | `COWORK_DIR`                          | (platform-specific)                                                             | Claude Desktop cowork sessions directory                                                                        |
 | `CODEX_SESSIONS_DIR`                  | `~/.codex/sessions`                                                             | Codex sessions directory                                                                                        |
 | `CODEX_HOME`                          | unset                                                                           | Codex home that re-roots the default `sessions/` and `archived_sessions/` discovery paths                       |
+| `INTERPRETER_HOME`                    | unset                                                                           | Open Interpreter home that re-roots the default `sessions/` and `archived_sessions/` paths                      |
 | `CLINE_DIR`                           | `~/.cline`                                                                      | Cline CLI sessions directory (discovers under `<root>/data/sessions/` or direct sessions root)                  |
 | `CODEBUFF_DIR`                        | `~/.config/manicode/projects`                                                   | Codebuff/Freebuff sessions directory                                                                            |
 | `COMMANDCODE_PROJECTS_DIR`            | `~/.commandcode/projects`                                                       | Command Code projects directory                                                                                 |
@@ -2619,6 +2646,7 @@ agentsview help
 | `OPENCLAW_DIR`                        | `~/.openclaw/agents` and `~/.kimi_openclaw/agents`                              | OpenClaw agents directory                                                                                       |
 | `OPENCODE_DIR`                        | `~/.local/share/opencode`                                                       | OpenCode data directory                                                                                         |
 | `OPENCODEREVIEW_DIR`                  | `~/.opencodereview/sessions`                                                    | Open Code Review sessions directory                                                                             |
+| `OPEN_INTERPRETER_SESSIONS_DIR`       | `~/.openinterpreter/sessions` and `archived_sessions`                           | Open Interpreter sessions directory                                                                             |
 | `OPENHANDS_CONVERSATIONS_DIR`         | `~/.openhands/conversations`                                                    | OpenHands CLI conversations directory                                                                           |
 | `PI_DIR`                              | `~/.pi/agent/sessions`                                                          | Pi sessions directory                                                                                           |
 | `PI_CODING_AGENT_DIR`                 | unset                                                                           | Pi agent home that re-roots the default `sessions/` discovery path                                              |
@@ -2676,7 +2704,7 @@ agentsview help
 | `AGENTSVIEW_DISABLE_UPDATE_CHECK`     |                                                                                 | Set to `1` to disable the update check                                                                          |
 | `AGENTSVIEW_ARCHIVE_CONTENT`          | `full`                                                                          | Archive storage policy when `config.toml` sets none: `full`, `transcripts`, or `usage`                          |
 | `AGENTSVIEW_NO_DAEMON`                |                                                                                 | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start                                             |
-| `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`      | `20m`                                                                           | Override idle self-shutdown duration for detached background daemons                                            |
+| `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`      | `20m`                                                                           | Override idle self-shutdown duration for automatically started and `serve --background` daemons                 |
 | `AGENTSVIEW_TELEMETRY_ENABLED`        |                                                                                 | Set to `0` to disable [anonymous daemon telemetry](/docs/configuration/#anonymous-daemon-telemetry)             |
 | `DO_NOT_TRACK`                        |                                                                                 | Set to `1` to disable telemetry                                                                                 |
 
