@@ -854,10 +854,15 @@ func (s *Store) GetSession(
 	return &sess, nil
 }
 
+// pgSessionIDTailExpr computes db.SessionIDTail(id).
+// idx_sessions_id_tail indexes this exact expression.
+const pgSessionIDTailExpr = `substring(id, '[^:~]*$')`
+
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
 // stored id is either the exact raw input or the raw input preceded
 // by an agent or host prefix. The suffix comparison is literal and results
-// match SQLite ordering: exact match first, then most recent session.
+// match SQLite ordering: exact match first, then most recent session. The
+// tail predicate lets PostgreSQL seek idx_sessions_id_tail.
 func (s *Store) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
@@ -869,13 +874,14 @@ func (s *Store) FindSessionIDsByRawSuffix(
 	}
 	rows, err := s.pg.QueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE (id = $1
+		 WHERE `+pgSessionIDTailExpr+` = $3
+		   AND (id = $1
 		        OR RIGHT(id, LENGTH($1) + 1) IN (':' || $1, '~' || $1))
 		   AND deleted_at IS NULL
 		 ORDER BY (id = $1) DESC,
 		          COALESCE(ended_at, started_at, created_at) DESC
 		 LIMIT $2`,
-		raw, limit,
+		raw, limit, db.SessionIDTail(raw),
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

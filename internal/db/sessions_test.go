@@ -128,6 +128,52 @@ func TestFindSessionIDsByRawSuffix(t *testing.T) {
 	t.Logf("head: sqlite_uuid=%v exact=%v wildcard=%v trashed=%v entry=%v", uuidIDs, exactIDs, wildcardIDs, trashedIDs, got)
 }
 
+// TestSessionIDTail checks the Go tail against the SQLite expression that
+// idx_sessions_id_tail indexes. If they disagree, raw ID lookups seek the
+// wrong index entry and miss sessions.
+func TestSessionIDTail(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct{ id, want string }{
+		{"uuid", "uuid"},
+		{"codex:uuid", "uuid"},
+		{"host~uuid", "uuid"},
+		{"host~codex:uuid", "uuid"},
+		{"kimi:project-hash:session-uuid", "session-uuid"},
+		{"a:b~c", "c"},
+		{"a~b:c", "c"},
+		{"a:xa:x", "x"},
+		{"host~trailing:", ""},
+		{"trailing~", ""},
+		{":", ""},
+		{"wild_%_literal", "wild_%_literal"},
+		{"caf\u00e9:th\u00e9", "th\u00e9"},
+	} {
+		assert.Equal(t, tc.want, SessionIDTail(tc.id), "Go tail of %q", tc.id)
+		var got string
+		require.NoError(t, d.getReader().QueryRow(t.Context(),
+			`SELECT `+sqliteSessionIDTailExpr+` FROM (SELECT ? AS id)`, tc.id,
+		).Scan(&got))
+		assert.Equal(t, tc.want, got, "SQLite tail of %q", tc.id)
+	}
+}
+
+func TestFindSessionIDsByRawSuffixSeeksTailIndex(t *testing.T) {
+	d := testDB(t)
+	rows, err := d.getReader().QueryContext(t.Context(),
+		`EXPLAIN QUERY PLAN `+rawSuffixLookupSQL, "uuid", 5, "uuid")
+	require.NoError(t, err)
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+		plan = append(plan, detail)
+	}
+	require.NoError(t, rows.Err())
+	assert.Contains(t, plan, "SEARCH sessions USING INDEX idx_sessions_id_tail (<expr>=?)")
+}
+
 func TestListSessions_OutcomeFilter(t *testing.T) {
 	d := testDB(t)
 

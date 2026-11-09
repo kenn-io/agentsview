@@ -2830,6 +2830,39 @@ func (db *DB) FindSessionIDsByPartial(
 	return ids, rows.Err()
 }
 
+// SessionIDTail returns the part of a session ID after its last ':' or '~'
+// delimiter, or the whole ID when it has neither. Every ID that
+// FindSessionIDsByRawSuffix matches for raw has the same tail as raw, so
+// backends index the tail and seek on it before checking the exact
+// suffix forms.
+func SessionIDTail(id string) string {
+	return id[strings.LastIndexAny(id, ":~")+1:]
+}
+
+// sqliteSessionIDTailExpr computes SessionIDTail(id) with SQLite core
+// functions, which have no reverse search. It maps '~' to ':', trims every
+// character after the last ':' to find the prefix ending at that delimiter,
+// and removes that prefix. The prefix ends in ':' and the tail has none, so
+// the replace removes only the leading copy. replace() returns its input
+// unchanged for an empty pattern, so an ID with no delimiter is its own
+// tail. idx_sessions_id_tail indexes this exact expression.
+const sqliteSessionIDTailExpr = `replace(replace(id, '~', ':'),
+	rtrim(replace(id, '~', ':'), replace(replace(id, '~', ''), ':', '')), '')`
+
+// rawSuffixLookupSQL binds ?1 raw, ?2 limit, and ?3 SessionIDTail(raw).
+const rawSuffixLookupSQL = `SELECT id FROM sessions
+	WHERE ` + sqliteSessionIDTailExpr + ` = ?3
+	  AND (id = ?1
+	       OR SUBSTR(id, -(LENGTH(?1) + 1)) IN (':' || ?1, '~' || ?1))
+	  AND deleted_at IS NULL
+	ORDER BY (id = ?1) DESC,
+	         COALESCE(
+	             NULLIF(ended_at, ''),
+	             NULLIF(started_at, ''),
+	             created_at
+	         ) DESC
+	LIMIT ?2`
+
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
 // stored id is either the exact raw input or the raw input
 // preceded by an agent or host prefix (e.g. "codex:<uuid>" or
@@ -2837,7 +2870,8 @@ func (db *DB) FindSessionIDsByPartial(
 // comparison uses SUBSTR rather than LIKE so that SQL wildcard
 // characters ('_' and '%') present in session IDs (which permit
 // underscores) are compared literally instead of matching any
-// character. Results are sorted by most recently active first.
+// character. The tail predicate lets SQLite seek idx_sessions_id_tail.
+// Results are sorted by most recently active first.
 // Excludes soft-deleted sessions.
 func (db *DB) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
@@ -2849,18 +2883,7 @@ func (db *DB) FindSessionIDsByRawSuffix(
 		limit = 5
 	}
 	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT id FROM sessions
-		 WHERE (id = ?1
-		        OR SUBSTR(id, -(LENGTH(?1) + 1)) IN (':' || ?1, '~' || ?1))
-		   AND deleted_at IS NULL
-		 ORDER BY (id = ?1) DESC,
-		          COALESCE(
-		              NULLIF(ended_at, ''),
-		              NULLIF(started_at, ''),
-		              created_at
-		          ) DESC
-		 LIMIT ?2`,
-		raw, limit,
+		rawSuffixLookupSQL, raw, limit, SessionIDTail(raw),
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

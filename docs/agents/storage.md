@@ -948,6 +948,25 @@ build scans `sessions` and blocks writes until installation commits. Restricted
 publishers keep writing before owner installation, using the existing queries
 until the indexes are available.
 
+### Raw session ID lookups
+
+`FindSessionIDsByRawSuffix` resolves a raw ID such as a bare Codex thread
+UUID to stored IDs like `codex:<uuid>` or `host~codex:<uuid>`. Every match
+shares the raw ID's tail, the text after its last `:` or `~`
+(`db.SessionIDTail`), so each backend filters on that tail before it checks
+the exact suffix forms:
+
+- SQLite and PostgreSQL index the tail expression as `idx_sessions_id_tail`.
+  The query must repeat the indexed expression exactly.
+- ClickHouse keeps an `id_tail` bloom filter skipping index on `sessions`.
+  The candidate subquery reads with `final = 0` because FINAL widens each
+  matching granule to every overlapping key range in other parts. The outer
+  read applies FINAL by primary key.
+- DuckDB scans. It does not use an expression index for this filter, and a
+  columnar scan of the disposable mirror's IDs takes a few milliseconds.
+
+`internal/dbtest` `AssertRawSuffix` checks the same cases on every backend.
+
 ### Usage archive indexes
 
 The usage cache discovers bounded-window candidates through
@@ -1164,8 +1183,12 @@ own metadata, which is why the docs below call the database a mirror.
   `sync_metadata`. Never store ClickHouse sync state in SQLite.
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
   sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not
-  write `FINAL` in query text. `clickhouse serve` keeps a separate 4-connection
-  pool for the session list, sidebar filters, and one-session reads
+  write `FINAL` in query text. One exception: a lookup may collect sort keys
+  in an `IN` subquery with `SETTINGS final = 0` and let the outer read apply
+  FINAL, because a skipping index loses most of its effect under FINAL (see
+  [Raw session ID lookups](#raw-session-id-lookups)). `clickhouse serve`
+  keeps a separate 4-connection pool for the session list, sidebar filters,
+  and one-session reads
   (`pageQueryContext`); dashboard, Usage, report, and search scans use the
   main pool (`queryContext`), sized by the URL's `max_open_conns` (default
   12). `OpenForAdmin`
