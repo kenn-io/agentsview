@@ -151,8 +151,21 @@ func (s *Store) FindSessionIDsByPartial(ctx context.Context, partial string, lim
 	return scanIDs(rows)
 }
 
+// chSessionIDTailExpr computes db.SessionIDTail(id). The id_tail skipping
+// index uses this exact expression, and a query must repeat it verbatim for
+// ClickHouse to apply the index.
+const chSessionIDTailExpr = `extract(id, '[^:~]*$')`
+
 // FindSessionIDsByRawSuffix returns IDs that equal raw or end with a literal
-// colon/tilde delimiter followed by raw.
+// colon/tilde delimiter followed by raw, exact match first, then most recent.
+//
+// The inner query finds candidate IDs through the id_tail index. It reads
+// without FINAL because the connection's final=1 makes ClickHouse widen each
+// matching granule to every overlapping key range in other parts, which
+// reads about half the table. Older row versions keep their id, so the
+// unmerged read returns the same IDs. The outer query then reads those IDs
+// by primary key with FINAL, so deleted_at and the activity order come from
+// the current version.
 func (s *Store) FindSessionIDsByRawSuffix(ctx context.Context, raw string, limit int) ([]string, error) {
 	if raw == "" {
 		return nil, nil
@@ -162,10 +175,14 @@ func (s *Store) FindSessionIDsByRawSuffix(ctx context.Context, raw string, limit
 	}
 	rows, err := s.pageQueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE (id = ? OR endsWith(id, ?) OR endsWith(id, ?))
+		 WHERE id IN (
+		     SELECT id FROM sessions
+		     WHERE `+chSessionIDTailExpr+` = ?
+		       AND (id = ? OR endsWith(id, ?) OR endsWith(id, ?))
+		     SETTINGS final = 0)
 		   AND deleted_at IS NULL
 		 ORDER BY (id = ?) DESC, `+sessionActivityExpr+` DESC
-		 LIMIT ?`, raw, ":"+raw, "~"+raw, raw, limit)
+		 LIMIT ?`, db.SessionIDTail(raw), raw, ":"+raw, "~"+raw, raw, limit)
 	if err != nil {
 		return nil, fmt.Errorf("finding clickhouse sessions by raw suffix %q: %w", raw, err)
 	}

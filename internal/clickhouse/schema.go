@@ -17,7 +17,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 6
+const SchemaVersion = 7
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -83,9 +83,22 @@ func (c columnSpec) ddl() string {
 	return c.name + " " + c.typ + " DEFAULT " + c.def
 }
 
+// indexSpec is a data skipping index.
+type indexSpec struct {
+	name string
+	expr string
+	typ  string
+}
+
+// definition is the index clause after the INDEX keyword.
+func (i indexSpec) definition() string {
+	return i.name + " " + i.expr + " TYPE " + i.typ + " GRANULARITY 1"
+}
+
 type tableSpec struct {
 	name    string
 	columns []columnSpec
+	indexes []indexSpec
 	orderBy []string
 	// partitionBy is the partition key expression, empty for none.
 	partitionBy string
@@ -97,6 +110,9 @@ func (t tableSpec) createSQL() string {
 		cols = append(cols, c.ddl())
 	}
 	cols = append(cols, pushVersionCol+" "+tVersion)
+	for _, i := range t.indexes {
+		cols = append(cols, "INDEX "+i.definition())
+	}
 	return "CREATE TABLE IF NOT EXISTS " + t.name + " (\n\t" +
 		strings.Join(cols, ",\n\t") + "\n) ENGINE = ReplacingMergeTree(" +
 		pushVersionCol + ")" + t.partitionSQL() + " ORDER BY (" + strings.Join(t.orderBy, ", ") + ")"
@@ -111,6 +127,15 @@ func (t tableSpec) partitionSQL() string {
 
 func (t tableSpec) addColumnSQL(c columnSpec) string {
 	return "ALTER TABLE " + t.name + " ADD COLUMN IF NOT EXISTS " + c.ddl()
+}
+
+// sessionIDTailIndex lets FindSessionIDsByRawSuffix read only the granules
+// whose IDs share the requested tail. Tails are near-unique, so a bloom
+// filter per granule rejects almost every other granule.
+var sessionIDTailIndex = indexSpec{
+	name: "id_tail",
+	expr: chSessionIDTailExpr,
+	typ:  "bloom_filter(0.01)",
 }
 
 func col(name, typ string) columnSpec { return columnSpec{name: name, typ: typ} }
@@ -267,6 +292,7 @@ var mirrorTables = []tableSpec{
 			col("fact_velocity_active_seconds", tFloat),
 			col("fact_velocity_assistant_chars", tInt),
 		},
+		indexes: []indexSpec{sessionIDTailIndex},
 		orderBy: []string{"id"},
 	},
 	{
@@ -675,6 +701,10 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	existingIndexes, err := readSkipIndexes(ctx, conn)
+	if err != nil {
+		return err
+	}
 	for _, t := range mirrorTables {
 		cols, ok := existing[t.name]
 		if !ok {
@@ -689,6 +719,14 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 			}
 			if _, err := conn.ExecContext(ctx, t.addColumnSQL(c)); err != nil {
 				return fmt.Errorf("adding clickhouse column %s.%s: %w", t.name, c.name, err)
+			}
+		}
+		for _, i := range t.indexes {
+			if _, has := existingIndexes[t.name][i.name]; has {
+				continue
+			}
+			if err := addSkipIndex(ctx, conn, t.name, i); err != nil {
+				return err
 			}
 		}
 	}
@@ -759,6 +797,46 @@ func readPartitionKeys(ctx context.Context, conn *sql.DB) (map[string]string, er
 		return nil, fmt.Errorf("iterating clickhouse partition keys: %w", err)
 	}
 	return keys, nil
+}
+
+// addSkipIndex adds a skipping index to an existing table and builds it for
+// the parts already written. New parts get the index on insert. The build
+// runs as a background mutation, so schema setup does not wait for it;
+// until it finishes, reads scan the parts that lack the index, which only
+// costs time.
+func addSkipIndex(ctx context.Context, conn *sql.DB, table string, i indexSpec) error {
+	if _, err := conn.ExecContext(ctx,
+		"ALTER TABLE "+table+" ADD INDEX IF NOT EXISTS "+i.definition()); err != nil {
+		return fmt.Errorf("adding clickhouse index %s.%s: %w", table, i.name, err)
+	}
+	if _, err := conn.ExecContext(ctx,
+		"ALTER TABLE "+table+" MATERIALIZE INDEX "+i.name); err != nil {
+		return fmt.Errorf("building clickhouse index %s.%s: %w", table, i.name, err)
+	}
+	return nil
+}
+
+// readSkipIndexes maps table name to the set of skipping index names in the
+// current database.
+func readSkipIndexes(ctx context.Context, conn *sql.DB) (map[string]map[string]struct{}, error) {
+	rows, err := conn.QueryContext(ctx,
+		`SELECT table, name FROM system.data_skipping_indices WHERE database = currentDatabase()`)
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse skipping indexes: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]struct{}{}
+	for rows.Next() {
+		var table, name string
+		if err := rows.Scan(&table, &name); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse skipping index: %w", err)
+		}
+		if out[table] == nil {
+			out[table] = map[string]struct{}{}
+		}
+		out[table][name] = struct{}{}
+	}
+	return out, rows.Err()
 }
 
 // readColumns maps table name to the set of column names in the current

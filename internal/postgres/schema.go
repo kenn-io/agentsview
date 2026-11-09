@@ -1285,6 +1285,9 @@ var preparationIndexesPG = []struct{ name, ddl string }{
 	{"idx_sessions_data_version", `CREATE INDEX IF NOT EXISTS idx_sessions_data_version ON sessions(data_version)`},
 	{"idx_sessions_parentless_workers", `CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers ON sessions(id) WHERE ` + db.ParentlessWorkerSQL},
 	{"idx_sessions_source_missing", `CREATE INDEX IF NOT EXISTS idx_sessions_source_missing ON sessions(id) WHERE deletion_cause = 'source_missing'`},
+	// Raw session ID lookups seek on the ID tail instead of scanning every
+	// session; see Store.FindSessionIDsByRawSuffix.
+	{"idx_sessions_id_tail", `CREATE INDEX IF NOT EXISTS idx_sessions_id_tail ON sessions((` + pgSessionIDTailExpr + `))`},
 }
 
 // createMissingPreparationIndexesPG serializes publishers upgrading the same

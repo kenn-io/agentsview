@@ -4057,6 +4057,10 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_activity
 		 ON sessions(COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, '')))
 		 WHERE deleted_at IS NULL`,
+		// Raw session ID lookups seek on the ID tail instead of scanning
+		// every session; see FindSessionIDsByRawSuffix.
+		`CREATE INDEX IF NOT EXISTS idx_sessions_id_tail
+		 ON sessions(` + sqliteSessionIDTailExpr + `)`,
 	}
 	for _, ddl := range indexes {
 		if _, err := w.Exec(ctx, ddl); err != nil {

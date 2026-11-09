@@ -610,6 +610,7 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
+		"idx_sessions_id_tail":            true,
 		"idx_sessions_data_version":       true,
 		"idx_sessions_parentless_workers": true,
 		"idx_sessions_source_missing":     true,
