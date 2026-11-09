@@ -24,7 +24,8 @@ func (s *Server) frictionAutoFileOn() bool {
 	return autoFile && s.frictionRunner != nil && kataCfg.Enabled && kataCfg.Hub
 }
 
-// autoFileFriction files patterns and reopens recurring linked issues.
+// autoFileFriction is the friction job's automatic filing pass and reopens recurring linked issues. It does
+// nothing unless frictionAutoFileOn.
 func (s *Server) autoFileFriction(ctx context.Context) error {
 	if !s.frictionAutoFileOn() {
 		return nil
@@ -54,8 +55,10 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 	}
 	since := latest.AddDate(0, 0, 1-max(backfill, 1)).Format(time.DateOnly)
 	rep, err := f.Reconcile(ctx, filing.Policy{
-		Kinds: policy.FileKinds(), Since: since,
-		MinSessions: policy.FileMinSessions(), MaxNew: frictionAutoFilePerPass,
+		Kinds:       policy.FileKinds(),
+		Since:       since,
+		MinSessions: policy.FileMinSessions(),
+		MaxNew:      frictionAutoFilePerPass,
 	})
 	reopened := 0
 	if err == nil {

@@ -27,7 +27,7 @@ func (f *Filer) Reopen(ctx context.Context, since, latest string, loc *time.Loca
 		return 0, err
 	}
 	occurrences := make(map[string]time.Time)
-	for day := start.AddDate(0, 0, -1); !day.After(end); day = day.AddDate(0, 0, 1) {
+	for day := start; !day.After(end); day = day.AddDate(0, 0, 1) {
 		digest, err := f.Store.GetFrictionDigest(ctx, day.Format(time.DateOnly))
 		if err != nil {
 			return 0, err

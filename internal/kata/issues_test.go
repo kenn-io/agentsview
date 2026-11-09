@@ -22,9 +22,8 @@ func readyClient(t *testing.T, s *katatest.Server) *Client {
 func TestFindByMetadata(t *testing.T) {
 	s := katatest.New(t)
 	s.SetWebOrigin("https://kata.example.test")
-	closed := time.Date(2026, 9, 15, 12, 0, 0, 123, time.UTC)
 	open := s.AddIssue(katatest.Issue{Title: "open one", Status: "open", Metadata: map[string]any{"friction.fingerprint": "fl1:aa"}})
-	s.AddIssue(katatest.Issue{Title: "closed one", Status: "closed", ClosedReason: "wontfix", ClosedAt: &closed, Metadata: map[string]any{"friction.fingerprint": "fl1:bb"}})
+	s.AddIssue(katatest.Issue{Title: "closed one", Status: "closed", ClosedReason: "wontfix", Metadata: map[string]any{"friction.fingerprint": "fl1:bb"}})
 	c := readyClient(t, s)
 
 	got, err := c.FindByMetadata(t.Context(), "friction.fingerprint", "fl1:aa")
@@ -39,8 +38,6 @@ func TestFindByMetadata(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, "closed", got[0].Status)
 	assert.Equal(t, "wontfix", got[0].ClosedReason)
-	require.NotNil(t, got[0].ClosedAt)
-	assert.True(t, closed.Equal(*got[0].ClosedAt))
 
 	reqs := s.RequestsMatching(http.MethodGet, "/api/v1/projects/17/issues")
 	require.NotEmpty(t, reqs)

@@ -134,7 +134,7 @@ func (c *Client) issueFromOut(o kg.IssueOut) (Issue, error) {
 	}
 	return Issue{
 		UID: o.UID, ShortID: o.ShortID, QualifiedID: qualifiedID, Title: o.Title, Status: o.Status,
-		ClosedAt: o.ClosedAt, ClosedReason: deref(o.ClosedReason), WebURL: deref(o.WebURL), Labels: o.Labels, Metadata: o.Metadata, Priority: intPtr(o.Priority),
+		ClosedReason: deref(o.ClosedReason), WebURL: deref(o.WebURL), Labels: o.Labels, Metadata: o.Metadata, Priority: intPtr(o.Priority),
 	}, nil
 }
 

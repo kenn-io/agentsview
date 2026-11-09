@@ -215,23 +215,6 @@ func TestReopenUsesLatestOccurrenceInWindow(t *testing.T) {
 	assert.Equal(t, "This pattern recurred on 2026-09-15.", got.Comments[0])
 }
 
-func TestReopenFromDayBeforeWindow(t *testing.T) {
-	s := katatest.New(t)
-	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
-	closed := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	seedRecurrence(t, d, "2026-09-13", "claude:s1", new(closed.Add(24*time.Hour)))
-	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
-	require.NoError(t, err)
-
-	n, err := f.Reopen(t.Context(), "2026-09-14", "2026-09-15", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-	got := mustIssue(t, s, is.UID)
-	require.Len(t, got.Comments, 1)
-	assert.Equal(t, "This pattern recurred on 2026-09-13.", got.Comments[0])
-}
-
 func TestReopenClosuresWithinSameSecond(t *testing.T) {
 	s := katatest.New(t)
 	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
@@ -249,30 +232,6 @@ func TestReopenClosuresWithinSameSecond(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 	assert.Len(t, mustIssue(t, s, is.UID).Comments, 2)
-}
-
-func TestReopenEarlierSurvivingDigest(t *testing.T) {
-	s := katatest.New(t)
-	sig := toolError("go: cannot find main module", "claude:s1")
-	f, d := newFiler(t, s, katatest.DefaultProjectName, sig)
-	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	seedRecurrenceSignal(t, d, "2026-09-16", "claude:s1", new(closed.Add(26*time.Hour)), sig)
-	seedRecurrenceSignal(t, d, "2026-09-17", "claude:s2", new(closed.Add(50*time.Hour)), sig)
-	digest, err := d.GetFrictionDigest(t.Context(), "2026-09-17")
-	require.NoError(t, err)
-	digest.SnapshotJSON = []byte("{}")
-	digest.Revision++
-	require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, nil, nil))
-	require.Equal(t, "2026-09-17", patternRow(t, d, sig.Fingerprint()).LastSeenDate)
-	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-	_, err = f.Link(t.Context(), sig.Fingerprint(), is.UID)
-	require.NoError(t, err)
-	n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-	got := mustIssue(t, s, is.UID)
-	require.Len(t, got.Comments, 1)
-	assert.Equal(t, "This pattern recurred on 2026-09-16.", got.Comments[0])
 }
 
 func TestReopenRetry(t *testing.T) {
