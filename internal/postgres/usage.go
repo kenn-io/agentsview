@@ -1363,18 +1363,16 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
-	// All four reads need only sessionID. A missing or failed session still
+	// All three reads need only sessionID. A missing or failed session still
 	// wins over the other results.
 	var (
-		sess                                  *db.Session
-		pricing                               []export.EffectivePricingRow
-		usageRows                             []pgUsageScanRow
-		planUsage                             *db.SessionPlanUsage
-		sessErr, pricingErr, rowsErr, planErr error
+		sess                      *db.Session
+		usageRows                 []pgUsageScanRow
+		planUsage                 *db.SessionPlanUsage
+		sessErr, rowsErr, planErr error
 	)
 	s.runIndependentReads(
 		func() { sess, sessErr = s.GetSession(ctx, sessionID) },
-		func() { pricing, pricingErr = s.loadPricingMap(ctx) },
 		func() { usageRows, rowsErr = s.querySessionUsageRows(ctx, sessionID) },
 		func() { planUsage, planErr = s.GetSessionPlanUsage(ctx, sessionID) },
 	)
@@ -1384,13 +1382,19 @@ func (s *Store) GetSessionUsage(
 	if sess == nil {
 		return nil, nil
 	}
-	if pricingErr != nil {
-		return nil, fmt.Errorf("loading pg pricing: %w", pricingErr)
-	}
 	if rowsErr != nil {
 		return nil, rowsErr
 	}
-	rateResolver := export.NewPricingResolver(pricing)
+	// A session without usage rows has nothing to price, so it skips the
+	// pricing catalog read, which costs more than the reads above.
+	var rateResolver *export.PricingResolver
+	if len(usageRows) > 0 {
+		pricing, err := s.loadPricingMap(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("loading pg pricing: %w", err)
+		}
+		rateResolver = export.NewPricingResolver(pricing)
+	}
 
 	var cost money.Money
 	var authoritativeCost *money.Money
