@@ -52,6 +52,7 @@ func TestDiagnosticRejectsUnreplicableValues(t *testing.T) {
 		{ID: uuid.NewV7().String(), Source: "work\x00er", Message: "failure"},
 		{ID: uuid.NewV7().String(), Source: "worker", Message: "fail\x00ure"},
 		{ID: uuid.NewV7().String(), Source: "worker", Message: "failure", OccurredAt: badTime},
+		{ID: uuid.NewV7().String(), Source: "worker", Message: "failure", OccurredAtSupplied: true},
 	} {
 		_, err := d.AppendDiagnostic(t.Context(), e)
 		require.ErrorIs(t, err, ErrInvalidDiagnostic)
@@ -61,7 +62,7 @@ func TestDiagnosticRejectsUnreplicableValues(t *testing.T) {
 	assert.Empty(t, events)
 }
 
-func TestDiagnosticResyncAndOlderArchive(t *testing.T) {
+func TestDiagnosticResync(t *testing.T) {
 	source := testDB(t)
 	target := testDB(t)
 	e := DiagnosticEvent{ID: uuid.NewV7().String(), Source: "worker", Message: "launch failed", OccurredAt: time.Date(2026, 1, 1, 23, 55, 0, 0, time.UTC)}
@@ -73,9 +74,17 @@ func TestDiagnosticResyncAndOlderArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, e.ID, events[0].ID)
-	_, err = source.getWriter().Exec(t.Context(), `DROP TABLE diagnostic_events`)
+}
+
+func TestDiagnosticTieOrder(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001"} {
+		_, err := d.getWriter().Exec(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,accepted_at) VALUES(?,?,?,?,?)`, id, "worker", "failure", "2026-01-01T00:00:00.000000000Z", "2026-01-02T00:00:00.000000000Z")
+		require.NoError(t, err)
+	}
+	signals, err := d.DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
 	require.NoError(t, err)
-	signals, err := source.DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
-	require.NoError(t, err)
-	assert.Empty(t, signals)
+	require.Len(t, signals, 2)
+	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000001", signals[0].SubjectID)
+	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000002", signals[1].SubjectID)
 }

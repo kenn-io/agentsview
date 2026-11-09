@@ -45,6 +45,12 @@ func TestDiagnosticsAppendLocalAndServer(t *testing.T) {
 	events, err = d.DiagnosticEventsAfter(t.Context(), 0, 10)
 	require.NoError(t, err)
 	assert.Len(t, events, 2)
+
+	for _, extra := range [][]string{nil, {"--server", ts.URL}} {
+		args := append([]string{"diagnostics", "append", "--source", "worker", "--message", "failure", "--at", "0001-01-01T00:00:00Z"}, extra...)
+		_, _, err = runInsightCommand(t, args...)
+		require.ErrorContains(t, err, "occurred_at")
+	}
 	_, _, err = runInsightCommand(t, "diagnostics", "append", "--source", "worker", "--message", "failure", "--pg")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read-only")

@@ -1560,8 +1560,6 @@ components:
           type: string
         id:
           type: string
-        machine:
-          type: string
         message:
           type: string
         occurred_at:

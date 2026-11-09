@@ -12,17 +12,18 @@ const MaxCannedFrictionPatterns = 20
 
 // CannedFrictionReviewInput is the deterministic Friction Log input for the
 // friction_review template. It carries the stored digest summary object,
-// pattern titles and counts, and the P0 list. Finding text, evidence and
-// transcript content never enter it, and it is never written back to any
-// friction table.
+// pattern titles and counts, grouped diagnostics, and the P0 list. Session
+// finding text, evidence, and transcript content never enter it. It is never
+// written back to any friction table.
 type CannedFrictionReviewInput struct {
-	Date         string                  `json:"date"`
-	Timezone     string                  `json:"timezone"`
-	RulesVersion string                  `json:"rules_version"`
-	Revision     int                     `json:"revision"`
-	Summary      map[string]any          `json:"summary"`
-	TopPatterns  []CannedFrictionPattern `json:"top_patterns"`
-	P0Alerts     []CannedFrictionP0      `json:"p0_alerts"`
+	Date         string                     `json:"date"`
+	Timezone     string                     `json:"timezone"`
+	RulesVersion string                     `json:"rules_version"`
+	Revision     int                        `json:"revision"`
+	Summary      map[string]any             `json:"summary"`
+	TopPatterns  []CannedFrictionPattern    `json:"top_patterns"`
+	Diagnostics  []CannedFrictionDiagnostic `json:"diagnostics,omitempty"`
+	P0Alerts     []CannedFrictionP0         `json:"p0_alerts"`
 }
 
 // CannedFrictionPattern is one fingerprint as seen in a single digest. Counts
@@ -37,6 +38,12 @@ type CannedFrictionPattern struct {
 	DigestSessions    int    `json:"digest_sessions"`
 	FirstSeenDate     string `json:"first_seen_date"`
 	Recurring         bool   `json:"recurring"`
+}
+
+type CannedFrictionDiagnostic struct {
+	Source  string `json:"source"`
+	Message string `json:"message"`
+	Count   int    `json:"count"`
 }
 
 // CannedFrictionP0 is one P0 alert: a tool failing across sessions.
@@ -136,7 +143,7 @@ func CannedFrictionP0Alerts(p0 map[string][]string) []CannedFrictionP0 {
 // convention CannedEvidenceRefs uses.
 func CannedFrictionEvidenceRefs(r CannedFrictionReviewInput) []CannedEvidenceRef {
 	if summaryInt(r.Summary, "sessions_scanned") == 0 &&
-		len(r.TopPatterns) == 0 && len(r.P0Alerts) == 0 {
+		len(r.TopPatterns) == 0 && len(r.P0Alerts) == 0 && len(r.Diagnostics) == 0 {
 		return []CannedEvidenceRef{{
 			ID:          "aggregate:empty",
 			Description: "The friction digest for this date scanned no sessions.",
@@ -146,6 +153,9 @@ func CannedFrictionEvidenceRefs(r CannedFrictionReviewInput) []CannedEvidenceRef
 		ID:          "friction:summary",
 		Description: "Digest counts by kind and sessions scanned.",
 	}}
+	if len(r.Diagnostics) > 0 {
+		refs = append(refs, CannedEvidenceRef{ID: "friction:diagnostics", Description: "Diagnostic failures grouped by source and message."})
+	}
 	if len(r.P0Alerts) > 0 {
 		refs = append(refs, CannedEvidenceRef{
 			ID:          "friction:p0_alerts",

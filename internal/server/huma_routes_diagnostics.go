@@ -29,6 +29,7 @@ func (s *Server) humaAppendDiagnostic(ctx context.Context, in *diagnosticAppendI
 	e := db.DiagnosticEvent{ID: in.Body.ID, Source: in.Body.Source, Message: in.Body.Message}
 	if in.Body.OccurredAt != nil {
 		e.OccurredAt = *in.Body.OccurredAt
+		e.OccurredAtSupplied = true
 	}
 	var stored db.DiagnosticEvent
 	err := s.SerializeArchiveWrite(ctx, func() error { var err error; stored, err = local.AppendDiagnostic(ctx, e); return err })

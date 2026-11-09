@@ -18,7 +18,7 @@ func (b *httpBackend) AppendDiagnostic(ctx context.Context, e db.DiagnosticEvent
 		return db.DiagnosticEvent{}, err
 	}
 	body := &apiclient.PostAPIV1DiagnosticsBody{ID: e.ID, Source: e.Source, Message: e.Message}
-	if !e.OccurredAt.IsZero() {
+	if e.OccurredAtSupplied || !e.OccurredAt.IsZero() {
 		body.OccurredAt = &e.OccurredAt
 	}
 	response, err := api.PostAPIV1DiagnosticsWithResponse(ctx, &apiclient.PostAPIV1DiagnosticsRequestOptions{Body: body})
@@ -36,8 +36,5 @@ func (b *httpBackend) AppendDiagnostic(ctx context.Context, e db.DiagnosticEvent
 	}
 	result := response.JSON200
 	e = db.DiagnosticEvent{ID: result.ID, Source: result.Source, Message: result.Message, OccurredAt: result.OccurredAt, AcceptedAt: result.AcceptedAt}
-	if result.Machine != nil {
-		e.Machine = *result.Machine
-	}
 	return e, nil
 }

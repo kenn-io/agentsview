@@ -2443,6 +2443,7 @@ agentsview diagnostics append --source worker --message "launch failed" [--at RF
 
 The occurrence time defaults to now. Supply `--at` to place a delayed report
 on the day it happened; it can be at most five minutes in the future. The
+zero timestamp `0001-01-01T00:00:00Z` is not accepted. The
 source is limited to 64 characters and the message to 500. The command prints
 its event ID and occurrence time; reuse both with the same source and message
 to retry without counting the event twice. When supplying `--id` without `--at`,

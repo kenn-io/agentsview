@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
 )
@@ -108,13 +109,27 @@ func (s *Server) buildFrictionReviewPayload(
 			fmt.Errorf("decoding friction snapshot %s: %w", date, err)
 	}
 	occurrences := make([]insight.CannedFrictionOccurrence, 0, len(snap.Signals))
+	diagnostics := []insight.CannedFrictionDiagnostic{}
+	diagnosticIndex := map[[2]string]int{}
+	var sessionSignals []friction.Signal
 	for _, sig := range snap.Signals {
+		if sig.Kind == friction.KindDiagnostic {
+			key := [2]string{sig.Label, sig.Text}
+			if i, ok := diagnosticIndex[key]; ok {
+				diagnostics[i].Count++
+			} else {
+				diagnosticIndex[key] = len(diagnostics)
+				diagnostics = append(diagnostics, insight.CannedFrictionDiagnostic{Source: sig.Label, Message: sig.Text, Count: 1})
+			}
+			continue
+		}
+		sessionSignals = append(sessionSignals, sig)
 		occurrences = append(occurrences, insight.CannedFrictionOccurrence{
 			SubjectID: sig.SubjectID, Kind: string(sig.Kind),
 			Title: sig.Title(), Fingerprint: sig.Fingerprint(),
 		})
 	}
-	patterns, err := frictionDigestPatterns(ctx, fr, snap.Signals)
+	patterns, err := frictionDigestPatterns(ctx, fr, sessionSignals)
 	if err != nil {
 		return insight.CannedAggregatePayload{}, "", "",
 			fmt.Errorf("loading friction patterns for %s: %w", date, err)
@@ -133,7 +148,8 @@ func (s *Server) buildFrictionReviewPayload(
 		TopPatterns: insight.RankCannedFrictionPatterns(
 			date, occurrences, firstSeen, insight.MaxCannedFrictionPatterns,
 		),
-		P0Alerts: insight.CannedFrictionP0Alerts(p0.P0Alerts),
+		P0Alerts:    insight.CannedFrictionP0Alerts(p0.P0Alerts),
+		Diagnostics: diagnostics,
 	}
 	filters := insight.CannedSessionFilters{
 		Timezone:       digest.Timezone,

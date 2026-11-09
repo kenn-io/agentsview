@@ -5,7 +5,6 @@
 export interface DbDiagnosticEvent {
   accepted_at: string;
   id: string;
-  machine?: string;
   message: string;
   occurred_at: string;
   source: string;

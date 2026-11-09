@@ -10,34 +10,28 @@ import (
 )
 
 func (s *Store) DiagnosticSignalsForDate(ctx context.Context, date string, loc *time.Location) ([]friction.Signal, error) {
-	if !pgHasTable(ctx, s.pg, "diagnostic_events") {
-		return nil, nil
-	}
 	from, to, err := db.FrictionDayBounds(date, loc)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.pg.QueryContext(ctx, `SELECT e.id,e.source,e.message,e.machine,e.occurred_at FROM diagnostic_events e LEFT JOIN friction_digest_sessions d ON d.subject_id='diagnostic:'||e.id WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND (d.subject_id IS NULL OR d.date=$3) ORDER BY e.occurred_at,e.accepted_at,e.id`, from.UTC(), to.UTC(), date)
+	rows, err := s.pg.QueryContext(ctx, `SELECT e.id,e.source,e.message,e.occurred_at FROM diagnostic_events e LEFT JOIN friction_digest_sessions d ON d.subject_id='diagnostic:'||e.id WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND (d.subject_id IS NULL OR d.date=$3) ORDER BY e.occurred_at,e.accepted_at,e.id`, from.UTC(), to.UTC(), date)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []friction.Signal
 	for rows.Next() {
-		var id, source, message, machine string
+		var id, source, message string
 		var ts time.Time
-		if err = rows.Scan(&id, &source, &message, &machine, &ts); err != nil {
+		if err = rows.Scan(&id, &source, &message, &ts); err != nil {
 			return nil, err
 		}
-		out = append(out, friction.Signal{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:" + id, SubjectKind: friction.SubjectDiagnostic, Label: source, Text: message, Dims: friction.Dims{Machine: machine}, OccurredAt: ts})
+		out = append(out, friction.Signal{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:" + id, SubjectKind: friction.SubjectDiagnostic, Label: source, Text: message, OccurredAt: ts})
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) FrictionPendingDiagnosticDates(ctx context.Context, last string, loc *time.Location) ([]string, error) {
-	if !pgHasTable(ctx, s.pg, "diagnostic_events") {
-		return nil, nil
-	}
 	_, to, err := db.FrictionDayBounds(last, loc)
 	if err != nil {
 		return nil, err
@@ -94,16 +88,15 @@ func (s *Sync) syncDiagnosticEvents(ctx context.Context, full bool, markerID str
 		if err != nil {
 			return err
 		}
+		if len(events) == 0 {
+			return nil
+		}
 		tx, err := s.pg.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		for _, event := range events {
-			machine := event.Machine
-			if machine == "" {
-				machine = s.machine
-			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO diagnostic_events(id,source,message,machine,occurred_at,accepted_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING`, event.ID, event.Source, event.Message, machine, event.OccurredAt, event.AcceptedAt); err != nil {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO diagnostic_events(id,source,message,occurred_at,accepted_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING`, event.ID, event.Source, event.Message, event.OccurredAt, event.AcceptedAt); err != nil {
 				_ = tx.Rollback()
 				return err
 			}
@@ -114,9 +107,6 @@ func (s *Sync) syncDiagnosticEvents(ctx context.Context, full bool, markerID str
 		}
 		if err = tx.Commit(); err != nil {
 			return err
-		}
-		if len(events) == 0 {
-			return nil
 		}
 		watermark = events[len(events)-1].RowID
 		if err = state.SetSyncState(ctx, key, strconv.FormatInt(watermark, 10)); err != nil {

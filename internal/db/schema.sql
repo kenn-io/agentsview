@@ -1419,7 +1419,6 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
     message TEXT NOT NULL,
-    machine TEXT NOT NULL DEFAULT '',
     occurred_at TEXT NOT NULL,
     accepted_at TEXT NOT NULL
 );

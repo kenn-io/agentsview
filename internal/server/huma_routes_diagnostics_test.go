@@ -39,6 +39,8 @@ func TestDiagnosticAppendRoute(t *testing.T) {
 	assertStatus(t, post(invalid, "127.0.0.1:1234"), http.StatusUnprocessableEntity)
 	invalidTime := fmt.Sprintf(`{"id":%q,"source":"worker","message":"failure","occurred_at":"0000-01-01T00:00:00+01:00"}`, uuid.NewV7().String())
 	assertStatus(t, post(invalidTime, "127.0.0.1:1234"), http.StatusUnprocessableEntity)
+	zeroTime := fmt.Sprintf(`{"id":%q,"source":"worker","message":"failure","occurred_at":"0001-01-01T00:00:00Z"}`, uuid.NewV7().String())
+	assertStatus(t, post(zeroTime, "127.0.0.1:1234"), http.StatusUnprocessableEntity)
 	events, err := te.db.DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
 	require.NoError(t, err)
 	assert.Len(t, events, 1)

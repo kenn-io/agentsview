@@ -28154,7 +28154,6 @@ type DBDailyUsageEntry = db.DailyUsageEntry
 type DBDiagnosticEvent struct {
 	AcceptedAt time.Time `json:"accepted_at" validate:"required"`
 	ID         string    `json:"id" validate:"required"`
-	Machine    *string   `json:"machine,omitempty"`
 	Message    string    `json:"message" validate:"required"`
 	OccurredAt time.Time `json:"occurred_at" validate:"required"`
 	Source     string    `json:"source" validate:"required"`

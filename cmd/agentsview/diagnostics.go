@@ -36,7 +36,7 @@ func newDiagnosticsCommand() *cobra.Command {
 				return fmt.Errorf("invalid --at: %w", err)
 			}
 		}
-		e := db.DiagnosticEvent{ID: id, Source: source, Message: message, OccurredAt: occurred}
+		e := db.DiagnosticEvent{ID: id, Source: source, Message: message, OccurredAt: occurred, OccurredAtSupplied: at != ""}
 		svc, cleanup, err := resolveWritableService(cmd)
 		if err != nil {
 			return err
