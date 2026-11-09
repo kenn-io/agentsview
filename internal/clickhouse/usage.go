@@ -786,13 +786,15 @@ func chUsageCTEFromRawSource(
 			snapshotFilter, snapshotFilterArgs, "survivor.model", f)
 		snapshotFilter, snapshotFilterArgs = appendChUsageSessionFilterClauses(
 			snapshotFilter, snapshotFilterArgs, f, "")
+		// Complete pairs share zero; incomplete rows discard the window results.
 		snapshotCTE = `,
 		usage_snapshot_ranked AS (
 			SELECT *,
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN first_value(session_id) OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 							ORDER BY ts ASC, session_id ASC,
 								COALESCE(message_ordinal, -1) ASC
 						)
@@ -801,7 +803,8 @@ func chUsageCTEFromRawSource(
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN row_number() OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 							ORDER BY output_tokens_norm DESC, ts DESC,
 								session_id DESC,
 								COALESCE(message_ordinal, -1) DESC
@@ -811,16 +814,19 @@ func chUsageCTEFromRawSource(
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN sum(output_tokens_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 						) - max(output_tokens_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 						)
 					ELSE 0
 				END AS snapshot_deduplicated_output_tokens,
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN max(web_search_requests_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 						)
 					ELSE web_search_requests_norm
 				END AS snapshot_web_search_requests
