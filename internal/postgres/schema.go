@@ -688,6 +688,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
     source TEXT NOT NULL,
     message TEXT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL,
+    occurred_at_exact TEXT NOT NULL,
     accepted_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events (occurred_at);

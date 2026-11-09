@@ -102,9 +102,17 @@ func (s *Sync) syncDiagnosticEvents(ctx context.Context, full bool, markerID str
 			return err
 		}
 		for _, event := range events {
-			if _, err = tx.ExecContext(ctx, `INSERT INTO diagnostic_events(id,source,message,occurred_at,accepted_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING`, event.ID, event.Source, event.Message, event.OccurredAt, event.AcceptedAt); err != nil {
+			result, err := tx.ExecContext(ctx, `INSERT INTO diagnostic_events(id,source,message,occurred_at,occurred_at_exact,accepted_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET id=excluded.id WHERE diagnostic_events.source=excluded.source AND diagnostic_events.message=excluded.message AND diagnostic_events.occurred_at_exact=excluded.occurred_at_exact`, event.ID, event.Source, event.Message, event.OccurredAt, event.OccurredAt.UTC().Format(time.RFC3339Nano), event.AcceptedAt)
+			if err != nil {
 				_ = tx.Rollback()
 				return err
+			}
+			if n, err := result.RowsAffected(); err != nil || n == 0 {
+				_ = tx.Rollback()
+				if err != nil {
+					return err
+				}
+				return db.ErrDiagnosticConflict
 			}
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES($1,'1') ON CONFLICT(key) DO UPDATE SET value=excluded.value`, marker); err != nil {

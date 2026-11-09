@@ -75,7 +75,7 @@ func TestDiagnosticTieOrder(t *testing.T) {
 	t.Cleanup(func() { _ = pg.Close() })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
 	for _, id := range []string{"00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001"} {
-		_, err := pg.ExecContext(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,accepted_at) VALUES($1,'worker','failure','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`, id)
+		_, err := pg.ExecContext(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,occurred_at_exact,accepted_at) VALUES($1,'worker','failure','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`, id)
 		require.NoError(t, err)
 	}
 	signals, err := (&Store{pg: pg}).DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
@@ -105,7 +105,7 @@ func TestDiagnosticReadsWithoutTable(t *testing.T) {
 	assert.Empty(t, signals)
 
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
-	_, err = pg.ExecContext(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,accepted_at) VALUES('00000000-0000-0000-0000-000000000001','worker','failure','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`)
+	_, err = pg.ExecContext(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,occurred_at_exact,accepted_at) VALUES('00000000-0000-0000-0000-000000000001','worker','failure','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`)
 	require.NoError(t, err)
 	dates, err = store.FrictionPendingDiagnosticDates(t.Context(), "2026-01-02", time.UTC)
 	require.NoError(t, err)
@@ -114,4 +114,46 @@ func TestDiagnosticReadsWithoutTable(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, signals, 1)
 	assert.Equal(t, "failure", signals[0].Text)
+}
+
+func TestDiagnosticPushConflictingArchives(t *testing.T) {
+	const schema = "agentsview_diagnostic_conflict_test"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pg, err := Open(t.Context(), pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pg.Close() })
+	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+
+	event := db.DiagnosticEvent{ID: uuid.NewV7().String(), Source: "worker", Message: "launch failed", OccurredAt: time.Date(2026, 1, 1, 0, 0, 0, 123456789, time.UTC)}
+	for _, tc := range []struct {
+		name     string
+		event    db.DiagnosticEvent
+		conflict bool
+	}{
+		{name: "original", event: event},
+		{name: "retry", event: event},
+		{name: "different message", event: db.DiagnosticEvent{ID: event.ID, Source: event.Source, Message: "different", OccurredAt: event.OccurredAt}, conflict: true},
+		{name: "different nanosecond", event: db.DiagnosticEvent{ID: event.ID, Source: event.Source, Message: event.Message, OccurredAt: event.OccurredAt.Add(time.Nanosecond)}, conflict: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = local.Close() })
+			_, err = local.AppendDiagnostic(t.Context(), tc.event)
+			require.NoError(t, err)
+			syncer := &Sync{pg: pg, local: local, targetFingerprint: "target"}
+			err = syncer.syncDiagnosticEvents(t.Context(), false, tc.name)
+			if tc.conflict {
+				require.ErrorIs(t, err, db.ErrDiagnosticConflict)
+				var marker bool
+				require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sync_metadata WHERE key=$1)`, "diagnostic_marker:"+tc.name+":").Scan(&marker))
+				assert.False(t, marker)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+	assert.Equal(t, 1, pgTableCount(t, t.Context(), pg, "diagnostic_events"))
 }
