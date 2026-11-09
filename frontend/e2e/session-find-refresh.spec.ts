@@ -100,13 +100,16 @@ for (const withFind of [false, true]) {
     await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
     const before = await transcript.evaluate((el) => el.scrollTop);
 
-    const reloaded = page.waitForResponse((r) => /\/messages/.test(r.url()) && r.ok());
+    // The refresh only counts once the client has fetched the appended rows.
+    const reloaded = page.waitForResponse(
+      async (r) =>
+        /\/messages/.test(r.url()) && r.ok() && (await r.text()).includes("Live message 304"),
+    );
     live.refresh();
     await reloaded;
-    await expect(page.getByText("Live message 304"))
-      .toBeAttached({ timeout: 5000 })
-      .catch(() => {});
-    await page.waitForTimeout(1000);
+    // Nothing observable marks "the reveal did not run", so give a stray
+    // re-reveal time to land before comparing offsets.
+    await page.waitForTimeout(500);
 
     const after = await transcript.evaluate((el) => el.scrollTop);
     // Row re-measurement can nudge the offset by a few hundred pixels; a reveal
