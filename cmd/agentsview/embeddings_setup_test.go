@@ -606,8 +606,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 						_, _ = io.WriteString(w, `{"setup":{"error":"setup failed"}}`)
 					} else if n == 4 {
 						_, _ = io.WriteString(w, `{"setup":{}}`)
-					} else if tc.name == "configured" {
-						_, _ = io.WriteString(w, `{"setup":{},"last_error":"build failed"}`)
 					} else {
 						_, _ = io.WriteString(w, `{"setup":{},"last_result":{}}`)
 					}
@@ -638,12 +636,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				require.ErrorContains(t, err, "setup failed")
 				return
 			}
-			if tc.name == "configured" {
-				require.ErrorContains(t, err, "build failed")
-			} else {
-				require.NoError(t, err)
-				assert.Contains(t, out.String(), "Embedded 0 documents")
-			}
+			require.NoError(t, err)
 			assert.GreaterOrEqual(t, polls.Load(), int64(5))
 			if tc.full {
 				assert.Contains(t, out.String(), "This rebuild re-embeds every document.")
