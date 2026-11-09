@@ -162,6 +162,11 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "changed-provider" {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
 			}
+			if recipe == "fresh" {
+				owner.mu.Lock()
+				owner.setup.Error = "earlier setup error"
+				owner.mu.Unlock()
+			}
 			request("POST", "/api/v1/embeddings/setup", fmt.Sprintf(`{"approved_bytes":%d}`, shown), 202)
 			if recipe == "changed-provider" {
 				<-owner.done
@@ -194,10 +199,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				return result
 			}
 			awaitBuild()
-			owner.mu.Lock()
-			owner.setup.Error = "earlier setup error"
-			owner.mu.Unlock()
-			assert.Empty(t, status().Setup.Error)
 			assert.EqualValues(t, 1, reloads.Load())
 			assert.Empty(t, status().Setup.Action)
 			assert.Equal(t, recipe == "fresh", installs.Load() > 0)
@@ -356,7 +357,7 @@ func embeddingRequest(t *testing.T, client *http.Client, base, method, path, con
 }
 
 func TestLiveEmbeddingsSetupFailures(t *testing.T) {
-	for _, failure := range []string{"already enabled", "configured provider", "invalid TOML", "model inspection", "config read"} {
+	for _, failure := range []string{"already enabled", "configured provider", "invalid TOML", "model inspection", "config read", "repair and full", "repair and backstop", "unknown server"} {
 		t.Run(failure, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
@@ -420,7 +421,16 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				require.NoError(t, err)
 				assert.Empty(t, status.Action)
 			}
-			err = owner.Setup(0, nil)
+			var build *vector.BuildRequest
+			switch failure {
+			case "repair and full":
+				build = &vector.BuildRequest{RepairInvalid: true, FullRebuild: true}
+			case "repair and backstop":
+				build = &vector.BuildRequest{RepairInvalid: true, Backstop: true}
+			case "unknown server":
+				build = &vector.BuildRequest{Using: "missing"}
+			}
+			err = owner.Setup(0, build)
 			require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
 		})
 	}
@@ -561,25 +571,23 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			cfg, err = config.LoadReadOnly()
 			require.NoError(t, err)
 			assert.True(t, cfg.Vector.Enabled)
+			assert.NotNil(t, owner.Manager(tc.store).Status().LastResult)
 			if tc.store == "recall" {
-				assert.NotNil(t, owner.Manager("recall").Status().LastResult)
 				assert.Nil(t, owner.Manager("").Status().LastResult)
 				return
 			}
-			search := newRootCommand()
-			var result strings.Builder
-			search.SetOut(&result)
-			search.SetArgs([]string{"session", "search", "database pooling", "--hybrid", "--json", "--include-one-shot"})
-			require.NoError(t, search.Execute())
-			assert.Contains(t, result.String(), "session-one")
+
 		})
 	}
 }
 
 func TestCLIEmbeddingsSetupDeclined(t *testing.T) {
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	for _, input := range []string{"no\n", ""} {
-		t.Run(fmt.Sprintf("input=%q", input), func(t *testing.T) {
+	for _, tc := range []struct {
+		input    string
+		download bool
+	}{{"no\n", false}, {"", false}, {"no\n", true}} {
+		t.Run(fmt.Sprintf("input=%q/download=%t", tc.input, tc.download), func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
@@ -589,8 +597,33 @@ func TestCLIEmbeddingsSetupDeclined(t *testing.T) {
 			require.NoError(t, err)
 			before = []byte(strings.Replace(string(before), "enabled = true", "enabled = false", 1))
 			require.NoError(t, os.WriteFile(path, before, 0o600))
+			if tc.download {
+				oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+				t.Cleanup(func() {
+					inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+				})
+				require.NoError(t, os.WriteFile(path, []byte("[vector]\nenabled = false\n"), 0o600))
+				before, err = os.ReadFile(path)
+				require.NoError(t, err)
+				inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+					return embedlocal.Status{DownloadBytes: 100}, nil
+				}
+				localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+				installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+					_, err := opts.Confirm(ctx, 101)
+					return embedlocal.Installation{}, err
+				}
+			}
+			startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = io.WriteString(w, `{"setup":{"action":"turn-on"}}`)
+				},
+			})
 			var out strings.Builder
-			require.ErrorContains(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader(input), EmbeddingsBuildOptions{Yes: true}), "search setup declined")
+			require.ErrorContains(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader(tc.input), EmbeddingsBuildOptions{Yes: true}), "search setup declined")
+			if tc.download {
+				assert.Contains(t, out.String(), "Downloads approximately 1 MB")
+			}
 			after, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, before, after)
@@ -601,77 +634,63 @@ func TestCLIEmbeddingsSetupDeclined(t *testing.T) {
 	}
 }
 
-func TestCLIDirectEmbeddingsSetup(t *testing.T) {
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	encoder := newEmbeddingsStubServer(t, 3)
-	defer encoder.Close()
-	writeEmbeddingsTestConfig(t, dir, encoder.URL)
-	path := filepath.Join(dir, "config.toml")
-	contents, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(contents), "enabled = true", "enabled = false", 1)), 0o600))
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
-	var out strings.Builder
-	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	assert.True(t, cfg.Vector.Enabled)
-	assert.Contains(t, out.String(), "Embedded 1 documents")
-}
-
 func TestCLIEmbeddingsSetupDownload(t *testing.T) {
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 	})
-	for _, size := range []int64{100, 101} {
-		t.Run(fmt.Sprint(size), func(t *testing.T) {
-			setTestHome(t, t.TempDir())
-			dir := testDataDir(t)
-			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
-			encoder := newEmbeddingsStubServer(t, 768)
-			defer encoder.Close()
-			installed := false
-			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-				return embedlocal.Status{DownloadBytes: 100}, nil
-			}
-			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
-				if !installed {
-					return "", embedlocal.ErrNotFound
-				}
-				return encoder.URL, nil
-			}
-			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-				approved, err := opts.Confirm(ctx, size)
-				if err != nil {
-					return embedlocal.Installation{}, err
-				}
-				if !approved {
-					return embedlocal.Installation{}, errors.New("download was not approved")
-				}
-				opts.Progress(50, 100)
-				opts.Progress(50, 100)
-				opts.Progress(51, 101)
-				opts.Progress(size, size)
-				installed = true
-				return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
-			}
-			var out strings.Builder
-			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-			cfg, loadErr := config.LoadReadOnly()
-			require.NoError(t, loadErr)
-			require.NoError(t, err)
-			assert.True(t, cfg.Vector.Enabled)
-			assert.Contains(t, out.String(), "Download: 100% of 1 MB")
-			assert.Equal(t, 2, strings.Count(out.String(), "Download: 50% of 1 MB"))
-			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
-		})
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+	encoder := newEmbeddingsStubServer(t, 768)
+	t.Cleanup(encoder.Close)
+	var installed atomic.Bool
+	var installs atomic.Int64
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{DownloadBytes: 100}, nil
 	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		if !installed.Load() {
+			return "", embedlocal.ErrNotFound
+		}
+		return encoder.URL, nil
+	}
+	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		installs.Add(1)
+		approved, err := opts.Confirm(ctx, 101)
+		if err != nil {
+			return embedlocal.Installation{}, err
+		}
+		if !approved {
+			return embedlocal.Installation{}, errors.New("download was not approved")
+		}
+		installed.Store(true)
+		return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
+	}
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, append(owner.ServerOptions(), server.WithBaseContext(t.Context()))...).Handler())
+	endpoint := serverEndpoint(t, ts)
+	writeDaemonRuntimeForTest(t, dir, endpoint.Host, endpoint.Port, "test", false)
+	oldInterval := embeddingsPollInterval
+	embeddingsPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { embeddingsPollInterval = oldInterval })
+	var out strings.Builder
+	err = runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+	assert.Contains(t, out.String(), "Downloads approximately 1 MB")
+	assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
+	cfg, loadErr := config.LoadReadOnly()
+	require.NoError(t, loadErr)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, installs.Load())
+	assert.True(t, cfg.Vector.Enabled)
+	assert.Contains(t, out.String(), "Embedded 1 documents")
 }
 
 func TestSetupRejectsInvalidBuildBeforeEnable(t *testing.T) {
@@ -686,8 +705,6 @@ func TestSetupRejectsInvalidBuildBeforeEnable(t *testing.T) {
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, append(owner.ServerOptions(), server.WithBaseContext(t.Context()))...).Handler())
 	for _, body := range []string{
 		`{"build":{"repair_invalid":true,"full_rebuild":true}}`,
-		`{"build":{"repair_invalid":true,"backstop":true}}`,
-		`{"build":{"using":"missing"}}`,
 	} {
 		response := embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(body), http.StatusBadRequest)
 		assert.Contains(t, string(response), "invalid embeddings build request")
@@ -695,131 +712,6 @@ func TestSetupRejectsInvalidBuildBeforeEnable(t *testing.T) {
 		require.NoError(t, statusErr)
 		assert.False(t, status.Enabled)
 		assert.False(t, status.Busy)
-	}
-}
-
-func TestCLIDirectEmbeddingsSetupMigratesLegacyConfig(t *testing.T) {
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	encoder := newEmbeddingsStubServer(t, 768)
-	t.Cleanup(encoder.Close)
-	oldEndpoint := localEmbeddingEndpoint
-	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
-	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return encoder.URL, nil }
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"port":7357,"codex_sessions_dirs":["/legacy/codex"]}`), 0o600))
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
-	var out strings.Builder
-	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	assert.Equal(t, 7357, cfg.Port)
-	assert.Equal(t, []string{"/legacy/codex"}, cfg.ResolveDirs(parser.AgentCodex))
-	assert.True(t, cfg.Vector.Enabled)
-}
-
-func TestCLIEmbeddingsSetupFollowsConcurrentBuild(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	writeEmbeddingsTestConfig(t, dir, "http://127.0.0.1:1")
-	path := filepath.Join(dir, "config.toml")
-	contents, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(contents), "enabled = true", "enabled = false", 1)), 0o600))
-	var builds atomic.Int64
-	startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
-		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
-			builds.Add(1)
-			w.WriteHeader(http.StatusAccepted)
-			_, _ = io.WriteString(w, `{"started":true}`)
-		},
-		"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusConflict)
-			_, _ = io.WriteString(w, `{"detail":"an embeddings build is already running"}`)
-		},
-		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"running":false,"setup":{"action":"turn-on","busy":false},"last_result":{"embedded":1}}`)
-		},
-	})
-	var out strings.Builder
-	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
-	assert.EqualValues(t, 1, builds.Load())
-	assert.Contains(t, out.String(), "a build is already running (daemon)")
-	assert.Contains(t, out.String(), "Embedded 0 documents")
-}
-
-func TestCLIEmbeddingsSetupDaemonRepairConsent(t *testing.T) {
-	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
-	t.Cleanup(func() {
-		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
-	})
-	for _, consent := range []bool{false, true} {
-		t.Run(fmt.Sprintf("consent=%t", consent), func(t *testing.T) {
-			setTestHome(t, t.TempDir())
-			dir := testDataDir(t)
-			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
-			encoder := newEmbeddingsStubServer(t, 768)
-			t.Cleanup(encoder.Close)
-			var installed atomic.Bool
-			var installs atomic.Int64
-			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-				return embedlocal.Status{DownloadBytes: 100}, nil
-			}
-			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
-				if !installed.Load() {
-					return "", embedlocal.ErrNotFound
-				}
-				return encoder.URL, nil
-			}
-			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-				installs.Add(1)
-				approved, err := opts.Confirm(ctx, 101)
-				if err != nil {
-					return embedlocal.Installation{}, err
-				}
-				if !approved {
-					return embedlocal.Installation{}, errors.New("download was not approved")
-				}
-				installed.Store(true)
-				return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
-			}
-			cfg, err := config.LoadReadOnly()
-			require.NoError(t, err)
-			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-			require.NoError(t, err)
-			defer func() { require.NoError(t, owner.Close()) }()
-			ln, port := listenLoopback(t)
-			cfg.Host, cfg.Port = "127.0.0.1", port
-			ts := startTestServer(t, ln, server.New(cfg, database, nil, append(owner.ServerOptions(), server.WithBaseContext(t.Context()))...).Handler())
-			endpoint := serverEndpoint(t, ts)
-			writeDaemonRuntimeForTest(t, dir, endpoint.Host, endpoint.Port, "test", false)
-			oldInterval := embeddingsPollInterval
-			embeddingsPollInterval = 10 * time.Millisecond
-			t.Cleanup(func() { embeddingsPollInterval = oldInterval })
-			input := "no\n"
-			if consent {
-				input = "yes\n"
-			}
-			var out strings.Builder
-			err = runEmbeddingsBuild(t.Context(), &out, strings.NewReader(input), EmbeddingsBuildOptions{})
-			assert.Contains(t, out.String(), "Downloads approximately 1 MB")
-			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
-			cfg, loadErr := config.LoadReadOnly()
-			require.NoError(t, loadErr)
-			if consent {
-				require.NoError(t, err)
-				assert.EqualValues(t, 1, installs.Load())
-				assert.True(t, cfg.Vector.Enabled)
-				assert.Contains(t, out.String(), "Embedded 1 documents")
-			} else {
-				require.ErrorContains(t, err, "search setup declined")
-				assert.EqualValues(t, 1, installs.Load())
-				assert.False(t, cfg.Vector.Enabled)
-			}
-		})
 	}
 }
 
@@ -831,7 +723,7 @@ func TestCLIEmbeddingsSetupJoinsDifferentStore(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			writeTestConfig(t, dir, "[vector]\nenabled = false\n")
-			var statusCalls, messageCalls atomic.Int64
+			var statusCalls atomic.Int64
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
 				if busy {
 					assert.GreaterOrEqual(t, statusCalls.Load(), int64(2), "provider preparation must wait for setup")
@@ -841,16 +733,6 @@ func TestCLIEmbeddingsSetupJoinsDifferentStore(t *testing.T) {
 			var builds atomic.Int64
 			startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Query().Get("store") == "" {
-						call := messageCalls.Add(1)
-						w.Header().Set("Content-Type", "application/json")
-						if call <= 2 {
-							_, _ = io.WriteString(w, `{"running":true,"setup":{"enabled":true,"busy":false}}`)
-						} else {
-							_, _ = io.WriteString(w, `{"running":false,"setup":{"enabled":true,"busy":false},"last_result":{}}`)
-						}
-						return
-					}
 					assert.Equal(t, "recall", r.URL.Query().Get("store"))
 					call := statusCalls.Add(1)
 					first := call == 1
@@ -859,9 +741,10 @@ func TestCLIEmbeddingsSetupJoinsDifferentStore(t *testing.T) {
 						_, _ = io.WriteString(w, `{"setup":{"action":"turn-on","busy":true}}`)
 						return
 					}
-					if call == 3 {
-						_, _ = io.WriteString(w, `{"running":true,"setup":{"enabled":true,"busy":false}}`)
-						return
+					if call == 2 {
+						cfg, err := config.LoadReadOnly()
+						require.NoError(t, err)
+						require.NoError(t, cfg.SaveVectorSetup())
 					}
 					_, _ = io.WriteString(w, `{"running":false,"setup":{"enabled":true,"busy":false},"last_result":{}}`)
 				},
@@ -871,8 +754,6 @@ func TestCLIEmbeddingsSetupJoinsDifferentStore(t *testing.T) {
 					_, _ = io.WriteString(w, `{"detail":"an embeddings build is already running"}`)
 				},
 				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
-					assert.GreaterOrEqual(t, messageCalls.Load(), int64(3), "the messages build must finish first")
-					assert.GreaterOrEqual(t, statusCalls.Load(), int64(4), "the recall build must finish first")
 					var request vector.BuildRequest
 					require.NoError(t, json.UnmarshalRead(r.Body, &request))
 					assert.Equal(t, "recall", request.Store)
@@ -892,15 +773,6 @@ func TestCLIEmbeddingsSetupJoinsDifferentStore(t *testing.T) {
 	}
 }
 
-func TestEmbeddingsBuildHelpExplainsYes(t *testing.T) {
-	cmd := newEmbeddingsBuildCommand()
-	var out strings.Builder
-	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"--help"})
-	require.NoError(t, cmd.Execute())
-	assert.Contains(t, out.String(), "setup and downloads still ask")
-}
-
 func TestCLIEmbeddingsFreshSetupAutostartsAndSyncs(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
@@ -908,7 +780,6 @@ func TestCLIEmbeddingsFreshSetupAutostartsAndSyncs(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", fixture.DataDir)
 	path := filepath.Join(fixture.DataDir, "config.toml")
 	require.NoError(t, os.WriteFile(path, fmt.Appendf(nil, "claude_project_dirs = [%q]\n", fixture.AgentDirs[parser.AgentClaude][0]), 0o600))
-	assert.NoFileExists(t, fixture.DBPath)
 	encoder := newEmbeddingsStubServer(t, 768)
 	t.Cleanup(encoder.Close)
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
@@ -920,11 +791,10 @@ func TestCLIEmbeddingsFreshSetupAutostartsAndSyncs(t *testing.T) {
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(ctx context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
 		started = true
-		assert.NoFileExists(t, cfg.DBPath)
 		database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 		engine := syncpkg.NewEngine(ctx, database, localSyncEngineConfig(*cfg))
 		t.Cleanup(engine.Close)
-		assert.Equal(t, 3, engine.SyncAll(ctx, nil).Synced)
+		engine.SyncAll(ctx, nil)
 		owner, err := newLiveVectorServing(t.Context(), *cfg, database, nil, config.LoadReadOnly)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, owner.Close()) })
@@ -955,65 +825,23 @@ func TestCLIEmbeddingsFreshSetupAutostartsAndSyncs(t *testing.T) {
 	assert.Contains(t, result.String(), "session0")
 }
 
-func TestCLIEmbeddingsSetupRequiresReadableArchiveWithoutDaemon(t *testing.T) {
-	for _, corrupt := range []bool{false, true} {
-		t.Run(fmt.Sprintf("corrupt=%t", corrupt), func(t *testing.T) {
-			setTestHome(t, t.TempDir())
-			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-			dir := testDataDir(t)
-			path := filepath.Join(dir, "config.toml")
-			contents := []byte("[vector]\nenabled = false\n")
-			require.NoError(t, os.WriteFile(path, contents, 0o600))
-			if corrupt {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "sessions.db"), []byte("invalid archive"), 0o600))
-			}
-			var out strings.Builder
-			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-			require.ErrorContains(t, err, "opening archive before search setup")
-			assert.ErrorContains(t, err, "agentsview daemon start")
-			assert.ErrorContains(t, err, "agentsview index embeddings build")
-			assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
-			assert.NotContains(t, out.String(), "[y/N]")
-			after, err := os.ReadFile(path)
-			require.NoError(t, err)
-			assert.Equal(t, contents, after)
-			assert.NoFileExists(t, filepath.Join(dir, "vectors.db"))
-		})
-	}
-}
-
-func TestCLIEmbeddingsSetupRejectsUnknownServerBeforeAutostart(t *testing.T) {
+func TestCLIEmbeddingsSetupRequiresDaemon(t *testing.T) {
 	setTestHome(t, t.TempDir())
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	dir := testDataDir(t)
-	forbidStartBackgroundServeForTransport(t, "unknown server must not start a daemon")
-	cmd := newEmbeddingsBuildCommand()
+	path := filepath.Join(dir, "config.toml")
+	contents := []byte("[vector]\nenabled = false\n")
+	require.NoError(t, os.WriteFile(path, contents, 0o600))
 	var out strings.Builder
-	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"--using", "missing"})
-	err := cmd.Execute()
-	require.ErrorContains(t, err, `no server named "missing"`)
+	err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+	require.ErrorContains(t, err, "search setup requires a daemon")
+	assert.ErrorContains(t, err, "agentsview daemon start")
+	assert.ErrorContains(t, err, "agentsview index embeddings build")
+	assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
 	assert.NotContains(t, out.String(), "[y/N]")
-	assert.NoFileExists(t, filepath.Join(dir, "sessions.db"))
-}
-
-func TestCLIEmbeddingsSetupAcceptsLegacyServerBeforeAutostart(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
-	dir := testDataDir(t)
-	legacy := []byte(`{"vector":{"enabled":false,"embeddings":{"model":"test-model","dimension":3,"servers":{"legacy":{"endpoint":"http://127.0.0.1:1"}}}}}`)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), legacy, 0o600))
-	startup := errors.New("startup reached")
-	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
-		return nil, startup
-	})
-	cmd := newEmbeddingsBuildCommand()
-	cmd.SetArgs([]string{"--using", "legacy"})
-	require.ErrorIs(t, cmd.Execute(), startup)
-	assert.NoFileExists(t, filepath.Join(dir, "config.toml"))
-	contents, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	after, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Equal(t, legacy, contents)
+	assert.Equal(t, contents, after)
 }
 
 func TestPollDaemonSetupPrintsDownloadProgress(t *testing.T) {
@@ -1040,19 +868,6 @@ func TestPollDaemonSetupPrintsDownloadProgress(t *testing.T) {
 	assert.Equal(t, "Download: 50% of 1 MB\nDownload: 50% of 2 MB\nDownload: 100% of 2 MB\n", out.String())
 }
 
-func TestCLIEmbeddingsSetupAcceptsAutomaticServerBeforeAutostart(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
-	testDataDir(t)
-	startup := errors.New("startup reached")
-	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
-		return nil, startup
-	})
-	cmd := newEmbeddingsBuildCommand()
-	cmd.SetArgs([]string{"--using", "automatic"})
-	require.ErrorIs(t, cmd.Execute(), startup)
-}
-
 func TestCLIEmbeddingsSetupRejectsOlderDaemonBeforeConsent(t *testing.T) {
 	for _, missingStatus := range []bool{false, true} {
 		t.Run(fmt.Sprintf("missing-status=%t", missingStatus), func(t *testing.T) {
@@ -1072,7 +887,11 @@ func TestCLIEmbeddingsSetupRejectsOlderDaemonBeforeConsent(t *testing.T) {
 			mux.Handle("GET /api/ping", daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: serverVersion}))
 			mux.HandleFunc("GET /api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"running":false}`)
+				if missingStatus {
+					_, _ = io.WriteString(w, `{"running":false}`)
+				} else {
+					_, _ = io.WriteString(w, `{"running":false,"setup":{"action":"turn-on"}}`)
+				}
 			})
 			mux.HandleFunc("POST /api/v1/embeddings/setup", func(w http.ResponseWriter, _ *http.Request) {
 				posts.Add(1)

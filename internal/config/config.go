@@ -1739,11 +1739,16 @@ func (c *Config) migrateJSONToTOML() error {
 			return fmt.Errorf("reading config.json for migration: %w", err)
 		}
 
-		converted, err := legacyJSONToTOML(data)
-		if err != nil {
-			return err
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return fmt.Errorf("parsing config.json for migration: %w", err)
 		}
-		if err := os.WriteFile(tomlPath, []byte(converted), 0o600); err != nil {
+
+		var buf bytes.Buffer
+		if err := toml.NewEncoder(&buf).Encode(m); err != nil {
+			return fmt.Errorf("encoding config.toml: %w", err)
+		}
+		if err := os.WriteFile(tomlPath, buf.Bytes(), 0o600); err != nil {
 			return fmt.Errorf("writing config.toml: %w", err)
 		}
 		if err := atomicfile.Replace(jsonPath, jsonPath+".bak"); err != nil {

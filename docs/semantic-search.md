@@ -531,7 +531,7 @@ agentsview index embeddings build --using build-box    # encode against a named 
 
 `--using <name>` selects which `[vector.embeddings.servers.<name>]` entry the
 build encodes against; without it the build uses `default_server`. A mistyped
-name fails immediately, before anything starts.
+name fails before the build starts.
 
 `--include-automated` overrides `[vector].include_automated` for this one build;
 it does not change the config file. Bare `--include-automated` embeds automated
@@ -634,7 +634,7 @@ elapsed time, estimated completion, and the generations already stored in
 When a writable local daemon is running, `build`/`activate`/`retire` proxy to it
 over HTTP so the daemon remains the sole writer of `vectors.db`; without a
 daemon, the CLI takes a dedicated `vectors.write.lock` in the data directory and
-runs the build in-process. If [`run_after_sync`](#enabling-vector) is enabled,
+runs an enabled build in-process. Initial setup requires the daemon. If [`run_after_sync`](#enabling-vector) is enabled,
 the daemon also embeds sync deltas automatically on a debounce, so a manual
 `build` is mainly for the initial index or a `--full-rebuild`.
 

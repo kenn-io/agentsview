@@ -487,22 +487,23 @@ func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
 	assert.True(t, status.Setup.Busy)
 }
 
-func TestEmbeddingsSetupUsesConfiguredScopeWhenOmitted(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		body map[string]any
-		want bool
-	}{
-		{"omitted", map[string]any{"using": "local"}, true},
-		{"explicit false", map[string]any{"include_automated": false}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var build *vector.BuildRequest
-			s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{includeAutomated: true, setupBuild: &build}))
-			w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/setup", map[string]any{"build": tc.body})
+func TestEmbeddingsSetupForwardsOptionalBuild(t *testing.T) {
+	for _, withBuild := range []bool{false, true} {
+		t.Run(fmt.Sprintf("build=%t", withBuild), func(t *testing.T) {
+			build := &vector.BuildRequest{Using: "sentinel"}
+			s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{setupBuild: &build}))
+			body := map[string]any{}
+			if withBuild {
+				body["build"] = map[string]any{"using": "local"}
+			}
+			w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/setup", body)
 			assertRecorderStatus(t, w, http.StatusAccepted)
-			require.NotNil(t, build)
-			assert.Equal(t, tc.want, build.IncludeAutomated)
+			if withBuild {
+				require.NotNil(t, build)
+				assert.Equal(t, "local", build.Using)
+			} else {
+				assert.Nil(t, build)
+			}
 		})
 	}
 }

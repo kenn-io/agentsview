@@ -433,19 +433,6 @@ func runEmbeddingsBuild(
 	setup := !cfg.Vector.Enabled
 	var setupBusy bool
 	if setup {
-		if opts.Using != "" {
-			embeddings := cfg.Vector.Embeddings
-			// A fresh config gets its default model when setup is enabled.
-			if embeddings.Model == "" && embeddings.Servers == nil {
-				embeddings, err = cfg.VectorSetupEmbeddings()
-				if err != nil {
-					return err
-				}
-			}
-			if _, _, err := embeddings.Server(opts.Using); err != nil {
-				return err
-			}
-		}
 		tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 0)
 		if err != nil {
 			return err
@@ -459,16 +446,7 @@ func runEmbeddingsBuild(
 			}
 			client = &embeddingsDaemonClient{baseURL: tr.URL, token: cfg.AuthToken, store: daemonEmbeddingStore(spec.Name)}
 		} else {
-			if tr.DirectReadOnly {
-				return errLocalDaemonUnreachable
-			}
-			archive, err := openReadOnlyDB(ctx, cfg)
-			if err != nil {
-				return fmt.Errorf("opening archive before search setup: %w; start the daemon with `agentsview daemon start` and retry `agentsview index embeddings build`, or turn it on in Settings → Embeddings → Turn on", err)
-			}
-			if err := archive.Close(); err != nil {
-				return fmt.Errorf("closing archive before search setup: %w", err)
-			}
+			return errors.New("search setup requires a daemon; start it with `agentsview daemon start` and retry `agentsview index embeddings build`, or use Settings → Embeddings → Turn on")
 		}
 	} else if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
 		c, err := resolveEmbeddingsDaemonClient(cfg)
@@ -498,9 +476,6 @@ func runEmbeddingsBuild(
 			return err
 		}
 	}
-	if _, _, err := cfg.Vector.Embeddings.Server(opts.Using); err != nil {
-		return err
-	}
 	includeAutomated := cfg.Vector.IncludeAutomated
 	if opts.IncludeAutomatedSet {
 		includeAutomated = opts.IncludeAutomated
@@ -511,17 +486,24 @@ func runEmbeddingsBuild(
 		RepairInvalid: opts.RepairInvalid, IncludeAutomated: includeAutomated, Using: opts.Using,
 	}
 	confirmation := bufio.NewScanner(in)
+	confirmed := false
 	if setupBusy {
-		return joinDaemonSetup(ctx, out, confirmation, cfg, *client, req, opts, false)
-	}
-	if setup {
-		return setupEmbeddingsBuild(ctx, out, confirmation, cfg, client, req, opts)
+		fmt.Fprintln(out, "a build is already running (daemon)")
+		if err := pollDaemonSetup(ctx, out, *client); err != nil {
+			return err
+		}
+	} else if setup {
+		err := setupEmbeddingsBuild(ctx, out, confirmation, cfg, *client, req)
+		if !errors.Is(err, errSetupJoined) {
+			return err
+		}
+		confirmed = true
 	}
 	cfg, err = loadDaemonClientConfig(config.ScopeVector)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	if opts.FullRebuild && !opts.Yes {
+	if opts.FullRebuild && !opts.Yes && !confirmed {
 		proceed, err := confirmFullRebuild(ctx, confirmation, out, cfg, includeAutomated, spec.Name)
 		if err != nil {
 			return err

@@ -102,22 +102,13 @@ func (v *liveVectorServing) Notify(recall bool) {
 func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	manager := v.managerLocked(store)
-	if manager == nil {
-		return nil
-	}
-	return manager
-}
-
-// managerLocked selects the store manager while v.mu is held.
-func (v *liveVectorServing) managerLocked(store string) *vector.Manager {
 	if v.serving.manager == nil {
 		return nil
 	}
 	if store == "" || store == vector.MessageIndexSpec().Name {
 		return v.serving.manager
 	}
-	if store == vector.RecallIndexSpec().Name {
+	if store == vector.RecallIndexSpec().Name && v.serving.recallManager != nil {
 		return v.serving.recallManager
 	}
 	return nil
@@ -226,9 +217,9 @@ func (v *liveVectorServing) Setup(approvedBytes int64, build *vector.BuildReques
 			return setupRequestError(err)
 		}
 	}
-	name := ""
+	name, store := "", ""
 	if build != nil {
-		name = build.Using
+		name, store = build.Using, build.Store
 		if err := vector.ValidateBuildRequest(*build); err != nil {
 			return err
 		}
@@ -259,14 +250,9 @@ func (v *liveVectorServing) Setup(approvedBytes int64, build *vector.BuildReques
 		} else {
 			v.setup.Action = ""
 		}
-		store := ""
-		if build != nil {
-			store = build.Store
-		}
-		manager := v.managerLocked(store)
 		close(v.done)
 		v.mu.Unlock()
-		if err == nil && manager != nil {
+		if manager := v.Manager(store); err == nil && manager != nil {
 			manager.Wait()
 		}
 	}()
@@ -321,10 +307,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	if build != nil {
 		req = *build
 	}
-	v.mu.Lock()
-	manager := v.managerLocked(req.Store)
-	v.mu.Unlock()
-	err = manager.StartBuild(req)
+	err = v.Manager(req.Store).StartBuild(req)
 	if errors.Is(err, vector.ErrBuildRunning) {
 		return nil
 	}

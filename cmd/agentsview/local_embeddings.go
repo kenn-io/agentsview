@@ -103,7 +103,9 @@ func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server confi
 	}
 }
 
-func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner, cfg config.Config, client *embeddingsDaemonClient, req vector.BuildRequest, opts EmbeddingsBuildOptions) error {
+var errSetupJoined = errors.New("joined existing search setup")
+
+func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner, cfg config.Config, client embeddingsDaemonClient, req vector.BuildRequest) error {
 	selected := cfg
 	if req.Using != "" {
 		selected.Vector.Embeddings.DefaultServer = req.Using
@@ -116,14 +118,16 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	if err != nil {
 		return err
 	}
+	rebuildNote := ""
+	if req.FullRebuild {
+		rebuildNote = " This rebuild re-embeds every document."
+	}
 	confirmed := false
 	var approvedBytes int64
 	var progress buildProgressPrinter
 	_, err = resolveLocalEmbeddings(ctx, server, func(_ context.Context, size int64) (bool, error) {
 		message := fmt.Sprintf("Turn on search by meaning? Downloads approximately %d MB once, shared by Kenn apps.", (size+999999)/1000000)
-		if req.FullRebuild {
-			message += " This rebuild re-embeds every document."
-		}
+		message += rebuildNote
 		if !confirmScanned(in, out, message) {
 			return false, errors.New("search setup declined")
 		}
@@ -137,37 +141,25 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	}
 	if !confirmed {
 		message := fmt.Sprintf("Turn on search by meaning using %s (%s)?", status.Provider, cfg.Vector.Embeddings.Model)
-		if req.FullRebuild {
-			message += " This rebuild re-embeds every document."
-		}
+		message += rebuildNote
 		if !confirmScanned(in, out, message) {
 			return errors.New("search setup declined")
 		}
 	}
-	if client != nil {
-		if err := client.startSetup(ctx, approvedBytes, req); err != nil {
-			if apiErr, ok := errors.AsType[*daemonAPIError](err); ok && apiErr.status == http.StatusConflict {
-				return joinDaemonSetup(ctx, out, in, cfg, *client, req, opts, true)
+	if err := client.startSetup(ctx, approvedBytes, req); err != nil {
+		if apiErr, ok := errors.AsType[*daemonAPIError](err); ok && apiErr.status == http.StatusConflict {
+			fmt.Fprintln(out, "a build is already running (daemon)")
+			if err := pollDaemonSetup(ctx, out, client); err != nil {
+				return err
 			}
-			return err
+			return errSetupJoined
 		}
-		if err := pollDaemonSetup(ctx, out, *client); err != nil {
-			return err
-		}
-		return pollDaemonBuildStatus(ctx, out, *client)
-	}
-	cfg, err = loadDaemonClientConfig(config.ScopeVector)
-	if err != nil {
 		return err
 	}
-	if err := cfg.SaveVectorSetup(); err != nil {
+	if err := pollDaemonSetup(ctx, out, client); err != nil {
 		return err
 	}
-	cfg, err = config.LoadReadOnlyFor(config.ScopeVector)
-	if err != nil {
-		return err
-	}
-	return runEmbeddingsBuildDirect(ctx, out, cfg, req)
+	return pollDaemonBuildStatus(ctx, out, client)
 }
 
 func pollDaemonSetup(ctx context.Context, out io.Writer, client embeddingsDaemonClient) error {
@@ -195,42 +187,4 @@ func pollDaemonSetup(ctx context.Context, out io.Writer, client embeddingsDaemon
 		case <-time.After(embeddingsPollInterval):
 		}
 	}
-}
-
-func joinDaemonSetup(ctx context.Context, out io.Writer, in *bufio.Scanner, cfg config.Config, client embeddingsDaemonClient, req vector.BuildRequest, opts EmbeddingsBuildOptions, confirmed bool) error {
-	fmt.Fprintln(out, "a build is already running (daemon)")
-	if err := pollDaemonSetup(ctx, out, client); err != nil {
-		return err
-	}
-	other := client
-	if client.store == "" {
-		other.store = vector.RecallIndexSpec().Name
-	} else {
-		other.store = ""
-	}
-	for _, current := range []embeddingsDaemonClient{other, client} {
-		status, err := current.status(ctx)
-		if err != nil {
-			return err
-		}
-		if status.Running {
-			if err := pollDaemonBuildStatus(ctx, out, current); err != nil {
-				return err
-			}
-		}
-	}
-	if opts.FullRebuild && !opts.Yes && !confirmed {
-		proceed, err := confirmFullRebuild(ctx, in, out, cfg, req.IncludeAutomated, req.Store)
-		if err != nil {
-			return err
-		}
-		if !proceed {
-			fmt.Fprintln(out, "Aborted.")
-			return nil
-		}
-	}
-	if err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, req.Using, in, out); err != nil {
-		return err
-	}
-	return buildViaDaemon(ctx, out, client, req)
 }
