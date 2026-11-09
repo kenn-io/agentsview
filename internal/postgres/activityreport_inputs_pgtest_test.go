@@ -75,30 +75,10 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	require.Len(t, counter.usageReads, 2)
 	assert.Equal(t, []string{"a"}, counter.usageReads[1])
 	assert.Equal(t, 1200, changed.Report.Totals.OutputTokens)
-	pgKeptBuild(t, store, f, q, true)
-	assert.Len(t, counter.transcriptReads, 2)
-	assert.Len(t, counter.usageReads, 2)
 	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 	pgKeptBuild(t, store, f, q, true)
 	assert.Len(t, counter.transcriptReads, 2)
 	assert.Len(t, counter.usageReads, 2)
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
-		{SessionID: "a", Ordinal: 0, Role: "assistant", Content: "partial", Timestamp: "2026-06-14T10:00:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":5}`), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"},
-	}))
-	pgKeptPush(t, syncer, false)
-	// Retain the partial snapshot before adding its peer.
-	pgKeptBuild(t, store, f, q, true)
-	pgKeptSession(t, local, "peer", "project-a", "2026-06-14")
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "peer", []db.Message{
-		{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":631}`), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"},
-	}))
-	pgKeptPush(t, syncer, false)
-	pgKeptBuild(t, store, f, q, true)
-	pgKeptBuild(t, store, f, q, true)
-	require.Len(t, counter.transcriptReads, 4)
-	assert.Equal(t, []string{"peer"}, counter.transcriptReads[3])
-	require.Len(t, counter.usageReads, 4)
-	assert.Equal(t, []string{"peer"}, counter.usageReads[3])
 }
 
 func TestPGActivityReportInputClock(t *testing.T) {

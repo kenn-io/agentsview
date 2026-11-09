@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPGActivityYearInputsFitBudget(t *testing.T) {
-	// Match the comparison archive's year scale without a database or raw bodies.
+func TestPGActivityComparisonYearInputsFitBudget(t *testing.T) {
+	// Match the comparison fixture's year scale. Its generated rows omit Claude identity strings.
 	const sessions, messages, usageRows = 30_946, 986_645, 483_777
 	inputs := pgActivityInputs{
 		transcripts: make(map[string][]pgActivityMessage, sessions),
