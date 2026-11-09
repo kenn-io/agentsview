@@ -216,3 +216,23 @@ func TestImageTextDuplicateInSameResult(t *testing.T) {
 		require.Zero(t, page.NextCursor)
 	}
 }
+
+func TestImageTextSearchUsesCurrentResultEvents(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	insertSession(t, d, "session", "demo")
+	stale := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	current := `[{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: stale, ResultEvents: []ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "completed", Content: current}}}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(stale)[0].SHA256, identity, "staleimageword", false))
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(current)[0].SHA256, identity, "currentimageword", false))
+	page, err := d.Search(ctx, SearchFilter{Query: "staleimageword"})
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
+	page, err = d.Search(ctx, SearchFilter{Query: "currentimageword"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "session", page.Results[0].SessionID)
+}
