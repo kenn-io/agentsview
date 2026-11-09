@@ -2137,6 +2137,7 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 			coverageCalls := atomic.Int32{}
 			batches := make(chan WatchBatch, 16)
 			firstReconcile := make(chan struct{})
+			retryStarted := make(chan WatchBatch, 1)
 			releaseRetry := make(chan struct{})
 			var releaseRetryOnce sync.Once
 			allowRetry := func() { releaseRetryOnce.Do(func() { close(releaseRetry) }) }
@@ -2158,6 +2159,7 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 						close(firstReconcile)
 						return reconcileErr
 					}
+					retryStarted <- batch
 					<-releaseRetry
 					return nil
 				},
@@ -2191,9 +2193,9 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 			requireReceiveWithin(t, closed, time.Second)
 			assert.False(t, requireReceiveWithin(t, invalidationDispatch, time.Second))
 			assert.False(t, requireReceiveWithin(t, reconcileDispatch, time.Second))
-			retry := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
-				return batch.FullSync && attempts.Load() == 2
-			})
+			// Batch delivery precedes the attempt counter update. Wait for the
+			// retry callback itself so a fast receiver cannot discard its batch.
+			retry := requireReceiveWithin(t, retryStarted, time.Second)
 			assert.True(t, retry.FullSync)
 			assert.Equal(t, darwinFallbackReconciling, backend.fallbackPhaseValue())
 			assert.Equal(t, int32(2), attempts.Load())
