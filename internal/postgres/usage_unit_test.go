@@ -646,14 +646,15 @@ func TestPGActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T
 				},
 			})
 
-			cost, priced, contributes, err := pgActivityReportRowStatus(
-				pgDailyUsageScanRow{
-					usageSource: "provider",
-					model:       "daimon-kimi-code",
-					ts:          sql.NullTime{Time: tt.timestamp, Valid: true},
-					pricingTS:   sql.NullTime{Time: tt.timestamp, Valid: true},
-					inputTokens: 1_000_000,
+			cost, priced, contributes, err := pgActivityReportRowStatusWithWebSearchRequests(
+				pgActivityUsageRow{
+					usageSource: unique.Make("provider"),
+					model:       unique.Make("daimon-kimi-code"),
+					providerID:  unique.Make(""),
+					us:          tt.timestamp.UnixMicro(),
+					input:       1_000_000,
 				},
+				0,
 				resolver,
 			)
 
@@ -690,20 +691,15 @@ func TestPGActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
 		},
 	})
 
-	cost, priced, contributes, err := pgActivityReportRowStatus(
-		pgDailyUsageScanRow{
-			usageSource: "provider",
-			model:       "daimon-kimi-code",
-			ts: sql.NullTime{
-				Time:  pricingpkg.KimiModelEraCutoff,
-				Valid: true,
-			},
-			pricingTS: sql.NullTime{
-				Time:  pricingpkg.KimiModelEraCutoff,
-				Valid: true,
-			},
-			inputTokens: 1_000_000,
+	cost, priced, contributes, err := pgActivityReportRowStatusWithWebSearchRequests(
+		pgActivityUsageRow{
+			usageSource: unique.Make("provider"),
+			model:       unique.Make("daimon-kimi-code"),
+			providerID:  unique.Make(""),
+			us:          pricingpkg.KimiModelEraCutoff.UnixMicro(),
+			input:       1_000_000,
 		},
+		0,
 		resolver,
 	)
 
@@ -998,11 +994,4 @@ func TestPGCompactActivityUsagePricing(t *testing.T) {
 			assert.Equal(t, tc.contributes, contributes)
 		})
 	}
-}
-
-func pgActivityReportRowStatus(
-	r pgDailyUsageScanRow, pricing *export.PricingResolver,
-) (cost money.Money, priced, contributes bool, err error) {
-	return pgActivityReportRowStatusWithWebSearchRequests(
-		pgCompactActivityUsage(r, unique.Make[string]), pgDailyUsageRowWebSearchRequests(r), pricing)
 }

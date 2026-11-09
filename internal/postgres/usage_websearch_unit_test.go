@@ -5,6 +5,7 @@ package postgres
 import (
 	"database/sql"
 	"testing"
+	"unique"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,12 +133,16 @@ func TestPGDailyUsageAmountsBillWebSearchRequests(t *testing.T) {
 
 func TestPGActivityReportRowStatusBillsWebSearchRequests(t *testing.T) {
 	resolver := webSearchResolver()
-	cost, priced, contributes, err := pgActivityReportRowStatus(
-		pgDailyUsageScanRow{
-			usageSource: "message",
-			model:       "claude-websearch-test",
-			tokenJSON:   webSearchTokenJSON("2"),
-		}, resolver)
+	cost, priced, contributes, err := pgActivityReportRowStatusWithWebSearchRequests(
+		pgActivityUsageRow{
+			usageSource:       unique.Make("message"),
+			model:             unique.Make("claude-websearch-test"),
+			providerID:        unique.Make(""),
+			input:             100_000,
+			output:            100_000,
+			webSearches:       2,
+			pricingTimeAbsent: true,
+		}, 2, resolver)
 	require.NoError(t, err)
 	assert.True(t, priced)
 	assert.True(t, contributes)

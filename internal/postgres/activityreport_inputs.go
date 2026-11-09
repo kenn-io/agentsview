@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // A report owns its maps and slices. Published inputs are immutable; builders
@@ -41,18 +42,6 @@ type pgActivityUsageRow struct {
 	input, output, cacheCreate, cacheRead, reasoning            int64
 	ordinal, cacheCreate1h                                      int32
 	ordinalValid, costValid, copilotReported, pricingTimeAbsent bool
-}
-
-// pgActivityStrings avoids repeated global interning lookups within one read.
-type pgActivityStrings map[string]unique.Handle[string]
-
-func (interned pgActivityStrings) handle(v string) unique.Handle[string] {
-	h, ok := interned[v]
-	if !ok {
-		h = unique.Make(v)
-		interned[v] = h
-	}
-	return h
 }
 
 func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Handle[string]) pgActivityUsageRow {
@@ -85,8 +74,8 @@ func pgActivityInputBytes(e pgActivityInputs) int64 {
 		}
 	}
 	for h := range shared {
-		// Include the canonical string header and estimated interning-table storage.
-		size += int64(len(h.Value())) + 64
+		// Include canonical headers, weak references, cleanup records, and table storage.
+		size += int64(len(h.Value())) + 192
 	}
 	for id := range e.candidates {
 		size += int64(len(id)) + 64
@@ -151,7 +140,7 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 				inputs.transcripts[id] = nil
 			}
 		}
-		handles := pgActivityStrings{}
+		handles := stringutil.Interner{}
 		finish := func(id string, session []activity.TranscriptMessage) {
 			if len(session) == 0 {
 				return
@@ -161,7 +150,7 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 			} else {
 				compact := make([]pgActivityMessage, len(session))
 				for i, m := range session {
-					compact[i] = pgActivityMessage{ordinal: int32(m.Ordinal), us: m.At.UnixMicro(), role: handles.handle(m.Role), model: handles.handle(m.Model)}
+					compact[i] = pgActivityMessage{ordinal: int32(m.Ordinal), us: m.At.UnixMicro(), role: handles.Intern(m.Role), model: handles.Intern(m.Model)}
 				}
 				inputs.transcripts[id] = compact
 			}
@@ -228,14 +217,14 @@ func (s *Store) readActivityUsageInputs(ctx context.Context, ids []string, lower
 		return nil, fmt.Errorf("querying activity report usage: %w", err)
 	}
 	defer rows.Close()
-	handles := pgActivityStrings{}
+	handles := stringutil.Interner{}
 	var out []pgActivityUsageRow
 	for rows.Next() {
 		r, err := scanPGDailyUsageRow(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scanning activity report usage: %w", err)
 		}
-		out = append(out, pgCompactActivityUsage(r, handles.handle))
+		out = append(out, pgCompactActivityUsage(r, handles.Intern))
 	}
 	return out, rows.Err()
 }
