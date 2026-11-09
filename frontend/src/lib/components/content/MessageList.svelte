@@ -850,9 +850,9 @@
 
   // Row of the current match in ascending display order. The reveal effect
   // re-runs when the match moves within the rendered rows (filters, mode,
-  // history loading in front of it), not when a live refresh appends rows
-  // after it: that must leave the user's scroll position alone. A $derived
-  // is needed so the effect sees the number, not the rebuilt items array.
+  // history loading in front of it), not when a live refresh adds rows: that
+  // must leave the user's scroll position alone. A $derived is needed so the
+  // effect sees the number, not the rebuilt items array.
   let searchMatchRow = $derived.by(() => {
     const ordinal = inSessionSearch.resolvedCurrent?.ordinal;
     if (ordinal === undefined) return -1;

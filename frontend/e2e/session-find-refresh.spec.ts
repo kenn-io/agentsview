@@ -78,42 +78,64 @@ async function installLiveSession(page: Page) {
   };
 }
 
-for (const withFind of [false, true]) {
-  test(`a live refresh does not move the transcript (find ${withFind})`, async ({ page }) => {
-    const live = await installLiveSession(page);
-    await page.goto(`/sessions/${SESSION_ID}`);
-    const transcript = page.locator(".message-list-scroll");
-    await expect(transcript).toHaveAttribute("data-loaded", "true");
+for (const newestFirst of [false, true])
+  for (const withFind of [false, true]) {
+    test(`a live refresh does not move the transcript (newest first ${newestFirst}, find ${withFind})`, async ({
+      page,
+    }) => {
+      const live = await installLiveSession(page);
+      await page.goto(`/sessions/${SESSION_ID}`);
+      const transcript = page.locator(".message-list-scroll");
+      await expect(transcript).toHaveAttribute("data-loaded", "true");
 
-    if (withFind) {
-      const modifier = await page.evaluate(() =>
-        /Mac/.test(navigator.platform) ? "Meta" : "Control",
+      if (newestFirst) {
+        await page.getByRole("button", { name: "Toggle sort order (o)" }).click();
+      }
+
+      if (withFind) {
+        const modifier = await page.evaluate(() =>
+          /Mac/.test(navigator.platform) ? "Meta" : "Control",
+        );
+        await page.keyboard.press(`${modifier}+f`);
+        await page.locator(".kit-find-bar__input").fill("needle");
+        await expect(page.locator(".search-announcement")).toHaveText(/^Match \d+ of 2$/);
+      }
+
+      // Let the initial reveal settle so it cannot race the user's scroll.
+      let last = -1;
+      await expect
+        .poll(
+          async () => {
+            const top = await transcript.evaluate((el) => el.scrollTop);
+            const settled = top === last;
+            last = top;
+            return settled;
+          },
+          { intervals: [300] },
+        )
+        .toBe(true);
+
+      // The user scrolls away from the current match.
+      const settledTop = await transcript.evaluate((el) => el.scrollTop);
+      await transcript.hover();
+      await page.mouse.wheel(0, 6000);
+      await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).not.toBe(settledTop);
+      const before = await transcript.evaluate((el) => el.scrollTop);
+
+      // The refresh only counts once the client has fetched the appended rows.
+      const reloaded = page.waitForResponse(
+        async (r) =>
+          /\/messages/.test(r.url()) && r.ok() && (await r.text()).includes("Live message 304"),
       );
-      await page.keyboard.press(`${modifier}+f`);
-      await page.locator(".kit-find-bar__input").fill("needle");
-      await expect(page.locator(".search-announcement")).toHaveText(/^Match \d+ of 2$/);
-    }
+      live.refresh();
+      await reloaded;
+      // Nothing observable marks "the reveal did not run", so give a stray
+      // re-reveal time to land before comparing offsets.
+      await page.waitForTimeout(500);
 
-    // The user scrolls away from the current match.
-    await transcript.hover();
-    await page.mouse.wheel(0, 6000);
-    await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-    const before = await transcript.evaluate((el) => el.scrollTop);
-
-    // The refresh only counts once the client has fetched the appended rows.
-    const reloaded = page.waitForResponse(
-      async (r) =>
-        /\/messages/.test(r.url()) && r.ok() && (await r.text()).includes("Live message 304"),
-    );
-    live.refresh();
-    await reloaded;
-    // Nothing observable marks "the reveal did not run", so give a stray
-    // re-reveal time to land before comparing offsets.
-    await page.waitForTimeout(500);
-
-    const after = await transcript.evaluate((el) => el.scrollTop);
-    // Row re-measurement can nudge the offset by a few hundred pixels; a reveal
-    // jumps thousands of pixels to the match.
-    expect(Math.abs(after - before)).toBeLessThan(1000);
-  });
-}
+      const after = await transcript.evaluate((el) => el.scrollTop);
+      // Row re-measurement can nudge the offset by a few hundred pixels; a reveal
+      // jumps thousands of pixels to the match.
+      expect(Math.abs(after - before)).toBeLessThan(1000);
+    });
+  }
