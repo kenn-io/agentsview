@@ -485,9 +485,11 @@ refresh, only when one of these holds:
 - The rows reads prepare themselves reach one `chPreparedUsageBehindShare`
   (one-fiftieth) of the stored rows.
 
-The push counts those rows with the delta query's own normalization, over the
-snapshots that no stored row was derived from, so a snapshot that prepares no
-rows counts nothing. A rebuild then rewrites at most fifty times the rows that
+The push counts those rows over the snapshots that no stored row was derived
+from, with the delta query's message and event eligibility, so a snapshot that
+prepares no rows counts nothing. The count reads only the usage array fields
+that eligibility checks, and a test holds it equal to the rows the delta query
+returns. A rebuild then rewrites at most fifty times the rows that
 changed, and reads prepare at most a fiftieth of what they read. On a
 300,000-row test table, a 5,000-row delta added about 0.13 seconds to the first
 read after a push. Deleted sessions' rows stay until the next

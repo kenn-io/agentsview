@@ -963,12 +963,20 @@ func changedSnapshotSessions(before, after map[string]string) []string {
 // Rows a shorter republished session left behind stay below it and are skipped.
 const chUsageMessageCurrent = "m.push_version >= s.push_version"
 
+// chStoredMessageUsable renders the condition a stored message meets when
+// its usage counts, from the expressions of its usage_present and model
+// fields. Row filters pass a message's columns; the rows-behind count and the
+// snapshot prepares_usage column pass the fields of usage_facts elements.
+func chStoredMessageUsable(present, model string) string {
+	return present + ` != 0
+			AND ` + model + ` != ''
+			AND ` + model + ` != '<synthetic>'`
+}
+
 // chUsageStoredMessageEligibility is chUsageMessageEligibility for reads of
 // usage_messages, which stores a presence flag instead of the raw JSON.
-const chUsageStoredMessageEligibility = `
-			m.usage_present != 0
-			AND m.model != ''
-			AND m.model != '<synthetic>'
+var chUsageStoredMessageEligibility = `
+			` + chStoredMessageUsable("m.usage_present", "m.model") + `
 			AND s.deleted_at IS NULL`
 
 func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
