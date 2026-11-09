@@ -54,6 +54,8 @@
         {#if segment.code}<code>{segment.text}</code>{:else}{segment.text}{/if}
       {/each}
     </span>
+  {:else if finding.kind === "diagnostic"}
+    <code>{finding.label}</code><span class="text">{finding.text}</span><span class="text">x{count}</span>
   {:else if finding.kind === "interruption"}
     <span class="text">{m.friction_interruption_count({ count })}</span>
   {:else}

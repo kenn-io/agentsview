@@ -3,6 +3,7 @@ import type { FrictionPatternItem, FrictionSignal } from "../../api/generated/in
 import {
   FRICTION_KINDS,
   codeSegments,
+  diagnosticRows,
   groupSignals,
   headlinePatterns,
   interruptionRows,
@@ -72,7 +73,9 @@ describe("groupSignals", () => {
       "frustration",
       "interruption",
     ]);
-    expect(sections.map((s) => s.kind)).toEqual([...FRICTION_KINDS]);
+    expect(sections.map((s) => s.kind)).toEqual(
+      FRICTION_KINDS.filter((kind) => kind !== "diagnostic"),
+    );
     expect(sections[0]!.signals.map((s) => s.subject_id)).toEqual(["c2", "c1"]);
     expect(sections[1]!.signals.map((s) => s.subject_id)).toEqual(["e1"]);
     expect(sections[2]!.signals).toEqual([]);
@@ -84,6 +87,18 @@ describe("groupSignals", () => {
   it("drops kinds the page does not know instead of throwing", () => {
     const sections = groupSignals([sig({ kind: "future_kind" })]);
     expect(sections.every((s) => s.signals.length === 0)).toBe(true);
+  });
+});
+
+describe("diagnostics", () => {
+  it("groups the same source and message across machines", () => {
+    const signals = [
+      sig({ kind: "diagnostic", label: "worker", text: "launch failed", machine: "one" }),
+      sig({ kind: "diagnostic", label: "worker", text: "launch failed", machine: "two" }),
+      sig({ kind: "diagnostic", label: "worker", text: "other failure" }),
+    ];
+    expect(diagnosticRows(signals).map((row) => row.count)).toEqual([2, 1]);
+    expect(groupSignals(signals).at(-1)?.kind).toBe("diagnostic");
   });
 });
 

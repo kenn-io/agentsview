@@ -3128,6 +3128,7 @@
   "friction_section_patterns": "Patrones",
   "friction_section_frustration": "Frustración",
   "friction_section_interruptions": "Interrupciones",
+  "friction_section_diagnostics": "Diagnósticos",
   "friction_interruption_count": [
     {
       "declarations": [

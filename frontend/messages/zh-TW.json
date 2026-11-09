@@ -3001,6 +3001,7 @@
   "friction_section_patterns": "模式",
   "friction_section_frustration": "挫折",
   "friction_section_interruptions": "中斷",
+  "friction_section_diagnostics": "診斷",
   "friction_interruption_count": [
     {
       "declarations": [

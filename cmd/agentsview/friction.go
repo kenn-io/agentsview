@@ -237,6 +237,7 @@ func frictionRunLine(r frictionRunReport) (string, error) {
 		Patterns        int                 `json:"patterns"`
 		Frustrations    int                 `json:"frustrations"`
 		Interruptions   int                 `json:"interruptions"`
+		Diagnostics     int                 `json:"diagnostics"`
 		P0Alerts        map[string][]string `json:"p0_alerts"`
 	}
 	if err := json.Unmarshal(r.Summary, &s); err != nil {
@@ -246,11 +247,15 @@ func frictionRunLine(r frictionRunReport) (string, error) {
 	if !r.Written {
 		state = "not written"
 	}
+	diagnosticCount := ""
+	if s.Diagnostics > 0 {
+		diagnosticCount = fmt.Sprintf(", %d diagnostic(s)", s.Diagnostics)
+	}
 	return fmt.Sprintf(
 		"%s: %d session(s) scanned; %d correction(s), %d error(s), %d workaround(s), "+
-			"%d deferral(s), %d pattern(s), %d frustration(s), %d interruption(s); %d P0 alert(s) (%s)",
+			"%d deferral(s), %d pattern(s), %d frustration(s), %d interruption(s)%s; %d P0 alert(s) (%s)",
 		r.Date, s.SessionsScanned, s.Corrections, s.Errors, s.Workarounds,
-		s.Deferrals, s.Patterns, s.Frustrations, s.Interruptions, len(s.P0Alerts), state,
+		s.Deferrals, s.Patterns, s.Frustrations, s.Interruptions, diagnosticCount, len(s.P0Alerts), state,
 	), nil
 }
 

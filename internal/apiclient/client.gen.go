@@ -426,6 +426,50 @@ func (o *PostAPIV1DataCompactRequestOptions) GetHeader() (map[string]string, err
 	return nil, nil
 }
 
+// PostAPIV1DiagnosticsRequestOptions is the options needed to make a request to PostAPIV1Diagnostics.
+type PostAPIV1DiagnosticsRequestOptions struct {
+	Body *PostAPIV1DiagnosticsBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PostAPIV1DiagnosticsRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PostAPIV1DiagnosticsRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *PostAPIV1DiagnosticsRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PostAPIV1DiagnosticsRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PostAPIV1DiagnosticsRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // PostAPIV1EmbeddingsBuildRequestOptions is the options needed to make a request to PostAPIV1EmbeddingsBuild.
 type PostAPIV1EmbeddingsBuildRequestOptions struct {
 	Body *PostAPIV1EmbeddingsBuildBody
@@ -5724,6 +5768,7 @@ type ClientInterface interface {
 	PostAPIV1CommitsSessionsWithResponse(ctx context.Context, options *PostAPIV1CommitsSessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1CommitsSessionsResp, error)
 	PostAPIV1DaemonPersistWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DaemonPersistResp, error)
 	PostAPIV1DataCompactWithResponse(ctx context.Context, options *PostAPIV1DataCompactRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DataCompactResp, error)
+	PostAPIV1DiagnosticsWithResponse(ctx context.Context, options *PostAPIV1DiagnosticsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DiagnosticsResp, error)
 	PostAPIV1EmbeddingsBuildWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsBuildRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsBuildResp, error)
 	GetAPIV1EmbeddingsGenerationsWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsGenerationsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsGenerationsResp, error)
 	PostAPIV1EmbeddingsGenerationsIDActivateWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDActivateRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDActivateResp, error)
@@ -7893,6 +7938,230 @@ func (c *Client) PostAPIV1DataCompactWithResponse(ctx context.Context, options *
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "PostAPIV1DataCompactErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PostAPIV1Diagnostics Append a diagnostic
+func (c *Client) PostAPIV1DiagnosticsWithResponse(ctx context.Context, options *PostAPIV1DiagnosticsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DiagnosticsResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/diagnostics",
+		Method:      "POST",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/diagnostics")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PostAPIV1DiagnosticsResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PostAPIV1DiagnosticsResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PostAPIV1DiagnosticsErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PostAPIV1DiagnosticsErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PostAPIV1DiagnosticsErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PostAPIV1DiagnosticsErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PostAPIV1DiagnosticsErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(PostAPIV1DiagnosticsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PostAPIV1DiagnosticsErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PostAPIV1DiagnosticsErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PostAPIV1DiagnosticsErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PostAPIV1DiagnosticsErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PostAPIV1DiagnosticsErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DiagnosticsErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -22467,6 +22736,8 @@ type PostAPIV1CommitsSessionsBody = CommitSessionsInputBody
 
 type PostAPIV1DataCompactBody = DataCompactRequest
 
+type PostAPIV1DiagnosticsBody = DiagnosticAppendInputBody
+
 type PostAPIV1EmbeddingsBuildBody = EmbeddingsBuildRequest
 
 type PostAPIV1EmbeddingsGenerationsIDActivateBody = EmbeddingsGenerationActionRequest
@@ -24218,6 +24489,30 @@ type PostAPIV1DataCompactErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1DataCompactErrorResponseJSON504 = APIErrorResponse
 
+type PostAPIV1DiagnosticsResponse = DBDiagnosticEvent
+
+type PostAPIV1DiagnosticsErrorResponse = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON403 = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON404 = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON409 = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON422 = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON500 = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON501 = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON502 = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON503 = APIErrorResponse
+
+type PostAPIV1DiagnosticsErrorResponseJSON504 = APIErrorResponse
+
 type PostAPIV1EmbeddingsBuildResponse = EmbeddingsBuildResponse
 
 type PostAPIV1EmbeddingsBuildErrorResponse = APIErrorResponse
@@ -25939,6 +26234,24 @@ type PostAPIV1DataCompactResp struct {
 	JSON502      *PostAPIV1DataCompactErrorResponseJSON502
 	JSON503      *PostAPIV1DataCompactErrorResponseJSON503
 	JSON504      *PostAPIV1DataCompactErrorResponseJSON504
+}
+
+type PostAPIV1DiagnosticsResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PostAPIV1DiagnosticsResponse
+	JSON400      *PostAPIV1DiagnosticsErrorResponse
+	JSON401      *PostAPIV1DiagnosticsErrorResponseJSON
+	JSON403      *PostAPIV1DiagnosticsErrorResponseJSON403
+	JSON404      *PostAPIV1DiagnosticsErrorResponseJSON404
+	JSON409      *PostAPIV1DiagnosticsErrorResponseJSON409
+	JSON422      *PostAPIV1DiagnosticsErrorResponseJSON422
+	JSON500      *PostAPIV1DiagnosticsErrorResponseJSON500
+	JSON501      *PostAPIV1DiagnosticsErrorResponseJSON501
+	JSON502      *PostAPIV1DiagnosticsErrorResponseJSON502
+	JSON503      *PostAPIV1DiagnosticsErrorResponseJSON503
+	JSON504      *PostAPIV1DiagnosticsErrorResponseJSON504
 }
 
 type PostAPIV1EmbeddingsBuildResp struct {
@@ -27838,6 +28151,19 @@ func (d DBCursorConversationCount) Validate() error {
 
 type DBDailyUsageEntry = db.DailyUsageEntry
 
+type DBDiagnosticEvent struct {
+	AcceptedAt time.Time `json:"accepted_at" validate:"required"`
+	ID         string    `json:"id" validate:"required"`
+	Machine    *string   `json:"machine,omitempty"`
+	Message    string    `json:"message" validate:"required"`
+	OccurredAt time.Time `json:"occurred_at" validate:"required"`
+	Source     string    `json:"source" validate:"required"`
+}
+
+func (d DBDiagnosticEvent) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
 type DBDistributionBucketV1 struct {
 	Count int64      `json:"count"`
 	Edge  []*float64 `json:"edge" validate:"required"`
@@ -28738,6 +29064,17 @@ type DBUsageSessionCounts = db.UsageSessionCounts
 
 type DBUsageTotals = db.UsageTotals
 
+type DiagnosticAppendInputBody struct {
+	ID         string     `json:"id" validate:"required"`
+	Message    string     `json:"message" validate:"required"`
+	OccurredAt *time.Time `json:"occurred_at,omitempty"`
+	Source     string     `json:"source" validate:"required"`
+}
+
+func (d DiagnosticAppendInputBody) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
 type EmbeddingsBuildRequest struct {
 	Backstop         *bool   `json:"backstop,omitempty"`
 	FullRebuild      *bool   `json:"full_rebuild,omitempty"`
@@ -29439,6 +29776,7 @@ type FrictionSummary struct {
 	Corrections     int64               `json:"corrections"`
 	Date            string              `json:"date" validate:"required"`
 	Deferrals       int64               `json:"deferrals"`
+	Diagnostics     *int64              `json:"diagnostics,omitempty"`
 	Errors          int64               `json:"errors"`
 	Frustrations    int64               `json:"frustrations"`
 	Interruptions   int64               `json:"interruptions"`

@@ -32,6 +32,7 @@ func (s *Server) registerFrictionRoutes() {
 	s.get(group, "/friction/findings", "List friction findings", s.humaListFrictionFindings)
 	s.get(group, "/friction/patterns", "List friction patterns", s.humaListFrictionPatterns)
 	s.postLong(group, "/friction/run", "Run friction review", s.humaRunFrictionReview)
+	s.post(group, "/diagnostics", "Append a diagnostic", s.humaAppendDiagnostic)
 	s.registerFrictionIssueRoutes(group)
 }
 
@@ -130,6 +131,7 @@ type frictionSummary struct {
 	Patterns        int                 `json:"patterns"`
 	Frustrations    int                 `json:"frustrations"`
 	Interruptions   int                 `json:"interruptions"`
+	Diagnostics     int                 `json:"diagnostics,omitempty"`
 	P0Alerts        map[string][]string `json:"p0_alerts"`
 }
 

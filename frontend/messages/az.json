@@ -3106,6 +3106,7 @@
   "friction_section_patterns": "Nümunələr",
   "friction_section_frustration": "Narazılıq",
   "friction_section_interruptions": "Kəsintilər",
+  "friction_section_diagnostics": "Diaqnostika",
   "friction_interruption_count": [
     {
       "declarations": [

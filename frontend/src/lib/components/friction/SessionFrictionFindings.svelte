@@ -26,6 +26,7 @@
     pattern: m.friction_kind_pattern,
     frustration: m.friction_kind_frustration,
     interruption: m.friction_kind_interruption,
+    diagnostic: m.friction_section_diagnostics,
   };
 
   function kindLabel(kind: string): string {

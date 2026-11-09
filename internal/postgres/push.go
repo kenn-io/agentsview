@@ -518,6 +518,9 @@ func (s *Sync) pushWithOptions(
 		func() error { return s.syncCursorUsageEvents(ctx) }); err != nil {
 		return result, err
 	}
+	if err := s.syncDiagnosticEvents(ctx, full, markerID); err != nil {
+		log.Printf("pgsync: diagnostic events: %v", err)
+	}
 	// Candidate selection shares ListSessionsForMirrorWindow with the
 	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and
 	// deliberately unbounded above. An upper bound at cutoff would let a

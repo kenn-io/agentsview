@@ -3072,6 +3072,7 @@
   "friction_section_patterns": "パターン",
   "friction_section_frustration": "苛立ち",
   "friction_section_interruptions": "中断",
+  "friction_section_diagnostics": "診断",
   "friction_interruption_count": [
     {
       "declarations": [

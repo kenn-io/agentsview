@@ -2998,6 +2998,7 @@
   "friction_section_patterns": "模式",
   "friction_section_frustration": "挫败",
   "friction_section_interruptions": "中断",
+  "friction_section_diagnostics": "诊断",
   "friction_interruption_count": [
     {
       "declarations": [

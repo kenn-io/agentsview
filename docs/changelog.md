@@ -144,6 +144,9 @@ The latest release is
   the Friction Log from the terminal, and MCP clients can read digests and
   recurring patterns with `get_friction_digest` and `list_friction_patterns`.
 
+- `agentsview diagnostics append` records failures outside agent sessions in
+  the daily Friction Log, grouping repeated messages with their count.
+
 - The Friction Log page can add an optional model-written summary of a digest
   using the configured insight generator. The summary is saved with the digest,
   is labeled as model-written, and cannot change findings, digests, or

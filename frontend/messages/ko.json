@@ -3004,6 +3004,7 @@
   "friction_section_patterns": "패턴",
   "friction_section_frustration": "좌절",
   "friction_section_interruptions": "중단",
+  "friction_section_diagnostics": "진단",
   "friction_interruption_count": [
     {
       "declarations": [

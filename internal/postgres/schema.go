@@ -683,6 +683,16 @@ CREATE INDEX IF NOT EXISTS idx_insights_cache
 
 // frictionReviewDDL adds daily state without altering the shipped findings schema.
 const frictionReviewDDL = `
+CREATE TABLE IF NOT EXISTS diagnostic_events (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    message TEXT NOT NULL,
+    machine TEXT NOT NULL DEFAULT '',
+    occurred_at TIMESTAMPTZ NOT NULL,
+    accepted_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events (occurred_at);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_friction_activity
     ON sessions(COALESCE(ended_at, started_at))
     WHERE deleted_at IS NULL;
@@ -2592,6 +2602,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "source_session_project_identity_snapshot_scopes") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mapping_scopes") ||
+		!pgHasTable(ctx, db, "diagnostic_events") ||
 		!pgHasTable(ctx, db, "friction_digests") ||
 		!pgHasTable(ctx, db, "friction_digest_sessions") ||
 		!pgHasTable(ctx, db, "friction_patterns") ||

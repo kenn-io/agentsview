@@ -1417,6 +1417,16 @@ CREATE INDEX IF NOT EXISTS idx_friction_findings_session
 
 -- Friction Log review state is built independently by each store.
 -- One digest is kept for each completed local date.
+CREATE TABLE IF NOT EXISTS diagnostic_events (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    message TEXT NOT NULL,
+    machine TEXT NOT NULL DEFAULT '',
+    occurred_at TEXT NOT NULL,
+    accepted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events (occurred_at);
+
 CREATE TABLE IF NOT EXISTS friction_digests (
     date             TEXT PRIMARY KEY,
     timezone         TEXT NOT NULL,

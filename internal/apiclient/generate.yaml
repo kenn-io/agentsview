@@ -85,6 +85,7 @@ filter:
       - put-api-v1-friction-patterns-fingerprint-issue
       - delete-api-v1-friction-patterns-fingerprint-issue
       - post-api-v1-friction-run
+      - post-api-v1-diagnostics
       - post-api-v1-raw-sync-manifests
 overlay:
   sources:

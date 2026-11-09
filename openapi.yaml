@@ -1552,6 +1552,30 @@ components:
         - agentBreakdowns
         - machineBreakdowns
       type: object
+    DbDiagnosticEvent:
+      additionalProperties: false
+      properties:
+        accepted_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        machine:
+          type: string
+        message:
+          type: string
+        occurred_at:
+          format: date-time
+          type: string
+        source:
+          type: string
+      required:
+        - id
+        - source
+        - message
+        - occurred_at
+        - accepted_at
+      type: object
     DbDistributionBucket:
       additionalProperties: false
       properties:
@@ -4896,6 +4920,23 @@ components:
         - next_project
         - cwd
       type: object
+    DiagnosticAppendInputBody:
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        message:
+          type: string
+        occurred_at:
+          format: date-time
+          type: string
+        source:
+          type: string
+      required:
+        - id
+        - source
+        - message
+      type: object
     EmbeddingsBuildRequest:
       additionalProperties: false
       properties:
@@ -5631,6 +5672,9 @@ components:
         date:
           type: string
         deferrals:
+          format: int64
+          type: integer
+        diagnostics:
           format: int64
           type: integer
         errors:
@@ -13793,6 +13837,91 @@ paths:
       summary: Preview inline tool-result image removal
       tags:
         - Data
+  /api/v1/diagnostics:
+    post:
+      operationId: post-api-v1-diagnostics
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiagnosticAppendInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbDiagnosticEvent"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Append a diagnostic
+      tags:
+        - Friction
   /api/v1/embeddings/build:
     post:
       operationId: post-api-v1-embeddings-build

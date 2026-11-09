@@ -15,6 +15,7 @@ export const FRICTION_KINDS = [
   "pattern",
   "frustration",
   "interruption",
+  "diagnostic",
 ] as const;
 export type FrictionKind = (typeof FRICTION_KINDS)[number];
 
@@ -46,7 +47,22 @@ export function groupSignals(signals: readonly FrictionSignal[]): SignalSection[
   for (const signal of signals) {
     byKind.get(signal.kind)?.push(signal);
   }
-  return FRICTION_KINDS.map((kind) => ({ kind, signals: byKind.get(kind)! }));
+  return FRICTION_KINDS.filter((kind) => kind !== "diagnostic" || byKind.get(kind)!.length > 0).map(
+    (kind) => ({ kind, signals: byKind.get(kind)! }),
+  );
+}
+
+export function diagnosticRows(
+  signals: readonly FrictionSignal[],
+): { first: FrictionSignal; count: number }[] {
+  const rows = new Map<string, { first: FrictionSignal; count: number }>();
+  for (const signal of signals) {
+    const key = JSON.stringify([signal.label, signal.text]);
+    const row = rows.get(key);
+    if (row) row.count += 1;
+    else rows.set(key, { first: signal, count: 1 });
+  }
+  return [...rows.values()];
 }
 
 export interface InterruptionRow {

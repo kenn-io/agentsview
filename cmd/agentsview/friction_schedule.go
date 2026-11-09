@@ -60,10 +60,14 @@ func newFrictionRunner(cfg config.Config, store frictionRunnerStore, now func() 
 	if err != nil {
 		return nil, err
 	}
-	return &review.Runner{
+	runner := &review.Runner{
 		Store: store, Loc: loc, Now: now,
 		BackfillDays: cfg.Friction.BackfillDays, SeatPatterns: patterns,
-	}, nil
+	}
+	if source, ok := store.(review.DiagnosticSource); ok {
+		runner.Diagnostics = source
+	}
+	return runner, nil
 }
 
 // frictionExclusive keeps a detached daemon alive and serializes digest work

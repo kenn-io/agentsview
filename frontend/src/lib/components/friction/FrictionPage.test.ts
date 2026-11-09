@@ -304,6 +304,33 @@ describe("FrictionPage", () => {
     expect(document.querySelector(".summary-strip")).toBeNull();
   });
 
+  it("groups diagnostics by source and message without session links", async () => {
+    const event = sig({
+      kind: "diagnostic",
+      subject_kind: "diagnostic",
+      label: "worker",
+      text: "launch failed",
+      machine: "machine-a",
+    });
+    friction.digest = {
+      ...makeDigest([
+        event,
+        { ...event, subject_id: "diagnostic:2", machine: "machine-b" },
+        { ...event, subject_id: "diagnostic:3" },
+      ]),
+      p0_alerts: [],
+      patterns: [],
+    };
+    await render();
+    const diagnostics = section("diagnostic");
+    expect(diagnostics.querySelectorAll("li.signal-row")).toHaveLength(1);
+    expect(diagnostics.textContent).toContain("worker");
+    expect(diagnostics.textContent).toContain("launch failed");
+    expect(diagnostics.textContent).toContain("x3");
+    expect(diagnostics.textContent).not.toContain("machine-a");
+    expect(diagnostics.querySelector("a")).toBeNull();
+  });
+
   it("names a finding's session by its opening message and project", async () => {
     await render();
     const row = section("correction").querySelector("li")!;

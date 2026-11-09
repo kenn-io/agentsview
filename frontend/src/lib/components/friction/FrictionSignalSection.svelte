@@ -5,6 +5,7 @@
   import FrictionSessionRef from "./FrictionSessionRef.svelte";
   import {
     interruptionRows,
+    diagnosticRows,
     isDiagnosticSubject,
     signalDims,
     type FrictionKind,
@@ -29,11 +30,14 @@
     pattern: m.friction_section_patterns,
     frustration: m.friction_section_frustration,
     interruption: m.friction_section_interruptions,
+    diagnostic: m.friction_section_diagnostics,
   };
 
   // Interruptions render one row per session with a count, as in the Markdown.
   const rows = $derived(
-    section.kind === "interruption"
+    section.kind === "diagnostic"
+      ? diagnosticRows(section.signals).map((row) => ({ signal: row.first, count: row.count }))
+      : section.kind === "interruption"
       ? interruptionRows(section.signals).map((row) => ({ signal: row.first, count: row.count }))
       : section.signals.map((signal) => ({ signal, count: 1 })),
   );
@@ -52,7 +56,7 @@
     {#each rows as { signal, count }}
       <li class="signal-row" data-kind={signal.kind}>
         <FrictionFinding finding={signal} subjectId={signal.subject_id} {count} />
-        <span class="row-context">
+        {#if section.kind !== "diagnostic"}<span class="row-context">
           <FrictionSessionRef
             subjectId={signal.subject_id}
             {sessions}
@@ -70,7 +74,7 @@
               <span class="row-issue">{issue.qualified_id}</span>
             {/if}
           {/if}
-        </span>
+        </span>{/if}
       </li>
     {/each}
   </ul>

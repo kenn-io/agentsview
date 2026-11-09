@@ -38,6 +38,9 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 	fmt.Fprintf(&b, "patterns: %d\n", len(patterns))
 	fmt.Fprintf(&b, "frustrations: %d\n", len(frustrations))
 	fmt.Fprintf(&b, "interruptions: %d\n", len(interruptions))
+	if n := len(groups[KindDiagnostic]); n > 0 {
+		fmt.Fprintf(&b, "diagnostics: %d\n", n)
+	}
 	b.WriteString("---\n\n")
 	fmt.Fprintf(&b, "# Friction Log — %s\n\n", s.Date)
 
@@ -89,7 +92,28 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 		}
 	}
 
+	if diagnostics := groupDiagnostics(groups[KindDiagnostic]); len(diagnostics) > 0 {
+		b.WriteString("\n## Diagnostics\n\n")
+		for _, group := range diagnostics {
+			fmt.Fprintf(&b, "- %s: %s x%d\n", code(group.first.Label), code(group.first.Text), group.n)
+		}
+	}
 	return b.Bytes()
+}
+
+func groupDiagnostics(signals []Signal) []interruptionGroup {
+	groups := []interruptionGroup{}
+	index := map[[2]string]int{}
+	for _, signal := range signals {
+		key := [2]string{signal.Label, signal.Text}
+		if i, ok := index[key]; ok {
+			groups[i].n++
+		} else {
+			index[key] = len(groups)
+			groups = append(groups, interruptionGroup{first: signal, n: 1})
+		}
+	}
+	return groups
 }
 
 func section(b *bytes.Buffer, title, placeholder string, sigs []Signal, line func(Signal) string) {
