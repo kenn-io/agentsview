@@ -91,9 +91,9 @@ type Store struct {
 	activityInputQueries atomic.Int64
 	// activityUsageRows keeps activity usage reads per source, set, and range.
 	activityUsageRows kept.Memo[*activityUsageKept]
-	// activityUsageRanges keeps every session's prepared usage rows per
-	// range in progress; see activityUsageRange.
-	activityUsageRanges kept.Memo[activityUsageRange]
+	// activityUsageRanges keeps every session's prepared usage rows and
+	// their survivors per range in progress; see activityUsageRange.
+	activityUsageRanges kept.Memo[*activityUsageRange]
 	// readinessLog holds the last prepared usage readiness logged.
 	readinessLog struct {
 		sync.Mutex

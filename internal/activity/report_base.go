@@ -11,6 +11,12 @@ import (
 
 // ReportBackend supplies every backend operation needed to assemble a report.
 type ReportBackend interface {
+	// ActivityReportUsage returns the usage survivors of the candidate
+	// sessions. The report only sums survivors, after it apportions a
+	// session total (SessionCost) over its session's rows by their costs.
+	// So a session without one may hand back its survivors summed per
+	// model and bucket window, each sum stamped with one of its rows'
+	// timestamps.
 	ActivityReportUsage(context.Context, []string, Query) ([]UsageRow, *export.PricingBlock, error)
 	ActivityReportCandidateSource([]string, Query) CandidateSource
 	ActivityReportMessageCounts(context.Context, []string, Query, *CandidateArtifacts) error
