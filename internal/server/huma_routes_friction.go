@@ -131,7 +131,7 @@ type frictionSummary struct {
 	Patterns        int                 `json:"patterns"`
 	Frustrations    int                 `json:"frustrations"`
 	Interruptions   int                 `json:"interruptions"`
-	Diagnostics     int                 `json:"diagnostics,omitempty"`
+	Diagnostics     int                 `json:"diagnostics,omitzero"`
 	P0Alerts        map[string][]string `json:"p0_alerts"`
 }
 

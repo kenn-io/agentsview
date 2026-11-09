@@ -14,7 +14,7 @@ import (
 )
 
 func newDiagnosticsCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "diagnostics", Short: "Record failures outside agent sessions", GroupID: groupData, SilenceUsage: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() }}
+	cmd := &cobra.Command{Use: "diagnostics", Short: "Record failures outside agent sessions", Long: "Record failures that happen outside agent sessions so they can appear in the Friction Log.", GroupID: groupData, SilenceUsage: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() }}
 	cmd.PersistentFlags().String("server", "", "Remote daemon URL")
 	cmd.PersistentFlags().String("server-token-file", "", "File containing bearer token")
 	cmd.PersistentFlags().Bool("pg", false, "Read from configured PostgreSQL")
