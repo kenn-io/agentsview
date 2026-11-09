@@ -77,8 +77,10 @@ func TestClaudeSplitResponseUsageCountsOnce(t *testing.T) {
 						block = map[string]any{"type": "thinking", "thinking": "Synthetic", "signature": "sig"}
 					case "tool_a", "tool_b":
 						id := "toolu_" + strings.TrimPrefix(r.kind, "tool_")
-						block = map[string]any{"type": "tool_use", "id": id, "name": "Synthetic",
-							"input": map[string]any{"text": id}}
+						block = map[string]any{
+							"type": "tool_use", "id": id, "name": "Synthetic",
+							"input": map[string]any{"text": id},
+						}
 					default:
 						block = map[string]any{"type": "text", "text": "Synthetic"}
 					}
