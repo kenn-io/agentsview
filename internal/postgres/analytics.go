@@ -583,7 +583,7 @@ func (s *Store) getAnalyticsModelsForSessionIDs(
 			SELECT DISTINCT model
 			FROM messages
 			WHERE session_id IN `+placeholders+`
-			AND COALESCE(model, '') <> ''
+			AND model <> ''
 			ORDER BY model`,
 			pb.args...,
 		)
@@ -648,7 +648,7 @@ func (s *Store) getAnalyticsModelsForSessionIDsFiltered(
 					'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '')
 			FROM messages
 			WHERE session_id IN `+placeholders+`
-			AND COALESCE(model, '') <> ''`,
+			AND model <> ''`,
 			pb.args...,
 		)
 		if err != nil {
@@ -1683,7 +1683,7 @@ func (s *Store) queryAutonomyChunk(
 	ph := pgInPlaceholders(chunk, pb)
 	q := `SELECT session_id,
 		SUM(CASE WHEN role='user' AND is_system=false
-			AND COALESCE(source_subtype, '') <> 'tool_result'
+			AND source_subtype <> 'tool_result'
 			THEN 1 ELSE 0 END),
 		SUM(CASE WHEN role='assistant'
 			AND has_tool_use=true THEN 1 ELSE 0 END)
@@ -1831,7 +1831,7 @@ func (s *Store) analyticsToolRows(
 	predicates := db.ToolSelectionPredicates("tc", "s.quality_signal_version", f, func(value string) string { return pb.add(value) })
 	q := pgAnalyticsCallsSQL(s.sessionDialect(), f, pb, ", agent, project, quality_signal_version",
 		`, tc.category,
-			TRIM(COALESCE(tc.tool_name, '')) AS tool_name, s.agent, s.project, m.ordinal, s.quality_signal_version, tc.observed_outcome, tc.observed_repeat, tc.sequence_ending`, predicates...) + `
+			TRIM(tc.tool_name) AS tool_name, s.agent, s.project, m.ordinal, s.quality_signal_version, tc.observed_outcome, tc.observed_repeat, tc.sequence_ending`, predicates...) + `
 	SELECT session_id, category, tool_name, agent,
 		local_at::date AS local_date, COUNT(*), project, MIN(ordinal)` + db.ToolEffectivenessSQL("analytics_calls", "quality_signal_version") + `
 	FROM analytics_calls
@@ -1888,7 +1888,7 @@ func (s *Store) GetAnalyticsSkills(
 	pb := &paramBuilder{}
 	q := pgAnalyticsCallsSQL(s.sessionDialect(), f, pb, ", agent, project",
 		`, TRIM(tc.skill_name) AS skill_name, s.agent, s.project`,
-		"TRIM(COALESCE(tc.skill_name, '')) != ''") + `
+		"TRIM(tc.skill_name) != ''") + `
 	SELECT session_id, skill_name, agent, project,
 		date_trunc(` + pb.add(pgSkillsTrendGranularity(granularity)) + `::text,
 			local_at)::date AS bucket,
@@ -2444,10 +2444,10 @@ func (s *Store) GetAnalyticsTopSessions(
 				END), 0) / 60000.0
 			FROM (
 				SELECT CAST(
-					round(EXTRACT(EPOCH FROM (
+					EXTRACT(EPOCH FROM (
 						LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal)
 						- m2.timestamp
-					)) * 1000)
+					)) * 1000
 				AS BIGINT) AS delta_ms
 				FROM messages m2
 				WHERE m2.session_id = sessions.id
@@ -2784,7 +2784,7 @@ func (s *Store) signalMessages(
 		q := `SELECT session_id, ordinal, role, content,
 					COALESCE(to_char(timestamp AT TIME ZONE 'UTC',
 						'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), ''),
-					is_system, has_tool_use, COALESCE(source_subtype, '')
+					is_system, has_tool_use, source_subtype
 				FROM messages
 				WHERE session_id IN (` + strings.Join(placeholders, ",") + `)`
 		if len(filterModels) == 1 {
@@ -2862,14 +2862,14 @@ func (s *Store) populateFrustrationMarkers(
 		in := "(" + strings.Join(placeholders, ",") + ")"
 		// Read each version once and keep the prompt scan on messages, with
 		// both branches sharing one statement's snapshot.
-		q := `SELECT id, ` + versionColumn + `::text, ''::text, false
+		q := `SELECT id, ` + versionColumn + `::text, '', false
 			FROM sessions
 			WHERE id IN ` + in + `
 			UNION ALL
-			SELECT session_id, NULL::text, content, is_system
+			SELECT session_id, NULL, content, is_system
 			FROM messages
 			WHERE role = 'user'
-			  AND COALESCE(source_subtype, '') <> 'tool_result'
+			  AND source_subtype <> 'tool_result'
 			  AND session_id IN ` + in
 		msgRows, err := s.pg.QueryContext(ctx, q, pb.args...)
 		if err != nil {

@@ -58,13 +58,13 @@ func (s *Store) queryTurnRows(
 		    m.session_id, m.ordinal, m.timestamp, m.has_tool_use,
 		    m.role, m.is_system,
 		    CASE WHEN `+db.PostgresSystemPrefixSQL("m.content", "m.role")+` THEN FALSE ELSE TRUE END AS is_system_prefixed,
-		    COALESCE(m.source_subtype, '') AS source_subtype, m.content_length,
-		    (round(EXTRACT(EPOCH FROM (
+		    m.source_subtype, m.content_length,
+		    (EXTRACT(EPOCH FROM (
 		      COALESCE(
 		        LEAD(m.timestamp) OVER (ORDER BY m.ordinal),
 		        s.ended_at
 		      ) - m.timestamp
-		    )) * 1000))::bigint AS delta_ms
+		    )) * 1000)::bigint AS delta_ms
 		  FROM messages m
 		  LEFT JOIN sessions s ON s.id = m.session_id
 		  WHERE m.session_id = $1

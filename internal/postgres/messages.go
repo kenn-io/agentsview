@@ -567,14 +567,14 @@ func (s *Store) attachToolCallsBatch(
 	query := fmt.Sprintf(`
 		SELECT message_ordinal, session_id, tool_name,
 			category,
-			COALESCE(tool_use_id, ''),
+			tool_use_id,
 			COALESCE(input_json, ''),
 			COALESCE(skill_name, ''),
 			COALESCE(result_content_length, 0),
 			COALESCE(result_content, ''),
 			COALESCE(subagent_session_id, ''),
 			COALESCE(file_path, ''),
-			COALESCE(call_index, 0), observed_outcome, observed_repeat, sequence_ending
+			call_index, observed_outcome, observed_repeat, sequence_ending
 		FROM tool_calls
 		WHERE session_id = $1
 			AND message_ordinal IN (%s)
