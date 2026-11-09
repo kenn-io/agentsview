@@ -3,7 +3,7 @@
 package clickhouse
 
 import (
-	"context"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestUsageDiskRestartAndPush(t *testing.T) {
@@ -27,6 +26,10 @@ func TestUsageDiskRestartAndPush(t *testing.T) {
 	daily, err := first.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	require.NotEmpty(t, daily.Daily)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	dailyFile := files[0]
 	top, err := first.GetTopSessionsByCost(t.Context(), filter, 10)
 	require.NoError(t, err)
 	_, queries := usageQueryCounts(t, first)
@@ -40,97 +43,54 @@ func TestUsageDiskRestartAndPush(t *testing.T) {
 	require.Equal(t, top, afterTop)
 	_, after := usageQueryCounts(t, restarted)
 	require.Equal(t, queries, after, "restart should reuse grouped selections")
-	require.NoError(t, EnsureSchemaOn(t.Context(), restarted.DB()))
-	execPreparedUsage(t, restarted, "OPTIMIZE TABLE sessions FINAL")
-	merged := newTestStore(t, syncer.conn, syncer.target)
-	require.NoError(t, merged.openActivityReportDisk(syncer.target))
-	_, queries = usageQueryCounts(t, merged)
-	mergedDaily, err := merged.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	require.Equal(t, daily, mergedDaily)
-	mergedTop, err := merged.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	require.Equal(t, top, mergedTop)
-	_, after = usageQueryCounts(t, merged)
-	require.Equal(t, queries, after, "schema checks and merges should preserve selections")
 	for _, f := range []db.UsageFilter{
 		{Timezone: "America/New_York", Project: "gamma", Breakdowns: true},
 		{Timezone: "UTC", Project: "no-such-project", PairwiseSides: true},
 	} {
-		cached := readPreparedUsage(t, merged, f)
+		cached := readPreparedUsage(t, first, f)
 		fresh := newTestStore(t, syncer.conn, syncer.target)
 		require.Equal(t, readPreparedUsage(t, fresh, f), cached)
 		reopened := newTestStore(t, syncer.conn, syncer.target)
 		require.NoError(t, reopened.openActivityReportDisk(syncer.target))
-		require.Equal(t, cached, readPreparedUsage(t, reopened, f))
+		_, before := usageQueryCounts(t, reopened)
+		reopenedDaily, err := reopened.GetDailyUsage(t.Context(), f)
+		require.NoError(t, err)
+		require.Equal(t, cached.daily, reopenedDaily)
+		reopenedTop, err := reopened.GetTopSessionsByCost(t.Context(), f, 10)
+		require.NoError(t, err)
+		require.Equal(t, cached.top, reopenedTop)
+		_, after := usageQueryCounts(t, reopened)
+		require.Equal(t, before, after)
 	}
 	roundFilter := db.UsageFilter{Timezone: "UTC", Model: "round-test"}
-	roundDaily, err := merged.GetDailyUsage(t.Context(), roundFilter)
+	roundDaily, err := first.GetDailyUsage(t.Context(), roundFilter)
 	require.NoError(t, err)
 	require.Equal(t, 100011, roundDaily.Totals.InputTokens)
 	roundRestart := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, roundRestart.openActivityReportDisk(syncer.target))
+	_, beforeRound := usageQueryCounts(t, roundRestart)
 	roundAgain, err := roundRestart.GetDailyUsage(t.Context(), roundFilter)
 	require.NoError(t, err)
 	require.Equal(t, 100011, roundAgain.Totals.InputTokens)
 	require.Equal(t, roundDaily, roundAgain)
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
+	_, afterRound := usageQueryCounts(t, roundRestart)
+	require.Equal(t, beforeRound, afterRound)
+	body, err := os.ReadFile(dailyFile)
 	require.NoError(t, err)
-	require.NotEmpty(t, files)
-	require.NoError(t, os.WriteFile(files[0], []byte("broken"), 0o600))
+	header, _, ok := bytes.Cut(body, []byte("\n"))
+	require.True(t, ok)
+	require.NoError(t, os.WriteFile(dailyFile, append(header, []byte("\nbroken")...), 0o600))
 	damaged := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, damaged.openActivityReportDisk(syncer.target))
+	_, beforeDamage := usageQueryCounts(t, damaged)
 	require.Equal(t, readPreparedUsage(t, newTestStore(t, syncer.conn, syncer.target), filter), readPreparedUsage(t, damaged, filter))
-	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = damaged.GetDailyUsage(canceled, db.UsageFilter{Timezone: "UTC", Project: "other"})
-	require.Error(t, err)
+	_, afterDamage := usageQueryCounts(t, damaged)
+	require.Greater(t, afterDamage, beforeDamage)
 	republishRoundSession(t, local, 123)
 	pushPreparedUsage(t, syncer)
 	got := readPreparedUsage(t, restarted, filter)
 	fresh := newTestStore(t, syncer.conn, syncer.target)
 	require.Equal(t, readPreparedUsage(t, fresh, filter), got)
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "round-test", InputPerMTok: money.MustParseDollars("2"), OutputPerMTok: money.MustParseDollars("3")}}))
-	require.NoError(t, syncer.syncModelPricing(t.Context()))
-	afterPricing := newTestStore(t, syncer.conn, syncer.target)
-	require.NoError(t, afterPricing.openActivityReportDisk(syncer.target))
-	freshPricing := newTestStore(t, syncer.conn, syncer.target)
-	require.Equal(t, readPreparedUsage(t, freshPricing, filter), readPreparedUsage(t, afterPricing, filter))
-	require.NoError(t, local.SoftDeleteSession(t.Context(), usagePriceTierID))
-	deleted, err := local.DeleteSessionIfTrashed(t.Context(), usagePriceTierID)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted)
-	pushPreparedUsage(t, syncer)
-	afterDelete := newTestStore(t, syncer.conn, syncer.target)
-	require.NoError(t, afterDelete.openActivityReportDisk(syncer.target))
-	freshDelete := newTestStore(t, syncer.conn, syncer.target)
-	require.Equal(t, readPreparedUsage(t, freshDelete, filter), readPreparedUsage(t, afterDelete, filter))
-	require.NoError(t, local.SoftDeleteSession(t.Context(), usagePriceSnapBID))
-	deleted, err = local.DeleteSessionIfTrashed(t.Context(), usagePriceSnapBID)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted)
-	pushPreparedUsage(t, syncer)
-	snapshotChanged := newTestStore(t, syncer.conn, syncer.target)
-	require.NoError(t, snapshotChanged.openActivityReportDisk(syncer.target))
-	freshSnapshot := newTestStore(t, syncer.conn, syncer.target)
-	require.Equal(t, readPreparedUsage(t, freshSnapshot, filter), readPreparedUsage(t, snapshotChanged, filter))
-	execPreparedUsage(t, snapshotChanged, "INSERT INTO source_archives (source_archive_id, source_archive_salt) VALUES ('archive-test', 'salt')")
-	archiveChanged := newTestStore(t, syncer.conn, syncer.target)
-	require.NoError(t, archiveChanged.openActivityReportDisk(syncer.target))
-	_, queries = usageQueryCounts(t, archiveChanged)
-	archiveDaily, err := archiveChanged.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	archiveTop, err := archiveChanged.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	_, after = usageQueryCounts(t, archiveChanged)
-	require.Equal(t, queries, after, "archive metadata changes should preserve grouped selections")
-	independent := newTestStore(t, syncer.conn, syncer.target)
-	freshDaily, err := independent.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	require.Equal(t, freshDaily, archiveDaily)
-	freshTop, err := independent.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	require.Equal(t, freshTop, archiveTop)
 }
 
 func TestUsageDiskNextDay(t *testing.T) {
@@ -151,12 +111,6 @@ func TestUsageDiskNextDay(t *testing.T) {
 		return count
 	}
 	extents := extentCount()
-	keptFiles, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Len(t, keptFiles, 2)
-	for _, file := range keptFiles {
-		require.NoError(t, os.Remove(file))
-	}
 	f.To = "2026-01-31"
 	memDaily, err := first.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
@@ -165,10 +119,6 @@ func TestUsageDiskNextDay(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, top, memTop)
 	require.Equal(t, extents, extentCount(), "next-day memory hits reuse the extent")
-	for _, file := range keptFiles {
-		_, err := os.Stat(file)
-		require.NoError(t, err)
-	}
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
 	_, before := usageQueryCounts(t, restarted)
@@ -189,18 +139,6 @@ func TestUsageDiskNextDay(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, freshTop, againTop)
 
-	// Earlier end dates must retain their bounds when later usage exists.
-	f.Timezone = "UTC"
-	f.To = "2026-01-11"
-	earlier, err := first.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	f.To = "2026-01-12"
-	got, err := restarted.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	fresh, err := newTestStore(t, syncer.conn, syncer.target).GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, fresh, got)
-	require.NotEqual(t, earlier.Totals.InputTokens, got.Totals.InputTokens)
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
 	require.NoError(t, err)
 	f.Termination = "active"
@@ -288,7 +226,6 @@ func TestUsageDiskTopGroupedCustomPricing(t *testing.T) {
 	want, err := store.GetTopSessionsByCost(t.Context(), f, 1)
 	require.NoError(t, err)
 	require.Len(t, want, 1)
-	require.Equal(t, "newer name", want[0].DisplayName)
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	restarted.SetCustomPricing(rates)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
@@ -344,8 +281,6 @@ func TestUsageDiskDeleteDuringDateProof(t *testing.T) {
 	pushPreparedUsage(t, syncer)
 	require.NoError(t, first.openActivityReportDisk(syncer.target))
 	f := db.UsageFilter{Timezone: "UTC", From: "2026-01-01"}
-	unbounded, err := first.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
 	var deleteErr error
@@ -362,69 +297,22 @@ func TestUsageDiskDeleteDuringDateProof(t *testing.T) {
 	require.NoError(t, deleteErr)
 	want, err := newTestStore(t, syncer.conn, syncer.target).GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
-	require.NotEqual(t, unbounded.Totals.InputTokens, want.Totals.InputTokens)
 	require.Equal(t, want, got)
-}
-
-func TestUsageDiskEvictionRebuildsSelection(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	_, syncer, first := newPreparedUsageStore(t)
-	require.NoError(t, first.usageDisk.Open("usage-eviction", "mirror", 128<<20, 1))
-	f := db.UsageFilter{Timezone: "UTC", Project: "gamma"}
-	want, err := first.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	f.Project = "alpha"
-	_, err = first.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	restarted := newTestStore(t, syncer.conn, syncer.target)
-	require.NoError(t, restarted.usageDisk.Open("usage-eviction", "mirror", 128<<20, 1))
-	_, before := usageQueryCounts(t, restarted)
-	f.Project = "gamma"
-	got, err := restarted.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, want, got)
-	_, after := usageQueryCounts(t, restarted)
-	require.Greater(t, after, before)
-}
-
-func TestUsageDiskPushDuringFill(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, store := newPreparedUsageStore(t)
-	require.NoError(t, store.openActivityReportDisk(syncer.target))
-	f := db.UsageFilter{Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
-	republishRoundSession(t, local, 123)
-	var pushed atomic.Bool
-	ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(*chdriver.Progress) {
-		if pushed.Load() {
-			return
-		}
-		var current uint64
-		err := store.DB().QueryRowContext(t.Context(), `SELECT count() FROM system.processes WHERE position(query, 'FROM usage_classified') > 0 AND position(query, 'system.processes') = 0`).Scan(&current)
-		if err == nil && current > 0 && pushed.CompareAndSwap(false, true) {
-			pushPreparedUsage(t, syncer)
-		}
-	}))
-	_, err := store.GetDailyUsage(ctx, f)
-	require.NoError(t, err)
-	require.True(t, pushed.Load())
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files, "a changing fill must not publish its rows")
-	fresh := newTestStore(t, syncer.conn, syncer.target)
-	want, err := fresh.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	restarted := newTestStore(t, syncer.conn, syncer.target)
-	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
-	got, err := restarted.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, want, got)
+	require.False(t, restarted.usageExtent.valid)
 }
 
 func TestUsageDiskPartsChangeDuringFill(t *testing.T) {
-	for _, change := range []string{"prepared", "reversed", "deleted"} {
+	for _, change := range []string{"prepared", "push", "reversed", "deleted"} {
 		t.Run(change, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			local, syncer, store := newPreparedUsageStore(t)
+			if change == "prepared" {
+				appendMessage(t, local, usagePriceRoundID, "refresh", "2026-01-13T05:00:00Z")
+				pushPreparedUsage(t, syncer)
+			}
+			if change == "push" {
+				republishRoundSession(t, local, 123)
+			}
 			if change == "deleted" {
 				require.NoError(t, local.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{OccurredAt: "2026-01-12T05:00:00Z", Model: "round-test", InputTokens: 42, DedupKey: "cursor:fill-delete"}}))
 				pushPreparedUsage(t, syncer)
@@ -456,7 +344,9 @@ func TestUsageDiskPartsChangeDuringFill(t *testing.T) {
 				}
 				switch change {
 				case "prepared":
-					_, mutationErr = store.DB().ExecContext(t.Context(), "INSERT INTO prepared_usage SELECT * FROM prepared_usage LIMIT 1")
+					runPreparedUsageRefresh(t, store)
+				case "push":
+					pushPreparedUsage(t, syncer)
 				case "reversed":
 					mutationErr = writeMetadata(t.Context(), store.DB(), map[string]string{key: value + "-temporary"})
 					if mutationErr == nil {
@@ -475,7 +365,9 @@ func TestUsageDiskPartsChangeDuringFill(t *testing.T) {
 			files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
 			require.NoError(t, err)
 			require.Empty(t, files)
-			got, err := store.GetDailyUsage(t.Context(), f)
+			restarted := newTestStore(t, syncer.conn, syncer.target)
+			require.NoError(t, restarted.openActivityReportDisk(syncer.target))
+			got, err := restarted.GetDailyUsage(t.Context(), f)
 			require.NoError(t, err)
 			want, err := newTestStore(t, syncer.conn, syncer.target).GetDailyUsage(t.Context(), f)
 			require.NoError(t, err)

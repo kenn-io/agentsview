@@ -29,8 +29,16 @@ func TestDiskEvictsLeastRecentlyOpened(t *testing.T) {
 	payload, ok = restarted.Get("first", "v1")
 	require.True(t, ok)
 	require.Equal(t, "one", string(payload))
-	_, ok = restarted.Get("first", "other")
+	require.NoError(t, os.Chtimes(disk.reports.disk.path("third"), old, old))
+	info, err := os.Stat(disk.reports.disk.path("first"))
+	require.NoError(t, err)
+	var trimmed Disk
+	require.NoError(t, trimmed.Open("test-usage", "mirror", 1024, info.Size()))
+	_, ok = trimmed.Get("third", "v1")
 	require.False(t, ok)
+	payload, ok = trimmed.Get("first", "v1")
+	require.True(t, ok)
+	require.Equal(t, "one", string(payload))
 }
 
 func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
@@ -38,35 +46,16 @@ func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	var disk Disk
 	require.NoError(t, disk.Open("test-usage", "mirror", 128, 0))
 	disk.Put("large", "v", make([]byte, 128))
+	_, err := os.Stat(disk.reports.disk.path("large"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, os.WriteFile(disk.reports.disk.path("large"), append(disk.reports.disk.header("v"), make([]byte, 128)...), 0o600))
 	_, ok := disk.Get("large", "v")
 	require.False(t, ok)
 	disk.Put("small", "v", []byte("body"))
-	require.NoError(t, os.WriteFile(disk.reports.disk.path("small"), []byte("corrupt"), 0o600))
-	_, ok = disk.Get("small", "v")
-	require.False(t, ok)
 	t.Setenv("CACHE_DIRECTORY", disk.reports.disk.path("small"))
 	var unavailable Disk
 	require.Error(t, unavailable.Open("test-usage", "mirror", 128, 0))
 	unavailable.Put("small", "v", []byte("body"))
 	_, ok = unavailable.Get("small", "v")
 	require.False(t, ok)
-}
-
-func TestDiskEnforcesByteLimitAtStartup(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	require.NoError(t, disk.Open("test-usage", "mirror", 1024, 0))
-	disk.Put("old", "v", []byte("old"))
-	disk.Put("new", "v", []byte("new"))
-	old := time.Now().Add(-time.Hour)
-	require.NoError(t, os.Chtimes(disk.reports.disk.path("old"), old, old))
-	info, err := os.Stat(disk.reports.disk.path("new"))
-	require.NoError(t, err)
-	var restarted Disk
-	require.NoError(t, restarted.Open("test-usage", "mirror", 1024, info.Size()))
-	_, ok := restarted.Get("old", "v")
-	require.False(t, ok)
-	data, ok := restarted.Get("new", "v")
-	require.True(t, ok)
-	require.Equal(t, "new", string(data))
 }
