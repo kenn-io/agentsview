@@ -3,8 +3,8 @@ title: Quick Start
 description: Get AgentsView running in under a minute
 ---
 
-CLI examples follow `main`. For older releases, use the legacy spellings in
-the [command migration](commands.md#command-migration).
+CLI examples use the commands from 0.47.0 and later. For older releases, use
+the legacy names in the [command migration](commands.md#command-migration).
 
 ## Install
 

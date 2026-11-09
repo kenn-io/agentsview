@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-09
 title: PostgreSQL Sync
 description: Share sessions across machines with PostgreSQL push sync, an auto-push service, and a read-only server
 ---
@@ -65,8 +65,8 @@ See [Hosted Raw Sync](/docs/hosted-raw-sync/#provision-a-hosted-instance) for
 the configuration, least-privilege grants and platform limits. Use `agentsview
 pg raw-reparse <runtime-target> --run-id <id> --batch-size 64` for bounded
 parser-version rollouts. Exhausted jobs can resume after a new source arrives,
-a processing-version selection changes, or an operator runs `agentsview pg
-raw-reparse <runtime-target> --repair --batch-size 64`. Repair uses this
+a processing-version selection changes, or an operator runs `agentsview replica
+pg raw-reparse <runtime-target> --repair --batch-size 64`. Repair uses this
 executable's processing version. It's safe to repeat until it prints
 `Rescheduled 0 failed jobs`, and leaves healthy jobs, in-progress jobs, and heads
 at other versions unchanged. Use `--repair` separately from `--run-id`.
@@ -257,8 +257,7 @@ catch up.
 
 #### Automatic Push Watcher
 
-Auto-push watching has been available since 0.32.0. On `main`, start it in
-the foreground with `agentsview replica pg push --watch`:
+Start the watcher in the foreground with `agentsview replica pg push --watch`:
 
 ```bash
 agentsview replica pg push --watch
