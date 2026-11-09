@@ -246,8 +246,8 @@ func TestFilterMatrixRecentEdits(t *testing.T) {
 			if d.name == "clickhouse" {
 				row = "toInt64(row_number() OVER ( PARTITION BY s.project, tc.file_path ORDER BY m.timestamp DESC NULLS LAST, tc.session_id DESC, m.ordinal DESC, tc.call_index DESC))"
 				count = "toInt64(count() OVER (PARTITION BY s.project, tc.file_path))"
-				lastEdited = "if(fp.last_edited_at IS NULL, CAST(NULL AS Nullable(String)), concat(replaceAll(toString(fp.last_edited_at), ' ', 'T'), 'Z'))"
-				timestamp = "if(r.timestamp IS NULL, CAST(NULL AS Nullable(String)), concat(replaceAll(toString(r.timestamp), ' ', 'T'), 'Z'))"
+				lastEdited = "if(fp.last_edited_at IS NULL, NULL, concat(replaceAll(toString(fp.last_edited_at), ' ', 'T'), 'Z'))"
+				timestamp = "if(r.timestamp IS NULL, NULL, concat(replaceAll(toString(r.timestamp), ' ', 'T'), 'Z'))"
 			}
 			for _, raw := range []RecentEditsParams{{}, {Project: "team,tools", Search: `  a%_\b  `, Limit: 5, Offset: 3, MaxEditsPerFile: 2}, {Limit: 201, Offset: -1, MaxEditsPerFile: -1}} {
 				p := NormalizeRecentEditsParams(raw)
