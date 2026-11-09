@@ -31,6 +31,13 @@ Hosted PostgreSQL and archives without the journal rebuild every time.
 Hosted PostgreSQL, archives without the journal, and filters that compare against
 the current time read every time.
 
+Native PostgreSQL also keeps priced Usage rows in `<data-dir>/usage-postgres/`,
+so restarts reuse work and reads refresh sessions and prices changed by a push.
+Existing supported journals need only `SELECT` access. Hosted and borrowed
+transaction readers, CockroachDB, and unavailable journals keep direct reads.
+Repeated source conflicts use a direct read for that request; cache storage
+errors are reported. The cache is disposable and contains no source sessions.
+
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
 the session browser, analytics dashboard, search, and, as of 0.23.0, the Usage
@@ -152,8 +159,9 @@ agentsview replica pg serve
 ```
 
 Opens the read-only web UI at `http://127.0.0.1:8080`, backed entirely by
-PostgreSQL. It does not use local SQLite or file watching, and its session UI
-and APIs do not accept session uploads. A writable deployment can also expose
+PostgreSQL. Source sessions stay there; Usage keeps a disposable local cache.
+It does no file watching, and its session UI and APIs do not accept session
+uploads. A writable deployment can also expose
 the separate
 [hosted raw-sync control plane](/docs/hosted-raw-sync/#http-control-plane).
 

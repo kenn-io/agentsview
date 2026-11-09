@@ -153,36 +153,41 @@ func pgUsageCacheCandidates(ctx context.Context, view *Store, filter db.UsageFil
 
 func pgCaptureUsageMetadata(ctx context.Context, view *Store, ids []string, filter db.UsageFilter, snapshot *db.UsageSourceSnapshot) error {
 	for batch := range slices.Chunk(ids, 512) {
-		pb := &paramBuilder{}
-		passes := appendPGUsageSessionFilterClauses("TRUE", pb, filter, view.sessionDialect())
-		params := make([]string, len(batch))
-		for i, id := range batch {
-			params[i] = pb.add(id)
-		}
-		query := `SELECT s.id, s.project, s.machine, s.agent, COALESCE(s.group_key,''), COALESCE(s.session_name,''), COALESCE(s.git_branch,''), s.created_at, s.started_at, s.ended_at,
-   COALESCE(NULLIF(COALESCE(s.display_name,s.session_name),''),NULLIF(s.first_message,''),NULLIF(s.project,''),s.id), s.user_message_count, s.total_output_tokens, s.peak_context_tokens, COALESCE(s.has_total_output_tokens,false), COALESCE(s.has_peak_context_tokens,false), COALESCE(s.is_automated,false), COALESCE(s.termination_status,''), (` + passes + `), s.xmin::text, COALESCE(c.revision,0)::text
+		if err := func() error {
+			pb := &paramBuilder{}
+			passes := appendPGUsageSessionFilterClauses("TRUE", pb, filter, view.sessionDialect())
+			params := make([]string, len(batch))
+			for i, id := range batch {
+				params[i] = pb.add(id)
+			}
+			query := `SELECT s.id, s.project, s.machine, s.agent, COALESCE(s.group_key,''), COALESCE(s.session_name,''), COALESCE(s.git_branch,''), s.created_at, s.started_at, s.ended_at,
+   COALESCE(NULLIF(COALESCE(s.display_name,s.session_name),''),NULLIF(s.first_message,''),NULLIF(s.project,''),s.id), s.user_message_count, s.total_output_tokens, s.peak_context_tokens, COALESCE(s.has_total_output_tokens,false), COALESCE(s.has_peak_context_tokens,false), COALESCE(s.is_automated,false), COALESCE(s.termination_status,''), COALESCE((` + passes + `), false), s.xmin::text, COALESCE(c.revision,0)::text
    FROM sessions s LEFT JOIN usage_session_changes c ON c.session_id=s.id WHERE s.deleted_at IS NULL AND s.id IN (` + strings.Join(params, ",") + `) ORDER BY s.id`
-		rows, err := view.pg.QueryContext(ctx, query, pb.args...)
-		if err != nil {
-			return fmt.Errorf("capturing PostgreSQL usage metadata: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var session db.UsageSourceSession
-			var version db.UsageSourceVersion
-			var created, started, ended sql.NullTime
-			if err := rows.Scan(&session.ID, &session.Project, &session.Machine, &session.Agent, &session.GroupKey, &session.SessionName, &session.GitBranch, &created, &started, &ended, &session.DisplayName, &session.UserMessageCount, &session.TotalOutputTokens, &session.PeakContextTokens, &session.HasTotalOutput, &session.HasPeakContext, &session.IsAutomated, &session.TerminationStatus, &session.PassesFilter, &version.SyncMarker, &version.UsageEventFingerprint); err != nil {
-				_ = rows.Close()
+			rows, err := view.pg.QueryContext(ctx, query, pb.args...)
+			if err != nil {
+				return fmt.Errorf("capturing PostgreSQL usage metadata: %w", err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var session db.UsageSourceSession
+				var version db.UsageSourceVersion
+				var created, started, ended sql.NullTime
+				if err := rows.Scan(&session.ID, &session.Project, &session.Machine, &session.Agent, &session.GroupKey, &session.SessionName, &session.GitBranch, &created, &started, &ended, &session.DisplayName, &session.UserMessageCount, &session.TotalOutputTokens, &session.PeakContextTokens, &session.HasTotalOutput, &session.HasPeakContext, &session.IsAutomated, &session.TerminationStatus, &session.PassesFilter, &version.SyncMarker, &version.UsageEventFingerprint); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				session.CreatedAt, session.StartedAt, session.EndedAt = pgUsageCacheTime(created), pgUsageCacheTime(started), pgUsageCacheTime(ended)
+				session.StartedAtMillis, _, _ = usagefacts.ParseTimestamp(session.StartedAt)
+				session.StartedAtNanos = usagefacts.ParseTimestampNanos(session.StartedAt)
+				version.SessionID = session.ID
+				snapshot.Sessions = append(snapshot.Sessions, session)
+				snapshot.Versions = append(snapshot.Versions, version)
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 				return err
 			}
-			session.CreatedAt, session.StartedAt, session.EndedAt = pgUsageCacheTime(created), pgUsageCacheTime(started), pgUsageCacheTime(ended)
-			session.StartedAtMillis, _, _ = usagefacts.ParseTimestamp(session.StartedAt)
-			session.StartedAtNanos = usagefacts.ParseTimestampNanos(session.StartedAt)
-			version.SessionID = session.ID
-			snapshot.Sessions = append(snapshot.Sessions, session)
-			snapshot.Versions = append(snapshot.Versions, version)
-		}
-		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return nil
+		}(); err != nil {
 			return err
 		}
 	}
@@ -211,71 +216,76 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 		return snapshot, err
 	}
 	for batch := range slices.Chunk(ids, 256) {
-		pb := &paramBuilder{}
-		params := make([]string, len(batch))
-		for i, id := range batch {
-			params[i] = pb.add(id)
-		}
-		selected := strings.Join(params, ",")
-		rowsSQL := pgDailyUsageRowsSQLWithColumns(pgUsageMessageEligibility+` AND m.session_id IN (`+selected+`)`, pgUsageEventEligibility+` AND ue.session_id IN (`+selected+`)`, ", m.role AS message_role", ", ''::text AS message_role")
-		extraColumns := ", (" + pgSnapshotOutputTokensSQL() + ")::bigint, u.message_role"
-		query := pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, true, "u.session_id", false, false, extraColumns) + ` ORDER BY u.session_id, u.ts ASC NULLS FIRST, COALESCE(u.message_ordinal,-1), u.usage_dedup_key`
-		rows, err := view.pg.QueryContext(ctx, query, pb.args...)
-		if err != nil {
-			return snapshot, fmt.Errorf("extracting PostgreSQL usage facts: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var rankingOutput int64
-			var role string
-			row, err := scanPGDailyUsageRowWithMachine(rows, true, &rankingOutput, &role)
+		if err := func() error {
+			pb := &paramBuilder{}
+			params := make([]string, len(batch))
+			for i, id := range batch {
+				params[i] = pb.add(id)
+			}
+			selected := strings.Join(params, ",")
+			rowsSQL := pgDailyUsageRowsSQLWithColumns(pgUsageMessageEligibility+` AND m.session_id IN (`+selected+`)`, pgUsageEventEligibility+` AND ue.session_id IN (`+selected+`)`, ", m.role AS message_role", ", ''::text AS message_role")
+			extraColumns := ", (" + pgSnapshotOutputTokensSQL() + ")::bigint, u.message_role"
+			query := pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, true, "u.session_id", false, false, extraColumns) + ` ORDER BY u.session_id, u.ts ASC NULLS FIRST, COALESCE(u.message_ordinal,-1), u.usage_dedup_key`
+			rows, err := view.pg.QueryContext(ctx, query, pb.args...)
 			if err != nil {
-				_ = rows.Close()
-				return snapshot, err
+				return fmt.Errorf("extracting PostgreSQL usage facts: %w", err)
 			}
-			input, output, write, read, reasoning := pgDailyUsageRowTokens(row)
-			fact := usagefacts.Fact{Source: row.usageSource, Model: row.model, ProviderID: row.providerID, RawTimestamp: pgUsageCacheTime(row.pricingTS), UsesSessionStart: !row.pricingTS.Valid, InputTokens: int64(input), OutputTokens: int64(output), RankingOutputTokens: &rankingOutput, ReasoningTokens: int64(reasoning), CacheCreationTokens: int64(write), CacheReadTokens: int64(read), CacheCreation1hTokens: int64(pgUsageRowCacheCreation1hTokens(row.usageSource, row.tokenJSON, write)), WebSearchRequests: int64(pgDailyUsageRowWebSearchRequests(row)), CostSource: row.costSource, ClaudeMessageID: row.claudeMessageID, ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID, UsageDedupKey: row.usageDedupKey, TokenEligible: true, ActivityEligible: row.usageSource != "message" || role == "assistant"}
-			fact.TimestampMillis, _, _ = usagefacts.ParseTimestamp(fact.RawTimestamp)
-			fact.TimestampNanos = usagefacts.ParseTimestampNanos(fact.RawTimestamp)
-			if row.messageOrdinal.Valid {
-				ordinal := int(row.messageOrdinal.Int64)
-				fact.MessageOrdinal = &ordinal
+			defer rows.Close()
+			for rows.Next() {
+				var rankingOutput int64
+				var role string
+				row, err := scanPGDailyUsageRowWithMachine(rows, true, &rankingOutput, &role)
+				if err != nil {
+					_ = rows.Close()
+					return err
+				}
+				input, output, write, read, reasoning := pgDailyUsageRowTokens(row)
+				fact := usagefacts.Fact{Source: row.usageSource, Model: row.model, ProviderID: row.providerID, RawTimestamp: pgUsageCacheTime(row.pricingTS), UsesSessionStart: !row.pricingTS.Valid, InputTokens: int64(input), OutputTokens: int64(output), RankingOutputTokens: &rankingOutput, ReasoningTokens: int64(reasoning), CacheCreationTokens: int64(write), CacheReadTokens: int64(read), CacheCreation1hTokens: int64(pgUsageRowCacheCreation1hTokens(row.usageSource, row.tokenJSON, write)), WebSearchRequests: int64(pgDailyUsageRowWebSearchRequests(row)), CostSource: row.costSource, ClaudeMessageID: row.claudeMessageID, ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID, UsageDedupKey: row.usageDedupKey, TokenEligible: true, ActivityEligible: row.usageSource != "message" || role == "assistant"}
+				fact.TimestampMillis, _, _ = usagefacts.ParseTimestamp(fact.RawTimestamp)
+				fact.TimestampNanos = usagefacts.ParseTimestampNanos(fact.RawTimestamp)
+				if row.messageOrdinal.Valid {
+					ordinal := int(row.messageOrdinal.Int64)
+					fact.MessageOrdinal = &ordinal
+				}
+				if row.cost.Valid {
+					cost := row.cost.Int64
+					fact.ReportedCostMicrodollars = &cost
+				}
+				fact.RequestScoped = row.usageSource == "message" || row.messageOrdinal.Valid || usagefacts.SourceIsRequestScoped(row.usageSource)
+				if err := emit(row.sessionID, fact); err != nil {
+					_ = rows.Close()
+					return err
+				}
 			}
-			if row.cost.Valid {
-				cost := row.cost.Int64
-				fact.ReportedCostMicrodollars = &cost
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				return err
 			}
-			fact.RequestScoped = row.usageSource == "message" || row.messageOrdinal.Valid || usagefacts.SourceIsRequestScoped(row.usageSource)
-			if err := emit(row.sessionID, fact); err != nil {
-				_ = rows.Close()
-				return snapshot, err
+			activityRows, err := view.pg.QueryContext(ctx, `SELECT m.session_id,m.ordinal,m.timestamp,m.model,m.provider_id FROM messages m WHERE m.session_id IN (`+selected+`) AND `+pgUsageMatchingMessageSourceEligibility+` AND NOT (`+pgUsageMessageSourceEligibility+`) ORDER BY m.session_id,m.ordinal`, pb.args...)
+			if err != nil {
+				return err
 			}
-		}
-		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-			return snapshot, err
-		}
-		activityRows, err := view.pg.QueryContext(ctx, `SELECT session_id,ordinal,timestamp,model,provider_id FROM messages WHERE session_id IN (`+selected+`) AND role='assistant' AND model!='<synthetic>' AND NOT (token_usage!='' AND model!='') ORDER BY session_id,ordinal`, pb.args...)
-		if err != nil {
-			return snapshot, err
-		}
-		defer activityRows.Close()
-		for activityRows.Next() {
-			var id string
-			var input usagefacts.MessageInput
-			var timestamp sql.NullTime
-			input.Role = "assistant"
-			if err := activityRows.Scan(&id, &input.Ordinal, &timestamp, &input.Model, &input.ProviderID); err != nil {
-				_ = activityRows.Close()
-				return snapshot, err
+			defer activityRows.Close()
+			for activityRows.Next() {
+				var id string
+				var input usagefacts.MessageInput
+				var timestamp sql.NullTime
+				input.Role = "assistant"
+				if err := activityRows.Scan(&id, &input.Ordinal, &timestamp, &input.Model, &input.ProviderID); err != nil {
+					_ = activityRows.Close()
+					return err
+				}
+				input.Timestamp = pgUsageCacheTime(timestamp)
+				fact, _ := usagefacts.FromMessage(input)
+				if err := emit(id, fact); err != nil {
+					_ = activityRows.Close()
+					return err
+				}
 			}
-			input.Timestamp = pgUsageCacheTime(timestamp)
-			fact, _ := usagefacts.FromMessage(input)
-			if err := emit(id, fact); err != nil {
-				_ = activityRows.Close()
-				return snapshot, err
+			if err := errors.Join(activityRows.Err(), activityRows.Close()); err != nil {
+				return err
 			}
-		}
-		if err := errors.Join(activityRows.Err(), activityRows.Close()); err != nil {
+			return nil
+		}(); err != nil {
 			return snapshot, err
 		}
 	}

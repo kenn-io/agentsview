@@ -14,6 +14,12 @@ The latest release is
 - With automatic filing on, reopen linked Kata issues when a digest finding
   shows the pattern returned after the issue was closed as done.
 
+**Improvements**
+
+- Usage reuses priced work after restarting native PostgreSQL serving and after
+  pushes. Its disposable cache lives in `<data-dir>/usage-postgres/`. SQLite
+  rebuilds its Usage cache once after this upgrade.
+
 **Bug fixes**
 
 - Commit lookups keep live prompts and other archives' deleted-session links.

@@ -744,6 +744,11 @@ matching counts, and per-session usage must remain observably equal. The
 PostgreSQL-native optimization in
 [agentsview#1451](https://github.com/kenn-io/agentsview/issues/1451).
 
+ClickHouse keeps its prepared-row path. The earlier fixture study measured
+cold/after-write pages at 5.78/5.28 seconds versus PostgreSQL's 11.72/12.61
+seconds, so this cache targets PostgreSQL first. ClickHouse's part and
+preparation fingerprints need a separate publication design.
+
 The usage cache filename is derived from its format version and the archive
 `database_id`. A format or database-ID change selects a new generation; it does
 not migrate or rewrite the archive. Facts contain only message- and

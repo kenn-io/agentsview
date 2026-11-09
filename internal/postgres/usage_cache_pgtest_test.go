@@ -492,3 +492,37 @@ func TestPGUsageCacheChronologicalFractionalTimestamps(t *testing.T) {
 		})
 	}
 }
+
+func TestPGUsageCacheNullableSessionFilters(t *testing.T) {
+	for _, tc := range []struct {
+		name, mutation string
+		filter         db.UsageFilter
+	}{
+		{"termination", `UPDATE sessions SET termination_status=CASE WHEN id='paid-a' THEN 'clean' ELSE NULL END`, db.UsageFilter{Termination: "clean", Timezone: "UTC"}},
+		{"recency", `UPDATE sessions SET created_at=NULL,started_at=NULL,ended_at=NULL WHERE id!='paid-a'`, db.UsageFilter{ActiveSince: "2026-01-01T00:00:00Z", Timezone: "UTC"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, store, _ := keptUsageFixture(t)
+			ctx := t.Context()
+			_, err := store.pg.ExecContext(ctx, tc.mutation)
+			require.NoError(t, err)
+			attachUsageCacheProbe(t, store, t.TempDir())
+			direct := &Store{pg: store.pg}
+			want, err := direct.GetDailyUsage(ctx, tc.filter)
+			require.NoError(t, err)
+			require.Equal(t, 500, want.Totals.OutputTokens)
+			for _, read := range []func(*Store) (any, error){
+				func(s *Store) (any, error) { return s.GetDailyUsage(ctx, tc.filter) },
+				func(s *Store) (any, error) { return s.GetTopSessionsByCost(ctx, tc.filter, 20) },
+				func(s *Store) (any, error) { return s.GetUsageSessionCounts(ctx, tc.filter) },
+				func(s *Store) (any, error) { return s.GetUsageMatchingSessionCount(ctx, tc.filter) },
+			} {
+				want, err := read(direct)
+				require.NoError(t, err)
+				got, err := read(store)
+				require.NoError(t, err)
+				require.Equal(t, want, got)
+			}
+		})
+	}
+}
