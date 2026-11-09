@@ -453,36 +453,34 @@ func usageQueryIntervals(filter UsageFilter) []usageQueryInterval {
 	}
 	location := filter.Location()
 	parseDate := func(value string) (time.Time, bool) {
-		parsed, err := time.ParseInLocation("2006-01-02", value, location)
+		parsed, err := time.Parse("2006-01-02", value)
 		return parsed, err == nil
 	}
 	from, hasFrom := parseDate(filter.From)
 	to, hasTo := parseDate(filter.To)
-	if filter.From != "" && !hasFrom || filter.To != "" && !hasTo {
+	if filter.From != "" && !hasFrom || filter.To != "" && !hasTo || hasFrom && hasTo && from.After(to) {
 		return nil
 	}
 	if hasFrom && hasTo {
-		if from.After(to) {
-			return nil
-		}
 		var intervals []usageQueryInterval
 		for day := from; !day.After(to); day = day.AddDate(0, 0, 1) {
-			next := day.AddDate(0, 0, 1)
 			date := day.Format("2006-01-02")
+			start, next, _ := FrictionDayBounds(date, location)
 			intervals = append(intervals, usageQueryInterval{
-				FromMillis: day.UTC().UnixMilli(), ToMillis: next.UTC().UnixMilli(),
+				FromMillis: start.UnixMilli(), ToMillis: next.UnixMilli(),
 				FromLocalDate: date, ToLocalDate: date,
 			})
 		}
 		return intervals
 	}
 	if hasFrom {
+		from, _, _ = FrictionDayBounds(filter.From, location)
 		return []usageQueryInterval{{
 			FromMillis: from.UTC().UnixMilli(), ToMillis: math.MaxInt64,
 			FromLocalDate: filter.From,
 		}}
 	}
-	next := to.AddDate(0, 0, 1)
+	_, next, _ := FrictionDayBounds(filter.To, location)
 	return []usageQueryInterval{{
 		FromMillis: math.MinInt64, ToMillis: next.UTC().UnixMilli(),
 		FromLocalDate: "0000-01-01", ToLocalDate: filter.To,

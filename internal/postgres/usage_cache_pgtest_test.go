@@ -167,6 +167,26 @@ func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
 	probe = attachUsageCacheProbe(t, store, directory)
 	requireCachedUsageMatchesDirect(t, store, all)
 	require.Empty(t, probe.takeExtracted())
+
+	for i, stamp := range []string{"2026-09-06T05:00:00Z", "2026-09-07T15:00:00Z"} {
+		id := fmt.Sprintf("santiago-%d", i)
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project-a", Machine: "test-machine", Agent: "codex", StartedAt: new(stamp)}))
+		require.NoError(t, local.ReplaceSessionUsageEvents(ctx, id, []db.UsageEvent{{SessionID: id, Source: "provider", Model: "paid-a", OutputTokens: 20 * (i + 1), DedupKey: id, OccurredAt: stamp}}))
+	}
+	pushed, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	for _, restart := range []bool{false, true} {
+		if restart {
+			require.NoError(t, store.usageCache.Close())
+			attachUsageCacheProbe(t, store, directory)
+		}
+		for _, window := range []struct{ from, to string }{{"2026-09-06", "2026-09-06"}, {"2026-09-05", "2026-09-07"}, {"2026-08-10", "2026-09-08"}} {
+			t.Run(fmt.Sprintf("%s..%s/restart=%t", window.from, window.to, restart), func(t *testing.T) {
+				requireCachedUsageMatchesDirect(t, store, db.UsageFilter{From: window.from, To: window.to, Timezone: "America/Santiago"})
+			})
+		}
+	}
 }
 
 func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {

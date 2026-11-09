@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,19 @@ func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
 	assert.Equal(t, "America/Chicago", got.Name)
 	assert.NotEmpty(t, got.IntervalFingerprint)
 	assert.Equal(t, "America/Chicago:"+got.IntervalFingerprint, got.Key)
+
+	day := usageQueryInterval{
+		FromMillis:    time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC).UnixMilli(),
+		ToMillis:      time.Date(2026, 9, 7, 3, 0, 0, 0, time.UTC).UnixMilli(),
+		FromLocalDate: "2026-09-06", ToLocalDate: "2026-09-06",
+	}
+	assert.Equal(t, []usageQueryInterval{day}, usageQueryIntervals(UsageFilter{From: "2026-09-06", To: "2026-09-06", Timezone: "America/Santiago"}))
+	fromOnly := day
+	fromOnly.ToMillis, fromOnly.ToLocalDate = math.MaxInt64, ""
+	assert.Equal(t, []usageQueryInterval{fromOnly}, usageQueryIntervals(UsageFilter{From: "2026-09-06", Timezone: "America/Santiago"}))
+	toOnly := day
+	toOnly.FromMillis, toOnly.FromLocalDate = math.MinInt64, "0000-01-01"
+	assert.Equal(t, []usageQueryInterval{toOnly}, usageQueryIntervals(UsageFilter{To: "2026-09-06", Timezone: "America/Santiago"}))
 }
 
 func TestUsageTimezoneRuleFingerprintTracksNamedZoneRules(t *testing.T) {
