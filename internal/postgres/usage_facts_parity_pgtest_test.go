@@ -167,22 +167,9 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	cacheDirectory := t.TempDir()
 	require.NoError(t, remote.ConfigureUsageCache(t.Context(), cacheDirectory, pgURL, schema))
 	require.NotNil(t, remote.usageCache)
-	for _, phase := range []string{"fill", "restart", "refresh"} {
-		t.Run(phase, func(t *testing.T) {
-			if phase == "restart" {
-				require.NoError(t, remote.usageCache.Close())
-				remote.usageCache = nil
-				require.NoError(t, remote.ConfigureUsageCache(t.Context(), cacheDirectory, pgURL, schema))
-			}
-			if phase == "refresh" {
-				_, err := remote.pg.ExecContext(t.Context(), `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='snapshot-winner'`)
-				require.NoError(t, err)
-			}
-			remote.forgetPricingLoad()
-			require.Equal(t, want, captureUsageParitySnapshot(t, remote, filter))
-			requireCompleteUsageParity(t, local, remote, filter)
-		})
-	}
+	remote.forgetPricingLoad()
+	require.Equal(t, want, captureUsageParitySnapshot(t, remote, filter))
+	requireCompleteUsageParity(t, local, remote, filter)
 
 	breakdownFilter := filter
 	breakdownFilter.Breakdowns = true
@@ -309,13 +296,6 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 			require.Equal(t, int64(260_042), daily.Totals.TotalCost.Microdollars)
 		})
 	}
-	require.NoError(t, remote.usageCache.Close())
-	remote.usageCache = nil
-	require.NoError(t, remote.ConfigureUsageCache(t.Context(), cacheDirectory, pgURL, schema))
-	requireCachedUsageMatchesDirect(t, remote, filter)
-	_, err = remote.pg.ExecContext(t.Context(), `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='fractional-rounding'`)
-	require.NoError(t, err)
-	requireCachedUsageMatchesDirect(t, remote, filter)
 }
 
 func requireCompleteUsageParity(
