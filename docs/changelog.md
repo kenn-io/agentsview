@@ -16,6 +16,11 @@ The latest release is
 
 **Bug fixes**
 
+- Claude sessions recorded through the Claude Agent SDK and other embedding
+  hosts no longer double-count tokens and cost when a tool result splits one
+  model response across several transcript records. These transcripts omit
+  `requestId`, so AgentsView now treats the response's message ID alone as its
+  identity. The SQLite usage cache rebuilds once after the upgrade.
 - Prune removes matching parent and child session chains in one pass, even
   without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.

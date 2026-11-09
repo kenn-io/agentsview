@@ -587,6 +587,9 @@ func AddUsageDedupToken(seen map[UsageDedupToken]struct{}, token UsageDedupToken
 	return true
 }
 
+// claudeUsageSnapshotToken identifies one Claude response. The message ID is
+// required; the request ID is empty when the transcript omits requestId, which
+// Claude Agent SDK transcripts do.
 type claudeUsageSnapshotToken struct {
 	messageID string
 	requestID string
@@ -612,11 +615,11 @@ func (row UsageRow) UsageIdentity() UsageIdentity {
 	}
 }
 
-// usageDedupTokenWithoutSourceGate picks the Claude pair, source UUID, or stored usage key,
+// usageDedupTokenWithoutSourceGate picks the Claude response identity, source UUID, or stored usage key,
 // accepting source UUIDs regardless of UsageSource. SessionUsageDedupTokenForRow
 // restricts source UUIDs to message rows.
 func usageDedupTokenWithoutSourceGate(row UsageIdentity) (UsageDedupToken, bool) {
-	if row.ClaudeMessageID != "" && row.ClaudeRequestID != "" {
+	if row.ClaudeMessageID != "" {
 		return UsageDedupToken{
 			Kind: "claude", Value: row.ClaudeMessageID + ":" + row.ClaudeRequestID,
 		}, true
@@ -700,7 +703,7 @@ func claudeSnapshotSelectionContext(
 		if eligible != nil && !eligible[i] {
 			continue
 		}
-		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
+		if u.ClaudeMessageID == "" {
 			mask[i] = true
 			attribution[i] = u.SessionID
 			webSearchRequests[i] = u.WebSearchRequests
@@ -744,7 +747,7 @@ func claudeSnapshotSelectionContext(
 		if eligible != nil && !eligible[i] {
 			continue
 		}
-		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
+		if u.ClaudeMessageID == "" {
 			continue
 		}
 		canonical[i] = groups[rowGroup[i]].best

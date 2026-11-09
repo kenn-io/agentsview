@@ -1555,9 +1555,9 @@ func TestGetActivityReport_UsageDedupOrdering(t *testing.T) {
 			})
 			insertMessages(t, d, Message{
 				SessionID: tc.firstID, Ordinal: 0, Role: "assistant", Content: "x",
-				Timestamp:       "2026-06-16T10:30:00Z",
-				Model:           "claude-sonnet-4-20250514",
-				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
+				Timestamp:  "2026-06-16T10:30:00Z",
+				Model:      "claude-sonnet-4-20250514",
+				SourceUUID: "src-dup",
 				TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.firstOutput)),
 			})
 			insertSession(t, d, tc.secondID, "proj2", func(s *Session) {
@@ -1567,9 +1567,9 @@ func TestGetActivityReport_UsageDedupOrdering(t *testing.T) {
 			})
 			insertMessages(t, d, Message{
 				SessionID: tc.secondID, Ordinal: 0, Role: "assistant", Content: "x",
-				Timestamp:       tc.secondTimestamp,
-				Model:           "claude-sonnet-4-20250514",
-				ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
+				Timestamp:  tc.secondTimestamp,
+				Model:      "claude-sonnet-4-20250514",
+				SourceUUID: "src-dup",
 				TokenUsage: jsontext.Value(fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.secondOutput)),
 			})
 

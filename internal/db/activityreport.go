@@ -1069,7 +1069,6 @@ type activityReportUsageCandidate struct {
 
 func activityReportClaudePeerPredicate(candidateSessions string) string {
 	return `m.claude_message_id != ''
-		AND m.claude_request_id != ''
 		AND (m.claude_message_id, m.claude_request_id) IN (
 			SELECT m.claude_message_id, m.claude_request_id
 			FROM messages m
@@ -1077,7 +1076,6 @@ func activityReportClaudePeerPredicate(candidateSessions string) string {
 			WHERE ` + usageMessageEligibility + `
 				AND m.session_id IN ` + candidateSessions + `
 				AND m.claude_message_id != ''
-				AND m.claude_request_id != ''
 				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
 				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
 		)`

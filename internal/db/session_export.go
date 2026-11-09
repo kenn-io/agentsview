@@ -1151,7 +1151,7 @@ func sessionExportClaudeSnapshotPeers(
 	}
 	keySet := make(map[snapshotKey]struct{})
 	for _, row := range pageRows {
-		if row.claudeMessageID == "" || row.claudeRequestID == "" {
+		if row.claudeMessageID == "" {
 			continue
 		}
 		keySet[snapshotKey{
@@ -1186,7 +1186,7 @@ func sessionExportClaudeSnapshotPeers(
 		}
 		rowsSQL := usageRowsSQLWithWhere(
 			usageMessageEligibility+
-				" AND m.claude_message_id != '' AND m.claude_request_id != ''"+
+				" AND m.claude_message_id != ''"+
 				" AND (m.claude_message_id, m.claude_request_id) IN (VALUES "+
 				strings.Join(tuples, ", ")+")",
 			usageEventEligibility+" AND 1 = 0")

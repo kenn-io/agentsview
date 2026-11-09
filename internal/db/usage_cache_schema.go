@@ -62,7 +62,9 @@ const (
 	// Version 19 preserves account agents and uncapped billing counters.
 	// Version 20 rebuilds account billing rollups without request pricing bands.
 	// Version 21 stores group keys and labels separately from version 20 writers.
-	usageCacheFormatVersion             = 21
+	// Version 22 deduplicates Claude snapshots by message ID when requestId is
+	// absent.
+	usageCacheFormatVersion             = 22
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -212,7 +214,7 @@ CREATE TABLE usage_facts (
 ) WITHOUT ROWID;
 CREATE INDEX usage_facts_claude_identity
     ON usage_facts (claude_message_id, claude_request_id)
-    WHERE claude_message_id != '' AND claude_request_id != '';
+    WHERE claude_message_id != '';
 CREATE INDEX usage_facts_source_uuid
     ON usage_facts (source_uuid) WHERE source_uuid != '';
 CREATE INDEX usage_facts_usage_dedup_key

@@ -99,8 +99,8 @@ const activityUsagePeerFactsSQL = `SELECT DISTINCT ` + activityUsageFactColumns 
 	CROSS JOIN usage_facts f ON f.claude_message_id = c.claude_message_id
 		AND f.claude_request_id = c.claude_request_id
 	CROSS JOIN usage_cached_sessions cs ON cs.id = f.cached_session_id
-	WHERE c.claude_message_id != '' AND c.claude_request_id != '' AND c.token_eligible
-		AND f.claude_message_id != '' AND f.claude_request_id != ''
+	WHERE c.claude_message_id != '' AND c.token_eligible
+		AND f.claude_message_id != ''
 		AND f.cached_session_id != c.cached_session_id
 		AND f.token_eligible AND f.source = 'message'
 		AND cs.session_id NOT IN (SELECT value FROM json_each(?1))
