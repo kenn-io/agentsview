@@ -430,14 +430,38 @@ func runEmbeddingsBuild(
 	var client *embeddingsDaemonClient
 	setup := !cfg.Vector.Enabled
 	var setupBusy bool
-	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+	if setup {
+		tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 0)
+		if err != nil {
+			return err
+		}
+		if tr.Mode == transportHTTP {
+			if tr.ReadOnly {
+				return errors.New("semantic search setup requires a writable daemon")
+			}
+			client = &embeddingsDaemonClient{baseURL: tr.URL, token: cfg.AuthToken, store: daemonEmbeddingStore(spec.Name)}
+		} else {
+			if tr.DirectReadOnly {
+				return errLocalDaemonUnreachable
+			}
+			archive, err := openReadOnlyDB(ctx, cfg)
+			if err != nil {
+				return fmt.Errorf("opening archive before search setup: %w; start the daemon with `agentsview daemon start`", err)
+			}
+			if err := archive.Close(); err != nil {
+				return fmt.Errorf("closing archive before search setup: %w", err)
+			}
+		}
+	} else if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
 		c, err := resolveEmbeddingsDaemonClient(cfg)
 		if err != nil {
 			return err
 		}
 		c.store = daemonEmbeddingStore(spec.Name)
 		client = &c
-		status, err := c.status(ctx)
+	}
+	if client != nil {
+		status, err := client.status(ctx)
 		if err != nil {
 			return err
 		}
@@ -463,9 +487,6 @@ func runEmbeddingsBuild(
 	req := vector.BuildRequest{
 		Store: spec.Name, FullRebuild: opts.FullRebuild, Backstop: opts.Backstop,
 		RepairInvalid: opts.RepairInvalid, IncludeAutomated: includeAutomated, Using: opts.Using,
-	}
-	if err := vector.ValidateBuildRequest(req); err != nil {
-		return err
 	}
 	confirmation := bufio.NewScanner(in)
 	if setupBusy {

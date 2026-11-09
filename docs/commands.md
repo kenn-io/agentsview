@@ -2250,9 +2250,9 @@ ______________________________________________________________________
 
 ### `agentsview index embeddings`
 
-Manage the local semantic search embedding index. Requires `[vector]` to be
-enabled in config. See [Semantic Search](/docs/semantic-search/) for full
-documentation, including configuration and the search surface.
+Manage the local semantic search embedding index. `build` turns search on when
+needed. The other commands require it to be enabled. See
+[Semantic Search](/docs/semantic-search/) for configuration and search details.
 
 ```bash
 agentsview index embeddings build           # build or refresh the index

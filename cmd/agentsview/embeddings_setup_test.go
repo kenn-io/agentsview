@@ -23,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedlocal"
 )
@@ -575,10 +576,12 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 }
 
 func TestCLIEmbeddingsSetupDeclined(t *testing.T) {
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	for _, input := range []string{"no\n", ""} {
 		t.Run(fmt.Sprintf("input=%q", input), func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
+			dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 			writeEmbeddingsTestConfig(t, dir, "http://127.0.0.1:1")
 			path := filepath.Join(dir, "config.toml")
 			before, err := os.ReadFile(path)
@@ -598,6 +601,7 @@ func TestCLIEmbeddingsSetupDeclined(t *testing.T) {
 }
 
 func TestCLIDirectEmbeddingsSetup(t *testing.T) {
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
 	encoder := newEmbeddingsStubServer(t, 3)
@@ -618,6 +622,7 @@ func TestCLIDirectEmbeddingsSetup(t *testing.T) {
 }
 
 func TestCLIEmbeddingsSetupDownload(t *testing.T) {
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
@@ -689,6 +694,7 @@ func TestSetupRejectsInvalidBuildBeforeEnable(t *testing.T) {
 }
 
 func TestCLIDirectEmbeddingsSetupMigratesLegacyConfig(t *testing.T) {
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
 	encoder := newEmbeddingsStubServer(t, 768)
@@ -888,4 +894,81 @@ func TestEmbeddingsBuildHelpExplainsYes(t *testing.T) {
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, out.String(), "setup and downloads still ask")
+}
+
+func TestCLIEmbeddingsFreshSetupAutostartsAndSyncs(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
+	fixture := testConfigWithClaudeFixture(t)
+	t.Setenv("AGENTSVIEW_DATA_DIR", fixture.DataDir)
+	path := filepath.Join(fixture.DataDir, "config.toml")
+	require.NoError(t, os.WriteFile(path, fmt.Appendf(nil, "claude_project_dirs = [%q]\n", fixture.AgentDirs[parser.AgentClaude][0]), 0o600))
+	assert.NoFileExists(t, fixture.DBPath)
+	encoder := newEmbeddingsStubServer(t, 768)
+	t.Cleanup(encoder.Close)
+	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{OllamaAvailable: true}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return encoder.URL, nil }
+	var started bool
+	stubStartBackgroundServeForTransport(t, func(ctx context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
+		started = true
+		assert.NoFileExists(t, cfg.DBPath)
+		database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+		engine := syncpkg.NewEngine(ctx, database, localSyncEngineConfig(*cfg))
+		t.Cleanup(engine.Close)
+		assert.Equal(t, 3, engine.SyncAll(ctx, nil).Synced)
+		owner, err := newLiveVectorServing(t.Context(), *cfg, database, nil, config.LoadReadOnly)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, owner.Close()) })
+		ln, port := listenLoopback(t)
+		cfg.Host, cfg.Port = "127.0.0.1", port
+		ts := startTestServer(t, ln, server.New(*cfg, database, nil, append(owner.ServerOptions(), server.WithBaseContext(t.Context()))...).Handler())
+		endpoint := serverEndpoint(t, ts)
+		writeDaemonRuntimeForTest(t, cfg.DataDir, endpoint.Host, endpoint.Port, version, false)
+		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
+	})
+	oldInterval := embeddingsPollInterval
+	embeddingsPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { embeddingsPollInterval = oldInterval })
+	var out strings.Builder
+	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
+	assert.True(t, started)
+	assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.True(t, cfg.Vector.Enabled)
+	search := newRootCommand()
+	var result strings.Builder
+	search.SetOut(&result)
+	search.SetArgs([]string{"session", "search", "network connections", "--hybrid", "--json", "--include-one-shot"})
+	require.NoError(t, search.Execute())
+	assert.Contains(t, result.String(), "session0")
+}
+
+func TestCLIEmbeddingsSetupRequiresReadableArchiveWithoutDaemon(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("corrupt=%t", corrupt), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+			dir := testDataDir(t)
+			path := filepath.Join(dir, "config.toml")
+			contents := []byte("[vector]\nenabled = false\n")
+			require.NoError(t, os.WriteFile(path, contents, 0o600))
+			if corrupt {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "sessions.db"), []byte("invalid archive"), 0o600))
+			}
+			var out strings.Builder
+			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+			require.ErrorContains(t, err, "opening archive before search setup")
+			assert.ErrorContains(t, err, "agentsview daemon start")
+			assert.NotContains(t, out.String(), "[y/N]")
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, contents, after)
+			assert.NoFileExists(t, filepath.Join(dir, "vectors.db"))
+		})
+	}
 }

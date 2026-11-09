@@ -521,7 +521,7 @@ ranked below top-level human-driven work. The
 
 ```bash
 agentsview index embeddings build            # incremental: refresh + fill whatever's missing
-agentsview index embeddings build --yes      # skip the full-rebuild prompt; local downloads still ask
+agentsview index embeddings build --yes      # skip the full-rebuild prompt; setup and downloads still ask
 agentsview index embeddings build --full-rebuild --yes  # re-embeds every document
 agentsview index embeddings build --backstop # force a full mirror reconciliation scan
 agentsview index embeddings build --repair-invalid # regenerate only documents with invalid stored vectors
