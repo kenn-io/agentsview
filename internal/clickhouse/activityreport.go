@@ -956,13 +956,14 @@ func (s *Store) readActivityUsageSlices(
 	for i := range levels {
 		levels[i] = strconv.FormatFloat(float64(i+1)/activityUsageMaxSlices, 'f', -1, 64)
 	}
-	// The scalar subquery runs before the count, so the generation it names
-	// is the one every slice reads unless a refresh swaps the table later.
+	// The generation is read before any slice runs, so rows that change
+	// while the slices run change it by the check below.
+	generationSQL := chActivityUsageGenerationSQL(len(state.raw) > 0)
 	var count uint64
 	var cuts []time.Time
 	var generation string
 	if err := s.bulk.QueryRow(ctx,
-		"SELECT count(), quantiles("+strings.Join(levels, ", ")+")(assumeNotNull(ts)), ("+chPreparedUsageGenerationSQL+
+		"SELECT count(), quantiles("+strings.Join(levels, ", ")+")(assumeNotNull(ts)), ("+generationSQL+
 			") FROM prepared_usage WHERE "+where,
 		args...,
 	).Scan(&count, &cuts, &generation); err != nil {
@@ -1009,12 +1010,12 @@ func (s *Store) readActivityUsageSlices(
 	if s.afterUsageSlices != nil {
 		s.afterUsageSlices()
 	}
-	// A refresh replaces prepared_usage whole. If it did so while the slices
-	// ran, some slices read the old rows and some the new, and a message
-	// whose timestamp a push corrected across a slice boundary is dropped
-	// or counted twice. One query reads a single generation.
+	// If the rows changed while the slices ran, some slices read the old
+	// rows and some the new, and a message whose timestamp a push corrected
+	// across a slice boundary is dropped or counted twice. One query reads a
+	// single generation.
 	var after string
-	if err := s.bulk.QueryRow(ctx, chPreparedUsageGenerationSQL).Scan(&after); err != nil {
+	if err := s.bulk.QueryRow(ctx, generationSQL).Scan(&after); err != nil {
 		return nil, fmt.Errorf("checking clickhouse prepared usage generation: %w", err)
 	}
 	if after != generation {
@@ -1023,12 +1024,34 @@ func (s *Store) readActivityUsageSlices(
 	return joinActivityUsageSlices(sorters), nil
 }
 
-// chPreparedUsageGenerationSQL names the prepared_usage table a query would
-// read now. A refresh exchanges in a new table and a rebuild creates one, so
-// the name changes whenever the table's rows are replaced. Databases without
-// table UUIDs fall back on the metadata time.
-const chPreparedUsageGenerationSQL = `SELECT concat(toString(uuid), '|', toString(metadata_modification_time))
-	FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'`
+// chActivityUsageRawTables are the tables a range read takes the raw hosts'
+// rows from; see chRawHostUsageRowsSQL.
+var chActivityUsageRawTables = []string{"usage_messages", "usage_events", "sessions", chUsagePriceTable}
+
+// chActivityUsageGenerationSQL identifies the rows a range read's slices
+// would read now: the prepared_usage table and the active parts of every
+// table they read, the raw hosts' tables included when raw is set. A
+// refresh exchanges in a new table, which changes its UUID, or its metadata
+// time in databases without table UUIDs. A rebuild moves new parts in with
+// REPLACE PARTITION, and a push to a raw host inserts new parts, so either
+// changes the parts. Merges change the parts too, which only costs a
+// second read.
+func chActivityUsageGenerationSQL(raw bool) string {
+	tables := []string{"prepared_usage"}
+	if raw {
+		tables = append(tables, chActivityUsageRawTables...)
+	}
+	quoted := make([]string, len(tables))
+	for i, table := range tables {
+		quoted[i] = chStringLiteral(table)
+	}
+	return `SELECT concat(
+		(SELECT concat(toString(uuid), '|', toString(metadata_modification_time))
+			FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'),
+		'|',
+		(SELECT hex(SHA256(toString(arraySort(groupArray((table, name, hash_of_all_files))))))
+			FROM system.parts WHERE database = currentDatabase() AND active AND table IN (` + strings.Join(quoted, ", ") + `)))`
+}
 
 // activityUsageSlice is an inclusive range of RFC 3339 bounds.
 type activityUsageSlice struct{ lower, upper string }
