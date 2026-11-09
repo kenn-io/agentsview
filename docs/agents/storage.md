@@ -930,7 +930,7 @@ invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
 PostgreSQL keeps ongoing Activity reports' ordered transcript metadata and raw
-usage inputs in memory with a shared 128 MiB estimated-size budget. The usage
+usage inputs in memory with a 128 MiB estimated-size budget. The usage
 change journal invalidates changed sessions and their matching snapshot peers.
 Each visit selects sessions, pairs messages against the current clock, selects
 usage snapshots, and prices the surviving rows again. Tool events and message
