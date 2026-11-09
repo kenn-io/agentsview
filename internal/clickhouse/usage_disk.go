@@ -5,15 +5,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/gob"
-	"fmt"
+	"errors"
 	"io"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 )
 
-const usageDiskVersion = "usage-2|"
-const topUsageDiskVersion = "usage-top-1|"
+const (
+	usageDiskVersion    = "usage-2|"
+	topUsageDiskVersion = "usage-top-1|"
+)
 
 func encodeUsageRows[T any](rows []T, limit int64, size func(T) int64) ([]byte, error) {
 	var buf bytes.Buffer
@@ -25,13 +27,13 @@ func encodeUsageRows[T any](rows []T, limit int64, size func(T) int64) ([]byte, 
 	for _, row := range rows {
 		total += size(row)
 		if total > limit {
-			return nil, fmt.Errorf("usage selection exceeds limit")
+			return nil, errors.New("usage selection exceeds limit")
 		}
 		if err := enc.Encode(row); err != nil {
 			return nil, err
 		}
 		if int64(buf.Len()) > limit {
-			return nil, fmt.Errorf("usage selection exceeds limit")
+			return nil, errors.New("usage selection exceeds limit")
 		}
 	}
 	return buf.Bytes(), nil
@@ -57,7 +59,7 @@ func decodeUsageRows[T any](data []byte, limit int64, size func(T) int64) ([]T, 
 		rows = append(rows, row)
 	}
 	var extra T
-	return rows, dec.Decode(&extra) == io.EOF
+	return rows, errors.Is(dec.Decode(&extra), io.EOF)
 }
 
 // usageCaptureStable validates a fill against the parts captured for its request.

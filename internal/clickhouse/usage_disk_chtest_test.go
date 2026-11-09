@@ -122,7 +122,7 @@ func TestUsageDiskNextDay(t *testing.T) {
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
 	_, before := usageQueryCounts(t, restarted)
-	f.To = "2026-01-31"
+	f.To = "2026-02-01"
 	again, err := restarted.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, daily, again)
