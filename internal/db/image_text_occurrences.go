@@ -24,8 +24,8 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 		return err
 	}
 	rows, err := tx.Query(`SELECT tc.id, 0, COALESCE(tc.result_content, '') FROM tool_calls tc
-		WHERE tc.session_id=? AND instr(lower(COALESCE(tc.result_content,'')), 'image')>0 AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
-		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND instr(lower(e.content), 'image')>0`, sessionID, sessionID)
+		WHERE tc.session_id=? AND tc.result_content LIKE '%image%' AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
+		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND e.content LIKE '%image%'`, sessionID, sessionID)
 	if err != nil {
 		return err
 	}
