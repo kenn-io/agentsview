@@ -48,14 +48,14 @@ func (s analyticsSQL) SummarySQL(f db.AnalyticsFilter) (string, []any) {
 			FROM filtered
 		),
 		project_totals AS (
-			SELECT project, toInt64(SUM(message_count)) AS messages
+			SELECT project, SUM(message_count) AS messages
 			FROM filtered
 			GROUP BY project
 		)
 		SELECT
 			toInt64(COUNT(*)) AS total_sessions,
-			toInt64(COALESCE(SUM(message_count), 0)) AS total_messages,
-			toInt64(COALESCE(sumIf(total_output_tokens, has_total_output_tokens = true), 0)) AS total_output_tokens,
+			COALESCE(SUM(message_count), 0) AS total_messages,
+			COALESCE(sumIf(total_output_tokens, has_total_output_tokens = true), 0) AS total_output_tokens,
 			toInt64(countIf(has_total_output_tokens = true)) AS token_reporting_sessions,
 			toInt64(COUNT(DISTINCT project)) AS active_projects,
 			toInt64(COUNT(DISTINCT local_date)) AS active_days,
@@ -78,7 +78,7 @@ func (s analyticsSQL) SummarySQL(f db.AnalyticsFilter) (string, []any) {
 				ORDER BY messages DESC, project ASC
 				LIMIT 1
 			), '') AS most_active,
-			ifNotFinite(round(CAST((
+			ifNotFinite(round((
 				SELECT SUM(messages)
 				FROM (
 					SELECT messages
@@ -86,7 +86,7 @@ func (s analyticsSQL) SummarySQL(f db.AnalyticsFilter) (string, []any) {
 					ORDER BY messages DESC
 					LIMIT 3
 				)
-			) AS Float64) / NULLIF(SUM(message_count), 0), 3), 0) AS concentration
+			) / NULLIF(SUM(message_count), 0), 3), 0) AS concentration
 		FROM filtered`
 	return query, queryArgs
 }
@@ -143,26 +143,26 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 			GROUP BY bucket
 		)
 		SELECT bucket,
-			toInt64(sum(sessions)) AS sessions,
-			toInt64(sum(messages)) AS messages,
-			toInt64(sum(user_messages)) AS user_messages,
-			toInt64(sum(assistant_messages)) AS assistant_messages,
-			toInt64(sum(thinking_messages)) AS thinking_messages,
-			toInt64(sum(tool_calls)) AS tool_calls
+			sum(sessions) AS sessions,
+			sum(messages) AS messages,
+			sum(user_messages) AS user_messages,
+			sum(assistant_messages) AS assistant_messages,
+			sum(thinking_messages) AS thinking_messages,
+			sum(tool_calls) AS tool_calls
 		FROM (
 			SELECT bucket, sessions,
-				toInt64(0) AS messages, toInt64(0) AS user_messages,
-				toInt64(0) AS assistant_messages, toInt64(0) AS thinking_messages,
-				toInt64(0) AS tool_calls
+				0 AS messages, 0 AS user_messages,
+				0 AS assistant_messages, 0 AS thinking_messages,
+				0 AS tool_calls
 			FROM session_rows
 			UNION ALL
-			SELECT bucket, toInt64(0) AS sessions, messages, user_messages,
-				assistant_messages, thinking_messages, toInt64(0) AS tool_calls
+			SELECT bucket, 0 AS sessions, messages, user_messages,
+				assistant_messages, thinking_messages, 0 AS tool_calls
 			FROM message_rows
 			UNION ALL
-			SELECT bucket, toInt64(0) AS sessions, toInt64(0) AS messages,
-				toInt64(0) AS user_messages, toInt64(0) AS assistant_messages,
-				toInt64(0) AS thinking_messages, tool_calls
+			SELECT bucket, 0 AS sessions, 0 AS messages,
+				0 AS user_messages, 0 AS assistant_messages,
+				0 AS thinking_messages, tool_calls
 			FROM tool_rows
 		) combined
 		GROUP BY bucket
@@ -189,11 +189,11 @@ func chActivityBucketsFromFactsSQL(where, localDate, bucketExpr string) string {
 		session_rows AS (
 			SELECT ` + bucketExpr + ` AS bucket,
 				toInt64(COUNT(*)) AS sessions,
-				toInt64(sumIf(fact_messages, facts_known)) AS messages,
-				toInt64(sumIf(fact_user_messages, facts_known)) AS user_messages,
-				toInt64(sumIf(fact_assistant_messages, facts_known)) AS assistant_messages,
-				toInt64(sumIf(fact_thinking_messages, facts_known)) AS thinking_messages,
-				toInt64(sumIf(fact_tool_calls, facts_known)) AS tool_calls
+				sumIf(fact_messages, facts_known) AS messages,
+				sumIf(fact_user_messages, facts_known) AS user_messages,
+				sumIf(fact_assistant_messages, facts_known) AS assistant_messages,
+				sumIf(fact_thinking_messages, facts_known) AS thinking_messages,
+				sumIf(fact_tool_calls, facts_known) AS tool_calls
 			FROM filtered_sessions
 			GROUP BY bucket
 		),
@@ -223,24 +223,24 @@ func chActivityBucketsFromFactsSQL(where, localDate, bucketExpr string) string {
 			GROUP BY bucket
 		)
 		SELECT bucket,
-			toInt64(sum(sessions)) AS sessions,
-			toInt64(sum(messages)) AS messages,
-			toInt64(sum(user_messages)) AS user_messages,
-			toInt64(sum(assistant_messages)) AS assistant_messages,
-			toInt64(sum(thinking_messages)) AS thinking_messages,
-			toInt64(sum(tool_calls)) AS tool_calls
+			sum(sessions) AS sessions,
+			sum(messages) AS messages,
+			sum(user_messages) AS user_messages,
+			sum(assistant_messages) AS assistant_messages,
+			sum(thinking_messages) AS thinking_messages,
+			sum(tool_calls) AS tool_calls
 		FROM (
 			SELECT bucket, sessions, messages, user_messages,
 				assistant_messages, thinking_messages, tool_calls
 			FROM session_rows
 			UNION ALL
-			SELECT bucket, toInt64(0) AS sessions, messages, user_messages,
-				assistant_messages, thinking_messages, toInt64(0) AS tool_calls
+			SELECT bucket, 0 AS sessions, messages, user_messages,
+				assistant_messages, thinking_messages, 0 AS tool_calls
 			FROM message_rows
 			UNION ALL
-			SELECT bucket, toInt64(0) AS sessions, toInt64(0) AS messages,
-				toInt64(0) AS user_messages, toInt64(0) AS assistant_messages,
-				toInt64(0) AS thinking_messages, tool_calls
+			SELECT bucket, 0 AS sessions, 0 AS messages,
+				0 AS user_messages, 0 AS assistant_messages,
+				0 AS thinking_messages, tool_calls
 			FROM tool_rows
 		) combined
 		GROUP BY bucket
@@ -266,7 +266,7 @@ func (s analyticsSQL) ActivityAgentsSQL(f db.AnalyticsFilter, granularity string
 			FROM sessions s
 			WHERE ` + where + `
 		)
-		SELECT bucket, agent, toInt64(sum(messages)) AS messages
+		SELECT bucket, agent, sum(messages) AS messages
 		FROM (
 			SELECT ` + bucketExpr + ` AS bucket, agent, fact_messages AS messages
 			FROM filtered_sessions
@@ -449,7 +449,7 @@ func (s analyticsSQL) ToolSessionWindow(f db.AnalyticsFilter) (string, []any) {
 func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includeTime bool) (string, []any) {
 	where, args := chBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, includeTime)
-	durationSelectExpr := `COALESCE(toFloat64(toUnixTimestamp64Micro(s.ended_at) - toUnixTimestamp64Micro(s.started_at)) / 60000000.0, 0)`
+	durationSelectExpr := `COALESCE((toUnixTimestamp64Micro(s.ended_at) - toUnixTimestamp64Micro(s.started_at)) / 60000000.0, 0)`
 	activeDurationSelectExpr := "COALESCE(ad.active_duration_min, 0)"
 	orderExpr := "s.message_count DESC, s.id ASC"
 	switch metric {

@@ -955,7 +955,7 @@ func (s *Sync) deleteVectorChunksThrough(ctx context.Context, fingerprint string
 		WHERE generation_fingerprint = {vector_evict_fingerprint:String}
 		  AND session_id IN {vector_evict_sessions:Array(String)} AND `+keys+`
 		  AND push_version <= transform(session_id, {vector_evict_sessions:Array(String)},
-			{vector_evict_versions:Array(UInt64)}, toUInt64(0))`); err != nil {
+			{vector_evict_versions:Array(UInt64)}, 0)`); err != nil {
 		return fmt.Errorf("evicting clickhouse vector chunks for %d session(s): %w", len(sessions), err)
 	}
 	return nil

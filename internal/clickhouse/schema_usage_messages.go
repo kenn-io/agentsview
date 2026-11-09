@@ -142,7 +142,7 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 		expression := strings.ReplaceAll(column.expression, "token_usage", "tupleElement(m,'token_usage')")
 		if column.name != "usage_present" && column.name != "usage_web" {
 			typ = "UInt32"
-			expression = fmt.Sprintf("least(greatest(%s,toInt64(0)),toInt64(%d))", expression, db.MaxPlausibleTokens)
+			expression = fmt.Sprintf("least(greatest(%s,0),%d)", expression, db.MaxPlausibleTokens)
 		}
 		factTypes = append(factTypes, column.name+" "+typ)
 		factValues = append(factValues, expression)
