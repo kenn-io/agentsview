@@ -97,14 +97,21 @@ async function selectFirstSession(page: Page) {
 }
 
 // Sessions holding only hook output appear in the sidebar but render
-// no messages, so a scan skips them instead of failing.
+// no messages, so a scan skips them instead of failing. Waiting for the
+// clicked session's transcript to load, rather than for a timeout,
+// keeps both capture passes choosing the same session.
 async function openSessionWithMessages(item: Locator): Promise<boolean> {
+  const page = item.page();
+  const id = await item.getAttribute('data-session-id');
+  if (!id) throw new Error('session item has no id');
   await item.click();
-  return item
-    .page()
+  const list = page.locator('.message-list-scroll');
+  await expect(list).toHaveAttribute('data-messages-session-id', id, { timeout: 10_000 });
+  await expect(list).toHaveAttribute('data-loaded', 'true', { timeout: 10_000 });
+  return page
     .locator('.message')
     .first()
-    .waitFor({ timeout: 10_000 })
+    .waitFor({ timeout: 2_000 })
     .then(
       () => true,
       () => false,
