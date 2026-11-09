@@ -32,8 +32,10 @@ func TestDiagnosticsAppendLocalAndServer(t *testing.T) {
 	ts := localServerProxy(t, d, dataDir, server.WithBasePath(""))
 	out, _, err = runInsightCommand(t, append(args, "--server", ts.URL)...)
 	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal([]byte(out), &event))
-	assert.Equal(t, id, event.ID)
+	var remoteEvent db.DiagnosticEvent
+	require.NoError(t, json.Unmarshal([]byte(out), &remoteEvent))
+	assert.Equal(t, id, remoteEvent.ID)
+	assert.Equal(t, time.Date(2026, 1, 1, 23, 55, 0, 0, time.UTC), remoteEvent.OccurredAt)
 	retryID := uuid.NewV7().String()
 	retryArgs := []string{"diagnostics", "append", "--source", "worker", "--message", "retry failure", "--id", retryID, "--server", ts.URL, "--json"}
 	first, _, err := runInsightCommand(t, retryArgs...)
