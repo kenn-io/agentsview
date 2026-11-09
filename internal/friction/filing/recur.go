@@ -21,7 +21,12 @@ func (f *Filer) Reopen(ctx context.Context, since string, loc *time.Location) (i
 	if loc == nil {
 		loc = time.UTC
 	}
-	filter := db.FrictionPatternFilter{Linked: true, Since: since, Limit: db.MaxFrictionListLimit}
+	start, err := time.Parse(time.DateOnly, since)
+	if err != nil {
+		return 0, err
+	}
+	start = start.AddDate(0, 0, -1)
+	filter := db.FrictionPatternFilter{Linked: true, Since: start.Format(time.DateOnly), Limit: db.MaxFrictionListLimit}
 	count := 0
 	for {
 		rows, next, err := f.Store.ListFrictionPatterns(ctx, filter)
@@ -32,7 +37,7 @@ func (f *Filer) Reopen(ctx context.Context, since string, loc *time.Location) (i
 			if err := ctx.Err(); err != nil {
 				return count, err
 			}
-			changed, err := f.reopenIfRecurred(ctx, p, since, loc)
+			changed, err := f.reopenIfRecurred(ctx, p, start, loc)
 			if errors.Is(err, kata.ErrNotReady) || errors.Is(err, kata.ErrUnavailable) || kata.StatusOf(err) >= http.StatusInternalServerError {
 				return count, nil
 			}
@@ -51,7 +56,7 @@ func (f *Filer) Reopen(ctx context.Context, since string, loc *time.Location) (i
 	}
 }
 
-func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, since string, loc *time.Location) (bool, error) {
+func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, start time.Time, loc *time.Location) (bool, error) {
 	is, err := f.Kata.GetIssue(ctx, p.Issue.IssueUID)
 	if err != nil {
 		return false, err
@@ -60,14 +65,9 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, sinc
 		return false, nil
 	}
 	closed := is.ClosedAt.In(loc).Format(time.DateOnly)
-	day, err := time.Parse(time.DateOnly, since)
-	if err != nil {
-		return false, err
-	}
-	day = day.AddDate(0, 0, -1)
 	qualified := ""
 	occurrenceDate := ""
-	for ; day.Format(time.DateOnly) <= p.LastSeenDate; day = day.AddDate(0, 0, 1) {
+	for day := start; day.Format(time.DateOnly) <= p.LastSeenDate; day = day.AddDate(0, 0, 1) {
 		date := day.Format(time.DateOnly)
 		filter := db.FrictionFindingFilter{Fingerprint: p.Fingerprint, Date: date, Limit: db.MaxFrictionListLimit}
 		for {

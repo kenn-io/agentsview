@@ -115,6 +115,22 @@ func TestReopenFindingInEarlierDigest(t *testing.T) {
 	assert.Equal(t, "This pattern recurred on 2026-09-15 after the issue was closed on 2026-09-15.\n\nhttps://av.example.test/base/friction?date="+date, got.Comments[0])
 }
 
+func TestReopenWhenOnlyDigestPrecedesSince(t *testing.T) {
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName)
+	closed := time.Date(2026, 9, 15, 14, 0, 0, 0, time.UTC)
+	occurred := time.Date(2026, 9, 15, 15, 30, 0, 0, time.UTC)
+	seedRecurrence(t, d, "2026-09-15", "claude:s1", &occurred)
+	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
+	require.NoError(t, err)
+
+	n, err := f.Reopen(t.Context(), "2026-09-16", time.FixedZone("Tokyo", 9*60*60))
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, "open", mustIssue(t, s, is.UID).Status)
+}
+
 func TestReopenClosuresWithinSameSecond(t *testing.T) {
 	s := katatest.New(t)
 	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
