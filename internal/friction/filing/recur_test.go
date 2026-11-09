@@ -102,6 +102,52 @@ func TestReopenRetryDoesNotDuplicateComment(t *testing.T) {
 	assert.Len(t, got.Comments, 1)
 }
 
+type changedLinkStore struct {
+	filing.Store
+	change func(context.Context)
+}
+
+func (s changedLinkStore) ListFrictionPatterns(ctx context.Context, filter db.FrictionPatternFilter) ([]db.FrictionPattern, string, error) {
+	rows, next, err := s.Store.ListFrictionPatterns(ctx, filter)
+	if filter.Linked && err == nil {
+		s.change(ctx)
+	}
+	return rows, next, err
+}
+
+func TestReopenRespectsChangedLink(t *testing.T) {
+	for _, relink := range []bool{false, true} {
+		name := "unlink"
+		if relink {
+			name = "relink"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := katatest.New(t)
+			f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+			seedDigestOn(t, d, "2026-09-16", correction)
+			closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+			old := s.AddIssue(katatest.Issue{Title: "old", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+			_, err := f.Link(t.Context(), correction.Fingerprint(), old.UID)
+			require.NoError(t, err)
+			other := s.AddIssue(katatest.Issue{Title: "other"})
+			f.Store = changedLinkStore{Store: findingStore{Store: d, findings: []db.FrictionFinding{{}}}, change: func(ctx context.Context) {
+				if relink {
+					_, err := f.Link(ctx, correction.Fingerprint(), other.UID)
+					require.NoError(t, err)
+				} else {
+					require.NoError(t, f.Unlink(ctx, correction.Fingerprint()))
+				}
+			}}
+			n, err := f.Reopen(t.Context(), "2026-09-01", nil)
+			require.NoError(t, err)
+			assert.Zero(t, n)
+			got := mustIssue(t, s, old.UID)
+			assert.Equal(t, "closed", got.Status)
+			assert.Empty(t, got.Comments)
+		})
+	}
+}
+
 func TestReopenWhenKataNotReady(t *testing.T) {
 	s := katatest.New(t)
 	f, _ := newFiler(t, s, "missing", correction)

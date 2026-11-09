@@ -84,6 +84,13 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, loc 
 	if !found {
 		return false, nil
 	}
+	current, err := f.pattern(ctx, p.Fingerprint)
+	if err != nil {
+		return false, err
+	}
+	if current.Issue == nil || current.Issue.IssueUID != p.Issue.IssueUID {
+		return false, nil
+	}
 	body := fmt.Sprintf("This pattern recurred on %s after the issue was closed on %s.", p.LastSeenDate, closed)
 	if link := friction.DigestURL(f.PublicURL, p.LastSeenDate); link != "" {
 		body += "\n\n" + link

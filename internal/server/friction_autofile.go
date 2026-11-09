@@ -37,7 +37,7 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 	s.mu.RUnlock()
 	runner := s.frictionRunner
 	store, ok := s.db.(filing.Store)
-	if !ok || !frictionLinksWritable(store) {
+	if !ok {
 		return nil
 	}
 	// The catch-up released its work lease; hold one so an idle daemon
@@ -57,7 +57,7 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 	}
 	since := latest.AddDate(0, 0, 1-max(backfill, 1)).Format(time.DateOnly)
 	var rep filing.ReconcileReport
-	if policy.AutoFile {
+	if policy.AutoFile && frictionLinksWritable(store) {
 		rep, err = f.Reconcile(ctx, filing.Policy{
 			Kinds: policy.FileKinds(), Since: since,
 			MinSessions: policy.FileMinSessions(), MaxNew: frictionAutoFilePerPass,

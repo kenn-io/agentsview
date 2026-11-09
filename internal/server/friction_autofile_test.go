@@ -85,6 +85,22 @@ func TestFrictionJobDoesNotFileWhereLinksCannotBeSaved(t *testing.T) {
 	cfg.Friction.Kata.MinSessions = 1
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	seedFrictionDigest(t, database, "2026-09-14")
+	fp := frictionTestSnapshot("2026-09-14").Signals[0].Fingerprint()
+	dbtest.SeedSession(t, database, "claude:s1", "proj")
+	session, err := database.GetSession(t.Context(), "claude:s1")
+	require.NoError(t, err)
+	occurred := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	applied, err := database.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
+		RulesVersion: "friction-v1", Findings: []db.FrictionFinding{{SessionID: "claude:s1", Kind: "correction", Detector: "correction.coding", Fingerprint: fp, OccurredAt: &occurred, RulesVersion: "friction-v1"}},
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
+	closed := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+	require.NoError(t, database.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{
+		Fingerprint: fp, KataInstanceUID: "instance", KataProjectUID: "project", IssueUID: is.UID,
+		QualifiedID: "agentsview#" + is.ShortID, Source: db.FrictionIssueSourceManual, LinkedAt: closed,
+	}))
 	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
 	runner := &review.Runner{Store: database, Loc: time.UTC, Now: func() time.Time { return fixed }, BackfillDays: 7}
 	server.New(cfg, linksUnwritableStore{database}, nil,
@@ -95,6 +111,10 @@ func TestFrictionJobDoesNotFileWhereLinksCannotBeSaved(t *testing.T) {
 
 	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
 	assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"), "no issue is created without a place for its link")
+	got, ok := s.Issue(is.UID)
+	require.True(t, ok)
+	assert.Equal(t, "open", got.Status)
+	assert.Len(t, got.Comments, 1)
 }
 
 // The local daemon starts the friction job after the server exists and
