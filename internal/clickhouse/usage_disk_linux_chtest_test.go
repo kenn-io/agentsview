@@ -18,7 +18,7 @@ func TestUsageDiskPushDuringLoad(t *testing.T) {
 	local, syncer, first := newPreparedUsageStore(t)
 	require.NoError(t, first.openActivityReportDisk(syncer.target))
 	f := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
-	_, err := first.GetDailyUsage(t.Context(), f)
+	before, err := first.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
 	require.NoError(t, err)
@@ -54,8 +54,12 @@ func TestUsageDiskPushDuringLoad(t *testing.T) {
 	got, err := restarted.GetDailyUsage(t.Context(), f)
 	require.NoError(t, <-done)
 	require.NoError(t, err)
+	require.Equal(t, before, got)
+	require.NoError(t, os.Remove(files[0]))
 	fresh := newTestStore(t, syncer.conn, syncer.target)
 	want, err := fresh.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
-	require.Equal(t, want, got)
+	next, err := restarted.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, want, next)
 }

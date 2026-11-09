@@ -18,15 +18,14 @@ type Disk struct {
 	reports           Reports
 	mu                sync.Mutex
 	maxFile, maxBytes int64
-	maxEntries        int
 }
 
-func (d *Disk) Open(subdir, id string, maxFile, maxBytes int64, maxEntries int) error {
+func (d *Disk) Open(subdir, id string, maxFile, maxBytes int64) error {
 	if err := d.reports.OpenDisk(subdir, id); err != nil {
 		return err
 	}
 	d.reports.disk.suffix = ".gob"
-	d.maxFile, d.maxBytes, d.maxEntries = maxFile, maxBytes, maxEntries
+	d.maxFile, d.maxBytes = maxFile, maxBytes
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.trim()
@@ -51,31 +50,62 @@ func (d *Disk) Get(selection, version string) ([]byte, bool) {
 	if disk.dir == "" {
 		return nil, false
 	}
-	path := disk.path(selection)
-	info, err := os.Stat(path)
-	if err != nil || (d.maxFile > 0 && info.Size() > d.maxFile) {
+	data, ok, err := disk.load(selection, version, d.maxFile)
+	if err != nil || !ok {
 		return nil, false
+	}
+	_ = disk.touch(selection)
+	return data, true
+}
+
+func (d activityReportDisk) load(selection, key string, maxFile int64) ([]byte, bool, error) {
+	path := d.path(selection)
+	if maxFile > 0 {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, false, err
+		}
+		if info.Size() > maxFile {
+			return nil, false, nil
+		}
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	var reader io.Reader = file
-	if d.maxFile > 0 {
-		reader = io.LimitReader(file, d.maxFile+1)
+	if maxFile > 0 {
+		reader = io.LimitReader(file, maxFile+1)
 	}
 	data, err := io.ReadAll(reader)
 	closeErr := file.Close()
-	if err != nil || closeErr != nil || (d.maxFile > 0 && int64(len(data)) > d.maxFile) {
-		return nil, false
+	if err != nil {
+		return nil, false, err
 	}
-	header := disk.header(version)
+	if closeErr != nil {
+		return nil, false, closeErr
+	}
+	if maxFile > 0 && int64(len(data)) > maxFile {
+		return nil, false, nil
+	}
+	header := d.header(key)
 	if !bytes.HasPrefix(data, header) {
-		return nil, false
+		return nil, false, nil
 	}
+	return data[len(header):], true, nil
+}
+
+func (d activityReportDisk) touch(selection string) error {
 	now := time.Now()
-	_ = os.Chtimes(path, now, now)
-	return data[len(header):], true
+	return os.Chtimes(d.path(selection), now, now)
+}
+
+func (d activityReportDisk) save(selection, key string, payload []byte, maxFile int64) error {
+	data := append(d.header(key), payload...)
+	if maxFile > 0 && int64(len(data)) > maxFile {
+		return nil
+	}
+	return writeFileAtomic(d.path(selection), data)
 }
 
 // Touch records a read served by the in-memory memo.
@@ -85,8 +115,7 @@ func (d *Disk) Touch(selection string) {
 	if d.reports.disk.dir == "" || selection == "" {
 		return
 	}
-	now := time.Now()
-	_ = os.Chtimes(d.reports.disk.path(selection), now, now)
+	_ = d.reports.disk.touch(selection)
 }
 
 func (d *Disk) Put(selection, version string, payload []byte) {
@@ -96,11 +125,7 @@ func (d *Disk) Put(selection, version string, payload []byte) {
 	if disk.dir == "" {
 		return
 	}
-	data := append(disk.header(version), payload...)
-	if d.maxFile > 0 && int64(len(data)) > d.maxFile {
-		return
-	}
-	if writeFileAtomic(disk.path(selection), data) == nil {
+	if disk.save(selection, version, payload, d.maxFile) == nil {
 		_ = d.trim()
 	}
 }
@@ -133,14 +158,13 @@ func (d *Disk) trim() error {
 	}
 	slices.SortFunc(files, func(a, b file) int { return a.mod.Compare(b.mod) })
 	for _, f := range files {
-		if (d.maxBytes <= 0 || total <= d.maxBytes) && (d.maxEntries <= 0 || len(files) <= d.maxEntries) {
+		if d.maxBytes <= 0 || total <= d.maxBytes {
 			break
 		}
 		if err := os.Remove(filepath.Join(d.reports.disk.dir, f.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("removing kept file: %w", err)
 		}
 		total -= f.size
-		files = files[1:]
 	}
 	return nil
 }

@@ -25,7 +25,7 @@ func (s *Store) openActivityReportDisk(t Target) error {
 	if err := s.reports.OpenDisk("clickhouse-activity-reports", id); err != nil {
 		return err
 	}
-	return s.usageDisk.Open("clickhouse-usage", id, 128<<20, 256<<20, 0)
+	return s.usageDisk.Open("clickhouse-usage", id, 128<<20, 256<<20)
 }
 
 // StartBackground prepares usage before serving and starts report cleanup.

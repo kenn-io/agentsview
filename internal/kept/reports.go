@@ -1,7 +1,6 @@
 package kept
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -177,7 +176,7 @@ func (s *Reports) loadActivityReport(selection, key string) (Report, bool) {
 	if d.dir == "" {
 		return Report{}, false
 	}
-	data, err := os.ReadFile(d.path(selection))
+	data, ok, err := d.load(selection, key, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return Report{}, false
 	}
@@ -185,12 +184,11 @@ func (s *Reports) loadActivityReport(selection, key string) (Report, bool) {
 		log.Printf("%s: reading a kept activity report: %v", s.subdir, err)
 		return Report{}, false
 	}
-	header := d.header(key)
-	if !bytes.HasPrefix(data, header) {
+	if !ok {
 		return Report{}, false
 	}
 	var file Report
-	if err := json.Unmarshal(data[len(header):], &file); err != nil {
+	if err := json.Unmarshal(data, &file); err != nil {
 		log.Printf("%s: decoding a kept activity report: %v", s.subdir, err)
 		return Report{}, false
 	}
@@ -206,7 +204,7 @@ func (s *Reports) saveActivityReport(selection, key string, entry Report) {
 	}
 	body, err := json.Marshal(entry)
 	if err == nil {
-		err = writeFileAtomic(d.path(selection), append(d.header(key), body...))
+		err = d.save(selection, key, body, 0)
 	}
 	if err != nil {
 		log.Printf("%s: keeping an activity report on disk: %v", s.subdir, err)
@@ -220,8 +218,7 @@ func (s *Reports) touchActivityReport(selection, key string, entry Report) {
 	if d.dir == "" {
 		return
 	}
-	now := time.Now()
-	err := os.Chtimes(d.path(selection), now, now)
+	err := d.touch(selection)
 	if errors.Is(err, os.ErrNotExist) {
 		s.saveActivityReport(selection, key, entry)
 		return

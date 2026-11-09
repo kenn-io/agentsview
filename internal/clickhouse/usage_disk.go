@@ -5,14 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/gob"
-	"errors"
 	"io"
+	"time"
 	"unsafe"
+
+	"go.kenn.io/agentsview/internal/db"
 )
-
-type usageDiskBypassKey struct{}
-
-var errUsageDiskChanged = errors.New("usage changed while loading disk cache")
 
 const usageDiskVersion = "usage-1|"
 
@@ -185,27 +183,46 @@ func decodeUsageGroups(data []byte) ([]chDailyUsageGroupRow, bool) {
 }
 
 // usageDiskVersionAt captures a fresh parts snapshot and the logical rows it names.
-func (s *Store) usageDiskVersionAt(ctx context.Context, pricingDigest string) (string, partsSnapshot, bool) {
+func (s *Store) usageDiskVersionAt(ctx context.Context, pricingDigest string) (string, bool) {
 	ctx, err := s.withPartsSnapshot(ctx)
 	if err != nil {
-		return "", nil, false
+		return "", false
 	}
-	parts := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	state, err := s.preparedUsageState(ctx)
 	if err != nil || !state.ready || len(state.raw) != 0 {
-		return "", nil, false
+		return "", false
 	}
 	version, err := s.usageReadFingerprint(ctx, state, pricingDigest)
 	if err != nil || version == "" {
-		return "", nil, false
+		return "", false
 	}
-	archives, stable, err := s.usageRowsVersion(ctx, []string{"source_archives"}, pricingDigest)
-	if err != nil || !stable {
-		return "", nil, false
+	return version, true
+}
+
+// usageDiskFilter drops the end date only when no source has later usage.
+func (s *Store) usageDiskFilter(ctx context.Context, state preparedUsageState, f db.UsageFilter) db.UsageFilter {
+	if f.To == "" || f.Timezone == "" {
+		return f
 	}
-	pricing, err := s.pricingSnapshot(ctx)
+	loc, err := time.LoadLocation(f.Timezone)
 	if err != nil {
-		return "", nil, false
+		return f
 	}
-	return version + "|" + archives + "|" + pricing.digest, parts, true
+	_, end, err := db.FrictionDayBounds(f.To, loc)
+	if err != nil {
+		return f
+	}
+	readCtx, err := withUsageDeltaTables(ctx, state)
+	if err != nil {
+		return f
+	}
+	bound := end.UTC().Format(time.RFC3339Nano)
+	source, args := chPreparedUsageSourceSQL(state, "ts >= "+chTimestampSQL, []any{bound})
+	args = append(args, bound)
+	var future bool
+	err = s.queryRowContext(readCtx, "SELECT EXISTS(SELECT 1 FROM ("+source+") LIMIT 1) OR EXISTS(SELECT 1 FROM cursor_usage_events WHERE occurred_at >= "+chTimestampSQL+" LIMIT 1)", args...).Scan(&future)
+	if err == nil && !future {
+		f.To = ""
+	}
+	return f
 }
