@@ -820,7 +820,7 @@ func TestCLIEmbeddingsSetupJoinsDifferentStore(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			writeTestConfig(t, dir, "[vector]\nenabled = false\n")
-			var statusCalls atomic.Int64
+			var statusCalls, messageCalls atomic.Int64
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
 				if busy {
 					assert.GreaterOrEqual(t, statusCalls.Load(), int64(2), "provider preparation must wait for setup")
@@ -830,6 +830,16 @@ func TestCLIEmbeddingsSetupJoinsDifferentStore(t *testing.T) {
 			var builds atomic.Int64
 			startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Query().Get("store") == "" {
+						call := messageCalls.Add(1)
+						w.Header().Set("Content-Type", "application/json")
+						if call <= 2 {
+							_, _ = io.WriteString(w, `{"running":true,"setup":{"enabled":true,"busy":false}}`)
+						} else {
+							_, _ = io.WriteString(w, `{"running":false,"setup":{"enabled":true,"busy":false},"last_result":{}}`)
+						}
+						return
+					}
 					assert.Equal(t, "recall", r.URL.Query().Get("store"))
 					call := statusCalls.Add(1)
 					first := call == 1
@@ -850,7 +860,8 @@ func TestCLIEmbeddingsSetupJoinsDifferentStore(t *testing.T) {
 					_, _ = io.WriteString(w, `{"detail":"an embeddings build is already running"}`)
 				},
 				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
-					assert.GreaterOrEqual(t, statusCalls.Load(), int64(4), "the concurrent build must finish first")
+					assert.GreaterOrEqual(t, messageCalls.Load(), int64(3), "the messages build must finish first")
+					assert.GreaterOrEqual(t, statusCalls.Load(), int64(4), "the recall build must finish first")
 					var request vector.BuildRequest
 					require.NoError(t, json.UnmarshalRead(r.Body, &request))
 					assert.Equal(t, "recall", request.Store)

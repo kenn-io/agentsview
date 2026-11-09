@@ -207,13 +207,21 @@ func joinDaemonSetup(ctx context.Context, out io.Writer, in *bufio.Scanner, cfg 
 	if err := pollDaemonSetup(ctx, out, client); err != nil {
 		return err
 	}
-	status, err := client.status(ctx)
-	if err != nil {
-		return err
+	other := client
+	if client.store == "" {
+		other.store = vector.RecallIndexSpec().Name
+	} else {
+		other.store = ""
 	}
-	if status.Running {
-		if err := pollDaemonBuildStatus(ctx, out, client); err != nil {
+	for _, current := range []embeddingsDaemonClient{other, client} {
+		status, err := current.status(ctx)
+		if err != nil {
 			return err
+		}
+		if status.Running {
+			if err := pollDaemonBuildStatus(ctx, out, current); err != nil {
+				return err
+			}
 		}
 	}
 	if opts.FullRebuild && !opts.Yes && !confirmed {
