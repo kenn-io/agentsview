@@ -231,10 +231,14 @@ func TestPGUsageCacheCancelledWaiterAndRetry(t *testing.T) {
 				requireCachedUsageMatchesDirect(t, store, filter)
 				_, err := store.pg.ExecContext(t.Context(), `UPDATE usage_events SET output_tokens=1100 WHERE session_id='paid-a'`)
 				require.NoError(t, err)
-				failure := errors.New("injected remote extraction failure")
-				probe.before = func(context.Context, []string) error { return failure }
-				_, err = store.usageCache.GetDailyUsage(t.Context(), filter)
-				require.ErrorIs(t, err, failure)
+				for _, failure := range []error{errors.New("injected remote extraction failure"), context.Canceled, context.DeadlineExceeded} {
+					_, err = store.pg.ExecContext(t.Context(), `UPDATE usage_events SET output_tokens=output_tokens+1 WHERE session_id='paid-a'`)
+					require.NoError(t, err)
+					probe.before = func(context.Context, []string) error { return failure }
+					_, err = store.usageCache.GetDailyUsage(t.Context(), filter)
+					require.ErrorIs(t, err, failure)
+					requireUsageReadsMatch(t, &Store{pg: store.pg}, store, filter)
+				}
 				probe.before = nil
 				requireCachedUsageMatchesDirect(t, store, filter)
 				return
@@ -628,7 +632,7 @@ func TestPGUsageCachePreJournalAccounts(t *testing.T) {
 	}
 }
 
-func TestPGUsageCacheStorageFailureIsReported(t *testing.T) {
+func TestPGUsageCacheStorageFailureUsesDirectReads(t *testing.T) {
 	_, _, store, _ := keptUsageFixture(t)
 	directory := t.TempDir()
 	attachUsageCacheProbe(t, store, directory)
@@ -642,10 +646,45 @@ func TestPGUsageCacheStorageFailureIsReported(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, damaged.Close()) })
 	_, err = damaged.ExecContext(t.Context(), `DROP TABLE usage_rollup_timezones`)
 	require.NoError(t, err)
-	filter.Project = "project-a"
-	_, err = store.GetDailyUsage(t.Context(), filter)
-	require.ErrorContains(t, err, "no such table: usage_rollup_timezones")
-	direct, err := (&Store{pg: store.pg}).GetDailyUsage(t.Context(), filter)
+	filter.Project, filter.From, filter.To = "project-a", "2026-01-01", "2026-01-01"
+	for _, grouped := range []bool{false, true} {
+		filter.TopSessionsByGroup = grouped
+		requireUsageReadsMatch(t, &Store{pg: store.pg}, store, filter)
+	}
+}
+
+func TestPGUsageCacheLateJournalInstallation(t *testing.T) {
+	_, syncer, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
-	require.Equal(t, 1250, direct.Totals.OutputTokens)
+	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
+	reader := store.usageCache
+	require.NotNil(t, reader)
+	filter := db.UsageFilter{Timezone: "UTC"}
+	_, err = reader.GetDailyUsage(ctx, filter)
+	require.ErrorIs(t, err, errPGUsageCacheUnavailable)
+	requireUsageReadsMatch(t, &Store{pg: store.pg}, store, filter)
+	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+	require.Same(t, reader, store.usageCache)
+	requireCachedUsageMatchesDirect(t, store, filter)
+	requireUsageReadsMatch(t, &Store{pg: store.pg}, store, filter)
+}
+
+func TestPGUsageCacheCancelledCallerSkipsDirectRead(t *testing.T) {
+	_, _, store, counter := keptUsageFixture(t)
+	attachUsageCacheProbe(t, store, t.TempDir())
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	before := counter.queryAttempts.Load()
+	filter := db.UsageFilter{Timezone: "UTC"}
+	_, err := store.GetDailyUsage(ctx, filter)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = store.GetTopSessionsByCost(ctx, filter, 20)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = store.GetUsageSessionCounts(ctx, filter)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = store.GetUsageMatchingSessionCount(ctx, filter)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, before, counter.queryAttempts.Load(), "cancelled cache requests must not start direct queries")
 }

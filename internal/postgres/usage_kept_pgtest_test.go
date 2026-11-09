@@ -24,6 +24,7 @@ type usageReadCounter struct {
 	storeExecutor
 	mu             sync.Mutex
 	queries        map[string]int
+	queryAttempts  atomic.Int64
 	revisionReads  int
 	revisionErrors []error
 }
@@ -110,6 +111,7 @@ func TestUsageKeptMissAfterPricingPush(t *testing.T) {
 }
 
 func (c *usageReadCounter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	c.queryAttempts.Add(1)
 	rows, err := c.storeExecutor.QueryContext(ctx, query, args...)
 	if strings.Contains(query, "usage_change_revision") {
 		c.mu.Lock()

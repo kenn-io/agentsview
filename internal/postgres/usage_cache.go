@@ -23,10 +23,6 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	if err != nil || column != "xmin" {
 		return err
 	}
-	revision, err := s.UsageChangeRevision(ctx)
-	if err != nil || revision == 0 {
-		return err
-	}
 	fingerprint, err := pgTargetFingerprint(targetURL, schema)
 	if err != nil {
 		return err
@@ -336,6 +332,6 @@ func (source *pgUsageCacheSource) UsageSessionNames(ctx context.Context, ids []s
 	return names, err
 }
 
-func directUsageRequired(err error) bool {
-	return errors.Is(err, errPGUsageCacheUnavailable) || db.IsUsageCacheConflict(err)
+func directUsageRequired(ctx context.Context, err error) bool {
+	return err != nil && ctx.Err() == nil
 }

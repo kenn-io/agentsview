@@ -727,10 +727,12 @@ PostgreSQL stores its disposable cache under the configured data directory,
 partitioned by a credential-free target fingerprint and the change journal's
 table identity. Existing supported journals work with SELECT-only roles. Hosted
 and borrowed transaction readers, CockroachDB, and connections without a usable
-journal retain direct reads. Repeated source or publication conflicts use direct
-reads for that request. Failure to create the cache directory uses temporary
-storage; later cache storage failures report an error. Pairwise retains
-its exactness fallback and can make two extra filtered cache reads.
+journal retain direct reads. A journal installed later enables persistent reuse
+without a server restart. If a cache attempt fails while the request is active,
+the existing direct PostgreSQL read supplies its result or error. Failure to
+create the cache directory uses temporary storage. Pairwise retains its exactness
+fallback and can make two extra filtered cache reads. Plan usage, per-session
+details, and Activity retain their existing read paths.
 
 A first bounded visit fills candidate sessions for its date window. Widening the
 window adds missing sessions. Only a complete, verified all-history read can

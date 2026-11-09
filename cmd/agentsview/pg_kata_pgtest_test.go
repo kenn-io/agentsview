@@ -75,7 +75,7 @@ func TestPGServeKataHubConnection(t *testing.T) {
 	assert.NotEmpty(t, kataServer.RequestsMatching(http.MethodGet, "/api/v1/health"))
 }
 
-func TestPGServeUsageAfterCacheSetupFailure(t *testing.T) {
+func TestPGServeUsageAfterJournalFailure(t *testing.T) {
 	pg, directory, url := newRawSyncCleanUploadsPG(t)
 	ctx := t.Context()
 	_, err := pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES (1,'cursor','2026-01-01','model-a',7,77,'startup-account')`)
@@ -85,7 +85,7 @@ func TestPGServeUsageAfterCacheSetupFailure(t *testing.T) {
 	store, err := postgres.NewStore(ctx, url, rawSyncCleanUploadsSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	require.Error(t, store.ConfigureUsageCache(ctx, directory, url, rawSyncCleanUploadsSchema))
+	require.NoError(t, store.ConfigureUsageCache(ctx, directory, url, rawSyncCleanUploadsSchema))
 	cfg := config.Config{DataDir: directory, Host: "127.0.0.1", Port: 8080, PG: config.PGConfig{URL: url}}
 	opts, cleanup, err := (pgReplica{}).serveOptions(ctx, cfg, storage.ReplicaTarget{URL: url, Schema: rawSyncCleanUploadsSchema}, store)
 	require.NoError(t, err)

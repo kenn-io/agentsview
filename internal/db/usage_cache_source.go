@@ -48,9 +48,6 @@ type UsageCacheSource interface {
 	UsageSessionNames(context.Context, []string) (map[string][2]string, error)
 }
 
-// IsUsageCacheConflict reports an exhausted source or publication conflict.
-func IsUsageCacheConflict(err error) bool { return errors.Is(err, errUsageCacheSourceChanged) }
-
 // UsageCacheReader exposes aggregate reads backed by the shared cache engine.
 type UsageCacheReader struct{ engine *DB }
 

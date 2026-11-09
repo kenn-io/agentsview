@@ -1561,7 +1561,7 @@ type pgDailyUsageSessionCost struct {
 func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
 	if cache := s.usageCache; cache != nil {
 		result, err := cache.GetDailyUsage(ctx, f)
-		if !directUsageRequired(err) {
+		if !directUsageRequired(ctx, err) {
 			return result, err
 		}
 	}
@@ -2169,7 +2169,7 @@ func (s *Store) GetTopSessionsByCost(
 	version := s.keptUsageVersion(ctx, slot)
 	if cache := s.usageCache; cache != nil {
 		result, err := s.cachedTopSessions(ctx, cache, f, limit, slot, version)
-		if !directUsageRequired(err) {
+		if !directUsageRequired(ctx, err) {
 			return result, err
 		}
 	}
@@ -2361,7 +2361,7 @@ func (s *Store) GetUsageSessionCounts(
 ) (db.UsageSessionCounts, error) {
 	if cache := s.usageCache; cache != nil {
 		result, err := cache.GetUsageSessionCounts(ctx, f)
-		if !directUsageRequired(err) {
+		if !directUsageRequired(ctx, err) {
 			return result, err
 		}
 	}
@@ -2469,7 +2469,7 @@ func (s *Store) GetUsageMatchingSessionCount(
 ) (int, error) {
 	if cache := s.usageCache; cache != nil {
 		result, err := cache.GetUsageMatchingSessionCount(ctx, f)
-		if !directUsageRequired(err) {
+		if !directUsageRequired(ctx, err) {
 			return result, err
 		}
 	}
