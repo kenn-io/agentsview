@@ -28,7 +28,7 @@ import (
 
 const chTimestampSQL = "parseDateTime64BestEffort(?, 6, 'UTC')"
 
-const chUsageDisplayNameSQL = "ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '')"
+const chUsageDisplayNameSQL = "COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id)"
 
 // chLoadPricing reads the mirrored model catalog and layers the reader's
 // custom rates on top. Push passes no custom rates.
@@ -240,7 +240,7 @@ func chUsageRawSQLFromWheres(
 	eventWhere string, eventArgs []any,
 ) (string, []any) {
 	query := fmt.Sprintf(`
-		SELECT m.session_id AS session_id, toNullable(m.ordinal) AS message_ordinal,
+		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 			'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
 			m.timestamp AS pricing_ts,
 			m.model AS model, m.provider_id AS provider_id, m.token_usage AS token_json,
@@ -248,12 +248,12 @@ func chUsageRawSQLFromWheres(
 			m.claude_request_id AS claude_request_id,
 			m.source_uuid AS source_uuid,
 			'' AS usage_dedup_key,
-				toInt64(0) AS input_tokens, toInt64(0) AS output_tokens,
-				toInt64(0) AS cache_create, toInt64(0) AS cache_read,
+				0 AS input_tokens, 0 AS output_tokens,
+				0 AS cache_create, 0 AS cache_read,
 				JSONExtractInt(m.token_usage, 'reasoning_tokens') AS reasoning_tokens,
 				JSONExtractInt(m.token_usage, 'cache_creation', 'ephemeral_1h_input_tokens') AS cache_create_1h,
 				JSONExtractInt(m.token_usage, 'server_tool_use', 'web_search_requests') AS web_search_requests,
-				CAST(NULL AS Nullable(Int64)) AS cost_microdollars, '' AS cost_source,
+				NULL AS cost_microdollars, '' AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			`+chUsageDisplayNameSQL+` AS display_name,
@@ -272,13 +272,13 @@ func chUsageRawSQLFromWheres(
 			'' AS source_uuid,
 			if(ue.dedup_key != '',
 				concat(ue.session_id, ':', ue.source, ':', ue.dedup_key),
-				concat(ue.session_id, ':', ue.source, ':id:', toString(ue.id))
+				concat(ue.session_id, ':', ue.source, ':id:', ue.id)
 			) AS usage_dedup_key,
 				ue.input_tokens AS input_tokens, ue.output_tokens AS output_tokens,
 				ue.cache_creation_input_tokens AS cache_create,
 				ue.cache_read_input_tokens AS cache_read,
 				ue.reasoning_tokens AS reasoning_tokens,
-				toInt64(0) AS cache_create_1h, toInt64(0) AS web_search_requests,
+				0 AS cache_create_1h, 0 AS web_search_requests,
 				ue.cost_microdollars AS cost_microdollars,
 				ue.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
@@ -684,7 +684,7 @@ func chClampedJSONInt(jsonExpr string, keys ...string) string {
 	}
 	extract := "JSONExtractInt(" + strings.Join(args, ", ") + ")"
 	return fmt.Sprintf(
-		"least(greatest(%s, toInt64(0)), toInt64(%d))",
+		"least(greatest(%s, 0), %d)",
 		extract, db.MaxPlausibleTokens,
 	)
 }
@@ -707,7 +707,7 @@ func chUsageRawNormSource() chUsageNormSource {
 		cacheCreate1h: chClampedJSONInt("token_json", "cache_creation", "ephemeral_1h_input_tokens"),
 		cacheRead:     chClampedJSONInt("token_json", "cache_read_input_tokens"),
 		reasoning:     chClampedJSONInt("token_json", "reasoning_tokens"),
-		web:           "greatest(JSONExtractInt(token_json, 'server_tool_use', 'web_search_requests'), toInt64(0))",
+		web:           "greatest(JSONExtractInt(token_json, 'server_tool_use', 'web_search_requests'), 0)",
 		priceModel:    chPriceModelCaseSQL(),
 		priceKey:      chUsagePriceKeySQL,
 	}
@@ -802,7 +802,7 @@ func chUsageCTEFromRawSource(
 								session_id DESC,
 								COALESCE(message_ordinal, -1) DESC
 						)
-					ELSE toUInt64(1)
+					ELSE 1
 				END AS snapshot_rank,
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
@@ -811,7 +811,7 @@ func chUsageCTEFromRawSource(
 						) - max(output_tokens_norm) OVER (
 							PARTITION BY claude_message_id, claude_request_id
 						)
-					ELSE toInt64(0)
+					ELSE 0
 				END AS snapshot_deduplicated_output_tokens,
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
@@ -860,10 +860,10 @@ func chUsageCTEFromRawSource(
 				if(attributed.id = '', ranked.machine, attributed.machine) AS machine,
 				if(attributed.id = '', ranked.user_message_count, attributed.user_message_count) AS user_message_count,
 				if(attributed.id = '', ranked.is_automated, attributed.is_automated) AS is_automated,
-				if(attributed.id = '', ranked.display_name, ifNull(COALESCE(
+				if(attributed.id = '', ranked.display_name, COALESCE(
 					attributed.display_name, attributed.session_name,
 					attributed.first_message, attributed.project, attributed.id
-				), '')) AS display_name,
+				)) AS display_name,
 				if(attributed.id = '', ranked.group_key, attributed.group_key) AS group_key,
 				if(attributed.id = '', ranked.session_name, ifNull(attributed.session_name, '')) AS session_name,
 				if(attributed.id = '', ranked.started_at, attributed.started_at) AS started_at,
@@ -909,22 +909,22 @@ func chUsageCTEFromRawSource(
 		usage_normalized AS (
 			SELECT *,
 				if(source = 'message', %[8]s,
-					if(source = 'session' OR session_id = '', greatest(input_tokens, toInt64(0)),
-						least(greatest(input_tokens, toInt64(0)), toInt64(%[4]d)))) AS input_tokens_norm,
+					if(source = 'session' OR session_id = '', greatest(input_tokens, 0),
+						least(greatest(input_tokens, 0), %[4]d))) AS input_tokens_norm,
 				if(source = 'message', %[9]s,
-					if(source = 'session' OR session_id = '', greatest(output_tokens, toInt64(0)),
-						least(greatest(output_tokens, toInt64(0)), toInt64(%[4]d)))) AS output_tokens_norm,
+					if(source = 'session' OR session_id = '', greatest(output_tokens, 0),
+						least(greatest(output_tokens, 0), %[4]d))) AS output_tokens_norm,
 				if(source = 'message', %[10]s,
-					if(source = 'session' OR session_id = '', greatest(cache_create, toInt64(0)),
-						least(greatest(cache_create, toInt64(0)), toInt64(%[4]d)))) AS cache_create_norm,
-				if(source = 'message', %[11]s, toInt64(0)) AS cache_create_1h_norm,
+					if(source = 'session' OR session_id = '', greatest(cache_create, 0),
+						least(greatest(cache_create, 0), %[4]d))) AS cache_create_norm,
+				if(source = 'message', %[11]s, 0) AS cache_create_1h_norm,
 				if(source = 'message', %[12]s,
-					if(source = 'session' OR session_id = '', greatest(cache_read, toInt64(0)),
-						least(greatest(cache_read, toInt64(0)), toInt64(%[4]d)))) AS cache_read_norm,
+					if(source = 'session' OR session_id = '', greatest(cache_read, 0),
+						least(greatest(cache_read, 0), %[4]d))) AS cache_read_norm,
 				if(source = 'message', %[13]s,
-					if(source = 'session' OR session_id = '', greatest(reasoning_tokens, toInt64(0)),
-						least(greatest(reasoning_tokens, toInt64(0)), toInt64(%[4]d)))) AS reasoning_tokens_norm,
-				if(source = 'message', %[15]s, toInt64(0)) AS web_search_requests_norm,
+					if(source = 'session' OR session_id = '', greatest(reasoning_tokens, 0),
+						least(greatest(reasoning_tokens, 0), %[4]d))) AS reasoning_tokens_norm,
+				if(source = 'message', %[15]s, 0) AS web_search_requests_norm,
 				if(claude_message_id != '' AND claude_request_id != '',
 					concat('claude:', claude_message_id, ':', claude_request_id),
 					if(source = 'message' AND agent != '' AND source_uuid != '',
@@ -1418,7 +1418,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 			if(explicit_row, '', if(
 				price_kind IN ('` + chUsagePriceKindReported + `', '` + chUsagePriceKindZero + `'),
 				p_unbilled_context_id, p_billed_context_id)) AS group_context,
-			if(explicit_row OR price_kind != '` + chUsagePriceKindRequest + `', toInt64(-1), p_band) AS group_band,
+			if(explicit_row OR price_kind != '` + chUsagePriceKindRequest + `', -1, p_band) AS group_band,
 			toInt64(count()) AS events,
 			sum(input_tokens_norm), sum(output_tokens_norm),
 			sum(cache_create_norm), sum(cache_read_norm),

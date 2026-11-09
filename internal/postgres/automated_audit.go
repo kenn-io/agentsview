@@ -27,8 +27,8 @@ const fullAutomationCandidatesPG = `SELECT
 		FROM messages m
 		WHERE m.session_id = s.id
 		  AND m.role = 'user'
-		  AND COALESCE(m.source_subtype, '') <> 'tool_result'
-		  AND COALESCE(m.is_system, false) = false
+		  AND m.source_subtype <> 'tool_result'
+		  AND m.is_system = false
 		  AND btrim(m.content) <> ''
 		ORDER BY m.ordinal
 		LIMIT 1
@@ -194,8 +194,8 @@ func auditAutomatedMatchingHashPG(
 			WHERE m.session_id = s.id
 			  AND s.user_message_count <= 1
 			  AND m.role = 'user'
-			  AND COALESCE(m.source_subtype, '') <> 'tool_result'
-			  AND COALESCE(m.is_system, false) = false
+			  AND m.source_subtype <> 'tool_result'
+			  AND m.is_system = false
 			  AND btrim(m.content) <> ''
 			ORDER BY m.ordinal
 			LIMIT 1

@@ -158,7 +158,7 @@ func (db *DB) FileBackedSessionCountForRebuildOwner(
 		seenAgents[exclusion.Agent] = struct{}{}
 		if exclusion.KeepJSONLRows {
 			conditions = append(conditions,
-				`(agent <> ? OR lower(file_path) LIKE '%.jsonl')`)
+				`(agent <> ? OR file_path LIKE '%.jsonl')`)
 			args = append(args, exclusion.Agent)
 			continue
 		}

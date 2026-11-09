@@ -57,9 +57,9 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 	err := s.queryRowContext(ctx, `SELECT
 		(SELECT toInt64(count()) FROM sessions),
 		ifNull(toString((SELECT max(local_modified_at) FROM sessions)), ''),
-		ifNull((SELECT max(data_version) FROM sessions), toInt64(0)),
-		ifNull((SELECT max(id) FROM messages), toInt64(0)),
-		ifNull((SELECT max(id) FROM usage_events), toInt64(0)),
+		ifNull((SELECT max(data_version) FROM sessions), 0),
+		ifNull((SELECT max(id) FROM messages), 0),
+		ifNull((SELECT max(id) FROM usage_events), 0),
 		greatest(
 			ifNull((SELECT max(updated_at) FROM model_pricing), ''),
 			ifNull((SELECT max(updated_at) FROM genai_pricing), '')
@@ -68,7 +68,7 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 			SELECT max(toInt64OrZero(value))
 			FROM sync_metadata
 			WHERE startsWith(key, ?)
-		), toInt64(0))`,
+		), 0)`,
 		identityRevisionKeyBase).Scan(
 		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,
 		&probe.MaxMessageID, &probe.MaxUsageID, &probe.MaxPricingUpdated,
@@ -147,7 +147,7 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	var filled uint64
 	var comment string
 	err := s.queryRowContext(ctx, `SELECT
-		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?)),
+		(SELECT max(toUInt64OrZero(value)) FROM sync_metadata WHERE startsWith(key,?)),
 		ifNull((SELECT comment FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'), '')`,
 		usageSnapshotReadyKeyBase+":").Scan(&filled, &comment)
 	if err != nil {

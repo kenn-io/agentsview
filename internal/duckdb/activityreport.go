@@ -119,7 +119,7 @@ func (s *Store) activityReportMessageCounts(
 		SELECT session_id, role, timestamp FROM messages
 		WHERE session_id IN (SELECT unnest(?))
 			AND role IN ('user', 'assistant') AND is_system = false
-			AND COALESCE(source_subtype, '') <> 'tool_result'
+			AND source_subtype <> 'tool_result'
 			AND timestamp >= CAST(? AS TIMESTAMP) AND timestamp < CAST(? AS TIMESTAMP)`,
 		ids, q.RangeStart.UTC().Format(time.RFC3339Nano), q.EffectiveEnd.UTC().Format(time.RFC3339Nano))
 	if err != nil {
@@ -177,7 +177,7 @@ func (s *Store) GetSessionUsageRows(
 			NULL AS cost_microdollars, '' AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM messages m
@@ -193,7 +193,7 @@ func (s *Store) GetSessionUsageRows(
 			'' AS source_uuid,
 			CASE
 				WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
-				ELSE ue.session_id || ':' || ue.source || ':id:' || CAST(ue.id AS VARCHAR)
+				ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 			END AS usage_dedup_key,
 			ue.input_tokens AS input_tokens, ue.output_tokens AS output_tokens,
 			ue.cache_creation_input_tokens AS cache_create,
@@ -203,7 +203,7 @@ func (s *Store) GetSessionUsageRows(
 			ue.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM usage_events ue
@@ -365,7 +365,7 @@ func (s *Store) activityReportSessions(
 		s.machine,
 		s.started_at,
 		s.ended_at,
-		COALESCE(s.is_automated, false) AS is_automated,
+		s.is_automated,
 		s.relationship_type = 'subagent' AS is_subagent
 	FROM sessions s
 	WHERE ` + where
@@ -919,7 +919,7 @@ func duckActivityReportUsageQuery(candidateWhere string) string {
 				'' AS source_uuid,
 				CASE
 					WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
-					ELSE ue.session_id || ':' || ue.source || ':id:' || CAST(ue.id AS VARCHAR)
+					ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 				END AS usage_dedup_key,
 					ue.input_tokens AS input_tokens, ue.output_tokens AS output_tokens,
 					ue.cache_creation_input_tokens AS cache_create,

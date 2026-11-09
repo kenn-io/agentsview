@@ -14,19 +14,19 @@ func AnalyticsSummaryAgentsSQL(where string, args []any, dialect db.QueryDialect
 			FROM sessions s
 			WHERE ` + where + `
 		)
-		SELECT agent, ` + dialect.SignedAggregate("COUNT(*)") + `, ` + dialect.SignedAggregate("COALESCE(SUM(message_count), 0)") + `
+		SELECT agent, ` + dialect.SignedAggregate("COUNT(*)") + `, ` + dialect.SignedAggregate("SUM(message_count)") + `
 		FROM filtered
 		GROUP BY agent`, args
 }
 
 func AnalyticsHeatmapSQL(where string, args []any, localDate string, localDateArgs []any, metric string, dialect db.QueryDialect) (string, []any) {
-	valueExpr := "COALESCE(SUM(s.message_count), 0)"
+	valueExpr := "SUM(s.message_count)"
 	switch metric {
 	case "sessions":
 		valueExpr = "COUNT(*)"
 	case "output_tokens":
 		where += " AND s.has_total_output_tokens = " + dialect.TrueLiteral()
-		valueExpr = "COALESCE(SUM(s.total_output_tokens), 0)"
+		valueExpr = "SUM(s.total_output_tokens)"
 	}
 	queryArgs := append([]any{}, localDateArgs...)
 	queryArgs = append(queryArgs, args...)
@@ -61,7 +61,7 @@ func analyticsModelsSQL(idSet string) string {
 			SELECT DISTINCT model
 			FROM messages
 			WHERE session_id IN ` + idSet + `
-				AND COALESCE(model, '') <> ''`
+				AND model <> ''`
 }
 
 func analyticsModelTimesSQL(idSet string) string {
@@ -69,13 +69,13 @@ func analyticsModelTimesSQL(idSet string) string {
 			SELECT model, timestamp
 			FROM messages
 			WHERE session_id IN ` + idSet + `
-				AND COALESCE(model, '') <> ''`
+				AND model <> ''`
 }
 
 func analyticsSignalMessagesSQL(ids []string) (string, []any) {
 	ph, args := db.InPlaceholders(ids)
 	return `SELECT session_id, ordinal, role, content,
-			timestamp, is_system, has_tool_use, COALESCE(source_subtype, '')
+			timestamp, is_system, has_tool_use, source_subtype
 		FROM messages
 		WHERE session_id IN ` + ph + `
 		ORDER BY session_id, ordinal`, args
@@ -135,10 +135,10 @@ func AnalyticsMessageWindowPred(col, from, to, timestampParam string) (string, [
 func analyticsCandidateMessagesSQL(ph string, includeContent bool) string {
 	contentExpr := "''"
 	if includeContent {
-		contentExpr = "COALESCE(content, '')"
+		contentExpr = "content"
 	}
 	return `
-			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system, COALESCE(model, ''),
+			SELECT session_id, ordinal, role, source_subtype, is_system, model,
 				has_thinking, has_tool_use, timestamp,
 				output_tokens, has_output_tokens, content_length, ` + contentExpr + `
 			FROM messages
@@ -185,7 +185,7 @@ func AnalyticsTrendsSQL(
 	}
 	return `
 		SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), ` + content + `, m.timestamp,
+			m.model, ` + content + `, m.timestamp,
 			s.started_at, s.created_at
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id

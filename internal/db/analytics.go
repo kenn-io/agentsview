@@ -456,15 +456,19 @@ func (db *DB) getAnalyticsModelsSQLiteSummary(
 	}
 
 	where, args := sqliteAnalyticsWhereSQL(f, dateCol, "s.id", true)
-	return db.queryAnalyticsModels(ctx, `
+	return db.queryAnalyticsModels(ctx, analyticsModelsQuery(where), args)
+}
+
+// analyticsModelsQuery lists the distinct models of the sessions matching
+// where. It reads messages through idx_messages_analytics_metadata.
+func analyticsModelsQuery(where string) string {
+	return `
 		SELECT DISTINCT m.model
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id
-		WHERE `+where+`
-		AND COALESCE(m.model, '') <> ''
-		ORDER BY m.model`,
-		args,
-	)
+		WHERE ` + where + `
+		AND m.model <> ''
+		ORDER BY m.model`
 }
 
 func (db *DB) getAnalyticsModelsForSessionIDs(
@@ -484,7 +488,7 @@ func (db *DB) getAnalyticsModelsForSessionIDs(
 			SELECT DISTINCT model
 			FROM messages
 			WHERE session_id IN `+ph+`
-			AND COALESCE(model, '') <> ''
+			AND model <> ''
 			ORDER BY model`,
 			args,
 		)
@@ -530,7 +534,7 @@ func (db *DB) getAnalyticsModelsForSessionIDsFiltered(
 			SELECT model, COALESCE(timestamp, '')
 			FROM messages
 			WHERE session_id IN `+ph+`
-			AND COALESCE(model, '') <> ''`,
+			AND model <> ''`,
 			args...,
 		)
 		if err != nil {
@@ -943,8 +947,8 @@ func (db *DB) GetAnalyticsSummary(
 				SELECT CAST(AVG(message_count) AS INTEGER)
 				FROM ranked
 				WHERE rn IN (
-					CAST(((n + 1) / 2) AS INTEGER),
-					CAST(((n + 2) / 2) AS INTEGER)
+					(n + 1) / 2,
+					(n + 2) / 2
 				)
 			), 0) AS median_messages,
 			COALESCE((
@@ -1023,7 +1027,7 @@ func (db *DB) GetAnalyticsSummary(
 			FROM sessions
 			WHERE `+where+`
 		)
-		SELECT agent, COUNT(*), COALESCE(SUM(message_count), 0)
+		SELECT agent, COUNT(*), SUM(message_count)
 		FROM filtered
 		GROUP BY agent`,
 		args...,
@@ -2492,7 +2496,7 @@ func (db *DB) GetAnalyticsSessionShape(
 func autonomyChunkSQL(placeholders string) string {
 	return `SELECT session_id,
 		SUM(CASE WHEN role='user' AND is_system=0
-			AND COALESCE(source_subtype, '') <> 'tool_result'
+			AND source_subtype <> 'tool_result'
 			THEN 1 ELSE 0 END),
 		SUM(CASE WHEN role='assistant'
 			AND has_tool_use=1 THEN 1 ELSE 0 END)
@@ -2980,7 +2984,7 @@ func analyticsToolsQuery(
 	includeMessageMeta bool,
 ) string {
 	query := `SELECT tc.session_id, tc.category,
-			TRIM(COALESCE(tc.tool_name, '')), COUNT(*)`
+			TRIM(tc.tool_name), COUNT(*)`
 	if includeMessageMeta {
 		query += `, MAX(COALESCE(m.timestamp, '')), MIN(m.ordinal)` + ToolEffectivenessSQL("tc", "s.quality_signal_version")
 	}
@@ -3002,7 +3006,7 @@ func analyticsToolsQuery(
 	}
 	query += `
 		GROUP BY tc.session_id, tc.category,
-			TRIM(COALESCE(tc.tool_name, ''))`
+			TRIM(tc.tool_name)`
 	if includeMessageMeta {
 		query += `, ` + sqliteAnalyticsMinuteKey()
 	}
@@ -3020,7 +3024,7 @@ func analyticsSkillsQuery(
 		LEFT JOIN messages m
 			ON m.session_id = tc.session_id AND m.id = tc.message_id
 		WHERE tc.session_id IN ` + placeholders + `
-			AND TRIM(COALESCE(tc.skill_name, '')) != ''`
+			AND TRIM(tc.skill_name) != ''`
 	if modelPred != "" {
 		query += `
 			AND ` + modelPred
@@ -4269,7 +4273,7 @@ func (db *DB) populateFrustrationMarkers(
 		ph, args := InPlaceholders(chunk)
 		q := `SELECT session_id, ordinal, content, is_system
 			FROM messages
-			WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN ` + ph
+			WHERE role = 'user' AND source_subtype <> 'tool_result' AND session_id IN ` + ph
 		msgRows, err := db.getReader().QueryContext(ctx, q, args...)
 		if err != nil {
 			return fmt.Errorf(
@@ -4418,7 +4422,7 @@ func (db *DB) signalMessages(
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		q := `SELECT session_id, ordinal, role, content,
-					COALESCE(timestamp, ''), is_system, has_tool_use, COALESCE(source_subtype, '')
+					COALESCE(timestamp, ''), is_system, has_tool_use, source_subtype
 				FROM messages
 				WHERE session_id IN ` + ph
 		if len(filterModels) == 1 {
@@ -5444,8 +5448,7 @@ func (db *DB) GetAnalyticsTopSessions(
 	durationExpr := `ROUND((julianday(ended_at) -
 		julianday(started_at)) * 1440, 1)`
 	durationSelectExpr := "COALESCE(" + durationExpr + ", 0)"
-	activeDurationSelectExpr := "COALESCE(" +
-		sqliteActiveDurationExpr("sessions.id") + ", 0)"
+	activeDurationSelectExpr := sqliteActiveDurationExpr("sessions.id")
 	needsGoSort := metric == "duration"
 	var orderExpr string
 	switch metric {
@@ -5552,8 +5555,7 @@ func (db *DB) getAnalyticsTopSessionsGo(
 	// under concurrent requests.
 	activeDurationSelectExpr := "0.0"
 	if needsGoSort {
-		activeDurationSelectExpr = "COALESCE(" +
-			sqliteActiveDurationExpr("sessions.id") + ", 0)"
+		activeDurationSelectExpr = sqliteActiveDurationExpr("sessions.id")
 	}
 	query := `SELECT id, ` + dateCol + `, project,
 		first_message,

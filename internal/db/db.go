@@ -1604,7 +1604,7 @@ DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_delete;
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_insert
 AFTER INSERT ON project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO project_identity_observation_changes (
         project, machine, root_path, git_remote, revision, deleted
@@ -1618,7 +1618,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_update
 AFTER UPDATE ON project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO project_identity_observation_changes (
         project, machine, root_path, git_remote, revision, deleted
@@ -1640,7 +1640,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_delete
 AFTER DELETE ON project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO project_identity_observation_changes (
         project, machine, root_path, git_remote, revision, deleted
@@ -1654,7 +1654,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_insert
 AFTER INSERT ON session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_project_identity_snapshot_changes (
         session_id, project, revision, deleted
@@ -1668,7 +1668,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_update
 AFTER UPDATE ON session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_project_identity_snapshot_changes (
         session_id, project, revision, deleted
@@ -1690,7 +1690,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_delete
 AFTER DELETE ON session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_project_identity_snapshot_changes (
         session_id, project, revision, deleted
@@ -3832,9 +3832,9 @@ AFTER INSERT ON sessions
 BEGIN
     UPDATE sessions SET sync_marker = MAX(
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.local_modified_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.ended_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.started_at), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.file_mtime / 1000000000.0, 'unixepoch'), '')
     ) WHERE id = NEW.id;
 END;
@@ -3845,9 +3845,9 @@ AFTER UPDATE OF created_at, local_modified_at, ended_at, started_at, file_mtime 
 BEGIN
     UPDATE sessions SET sync_marker = MAX(
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.local_modified_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.ended_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.started_at), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.file_mtime / 1000000000.0, 'unixepoch'), '')
     ) WHERE id = NEW.id;
 END;
@@ -3882,9 +3882,9 @@ END;
 // marker.
 const backfillSyncMarkerSQL = `UPDATE sessions SET sync_marker = MAX(
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), ''),
-    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(local_modified_at, '')), ''),
-    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(ended_at, '')), ''),
-    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(started_at, '')), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', local_modified_at), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', ended_at), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', started_at), ''),
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', file_mtime / 1000000000.0, 'unixepoch'), '')
 ) WHERE sync_marker IS NULL`
 

@@ -209,7 +209,7 @@ func pgMessagesBranch(
 	// Select the full content; the snippet is windowed and redacted in Go.
 	return fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent,
-			COALESCE(s.transcript_revision,'') AS transcript_revision,
+			s.transcript_revision,
 			'message' AS location,
 			m.role AS role, '' AS tool_name, m.ordinal,
 			m.timestamp AS ts,
@@ -247,7 +247,7 @@ func pgToolInputBranch(
 
 	return fmt.Sprintf(`
 		SELECT tc.session_id, s.project, s.agent,
-			COALESCE(s.transcript_revision,'') AS transcript_revision,
+			s.transcript_revision,
 			'tool_input' AS location,
 			'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,
 			m.timestamp AS ts,
@@ -274,7 +274,7 @@ func pgToolResultContentBranch(
 
 	return fmt.Sprintf(`
 		SELECT tc.session_id, s.project, s.agent,
-			COALESCE(s.transcript_revision,'') AS transcript_revision,
+			s.transcript_revision,
 			'tool_result' AS location,
 			'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,
 			m.timestamp AS ts,
@@ -305,7 +305,7 @@ func pgToolResultEventsBranch(
 
 	return fmt.Sprintf(`
 		SELECT tre.session_id, s.project, s.agent,
-			COALESCE(s.transcript_revision,'') AS transcript_revision,
+			s.transcript_revision,
 			'tool_result' AS location,
 			'assistant' AS role, '' AS tool_name,
 			tre.tool_call_message_ordinal AS ordinal,
@@ -515,7 +515,7 @@ func pgMessagesCandidateBranch(
 	sysPred += " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
 	return fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent,
-			COALESCE(s.transcript_revision,'') AS transcript_revision,
+			s.transcript_revision,
 			'message' AS location,
 			m.role AS role, '' AS tool_name, m.ordinal,
 			m.timestamp AS ts,
@@ -535,7 +535,7 @@ func pgToolInputCandidateBranch(
 	prefilter := pgPrefilterClause("tc.input_json", lit, pb)
 	prefilter += " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
 
-	return "\n\t\tSELECT tc.session_id, s.project, s.agent,\n\t\t\tCOALESCE(s.transcript_revision,'') AS transcript_revision,\n\t\t\t'tool_input' AS location, 'assistant' AS role, tc.tool_name,\n\t\t\ttc.message_ordinal AS ordinal, m.timestamp AS ts,\n\t\t\ttc.input_json AS body, 1 AS src, tc.id AS row_id, FALSE AS legacy_thinking,\n\t\t\tCOALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts\n\t\tFROM tool_calls tc\n\t\tJOIN sessions s ON s.id = tc.session_id\n\t\tJOIN scoped sc ON sc.id = tc.session_id\n\t\tJOIN messages m ON m.session_id = tc.session_id\n\t\t\tAND m.ordinal = tc.message_ordinal\n\t\tWHERE " + prefilter
+	return "\n\t\tSELECT tc.session_id, s.project, s.agent,\n\t\t\ts.transcript_revision,\n\t\t\t'tool_input' AS location, 'assistant' AS role, tc.tool_name,\n\t\t\ttc.message_ordinal AS ordinal, m.timestamp AS ts,\n\t\t\ttc.input_json AS body, 1 AS src, tc.id AS row_id, FALSE AS legacy_thinking,\n\t\t\tCOALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts\n\t\tFROM tool_calls tc\n\t\tJOIN sessions s ON s.id = tc.session_id\n\t\tJOIN scoped sc ON sc.id = tc.session_id\n\t\tJOIN messages m ON m.session_id = tc.session_id\n\t\t\tAND m.ordinal = tc.message_ordinal\n\t\tWHERE " + prefilter
 }
 
 // pgToolResultContentCandidateBranch: candidate result_content rows (no events).
@@ -547,7 +547,7 @@ func pgToolResultContentCandidateBranch(
 
 	return fmt.Sprintf(`
 		SELECT tc.session_id, s.project, s.agent,
-			COALESCE(s.transcript_revision,'') AS transcript_revision,
+			s.transcript_revision,
 			'tool_result' AS location,
 			'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,
 			m.timestamp AS ts,
@@ -576,7 +576,7 @@ func pgToolResultEventsCandidateBranch(
 	prefilter := pgPrefilterClause("tre.content", lit, pb)
 	prefilter += " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
 
-	return "\n\t\tSELECT tre.session_id, s.project, s.agent,\n\t\t\tCOALESCE(s.transcript_revision,'') AS transcript_revision,\n\t\t\t'tool_result' AS location, 'assistant' AS role, '' AS tool_name,\n\t\t\ttre.tool_call_message_ordinal AS ordinal, tre.timestamp AS ts,\n\t\t\ttre.content AS body, 3 AS src, tre.id AS row_id, FALSE AS legacy_thinking,\n\t\t\tCOALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts\n\t\tFROM tool_result_events tre\n\t\tJOIN sessions s ON s.id = tre.session_id\n\t\tJOIN scoped sc ON sc.id = tre.session_id\n" + eventAnchorJoin + "\n\t\tWHERE " + prefilter
+	return "\n\t\tSELECT tre.session_id, s.project, s.agent,\n\t\t\ts.transcript_revision,\n\t\t\t'tool_result' AS location, 'assistant' AS role, '' AS tool_name,\n\t\t\ttre.tool_call_message_ordinal AS ordinal, tre.timestamp AS ts,\n\t\t\ttre.content AS body, 3 AS src, tre.id AS row_id, FALSE AS legacy_thinking,\n\t\t\tCOALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts\n\t\tFROM tool_result_events tre\n\t\tJOIN sessions s ON s.id = tre.session_id\n\t\tJOIN scoped sc ON sc.id = tre.session_id\n" + eventAnchorJoin + "\n\t\tWHERE " + prefilter
 }
 
 // pgSubstringSnippet builds a substring-match snippet: it locates the
@@ -612,7 +612,7 @@ func pgThinkingBranch(f db.ContentSearchFilter, escapedPat string, pb *paramBuil
 	}
 	sysPred += " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
 	return fmt.Sprintf(`SELECT m.session_id, s.project, s.agent,
-        COALESCE(s.transcript_revision,'') AS transcript_revision,
+        s.transcript_revision,
         'thinking' AS location, m.role, '' AS tool_name, m.ordinal,
         m.timestamp AS ts, m.thinking_text AS snippet,
         4 AS src, 0::bigint AS row_id,
@@ -630,7 +630,7 @@ func pgThinkingCandidateBranch(f db.ContentSearchFilter, lit string, pb *paramBu
 	}
 	sysPred += " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
 	return fmt.Sprintf(`SELECT m.session_id, s.project, s.agent,
-        COALESCE(s.transcript_revision,'') AS transcript_revision,
+        s.transcript_revision,
         'thinking' AS location, m.role, '' AS tool_name, m.ordinal,
         m.timestamp AS ts, m.thinking_text AS body,
         4 AS src, 0::bigint AS row_id, m.dialogue_text IS NULL AS legacy_thinking,

@@ -388,7 +388,7 @@ func (s *Store) activityReportSessions(
 		s.machine,
 		s.started_at,
 		s.ended_at,
-		COALESCE(s.is_automated, false) AS is_automated,
+		s.is_automated,
 		s.relationship_type = 'subagent' AS is_subagent
 	FROM sessions s
 	WHERE ` + where + `

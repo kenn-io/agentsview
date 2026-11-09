@@ -390,7 +390,7 @@ func (db *DB) substringSearchPage(
 	if hasSource(f, "messages") {
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'message' AS location,
 				m.role AS role, '' AS tool_name, m.ordinal,
 				COALESCE(m.timestamp,'') AS ts, %s AS snippet,
@@ -408,7 +408,7 @@ func (db *DB) substringSearchPage(
 	if hasSource(f, "thinking") {
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'thinking' AS location,
 				m.role AS role, '' AS tool_name, m.ordinal,
 				COALESCE(m.timestamp,'') AS ts, %s AS snippet,
@@ -424,7 +424,7 @@ func (db *DB) substringSearchPage(
 	if hasSource(f, "tool_input") {
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
@@ -450,7 +450,7 @@ func (db *DB) substringSearchPage(
 		// tool_calls, which SQLite does not store.
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
@@ -470,7 +470,7 @@ func (db *DB) substringSearchPage(
 		args = append(args, scopeArgs...)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tre.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
@@ -767,7 +767,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'message' AS location,
 				m.role AS role, '' AS tool_name,
 				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
@@ -786,7 +786,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'thinking' AS location,
 				m.role AS role, '' AS tool_name,
 				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
@@ -802,7 +802,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
@@ -819,7 +819,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
@@ -837,7 +837,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tre.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
@@ -1033,7 +1033,7 @@ func (db *DB) searchContentFTS(
 	// and secret redaction sees whole secrets rather than a pre-truncated window.
 	query := fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent,
-			COALESCE(s.transcript_revision,''), 'message', m.role, '',
+			s.transcript_revision, 'message', m.role, '',
 			m.ordinal, COALESCE(m.timestamp,'') AS ts, COALESCE(m.dialogue_text, m.content) AS snippet,
 			%s AS term_hits
 		FROM messages_fts
@@ -2031,8 +2031,8 @@ func (db *DB) enrichSemanticHits(
 				strings.Join(values, ", ") + ") " +
 				"SELECT m.session_id, s.project, s.agent, s.machine, COALESCE(s.display_name, s.session_name), m.role, m.ordinal, " +
 				"COALESCE(m.timestamp, ''), m.content, COALESCE(m.dialogue_text, m.content), " +
-				"COALESCE(s.transcript_revision, ''), " +
-				"COALESCE(s.relationship_type, ''), " +
+				"s.transcript_revision, " +
+				"s.relationship_type, " +
 				"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 				"FROM hits h " +
 				"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +

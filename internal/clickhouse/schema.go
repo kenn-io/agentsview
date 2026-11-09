@@ -923,7 +923,7 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 func CheckDataVersionCompat(ctx context.Context, conn *sql.DB) error {
 	var maxVersion int
 	err := conn.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(data_version), 0) FROM sessions`).Scan(&maxVersion)
+		`SELECT MAX(data_version) FROM sessions`).Scan(&maxVersion)
 	if err != nil {
 		if isMissingTableError(err) {
 			return nil

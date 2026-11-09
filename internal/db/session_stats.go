@@ -185,7 +185,7 @@ func (db *DB) sessionOutcomeStats(ctx context.Context, f StatsFilter, tz *time.L
 	cwds, err := func() ([]string, error) {
 		defer release()
 		where, args := sessionsInWindowWhere(f, from, to, false)
-		rows, err := db.getReader().QueryContext(ctx, `SELECT COALESCE(s.cwd, '') FROM sessions s WHERE `+where, args...)
+		rows, err := db.getReader().QueryContext(ctx, `SELECT s.cwd FROM sessions s WHERE `+where, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -352,7 +352,7 @@ func accumulateModelMix(
 	ctx context.Context, reader messageRowsQuerier, facts sessionStatsFactsByID, sessionIDs []string,
 ) error {
 	ph, args := InPlaceholders(sessionIDs)
-	q := `SELECT session_id, model, COALESCE(SUM(output_tokens), 0)
+	q := `SELECT session_id, model, SUM(output_tokens)
 		FROM messages
 		WHERE session_id IN ` + ph + `
 			AND token_usage != ''
@@ -564,7 +564,7 @@ func loadSessionsInWindow(
 		s.peak_context_tokens, s.has_peak_context_tokens,
 		s.outcome, COALESCE(s.health_grade, ''),
 		s.tool_retry_count, s.compaction_count, s.edit_churn_count,
-		COALESCE(s.cwd, ''),
+		s.cwd,
 		s.is_automated
 		FROM sessions s WHERE ` + where
 
@@ -1293,7 +1293,7 @@ func (db *DB) accumulateHourlyUTC(
 		WHERE m.session_id IN ` + ph + `
 			AND m.role = 'user'
 			AND ` + ExcludeClaudeHooksSQL("m.source_subtype") + `
-			AND COALESCE(m.source_subtype, '') <> 'tool_result'
+			AND m.source_subtype <> 'tool_result'
 			AND m.timestamp IS NOT NULL
 			AND m.timestamp != ''
 			AND m.timestamp >= ?

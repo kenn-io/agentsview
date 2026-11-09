@@ -72,7 +72,7 @@ func (s *Store) queryTurnRows(ctx context.Context, sess *db.Session) ([]db.TurnR
 		SELECT id, ordinal, timestamp, has_tool_use,
 			role, is_system,
 			CASE WHEN `+db.ClickHouseSystemPrefixSQL("content", "role")+` THEN false ELSE true END,
-			COALESCE(source_subtype, ''), content_length
+			source_subtype, content_length
 		FROM messages
 		WHERE session_id = ?
 			AND `+db.ExcludeClaudeHooksSQL("source_subtype")+`

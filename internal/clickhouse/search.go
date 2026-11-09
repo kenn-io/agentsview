@@ -128,7 +128,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			SELECT s.id AS session_id, s.project AS project, s.agent AS agent, s.machine AS machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
-				toInt64(-1) AS ordinal,
+				-1 AS ordinal,
 				CASE
 					WHEN COALESCE(s.display_name, s.session_name) ILIKE ?
 						THEN COALESCE(s.display_name, s.session_name, '')
@@ -136,7 +136,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 						THEN COALESCE(s.first_message, '')
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
-				1.0 AS rank, 2 AS match_priority, toUInt64(0) AS match_pos
+				1.0 AS rank, 2 AS match_priority, 0 AS match_pos
 			FROM sessions s
 			WHERE s.id IN (SELECT id FROM name_candidates)
 				AND s.id IN (
@@ -391,7 +391,7 @@ func (s *Store) collectContentSubstringMatches(
 					tc.result_content AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 					2 AS src, tc.message_id AS row_id,
-					tc.call_index AS call_index, toInt64(0) AS event_index
+					tc.call_index AS call_index, 0 AS event_index
 				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 				`+toolCallMessageJoin+`
 				WHERE `+contentPred+`
@@ -405,7 +405,7 @@ func (s *Store) collectContentSubstringMatches(
 					tre.timestamp AS ts,
 					tre.content AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-					3 AS src, toInt64(0) AS row_id,
+					3 AS src, 0 AS row_id,
 					tre.call_index AS call_index,
 					tre.event_index AS event_index
 				FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
@@ -564,7 +564,7 @@ func (s *Store) collectContentSource(
 					tc.result_content AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 					2 AS src, tc.message_id AS row_id,
-					tc.call_index AS call_index, toInt64(0) AS event_index, false AS legacy_thinking
+					tc.call_index AS call_index, 0 AS event_index, false AS legacy_thinking
 				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 				` + toolCallMessageJoin + `
 				WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + `
@@ -575,7 +575,7 @@ func (s *Store) collectContentSource(
 					tre.tool_call_message_ordinal AS ordinal, tre.timestamp AS ts,
 					tre.content AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-					3 AS src, toInt64(0) AS row_id,
+					3 AS src, 0 AS row_id,
 					tre.call_index AS call_index, tre.event_index AS event_index, false AS legacy_thinking
 				FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
 				` + eventAnchorJoin + `

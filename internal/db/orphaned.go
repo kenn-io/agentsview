@@ -2356,7 +2356,7 @@ func reconcileTranscriptRevisionsTx(
 					FROM main.tool_result_events WHERE session_id = current.id
 				)
 			THEN old.transcript_revision
-			ELSE CAST(CAST(old.transcript_revision AS INTEGER) + 1 AS TEXT)
+			ELSE CAST(old.transcript_revision AS INTEGER) + 1
 			END
 			FROM old_db.sessions AS old
 			WHERE old.id = current.id

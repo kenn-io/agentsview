@@ -210,5 +210,5 @@ ORDER BY fp.last_edited_at DESC NULLS LAST, fp.last_session_id DESC,
 }
 
 func recentEditsRFC3339Expr(col string) string {
-	return "if(" + col + " IS NULL, CAST(NULL AS Nullable(String)), concat(replaceAll(toString(" + col + "), ' ', 'T'), 'Z'))"
+	return "if(" + col + " IS NULL, NULL, concat(replaceAll(toString(" + col + "), ' ', 'T'), 'Z'))"
 }

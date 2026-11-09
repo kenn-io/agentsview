@@ -529,7 +529,7 @@ func (db *DB) activityReportSessionsFrom(
 		s.machine,
 		COALESCE(s.started_at, ''),
 		COALESCE(s.ended_at, ''),
-		COALESCE(s.is_automated, 0),
+		s.is_automated,
 		s.relationship_type = 'subagent'
 	FROM sessions s
 	WHERE ` + where
@@ -610,7 +610,7 @@ func (db *DB) activityReportActivityFrom(
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		query := `SELECT session_id, ordinal, role,
-			COALESCE(timestamp, ''), model
+			timestamp, model
 		FROM messages
 		WHERE session_id IN ` + ph + `
 			AND timestamp IS NOT NULL
@@ -682,7 +682,7 @@ func (db *DB) activityReportCandidates(
 // pair through a Go callback. The last column marks messages that message
 // counts include.
 const activityReportMessagesSQL = `SELECT session_id, ordinal, role, timestamp, model,
-	is_system = 0 AND COALESCE(source_subtype, '') <> 'tool_result'
+	is_system = 0 AND source_subtype <> 'tool_result'
 FROM messages INDEXED BY idx_messages_velocity
 WHERE session_id IN (SELECT value FROM json_each(?))
 	AND timestamp IS NOT NULL AND timestamp != ''

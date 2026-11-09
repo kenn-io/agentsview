@@ -169,7 +169,7 @@ func pinMessageTx(ctx context.Context, tx *sql.Tx, sessionID string, messageID i
 				session_id, message_id, ordinal, source_uuid, note
 			)
 			SELECT $1, m.ordinal, m.ordinal,
-				COALESCE(m.source_uuid, ''), $3
+				m.source_uuid, $3
 			FROM messages m
 			WHERE m.session_id = $1 AND m.ordinal = $2
 			ON CONFLICT (session_id, message_id)

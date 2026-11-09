@@ -425,8 +425,8 @@ func clickActivityReportCandidateWhere(
 // chActivityCandidateDigestSQL selects the digest that identifies a set of
 // candidate sessions by their push versions: two independent hash sums,
 // then the count.
-const chActivityCandidateDigestSQL = "toString(sum(sipHash64(s.id, s.push_version))) || ':' || " +
-	"toString(sum(cityHash64(s.id, s.push_version))), count()"
+const chActivityCandidateDigestSQL = "sum(sipHash64(s.id, s.push_version)) || ':' || " +
+	"sum(cityHash64(s.id, s.push_version)), count()"
 
 type activityCandidateDigest struct {
 	hash  string
@@ -1004,7 +1004,7 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 	return fmt.Sprintf(`
 		WITH %[3]susage_raw AS (
 			SELECT s.id AS session_id,
-				CAST(m.ordinal AS Nullable(Int64)) AS message_ordinal,
+				m.ordinal AS message_ordinal,
 				'message' AS source,
 				COALESCE(m.timestamp, s.started_at) AS ts,
 				m.timestamp AS pricing_ts,
@@ -1020,12 +1020,12 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 				m.claude_message_id AS claude_message_id,
 				m.claude_request_id AS claude_request_id,
 				m.source_uuid AS source_uuid,
-				CAST('' AS String) AS usage_dedup_key,
-				toInt64(0) AS input_tokens, toInt64(0) AS output_tokens,
-				toInt64(0) AS cache_create, toInt64(0) AS cache_read,
-				toInt64(0) AS reasoning_tokens,
-				CAST(NULL AS Nullable(Int64)) AS cost_microdollars,
-				CAST('' AS String) AS cost_source,
+				'' AS usage_dedup_key,
+				0 AS input_tokens, 0 AS output_tokens,
+				0 AS cache_create, 0 AS cache_read,
+				0 AS reasoning_tokens,
+				NULL AS cost_microdollars,
+				'' AS cost_source,
 				COALESCE(m.timestamp, s.started_at) AS ts_raw,
 				s.started_at AS started_at_raw%[7]s
 			FROM %[5]s
@@ -1043,19 +1043,19 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 				toInt64(0) AS usage_cache_create_1h,
 				toInt64(0) AS usage_cache_read,
 				toInt64(0) AS usage_reasoning,
-				toInt64(0) AS usage_web,
+				0 AS usage_web,
 				s.agent AS agent,
-				CAST('' AS String) AS claude_message_id,
-				CAST('' AS String) AS claude_request_id,
-				CAST('' AS String) AS source_uuid,
+				'' AS claude_message_id,
+				'' AS claude_request_id,
+				'' AS source_uuid,
 				if(ue.dedup_key != '',
 					concat(s.id, ':', ue.source, ':', ue.dedup_key),
-					concat(s.id, ':', ue.source, ':id:', toString(ue.id))) AS usage_dedup_key,
-				toInt64(ue.input_tokens) AS input_tokens,
-				toInt64(ue.output_tokens) AS output_tokens,
-				toInt64(ue.cache_creation_input_tokens) AS cache_create,
-				toInt64(ue.cache_read_input_tokens) AS cache_read,
-				toInt64(ue.reasoning_tokens) AS reasoning_tokens,
+					concat(s.id, ':', ue.source, ':id:', ue.id)) AS usage_dedup_key,
+				ue.input_tokens AS input_tokens,
+				ue.output_tokens AS output_tokens,
+				ue.cache_creation_input_tokens AS cache_create,
+				ue.cache_read_input_tokens AS cache_read,
+				ue.reasoning_tokens AS reasoning_tokens,
 				ue.cost_microdollars AS cost_microdollars,
 				ue.cost_source AS cost_source,
 				COALESCE(ue.occurred_at, s.started_at) AS ts_raw,
@@ -1070,7 +1070,7 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 func clickUsageNormalizedColumns() string {
 	maxTok := db.MaxPlausibleTokens
 	clamp := func(expr string) string {
-		return fmt.Sprintf("least(greatest(%s, toInt64(0)), toInt64(%d))", expr, maxTok)
+		return fmt.Sprintf("least(greatest(%s, 0), %d)", expr, maxTok)
 	}
 	msgInput := clamp("usage_input")
 	msgOutput := clamp("usage_output")
@@ -1078,43 +1078,43 @@ func clickUsageNormalizedColumns() string {
 	msgCacheCr1h := clamp("usage_cache_create_1h")
 	msgCacheRd := clamp("usage_cache_read")
 	msgReasoning := clamp("usage_reasoning")
-	msgWeb := "greatest(usage_web, toInt64(0))"
+	msgWeb := "greatest(usage_web, 0)"
 	return fmt.Sprintf(`session_id, message_ordinal, ts, pricing_ts, source, model,
 			provider_id, agent, claude_message_id, claude_request_id, source_uuid,
 			usage_dedup_key,
-			toInt64(CASE
+			CASE
 				WHEN source = 'message' THEN %[1]s
-				WHEN source = 'session' THEN greatest(input_tokens, toInt64(0))
+				WHEN source = 'session' THEN greatest(input_tokens, 0)
 				ELSE %[6]s
-			END) AS input_tokens_norm,
-			toInt64(CASE
+			END AS input_tokens_norm,
+			CASE
 				WHEN source = 'message' THEN %[2]s
-				WHEN source = 'session' THEN greatest(output_tokens, toInt64(0))
+				WHEN source = 'session' THEN greatest(output_tokens, 0)
 				ELSE %[7]s
-			END) AS output_tokens_norm,
-			toInt64(CASE
+			END AS output_tokens_norm,
+			CASE
 				WHEN source = 'message' THEN %[3]s
-				WHEN source = 'session' THEN greatest(cache_create, toInt64(0))
+				WHEN source = 'session' THEN greatest(cache_create, 0)
 				ELSE %[8]s
-			END) AS cache_create_norm,
-			toInt64(CASE
+			END AS cache_create_norm,
+			CASE
 				WHEN source = 'message' THEN %[4]s
-				ELSE toInt64(0)
-			END) AS cache_create_1h_norm,
-			toInt64(CASE
+				ELSE 0
+			END AS cache_create_1h_norm,
+			CASE
 				WHEN source = 'message' THEN %[5]s
-				WHEN source = 'session' THEN greatest(cache_read, toInt64(0))
+				WHEN source = 'session' THEN greatest(cache_read, 0)
 				ELSE %[9]s
-			END) AS cache_read_norm,
-			toInt64(CASE
+			END AS cache_read_norm,
+			CASE
 				WHEN source = 'message' THEN %[10]s
-				WHEN source = 'session' THEN greatest(reasoning_tokens, toInt64(0))
+				WHEN source = 'session' THEN greatest(reasoning_tokens, 0)
 				ELSE %[11]s
-			END) AS reasoning_tokens_norm,
-			toInt64(CASE
+			END AS reasoning_tokens_norm,
+			CASE
 				WHEN source = 'message' THEN %[12]s
-				ELSE toInt64(0)
-			END) AS web_search_requests_norm,
+				ELSE 0
+			END AS web_search_requests_norm,
 			cost_microdollars, cost_source`,
 		msgInput, msgOutput, msgCacheCr, msgCacheCr1h, msgCacheRd,
 		clamp("input_tokens"), clamp("output_tokens"), clamp("cache_create"),

@@ -91,7 +91,7 @@ SELECT
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
-	NULL::bigint AS cost_microdollars,
+	NULL AS cost_microdollars,
 	'' AS cost_status,
 	'' AS cost_source,
 	m.claude_message_id,
@@ -102,7 +102,7 @@ SELECT
 	s.agent,
 	s.machine,
 	s.user_message_count,
-	COALESCE(s.is_automated, false) AS is_automated,
+	s.is_automated,
 	COALESCE(s.ended_at, s.started_at, s.created_at) AS session_activity_at,
 	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
 	s.started_at
@@ -140,7 +140,7 @@ SELECT
 	s.agent,
 	s.machine,
 	s.user_message_count,
-	COALESCE(s.is_automated, false) AS is_automated,
+	s.is_automated,
 	COALESCE(s.ended_at, s.started_at, s.created_at) AS session_activity_at,
 	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
 	s.started_at
@@ -173,7 +173,7 @@ SELECT
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
-	NULL::bigint AS cost_microdollars,
+	NULL AS cost_microdollars,
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -233,7 +233,7 @@ SELECT
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
-	NULL::bigint AS cost_microdollars,
+	NULL AS cost_microdollars,
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -702,7 +702,7 @@ func pgUsageRowQuery(pb *paramBuilder, f db.UsageFilter, dialect db.QueryDialect
 const pgDailyCursorUsageRowsSQLTemplate = `
 SELECT
 	'' AS session_id,
-	NULL::INT AS message_ordinal,
+	NULL AS message_ordinal,
 	cu.agent AS usage_source,
 	cu.occurred_at AS ts,
 	cu.occurred_at AS pricing_ts,
@@ -1539,7 +1539,7 @@ func (s *Store) querySessionUsageRows(
 		pb.add(sessionID) + ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC,
 		u.usage_source ASC,
-		COALESCE(u.usage_dedup_key, '') ASC`
+		u.usage_dedup_key ASC`
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying pg session usage: %w", err)

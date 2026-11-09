@@ -335,7 +335,7 @@ SELECT
 	s.agent,
 	s.machine,
 	s.user_message_count,
-	COALESCE(s.is_automated, 0) AS is_automated,
+	s.is_automated,
 	COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) AS session_activity_at,
 	COALESCE(s.termination_status, '') AS termination_status,
 	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
@@ -374,7 +374,7 @@ SELECT
 	s.agent,
 	s.machine,
 	s.user_message_count,
-	COALESCE(s.is_automated, 0) AS is_automated,
+	s.is_automated,
 	COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) AS session_activity_at,
 	COALESCE(s.termination_status, '') AS termination_status,
 	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
@@ -3288,7 +3288,7 @@ func (db *DB) getSessionUsageLegacy(
 		ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC,
 		u.usage_source ASC,
-		COALESCE(u.usage_dedup_key, '') ASC`
+		u.usage_dedup_key ASC`
 	rows, err := db.getReader().QueryContext(ctx, query, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("querying session usage: %w", err)

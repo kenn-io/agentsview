@@ -142,7 +142,7 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 		expression := strings.ReplaceAll(column.expression, "token_usage", "tupleElement(m,'token_usage')")
 		if column.name != "usage_present" && column.name != "usage_web" {
 			typ = "UInt32"
-			expression = fmt.Sprintf("least(greatest(%s,toInt64(0)),toInt64(%d))", expression, db.MaxPlausibleTokens)
+			expression = fmt.Sprintf("least(greatest(%s,0),%d)", expression, db.MaxPlausibleTokens)
 		}
 		factTypes = append(factTypes, column.name+" "+typ)
 		factValues = append(factValues, expression)
@@ -384,7 +384,7 @@ const chPreparedUsageColumns = `session_id, message_ordinal, ts, pricing_ts, sou
 // chPreparedUsagePricingDigestSQL reads the digest the mirror was last priced
 // under. A push writes every price record for a digest before this key, so a
 // refresh that reads the key joins a complete set of records for it.
-const chPreparedUsagePricingDigestSQL = "(SELECT ifNull(max(value), '') FROM sync_metadata WHERE key = '" +
+const chPreparedUsagePricingDigestSQL = "(SELECT max(value) FROM sync_metadata WHERE key = '" +
 	usagePricedDigestKey + "')"
 
 // chPriceStampSQL counts the price records under the digest the refresh

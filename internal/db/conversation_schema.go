@@ -17,7 +17,7 @@ CREATE TRIGGER IF NOT EXISTS conversation_messages_revision AFTER INSERT ON conv
 WHEN NEW.revision = 0
 BEGIN
  INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1')
- ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  UPDATE conversation_messages SET revision=(SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key='conversation_publication_revision')
  WHERE session_id=NEW.session_id AND message_id=NEW.message_id;
 END;
@@ -30,14 +30,14 @@ WHEN OLD.ordinal IS NOT NEW.ordinal OR OLD.role IS NOT NEW.role OR OLD.timestamp
  OR OLD.removed IS NOT NEW.removed
 BEGIN
  INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1')
- ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  UPDATE conversation_messages SET revision=(SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key='conversation_publication_revision')
  WHERE session_id=NEW.session_id AND message_id=NEW.message_id;
 END;
 CREATE TRIGGER IF NOT EXISTS conversation_session_delete AFTER DELETE ON sessions
 BEGIN
  UPDATE conversation_messages SET deleted=1,removed=1,body=NULL WHERE session_id=OLD.id AND removed=0;
- INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  INSERT INTO conversation_session_changes(session_id,revision,deleted) SELECT OLD.id,CAST(value AS INTEGER),1 FROM archive_metadata WHERE key='conversation_publication_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=1;
 END;
@@ -45,21 +45,21 @@ CREATE TRIGGER IF NOT EXISTS conversation_session_trash AFTER UPDATE OF deleted_
 WHEN OLD.deleted_at IS NOT NEW.deleted_at
 BEGIN
  UPDATE conversation_messages SET deleted=(NEW.deleted_at IS NOT NULL) WHERE session_id=NEW.id AND removed=0;
- INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  INSERT INTO conversation_session_changes(session_id,revision,deleted) SELECT NEW.id,CAST(value AS INTEGER),(NEW.deleted_at IS NOT NULL) FROM archive_metadata WHERE key='conversation_publication_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted;
 END;
 CREATE TRIGGER IF NOT EXISTS conversation_session_project AFTER UPDATE OF project,machine ON sessions
 WHEN (OLD.project IS NOT NEW.project OR OLD.machine IS NOT NEW.machine) AND (EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=NEW.id AND removed=0) OR EXISTS(SELECT 1 FROM conversation_session_changes WHERE session_id=NEW.id))
 BEGIN
- INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  INSERT INTO conversation_session_changes(session_id,revision,deleted) SELECT NEW.id,CAST(value AS INTEGER),(NEW.deleted_at IS NOT NULL) FROM archive_metadata WHERE key='conversation_publication_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted;
 END;
 CREATE TRIGGER IF NOT EXISTS conversation_project_insert AFTER INSERT ON session_project_identity_snapshots
 WHEN EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=NEW.session_id AND removed=0) OR EXISTS(SELECT 1 FROM conversation_session_changes WHERE session_id=NEW.session_id)
 BEGIN
- INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  INSERT INTO conversation_session_changes(session_id,revision,deleted) SELECT NEW.session_id,CAST(value AS INTEGER),COALESCE((SELECT deleted_at IS NOT NULL FROM sessions WHERE id=NEW.session_id),1) FROM archive_metadata WHERE key='conversation_publication_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted;
 END;
@@ -71,14 +71,14 @@ WHEN (OLD.project IS NOT NEW.project OR OLD.machine IS NOT NEW.machine OR OLD.ro
  OR OLD.checkout_state IS NOT NEW.checkout_state OR OLD.git_branch IS NOT NEW.git_branch
  OR OLD.remote_resolution IS NOT NEW.remote_resolution) AND (EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=NEW.session_id AND removed=0) OR EXISTS(SELECT 1 FROM conversation_session_changes WHERE session_id=NEW.session_id))
 BEGIN
- INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  INSERT INTO conversation_session_changes(session_id,revision,deleted) SELECT NEW.session_id,CAST(value AS INTEGER),COALESCE((SELECT deleted_at IS NOT NULL FROM sessions WHERE id=NEW.session_id),1) FROM archive_metadata WHERE key='conversation_publication_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted;
 END;
 CREATE TRIGGER IF NOT EXISTS conversation_project_delete AFTER DELETE ON session_project_identity_snapshots
 WHEN EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=OLD.session_id AND removed=0) OR EXISTS(SELECT 1 FROM conversation_session_changes WHERE session_id=OLD.session_id)
 BEGIN
- INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  INSERT INTO conversation_session_changes(session_id,revision,deleted) SELECT OLD.session_id,CAST(value AS INTEGER),COALESCE((SELECT deleted_at IS NOT NULL FROM sessions WHERE id=OLD.session_id),1) FROM archive_metadata WHERE key='conversation_publication_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted;
 END;`

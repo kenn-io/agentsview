@@ -123,7 +123,7 @@ func (db *DB) queryTurnRows(
 		    ELSE m2.delta_ms
 		  END AS turn_duration_ms,
 		  m2.role, m2.is_system, m2.is_system_prefixed,
-		  COALESCE(m2.source_subtype, ''), m2.content_length
+		  m2.source_subtype, m2.content_length
 		FROM (
 		  SELECT
 		    m.*,

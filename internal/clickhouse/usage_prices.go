@@ -82,7 +82,7 @@ func decodeUsagePriceError(data string) error {
 // is never computed in Go.
 const chUsagePriceKeySQL = `hex(sipHash128(
 				model, price_model, provider_id,
-				ifNull(toUnixTimestamp64Micro(pricing_ts), toInt64(0)),
+				ifNull(toUnixTimestamp64Micro(pricing_ts), 0),
 				pricing_ts IS NULL,
 				source, message_ordinal IS NOT NULL,
 				input_tokens_norm, output_tokens_norm, reasoning_tokens_norm,
@@ -95,13 +95,13 @@ const chUsagePriceKeySQL = `hex(sipHash128(
 // under. zero is the value a row without a record carries, matching a LEFT
 // JOIN without join_use_nulls.
 var chUsageStoredPriceColumns = []struct{ source, joined, stored, zero string }{
-	{"priced", "p_priced", "stored_priced", "toInt64(0)"},
-	{"token_cost_microdollars", "p_token_cost", "stored_token_cost", "toInt64(0)"},
-	{"cache_savings_microdollars", "p_savings", "stored_savings", "toInt64(0)"},
+	{"priced", "p_priced", "stored_priced", "0"},
+	{"token_cost_microdollars", "p_token_cost", "stored_token_cost", "0"},
+	{"cache_savings_microdollars", "p_savings", "stored_savings", "0"},
 	{"billed_context_id", "p_billed_context_id", "stored_billed_context_id", "''"},
 	{"unbilled_context_id", "p_unbilled_context_id", "stored_unbilled_context_id", "''"},
 	{"request_scoped", "p_request_scoped", "stored_request_scoped", "false"},
-	{"band_above_input_tokens", "p_band", "stored_band", "toInt64(0)"},
+	{"band_above_input_tokens", "p_band", "stored_band", "0"},
 	{"price_error", "p_price_error", "stored_price_error", "''"},
 }
 
