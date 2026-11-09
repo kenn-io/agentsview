@@ -26,6 +26,34 @@ func commitMessages(id, input, result string) []Message {
 	}
 }
 
+func TestCommitLinksArgvCommands(t *testing.T) {
+	for _, tt := range []struct {
+		name, input, repository string
+	}{
+		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
+		{"sh -lc", `{"command":["sh","-lc","git commit -m fix"]}`, "/work"},
+		{"bash -c", `{"command":["bash","-c","git commit -m fix"]}`, "/work"},
+		{"bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
+		{"zsh -c", `{"command":["zsh","-c","git commit -m fix"]}`, "/work"},
+		{"zsh -lc", `{"command":["zsh","-lc","git commit -m fix"]}`, "/work"},
+		{"argv path", `{"command":["git","-C","/path with spaces","commit","-m","fix"]}`, "/path with spaces"},
+		{"string command", `{"command":"git -C '/path with spaces' commit -m fix"}`, "/path with spaces"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			messages := commitMessages("s1", tt.input, "[main abc1234] Fix parser")
+			messages[2].ToolCalls[0].ToolName = "shell"
+			insertMessages(t, d, messages...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			assert.Equal(t, tt.repository, got.Commits[0].Repository)
+		})
+	}
+}
+
 func TestCommitLinksNonCommitCandidatesSkipResultReadsAndDelete(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "candidate", "project-a")

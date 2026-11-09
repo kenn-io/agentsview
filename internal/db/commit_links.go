@@ -16,6 +16,7 @@ import (
 
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/shellquote"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
@@ -154,6 +155,19 @@ func commitRepository(input, cwd string) string {
 
 func commitCommandText(input string) string {
 	if jsontext.Value(input).IsValid() {
+		var payload struct {
+			Command []string `json:"command"`
+		}
+		if json.Unmarshal([]byte(input), &payload) == nil && payload.Command != nil {
+			args := payload.Command
+			if len(args) >= 3 && (args[0] == "sh" || args[0] == "bash" || args[0] == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+				return args[2]
+			}
+			for i, arg := range args {
+				args[i] = shellquote.POSIX(arg)
+			}
+			return strings.Join(args, " ")
+		}
 		return signals.CommandText(input)
 	}
 	// A batch's output and process IDs do not identify which new call owns them.
