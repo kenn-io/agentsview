@@ -62,6 +62,16 @@ func TestUsageSnapshotRanking(t *testing.T) {
 			}
 			state, err := store.preparedUsageState(t.Context())
 			require.NoError(t, err)
+			switch phase {
+			case "raw":
+				require.False(t, state.ready)
+			case "prepared":
+				require.True(t, state.ready)
+				require.Empty(t, state.changed)
+			case "delta":
+				require.True(t, state.ready)
+				require.Contains(t, state.changed, b)
+			}
 			query := usageCTEFor(state, db.UsageFilter{Timezone: "UTC"}, "")
 			readCtx, err := withUsageDeltaTables(t.Context(), state)
 			require.NoError(t, err)
@@ -86,6 +96,7 @@ func TestUsageSnapshotRanking(t *testing.T) {
 			require.NoError(t, err)
 			assert.EqualValues(t, 41, inputTotal)
 			assert.EqualValues(t, 56, outputTotal)
+			// Parity also checks that the shared source UUID contributes once across sessions.
 			filter := db.UsageFilter{Timezone: "UTC"}
 			want, err := local.GetDailyUsage(t.Context(), filter)
 			require.NoError(t, err)
