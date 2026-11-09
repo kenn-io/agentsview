@@ -218,11 +218,7 @@ func (s *Reports) touchActivityReport(selection, key string, entry Report) {
 	if d.dir == "" {
 		return
 	}
-	err := d.touch(selection)
-	if errors.Is(err, os.ErrNotExist) {
-		s.saveActivityReport(selection, key, entry)
-		return
-	}
+	_, err := d.keep(selection, key, 0, func() ([]byte, error) { return json.Marshal(entry) })
 	if err != nil {
 		log.Printf("%s: recording an activity report open: %v", s.subdir, err)
 	}

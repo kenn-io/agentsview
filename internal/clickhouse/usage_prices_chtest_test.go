@@ -255,7 +255,7 @@ func dailyUsageGroupRowStats(
 	require.NoError(t, err)
 	customModels := chCustomPricedModels(contexts, export.NewPricingResolver(catalog.rows))
 	var stats usageGroupRowStats
-	err = store.forEachDailyUsageGroupRow(t.Context(), filter, catalog.digest, customModels, false, nil, func(r chDailyUsageGroupRow) error {
+	err = store.forEachDailyUsageGroupRow(t.Context(), filter, catalog.digest, customModels, false, func(r chDailyUsageGroupRow) error {
 		stats.rows++
 		stats.events += r.Events
 		if r.Explicit {

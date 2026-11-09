@@ -3,7 +3,9 @@ package clickhouse
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/gob"
+	"fmt"
 	"io"
 	"time"
 	"unsafe"
@@ -12,64 +14,75 @@ import (
 )
 
 const usageDiskVersion = "usage-2|"
+const topUsageDiskVersion = "usage-top-1|"
 
-func encodeUsageGroups(rows []chDailyUsageGroupRow) ([]byte, bool) {
+func encodeUsageRows[T any](rows []T, limit int64, size func(T) int64) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(len(rows)); err != nil {
-		return nil, false
+		return nil, err
 	}
+	var total int64
 	for _, row := range rows {
-		if err := enc.Encode(row); err != nil || buf.Len() > dailyUsageRowsBytes {
-			return nil, false
+		total += size(row)
+		if total > limit {
+			return nil, fmt.Errorf("usage selection exceeds limit")
+		}
+		if err := enc.Encode(row); err != nil {
+			return nil, err
+		}
+		if int64(buf.Len()) > limit {
+			return nil, fmt.Errorf("usage selection exceeds limit")
 		}
 	}
-	return buf.Bytes(), true
+	return buf.Bytes(), nil
 }
 
-func decodeUsageGroups(data []byte) ([]chDailyUsageGroupRow, bool) {
+func decodeUsageRows[T any](data []byte, limit int64, size func(T) int64) ([]T, bool) {
 	dec := gob.NewDecoder(bytes.NewReader(data))
 	var count int
-	if err := dec.Decode(&count); err != nil || count < 0 || count > dailyUsageRowsBytes/int(unsafe.Sizeof(chDailyUsageGroupRow{})) {
+	var item T
+	if err := dec.Decode(&count); err != nil || count < 0 || int64(count) > limit/int64(unsafe.Sizeof(item)) {
 		return nil, false
 	}
-	var rows []chDailyUsageGroupRow
-	var size int64
+	rows := make([]T, 0, count)
+	var total int64
 	for range count {
-		var row chDailyUsageGroupRow
+		var row T
 		if err := dec.Decode(&row); err != nil {
 			return nil, false
 		}
-		size += dailyUsageRowBytes(row)
-		if size > dailyUsageRowsBytes {
+		total += size(row)
+		if total > limit {
 			return nil, false
 		}
 		rows = append(rows, row)
 	}
-	var extra chDailyUsageGroupRow
+	var extra T
 	return rows, dec.Decode(&extra) == io.EOF
 }
 
-// usageDiskVersionAt captures a fresh parts snapshot and the logical rows it names.
-func (s *Store) usageDiskVersionAt(ctx context.Context, pricingDigest string) (string, bool) {
-	ctx, err := s.withPartsSnapshot(ctx)
+// usageCaptureStable validates a fill against the parts captured for its request.
+func (s *Store) usageCaptureStable(ctx context.Context) bool {
+	before, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
+	if !ok || ctx.Err() != nil {
+		return false
+	}
+	after, err := s.readPartsSnapshot(ctx)
 	if err != nil {
-		return "", false
+		return false
 	}
-	state, err := s.preparedUsageState(ctx)
-	if err != nil || !state.ready || len(state.raw) != 0 {
-		return "", false
+	for _, table := range append(append([]string{}, chUsageReadTables...), "prepared_usage", "usage_price_models") {
+		if before[table] != after[table] {
+			return false
+		}
 	}
-	version, err := s.usageReadFingerprint(ctx, state, pricingDigest)
-	if err != nil || version == "" {
-		return "", false
-	}
-	return version, true
+	return ctx.Err() == nil
 }
 
-// usageDiskFilter drops the end date only when no source has later usage.
-func (s *Store) usageDiskFilter(ctx context.Context, state preparedUsageState, f db.UsageFilter) db.UsageFilter {
-	if f.To == "" || f.Timezone == "" {
+// usageDiskFilter shares one source extent per logical version across selections.
+func (s *Store) usageDiskFilter(ctx context.Context, state preparedUsageState, f db.UsageFilter, version string) db.UsageFilter {
+	if f.To == "" || f.Timezone == "" || db.TerminationUsesTime(f.Termination) || version == "" || !state.ready || len(state.raw) != 0 {
 		return f
 	}
 	loc, err := time.LoadLocation(f.Timezone)
@@ -80,16 +93,23 @@ func (s *Store) usageDiskFilter(ctx context.Context, state preparedUsageState, f
 	if err != nil {
 		return f
 	}
-	readCtx, err := withUsageDeltaTables(ctx, state)
-	if err != nil {
-		return f
+	s.usageExtent.Lock()
+	defer s.usageExtent.Unlock()
+	if !s.usageExtent.valid || s.usageExtent.version != version {
+		readCtx, err := withUsageDeltaTables(ctx, state)
+		if err != nil {
+			return f
+		}
+		source, args := chPreparedUsageSourceSQL(state, "1", nil)
+		var latest sql.NullTime
+		var unknown uint64
+		err = s.queryRowContext(readCtx, "SELECT maxOrNull(ts), countIf(isNull(ts)) FROM (SELECT ts FROM ("+source+") UNION ALL SELECT occurred_at AS ts FROM cursor_usage_events)", args...).Scan(&latest, &unknown)
+		if err != nil || !s.usageCaptureStable(ctx) {
+			return f
+		}
+		s.usageExtent.version, s.usageExtent.latest, s.usageExtent.unknown, s.usageExtent.valid = version, latest.Time, unknown != 0, true
 	}
-	bound := end.UTC().Format(time.RFC3339Nano)
-	source, args := chPreparedUsageSourceSQL(state, "ts >= "+chTimestampSQL, []any{bound})
-	args = append(args, bound)
-	var future bool
-	err = s.queryRowContext(readCtx, "SELECT EXISTS(SELECT 1 FROM ("+source+") LIMIT 1) OR EXISTS(SELECT 1 FROM cursor_usage_events WHERE occurred_at >= "+chTimestampSQL+" LIMIT 1)", args...).Scan(&future)
-	if err == nil && !future {
+	if !s.usageExtent.unknown && s.usageExtent.latest.Before(end) {
 		f.To = ""
 	}
 	return f

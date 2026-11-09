@@ -108,14 +108,28 @@ func (d activityReportDisk) save(selection, key string, payload []byte, maxFile 
 	return writeFileAtomic(d.path(selection), data)
 }
 
-// Touch records a read served by the in-memory memo.
-func (d *Disk) Touch(selection string) {
+func (d activityReportDisk) keep(selection, version string, maxFile int64, encode func() ([]byte, error)) (bool, error) {
+	err := d.touch(selection)
+	if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	body, err := encode()
+	if err != nil {
+		return false, err
+	}
+	return true, d.save(selection, version, body, maxFile)
+}
+
+// Keep touches an in-memory selection and restores it if its file was removed.
+func (d *Disk) Keep(selection, version string, encode func() ([]byte, error)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.reports.disk.dir == "" || selection == "" {
 		return
 	}
-	_ = d.reports.disk.touch(selection)
+	if saved, err := d.reports.disk.keep(selection, version, d.maxFile, encode); saved && err == nil {
+		_ = d.trim()
+	}
 }
 
 func (d *Disk) Put(selection, version string, payload []byte) {
