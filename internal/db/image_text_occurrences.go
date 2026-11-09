@@ -2,18 +2,20 @@ package db
 
 // refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
 func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) error {
-	oldRows, err := tx.Query(`SELECT image_hash FROM image_text_occurrences WHERE session_id=?`, sessionID)
+	oldRows, err := tx.Query(`SELECT COALESCE(call_id,0),COALESCE(event_id,0),image_index,image_hash FROM image_text_occurrences WHERE session_id=?`, sessionID)
 	if err != nil {
 		return err
 	}
 	var oldHashes []string
+	oldOccurrences := make(map[ImageTextOccurrence]bool)
 	for oldRows.Next() {
-		var hash string
-		if err := oldRows.Scan(&hash); err != nil {
+		var old ImageTextOccurrence
+		if err := oldRows.Scan(&old.CallID, &old.EventID, &old.Index, &old.Hash); err != nil {
 			oldRows.Close()
 			return err
 		}
-		oldHashes = append(oldHashes, hash)
+		oldHashes = append(oldHashes, old.Hash)
+		oldOccurrences[old] = true
 	}
 	if err := oldRows.Err(); err != nil {
 		oldRows.Close()
@@ -61,6 +63,11 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 		}
 		if _, err := tx.Exec(`INSERT INTO image_text_occurrences(session_id,call_id,event_id,image_index,image_hash) VALUES(?,?,?,?,?)`, sessionID, call, event, o.Index, o.Hash); err != nil {
 			return err
+		}
+		if !oldOccurrences[o] {
+			if _, err := tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND succeeded=0 AND retry_at='9999-12-31T23:59:59Z'`, o.Hash); err != nil {
+				return err
+			}
 		}
 	}
 	for _, hash := range oldHashes {

@@ -410,3 +410,43 @@ func TestImageTextRetriesRepairedAsset(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 }
+
+func TestImageTextTerminalBecomesEligibleForNewOccurrence(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	bytes := []byte("\x89PNG\r\n\x1a\nimage")
+	encoded := base64.StdEncoding.EncodeToString(bytes)
+	gif := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/gif;base64,%s"}]`, encoded)
+	png := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, encoded)
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"recovered invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	}))
+	t.Cleanup(srv.Close)
+	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
+	require.NoError(t, err)
+	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
+	require.NoError(t, err)
+	manager := Manager{DB: d, Client: client}
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "session", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "first", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: gif}}}}))
+	require.NoError(t, manager.Run(ctx))
+	require.Zero(t, requests)
+	var retry string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
+	require.Equal(t, "9999-12-31T23:59:59Z", retry)
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "session", Ordinal: 2, Role: "assistant", Content: "append"}}))
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
+	require.Equal(t, "9999-12-31T23:59:59Z", retry)
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "session", Ordinal: 3, Role: "assistant", Content: "second", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: png}}}}))
+	require.NoError(t, manager.Run(ctx))
+	require.Equal(t, 1, requests)
+	page, err := d.Search(ctx, db.SearchFilter{Query: "recovered"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "session", page.Results[0].SessionID)
+}
