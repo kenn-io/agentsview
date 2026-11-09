@@ -78,7 +78,7 @@ type Store struct {
 	// The usage row memos keep recent range reads per rows and filter.
 	dailyUsageRows       kept.Memo[chDailyUsageGroupRow]
 	usageDisk            kept.Disk
-	sessionAggregateRows kept.Memo[chUsageAggregateRow]
+	sessionAggregateRows kept.Memo[CHUsageAggregateRow]
 	usageSessionRows     kept.Memo[chUsageSessionRow]
 	// topSessionTotals keeps each session's totals per top-sessions read.
 	topSessionTotals kept.Memo[db.TopSessionEntry]
