@@ -2852,60 +2852,37 @@ func (s *Store) populateFrustrationMarkers(
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
-	scannedVersions := make(map[string]string, len(ids))
-	err := pgQueryChunked(ids, func(chunk []string) error {
-		pb := &paramBuilder{}
-		placeholders := make([]string, 0, len(chunk))
-		for _, id := range chunk {
-			placeholders = append(placeholders, pb.add(id))
-		}
-		in := "(" + strings.Join(placeholders, ",") + ")"
-		// Read each version once and keep the prompt scan on messages, with
-		// both branches sharing one statement's snapshot.
-		q := `SELECT id, ` + versionColumn + `::text, ''
-			FROM sessions
-			WHERE id IN ` + in + `
-			UNION ALL
-			SELECT session_id, NULL, content
-			FROM messages
-			WHERE role = 'user'
-			  AND source_subtype <> 'tool_result'
-			  AND NOT is_system
-			  AND session_id IN ` + in
-		msgRows, err := s.pg.QueryContext(ctx, q, pb.args...)
-		if err != nil {
-			return fmt.Errorf(
-				"querying frustration markers: %w", err,
-			)
-		}
-		defer msgRows.Close()
-		for msgRows.Next() {
-			var sessionID, content string
-			var version *string
-			if err := msgRows.Scan(
-				&sessionID, &version, &content,
-			); err != nil {
-				return fmt.Errorf(
-					"scanning frustration marker: %w", err,
-				)
-			}
-			if version != nil {
-				scannedVersions[sessionID] = *version
-				continue
-			}
-			if signals.IsFrustrationMarker(content) {
-				rows[idx[sessionID]].FrustrationMarkerCount++
-			}
-		}
-		if err := msgRows.Err(); err != nil {
-			return fmt.Errorf(
-				"iterating frustration markers: %w", err,
-			)
-		}
+	if len(ids) == 0 {
 		return nil
-	})
+	}
+	var serverEncoding string
+	if err := s.pg.QueryRowContext(ctx, `SELECT current_setting('server_encoding')`).Scan(&serverEncoding); err != nil {
+		return fmt.Errorf("reading server encoding: %w", err)
+	}
+	scannedVersions := make(map[string]string, len(ids))
+	query, args := pgFrustrationQuery(serverEncoding, versionColumn, ids)
+	msgRows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
-		return err
+		return fmt.Errorf("querying frustration markers: %w", err)
+	}
+	defer msgRows.Close()
+	for msgRows.Next() {
+		var sessionID, content string
+		var version *string
+		var decided bool
+		if err := msgRows.Scan(&sessionID, &version, &decided, &content); err != nil {
+			return fmt.Errorf("scanning frustration marker: %w", err)
+		}
+		if version != nil {
+			scannedVersions[sessionID] = *version
+			continue
+		}
+		if decided || signals.IsFrustrationMarker(content) {
+			rows[idx[sessionID]].FrustrationMarkerCount++
+		}
+	}
+	if err := msgRows.Err(); err != nil {
+		return fmt.Errorf("iterating frustration markers: %w", err)
 	}
 	// Only complete scans are memoized, using versions read with the prompts.
 	for id, version := range scannedVersions {
