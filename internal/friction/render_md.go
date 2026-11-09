@@ -24,7 +24,7 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 	frustrations, interruptions := groups[KindFrustration], groups[KindInterruption]
 	patterns := groups[KindPattern]
 	total := len(corrections) + len(errs) + len(workarounds) + len(deferrals) +
-		len(frustrations) + len(interruptions) + len(patterns)
+		len(frustrations) + len(interruptions) + len(patterns) + len(groups[KindDiagnostic])
 
 	var b bytes.Buffer
 	b.WriteString("---\n")

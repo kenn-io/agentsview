@@ -31,6 +31,7 @@ func TestDiagnosticsCatchUpRebuildsOldDay(t *testing.T) {
 	assert.False(t, friction.Fileable(friction.KindDiagnostic))
 	digest := stored(t, d, "2026-08-30")
 	require.NotNil(t, digest)
+	assert.Contains(t, string(digest.Markdown), "signals_captured: 3\n")
 	assert.Contains(t, string(digest.Markdown), "`worker`: `launch failed` x3")
 	assert.Equal(t, 0, digest.SessionsScanned)
 	assert.Zero(t, rowCount(t, d, "friction_patterns"))
