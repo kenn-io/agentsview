@@ -558,12 +558,9 @@ changed.
 
 ## Kept reads
 
-Serve keeps recent read results in memory. Most repeat requests between pushes
-read no data rows; small metadata queries still check whether inputs changed.
-Ungrouped Top sessions requests also reload display metadata for their ranked
-winners. Grouped Top sessions keep member metadata with their totals.
-
-Each kept read has one slot per selection
+Serve keeps the results of recent reads in memory so a repeat request between
+pushes reads no rows from ClickHouse; it still runs the small metadata queries
+that check whether its inputs changed. Each kept read has one slot per selection
 (filter, range, and similar inputs), and its key names the rows it read: the
 prepared usage stamp and row identities for fully prepared range reads, the
 candidate sessions and their push versions, or the parts of the tables it
@@ -578,6 +575,10 @@ filtered by `active`, `stale`, or `unclean` termination compare session times
 with the current time, so their rows are never kept. Kept reads include usage
 rows, analytics session listings, Activity pairing inputs per session version,
 candidate listings, project label maps, and the whole report of an ended range.
+
+Ungrouped Top sessions are the exception. Each request reloads display metadata
+for its ranked winners. Grouped Top sessions keep member metadata with their
+totals.
 
 Nothing rebuilds kept reads in the background. The first request after a push
 that changes a read's rows pays for that read.

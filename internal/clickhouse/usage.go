@@ -2165,11 +2165,10 @@ func (s *Store) GetTopSessionsByCost(
 		}
 		s.topSessionTotals.Put(memoSlot, memoVersion, out)
 	}
-	out = slices.Clone(out)
 	if f.TopSessionsByGroup {
 		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
-	out = db.SortAndLimitTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	out = db.SortAndLimitTopSessions(slices.Clone(out), limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	if err := s.loadTopSessionMetadata(ctx, out); err != nil {
 		return nil, err
 	}
@@ -2193,7 +2192,7 @@ func (s *Store) loadTopSessionMetadata(ctx context.Context, entries []db.TopSess
 	rows, err := s.queryContext(chdriver.Context(ctx, chdriver.WithExternalTable(table)), `
 		SELECT s.id,
 			`+chUsageDisplayNameSQL+`,
-			s.started_at, ifNull(s.group_key, ''), ifNull(s.session_name, ''), s.machine
+			s.started_at, s.group_key, ifNull(s.session_name, ''), s.machine
 		FROM sessions s
 		WHERE s.id IN (SELECT id FROM usage_top_sessions)`)
 	if err != nil {
