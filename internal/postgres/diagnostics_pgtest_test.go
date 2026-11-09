@@ -84,3 +84,34 @@ func TestDiagnosticTieOrder(t *testing.T) {
 	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000001", signals[0].SubjectID)
 	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000002", signals[1].SubjectID)
 }
+
+func TestDiagnosticReadsWithoutTable(t *testing.T) {
+	const schema = "agentsview_diagnostic_missing_test"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pg, err := Open(t.Context(), pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pg.Close() })
+	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	_, err = pg.ExecContext(t.Context(), `DROP TABLE diagnostic_events`)
+	require.NoError(t, err)
+	store := &Store{pg: pg}
+	dates, err := store.FrictionPendingDiagnosticDates(t.Context(), "2026-01-02", time.UTC)
+	require.NoError(t, err)
+	assert.Empty(t, dates)
+	signals, err := store.DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
+	require.NoError(t, err)
+	assert.Empty(t, signals)
+
+	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	_, err = pg.ExecContext(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,accepted_at) VALUES('00000000-0000-0000-0000-000000000001','worker','failure','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`)
+	require.NoError(t, err)
+	dates, err = store.FrictionPendingDiagnosticDates(t.Context(), "2026-01-02", time.UTC)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"2026-01-01"}, dates)
+	signals, err = store.DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
+	require.NoError(t, err)
+	require.Len(t, signals, 1)
+	assert.Equal(t, "failure", signals[0].Text)
+}

@@ -16,6 +16,9 @@ func (s *Store) DiagnosticSignalsForDate(ctx context.Context, date string, loc *
 	}
 	rows, err := s.pg.QueryContext(ctx, `SELECT e.id,e.source,e.message,e.occurred_at FROM diagnostic_events e LEFT JOIN friction_digest_sessions d ON d.subject_id='diagnostic:'||e.id WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND (d.subject_id IS NULL OR d.date=$3) ORDER BY e.occurred_at,e.accepted_at,e.id`, from.UTC(), to.UTC(), date)
 	if err != nil {
+		if isUndefinedTable(err) && !pgHasTable(ctx, s.pg, "diagnostic_events") {
+			return nil, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()
@@ -38,6 +41,9 @@ func (s *Store) FrictionPendingDiagnosticDates(ctx context.Context, last string,
 	}
 	rows, err := s.pg.QueryContext(ctx, `SELECT e.occurred_at FROM diagnostic_events e LEFT JOIN friction_digest_sessions d ON d.subject_id='diagnostic:'||e.id WHERE d.subject_id IS NULL AND e.occurred_at<$1`, to.UTC())
 	if err != nil {
+		if isUndefinedTable(err) && !pgHasTable(ctx, s.pg, "diagnostic_events") {
+			return nil, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()
