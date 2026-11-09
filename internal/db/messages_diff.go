@@ -210,10 +210,13 @@ func transcriptMessageEqual(a, b Message) bool {
 //   - duplicate ordinals on either side;
 //   - a changed row's source_uuid differs from the stored row's
 //     (the ordinal now holds a different message, so pins must be
-//     re-matched by source_uuid — full replace's job);
+//     re-matched by source_uuid — full replace's job), unless the
+//     stored row had none and gains one used once in incoming while
+//     staying unchanged or completing its text;
 //   - more than half the stored rows changed (an ordinal-shifting
 //     rewrite, where full replace's source_uuid pin re-matching and
-//     bulk FTS handling are the right tool).
+//     bulk FTS handling are the right tool). Rows that only gain a
+//     source_uuid do not count: they cannot shift.
 func planSessionMessageDiff(
 	stored, incoming []Message,
 ) (messageDiffPlan, bool) {
@@ -231,6 +234,7 @@ func planSessionMessageDiff(
 	incomingUUIDCounts := messageSourceUUIDCounts(incoming)
 
 	var plan messageDiffPlan
+	shifting := 0
 	seen := make(map[int]bool, len(incoming))
 	for _, m := range incoming {
 		if seen[m.Ordinal] {
@@ -242,8 +246,22 @@ func planSessionMessageDiff(
 		case !exists:
 			plan.inserts = append(plan.inserts, m)
 		case !messageRowEqual(old, m):
-			if old.SourceUUID != m.SourceUUID {
+			gainsSourceUUID := old.SourceUUID == "" && m.SourceUUID != "" &&
+				incomingUUIDCounts[m.SourceUUID] == 1
+			if old.SourceUUID != m.SourceUUID && !gainsSourceUUID {
 				return messageDiffPlan{}, false
+			}
+			withSourceUUID := old
+			withSourceUUID.SourceUUID = m.SourceUUID
+			onlyGainsSourceUUID := gainsSourceUUID && messageRowEqual(withSourceUUID, m)
+			// A gained ID proves nothing about which message moved where,
+			// so the row must be unchanged or the same reply completed.
+			if gainsSourceUUID && !onlyGainsSourceUUID &&
+				(old.Role != m.Role || !IsTextExtension(old.Content, m.Content)) {
+				return messageDiffPlan{}, false
+			}
+			if !onlyGainsSourceUUID {
+				shifting++
 			}
 			plan.updates = append(plan.updates, messageDiffUpdate{
 				id:  old.ID,
@@ -263,7 +281,7 @@ func planSessionMessageDiff(
 			return messageDiffPlan{}, false
 		}
 	}
-	if 2*len(plan.updates) > len(stored) {
+	if 2*shifting > len(stored) {
 		return messageDiffPlan{}, false
 	}
 	return plan, true
