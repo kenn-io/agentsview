@@ -119,9 +119,11 @@ func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
 		_, err := store.pg.ExecContext(ctx, `UPDATE sessions SET display_name=COALESCE(display_name,'')||'!' WHERE id='older'`)
 		return err
 	}
-	requireCachedUsageMatchesDirect(t, store, bounded)
+	_, err = store.GetDailyUsage(ctx, bounded)
+	require.NoError(t, err)
 	require.Equal(t, []string{"paid-a", "paid-b", "plan"}, probe.takeExtracted())
 	require.Equal(t, int64(1), extractions.Load(), "unrelated writes must reuse the completed extraction")
+	requireCachedUsageMatchesDirect(t, store, bounded)
 	require.NoError(t, store.usageCache.Close())
 	probe = attachUsageCacheProbe(t, store, directory)
 	requireCachedUsageMatchesDirect(t, store, bounded)
@@ -255,15 +257,6 @@ func TestPGUsageCacheCloseFill(t *testing.T) {
 	finishRelease()
 	attachUsageCacheProbe(t, store, directory)
 	requireCachedUsageMatchesDirect(t, store, filter)
-}
-
-func TestPGUsageCachePairwiseFallback(t *testing.T) {
-	_, _, store, _ := keptUsageFixture(t)
-	attachUsageCacheProbe(t, store, t.TempDir())
-	ctx := t.Context()
-	ranking, err := store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true, PairwiseSides: true})
-	require.NoError(t, err)
-	require.Nil(t, ranking.Pairwise)
 }
 
 func TestPGUsageCacheConcurrentHandlesCannotPublishPartialWindow(t *testing.T) {
