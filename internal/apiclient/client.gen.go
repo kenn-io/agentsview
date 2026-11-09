@@ -29066,9 +29066,9 @@ type DBUsageTotals = db.UsageTotals
 
 type DiagnosticAppendInputBody struct {
 	ID         string     `json:"id" validate:"required"`
-	Message    string     `json:"message" validate:"required"`
+	Message    string     `json:"message" validate:"required,max=500,min=1"`
 	OccurredAt *time.Time `json:"occurred_at,omitempty"`
-	Source     string     `json:"source" validate:"required"`
+	Source     string     `json:"source" validate:"required,max=64,min=1"`
 }
 
 func (d DiagnosticAppendInputBody) Validate() error {

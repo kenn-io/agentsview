@@ -2285,7 +2285,8 @@ builds missing days on demand. Findings are heuristics: check the session
 before acting on one.
 
 Use `agentsview diagnostics append` or `POST /api/v1/diagnostics` to record a
-failure outside an agent session. The digest groups matching sources and
+failure outside an agent session. Friction review must be enabled on the
+archive building the digest for the events to appear. The digest groups matching sources and
 messages in a Diagnostics section. These events do not create P0 alerts or
 recurring patterns. A delayed event rebuilds its completed day, including dates
 older than the session backfill window.

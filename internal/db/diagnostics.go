@@ -13,6 +13,7 @@ import (
 )
 
 var ErrDiagnosticConflict = errors.New("diagnostic ID already has a different payload")
+var ErrInvalidDiagnostic = errors.New("invalid diagnostic")
 
 func diagnosticTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000000000Z") }
 
@@ -29,16 +30,16 @@ type DiagnosticEvent struct {
 
 func ValidateDiagnostic(e DiagnosticEvent, now time.Time) error {
 	if _, err := uuid.Parse(e.ID); err != nil {
-		return errors.New("id must be a UUID")
+		return fmt.Errorf("%w: id must be a UUID", ErrInvalidDiagnostic)
 	}
-	if strings.TrimSpace(e.Source) == "" || utf8.RuneCountInString(e.Source) > 64 || !utf8.ValidString(e.Source) {
-		return errors.New("source must contain 1–64 characters")
+	if strings.TrimSpace(e.Source) == "" || strings.ContainsRune(e.Source, 0) || utf8.RuneCountInString(e.Source) > 64 || !utf8.ValidString(e.Source) {
+		return fmt.Errorf("%w: source must contain 1–64 characters without NUL", ErrInvalidDiagnostic)
 	}
-	if strings.TrimSpace(e.Message) == "" || utf8.RuneCountInString(e.Message) > 500 || !utf8.ValidString(e.Message) {
-		return errors.New("message must contain 1–500 characters")
+	if strings.TrimSpace(e.Message) == "" || strings.ContainsRune(e.Message, 0) || utf8.RuneCountInString(e.Message) > 500 || !utf8.ValidString(e.Message) {
+		return fmt.Errorf("%w: message must contain 1–500 characters without NUL", ErrInvalidDiagnostic)
 	}
-	if e.OccurredAt.After(now.Add(5*time.Minute)) {
-		return errors.New("occurred_at must not be in the future")
+	if !e.OccurredAt.IsZero() && (e.OccurredAt.UTC().Year() < 0 || e.OccurredAt.UTC().Year() > 9999 || e.OccurredAt.After(now.Add(5*time.Minute))) {
+		return fmt.Errorf("%w: occurred_at must be a valid UTC time no more than five minutes in the future", ErrInvalidDiagnostic)
 	}
 	return nil
 }
@@ -56,6 +57,8 @@ func (db *DB) AppendDiagnostic(ctx context.Context, e DiagnosticEvent) (Diagnost
 	if err := ValidateDiagnostic(e, now); err != nil {
 		return DiagnosticEvent{}, err
 	}
+	id, _ := uuid.Parse(e.ID)
+	e.ID = id.String()
 	e.OccurredAt = e.OccurredAt.UTC()
 	e.AcceptedAt = now
 	db.mu.Lock()

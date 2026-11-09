@@ -4,7 +4,15 @@
 
 export interface DiagnosticAppendInputBody {
   id: string;
+  /**
+   * @minLength 1
+   * @maxLength 500
+   */
   message: string;
   occurred_at?: string;
+  /**
+   * @minLength 1
+   * @maxLength 64
+   */
   source: string;
 }

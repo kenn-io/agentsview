@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -18,6 +19,14 @@ func TestDiagnosticAppendAndDaySelection(t *testing.T) {
 	retry, err := d.AppendDiagnostic(t.Context(), e)
 	require.NoError(t, err)
 	assert.Equal(t, first, retry)
+	e.ID = strings.ToUpper(e.ID)
+	retry, err = d.AppendDiagnostic(t.Context(), e)
+	require.NoError(t, err)
+	assert.Equal(t, first, retry)
+	e.ID = strings.ReplaceAll(e.ID, "-", "")
+	retry, err = d.AppendDiagnostic(t.Context(), e)
+	require.NoError(t, err)
+	assert.Equal(t, first, retry)
 	e.Message = "another failure"
 	_, err = d.AppendDiagnostic(t.Context(), e)
 	require.ErrorIs(t, err, ErrDiagnosticConflict)
@@ -33,6 +42,23 @@ func TestDiagnosticAppendAndDaySelection(t *testing.T) {
 	e.ID = uuid.NewV7().String()
 	_, err = d.AppendDiagnostic(t.Context(), e)
 	require.Error(t, err)
+}
+
+func TestDiagnosticRejectsUnreplicableValues(t *testing.T) {
+	d := testDB(t)
+	badTime, err := time.Parse(time.RFC3339, "0000-01-01T00:00:00+01:00")
+	require.NoError(t, err)
+	for _, e := range []DiagnosticEvent{
+		{ID: uuid.NewV7().String(), Source: "work\x00er", Message: "failure"},
+		{ID: uuid.NewV7().String(), Source: "worker", Message: "fail\x00ure"},
+		{ID: uuid.NewV7().String(), Source: "worker", Message: "failure", OccurredAt: badTime},
+	} {
+		_, err := d.AppendDiagnostic(t.Context(), e)
+		require.ErrorIs(t, err, ErrInvalidDiagnostic)
+	}
+	events, err := d.DiagnosticEventsAfter(t.Context(), 0, 10)
+	require.NoError(t, err)
+	assert.Empty(t, events)
 }
 
 func TestDiagnosticResyncAndOlderArchive(t *testing.T) {

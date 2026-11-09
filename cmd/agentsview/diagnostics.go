@@ -21,10 +21,14 @@ func newDiagnosticsCommand() *cobra.Command {
 	registerFormatFlags(cmd.PersistentFlags())
 	var source, message, at, id string
 	appendCmd := &cobra.Command{Use: "append", Short: "Append a diagnostic", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(cmd *cobra.Command, _ []string) error {
-		if id == "" {
+		generatedID := id == ""
+		if generatedID {
 			id = uuid.NewV7().String()
 		}
-		occurred := time.Now().UTC()
+		var occurred time.Time
+		if generatedID {
+			occurred = time.Now().UTC()
+		}
 		if at != "" {
 			var err error
 			occurred, err = time.Parse(time.RFC3339Nano, at)
@@ -44,6 +48,9 @@ func newDiagnosticsCommand() *cobra.Command {
 		}
 		stored, err := appender.AppendDiagnostic(cmd.Context(), e)
 		if err != nil {
+			if occurred.IsZero() {
+				return fmt.Errorf("append diagnostic %s: %w", id, err)
+			}
 			return fmt.Errorf("append diagnostic %s at %s: %w", id, occurred.UTC().Format(time.RFC3339Nano), err)
 		}
 		if outputFormat(cmd) == "json" {

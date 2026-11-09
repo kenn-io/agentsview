@@ -11,9 +11,9 @@ import (
 
 type diagnosticAppendInput struct {
 	Body struct {
-		ID         string     `json:"id" required:"true"`
-		Source     string     `json:"source" required:"true"`
-		Message    string     `json:"message" required:"true"`
+		ID         string     `json:"id" required:"true" format:"uuid"`
+		Source     string     `json:"source" required:"true" minLength:"1" maxLength:"64"`
+		Message    string     `json:"message" required:"true" minLength:"1" maxLength:"500"`
 		OccurredAt *time.Time `json:"occurred_at,omitempty"`
 	}
 }
@@ -30,11 +30,11 @@ func (s *Server) humaAppendDiagnostic(ctx context.Context, in *diagnosticAppendI
 	if in.Body.OccurredAt != nil {
 		e.OccurredAt = *in.Body.OccurredAt
 	}
-	if err := db.ValidateDiagnostic(e, time.Now()); err != nil {
-		return nil, apiError(http.StatusUnprocessableEntity, err.Error())
-	}
 	var stored db.DiagnosticEvent
 	err := s.SerializeArchiveWrite(ctx, func() error { var err error; stored, err = local.AppendDiagnostic(ctx, e); return err })
+	if errors.Is(err, db.ErrInvalidDiagnostic) {
+		return nil, apiError(http.StatusUnprocessableEntity, err.Error())
+	}
 	if errors.Is(err, db.ErrDiagnosticConflict) {
 		return nil, apiError(http.StatusConflict, err.Error())
 	}

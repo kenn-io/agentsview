@@ -4924,13 +4924,18 @@ components:
       additionalProperties: false
       properties:
         id:
+          format: uuid
           type: string
         message:
+          maxLength: 500
+          minLength: 1
           type: string
         occurred_at:
           format: date-time
           type: string
         source:
+          maxLength: 64
+          minLength: 1
           type: string
       required:
         - id
