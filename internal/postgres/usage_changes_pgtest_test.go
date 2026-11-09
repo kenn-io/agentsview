@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -485,7 +486,7 @@ $v1$;`
 	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
 	var version string
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version))
-	require.Equal(t, "2", version, "existing version-1 journals must migrate forward")
+	require.Equal(t, strconv.Itoa(usageChangeJournalVersionPG), version, "existing version-1 journals must migrate forward")
 	var upgradedOID uint32
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid`).Scan(&upgradedOID))
 	require.Equal(t, oid, upgradedOID, "upgrading must preserve the source incarnation")
@@ -504,6 +505,9 @@ $v1$;`
 	} {
 		_, err := store.pg.ExecContext(ctx, mutation)
 		require.NoError(t, err)
-		requireCachedUsageMatchesDirect(t, store, filter)
+		var accountRevision int64
+		require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT revision FROM usage_session_changes WHERE session_id=`+usageAccountChangeKeyPG).Scan(&accountRevision))
+		require.Greater(t, accountRevision, through, "upgraded writers must advance the dedicated account marker")
+		through = accountRevision
 	}
 }

@@ -35,8 +35,6 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	return nil
 }
 
-var errPGUsageCacheUnavailable = errors.New("PostgreSQL usage journal unavailable")
-
 type pgUsageCacheSource struct {
 	*Store
 	target string
@@ -60,7 +58,7 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 		return snapshot, err
 	}
 	if snapshot.ChangeRevision == 0 {
-		return snapshot, errPGUsageCacheUnavailable
+		return snapshot, errors.New("PostgreSQL usage journal unavailable")
 	}
 	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=`+usageAccountChangeKeyPG+`), 1)`).Scan(&snapshot.CursorHighWater)
 	if err != nil {

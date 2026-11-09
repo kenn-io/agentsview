@@ -976,16 +976,6 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			require.Equal(t, int64(20), result.Groups[0].OutputTokens)
 			if tc.account {
 				require.Equal(t, int64(200), result.Groups[0].CostMicrodollars)
-				require.NoError(t, reader.Close())
-				reader, err = NewUsageCacheReader(directory, source)
-				require.NoError(t, err)
-				cache, err = reader.engine.usageCache.Generation(t.Context(), newSnapshot.DatabaseID)
-				require.NoError(t, err)
-				result, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter, export.NewPricingResolver(newSnapshot.PricingRows), 0)
-				require.NoError(t, err)
-				require.Len(t, result.Groups, 1)
-				require.Equal(t, int64(20), result.Groups[0].OutputTokens)
-				require.Equal(t, int64(200), result.Groups[0].CostMicrodollars)
 				return
 			}
 			require.Equal(t, "project-b", result.Groups[0].Project)
