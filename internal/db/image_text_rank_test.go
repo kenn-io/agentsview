@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/docbank/document/ocr"
@@ -29,25 +28,26 @@ func TestImageTextSearchKeepsCommonTermWorkBounded(t *testing.T) {
 	insertSession(t, d, "image", "demo")
 	content := testInlineImageContent()
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	measure := func() time.Duration {
-		t.Helper()
-		best := time.Duration(1<<63 - 1)
-		for range 3 {
-			start := time.Now()
-			page, err := d.Search(ctx, SearchFilter{Query: "needle", Limit: 10})
-			require.NoError(t, err)
-			require.Len(t, page.Results, 10)
-			best = min(best, time.Since(start))
-		}
-		return best
-	}
-	baseline := measure()
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
 	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "needle", false))
-	withImage := measure()
-	t.Logf("without image: %s; with image: %s", baseline, withImage)
-	require.Less(t, withImage, baseline*4+20*time.Millisecond, "one image match should not rank all message matches")
+	reader := d.getReader().current()
+	reader.SetMaxOpenConns(1)
+	conn, err := reader.Conn(ctx)
+	require.NoError(t, err)
+	// Relevance search lowers each candidate's content to find the match position.
+	var calls int
+	require.NoError(t, conn.Raw(func(raw any) error {
+		return raw.(*diagnosticReaderConn).RegisterFunc("lower", func(value string) string {
+			calls++
+			return strings.ToLower(value)
+		}, true)
+	}))
+	require.NoError(t, conn.Close())
+	page, err := d.Search(ctx, SearchFilter{Query: "needle", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 10)
+	require.Less(t, calls, 100, "one image match should not evaluate every message")
 }
 
 func TestImageTextSearchPaginationAfterMessageMatches(t *testing.T) {

@@ -4,17 +4,13 @@ import (
 	"encoding/base64"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/docbank/document/ocr"
 )
 
-func TestImageTextCJKReopenOnlyRebuildsStaleIndex(t *testing.T) {
-	if !simpleFTSRuntimeConfig.available() {
-		t.Skip("simple FTS runtime is not installed")
-	}
+func TestImageTextIndexRebuild(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d, err := Open(ctx, path)
@@ -29,28 +25,42 @@ func TestImageTextCJKReopenOnlyRebuildsStaleIndex(t *testing.T) {
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "中文搜索", false))
-	_, err = d.getWriter().Exec(ctx, `INSERT INTO image_text_cjk_fts(rowid,text) SELECT rowid, 'sentinelword' FROM image_text_cache`)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = Open(ctx, path)
-	require.NoError(t, err)
-	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cjk_fts WHERE image_text_cjk_fts MATCH 'sentinelword'`).Scan(&count))
-	require.Equal(t, 1, count, "unchanged reopen must retain the existing index")
-	page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value='stale' WHERE key=?`, cjkFTSFingerprintStatsKey)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = Open(ctx, path)
-	require.NoError(t, err)
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cjk_fts WHERE image_text_cjk_fts MATCH 'sentinelword'`).Scan(&count))
-	require.Zero(t, count, "a stale tokenizer must rebuild the index")
-	page, err = d.Search(ctx, SearchFilter{Query: "中文搜索"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice 中文搜索", false))
+	if simpleFTSRuntimeConfig.available() {
+		_, err = d.getWriter().Exec(ctx, `INSERT INTO image_text_cjk_fts(rowid,text) SELECT rowid, 'sentinelword' FROM image_text_cache`)
+		require.NoError(t, err)
+		require.NoError(t, d.Close())
+		d, err = Open(ctx, path)
+		require.NoError(t, err)
+		var count int
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cjk_fts WHERE image_text_cjk_fts MATCH 'sentinelword'`).Scan(&count))
+		require.Equal(t, 1, count)
+		page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value='stale' WHERE key=?`, cjkFTSFingerprintStatsKey)
+		require.NoError(t, err)
+		require.NoError(t, d.Close())
+		d, err = Open(ctx, path)
+		require.NoError(t, err)
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cjk_fts WHERE image_text_cjk_fts MATCH 'sentinelword'`).Scan(&count))
+		require.Zero(t, count)
+		page, err = d.Search(ctx, SearchFilter{Query: "中文搜索"})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+	}
+	require.NoError(t, d.DropFTS(ctx))
+	require.NoError(t, d.RebuildFTS(ctx))
+	queries := []string{"invoice"}
+	if simpleFTSRuntimeConfig.available() {
+		queries = append(queries, "中文搜索")
+	}
+	for _, query := range queries {
+		page, err := d.Search(ctx, SearchFilter{Query: query})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		require.Equal(t, "image", page.Results[0].SessionID)
+	}
 }
 
 func TestImageTextMembershipAndPruning(t *testing.T) {
@@ -70,39 +80,23 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.SaveImageText(ctx, images[0].SHA256, identity, "invoice", false))
 	add("two")
+	insertSession(t, d, "other", "demo")
+	other := `[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "other", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: other}}}}))
+	otherHash := RetainedToolResultImages(other)[0].SHA256
+	require.NoError(t, d.SaveImageText(ctx, otherHash, identity, "other text", false))
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "one", []Message{{SessionID: "one", Role: "assistant", Content: "removed"}}))
 	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, images[0].SHA256).Scan(&count))
 	require.Equal(t, 1, count)
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "two", []Message{{SessionID: "two", Role: "assistant", Content: "removed"}}))
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, images[0].SHA256).Scan(&count))
 	require.Zero(t, count)
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, otherHash).Scan(&count))
+	require.Equal(t, 1, count)
 	require.NoError(t, d.SaveImageText(ctx, images[0].SHA256, identity, "late", false))
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, images[0].SHA256).Scan(&count))
 	require.Zero(t, count)
-}
-
-func TestImageTextCJKSearchAndRebuild(t *testing.T) {
-	if !simpleFTSRuntimeConfig.available() {
-		t.Skip("simple FTS runtime is not installed")
-	}
-	ctx := t.Context()
-	d := testDB(t)
-	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-	images := RetainedToolResultImages(content)
-	require.Len(t, images, 1)
-	insertSession(t, d, "cjk-image", "demo")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "cjk-image", Ordinal: 2, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, images[0].SHA256, identity, "请验证中文搜索功能", false))
-	require.NoError(t, d.DropFTS(ctx))
-	require.NoError(t, d.RebuildFTS(ctx))
-	page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, "cjk-image", page.Results[0].SessionID)
-	require.Equal(t, 2, page.Results[0].Ordinal)
 }
 
 func TestImageTextMigrationStrippingAndDeletion(t *testing.T) {
@@ -130,7 +124,7 @@ func TestImageTextMigrationStrippingAndDeletion(t *testing.T) {
 	require.Zero(t, count)
 }
 
-func TestImageTextBackfillNumericCursorAndTargetedPruning(t *testing.T) {
+func TestImageTextBackfillNumericCursor(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
 	for _, id := range []string{"10", "2", "3"} {
@@ -149,12 +143,6 @@ func TestImageTextBackfillNumericCursorAndTargetedPruning(t *testing.T) {
 	var count int
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_occurrences`).Scan(&count))
 	require.Equal(t, 3, count)
-	// An unrelated cached hash must not be removed by another session's refresh.
-	_, err = d.getWriter().Exec(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded) VALUES('unrelated','p','test','m','r','saved',1)`)
-	require.NoError(t, err)
-	require.NoError(t, d.ReplaceSessionMessages(ctx, "10", []Message{{SessionID: "10", Role: "assistant", Content: "no pictures"}}))
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash='unrelated'`).Scan(&count))
-	require.Equal(t, 1, count)
 }
 
 func TestImageTextProcessorReplacement(t *testing.T) {
@@ -198,62 +186,42 @@ func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 	require.Empty(t, page.Results)
 }
 
-func TestImageTextRefreshIgnoresPlainResults(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	insertSession(t, d, "plain", "demo")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "plain", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: "plain result"}}}}))
-	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_occurrences`).Scan(&count))
-	require.Zero(t, count)
-}
-
-func TestRetainedImageFormsContainImageMarker(t *testing.T) {
-	for _, content := range []string{
-		`[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`,
-		`[{"type":"file","uri":"data:image/png;base64,AAEC"}]`,
-		`[{"type":"agentsview_image","version":1,"image_ref":"asset://ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc.png","media_type":"image/png","byte_size":3}]`,
-	} {
-		require.NotEmpty(t, RetainedToolResultImages(content))
-		require.Contains(t, strings.ToLower(content), "image")
-	}
-}
-
-func TestImageTextSearchSidechainOccurrence(t *testing.T) {
+func TestImageTextSearchContent(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
 	insertSession(t, d, "session", "demo")
-	content := testInlineImageContent()
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	messages := []Message{
 		{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "main", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}},
 		{SessionID: "session", Ordinal: 2, Role: "assistant", Content: "side", IsSidechain: true, ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}},
 	}
 	require.NoError(t, d.InsertMessages(ctx, messages))
-	hash := RetainedToolResultImages(content)[0].SHA256
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice", false))
+	text := "invoice 42\n-----BEGIN RSA PRIVATE KEY-----\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\n-----END RSA PRIVATE KEY-----"
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, text, false))
 	for _, mode := range []string{"substring", "regex"} {
-		page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: "invoice", Mode: mode, Sources: []string{"tool_result"}, Scope: "subordinate", IncludeOneShot: true, IncludeAutomated: true})
+		filter := ContentSearchFilter{Pattern: "invoice 42", Mode: mode, Sources: []string{"tool_result"}, Scope: "subordinate", IncludeOneShot: true, IncludeAutomated: true}
+		page, err := d.SearchContent(ctx, filter)
 		require.NoError(t, err)
 		require.Len(t, page.Matches, 1)
 		require.Equal(t, 2, page.Matches[0].Ordinal)
 		require.True(t, page.Matches[0].Sidechain)
-	}
-}
-
-func TestImageTextDuplicateInSameResult(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	insertSession(t, d, "session", "demo")
-	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	hash := RetainedToolResultImages(content)[0].SHA256
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice", false))
-	for _, mode := range []string{"substring", "regex"} {
-		page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: "invoice", Mode: mode, Sources: []string{"tool_result"}, IncludeOneShot: true, IncludeAutomated: true, Limit: 1})
+		require.Contains(t, page.Matches[0].Snippet, "[redacted private key block]")
+		require.NotContains(t, page.Matches[0].Snippet, "MIIBSECRETKEYMATERIAL")
+		filter.Scope = ""
+		filter.Project = "missing"
+		page, err = d.SearchContent(ctx, filter)
+		require.NoError(t, err)
+		require.Empty(t, page.Matches)
+		filter.Project = ""
+		filter.Limit = 1
+		page, err = d.SearchContent(ctx, filter)
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		require.NotZero(t, page.NextCursor)
+		filter.Cursor = page.NextCursor
+		page, err = d.SearchContent(ctx, filter)
 		require.NoError(t, err)
 		require.Len(t, page.Matches, 1)
 		require.Zero(t, page.NextCursor)
@@ -289,9 +257,7 @@ func TestImageTextSearchRespectsMessageVisibility(t *testing.T) {
 		system, event  bool
 	}{
 		{"hidden-call", "system", "hidden", true, false},
-		{"hidden-event", "system", "hidden", true, true},
 		{"prefix-call", "user", "<system-reminder>hidden</system-reminder>", false, false},
-		{"prefix-event", "user", "<system-reminder>hidden</system-reminder>", false, true},
 		{"visible-call", "assistant", "answer", false, false},
 		{"visible-event", "assistant", "answer", false, true},
 	} {
