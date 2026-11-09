@@ -96,6 +96,21 @@ async function selectFirstSession(page: Page) {
   await page.waitForTimeout(1000);
 }
 
+// Sessions holding only hook output appear in the sidebar but render
+// no messages, so a scan skips them instead of failing.
+async function openSessionWithMessages(item: Locator): Promise<boolean> {
+  await item.click();
+  return item
+    .page()
+    .locator('.message')
+    .first()
+    .waitFor({ timeout: 10_000 })
+    .then(
+      () => true,
+      () => false,
+    );
+}
+
 async function selectRichSession(page: Page) {
   await page.goto('/sessions/' + encodeURIComponent(CORPUS.targets.rich.session_id));
   await page.waitForSelector('.message', { timeout: 10_000 });
@@ -2244,8 +2259,7 @@ test.describe('Session Vital Signs', () => {
       'button[aria-label="Show session analysis"], button[aria-label="Hide session analysis"]',
     );
     for (let i = 0; i < limit; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
+      if (!(await openSessionWithMessages(items.nth(i)))) continue;
       await page.waitForTimeout(400);
       if (!(await vitalsBtn.count()) || !(await vitalsBtn.isVisible())) {
         continue;
@@ -2325,8 +2339,7 @@ test.describe('Session intelligence', () => {
     const total = await items.count();
     const limit = Math.min(total, 25);
     for (let i = 0; i < limit; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
+      if (!(await openSessionWithMessages(items.nth(i)))) continue;
       await page.waitForTimeout(400);
       const badge = page.locator('.grade-badge');
       if (
@@ -2353,8 +2366,7 @@ test.describe('Session intelligence', () => {
     const limit = Math.min(total, 30);
     let firstGradedIdx = -1;
     for (let i = 0; i < limit; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
+      if (!(await openSessionWithMessages(items.nth(i)))) continue;
       await page.waitForTimeout(300);
       const badge = page.locator('.grade-badge').first();
       if (!(await badge.count()) || !(await badge.isVisible())) {
