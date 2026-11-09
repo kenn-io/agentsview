@@ -93,6 +93,33 @@ func TestReopenReportsOccurrenceDateAndDigestDay(t *testing.T) {
 	assert.Equal(t, "This pattern recurred on 2026-09-16 after the issue was closed on 2026-09-15.\n\nhttps://av.example.test/base/friction?date=2026-09-15", got.Comments[0])
 }
 
+func TestReopenFindingInEarlierDigest(t *testing.T) {
+	for _, date := range []string{"2026-09-10", "2026-08-31"} {
+		t.Run(date, func(t *testing.T) {
+			s := katatest.New(t)
+			f, d := newFiler(t, s, katatest.DefaultProjectName)
+			closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+			occurred := time.Date(2026, 9, 15, 13, 0, 0, 0, time.UTC)
+			seedRecurrence(t, d, date, "claude:s1", &occurred)
+			if date == "2026-08-31" {
+				seedRecurrence(t, d, "2026-09-10", "claude:s2", nil)
+			}
+			require.Equal(t, "2026-09-10", patternRow(t, d, correction.Fingerprint()).LastSeenDate)
+			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+			_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
+			require.NoError(t, err)
+
+			n, err := f.Reopen(t.Context(), "2026-09-01", nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, n)
+			got := mustIssue(t, s, is.UID)
+			assert.Equal(t, "open", got.Status)
+			require.Len(t, got.Comments, 1)
+			assert.Equal(t, "This pattern recurred on 2026-09-15 after the issue was closed on 2026-09-15.\n\nhttps://av.example.test/base/friction?date="+date, got.Comments[0])
+		})
+	}
+}
+
 func TestReopenDigestFromEarlierTimezone(t *testing.T) {
 	s := katatest.New(t)
 	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)

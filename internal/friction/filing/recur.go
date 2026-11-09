@@ -60,8 +60,7 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, sinc
 		return false, nil
 	}
 	closed := is.ClosedAt.In(loc).Format(time.DateOnly)
-	start := max(closed, since)
-	day, err := time.Parse(time.DateOnly, start)
+	day, err := time.Parse(time.DateOnly, since)
 	if err != nil {
 		return false, err
 	}
