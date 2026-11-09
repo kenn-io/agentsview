@@ -865,25 +865,38 @@ func TestUsageRollupConnectedSnapshotChangeRebuildsOnlyChangedSession(t *testing
 
 func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 	t.Parallel()
-	for _, external := range []bool{false, true} {
-		t.Run(fmt.Sprintf("external=%t", external), func(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		external, account bool
+	}{{"local facts", false, false}, {"external facts", true, false}, {"external accounts", true, true}} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			database := testDB(t)
-			seedUsageSnapshotSession(t, database, "rollup-race", "project-a",
-				"2026-08-10T09:00:00Z", 0, 10, "model-a")
+			if !tc.account {
+				seedUsageSnapshotSession(t, database, "rollup-race", "project-a",
+					"2026-08-10T09:00:00Z", 0, 10, "model-a")
+			}
 			engine := database
 			var source *rollupAccountSource
-			if external {
+			var reader *UsageCacheReader
+			directory := t.TempDir()
+			if tc.external {
 				databaseID, err := database.GetDatabaseID(t.Context())
 				require.NoError(t, err)
 				source = &rollupAccountSource{database: database, databaseID: databaseID, revision: 10, output: 10}
-				reader, err := NewUsageCacheReader(t.TempDir(), source)
+				if tc.account {
+					source.accounts = []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, ChargedMicrodollars: 100, DedupKey: "account"}}
+				}
+				reader, err = NewUsageCacheReader(directory, source)
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, reader.Close()) })
 				engine = reader.engine
 			}
 			oldSnapshot, oldFills, cache := prepareUsageRollupTest(t, engine)
-			oldRevision := oldFills["rollup-race"].InstallRevision
+			owner, oldRevision := "rollup-race", oldFills["rollup-race"].InstallRevision
+			if tc.account {
+				owner, oldRevision = usageRollupCursorSessionID, oldSnapshot.CursorHighWater
+			}
 			oldBuilt := make(chan struct{})
 			releaseOld := make(chan struct{})
 			release := sync.OnceFunc(func() { close(releaseOld) })
@@ -891,7 +904,7 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			var blocked atomic.Bool
 			cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
 				if !slices.ContainsFunc(builds, func(build usageRollupBuild) bool {
-					return build.SessionID == "rollup-race" && build.FactRevision == oldRevision
+					return build.SessionID == owner && build.FactRevision == oldRevision
 				}) ||
 					!blocked.CompareAndSwap(false, true) {
 					return
@@ -915,17 +928,23 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				require.FailNow(t, "old rollup did not reach publication")
 			}
-			tx, err := database.getWriter().BeginTx(t.Context(), nil)
-			require.NoError(t, err)
-			_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":20}'
-		WHERE session_id = 'rollup-race'`)
-			require.NoError(t, err)
-			_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer', project = 'project-b'
-		WHERE id = 'rollup-race'`)
-			require.NoError(t, err)
-			require.NoError(t, tx.Commit())
-			if source != nil {
-				source.output = 20
+			if tc.account {
+				source.revision = 20
+				source.accounts[0].OutputTokens, source.accounts[0].ChargedMicrodollars = 20, 200
+				require.NoError(t, cache.fill.replaceExternalAccounts(t.Context(), 20))
+			} else {
+				tx, err := database.getWriter().BeginTx(t.Context(), nil)
+				require.NoError(t, err)
+				_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":20}'
+			WHERE session_id = 'rollup-race'`)
+				require.NoError(t, err)
+				_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer', project = 'project-b'
+			WHERE id = 'rollup-race'`)
+				require.NoError(t, err)
+				require.NoError(t, tx.Commit())
+				if source != nil {
+					source.output = 20
+				}
 			}
 			newSnapshot, newFills, _ := prepareUsageRollupTest(t, engine)
 			release()
@@ -935,13 +954,16 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				require.FailNow(t, "old rollup did not finish")
 			}
-			if external {
+			if tc.external {
 				require.ErrorIs(t, oldOutcome.err, errUsageCacheSourceChanged)
 				oldOutcome.installs, _, oldOutcome.err = cache.rollup.Ensure(t.Context(), newSnapshot, newFills, export.NewPricingResolver(newSnapshot.PricingRows))
 			}
 			require.NoError(t, oldOutcome.err)
-			assert.Equal(t, newFills["rollup-race"].InstallRevision,
-				oldOutcome.installs["rollup-race"].FactRevision)
+			newRevision := newFills[owner].InstallRevision
+			if tc.account {
+				newRevision = newSnapshot.CursorHighWater
+			}
+			assert.Equal(t, newRevision, oldOutcome.installs[owner].FactRevision)
 
 			filter := UsageFilter{
 				From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
@@ -952,6 +974,20 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, result.Groups, 1)
 			require.Equal(t, int64(20), result.Groups[0].OutputTokens)
+			if tc.account {
+				require.Equal(t, int64(200), result.Groups[0].CostMicrodollars)
+				require.NoError(t, reader.Close())
+				reader, err = NewUsageCacheReader(directory, source)
+				require.NoError(t, err)
+				cache, err = reader.engine.usageCache.Generation(t.Context(), newSnapshot.DatabaseID)
+				require.NoError(t, err)
+				result, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter, export.NewPricingResolver(newSnapshot.PricingRows), 0)
+				require.NoError(t, err)
+				require.Len(t, result.Groups, 1)
+				require.Equal(t, int64(20), result.Groups[0].OutputTokens)
+				require.Equal(t, int64(200), result.Groups[0].CostMicrodollars)
+				return
+			}
 			require.Equal(t, "project-b", result.Groups[0].Project)
 			filter.Project = "project-a"
 			newSnapshot, err = engine.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
@@ -1208,49 +1244,4 @@ func (s *rollupAccountSource) BuildProjectIdentityMap(ctx context.Context, label
 
 func (s *rollupAccountSource) ReadUsageAccounts(context.Context) (string, int64, []UsageSourceAccount, error) {
 	return s.databaseID, s.revision, s.accounts, nil
-}
-
-func TestUsageRollupExternalAccountReplacementDuringBuild(t *testing.T) {
-	t.Parallel()
-	database := testDB(t)
-	databaseID, err := database.GetDatabaseID(t.Context())
-	require.NoError(t, err)
-	source := &rollupAccountSource{database: database, databaseID: databaseID, revision: 10, accounts: []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, ChargedMicrodollars: 100, DedupKey: "account"}}}
-	directory := t.TempDir()
-	reader, err := NewUsageCacheReader(directory, source)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	snapshot, _, cache := prepareUsageRollupTest(t, reader.engine)
-	var changed atomic.Bool
-	var replaceErr error
-	cache.rollup.observer.beforeInstall = func([]usageRollupBuild) {
-		if changed.CompareAndSwap(false, true) {
-			source.revision = 20
-			source.accounts[0].OutputTokens, source.accounts[0].ChargedMicrodollars = 20, 200
-			replaceErr = cache.fill.replaceExternalAccounts(t.Context(), 20)
-		}
-	}
-	resolver := export.NewPricingResolver(snapshot.PricingRows)
-	_, _, err = cache.rollup.Ensure(t.Context(), snapshot, nil, resolver)
-	require.True(t, changed.Load())
-	require.NoError(t, replaceErr)
-	require.ErrorIs(t, err, errUsageCacheSourceChanged)
-	snapshot, err = reader.engine.captureUsageQuery(t.Context(), UsageFilter{Timezone: "UTC"}, usageQueryKindToken)
-	require.NoError(t, err)
-	installs, _, err := cache.rollup.Ensure(t.Context(), snapshot, nil, resolver)
-	require.NoError(t, err)
-	for _, reopen := range []bool{false, true} {
-		if reopen {
-			require.NoError(t, reader.Close())
-			reader, err = NewUsageCacheReader(directory, source)
-			require.NoError(t, err)
-			cache, err = reader.engine.usageCache.Generation(t.Context(), snapshot.DatabaseID)
-			require.NoError(t, err)
-		}
-		result, err := cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: snapshot, installs: installs}, UsageFilter{Timezone: "UTC"}, resolver, 0)
-		require.NoError(t, err)
-		require.Len(t, result.Groups, 1)
-		require.Equal(t, int64(20), result.Groups[0].OutputTokens)
-		require.Equal(t, int64(200), result.Groups[0].CostMicrodollars)
-	}
 }

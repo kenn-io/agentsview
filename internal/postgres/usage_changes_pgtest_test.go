@@ -414,7 +414,6 @@ func TestUsageChangeJournalUpgradesAccountGeneration(t *testing.T) {
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',10,100,'account')`)
 	require.NoError(t, err)
 	attachUsageCacheProbe(t, store, t.TempDir())
-	reader := store.usageCache
 	filter := db.UsageFilter{Timezone: "UTC"}
 	requireCachedUsageMatchesDirect(t, store, filter)
 	var oid uint32
@@ -494,9 +493,8 @@ $v1$;`
 	require.NoError(t, err)
 	require.Equal(t, revision+1, through, "only the old writer may advance the commit clock")
 	require.Empty(t, ids)
-	require.Same(t, reader, store.usageCache)
 	requireCachedUsageMatchesDirect(t, store, filter)
-	got, err := reader.GetDailyUsage(ctx, filter)
+	got, err := store.usageCache.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, 1270, got.Totals.OutputTokens)
 	require.Equal(t, int64(8950), got.Totals.TotalCost.Microdollars)

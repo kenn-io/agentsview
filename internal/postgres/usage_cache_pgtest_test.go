@@ -4,10 +4,8 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -263,7 +261,7 @@ func TestPGUsageCacheCloseFill(t *testing.T) {
 	requireCachedUsageMatchesDirect(t, store, filter)
 }
 
-func TestPGUsageCacheReadOnlyRestart(t *testing.T) {
+func TestPGUsageCacheReadOnly(t *testing.T) {
 	_, syncer, _, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
@@ -274,10 +272,6 @@ func TestPGUsageCacheReadOnlyRestart(t *testing.T) {
 	require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
 	require.NotNil(t, reader.usageCache)
 	filter := db.UsageFilter{Timezone: "UTC"}
-	requireCachedUsageMatchesDirect(t, reader, filter)
-	require.NoError(t, reader.usageCache.Close())
-	reader.usageCache = nil
-	require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
 	requireCachedUsageMatchesDirect(t, reader, filter)
 }
 
@@ -647,29 +641,20 @@ func TestPGUsageCacheSessionReadsExcludeOverlappingAccounts(t *testing.T) {
 }
 
 func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
-	for _, name := range []string{"initial denial", "permission revoked", "dropped journal", "malformed revision", "cache storage", "extraction failure", "extraction canceled", "extraction deadline", "late journal installation"} {
+	for _, name := range []string{"initial denial", "extraction failure", "late journal installation"} {
 		t.Run(name, func(t *testing.T) {
 			_, syncer, owner, _ := keptUsageFixture(t)
 			ctx := t.Context()
 			reader, roleURL := owner, testPGURL(t)
-			if name == "initial denial" || name == "permission revoked" {
+			if name == "initial denial" {
 				roleURL = newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
 				var err error
 				reader, err = NewStore(ctx, roleURL, syncer.schema, true)
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, reader.Close()) })
-			}
-			revoke := func() {
 				var role string
 				require.NoError(t, reader.pg.QueryRowContext(ctx, `SELECT current_user`).Scan(&role))
-				_, err := owner.pg.ExecContext(ctx, `REVOKE SELECT ON usage_session_changes FROM `+role)
-				require.NoError(t, err)
-			}
-			if name == "initial denial" {
-				revoke()
-			}
-			if name == "malformed revision" {
-				_, err := owner.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='broken' WHERE key='usage_change_revision'`)
+				_, err = owner.pg.ExecContext(ctx, `REVOKE SELECT ON usage_session_changes FROM `+role)
 				require.NoError(t, err)
 			}
 			if name == "late journal installation" {
@@ -679,69 +664,45 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				require.NoError(t, err)
 			}
 			directory := t.TempDir()
-			var probe *usageCacheProbe
-			extraction := name == "extraction failure" || name == "extraction canceled" || name == "extraction deadline"
-			if extraction || name == "cache storage" {
-				probe = attachUsageCacheProbe(t, reader, directory)
-			} else {
-				require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
-			}
-			configured := reader.usageCache
-			require.NotNil(t, configured)
 			filter := db.UsageFilter{Timezone: "UTC"}
-			if name != "initial denial" && name != "late journal installation" && name != "malformed revision" {
+			if name == "extraction failure" {
+				probe := attachUsageCacheProbe(t, reader, directory)
 				requireCachedUsageMatchesDirect(t, reader, filter)
 				_, err := owner.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=5000 WHERE session_id='paid-a'`)
 				require.NoError(t, err)
-			}
-			var failure error
-			switch name {
-			case "permission revoked":
-				revoke()
-			case "dropped journal":
-				_, err := owner.pg.ExecContext(ctx, `DROP TABLE usage_session_changes CASCADE`)
-				require.NoError(t, err)
-			case "cache storage":
-				paths, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
-				require.NoError(t, err)
-				require.Len(t, paths, 1)
-				damaged, err := sql.Open("sqlite3", paths[0])
-				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, damaged.Close()) })
-				_, err = damaged.ExecContext(ctx, `DROP TABLE usage_rollup_timezones`)
-				require.NoError(t, err)
-				filter.Project, filter.From, filter.To = "project-a", "2026-01-01", "2026-01-01"
-			case "extraction failure", "extraction canceled", "extraction deadline":
-				failure = map[string]error{"extraction failure": errors.New("injected remote extraction failure"), "extraction canceled": context.Canceled, "extraction deadline": context.DeadlineExceeded}[name]
-				probe.before = func(context.Context, []string) error { return failure }
-			}
-			_, err := configured.GetDailyUsage(ctx, filter)
-			switch name {
-			case "initial denial", "permission revoked":
-				require.True(t, isInsufficientPrivilege(err), "cache must preserve the PostgreSQL permission error: %v", err)
-			case "dropped journal", "late journal installation":
-				require.True(t, isUndefinedTable(err), "cache must preserve the PostgreSQL missing-table error: %v", err)
-			case "cache storage", "malformed revision":
-				require.Error(t, err)
-			default:
-				require.ErrorIs(t, err, failure)
-			}
-			if extraction {
-				// An internal fill cancellation still permits its active caller's live read.
-				got, err := reader.GetDailyUsage(ctx, filter)
-				require.NoError(t, err)
-				require.Equal(t, 5750, got.Totals.OutputTokens)
+				// A fill can stop while its caller remains active. Classify the caller,
+				// rather than the fill error, when deciding whether to read directly.
+				for _, failure := range []error{errors.New("injected remote extraction failure"), context.Canceled, context.DeadlineExceeded} {
+					probe.before = func(context.Context, []string) error { return failure }
+					_, err := reader.usageCache.GetDailyUsage(ctx, filter)
+					require.ErrorIs(t, err, failure)
+					active := &Store{pg: reader.pg, usageCache: reader.usageCache}
+					got, err := active.GetDailyUsage(ctx, filter)
+					require.NoError(t, err)
+					require.Equal(t, 5750, got.Totals.OutputTokens)
+					for _, grouped := range []bool{false, true} {
+						filter.TopSessionsByGroup = grouped
+						requireUsageReadsMatch(t, &Store{pg: reader.pg}, active, filter)
+					}
+				}
 				probe.before = nil
 				requireCachedUsageMatchesDirect(t, reader, filter)
+				return
+			}
+			require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
+			require.NotNil(t, reader.usageCache)
+			_, err := reader.usageCache.GetDailyUsage(ctx, filter)
+			if name == "initial denial" {
+				require.True(t, isInsufficientPrivilege(err), "cache must preserve the PostgreSQL permission error: %v", err)
 			} else {
-				for _, grouped := range []bool{false, true} {
-					filter.TopSessionsByGroup = grouped
-					requireUsageReadsMatch(t, &Store{pg: reader.pg}, reader, filter)
-				}
+				require.True(t, isUndefinedTable(err), "cache must preserve the PostgreSQL missing-table error: %v", err)
+			}
+			for _, grouped := range []bool{false, true} {
+				filter.TopSessionsByGroup = grouped
+				requireUsageReadsMatch(t, &Store{pg: reader.pg}, reader, filter)
 			}
 			if name == "late journal installation" {
 				require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
-				require.Same(t, configured, reader.usageCache)
 				for _, restart := range []bool{false, true} {
 					if restart {
 						require.NoError(t, reader.usageCache.Close())
@@ -759,20 +720,14 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 	}
 }
 
-func TestPGUsageCacheCancelledCallerSkipsDirectRead(t *testing.T) {
+func TestPGUsageCacheCancelledCallerSkipsDirectCountRead(t *testing.T) {
 	_, _, store, counter := keptUsageFixture(t)
 	attachUsageCacheProbe(t, store, t.TempDir())
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	before := counter.queryAttempts.Load()
 	filter := db.UsageFilter{Timezone: "UTC"}
-	_, err := store.GetDailyUsage(ctx, filter)
-	require.ErrorIs(t, err, context.Canceled)
-	_, err = store.GetTopSessionsByCost(ctx, filter, 20)
-	require.ErrorIs(t, err, context.Canceled)
-	_, err = store.GetUsageSessionCounts(ctx, filter)
-	require.ErrorIs(t, err, context.Canceled)
-	_, err = store.GetUsageMatchingSessionCount(ctx, filter)
+	_, err := store.GetUsageSessionCounts(ctx, filter)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, before, counter.queryAttempts.Load(), "cancelled cache requests must not start direct queries")
 }

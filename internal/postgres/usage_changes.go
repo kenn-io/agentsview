@@ -135,7 +135,11 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 	if err := lockSyncMetadataRow(ctx, tx, "usage_change_journal_lock"); err != nil {
 		return err
 	}
-	quoted, err := usageChangeSchemaPG(ctx, tx)
+	var schema string
+	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return err
+	}
+	quoted, err := quoteIdentifier(schema)
 	if err != nil {
 		return err
 	}
@@ -187,14 +191,6 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)`, strconv.Itoa(usageChangeJournalVersionPG))
 	return err
-}
-
-func usageChangeSchemaPG(ctx context.Context, tx *sql.Tx) (string, error) {
-	var schema string
-	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
-		return "", err
-	}
-	return quoteIdentifier(schema)
 }
 
 func markUsageChangeFunctionPG(table, sessionKey, quoted string) string {
