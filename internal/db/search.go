@@ -511,7 +511,6 @@ func (db *DB) Search(
 	args = append(args, bestArgs...)
 
 	imageBranchSQL := ""
-	imageQuery := f.Query
 	imageOccurrenceSQL := ` JOIN image_text_occurrences o ON o.image_hash=c.image_hash
 		 LEFT JOIN tool_result_events e ON e.id=o.event_id
 		 LEFT JOIN tool_calls tc ON tc.id=o.call_id
@@ -519,7 +518,7 @@ func (db *DB) Search(
 		 JOIN messages im ON im.session_id=o.session_id AND im.ordinal=COALESCE(e.tool_call_message_ordinal,cm.ordinal)`
 	imageVisibilitySQL := `im.is_system = 0 AND ` + SystemPrefixSQL("im.content", "im.role")
 	if hasImageText && includeNames {
-		args = append(args, imageQuery)
+		args = append(args, f.Query)
 		args = append(args, nameProjectArgs...)
 		args = append(args, ftsSessionsArgs...)
 		imageBranchSQL = fmt.Sprintf(`
@@ -548,7 +547,7 @@ func (db *DB) Search(
 		args = append(args, nameProjectArgs...) // optional name branch project and dates
 		args = append(args, ftsSessionsArgs...) // NOT IN WHERE
 		if hasImageText {
-			args = append(args, imageQuery)
+			args = append(args, f.Query)
 		}
 		nameBranchSQL = fmt.Sprintf(`
 			UNION ALL
@@ -588,7 +587,7 @@ func (db *DB) Search(
 		}(), nameProjectClause, ftsSessionsSQL)
 	}
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
-	args = append(args, imageQuery, f.Query) // paged image and message snippet MATCH
+	args = append(args, f.Query, f.Query)    // paged image and message snippet MATCH
 
 	// Relevance ordering needs match_pos before pagination. Recency ordering
 	// does not, so it avoids scanning every matching message for the position.

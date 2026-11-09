@@ -2,17 +2,12 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
 	"go.kenn.io/docbank/document/ocr"
 )
 
-type ImageTextRow struct {
-	CallID, EventID int64
-	Content         string
-}
 type ImageTextOccurrence struct {
 	CallID, EventID int64
 	Index           int
@@ -23,59 +18,6 @@ type PendingImageText struct {
 	Content string
 	Index   int
 	Hash    string
-}
-
-// BackfillImageTextOccurrences advances the one-time scan of an existing archive.
-func (db *DB) BackfillImageTextOccurrences(ctx context.Context, limit int) (bool, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	tx, err := db.getWriter().BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	var cursor string
-	err = tx.QueryRowContext(ctx, `SELECT value FROM pg_sync_state WHERE key='image_text_backfill_cursor'`).Scan(&cursor)
-	if err != nil && err != sql.ErrNoRows {
-		return false, err
-	}
-	if cursor == "\xff" {
-		return false, nil
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE id>? ORDER BY id LIMIT ?`, cursor, limit)
-	if err != nil {
-		return false, err
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return false, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return false, err
-	}
-	if err := rows.Close(); err != nil {
-		return false, err
-	}
-	for _, id := range ids {
-		if err := refreshImageTextOccurrencesTx(tx, id); err != nil {
-			return false, err
-		}
-	}
-	if len(ids) < limit {
-		cursor = "\xff"
-	} else {
-		cursor = ids[len(ids)-1]
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO pg_sync_state(key,value) VALUES('image_text_backfill_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, cursor); err != nil {
-		return false, err
-	}
-	return cursor != "\xff", tx.Commit()
 }
 
 func (db *DB) PendingImageText(ctx context.Context, processor string, now time.Time, limit int) ([]string, error) {

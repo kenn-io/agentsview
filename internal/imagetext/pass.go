@@ -25,18 +25,6 @@ func (m *Manager) Run(ctx context.Context) error {
 		identity.Fingerprint = m.Processor
 	}
 	for {
-		more, err := m.DB.BackfillImageTextOccurrences(ctx, 20)
-		if err != nil {
-			return err
-		}
-		if !more {
-			break
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
-	for {
 		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
 		if err != nil {
 			return err

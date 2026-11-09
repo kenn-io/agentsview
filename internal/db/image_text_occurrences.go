@@ -78,7 +78,6 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 	if err != nil {
 		return err
 	}
-	var oldHashes []string
 	oldOccurrences := make(map[ImageTextOccurrence]bool)
 	for oldRows.Next() {
 		var old ImageTextOccurrence
@@ -86,7 +85,6 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 			oldRows.Close()
 			return err
 		}
-		oldHashes = append(oldHashes, old.Hash)
 		oldOccurrences[old] = true
 	}
 	if err := oldRows.Err(); err != nil {
@@ -104,14 +102,15 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 	}
 	var occurrences []ImageTextOccurrence
 	for rows.Next() {
-		var row ImageTextRow
-		if err := rows.Scan(&row.CallID, &row.EventID, &row.Content); err != nil {
+		var callID, eventID int64
+		var content string
+		if err := rows.Scan(&callID, &eventID, &content); err != nil {
 			rows.Close()
 			return err
 		}
-		for _, image := range retainedImageMemo.images(row.Content) {
+		for _, image := range retainedImageMemo.images(content) {
 			if image.SHA256 != "" {
-				occurrences = append(occurrences, ImageTextOccurrence{CallID: row.CallID, EventID: row.EventID, Index: image.Index, Hash: image.SHA256, MediaType: image.MediaType})
+				occurrences = append(occurrences, ImageTextOccurrence{CallID: callID, EventID: eventID, Index: image.Index, Hash: image.SHA256, MediaType: image.MediaType})
 			}
 		}
 	}
@@ -142,8 +141,8 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 			}
 		}
 	}
-	for _, hash := range oldHashes {
-		if _, err = tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=?)`, hash, hash); err != nil {
+	for old := range oldOccurrences {
+		if _, err = tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=?)`, old.Hash, old.Hash); err != nil {
 			return err
 		}
 	}

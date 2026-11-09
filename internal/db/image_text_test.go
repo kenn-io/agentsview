@@ -124,27 +124,6 @@ func TestImageTextMigrationStrippingAndDeletion(t *testing.T) {
 	require.Zero(t, count)
 }
 
-func TestImageTextBackfillNumericCursor(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	for _, id := range []string{"10", "2", "3"} {
-		insertSession(t, d, id, "demo")
-		insertMessages(t, d, testImageMessage(id))
-	}
-	_, err := d.getWriter().Exec(ctx, `DELETE FROM image_text_occurrences`)
-	require.NoError(t, err)
-	more, err := d.BackfillImageTextOccurrences(ctx, 1)
-	require.NoError(t, err)
-	require.True(t, more)
-	for more {
-		more, err = d.BackfillImageTextOccurrences(ctx, 1)
-		require.NoError(t, err)
-	}
-	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_occurrences`).Scan(&count))
-	require.Equal(t, 3, count)
-}
-
 func TestImageTextProcessorReplacement(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)

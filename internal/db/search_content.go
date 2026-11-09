@@ -858,12 +858,10 @@ func (db *DB) regexCandidateRows(
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "tool_result") {
-		w := prefilterClause("c.text")
-		branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, w, true)[0])
-		args = append(args, scopeArgs...)
-		w = prefilterClause("c.text")
-		branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, w, true)[1])
-		args = append(args, scopeArgs...)
+		for i := range 2 {
+			branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, prefilterClause("c.text"), true)[i])
+			args = append(args, scopeArgs...)
+		}
 	}
 	if len(branches) == 0 {
 		// Return an empty result set.
