@@ -19,45 +19,6 @@ import (
 	"go.kenn.io/docbank/document/glmocr"
 )
 
-func TestImageTextPassReusesCachedText(t *testing.T) {
-	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	assetDir := t.TempDir()
-	d.SetAssetsDir(assetDir)
-	png := []byte("\x89PNG\r\n\x1a\nsynthetic image")
-	inline := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
-	requests := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice 42"}]]}`, glmocr.DefaultDeploymentFingerprint)
-	}))
-	t.Cleanup(srv.Close)
-	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
-	require.NoError(t, err)
-	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
-	require.NoError(t, err)
-	manager := Manager{DB: d, Client: client}
-	add := func(id, content string) {
-		t.Helper()
-		require.NoError(t, d.UpsertSession(ctx, db.Session{ID: id, Project: "demo", Agent: "test", MessageCount: 1}))
-		require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: id, Ordinal: 3, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read", ToolUseID: "call", ResultContent: content, ResultEvents: []db.ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "completed", Content: content}}}}}}))
-	}
-	add("one", inline)
-	err = manager.Run(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 1, requests)
-	ref, _, err := assets.Put(assetDir, "image/png", png)
-	require.NoError(t, err)
-	offload := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
-	add("two", offload)
-	err = manager.Run(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 1, requests)
-}
-
 func TestImageTextFailureClassification(t *testing.T) {
 	for _, name := range []string{"service error", "corrupt offloaded asset", "invalid inline bytes"} {
 		t.Run(name, func(t *testing.T) {

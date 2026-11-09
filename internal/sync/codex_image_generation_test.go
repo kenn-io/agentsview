@@ -137,7 +137,11 @@ func TestCodexGeneratedImageRestoredByFullResync(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
 	t.Cleanup(engine.Close)
-	stats := engine.ResyncAll(t.Context(), nil)
+	stats, err := engine.SyncThenRun(t.Context(), false, nil, func(full bool) error {
+		assert.True(t, full, "the archive upgrade must select a full resync")
+		return nil
+	})
+	require.NoError(t, err)
 	require.False(t, stats.Aborted)
 	require.Zero(t, stats.Failed)
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), sessionID))
