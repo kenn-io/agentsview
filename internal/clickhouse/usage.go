@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
@@ -882,6 +883,16 @@ func chUsageCTEFromRawSource(
 			snapshotArgs = append(snapshotArgs, snapshotFilterArgs...)
 		}
 	}
+	evidenceSelect := ""
+	if f.PairwiseSides {
+		evidenceSelect = `,
+				arrayFilter(value -> value != model, groupUniqArray(model) OVER (
+					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+				)) AS inexact_models,
+				arrayFilter(value -> value != project, groupUniqArray(project) OVER (
+					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+				)) AS inexact_projects`
+	}
 	maxTok := db.MaxPlausibleTokens
 	query := fmt.Sprintf(`
 		WITH usage_raw AS (
@@ -930,14 +941,14 @@ func chUsageCTEFromRawSource(
 					PARTITION BY dedup_group
 					ORDER BY ts ASC, session_id ASC,
 						COALESCE(message_ordinal, -1) ASC
-				) AS dedup_rank
+				) AS dedup_rank%[16]s
 			FROM %[7]s
 			QUALIFY dedup_rank = 1
 		)`, rawSQL, localDateSQL, datePred, maxTok,
 		priceModelSQL, snapshotCTE, rankedSource,
 		norms.input, norms.output, norms.cacheCreate, norms.cacheCreate1h,
 		norms.cacheRead, norms.reasoning,
-		norms.priceKey, norms.web,
+		norms.priceKey, norms.web, evidenceSelect,
 	)
 	args = append(args, localDateArg)
 	args = append(args, dateArgs...)
@@ -1259,15 +1270,17 @@ const chUsageBillableSelect = `
 // ordinary cache miss that Go prices for this read; only push writes records.
 type chDailyUsageGroupRow struct {
 	chUsageAggregateRow
-	explicit   bool
-	kind       string
-	contextID  string
-	bandAbove  int64
-	events     int
-	tokenCost  int64
-	savings    int64
-	priceError string
-	overflow   bool
+	explicit        bool
+	kind            string
+	contextID       string
+	bandAbove       int64
+	events          int
+	tokenCost       int64
+	savings         int64
+	priceError      string
+	overflow        bool
+	inexactModels   []string
+	inexactProjects []string
 }
 
 // chUsagePricedCTE attaches each row's price record under pricingDigest.
@@ -1364,6 +1377,10 @@ func (s *Store) forEachDailyUsageGroupRow(
 	}
 	pricedSQL, pricedArgs := chUsagePricedCTE(source, pricingDigest)
 	metadataSelect := ""
+	evidenceSelect := ""
+	if f.PairwiseSides && !top {
+		evidenceSelect = ", groupUniqArrayArray(inexact_models), groupUniqArrayArray(inexact_projects)"
+	}
 	// Visit rows in time order so the last Copilot-reported total is the session cost.
 	order := `ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC, group_machine ASC,
 			row_ts ASC, COALESCE(row_message_ordinal, -1) ASC, row_source ASC,
@@ -1414,7 +1431,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 			any(billable_reasoning_tokens), any(billable_cache_creation_tokens),
 			any(billable_cache_creation_1h_tokens), any(billable_cache_read_tokens),
 			toInt64(any(reported_cost_rows)),
-			any(authoritative_cost), toInt64(any(authoritative_cost_rows))` + metadataSelect + `
+			any(authoritative_cost), toInt64(any(authoritative_cost_rows))` + metadataSelect + evidenceSelect + `
 		FROM usage_classified
 		GROUP BY session_id, local_date, project, agent, group_machine, model, provider_id,
 			explicit_key, group_kind, group_context, group_band
@@ -1453,6 +1470,9 @@ func (s *Store) forEachDailyUsageGroupRow(
 		}
 		if top {
 			targets = append(targets, &r.displayName, &startedAt, &r.groupKey, &r.sessionName, &metadataMachine)
+		}
+		if f.PairwiseSides && !top {
+			targets = append(targets, &r.inexactModels, &r.inexactProjects)
 		}
 		if err := rows.Scan(targets...); err != nil {
 			return fmt.Errorf("scanning clickhouse daily usage aggregate: %w", err)
@@ -1661,8 +1681,20 @@ func (s *Store) dailyUsageForCatalog(
 	if !f.SkipSessionCounts {
 		seenSessions = map[string]db.UsageSessionInfo{}
 	}
+	var sides *db.UsagePairwiseSides
+	if f.PairwiseSides {
+		sides = &db.UsagePairwiseSides{Models: make(map[string]db.UsagePairwiseValue), Projects: make(map[string]db.UsagePairwiseValue)}
+	}
 	var totalSavings money.Money
 	err = s.forEachDailyUsageGroupRow(ctx, f, catalog.digest, customModels, false, func(r chDailyUsageGroupRow) error {
+		if sides != nil {
+			for _, model := range r.inexactModels {
+				sides.Models.MarkInexact(model)
+			}
+			for _, project := range r.inexactProjects {
+				sides.Projects.MarkInexact(project)
+			}
+		}
 		key := usageAccumKey{
 			date: r.date, project: r.project, agent: r.agent,
 			machine: r.machine, model: r.model, providerID: r.providerID,
@@ -1724,6 +1756,16 @@ func (s *Store) dailyUsageForCatalog(
 	sort.Strings(sessionIDs)
 	for _, sessionID := range sessionIDs {
 		sc := sessionCosts[sessionID]
+		// A model filter uses estimates even when Copilot reports a session total.
+		if sides != nil {
+			for key, estimated := range sc.estimated {
+				sides.Models.AddTotals(key.model, db.UsageTotals{TotalCost: estimated})
+				sides.Models.AddSession(key.model, sessionID)
+				if key.project != "" {
+					sides.Projects.AddSession(key.project, sessionID)
+				}
+			}
+		}
 		if sc.authoritative != nil {
 			keys := make([]usageAccumKey, 0, len(sc.estimated))
 			for key := range sc.estimated {
@@ -1790,6 +1832,14 @@ func (s *Store) dailyUsageForCatalog(
 	}
 	days := map[string]*dayMaps{}
 	for key, b := range accum {
+		if sides != nil {
+			totals := db.UsageTotals{InputTokens: b.inputTok, OutputTokens: b.outputTok, CacheCreationTokens: b.cacheCr, CacheReadTokens: b.cacheRd}
+			sides.Models.AddTotals(key.model, totals)
+			if key.project != "" {
+				totals.TotalCost = b.cost
+				sides.Projects.AddTotals(key.project, totals)
+			}
+		}
 		day := days[key.date]
 		if day == nil {
 			day = &dayMaps{
@@ -1928,6 +1978,10 @@ func (s *Store) dailyUsageForCatalog(
 		result.SessionCounts = db.NewUsageSessionCounts(seenSessions)
 	}
 	db.SanitizeDailyUsageProjectLabelsWithCatalog(&result, projects)
+	result.Pairwise = sides
+	if sides != nil && result.Bytes() > kept.DefaultMaxBytes {
+		result.Pairwise = nil
+	}
 	return result, nil
 }
 

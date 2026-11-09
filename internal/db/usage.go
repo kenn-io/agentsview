@@ -99,6 +99,7 @@ type UsageFilter struct {
 	ActiveSince        string // RFC3339 session recency cutoff
 	Termination        string // "", "clean", "unclean", "active", or "stale"
 	Breakdowns         bool   // populate Project/AgentBreakdowns per day
+	PairwiseSides      bool   // request ranking-derived comparison metadata
 	SkipSessionCounts  bool   // skip distinct session counts when callers do not need them
 	TopSessionsByGroup bool   // merge runs by project and group before ranking
 	// TopSessionsSort ranks GetTopSessionsByCost results: ""/"cost"
@@ -1790,9 +1791,44 @@ type UsagePairwiseValue struct {
 	Inexact  bool
 }
 
+// UsagePairwiseValues accumulates ranking totals and ordered session memberships.
+type UsagePairwiseValues map[string]UsagePairwiseValue
+
+// AddTotals marks overflowing sums inexact so callers use a filtered read.
+func (values UsagePairwiseValues) AddTotals(name string, totals UsageTotals) {
+	value := values[name]
+	value.Totals.InputTokens += totals.InputTokens
+	value.Totals.OutputTokens += totals.OutputTokens
+	value.Totals.CacheCreationTokens += totals.CacheCreationTokens
+	value.Totals.CacheReadTokens += totals.CacheReadTokens
+	var err error
+	value.Totals.TotalCost, err = money.Add(value.Totals.TotalCost, totals.TotalCost)
+	value.Inexact = value.Inexact || err != nil
+	values[name] = value
+}
+
+// AddSession requires session IDs in sorted order, so adjacent repeats suffice.
+func (values UsagePairwiseValues) AddSession(name, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	value := values[name]
+	if n := len(value.Sessions); n == 0 || value.Sessions[n-1] != sessionID {
+		value.Sessions = append(value.Sessions, sessionID)
+		values[name] = value
+	}
+}
+
+// MarkInexact requires a filtered read for this value.
+func (values UsagePairwiseValues) MarkInexact(name string) {
+	value := values[name]
+	value.Inexact = true
+	values[name] = value
+}
+
 // UsagePairwiseSides is immutable once attached to a daily usage result.
 type UsagePairwiseSides struct {
-	Models, Projects map[string]UsagePairwiseValue
+	Models, Projects UsagePairwiseValues
 }
 
 // Side combines raw ranking values, including session unions for model groups.
