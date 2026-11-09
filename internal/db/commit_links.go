@@ -384,7 +384,10 @@ func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string
 		}
 	}
 	if !refresh {
-		return bumpTranscriptRevision(tx, sessionID, true)
+		if err := bumpTranscriptRevision(tx, sessionID, true); err != nil {
+			return err
+		}
+		return refreshImageTextOccurrencesTx(tx, sessionID)
 	}
 	return bumpTranscriptRevisionTx(tx, sessionID)
 }

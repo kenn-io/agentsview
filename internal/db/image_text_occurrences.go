@@ -2,7 +2,7 @@ package db
 
 // refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
 func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) error {
-	oldRows, err := tx.Query(`SELECT COALESCE(call_id,0),COALESCE(event_id,0),image_index,image_hash FROM image_text_occurrences WHERE session_id=?`, sessionID)
+	oldRows, err := tx.Query(`SELECT COALESCE(call_id,0),COALESCE(event_id,0),image_index,image_hash,media_type FROM image_text_occurrences WHERE session_id=?`, sessionID)
 	if err != nil {
 		return err
 	}
@@ -10,7 +10,7 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 	oldOccurrences := make(map[ImageTextOccurrence]bool)
 	for oldRows.Next() {
 		var old ImageTextOccurrence
-		if err := oldRows.Scan(&old.CallID, &old.EventID, &old.Index, &old.Hash); err != nil {
+		if err := oldRows.Scan(&old.CallID, &old.EventID, &old.Index, &old.Hash, &old.MediaType); err != nil {
 			oldRows.Close()
 			return err
 		}
@@ -39,7 +39,7 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 		}
 		for _, image := range RetainedToolResultImages(row.Content) {
 			if image.SHA256 != "" {
-				occurrences = append(occurrences, ImageTextOccurrence{CallID: row.CallID, EventID: row.EventID, Index: image.Index, Hash: image.SHA256})
+				occurrences = append(occurrences, ImageTextOccurrence{CallID: row.CallID, EventID: row.EventID, Index: image.Index, Hash: image.SHA256, MediaType: image.MediaType})
 			}
 		}
 	}
@@ -61,7 +61,7 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 		if o.EventID != 0 {
 			event = o.EventID
 		}
-		if _, err := tx.Exec(`INSERT INTO image_text_occurrences(session_id,call_id,event_id,image_index,image_hash) VALUES(?,?,?,?,?)`, sessionID, call, event, o.Index, o.Hash); err != nil {
+		if _, err := tx.Exec(`INSERT INTO image_text_occurrences(session_id,call_id,event_id,image_index,image_hash,media_type) VALUES(?,?,?,?,?,?)`, sessionID, call, event, o.Index, o.Hash, o.MediaType); err != nil {
 			return err
 		}
 		if !oldOccurrences[o] {

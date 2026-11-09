@@ -17,6 +17,7 @@ type ImageTextOccurrence struct {
 	CallID, EventID int64
 	Index           int
 	Hash            string
+	MediaType       string
 }
 type PendingImageText struct {
 	Content string

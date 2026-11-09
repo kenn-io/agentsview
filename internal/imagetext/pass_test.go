@@ -450,3 +450,44 @@ func TestImageTextTerminalBecomesEligibleForNewOccurrence(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "session", page.Results[0].SessionID)
 }
+
+func TestImageTextTerminalBecomesEligibleForChangedMediaType(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	encoded := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage"))
+	gif := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/gif;base64,%s"}]`, encoded)
+	png := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, encoded)
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"recovered invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	}))
+	t.Cleanup(srv.Close)
+	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
+	require.NoError(t, err)
+	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
+	require.NoError(t, err)
+	manager := Manager{DB: d, Client: client}
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "session", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "session", Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "Read", ResultContent: gif}}}}))
+	require.NoError(t, manager.Run(ctx))
+	require.Zero(t, requests)
+	var sourceID int64
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT id FROM tool_calls WHERE tool_use_id='call'`).Scan(&sourceID))
+	_, err = d.WriteSessionIncremental(ctx, "session", nil, db.IncrementalSessionUpdate{SubagentLinks: []db.ToolCallSubagentLink{{ToolUseID: "call", HasResult: true, ResultContent: png}}})
+	require.NoError(t, err)
+	var stored string
+	var updatedID int64
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT id, result_content FROM tool_calls WHERE tool_use_id='call'`).Scan(&updatedID, &stored))
+	require.Equal(t, sourceID, updatedID)
+	require.Equal(t, png, stored)
+	require.NoError(t, manager.Run(ctx))
+	require.Equal(t, 1, requests)
+	page, err := d.Search(ctx, db.SearchFilter{Query: "recovered"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "session", page.Results[0].SessionID)
+}

@@ -1807,6 +1807,7 @@ CREATE TABLE IF NOT EXISTS image_text_occurrences (
     event_id INTEGER,
     image_index INTEGER NOT NULL,
     image_hash TEXT NOT NULL,
+    media_type TEXT NOT NULL,
     CHECK ((call_id IS NULL) <> (event_id IS NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_image_text_occurrences_call ON image_text_occurrences(call_id, image_index) WHERE call_id IS NOT NULL;
