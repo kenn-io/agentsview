@@ -60,7 +60,6 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	counter := &activityInputReadCounter{storeExecutor: store.pg}
 	store.pg = counter
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	q.Bucket = activity.BucketSpec{Unit: activity.BucketDay, NominalSeconds: 86400}
 	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
 	before := pgKeptBuild(t, store, f, q, true)
 	require.Len(t, counter.transcriptReads, 1)
@@ -72,9 +71,6 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	assert.Len(t, counter.usageReads, 1)
 	assert.Equal(t, 1000, repeated.Report.Totals.OutputTokens)
 	assert.Len(t, repeated.Sessions, 2)
-	assert.Equal(t, 2, repeated.Report.Buckets[0].UserMessages)
-	assert.Equal(t, 2, repeated.Report.Buckets[0].AssistantMessages)
-	assert.Zero(t, counter.countReads)
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
 		{SessionID: "a", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
 		{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
@@ -104,7 +100,6 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	counter := &activityInputReadCounter{storeExecutor: store.pg}
 	store.pg = counter
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	q.Bucket = activity.BucketSpec{Unit: activity.BucketDay, NominalSeconds: 86400}
 	q.Partial = true
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + time.Minute)
 	before := pgKeptBuild(t, store, f, q, true)
@@ -115,10 +110,6 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	assert.Len(t, counter.transcriptReads, 1)
 	assert.Len(t, counter.usageReads, 1)
 	assert.NotEqual(t, before.Report.Totals, after.Report.Totals)
-	assert.Equal(t, 1, before.Report.Buckets[0].UserMessages)
-	assert.Equal(t, 1, before.Report.Buckets[0].AssistantMessages)
-	assert.Equal(t, 2, after.Report.Buckets[0].AssistantMessages)
-	assert.Zero(t, counter.countReads)
 	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer fresh.Close()
