@@ -164,7 +164,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	state, err := NewStoreFromDB(store.DB()).preparedUsageState(ctx)
+	state, err := NewStoreFromDB(store.DB(), store.bulk).preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.True(t, state.ready, "the host with snapshots keeps prepared reads")
 	require.Equal(t, []string{"older-snapshot", "other-host"}, state.raw)
@@ -185,7 +185,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	}
 	read := func() reads {
 		t.Helper()
-		fresh := NewStoreFromDB(store.DB())
+		fresh := NewStoreFromDB(store.DB(), store.bulk)
 		var r reads
 		r.day, err = fresh.GetActivityReport(ctx, filter, day)
 		require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	mixed := read()
 	snapshotHost := filter
 	snapshotHost.Machine = "test-machine"
-	withSnapshots, err := NewStoreFromDB(store.DB()).GetActivityReport(ctx, snapshotHost, day)
+	withSnapshots, err := NewStoreFromDB(store.DB(), store.bulk).GetActivityReport(ctx, snapshotHost, day)
 	require.NoError(t, err)
 	require.Equal(t, 22+40, mixed.day.Totals.OutputTokens-withSnapshots.Totals.OutputTokens,
 		"the raw host's current tokens are counted, and its stale prepared rows are not")
@@ -207,7 +207,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	// With the snapshot readiness keys gone, every read is raw.
 	_, err = store.DB().ExecContext(ctx, "DELETE FROM sync_metadata WHERE startsWith(key, ?)", usageSnapshotReadyKeyBase+":")
 	require.NoError(t, err)
-	state, err = NewStoreFromDB(store.DB()).preparedUsageState(ctx)
+	state, err = NewStoreFromDB(store.DB(), store.bulk).preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.False(t, state.ready)
 	raw := read()
@@ -217,4 +217,66 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	require.Equal(t, raw.partial.Totals, mixed.partial.Totals)
 	require.Equal(t, raw.partial.BySession, mixed.partial.BySession)
 	require.Equal(t, dailyUsageWire(t, raw.daily, false), dailyUsageWire(t, mixed.daily, false))
+}
+
+// A range read cut into time slices must keep exactly the rows, in exactly
+// the order, that one read of the whole range keeps.
+func TestSlicedActivityUsageMatchesOneRead(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newPushedStore(t)
+	ctx := t.Context()
+	_, err := store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+	state, err := store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	const lower, upper = "2020-01-01T00:00:00Z", "2030-01-01T00:00:00Z"
+
+	whole, err := store.readActivityUsageSlices(ctx, state, lower, upper)
+	require.NoError(t, err)
+	require.NotZero(t, whole.count)
+	sliced := NewStoreFromDB(store.DB(), store.bulk)
+	sliced.usageSliceRows = 1
+	got, err := sliced.readActivityUsageSlices(ctx, state, lower, upper)
+	require.NoError(t, err)
+	require.Equal(t, keptTestRows(whole), keptTestRows(got))
+}
+
+// A refresh that replaces prepared_usage while the slices of a range read
+// run leaves them reading different generations of the rows, so the read
+// must discard them and read the range again in one query. Here the
+// refresh lands after every slice is read, so the rows are read twice.
+func TestSlicedActivityUsageRereadsAfterRefresh(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newPushedStore(t)
+	ctx := t.Context()
+	_, err := store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+	state, err := store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	const lower, upper = "2020-01-01T00:00:00Z", "2030-01-01T00:00:00Z"
+	whole, err := store.readActivityUsageSlices(ctx, state, lower, upper)
+	require.NoError(t, err)
+	require.NotZero(t, whole.count)
+
+	sliced := NewStoreFromDB(store.DB(), store.bulk)
+	sliced.usageSliceRows = 1
+	got, err := sliced.readActivityUsageSlices(ctx, state, lower, upper)
+	require.NoError(t, err)
+	require.Equal(t, int64(whole.count), sliced.activityUsageRowsRead.Load(), "an undisturbed sliced read reads each row once")
+	require.Equal(t, keptTestRows(whole), keptTestRows(got))
+
+	refreshed := NewStoreFromDB(store.DB(), store.bulk)
+	refreshed.usageSliceRows = 1
+	refreshed.afterUsageSlices = func() {
+		for _, query := range []string{"SYSTEM REFRESH VIEW prepare_usage", "SYSTEM WAIT VIEW prepare_usage"} {
+			_, err := store.DB().ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+	}
+	got, err = refreshed.readActivityUsageSlices(ctx, state, lower, upper)
+	require.NoError(t, err)
+	require.Equal(t, 2*int64(whole.count), refreshed.activityUsageRowsRead.Load(), "the refreshed range is read again")
+	require.Equal(t, keptTestRows(whole), keptTestRows(got))
 }

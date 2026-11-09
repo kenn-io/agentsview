@@ -53,7 +53,7 @@ func TestGetSessionActivityCountsVisibleMessages(t *testing.T) {
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 
 	activity, err := store.GetSessionActivity(ctx, sessionID)
 	require.NoError(t, err)

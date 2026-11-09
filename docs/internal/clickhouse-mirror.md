@@ -65,7 +65,18 @@ repairs on the next push.
 **Driver `github.com/ClickHouse/clickhouse-go/v2` through `database/sql`.**
 Stores stay in the same `Query`/`Scan` shape as DuckDB and PostgreSQL. Every
 connection sets `final=1` so `ReplacingMergeTree` collapses duplicates without
-`FINAL` in SQL.
+`FINAL` in SQL. Activity usage rows are the exception: serve reads them on a
+second pool that uses the driver's native API with the same settings. A
+full-history report reads about 1.5 million rows, and `database/sql` boxes each
+of their 32 million values and round-trips integers through text; on one
+production mirror that left ClickHouse waiting 3.8 of 4.2 seconds for serve to
+take the rows. The native read packs each row into the kept form as it arrives
+and sorts small keys, so no slice of wide rows is held or sorted. One goroutine
+still cannot take rows as fast as ClickHouse produces them, so a range read of
+more than 300,000 stored rows is cut at timestamp quantiles into up to eight
+slices that are read, sorted, and packed at once and then joined as bytes. On
+1.5 million rows a cold range read takes about 1.1 seconds, against 3.5 seconds
+for one read and 6 to 10 seconds through `database/sql`.
 
 **Vectors are pushed and searched, keyed by fingerprint and archive.**
 `clickhouse push` runs the vector phase after the session phase when the local
