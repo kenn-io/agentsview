@@ -105,10 +105,10 @@ var cannedTemplates = map[CannedKind]cannedTemplate{
 	},
 	CannedFrictionReview: {
 		ID:      "friction_review",
-		Version: "2026-09-22",
+		Version: "2026-11-09",
 		Title:   "Friction Review",
-		Focus: "Summarize one Friction Log digest using only the supplied deterministic digest summary, pattern titles and counts, and P0 alerts. " +
-			"Focus on which friction patterns recur, which tools fail across sessions, and which process, instruction, or environment changes would reduce them.",
+		Focus: "Summarize one Friction Log digest using only the supplied deterministic digest summary, pattern titles and counts, P0 alerts, and grouped diagnostic failures. " +
+			"Focus on recurring friction patterns, tools that fail across sessions, external failures, and process, instruction, or environment changes that would reduce them.",
 	},
 }
 
