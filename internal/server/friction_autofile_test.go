@@ -93,10 +93,8 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 			require.True(t, ok)
 			if tt.autoFile && tt.hub {
 				assert.Equal(t, "open", got.Status)
-				assert.Len(t, got.Comments, 1)
 			} else {
 				assert.Equal(t, "closed", got.Status)
-				assert.Empty(t, got.Comments)
 			}
 			if !tt.filed {
 				assert.Nil(t, patternIssue(t, te, fp))

@@ -2,6 +2,7 @@ package filing_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -45,35 +46,74 @@ func seedRecurrenceSignal(t *testing.T, d *db.DB, date, id string, at *time.Time
 
 func TestReopenRecurringPattern(t *testing.T) {
 	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	type occurrence struct {
+		date string
+		at   *time.Time
+	}
 	tests := []struct {
-		name, date, reason string
-		occurred           *time.Time
-		closed             *time.Time
-		want               bool
+		name, reason, since, latest string
+		occurrences                 []occurrence
+		closed                      *time.Time
+		loc                         *time.Location
+		stalePattern                bool
+		comment                     string
 	}{
-		{"pre-close next day", "2026-09-16", "done", new(closed.Add(-time.Hour)), &closed, false},
-		{"same day after close", "2026-09-15", "done", new(closed.Add(time.Hour)), &closed, true},
-		{"missing time later day", "2026-09-16", "done", nil, &closed, false},
-		{"wontfix", "2026-09-16", "wontfix", new(closed.Add(25 * time.Hour)), &closed, false},
-		{"missing close", "2026-09-16", "done", new(closed.Add(25 * time.Hour)), nil, false},
+		{name: "pre-close next day", reason: "done", occurrences: []occurrence{{"2026-09-16", new(closed.Add(-time.Hour))}}, closed: &closed},
+		{name: "same day after close", reason: "done", occurrences: []occurrence{{"2026-09-15", new(closed.Add(time.Hour))}}, closed: &closed, comment: "This pattern recurred on 2026-09-15."},
+		{name: "missing time later day", reason: "done", occurrences: []occurrence{{"2026-09-16", nil}}, closed: &closed},
+		{name: "wontfix", reason: "wontfix", occurrences: []occurrence{{"2026-09-16", new(closed.Add(25 * time.Hour))}}, closed: &closed},
+		{name: "missing close", reason: "done", occurrences: []occurrence{{"2026-09-16", new(closed.Add(25 * time.Hour))}}},
+		{name: "rebuilt digest with stale pattern", reason: "done", occurrences: []occurrence{{"2026-09-14", new(closed.Add(25 * time.Hour))}}, closed: &closed, stalePattern: true, comment: "This pattern recurred on 2026-09-16."},
+		{name: "local occurrence date", reason: "done", occurrences: []occurrence{{"2026-09-17", new(time.Date(2026, 9, 17, 1, 0, 0, 0, time.UTC))}}, closed: &closed, loc: time.FixedZone("UTC-4", -4*60*60), comment: "This pattern recurred on 2026-09-16."},
+		{name: "latest occurrence in window", reason: "done", since: "2026-09-16", latest: "2026-09-17", occurrences: []occurrence{{"2026-09-16", new(closed.Add(50 * time.Hour))}, {"2026-09-17", new(closed.Add(25 * time.Hour))}, {"2026-09-18", new(closed.Add(74 * time.Hour))}}, closed: &closed, comment: "This pattern recurred on 2026-09-17."},
+		{name: "occurrence before window", reason: "done", since: "2026-09-17", latest: "2026-09-18", occurrences: []occurrence{{"2026-09-16", new(closed.Add(25 * time.Hour))}}, closed: &closed},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := katatest.New(t)
-			f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
-			seedRecurrence(t, d, tt.date, "claude:s1", tt.occurred)
+			sig := toolError("go: cannot find main module", "claude:s1")
+			f, d := newFiler(t, s, katatest.DefaultProjectName, sig)
+			if tt.stalePattern {
+				seedRecurrenceSignal(t, d, "2026-09-14", "claude:s1", nil, sig)
+			}
+			for i, occurrence := range tt.occurrences {
+				id := fmt.Sprintf("claude:s%d", i+1)
+				if tt.stalePattern {
+					sig.SubjectID = id
+					sig.OccurredAt = *occurrence.at
+					snapshot, err := review.EncodeSnapshot(review.Snapshot{Date: occurrence.date, Timezone: "UTC", RulesVersion: friction.RulesVersion, Signals: []friction.Signal{sig}})
+					require.NoError(t, err)
+					digest, err := d.GetFrictionDigest(t.Context(), occurrence.date)
+					require.NoError(t, err)
+					digest.SnapshotJSON = snapshot
+					digest.Revision++
+					require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, nil, nil))
+					require.Equal(t, "2026-09-14", patternRow(t, d, sig.Fingerprint()).LastSeenDate)
+				} else {
+					seedRecurrenceSignal(t, d, occurrence.date, id, occurrence.at, sig)
+				}
+			}
 			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: tt.reason, ClosedAt: tt.closed})
-			_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
+			_, err := f.Link(t.Context(), sig.Fingerprint(), is.UID)
 			require.NoError(t, err)
-			n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
+			since, latest := tt.since, tt.latest
+			if since == "" {
+				since = "2026-09-01"
+			}
+			if latest == "" {
+				latest = "2026-09-18"
+			}
+			n, err := f.Reopen(t.Context(), since, latest, tt.loc)
 			require.NoError(t, err)
 			got := mustIssue(t, s, is.UID)
-			if tt.want {
+			if tt.comment != "" {
 				assert.Equal(t, 1, n)
 				assert.Equal(t, "open", got.Status)
 				require.Len(t, got.Comments, 1)
+				assert.Equal(t, tt.comment, got.Comments[0])
 			} else {
 				assert.Zero(t, n)
+				assert.Equal(t, "closed", got.Status)
 				assert.Empty(t, got.Comments)
 			}
 		})
@@ -124,141 +164,26 @@ func TestReopenSkipsUnlinkedPattern(t *testing.T) {
 	assert.Equal(t, 1, n)
 }
 
-func TestReopenFromRebuiltDigestWithoutPatternUpdate(t *testing.T) {
-	closed := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	tests := []struct {
-		name        string
-		live, saved time.Time
-		wantOpen    bool
-	}{
-		{"live finding older than digest", time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC), time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC), true},
-		{"live finding later than digest", time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC), time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC), false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := katatest.New(t)
-			f, d := newFiler(t, s, katatest.DefaultProjectName)
-			old := toolError("go: cannot find main module", "claude:s1")
-			sig := toolError("go: cannot find main module", "claude:s2")
-			require.Equal(t, old.Fingerprint(), sig.Fingerprint())
-			seedRecurrenceSignal(t, d, "2026-09-05", old.SubjectID, nil, old)
-			dbtest.SeedSession(t, d, sig.SubjectID, "proj")
-			digest, err := d.GetFrictionDigest(t.Context(), "2026-09-14")
-			require.NoError(t, err)
-			digest.Revision++
-			require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, []db.FrictionDigestSubject{{SubjectID: sig.SubjectID, Date: digest.Date, SubjectKind: "session"}}, nil))
-			session, err := d.GetSession(t.Context(), sig.SubjectID)
-			require.NoError(t, err)
-			applied, err := d.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
-				RulesVersion: friction.RulesVersion, Findings: []db.FrictionFinding{{SessionID: sig.SubjectID, Kind: string(sig.Kind), Detector: sig.Detector, Fingerprint: sig.Fingerprint(), OccurredAt: &tt.live, RulesVersion: friction.RulesVersion}},
-			})
-			require.NoError(t, err)
-			require.True(t, applied)
-			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-			_, err = f.Link(t.Context(), sig.Fingerprint(), is.UID)
-			require.NoError(t, err)
-			sig.OccurredAt = tt.saved
-			digest.SnapshotJSON, err = review.EncodeSnapshot(review.Snapshot{Date: digest.Date, Timezone: "UTC", RulesVersion: friction.RulesVersion, Signals: []friction.Signal{sig}})
-			require.NoError(t, err)
-			digest.Revision++
-			require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, []db.FrictionDigestSubject{{SubjectID: sig.SubjectID, Date: digest.Date, SubjectKind: "session"}}, nil))
-			require.Equal(t, "2026-09-05", patternRow(t, d, sig.Fingerprint()).LastSeenDate)
-
-			n, err := f.Reopen(t.Context(), "2026-09-10", "2026-09-18", nil)
-			require.NoError(t, err)
-			got := mustIssue(t, s, is.UID)
-			if tt.wantOpen {
-				assert.Equal(t, 1, n)
-				assert.Equal(t, "open", got.Status)
-				require.Len(t, got.Comments, 1)
-				assert.Equal(t, "This pattern recurred on 2026-09-14.", got.Comments[0])
-			} else {
-				assert.Zero(t, n)
-				assert.Equal(t, "closed", got.Status)
-				assert.Empty(t, got.Comments)
-			}
-		})
-	}
-}
-
-func TestReopenReportsOccurrenceDate(t *testing.T) {
-	s := katatest.New(t)
-	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
-	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	occurred := time.Date(2026, 9, 17, 1, 0, 0, 0, time.UTC)
-	seedRecurrence(t, d, "2026-09-17", "claude:s1", &occurred)
-	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
-	require.NoError(t, err)
-
-	n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", time.FixedZone("UTC-4", -4*60*60))
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-	got := mustIssue(t, s, is.UID)
-	assert.Equal(t, "open", got.Status)
-	require.Len(t, got.Comments, 1)
-	assert.Equal(t, "This pattern recurred on 2026-09-16.", got.Comments[0])
-}
-
-func TestReopenUsesLatestOccurrenceInWindow(t *testing.T) {
+func TestReopenClosuresWithinSameSecond(t *testing.T) {
 	s := katatest.New(t)
 	sig := toolError("go: cannot find main module", "claude:s1")
 	f, d := newFiler(t, s, katatest.DefaultProjectName, sig)
-	closed := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	seedRecurrenceSignal(t, d, "2026-09-13", "claude:s1", new(closed.Add(24*time.Hour)), sig)
-	seedRecurrenceSignal(t, d, "2026-09-15", "claude:s2", new(closed.Add(72*time.Hour)), sig)
-	seedRecurrenceSignal(t, d, "2026-09-17", "claude:s3", new(closed.Add(120*time.Hour)), sig)
+	closed := time.Date(2026, 9, 15, 12, 0, 0, 100, time.UTC)
+	occurred := closed.Add(50 * time.Nanosecond)
+	seedRecurrenceSignal(t, d, "2026-09-15", "claude:s1", &occurred, sig)
 	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
 	_, err := f.Link(t.Context(), sig.Fingerprint(), is.UID)
 	require.NoError(t, err)
-
-	n, err := f.Reopen(t.Context(), "2026-09-14", "2026-09-15", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-	got := mustIssue(t, s, is.UID)
-	require.Len(t, got.Comments, 1)
-	assert.Equal(t, "This pattern recurred on 2026-09-15.", got.Comments[0])
-}
-
-func TestReopenClosuresWithinSameSecond(t *testing.T) {
-	s := katatest.New(t)
-	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
-	closed := time.Date(2026, 9, 15, 12, 0, 0, 100, time.UTC)
-	occurred := closed.Add(time.Hour)
-	seedRecurrence(t, d, "2026-09-15", "claude:s1", &occurred)
-	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
-	require.NoError(t, err)
+	f.EvaluatedOccurrences = make(map[string]time.Time)
 	n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	s.CloseIssue(is.UID, closed.Add(100*time.Nanosecond))
+	seedRecurrenceSignal(t, d, "2026-09-15", "claude:s2", new(closed.Add(200*time.Nanosecond)), sig)
 	n, err = f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 	assert.Len(t, mustIssue(t, s, is.UID).Comments, 2)
-}
-
-func TestReopenRetry(t *testing.T) {
-	s := katatest.New(t)
-	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
-	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	seedRecurrence(t, d, "2026-09-16", "claude:s1", new(closed.Add(26*time.Hour)))
-	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
-	require.NoError(t, err)
-	f.EvaluatedOccurrences = make(map[string]time.Time)
-	s.Fail(http.MethodPost, "/actions/reopen", katatest.Fault{Status: 503, Code: "unavailable"})
-	n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
-	require.NoError(t, err)
-	assert.Zero(t, n)
-	assert.Equal(t, "closed", mustIssue(t, s, is.UID).Status)
-	n, err = f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-	got := mustIssue(t, s, is.UID)
-	assert.Equal(t, "open", got.Status)
-	assert.Len(t, got.Comments, 1)
 }
 
 type countingGetKata struct {
@@ -313,9 +238,10 @@ func (k *failingGetKata) GetIssue(ctx context.Context, ref string) (kata.Issue, 
 
 func TestReopenWhenKataNotReady(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		err  error
-	}{{"not ready", kata.ErrNotReady}, {"service unavailable", &kata.APIError{Status: 503}}} {
+		name       string
+		err        error
+		failReopen bool
+	}{{name: "not ready", err: kata.ErrNotReady}, {name: "service unavailable", err: &kata.APIError{Status: 503}}, {name: "reopen unavailable", failReopen: true}} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := katatest.New(t)
 			other := toolError("go: cannot find main module", "claude:s2")
@@ -323,13 +249,31 @@ func TestReopenWhenKataNotReady(t *testing.T) {
 			closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 			seedRecurrence(t, d, "2026-09-16", "claude:s1", new(closed.Add(time.Hour)))
 			seedRecurrenceSignal(t, d, "2026-09-17", "claude:s2", new(closed.Add(25*time.Hour)), other)
+			var issues []string
 			for _, sig := range []friction.Signal{correction, other} {
 				is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
 				require.NoError(t, d.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{Fingerprint: sig.Fingerprint(), KataInstanceUID: "instance", KataProjectUID: "project", IssueUID: is.UID, QualifiedID: "agentsview#" + is.ShortID, Source: db.FrictionIssueSourceManual, LinkedAt: closed}))
+				issues = append(issues, is.UID)
+			}
+			f.EvaluatedOccurrences = make(map[string]time.Time)
+			if tt.failReopen {
+				s.Fail(http.MethodPost, "/actions/reopen", katatest.Fault{Status: 503, Code: "unavailable"})
+				n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
+				require.NoError(t, err)
+				assert.Zero(t, n)
+				assert.Empty(t, f.EvaluatedOccurrences)
+				n, err = f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
+				require.NoError(t, err)
+				assert.Equal(t, 2, n)
+				for _, uid := range issues {
+					got := mustIssue(t, s, uid)
+					assert.Equal(t, "open", got.Status)
+					assert.Len(t, got.Comments, 1)
+				}
+				return
 			}
 			spy := &failingGetKata{Kata: f.Kata, err: tt.err}
 			f.Kata = spy
-			f.EvaluatedOccurrences = make(map[string]time.Time)
 			for i := range 2 {
 				n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
 				require.NoError(t, err)
