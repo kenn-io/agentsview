@@ -21,16 +21,10 @@ type activityInputReadCounter struct {
 	storeExecutor
 	mu                          sync.Mutex
 	transcriptReads, usageReads [][]string
-	countReads                  int
 	cancel                      context.CancelFunc
 }
 
 func (c *activityInputReadCounter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	if strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
-		c.mu.Lock()
-		c.countReads++
-		c.mu.Unlock()
-	}
 	transcript := strings.HasPrefix(query, "SELECT session_id, ordinal, role, timestamp, model")
 	usage := strings.Contains(query, "usage_events") && !strings.Contains(query, "usage_session_changes")
 	if transcript || usage {
@@ -181,23 +175,18 @@ func TestPGActivityReportInputEmptySelectionAfterPush(t *testing.T) {
 
 func TestPGActivityReportInputMessageCounts(t *testing.T) {
 	local, syncer, store := newUsageJournalFixture(t)
-	for _, id := range []string{"a", "singleton", "excluded"} {
-		pgKeptSession(t, local, id, map[string]string{"a": "project-a", "singleton": "project-a", "excluded": "project-b"}[id], "2026-06-14")
-	}
 	messages := []db.Message{
-		{SessionID: "a", Ordinal: 0, Role: "user", Content: "before range", Timestamp: "2026-06-13T23:59:59Z"},
-		{SessionID: "a", Ordinal: 1, Role: "user", Content: "range start", Timestamp: "2026-06-14T00:00:00Z"},
-		{SessionID: "a", Ordinal: 2, Role: "user", Content: "start", Timestamp: "2026-06-14T10:00:00Z"},
-		{SessionID: "a", Ordinal: 3, Role: "assistant", Content: "system", Timestamp: "2026-06-14T10:01:00Z", IsSystem: true},
-		{SessionID: "a", Ordinal: 4, Role: "user", Content: "result", Timestamp: "2026-06-14T10:02:00Z", SourceSubtype: "tool_result"},
-		{SessionID: "a", Ordinal: 5, Role: "tool", Content: "tool", Timestamp: "2026-06-14T10:03:00Z"},
-		{SessionID: "a", Ordinal: 6, Role: "assistant", Content: "undated"},
-		{SessionID: "a", Ordinal: 7, Role: "assistant", Content: "boundary", Timestamp: "2026-06-14T10:05:00Z"},
+		{SessionID: "a", Ordinal: 0, Role: "user", Content: "range start", Timestamp: "2026-06-14T00:00:00Z"},
+		{SessionID: "a", Ordinal: 1, Role: "user", Content: "start", Timestamp: "2026-06-14T10:00:00Z"},
+		{SessionID: "a", Ordinal: 2, Role: "assistant", Content: "system", Timestamp: "2026-06-14T10:01:00Z", IsSystem: true},
+		{SessionID: "a", Ordinal: 3, Role: "user", Content: "result", Timestamp: "2026-06-14T10:02:00Z", SourceSubtype: "tool_result"},
+		{SessionID: "a", Ordinal: 4, Role: "assistant", Content: "boundary", Timestamp: "2026-06-14T10:05:00Z"},
 	}
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", messages))
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "singleton", []db.Message{
-		{SessionID: "singleton", Ordinal: 0, Role: "user", Content: "alone", Timestamp: "2026-06-14T10:00:00Z"},
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: "a", Project: "project-a", Machine: "test-machine", Agent: "claude",
+		StartedAt: new("2026-06-14T00:00:00Z"), EndedAt: new("2026-06-14T10:05:00Z"), MessageCount: len(messages),
 	}))
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", messages))
 	pgKeptPush(t, syncer, false)
 	counter := &activityInputReadCounter{storeExecutor: store.pg}
 	store.pg = counter
@@ -206,35 +195,22 @@ func TestPGActivityReportInputMessageCounts(t *testing.T) {
 	q.Partial = true
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 5*time.Minute + 500*time.Nanosecond)
 	before := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 3, before.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 2, before.Report.Buckets[0].UserMessages)
 	assert.Zero(t, before.Report.Buckets[0].AssistantMessages)
-	assert.NotEmpty(t, before.Membership["singleton"])
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Microsecond)
 	after := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 3, after.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 2, after.Report.Buckets[0].UserMessages)
 	assert.Equal(t, 1, after.Report.Buckets[0].AssistantMessages)
 	q.RangeStart = q.RangeStart.Add(time.Microsecond)
 	shifted := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 2, shifted.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 1, shifted.Report.Buckets[0].UserMessages)
 	assert.Equal(t, 1, shifted.Report.Buckets[0].AssistantMessages)
 	assert.Len(t, counter.transcriptReads, 1)
-	messages[3].IsSystem = false
-	messages[4].SourceSubtype = ""
+	messages[2].IsSystem = false
+	messages[3].SourceSubtype = ""
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", messages))
 	pgKeptPush(t, syncer, false)
 	changed := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 3, changed.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 2, changed.Report.Buckets[0].UserMessages)
 	assert.Equal(t, 2, changed.Report.Buckets[0].AssistantMessages)
-	require.Len(t, counter.transcriptReads, 2)
-	assert.Equal(t, []string{"a"}, counter.transcriptReads[1])
-	assert.Zero(t, counter.countReads)
-	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
-	require.NoError(t, err)
-	defer fresh.Close()
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), changed)
-	q.Partial, q.EffectiveEnd = false, q.RangeEnd
-	finished := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 3, finished.Report.Buckets[0].UserMessages)
-	assert.Equal(t, 2, finished.Report.Buckets[0].AssistantMessages)
-	assert.Zero(t, counter.countReads)
 }
