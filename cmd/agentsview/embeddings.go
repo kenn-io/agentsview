@@ -459,7 +459,7 @@ func runEmbeddingsBuild(
 			}
 			archive, err := openReadOnlyDB(ctx, cfg)
 			if err != nil {
-				return fmt.Errorf("opening archive before search setup: %w; start the daemon with `agentsview daemon start`", err)
+				return fmt.Errorf("opening archive before search setup: %w; start the daemon with `agentsview daemon start` and retry `agentsview index embeddings build`, or turn it on in Settings → Embeddings → Turn on", err)
 			}
 			if err := archive.Close(); err != nil {
 				return fmt.Errorf("closing archive before search setup: %w", err)

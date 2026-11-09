@@ -653,6 +653,9 @@ func TestCLIEmbeddingsSetupDownload(t *testing.T) {
 				if !approved {
 					return embedlocal.Installation{}, errors.New("download was not approved")
 				}
+				opts.Progress(50, 100)
+				opts.Progress(50, 100)
+				opts.Progress(51, 101)
 				opts.Progress(size, size)
 				installed = true
 				return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
@@ -664,6 +667,7 @@ func TestCLIEmbeddingsSetupDownload(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, cfg.Vector.Enabled)
 			assert.Contains(t, out.String(), "Download: 100% of 1 MB")
+			assert.Equal(t, 2, strings.Count(out.String(), "Download: 50% of 1 MB"))
 			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
 		})
 	}
@@ -964,6 +968,8 @@ func TestCLIEmbeddingsSetupRequiresReadableArchiveWithoutDaemon(t *testing.T) {
 			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
 			require.ErrorContains(t, err, "opening archive before search setup")
 			assert.ErrorContains(t, err, "agentsview daemon start")
+			assert.ErrorContains(t, err, "agentsview index embeddings build")
+			assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
 			assert.NotContains(t, out.String(), "[y/N]")
 			after, err := os.ReadFile(path)
 			require.NoError(t, err)
@@ -1011,11 +1017,16 @@ func TestPollDaemonSetupPrintsDownloadProgress(t *testing.T) {
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if calls.Add(1) == 1 {
-			_, _ = io.WriteString(w, `{"setup":{"busy":true,"downloaded_bytes":50,"total_bytes":100}}`)
-			return
+		switch calls.Add(1) {
+		case 1:
+			_, _ = io.WriteString(w, `{"setup":{"busy":true,"downloaded_bytes":500000,"total_bytes":1000000}}`)
+		case 2:
+			_, _ = io.WriteString(w, `{"setup":{"busy":true,"downloaded_bytes":500001,"total_bytes":1000000}}`)
+		case 3:
+			_, _ = io.WriteString(w, `{"setup":{"busy":true,"downloaded_bytes":500001,"total_bytes":1000001}}`)
+		default:
+			_, _ = io.WriteString(w, `{"setup":{"busy":false,"downloaded_bytes":1000001,"total_bytes":1000001}}`)
 		}
-		_, _ = io.WriteString(w, `{"setup":{"busy":false,"downloaded_bytes":100,"total_bytes":100}}`)
 	}))
 	t.Cleanup(srv.Close)
 	oldInterval := embeddingsPollInterval
@@ -1023,7 +1034,7 @@ func TestPollDaemonSetupPrintsDownloadProgress(t *testing.T) {
 	t.Cleanup(func() { embeddingsPollInterval = oldInterval })
 	var out strings.Builder
 	require.NoError(t, pollDaemonSetup(t.Context(), &out, embeddingsDaemonClient{baseURL: srv.URL}))
-	assert.Equal(t, "Download: 50% of 1 MB\nDownload: 100% of 1 MB\n", out.String())
+	assert.Equal(t, "Download: 50% of 1 MB\nDownload: 50% of 2 MB\nDownload: 100% of 2 MB\n", out.String())
 }
 
 func TestCLIEmbeddingsSetupAcceptsAutomaticServerBeforeAutostart(t *testing.T) {

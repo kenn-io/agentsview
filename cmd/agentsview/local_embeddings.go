@@ -118,7 +118,7 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	}
 	confirmed := false
 	var approvedBytes int64
-	lastPercent := int64(-1)
+	var progress downloadProgressPrinter
 	_, err = resolveLocalEmbeddings(ctx, server, func(_ context.Context, size int64) (bool, error) {
 		message := fmt.Sprintf("Turn on search by meaning? Downloads approximately %d MB once, shared by Kenn apps.", (size+999999)/1000000)
 		if req.FullRebuild {
@@ -130,11 +130,7 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 		confirmed, approvedBytes = true, size
 		return true, nil
 	}, func(done, total int64) {
-		percent := done * 100 / max(total, 1)
-		if percent != lastPercent {
-			lastPercent = percent
-			printDownloadProgress(out, done, total)
-		}
+		progress.print(out, done, total)
 	})
 	if err != nil {
 		return err
@@ -174,12 +170,23 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	return runEmbeddingsBuildDirect(ctx, out, cfg, req)
 }
 
-func printDownloadProgress(out io.Writer, done, total int64) {
-	fmt.Fprintf(out, "Download: %d%% of %d MB\n", done*100/max(total, 1), (total+999999)/1000000)
+type downloadProgressPrinter struct {
+	printed bool
+	percent int64
+	total   int64
+}
+
+func (p *downloadProgressPrinter) print(out io.Writer, done, total int64) {
+	percent := done * 100 / max(total, 1)
+	if p.printed && p.percent == percent && p.total == total {
+		return
+	}
+	p.printed, p.percent, p.total = true, percent, total
+	fmt.Fprintf(out, "Download: %d%% of %d MB\n", percent, (total+999999)/1000000)
 }
 
 func pollDaemonSetup(ctx context.Context, out io.Writer, client embeddingsDaemonClient) error {
-	var downloaded, total int64
+	var progress downloadProgressPrinter
 	for {
 		status, err := client.status(ctx)
 		if err != nil {
@@ -190,9 +197,8 @@ func pollDaemonSetup(ctx context.Context, out io.Writer, client embeddingsDaemon
 			if setup.Error != "" {
 				return errors.New(setup.Error)
 			}
-			if setup.DownloadedBytes != downloaded || setup.TotalBytes != total {
-				downloaded, total = setup.DownloadedBytes, setup.TotalBytes
-				printDownloadProgress(out, downloaded, total)
+			if setup.DownloadedBytes != 0 || setup.TotalBytes != 0 {
+				progress.print(out, setup.DownloadedBytes, setup.TotalBytes)
 			}
 			if !setup.Busy {
 				return nil
