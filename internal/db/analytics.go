@@ -456,15 +456,19 @@ func (db *DB) getAnalyticsModelsSQLiteSummary(
 	}
 
 	where, args := sqliteAnalyticsWhereSQL(f, dateCol, "s.id", true)
-	return db.queryAnalyticsModels(ctx, `
+	return db.queryAnalyticsModels(ctx, analyticsModelsQuery(where), args)
+}
+
+// analyticsModelsQuery lists the distinct models of the sessions matching
+// where. It reads messages through idx_messages_analytics_metadata.
+func analyticsModelsQuery(where string) string {
+	return `
 		SELECT DISTINCT m.model
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id
-		WHERE `+where+`
+		WHERE ` + where + `
 		AND m.model <> ''
-		ORDER BY m.model`,
-		args,
-	)
+		ORDER BY m.model`
 }
 
 func (db *DB) getAnalyticsModelsForSessionIDs(
