@@ -1388,7 +1388,8 @@ func TestDarwinWatcherRootChangedRetiresRecursiveStreamAcrossABA(t *testing.T) {
 	require.NoError(t, os.Mkdir(root, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
-	closed := make(chan struct{})
+	// Retain retirement even when the lifecycle worker runs before the receiver.
+	closed := make(chan struct{}, 1)
 	var nativeSink func([]fsevents.Event)
 	backend.newStream = func(_ string, sink func([]fsevents.Event)) (darwinStream, error) {
 		nativeSink = sink
