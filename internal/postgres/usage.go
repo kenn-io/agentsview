@@ -2522,44 +2522,29 @@ WHERE `+where, pb.args...).Scan(&count)
 func pgDailyPairwiseSides(accum map[pgDailyUsageKey]*pgDailyUsageBucket, costs map[string]pgDailyUsageSessionCost, sessionIDs []string, inexactModels, inexactProjects map[string]bool) *db.UsagePairwiseSides {
 	sides := &db.UsagePairwiseSides{Models: make(map[string]db.UsagePairwiseValue), Projects: make(map[string]db.UsagePairwiseValue)}
 	for model, inexact := range inexactModels {
-		sides.Models[model] = db.UsagePairwiseValue{Inexact: inexact}
-	}
-	for project, inexact := range inexactProjects {
-		sides.Projects[project] = db.UsagePairwiseValue{Inexact: inexact}
-	}
-	add := func(entries map[string]db.UsagePairwiseValue, name string, b *pgDailyUsageBucket, cost money.Money) {
-		value := entries[name]
-		value.Totals.InputTokens += b.inputTok
-		value.Totals.OutputTokens += b.outputTok
-		value.Totals.CacheCreationTokens += b.cacheCr
-		value.Totals.CacheReadTokens += b.cacheRd
-		var err error
-		value.Totals.TotalCost, err = money.Add(value.Totals.TotalCost, cost)
-		value.Inexact = value.Inexact || err != nil
-		entries[name] = value
-	}
-	for key, b := range accum {
-		add(sides.Models, key.model, b, money.Money{})
-		if key.project != "" {
-			add(sides.Projects, key.project, b, b.cost)
+		if inexact {
+			sides.Models.MarkInexact(model)
 		}
 	}
-	// Sessions arrive in order, so a repeat is always the list's last entry.
-	member := func(entries map[string]db.UsagePairwiseValue, name, sessionID string) {
-		value := entries[name]
-		if n := len(value.Sessions); n == 0 || value.Sessions[n-1] != sessionID {
-			value.Sessions = append(value.Sessions, sessionID)
-			entries[name] = value
+	for project, inexact := range inexactProjects {
+		if inexact {
+			sides.Projects.MarkInexact(project)
+		}
+	}
+	for key, b := range accum {
+		totals := db.UsageTotals{InputTokens: b.inputTok, OutputTokens: b.outputTok, CacheCreationTokens: b.cacheCr, CacheReadTokens: b.cacheRd}
+		sides.Models.AddTotals(key.model, totals)
+		if key.project != "" {
+			totals.TotalCost = b.cost
+			sides.Projects.AddTotals(key.project, totals)
 		}
 	}
 	for _, sessionID := range sessionIDs {
 		for key, estimated := range costs[sessionID].estimated {
-			add(sides.Models, key.model, &pgDailyUsageBucket{}, estimated)
-			if sessionID != "" {
-				member(sides.Models, key.model, sessionID)
-				if key.project != "" {
-					member(sides.Projects, key.project, sessionID)
-				}
+			sides.Models.AddTotals(key.model, db.UsageTotals{TotalCost: estimated})
+			sides.Models.AddSession(key.model, sessionID)
+			if key.project != "" {
+				sides.Projects.AddSession(key.project, sessionID)
 			}
 		}
 	}

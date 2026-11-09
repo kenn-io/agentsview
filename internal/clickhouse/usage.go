@@ -1685,38 +1685,14 @@ func (s *Store) dailyUsageForCatalog(
 	if f.Breakdowns {
 		sides = &db.UsagePairwiseSides{Models: make(map[string]db.UsagePairwiseValue), Projects: make(map[string]db.UsagePairwiseValue)}
 	}
-	addSide := func(entries map[string]db.UsagePairwiseValue, name string, b *chUsageBucket, cost money.Money) {
-		value := entries[name]
-		value.Totals.InputTokens += b.inputTok
-		value.Totals.OutputTokens += b.outputTok
-		value.Totals.CacheCreationTokens += b.cacheCr
-		value.Totals.CacheReadTokens += b.cacheRd
-		var err error
-		value.Totals.TotalCost, err = money.Add(value.Totals.TotalCost, cost)
-		value.Inexact = value.Inexact || err != nil
-		entries[name] = value
-	}
-	member := func(entries map[string]db.UsagePairwiseValue, name, sessionID string) {
-		value := entries[name]
-		if n := len(value.Sessions); n == 0 || value.Sessions[n-1] != sessionID {
-			value.Sessions = append(value.Sessions, sessionID)
-			entries[name] = value
-		}
-	}
 	var totalSavings money.Money
 	err = s.forEachDailyUsageGroupRow(ctx, f, catalog.digest, customModels, false, func(r chDailyUsageGroupRow) error {
 		if sides != nil {
-			for _, dimension := range []struct {
-				names   []string
-				entries map[string]db.UsagePairwiseValue
-			}{
-				{r.inexactModels, sides.Models}, {r.inexactProjects, sides.Projects},
-			} {
-				for _, name := range dimension.names {
-					value := dimension.entries[name]
-					value.Inexact = true
-					dimension.entries[name] = value
-				}
+			for _, model := range r.inexactModels {
+				sides.Models.MarkInexact(model)
+			}
+			for _, project := range r.inexactProjects {
+				sides.Projects.MarkInexact(project)
 			}
 		}
 		key := usageAccumKey{
@@ -1783,12 +1759,10 @@ func (s *Store) dailyUsageForCatalog(
 		// A model filter uses estimates even when Copilot reports a session total.
 		if sides != nil {
 			for key, estimated := range sc.estimated {
-				addSide(sides.Models, key.model, &chUsageBucket{}, estimated)
-				if sessionID != "" {
-					member(sides.Models, key.model, sessionID)
-					if key.project != "" {
-						member(sides.Projects, key.project, sessionID)
-					}
+				sides.Models.AddTotals(key.model, db.UsageTotals{TotalCost: estimated})
+				sides.Models.AddSession(key.model, sessionID)
+				if key.project != "" {
+					sides.Projects.AddSession(key.project, sessionID)
 				}
 			}
 		}
@@ -1859,9 +1833,11 @@ func (s *Store) dailyUsageForCatalog(
 	days := map[string]*dayMaps{}
 	for key, b := range accum {
 		if sides != nil {
-			addSide(sides.Models, key.model, b, money.Money{})
+			totals := db.UsageTotals{InputTokens: b.inputTok, OutputTokens: b.outputTok, CacheCreationTokens: b.cacheCr, CacheReadTokens: b.cacheRd}
+			sides.Models.AddTotals(key.model, totals)
 			if key.project != "" {
-				addSide(sides.Projects, key.project, b, b.cost)
+				totals.TotalCost = b.cost
+				sides.Projects.AddTotals(key.project, totals)
 			}
 		}
 		day := days[key.date]
@@ -2003,7 +1979,7 @@ func (s *Store) dailyUsageForCatalog(
 	}
 	db.SanitizeDailyUsageProjectLabelsWithCatalog(&result, projects)
 	result.Pairwise = sides
-	if result.Bytes() > kept.DefaultMaxBytes {
+	if sides != nil && result.Bytes() > kept.DefaultMaxBytes {
 		result.Pairwise = nil
 	}
 	return result, nil

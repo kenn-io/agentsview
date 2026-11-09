@@ -55,10 +55,7 @@ func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
 		t.Run(map[bool]string{false: "prepared", true: "raw"}[raw], func(t *testing.T) {
 			local, syncer, store := newPreparedUsageStore(t)
 			if raw {
-				_, err := store.conn.ExecContext(t.Context(), "SYSTEM STOP VIEW prepare_usage")
-				require.NoError(t, err)
-				_, err = store.conn.ExecContext(t.Context(), "TRUNCATE TABLE prepared_usage")
-				require.NoError(t, err)
+				execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
 			}
 			for _, phase := range []string{"first", "repeat", "after push", "custom"} {
 				t.Run(phase, func(t *testing.T) {
@@ -95,7 +92,7 @@ func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
 								if selection.dimension == "model" {
 									filtered.Model = strings.Join(selection.values, ",")
 									// A base model selection intersects the side.
-									if f.HasModelFilter() && f.Model != " , " && f.Model != filtered.Model {
+									if f.HasModelFilter() && f.Model != filtered.Model {
 										continue
 									}
 								} else {
