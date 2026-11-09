@@ -250,20 +250,24 @@ func openDatabase(ctx context.Context, dsn, database string, poolSize int) (*sql
 // boxed in an interface, with reflection for nullable columns and a text
 // round trip into int fields; the native API scans into typed destinations
 // at a fraction of that cost.
-func openBulk(ctx context.Context, dsn, database string) (clickhouse.Conn, error) {
-	opt, err := connectOptions(dsn, database, 0)
+func openBulk(ctx context.Context, t Target) (clickhouse.Conn, error) {
+	database, err := t.DatabaseName()
+	if err != nil {
+		return nil, err
+	}
+	opt, err := connectOptions(t.URL, database, 0)
 	if err != nil {
 		return nil, err
 	}
 	conn, err := clickhouse.Open(opt)
 	if err != nil {
-		return nil, fmt.Errorf("opening clickhouse native connection at %s: %w", RedactDSN(dsn), err)
+		return nil, fmt.Errorf("opening clickhouse native connection at %s: %w", RedactDSN(t.URL), err)
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
 	defer cancel()
 	if err := conn.Ping(pingCtx); err != nil {
 		return nil, errors.Join(
-			fmt.Errorf("connecting to clickhouse at %s: %w", RedactDSN(dsn), err), conn.Close())
+			fmt.Errorf("connecting to clickhouse at %s: %w", RedactDSN(t.URL), err), conn.Close())
 	}
 	return conn, nil
 }

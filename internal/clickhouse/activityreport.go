@@ -13,7 +13,9 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -26,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/readbase"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -888,31 +891,35 @@ func (s *Store) activityUsageRange(
 		}
 		incremental = len(changed) <= max(activityUsageRereadSessions, len(state.revisions)/4)
 	}
-	where, args := chPreparedActivityRangeSQL(lowerBound, upperBound)
-	readCtx, err := withUsageDeltaTables(ctx, state)
-	if err != nil {
-		return nil, err
-	}
+	s.activityUsageQueries.Add(1)
+	var rows *activityUsageKept
 	if incremental {
+		where, args := chPreparedActivityRangeSQL(lowerBound, upperBound)
 		where += " AND session_id IN (SELECT id FROM activity_usage_changed)"
+		readCtx, err := withUsageDeltaTables(ctx, state)
+		if err != nil {
+			return nil, err
+		}
 		table, err := usageSessionListTable("activity_usage_changed", changed)
 		if err != nil {
 			return nil, err
 		}
 		readCtx = chdriver.Context(readCtx, chdriver.WithExternalTable(table))
-	}
-	sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, where, args)
-	s.activityUsageQueries.Add(1)
-	rows, err := s.readActivityUsageKept(readCtx, "SELECT "+chPreparedUsageColumns+" FROM ("+sourceSQL+")", sourceArgs)
-	if err != nil {
-		return nil, err
-	}
-	if incremental {
+		sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, where, args)
+		fresh, err := s.readActivityUsageKept(readCtx, "SELECT "+chPreparedUsageColumns+" FROM ("+sourceSQL+")", sourceArgs)
+		if err != nil {
+			return nil, err
+		}
 		replaced := make(map[string]bool, len(changed))
 		for _, id := range changed {
 			replaced[id] = true
 		}
-		rows = mergeActivityUsage(prev.rows, replaced, rows)
+		rows = mergeActivityUsage(prev.rows, replaced, fresh)
+	} else {
+		var err error
+		if rows, err = s.readActivityUsageSlices(ctx, state, lowerBound, upperBound); err != nil {
+			return nil, err
+		}
 	}
 	// Only ranges in progress read this memo, so a range that has ended is
 	// never read again.
@@ -924,6 +931,111 @@ func (s *Store) activityUsageRange(
 	})
 	s.activityUsageRanges.Put(slot, "", []activityUsageRange{{revisions: state.revisions, rows: rows}})
 	return rows, nil
+}
+
+// activityUsageSliceRows is the fewest stored rows worth a slice of their own
+// in a range read; see readActivityUsageSlices.
+const activityUsageSliceRows = 150_000
+
+// activityUsageMaxSlices caps the slices a range read runs at once. The
+// native pool holds defaultMaxOpenConns connections.
+const activityUsageMaxSlices = 8
+
+// readActivityUsageSlices reads every session's prepared usage rows in the
+// range and keeps them in report order. One goroutine scanning a million
+// rows through the driver's row API takes seconds, while ClickHouse produces
+// them in well under one. So a large range is cut into time slices of about
+// equal row counts, and the slices are read, sorted, and written at once.
+// Every row of a slice is earlier than every row of the next, so joining
+// them needs no merge.
+func (s *Store) readActivityUsageSlices(
+	ctx context.Context, state preparedUsageState, lowerBound, upperBound string,
+) (*activityUsageKept, error) {
+	where, args := chPreparedActivityRangeSQL(lowerBound, upperBound)
+	levels := make([]string, activityUsageMaxSlices-1)
+	for i := range levels {
+		levels[i] = strconv.FormatFloat(float64(i+1)/activityUsageMaxSlices, 'f', -1, 64)
+	}
+	var count uint64
+	var cuts []time.Time
+	if err := s.bulk.QueryRow(ctx,
+		"SELECT count(), quantiles("+strings.Join(levels, ", ")+")(assumeNotNull(ts)) FROM prepared_usage WHERE "+where,
+		args...,
+	).Scan(&count, &cuts); err != nil {
+		return nil, fmt.Errorf("sizing clickhouse activity usage slices: %w", err)
+	}
+	bounds, err := activityUsageSlices(lowerBound, upperBound, int(count/uint64(s.usageSliceRows)), cuts)
+	if err != nil {
+		return nil, err
+	}
+	if len(bounds) == 1 {
+		sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, where, args)
+		readCtx, err := withUsageDeltaTables(ctx, state)
+		if err != nil {
+			return nil, err
+		}
+		return s.readActivityUsageKept(readCtx, "SELECT "+chPreparedUsageColumns+" FROM ("+sourceSQL+")", sourceArgs)
+	}
+	sorters := make([]*keptUsageSorter, len(bounds))
+	g, readCtx := errgroup.WithContext(ctx)
+	for i, bound := range bounds {
+		g.Go(func() error {
+			where, args := chPreparedActivityRangeSQL(bound.lower, bound.upper)
+			// Each read sends its own external tables.
+			sliceCtx, err := withUsageDeltaTables(readCtx, state)
+			if err != nil {
+				return err
+			}
+			sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, where, args)
+			sorter, err := s.scanActivityUsageSorter(sliceCtx, "SELECT "+chPreparedUsageColumns+" FROM ("+sourceSQL+")", sourceArgs)
+			if err != nil {
+				return err
+			}
+			sorter.sort()
+			sorters[i] = sorter
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return joinActivityUsageSlices(sorters), nil
+}
+
+// activityUsageSlice is an inclusive range of RFC 3339 bounds.
+type activityUsageSlice struct{ lower, upper string }
+
+// activityUsageSlices cuts the inclusive range into at most n slices at
+// cuts, the even quantiles of its rows' timestamps. A slice ends a
+// microsecond before the next begins, so rows that tie on time share a
+// slice. Cuts outside the range or not after the previous cut are skipped.
+func activityUsageSlices(lowerBound, upperBound string, n int, cuts []time.Time) ([]activityUsageSlice, error) {
+	whole := []activityUsageSlice{{lowerBound, upperBound}}
+	n = min(n, len(cuts)+1)
+	if n < 2 || len(cuts) == 0 {
+		return whole, nil
+	}
+	lower, err := time.Parse(time.RFC3339Nano, lowerBound)
+	if err != nil {
+		return nil, fmt.Errorf("parsing activity usage range start: %w", err)
+	}
+	upper, err := time.Parse(time.RFC3339Nano, upperBound)
+	if err != nil {
+		return nil, fmt.Errorf("parsing activity usage range end: %w", err)
+	}
+	const layout = "2006-01-02T15:04:05.000000Z07:00"
+	var out []activityUsageSlice
+	start, startText := lower, lowerBound
+	for k := 1; k < n; k++ {
+		// n slices take every (len(cuts)+1)/n-th cut.
+		cut := cuts[k*(len(cuts)+1)/n-1].UTC().Truncate(time.Microsecond)
+		if !cut.After(start) || cut.After(upper) {
+			continue
+		}
+		out = append(out, activityUsageSlice{startText, cut.Add(-time.Microsecond).Format(layout)})
+		start, startText = cut, cut.Format(layout)
+	}
+	return append(out, activityUsageSlice{startText, upperBound}), nil
 }
 
 // changedSnapshotSessions lists the sessions whose snapshot revision differs
@@ -1111,26 +1223,12 @@ func clickUsageNormalizedColumns() string {
 func (s *Store) scanActivityUsageRows(
 	ctx context.Context, query string, args []any,
 ) ([]clickSessionUsageOrderedRow, error) {
-	rows, err := s.bulk.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying clickhouse activity usage: %w", err)
+	var out []clickSessionUsageOrderedRow
+	if err := s.eachActivityUsageRow(ctx, query, args, func(r *clickSessionUsageOrderedRow) {
+		out = append(out, *r)
+	}); err != nil {
+		return nil, err
 	}
-	defer rows.Close()
-	// Non-nil even when empty: the caller indexes the result through a
-	// sorted index slice, and NilAway cannot see that an empty result yields
-	// no indexes.
-	out := make([]clickSessionUsageOrderedRow, 0)
-	for rows.Next() {
-		var r clickSessionUsageOrderedRow
-		if err := scanActivityUsageRow(rows, &r); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating clickhouse activity usage: %w", err)
-	}
-	s.activityUsageRowsRead.Add(int64(len(out)))
 	return out, nil
 }
 
@@ -1142,25 +1240,50 @@ func (s *Store) scanActivityUsageRows(
 func (s *Store) readActivityUsageKept(
 	ctx context.Context, query string, args []any,
 ) (*activityUsageKept, error) {
+	sorter, err := s.scanActivityUsageSorter(ctx, query, args)
+	if err != nil {
+		return nil, err
+	}
+	return sorter.finish(), nil
+}
+
+// scanActivityUsageSorter packs the rows query selects, in the columns of
+// chPreparedUsageColumns, as they arrive.
+func (s *Store) scanActivityUsageSorter(
+	ctx context.Context, query string, args []any,
+) (*keptUsageSorter, error) {
+	sorter := newKeptUsageSorter()
+	if err := s.eachActivityUsageRow(ctx, query, args, sorter.add); err != nil {
+		return nil, err
+	}
+	return sorter, nil
+}
+
+// eachActivityUsageRow runs query on the native connection and passes each
+// row, in the columns of chPreparedUsageColumns, to add. The row value is
+// reused, so add copies whatever it keeps.
+func (s *Store) eachActivityUsageRow(
+	ctx context.Context, query string, args []any, add func(*clickSessionUsageOrderedRow),
+) error {
 	rows, err := s.bulk.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying clickhouse activity usage: %w", err)
+		return fmt.Errorf("querying clickhouse activity usage: %w", err)
 	}
 	defer rows.Close()
-	sorter := newKeptUsageSorter()
 	var r clickSessionUsageOrderedRow
+	var n int64
 	for rows.Next() {
 		if err := scanActivityUsageRow(rows, &r); err != nil {
-			return nil, err
+			return err
 		}
-		sorter.add(&r)
+		add(&r)
+		n++
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating clickhouse activity usage: %w", err)
+		return fmt.Errorf("iterating clickhouse activity usage: %w", err)
 	}
-	kept := sorter.finish()
-	s.activityUsageRowsRead.Add(int64(kept.count))
-	return kept, nil
+	s.activityUsageRowsRead.Add(n)
+	return nil
 }
 
 // scanActivityUsageRow scans the current row, in the columns of
@@ -1386,13 +1509,19 @@ func (e *keptUsageEncoder) ref(field int, v string) uint64 {
 	if l := &e.last[field]; l.set && l.s == v {
 		return l.id
 	}
+	id := e.intern(v)
+	e.last[field].s, e.last[field].id, e.last[field].set = v, id, true
+	return id
+}
+
+// intern returns v's dictionary index, adding v when it is new.
+func (e *keptUsageEncoder) intern(v string) uint64 {
 	id, ok := e.ids[v]
 	if !ok {
 		id = uint64(len(e.k.dict))
 		e.ids[v] = id
 		e.k.dict = append(e.k.dict, v)
 	}
-	e.last[field].s, e.last[field].id, e.last[field].set = v, id, true
 	return id
 }
 
@@ -1598,8 +1727,15 @@ func (s *keptUsageSorter) add(r *clickSessionUsageOrderedRow) {
 }
 
 func (s *keptUsageSorter) finish() *activityUsageKept {
-	arrival := &activityUsageKept{dict: s.e.k.dict, arena: s.e.arena.String(), data: s.e.data}
-	dict := arrival.dict
+	s.sort()
+	e := newKeptUsageEncoder(s.e.k.dict, s.e.arena.Len(), len(s.keys))
+	s.writeSorted(e, nil)
+	return e.finish()
+}
+
+// sort puts the keys in report order.
+func (s *keptUsageSorter) sort() {
+	dict := s.e.k.dict
 	slices.SortFunc(s.keys, func(a, b keptUsageKey) int {
 		if a.validTS && b.validTS && a.us != b.us {
 			return cmp.Compare(a.us, b.us)
@@ -1614,14 +1750,103 @@ func (s *keptUsageSorter) finish() *activityUsageKept {
 		}
 		return cmp.Compare(a.data, b.data)
 	})
-	e := newKeptUsageEncoder(dict, len(arrival.arena), len(s.keys))
+}
+
+// writeSorted appends the rows to e in key order, translating dictionary
+// indexes through remap unless it is nil.
+func (s *keptUsageSorter) writeSorted(e *keptUsageEncoder, remap []uint64) {
+	arrival := &activityUsageKept{dict: s.e.k.dict}
+	data, arena := s.e.data, s.e.arena.String()
 	var r keptUsageRow
 	for _, key := range s.keys {
-		arrival.decode(arrival.data[key.data:], arrival.arena[key.arena:], 0, &r)
+		arrival.decode(data[key.data:], arena[key.arena:], 0, &r)
 		r.us = key.us
+		if remap != nil {
+			for i := range r.refs {
+				r.refs[i] = remap[r.refs[i]]
+			}
+		}
 		e.addKept(&r)
 	}
-	return e.finish()
+}
+
+// lastUS returns the timestamp of the last sorted row that has one. Rows
+// with a timestamp are in timestamp order, so it is the latest.
+func (s *keptUsageSorter) lastUS() (int64, bool) {
+	for _, v := range slices.Backward(s.keys) {
+		if v.validTS {
+			return v.us, true
+		}
+	}
+	return 0, false
+}
+
+// joinActivityUsageSlices keeps the sorted rows of consecutive slices, each
+// of whose rows follow every row of the slice before, as one kept read. The
+// slices write their rows into the shared dictionary at once, and the
+// results are joined as bytes.
+func joinActivityUsageSlices(parts []*keptUsageSorter) *activityUsageKept {
+	out := &activityUsageKept{}
+	ids := make(map[string]uint64)
+	remaps := make([][]uint64, len(parts))
+	prevUS := make([]int64, len(parts))
+	var us int64
+	for i, part := range parts {
+		remaps[i] = make([]uint64, len(part.e.k.dict))
+		for j, v := range part.e.k.dict {
+			id, ok := ids[v]
+			if !ok {
+				id = uint64(len(out.dict))
+				ids[v] = id
+				out.dict = append(out.dict, v)
+			}
+			remaps[i][j] = id
+		}
+		// A row's timestamp is a delta from the last earlier one, which
+		// for a slice's first row is in the slice before.
+		prevUS[i] = us
+		if last, ok := part.lastUS(); ok {
+			us = last
+		}
+	}
+	encoders := make([]*keptUsageEncoder, len(parts))
+	var wg sync.WaitGroup
+	for i, part := range parts {
+		wg.Go(func() {
+			e := &keptUsageEncoder{
+				k:       &activityUsageKept{dict: out.dict},
+				session: make([]bool, len(out.dict)),
+				data:    make([]byte, 0, 48*len(part.keys)),
+				us:      prevUS[i],
+			}
+			e.arena.Grow(part.e.arena.Len())
+			part.writeSorted(e, remaps[i])
+			encoders[i] = e
+		})
+	}
+	wg.Wait()
+	dataSize, arenaSize := 0, 0
+	for _, e := range encoders {
+		dataSize += len(e.data)
+		arenaSize += e.arena.Len()
+	}
+	out.data = make([]byte, 0, dataSize)
+	var arena strings.Builder
+	arena.Grow(arenaSize)
+	seen := make([]bool, len(out.dict))
+	for _, e := range encoders {
+		out.data = append(out.data, e.data...)
+		arena.WriteString(e.arena.String())
+		out.count += e.k.count
+		for _, session := range e.k.sessions {
+			if !seen[session] {
+				seen[session] = true
+				out.sessions = append(out.sessions, session)
+			}
+		}
+	}
+	out.arena = arena.String()
+	return out
 }
 
 // keptUsageBefore reports whether a comes before b in report order.

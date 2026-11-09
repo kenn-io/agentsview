@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"slices"
 	"testing"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
@@ -149,4 +150,80 @@ func TestActivityUsageSelectionKeepsClaudePeers(t *testing.T) {
 	}
 	require.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8}, outputs)
 	require.Equal(t, len(outputs), count)
+}
+
+// Slices of a range must cover it exactly once, so a sliced read neither
+// drops nor repeats a row: each slice ends a microsecond before the next
+// begins, and cuts that would leave a slice empty are skipped.
+func TestActivityUsageSlicesCoverRange(t *testing.T) {
+	at := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339Nano, s)
+		require.NoError(t, err)
+		return v
+	}
+	const lower, upper = "2026-04-15T04:00:00Z", "2026-11-10T05:00:00Z"
+	cuts := []time.Time{
+		at("2026-05-01T00:00:00Z"), at("2026-06-01T00:00:00.5Z"), at("2026-06-01T00:00:00.5Z"),
+		at("2026-07-01T00:00:00Z"), at("2026-08-01T00:00:00Z"), at("2027-01-01T00:00:00Z"),
+		at("2027-02-01T00:00:00Z"),
+	}
+	got, err := activityUsageSlices(lower, upper, 8, cuts)
+	require.NoError(t, err)
+	require.Equal(t, []activityUsageSlice{
+		{lower, "2026-04-30T23:59:59.999999Z"},
+		{"2026-05-01T00:00:00.000000Z", "2026-06-01T00:00:00.499999Z"},
+		{"2026-06-01T00:00:00.500000Z", "2026-06-30T23:59:59.999999Z"},
+		{"2026-07-01T00:00:00.000000Z", "2026-07-31T23:59:59.999999Z"},
+		{"2026-08-01T00:00:00.000000Z", upper},
+	}, got)
+
+	got, err = activityUsageSlices(lower, upper, 2, cuts)
+	require.NoError(t, err)
+	require.Equal(t, []activityUsageSlice{
+		{lower, "2026-06-30T23:59:59.999999Z"},
+		{"2026-07-01T00:00:00.000000Z", upper},
+	}, got, "two slices cut at the median")
+
+	got, err = activityUsageSlices(lower, upper, 1, cuts)
+	require.NoError(t, err)
+	require.Equal(t, []activityUsageSlice{{lower, upper}}, got)
+}
+
+// Consecutive slices joined together must keep what one read of all their
+// rows keeps, dictionary references and timestamps included.
+func TestJoinedActivityUsageSlicesMatchOneRead(t *testing.T) {
+	early := []clickSessionUsageOrderedRow{
+		keptTestRow("session-b", "message", "2026-09-01T10:00:00Z", 1, "m1", "r1", 1),
+		keptTestRow("session-a", "message", "2026-09-01T10:00:00Z", 2, "", "", 2),
+	}
+	late := []clickSessionUsageOrderedRow{
+		keptTestRow("session-c", "event", "2026-09-01T10:00:01Z", -1, "", "", 3),
+		keptTestRow("session-a", "message", "2026-09-01T10:00:02Z", 3, "m2", "r2", 4),
+	}
+	slice := func(rows []clickSessionUsageOrderedRow) *keptUsageSorter {
+		sorter := newKeptUsageSorter()
+		for i := range rows {
+			sorter.add(&rows[i])
+		}
+		sorter.sort()
+		return sorter
+	}
+	joined := joinActivityUsageSlices([]*keptUsageSorter{slice(early), slice(late)})
+	want := keepTestUsage(slices.Concat(early, late))
+	require.Equal(t, keptTestRows(want), keptTestRows(joined))
+	require.Equal(t, want.count, joined.count)
+	micros := func(k *activityUsageKept) []int64 {
+		var out []int64
+		for r := range k.rows() {
+			out = append(out, r.us)
+		}
+		return out
+	}
+	require.Equal(t, micros(want), micros(joined), "timestamps chain across the slice boundary")
+	selection, _ := activityUsageSelection(joined, []string{"session-a"})
+	var outputs []int
+	for r := range selection {
+		outputs = append(outputs, r.outputTok)
+	}
+	require.Equal(t, []int{2, 4}, outputs, "joined sessions keep their dictionary entries")
 }

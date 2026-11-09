@@ -218,3 +218,26 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	require.Equal(t, raw.partial.BySession, mixed.partial.BySession)
 	require.Equal(t, dailyUsageWire(t, raw.daily, false), dailyUsageWire(t, mixed.daily, false))
 }
+
+// A range read cut into time slices must keep exactly the rows, in exactly
+// the order, that one read of the whole range keeps.
+func TestSlicedActivityUsageMatchesOneRead(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newPushedStore(t)
+	ctx := t.Context()
+	_, err := store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+	state, err := store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	const lower, upper = "2020-01-01T00:00:00Z", "2030-01-01T00:00:00Z"
+
+	whole, err := store.readActivityUsageSlices(ctx, state, lower, upper)
+	require.NoError(t, err)
+	require.NotZero(t, whole.count)
+	sliced := NewStoreFromDB(store.DB(), store.bulk)
+	sliced.usageSliceRows = 1
+	got, err := sliced.readActivityUsageSlices(ctx, state, lower, upper)
+	require.NoError(t, err)
+	require.Equal(t, keptTestRows(whole), keptTestRows(got))
+}

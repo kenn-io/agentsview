@@ -203,9 +203,7 @@ func newTestSync(t *testing.T, local *db.DB, target Target, opts storage.PusherO
 // newTestStore wraps conn with a native connection to target's database.
 func newTestStore(tb testing.TB, conn *sql.DB, target Target) *Store {
 	tb.Helper()
-	database, err := target.DatabaseName()
-	require.NoError(tb, err)
-	bulk, err := openBulk(tb.Context(), target.URL, database)
+	bulk, err := openBulk(tb.Context(), target)
 	require.NoError(tb, err)
 	tb.Cleanup(func() { require.NoError(tb, bulk.Close()) })
 	return NewStoreFromDB(conn, bulk)

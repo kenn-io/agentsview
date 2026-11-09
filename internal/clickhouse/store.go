@@ -44,10 +44,13 @@ type Store struct {
 	// apart from conn's dashboard and Usage scans; see pageMaxOpenConns.
 	pages *sql.DB
 	// bulk reads the Activity usage rows; see openBulk.
-	bulk          chdriver.Conn
-	cursorMu      sync.RWMutex
-	cursorSecret  []byte
-	customPricing map[string]config.CustomModelRate
+	bulk chdriver.Conn
+	// usageSliceRows is the fewest stored rows worth a slice of their own in
+	// an Activity range read; see readActivityUsageSlices.
+	usageSliceRows int
+	cursorMu       sync.RWMutex
+	cursorSecret   []byte
+	customPricing  map[string]config.CustomModelRate
 
 	// vectorMu guards the searcher and reason installed by the serve gate.
 	vectorMu                  sync.RWMutex
@@ -136,11 +139,7 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 		conn.Close()
 		return nil, err
 	}
-	database, err := t.DatabaseName()
-	if err != nil {
-		return nil, errors.Join(err, conn.Close(), pages.Close())
-	}
-	bulk, err := openBulk(ctx, t.URL, database)
+	bulk, err := openBulk(ctx, t)
 	if err != nil {
 		return nil, errors.Join(err, conn.Close(), pages.Close())
 	}
@@ -153,7 +152,7 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 // and bulk serves the reads that return millions of rows; see openBulk. The
 // caller owns the connections' compatibility checks.
 func NewStoreFromDB(conn *sql.DB, bulk chdriver.Conn) *Store {
-	s := &Store{conn: conn, pages: conn, bulk: bulk}
+	s := &Store{conn: conn, pages: conn, bulk: bulk, usageSliceRows: activityUsageSliceRows}
 	s.usageVersions.tables = map[string]usageTableVersion{}
 	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
 	s.sessionAggregateRows.Size = aggregateRowBytes
