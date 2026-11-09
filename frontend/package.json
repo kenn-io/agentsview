@@ -22,8 +22,8 @@
   },
   "dependencies": {
     "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#2c225af2bc8f6170825877786be72b29e79ec2c1",
-    "@lucide/svelte": "1.64.0",
-    "@tanstack/virtual-core": "3.19.9",
+    "@lucide/svelte": "1.66.0",
+    "@tanstack/virtual-core": "3.19.10",
     "d3-hierarchy": "3.1.2",
     "d3-scale": "4.0.2",
     "d3-shape": "3.2.0",
@@ -31,10 +31,10 @@
     "dompurify": "3.4.17",
     "eventsource": "^5.0.0",
     "eventsource-parser": "^4.0.0",
-    "layerchart": "2.9.1",
+    "layerchart": "2.9.2",
     "marked": "18.1.2",
     "mermaid": "12.2.0",
-    "shiki": "4.5.0"
+    "shiki": "4.6.0"
   },
   "devDependencies": {
     "@inlang/paraglide-js": "^2.20.2",
@@ -48,9 +48,9 @@
     "@types/d3-scale": "4.0.9",
     "@types/node": "26.6.6",
     "jsdom": "30.1.3",
-    "orval": "8.45.0",
+    "orval": "8.46.0",
     "svelte": "5.57.3",
-    "svelte-check": "4.7.7",
+    "svelte-check": "4.7.8",
     "typescript": "6.0.3",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.4.0",
     "vite-plus": "1.4.0",
