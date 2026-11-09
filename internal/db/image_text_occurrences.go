@@ -22,7 +22,7 @@ type imageTextMemo struct {
 
 // Refreshes revisit unchanged results. Keep parsed image metadata, never the
 // potentially large source content, and bound both records and string bytes.
-var retainedImageMemo = imageTextMemo{maxEntries: 256, maxImages: 4096, maxBytes: 1 << 20}
+var retainedImageMemo = imageTextMemo{maxEntries: 1024, maxImages: 4096, maxBytes: 1 << 20}
 
 func (m *imageTextMemo) images(content string) []RetainedImage {
 	key := sha256.Sum256([]byte(content))

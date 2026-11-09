@@ -660,7 +660,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // from conversation_summaries.db. Re-parse unchanged antigravity and
 // antigravity-cli sources in place, so remote mirrors that are otherwise
 // unchanged catch up; source and session identities are unchanged.)
-const dataVersion = 168
+// (169: protect the image text occurrence projection from older writers.)
+const dataVersion = 169
 
 const archiveOnlyVersionBase = 1 << 20
 

@@ -1078,6 +1078,8 @@ func TestOpenRejectsNewerDataVersion(t *testing.T) {
 
 	d, err := Open(t.Context(), path)
 	requireNoError(t, err, "initial open")
+	insertSession(t, d, "preserved", "demo")
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "preserved", Ordinal: 1, Role: "assistant", Content: "retained transcript"}}))
 
 	// Simulate a newer build by setting user_version higher
 	// than our dataVersion.
@@ -1104,6 +1106,9 @@ func TestOpenRejectsNewerDataVersion(t *testing.T) {
 
 	assert.Equal(t, futureVersion, version,
 		"user_version should not be mutated")
+	var content string
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT content FROM messages WHERE session_id='preserved'`).Scan(&content))
+	assert.Equal(t, "retained transcript", content)
 	assert.True(t, IsDataVersionTooNew(openErr),
 		"expected too-new data version error")
 }

@@ -3,9 +3,6 @@ package imagetext
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -131,14 +128,15 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 // ProcessorKey includes the output policy while excluding the service address.
 func ProcessorKey(policy glmocr.Policy) (string, error) {
 	values := policy.Values()
-	values.Endpoint = ""
-	data, err := json.Marshal(struct {
-		Identity string
-		Policy   glmocr.PolicyValues
-	}{policy.Identity().Fingerprint, values})
+	canonical, err := glmocr.NewPolicy(glmocr.PolicyConfig{
+		Endpoint: glmocr.DefaultEndpoint, Model: values.Model, ServedModel: values.ServedModel,
+		ModelRevision: values.ModelRevision, SDKRevision: values.SDKRevision,
+		LayoutModel: values.LayoutModel, LayoutRevision: values.LayoutRevision,
+		MaxDocumentBytes: values.MaxDocumentBytes, MaxResponseBytes: values.MaxResponseBytes,
+		MaxUnits: values.MaxUnits, NormalizePolicy: policy.NormalizePolicy(),
+	})
 	if err != nil {
-		return "", fmt.Errorf("encode OCR policy: %w", err)
+		return "", fmt.Errorf("build OCR policy: %w", err)
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	return canonical.Fingerprint(), nil
 }

@@ -166,6 +166,7 @@ func TestImageTextProcessorKey(t *testing.T) {
 	require.NoError(t, err)
 	firstKey, err := ProcessorKey(first)
 	require.NoError(t, err)
+	require.Equal(t, first.Fingerprint(), firstKey)
 	secondKey, err := ProcessorKey(second)
 	require.NoError(t, err)
 	require.Equal(t, firstKey, secondKey)

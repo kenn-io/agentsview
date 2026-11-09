@@ -512,6 +512,12 @@ func (db *DB) Search(
 
 	imageBranchSQL := ""
 	imageQuery := f.Query
+	imageOccurrenceSQL := ` JOIN image_text_occurrences o ON o.image_hash=c.image_hash
+		 LEFT JOIN tool_result_events e ON e.id=o.event_id
+		 LEFT JOIN tool_calls tc ON tc.id=o.call_id
+		 LEFT JOIN messages cm ON cm.id=tc.message_id
+		 JOIN messages im ON im.session_id=o.session_id AND im.ordinal=COALESCE(e.tool_call_message_ordinal,cm.ordinal)`
+	imageVisibilitySQL := `im.is_system = 0 AND ` + SystemPrefixSQL("im.content", "im.role")
 	if hasImageText {
 		args = append(args, imageQuery)
 		args = append(args, nameProjectArgs...)
@@ -523,18 +529,15 @@ func (db *DB) Search(
 			 SELECT s.id AS session_id,s.project,s.agent,s.machine,
 			 COALESCE(s.display_name,s.session_name,s.first_message,'') AS name,
 			 COALESCE(s.ended_at,s.started_at,'') AS session_ended_at,
-			 COALESCE(e.tool_call_message_ordinal,m.ordinal) AS ordinal,
+			 im.ordinal AS ordinal,
 			 c.rowid AS image_rowid,
-			 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY c.rowid,COALESCE(e.tool_call_message_ordinal,m.ordinal),o.call_id,o.event_id,o.image_index) AS rn
+			 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY c.rowid,im.ordinal,o.call_id,o.event_id,o.image_index) AS rn
 			 FROM %s JOIN image_text_cache c ON c.rowid=%s.rowid AND c.succeeded=1
-			 JOIN image_text_occurrences o ON o.image_hash=c.image_hash
+			 %s
 			 JOIN sessions s ON s.id=o.session_id
-			 LEFT JOIN tool_result_events e ON e.id=o.event_id
-			 LEFT JOIN tool_calls tc ON tc.id=o.call_id
-			 LEFT JOIN messages m ON m.id=tc.message_id
-			 WHERE %s MATCH ? AND s.deleted_at IS NULL %s
+			 WHERE %s MATCH ? AND s.deleted_at IS NULL AND %s %s
 			 AND s.id NOT IN (%s)
-			) WHERE rn=1`, imageTable, imageTable, imageTable, nameProjectClause, ftsSessionsSQL)
+			) WHERE rn=1`, imageTable, imageTable, imageOccurrenceSQL, imageTable, imageVisibilitySQL, nameProjectClause, ftsSessionsSQL)
 	}
 	nameBranchSQL := ""
 	if includeNames {
@@ -579,7 +582,7 @@ func (db *DB) Search(
 					%s
 				)`+func() string {
 			if hasImageText {
-				return ` AND NOT EXISTS (SELECT 1 FROM ` + imageTable + ` JOIN image_text_cache ic ON ic.rowid=` + imageTable + `.rowid AND ic.succeeded=1 JOIN image_text_occurrences io ON io.image_hash=ic.image_hash WHERE io.session_id=s.id AND ` + imageTable + ` MATCH ?)`
+				return ` AND NOT EXISTS (SELECT 1 FROM ` + imageTable + ` JOIN image_text_cache c ON c.rowid=` + imageTable + `.rowid AND c.succeeded=1 ` + imageOccurrenceSQL + ` WHERE o.session_id=s.id AND ` + imageVisibilitySQL + ` AND ` + imageTable + ` MATCH ?)`
 			}
 			return ``
 		}(), nameProjectClause, ftsSessionsSQL)

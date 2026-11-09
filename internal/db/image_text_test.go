@@ -236,3 +236,47 @@ func TestImageTextSearchUsesCurrentResultEvents(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "session", page.Results[0].SessionID)
 }
+
+func TestImageTextSearchRespectsMessageVisibility(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	content := testInlineImageContent()
+	for _, tc := range []struct {
+		id, role, body string
+		system, event  bool
+	}{
+		{"hidden-call", "system", "hidden", true, false},
+		{"hidden-event", "system", "hidden", true, true},
+		{"prefix-call", "user", "<system-reminder>hidden</system-reminder>", false, false},
+		{"prefix-event", "user", "<system-reminder>hidden</system-reminder>", false, true},
+		{"visible-call", "assistant", "answer", false, false},
+		{"visible-event", "assistant", "answer", false, true},
+	} {
+		insertSession(t, d, tc.id, "demo")
+		call := ToolCall{ToolName: "Read", ToolUseID: "call", ResultContent: content}
+		if tc.event {
+			call.ResultEvents = []ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "completed", Content: content}}
+		}
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: tc.id, Ordinal: 1, Role: tc.role, Content: tc.body, IsSystem: tc.system, ToolCalls: []ToolCall{call}}}))
+	}
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+	page, err := d.Search(ctx, SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	var ids []string
+	for _, result := range page.Results {
+		ids = append(ids, result.SessionID)
+	}
+	require.ElementsMatch(t, []string{"visible-call", "visible-event"}, ids)
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "hidden-call", Ordinal: 2, Role: "assistant", Content: "visible reply"}}))
+	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET display_name='invoice' WHERE id='hidden-call'`)
+	require.NoError(t, err)
+	page, err = d.Search(ctx, SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	ids = nil
+	for _, result := range page.Results {
+		ids = append(ids, result.SessionID)
+	}
+	require.ElementsMatch(t, []string{"visible-call", "visible-event", "hidden-call"}, ids)
+}
