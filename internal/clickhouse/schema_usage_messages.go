@@ -148,7 +148,8 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 		factValues = append(factValues, expression)
 	}
 	columns = append(columns, "usage_facts Array(Tuple("+strings.Join(factTypes, ",")+
-		")) MATERIALIZED arrayMap(m -> tuple("+strings.Join(factValues, ",")+"),usage_messages)")
+		")) MATERIALIZED arrayMap(m -> tuple("+strings.Join(factValues, ",")+"),usage_messages)",
+		chSnapshotPreparesUsageColumn)
 	_, err = conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS "+spec.name+" ("+
 		strings.Join(columns, ",")+") ENGINE=ReplacingMergeTree(revision) ORDER BY id SETTINGS index_granularity=1")
 	if err != nil {
@@ -167,7 +168,48 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 			return fmt.Errorf("adding clickhouse column %s.%s: %w", spec.name, c.name, err)
 		}
 	}
+	if _, has := existing[spec.name][chSnapshotPreparesUsage]; !has {
+		if err := addSnapshotPreparesUsage(ctx, conn); err != nil {
+			return err
+		}
+	}
 	return ensurePreparedUsage(ctx, conn)
+}
+
+// chSnapshotPreparesUsage names the snapshot column that says whether the
+// prepared usage refresh keeps any row of the snapshot: the session is not
+// trashed, and a message or event passes the refresh's eligibility. Coverage
+// reads it to tell a snapshot pushed since the refresh from one that has
+// nothing to prepare; see compareUsageCoverage.
+const chSnapshotPreparesUsage = "prepares_usage"
+
+// chSnapshotPreparesUsageColumn defines chSnapshotPreparesUsage with the
+// eligibility chPreparedUsageKeyedSQL applies to each message
+// (chUsageStoredMessageEligibility) and event (chUsageEventEligibility). It
+// names tuple elements with tupleElement: a lightweight DELETE recomputes the
+// column, and that path cannot resolve m.model inside a lambda.
+const chSnapshotPreparesUsageColumn = chSnapshotPreparesUsage + ` Bool MATERIALIZED deleted_at IS NULL AND (
+	arrayExists(m -> tupleElement(m, 'usage_present') != 0
+		AND tupleElement(m, 'model') NOT IN ('', '<synthetic>'), usage_facts)
+	OR arrayExists(ue -> tupleElement(ue, 'model') != '', usage_events))`
+
+// addSnapshotPreparesUsage adds chSnapshotPreparesUsage to a snapshot table
+// created before it. Parts written earlier compute the column from their
+// usage arrays on every read, so it also starts a mutation that stores the
+// column in them. The schema step does not wait for the mutation: reads are
+// correct while it runs, only slower. A step stopped between the two
+// statements leaves the column computed on read until merges rewrite those
+// parts.
+func addSnapshotPreparesUsage(ctx context.Context, conn *sql.DB) error {
+	for _, stmt := range []string{
+		"ALTER TABLE " + usageSessionSnapshotTable + " ADD COLUMN IF NOT EXISTS " + chSnapshotPreparesUsageColumn,
+		"ALTER TABLE " + usageSessionSnapshotTable + " MATERIALIZE COLUMN " + chSnapshotPreparesUsage,
+	} {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("adding %s.%s: %w", usageSessionSnapshotTable, chSnapshotPreparesUsage, err)
+		}
+	}
+	return nil
 }
 
 // chPreparedUsageKeyColumn is the non-null time column prepared_usage sorts
