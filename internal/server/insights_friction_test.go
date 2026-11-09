@@ -358,7 +358,7 @@ func TestGenerateFrictionReviewInsight_Validation(t *testing.T) {
 	assert.Equal(t, int32(0), calls.Load(), "rejected requests never reach the model")
 }
 
-func TestGenerateFrictionReviewGroupsDiagnostics(t *testing.T) {
+func TestGenerateFrictionReviewSkipsDiagnostics(t *testing.T) {
 	var calls atomic.Int32
 	var prompt string
 	te := newFrictionReviewEnv(t, &calls, &prompt)
@@ -370,9 +370,7 @@ func TestGenerateFrictionReviewGroupsDiagnostics(t *testing.T) {
 	w := te.post(t, "/api/v1/insights/generate", frictionReviewRequest)
 	assertStatus(t, w, http.StatusOK)
 	doneInsight(t, w.Body.String())
-	assert.Contains(t, prompt, `"diagnostics":[{"source":"worker","message":"launch failed","count":2}]`)
 	assert.Contains(t, prompt, frictionErrTitle)
-	assert.Contains(t, prompt, "friction:diagnostics")
 	assert.NotContains(t, prompt, "diagnostic:event-a")
 	assert.NotContains(t, prompt, `"kind":"diagnostic"`)
 }

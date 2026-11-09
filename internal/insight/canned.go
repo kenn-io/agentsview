@@ -105,10 +105,10 @@ var cannedTemplates = map[CannedKind]cannedTemplate{
 	},
 	CannedFrictionReview: {
 		ID:      "friction_review",
-		Version: "2026-11-09",
+		Version: "2026-09-22",
 		Title:   "Friction Review",
-		Focus: "Summarize one Friction Log digest using only the supplied deterministic digest summary, pattern titles and counts, P0 alerts, and grouped diagnostic failures. " +
-			"Focus on recurring friction patterns, tools that fail across sessions, external failures, and process, instruction, or environment changes that would reduce them.",
+		Focus: "Summarize one Friction Log digest using only the supplied deterministic digest summary, pattern titles and counts, and P0 alerts. " +
+			"Focus on which friction patterns recur, which tools fail across sessions, and which process, instruction, or environment changes would reduce them.",
 	},
 }
 
@@ -460,7 +460,7 @@ func writeCannedKindRules(
 		b.WriteString("Friction review template rules:\n")
 		b.WriteString("- Friction findings are deterministic heuristics already computed by agentsview. Do not add, remove, re-classify, or dispute findings, and do not assign severities or scores.\n")
 		b.WriteString("- Do not propose filing, closing, reopening, or editing tracker issues.\n")
-		b.WriteString("- Cite friction:pattern:NN refs for pattern-specific recommendations, friction:p0_alerts for tools failing across sessions, and friction:diagnostics for diagnostic failures.\n")
+		b.WriteString("- Cite friction:pattern:NN refs for pattern-specific recommendations and friction:p0_alerts for tools failing across sessions.\n")
 		b.WriteString("- frustration (user frustration markers) and interruption (user-interrupted turns) are detector kinds of their own; weigh them like corrections and deferrals respectively.\n")
 		b.WriteString("- Frustration pattern titles are withheld because they quote the user; reason about them from kind and counts only, and never guess their wording.\n")
 		b.WriteString("- Prefer recurring patterns (recurring=true) over first-seen ones when their counts are similar.\n\n")

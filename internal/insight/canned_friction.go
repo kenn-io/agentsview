@@ -12,18 +12,17 @@ const MaxCannedFrictionPatterns = 20
 
 // CannedFrictionReviewInput is the deterministic Friction Log input for the
 // friction_review template. It carries the stored digest summary object,
-// pattern titles and counts, grouped diagnostics, and the P0 list. Session
-// finding text, evidence, and transcript content never enter it. It is never
-// written back to any friction table.
+// pattern titles and counts, and the P0 list. Session finding text, evidence,
+// and transcript content never enter it. It is never written back to any
+// friction table.
 type CannedFrictionReviewInput struct {
-	Date         string                     `json:"date"`
-	Timezone     string                     `json:"timezone"`
-	RulesVersion string                     `json:"rules_version"`
-	Revision     int                        `json:"revision"`
-	Summary      map[string]any             `json:"summary"`
-	TopPatterns  []CannedFrictionPattern    `json:"top_patterns"`
-	Diagnostics  []friction.DiagnosticGroup `json:"diagnostics,omitempty"`
-	P0Alerts     []CannedFrictionP0         `json:"p0_alerts"`
+	Date         string                  `json:"date"`
+	Timezone     string                  `json:"timezone"`
+	RulesVersion string                  `json:"rules_version"`
+	Revision     int                     `json:"revision"`
+	Summary      map[string]any          `json:"summary"`
+	TopPatterns  []CannedFrictionPattern `json:"top_patterns"`
+	P0Alerts     []CannedFrictionP0      `json:"p0_alerts"`
 }
 
 // CannedFrictionPattern is one fingerprint as seen in a single digest. Counts
@@ -136,8 +135,8 @@ func CannedFrictionP0Alerts(p0 map[string][]string) []CannedFrictionP0 {
 // cite, sorted by ID. An empty digest yields only aggregate:empty, the same
 // convention CannedEvidenceRefs uses.
 func CannedFrictionEvidenceRefs(r CannedFrictionReviewInput) []CannedEvidenceRef {
-	if summaryInt(r.Summary, "sessions_scanned") == 0 &&
-		len(r.TopPatterns) == 0 && len(r.P0Alerts) == 0 && len(r.Diagnostics) == 0 {
+	if summaryInt(r.Summary, "sessions_scanned") == 0 && summaryInt(r.Summary, "diagnostics") == 0 &&
+		len(r.TopPatterns) == 0 && len(r.P0Alerts) == 0 {
 		return []CannedEvidenceRef{{
 			ID:          "aggregate:empty",
 			Description: "The friction digest for this date scanned no sessions.",
@@ -147,9 +146,6 @@ func CannedFrictionEvidenceRefs(r CannedFrictionReviewInput) []CannedEvidenceRef
 		ID:          "friction:summary",
 		Description: "Digest counts by kind and sessions scanned.",
 	}}
-	if len(r.Diagnostics) > 0 {
-		refs = append(refs, CannedEvidenceRef{ID: "friction:diagnostics", Description: "Diagnostic failures grouped by source and message."})
-	}
 	if len(r.P0Alerts) > 0 {
 		refs = append(refs, CannedEvidenceRef{
 			ID:          "friction:p0_alerts",

@@ -109,19 +109,16 @@ func (s *Server) buildFrictionReviewPayload(
 			fmt.Errorf("decoding friction snapshot %s: %w", date, err)
 	}
 	occurrences := make([]insight.CannedFrictionOccurrence, 0, len(snap.Signals))
-	var diagnosticSignals, sessionSignals []friction.Signal
 	for _, sig := range snap.Signals {
 		if sig.Kind == friction.KindDiagnostic {
-			diagnosticSignals = append(diagnosticSignals, sig)
 			continue
 		}
-		sessionSignals = append(sessionSignals, sig)
 		occurrences = append(occurrences, insight.CannedFrictionOccurrence{
 			SubjectID: sig.SubjectID, Kind: string(sig.Kind),
 			Title: sig.Title(), Fingerprint: sig.Fingerprint(),
 		})
 	}
-	patterns, err := frictionDigestPatterns(ctx, fr, sessionSignals)
+	patterns, err := frictionDigestPatterns(ctx, fr, snap.Signals)
 	if err != nil {
 		return insight.CannedAggregatePayload{}, "", "",
 			fmt.Errorf("loading friction patterns for %s: %w", date, err)
@@ -140,8 +137,7 @@ func (s *Server) buildFrictionReviewPayload(
 		TopPatterns: insight.RankCannedFrictionPatterns(
 			date, occurrences, firstSeen, insight.MaxCannedFrictionPatterns,
 		),
-		P0Alerts:    insight.CannedFrictionP0Alerts(p0.P0Alerts),
-		Diagnostics: friction.GroupDiagnostics(diagnosticSignals),
+		P0Alerts: insight.CannedFrictionP0Alerts(p0.P0Alerts),
 	}
 	filters := insight.CannedSessionFilters{
 		Timezone:       digest.Timezone,

@@ -2456,8 +2456,6 @@ archive that builds them.
 `POST /api/v1/diagnostics` accepts `id`, `source`, `message`, and an optional
 RFC 3339 `occurred_at`. It requires an authenticated server or a localhost
 request. Reusing an ID with different content returns HTTP 409.
-Events appear in digests only when Friction review is enabled on the archive
-that builds them.
 
 ______________________________________________________________________
 

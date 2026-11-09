@@ -104,6 +104,11 @@ func TestCannedFrictionEvidenceRefs(t *testing.T) {
 			want:   []string{"friction:summary"},
 		},
 		{
+			name:   "diagnostics_only",
+			review: CannedFrictionReviewInput{Summary: map[string]any{"sessions_scanned": float64(0), "diagnostics": float64(3)}},
+			want:   []string{"friction:summary"},
+		},
+		{
 			name: "all_refs_sorted",
 			review: CannedFrictionReviewInput{
 				Summary:     map[string]any{"sessions_scanned": float64(3)},

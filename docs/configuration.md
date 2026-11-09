@@ -2294,12 +2294,11 @@ older than the session backfill window.
 On the Friction Log page, **Generate summary** asks the configured `[insights]`
 endpoint or agent CLI for an optional model-written overview of one digest.
 Nothing generates summaries on a schedule. The model receives the digest counts,
-P0 alerts, grouped diagnostic sources and messages, and up to 20 pattern titles
-ranked by occurrences. Pattern titles can contain up to 80 characters of the
-text that triggered a correction, workaround, or deferral; frustration titles
-are withheld because they quote the user. The model does not receive session
-finding text, evidence, or transcripts. The summary is labeled as model-written
-and cannot change findings, digests, or recurrence.
+P0 alerts, and up to 20 pattern titles ranked by occurrences. Pattern titles can
+contain up to 80 characters of the text that triggered a correction, workaround,
+or deferral; frustration titles are withheld because they quote the user. The
+model does not receive session finding text, evidence, or transcripts. The summary is
+labeled as model-written and cannot change findings, digests, or recurrence.
 Repeating a request returns the saved summary until the digest changes, and
 saved summaries also appear under **Recall → Generated insights** as **Friction
 Review**.
