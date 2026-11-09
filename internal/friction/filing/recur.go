@@ -76,12 +76,9 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, star
 				return false, err
 			}
 			for _, finding := range findings {
-				if (finding.OccurredAt != nil && finding.OccurredAt.After(*is.ClosedAt)) || (finding.OccurredAt == nil && date > closed) {
+				if finding.OccurredAt != nil && finding.OccurredAt.After(*is.ClosedAt) {
 					qualified = date
-					occurrenceDate = date
-					if finding.OccurredAt != nil {
-						occurrenceDate = finding.OccurredAt.In(loc).Format(time.DateOnly)
-					}
+					occurrenceDate = finding.OccurredAt.In(loc).Format(time.DateOnly)
 					break
 				}
 			}

@@ -46,8 +46,7 @@ func TestReopenRecurringPattern(t *testing.T) {
 		{"catchup", "2026-09-14", "closed", "done", new(closed.Add(-time.Hour)), &closed, false},
 		{"pre-close next day", "2026-09-16", "closed", "done", new(closed.Add(-time.Hour)), &closed, false},
 		{"same day after close", "2026-09-15", "closed", "done", new(closed.Add(time.Hour)), &closed, true},
-		{"missing time same day", "2026-09-15", "closed", "done", nil, &closed, false},
-		{"missing time later day", "2026-09-16", "closed", "done", nil, &closed, true},
+		{"missing time later day", "2026-09-16", "closed", "done", nil, &closed, false},
 		{"wontfix", "2026-09-16", "closed", "wontfix", nil, &closed, false},
 		{"missing close", "2026-09-16", "closed", "done", nil, nil, false},
 	}
