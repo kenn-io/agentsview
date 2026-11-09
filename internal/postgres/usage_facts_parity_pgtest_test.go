@@ -562,6 +562,7 @@ func captureUsageParitySession(
 // A bounded matching-session count keeps the sessions with a usage row on a
 // local day of the window, in the filter's timezone, for timestamped
 // messages, messages that fall back to the session start, and usage events.
+// A day before a skipped local midnight keeps its last hour.
 func TestUsageMatchingSessionCountLocalDayParity(t *testing.T) {
 	const schema = "agentsview_usage_matching_day_test"
 	pgURL := testPGURL(t)
@@ -600,6 +601,9 @@ func TestUsageMatchingSessionCountLocalDayParity(t *testing.T) {
 		// 13th, 13th.
 		{usageParitySessionFixture("after-midnight", "p", "claude", "2026-08-13T05:00:00Z", 1, 1),
 			new(message("after-midnight", "2026-08-13T05:00:00Z"))},
+		// 23:30 on September 5 in Santiago, whose next midnight is skipped.
+		{usageParitySessionFixture("before-skipped-midnight", "p", "claude", "2026-09-06T03:00:00Z", 1, 1),
+			new(message("before-skipped-midnight", "2026-09-06T03:30:00Z"))},
 	}
 	var messages []db.Message
 	for _, s := range sessions {
@@ -632,8 +636,10 @@ func TestUsageMatchingSessionCountLocalDayParity(t *testing.T) {
 		{"new york day", db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: newYork}, 4},
 		{"utc day", db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"}, 3},
 		{"new york previous day", db.UsageFilter{From: "2026-08-11", To: "2026-08-11", Timezone: newYork}, 2},
-		{"new york from only", db.UsageFilter{From: "2026-08-12", Timezone: newYork}, 5},
+		{"new york from only", db.UsageFilter{From: "2026-08-12", Timezone: newYork}, 6},
 		{"new york to only", db.UsageFilter{To: "2026-08-11", Timezone: newYork}, 2},
+		{"day before skipped midnight", db.UsageFilter{
+			From: "2026-09-05", To: "2026-09-05", Timezone: "America/Santiago"}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for name, store := range map[string]db.Store{"sqlite": local, "postgres": remote} {
