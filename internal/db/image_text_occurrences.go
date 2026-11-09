@@ -1,5 +1,77 @@
 package db
 
+import (
+	"container/list"
+	"crypto/sha256"
+	"sync"
+)
+
+type imageTextMemoEntry struct {
+	key    [sha256.Size]byte
+	images []RetainedImage
+	bytes  int
+}
+
+type imageTextMemo struct {
+	mu                              sync.Mutex
+	entries                         map[[sha256.Size]byte]*list.Element
+	order                           list.List
+	imageCount, bytes               int
+	maxEntries, maxImages, maxBytes int
+}
+
+// Refreshes revisit unchanged results. Keep parsed image metadata, never the
+// potentially large source content, and bound both records and string bytes.
+var retainedImageMemo = imageTextMemo{maxEntries: 256, maxImages: 4096, maxBytes: 1 << 20}
+
+func (m *imageTextMemo) images(content string) []RetainedImage {
+	key := sha256.Sum256([]byte(content))
+	m.mu.Lock()
+	if entry := m.entries[key]; entry != nil {
+		m.order.MoveToFront(entry)
+		images := entry.Value.(imageTextMemoEntry).images
+		m.mu.Unlock()
+		return images
+	}
+	m.mu.Unlock()
+
+	images := RetainedToolResultImages(content)
+	if len(images) == 0 || len(images) > m.maxImages {
+		return images
+	}
+	bytes := 0
+	for _, image := range images {
+		bytes += len(image.MediaType) + len(image.SHA256)
+	}
+	if bytes > m.maxBytes {
+		return images
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entry := m.entries[key]; entry != nil {
+		m.order.MoveToFront(entry)
+		return entry.Value.(imageTextMemoEntry).images
+	}
+	if m.entries == nil {
+		m.entries = make(map[[sha256.Size]byte]*list.Element)
+	}
+	for m.order.Len() >= m.maxEntries || m.imageCount+len(images) > m.maxImages || m.bytes+bytes > m.maxBytes {
+		last := m.order.Back()
+		if last == nil {
+			return images
+		}
+		old := last.Value.(imageTextMemoEntry)
+		delete(m.entries, old.key)
+		m.order.Remove(last)
+		m.imageCount -= len(old.images)
+		m.bytes -= old.bytes
+	}
+	m.entries[key] = m.order.PushFront(imageTextMemoEntry{key: key, images: images, bytes: bytes})
+	m.imageCount += len(images)
+	m.bytes += bytes
+	return images
+}
+
 // refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
 func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) error {
 	oldRows, err := tx.Query(`SELECT COALESCE(call_id,0),COALESCE(event_id,0),image_index,image_hash,media_type FROM image_text_occurrences WHERE session_id=?`, sessionID)
@@ -37,7 +109,7 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 			rows.Close()
 			return err
 		}
-		for _, image := range RetainedToolResultImages(row.Content) {
+		for _, image := range retainedImageMemo.images(row.Content) {
 			if image.SHA256 != "" {
 				occurrences = append(occurrences, ImageTextOccurrence{CallID: row.CallID, EventID: row.EventID, Index: image.Index, Hash: image.SHA256, MediaType: image.MediaType})
 			}
