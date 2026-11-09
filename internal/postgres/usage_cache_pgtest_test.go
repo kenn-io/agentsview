@@ -614,7 +614,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				_, err := owner.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=5000 WHERE session_id='paid-a'`)
 				require.NoError(t, err)
 			}
-			failure := errPGUsageCacheUnavailable
+			var failure error
 			switch name {
 			case "permission revoked":
 				revoke()
@@ -636,9 +636,14 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				probe.before = func(context.Context, []string) error { return failure }
 			}
 			_, err := configured.GetDailyUsage(ctx, filter)
-			if name == "cache storage" || name == "malformed revision" {
+			switch name {
+			case "initial denial", "permission revoked":
+				require.True(t, isInsufficientPrivilege(err), "cache must preserve the PostgreSQL permission error: %v", err)
+			case "dropped journal", "late journal installation":
+				require.True(t, isUndefinedTable(err), "cache must preserve the PostgreSQL missing-table error: %v", err)
+			case "cache storage", "malformed revision":
 				require.Error(t, err)
-			} else {
+			default:
 				require.ErrorIs(t, err, failure)
 			}
 			if extraction {

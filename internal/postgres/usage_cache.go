@@ -37,13 +37,6 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 
 var errPGUsageCacheUnavailable = errors.New("PostgreSQL usage journal unavailable")
 
-func usageJournalError(err error) error {
-	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
-		return errPGUsageCacheUnavailable
-	}
-	return err
-}
-
 type pgUsageCacheSource struct {
 	*Store
 	target string
@@ -59,7 +52,7 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 	snapshot := db.UsageSourceSnapshot{MissingTimestampsLast: true}
 	oid, err := usageJournalOID(ctx, view.pg)
 	if err != nil {
-		return snapshot, usageJournalError(err)
+		return snapshot, err
 	}
 	snapshot.DatabaseID = fmt.Sprintf("%s|%d", source.target, oid)
 	snapshot.ChangeRevision, err = view.UsageChangeRevision(ctx)
@@ -71,7 +64,7 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 	}
 	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=`+usageAccountChangeKeyPG+`), 1)`).Scan(&snapshot.CursorHighWater)
 	if err != nil {
-		return snapshot, usageJournalError(err)
+		return snapshot, err
 	}
 	snapshot.PricingRows, err = view.loadPricingMap(ctx)
 	return snapshot, err
@@ -92,7 +85,7 @@ func (source *pgUsageCacheSource) CaptureUsage(ctx context.Context, request db.U
 	if request.AfterRevision != nil {
 		_, changes, err := view.loadUsageChanges(ctx, *request.AfterRevision)
 		if err != nil {
-			return snapshot, usageJournalError(err)
+			return snapshot, err
 		}
 		snapshot.ChangeIDs = changes
 		selected := slices.Clone(changes)
@@ -162,7 +155,7 @@ func pgCaptureUsageMetadata(ctx context.Context, view *Store, ids []string, filt
    FROM sessions s LEFT JOIN usage_session_changes c ON c.session_id=s.id WHERE s.deleted_at IS NULL AND s.id IN (` + strings.Join(params, ",") + `) ORDER BY s.id`
 			rows, err := view.pg.QueryContext(ctx, query, pb.args...)
 			if err != nil {
-				return fmt.Errorf("capturing PostgreSQL usage metadata: %w", usageJournalError(err))
+				return fmt.Errorf("capturing PostgreSQL usage metadata: %w", err)
 			}
 			defer rows.Close()
 			for rows.Next() {
