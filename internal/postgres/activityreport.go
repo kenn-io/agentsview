@@ -49,6 +49,7 @@ type activityReportBackend struct {
 	pricing                []export.EffectivePricingRow
 	pricingDigest          string
 	inputs                 *pgActivityInputs
+	counted                *[]pgActivityCountedMessage
 }
 
 func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
@@ -62,13 +63,24 @@ func (b activityReportBackend) ActivityReportUsage(
 }
 
 func (b activityReportBackend) ActivityReportCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
-	return b.activityReportCandidateSourceWithInputs(ids, q, b.inputs)
+	return b.activityReportCandidateSourceWithInputs(ids, q, b.inputs, b.counted)
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
-	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	for _, message := range *b.counted {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		role := "assistant"
+		if message.user {
+			role = "user"
+		}
+		counts.Add(message.sessionID, role, time.UnixMicro(message.timestamp).UTC())
+	}
+	return ctx.Err()
 }
 
 func (s *Store) BuildActivityReportArtifacts(
@@ -145,7 +157,9 @@ func (s *Store) BuildActivityReportArtifacts(
 			}
 		}
 	}
+	var counted []pgActivityCountedMessage
 	backend := activityReportBackend{
+		counted:       &counted,
 		read:          read,
 		inputs:        inputs,
 		pricing:       pricing,
@@ -178,33 +192,11 @@ func (s *Store) BuildActivityReportArtifacts(
 	return artifacts, err
 }
 
-func (s *Store) activityReportMessageCounts(
-	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
-) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	// DescribeExec plans candidate reads with their actual IDs on every visit.
-	rows, err := s.pg.QueryContext(ctx, `
-		SELECT session_id, role, timestamp FROM messages
-		WHERE session_id = ANY($1)
-			AND role IN ('user', 'assistant') AND is_system = false
-			AND COALESCE(source_subtype, '') <> 'tool_result'
-			AND timestamp >= $2 AND timestamp < $3`, pgx.QueryExecModeDescribeExec, ids, q.RangeStart, q.EffectiveEnd)
-	if err != nil {
-		return fmt.Errorf("querying pg activity message counts: %w", err)
-	}
-	defer rows.Close()
-	counts := activity.NewMessageAccumulator(q, artifacts)
-	for rows.Next() {
-		var sessionID, role string
-		var timestamp time.Time
-		if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
-			return fmt.Errorf("scanning pg activity message counts: %w", err)
-		}
-		counts.Add(sessionID, role, timestamp)
-	}
-	return rows.Err()
+// pgActivityCountedMessage lives only until this report finishes aggregation.
+type pgActivityCountedMessage struct {
+	sessionID string
+	timestamp int64
+	user      bool
 }
 
 // GetSessionUsageRows returns the backend-priced usage rows for the supplied
@@ -449,10 +441,10 @@ func (s *Store) activityReportSessions(
 func (s *Store) activityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
-	return s.activityReportCandidateSourceWithInputs(ids, q, nil)
+	return s.activityReportCandidateSourceWithInputs(ids, q, nil, nil)
 }
 
-func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity.Query, inputs *pgActivityInputs) activity.CandidateSource {
+func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity.Query, inputs *pgActivityInputs, counted *[]pgActivityCountedMessage) activity.CandidateSource {
 	return func(
 		ctx context.Context,
 		yield func(activity.IntervalCandidate) error,
@@ -630,6 +622,7 @@ func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity
 			var pairs []activity.IntervalCandidate
 			var copyBuffer []activity.TranscriptMessage
 			lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
+			countLowerMicro := q.RangeStart.UnixMicro()
 			err := s.activityTranscriptSource(ctx, ids, inputs, func(id string, session []activity.TranscriptMessage) {
 				if inputs != nil {
 					copyBuffer = append(copyBuffer[:0], session...)
@@ -637,6 +630,9 @@ func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity
 				}
 				for i := range session {
 					us := session[i].At.UnixMicro()
+					if counted != nil && session[i].Counted && us >= countLowerMicro && us < upperMicro {
+						*counted = append(*counted, pgActivityCountedMessage{id, us, session[i].Role == "user"})
+					}
 					session[i].Starts = us >= lowerMicro && us < upperMicro
 				}
 				pairs = activity.AppendTranscriptPairs(pairs, id, session)
