@@ -73,49 +73,73 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 	return next, nil
 }
 
-func (s *Store) activityTranscriptInputs(ctx context.Context, ids []string, inputs *pgActivityInputs) (map[string][]activity.TranscriptMessage, error) {
-	transcripts := map[string][]activity.TranscriptMessage{}
+// activityTranscriptSource streams uncached sessions through the same reader
+// that fills retained inputs. Its callback may mutate only uncached messages.
+func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inputs *pgActivityInputs, yield func(string, []activity.TranscriptMessage)) error {
+	missing := ids
 	if inputs != nil {
-		transcripts = inputs.transcripts
-	}
-	missing := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if _, ok := transcripts[id]; !ok {
-			missing = append(missing, id)
+		missing = make([]string, 0, len(ids))
+		for _, id := range ids {
+			if _, ok := inputs.transcripts[id]; !ok {
+				missing = append(missing, id)
+			}
 		}
 	}
-	if len(missing) == 0 {
-		return transcripts, nil
-	}
-	rows, err := s.pg.QueryContext(ctx, `SELECT session_id, ordinal, role, timestamp, model
+	if len(missing) > 0 {
+		rows, err := s.pg.QueryContext(ctx, `SELECT session_id, ordinal, role, timestamp, model
  FROM messages WHERE session_id = ANY($1) AND timestamp IS NOT NULL
  ORDER BY session_id, ordinal`, pgx.QueryExecModeDescribeExec, missing)
-	if err != nil {
-		return nil, fmt.Errorf("querying pg activity report candidates: %w", err)
-	}
-	defer rows.Close()
-	for _, id := range missing {
-		transcripts[id] = nil
-	}
-	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		if err != nil {
+			return fmt.Errorf("querying pg activity report candidates: %w", err)
+		}
+		defer rows.Close()
+		if inputs != nil {
+			for _, id := range missing {
+				inputs.transcripts[id] = nil
+			}
+		}
+		finish := func(id string, session []activity.TranscriptMessage) {
+			if len(session) == 0 {
+				return
+			}
+			if inputs == nil {
+				yield(id, session)
+			} else {
+				inputs.transcripts[id] = slices.Clip(slices.Clone(session))
+			}
 		}
 		var id string
-		var m activity.TranscriptMessage
-		if err := rows.Scan(&id, &m.Ordinal, &m.Role, &m.At, &m.Model); err != nil {
-			return nil, fmt.Errorf("scanning pg activity report message: %w", err)
+		var session []activity.TranscriptMessage
+		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var next string
+			var m activity.TranscriptMessage
+			if err := rows.Scan(&next, &m.Ordinal, &m.Role, &m.At, &m.Model); err != nil {
+				return fmt.Errorf("scanning pg activity report message: %w", err)
+			}
+			if id != next {
+				finish(id, session)
+				id, session = next, session[:0]
+			}
+			m.At = m.At.UTC()
+			session = append(session, m)
 		}
-		m.At = m.At.UTC()
-		transcripts[id] = append(transcripts[id], m)
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		finish(id, session)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if inputs != nil {
+		for _, id := range ids {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			yield(id, inputs.transcripts[id])
+		}
 	}
-	for _, id := range missing {
-		transcripts[id] = slices.Clip(slices.Clone(transcripts[id]))
-	}
-	return transcripts, nil
+	return nil
 }
 
 func (s *Store) readActivityUsageInputs(ctx context.Context, ids []string, lowerBound, upperBound string) ([]pgDailyUsageScanRow, error) {

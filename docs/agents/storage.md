@@ -934,10 +934,10 @@ usage inputs in memory with a shared 128 MiB estimated-size budget. The usage
 change journal invalidates changed sessions and their matching snapshot peers.
 Each visit selects sessions, pairs messages against the current clock, selects
 usage snapshots, and prices the surviving rows again. Tool events and message
-counts are read fresh. Journal replacement, unavailable or regressed revisions,
-and pricing changes rebuild the inputs. Large change sets use a full read, and
-inputs above the budget aren't retained. Hosted stores and transaction views
-use their existing reads.
+counts are read fresh. Journal replacement and unavailable or regressed
+revisions rebuild the inputs. Large change sets use a full read, and inputs
+above the budget aren't retained. Hosted stores and transaction views use their
+existing reads.
 
 ### PostgreSQL push preparation indexes
 

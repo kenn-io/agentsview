@@ -134,7 +134,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	var inputs *pgActivityInputs
 	var inputVersion string
 	if q.Partial && !s.hostedRelations && s.readTx == nil {
-		inputVersion, err = s.activityKeptVersion(ctx, pricingDigest)
+		inputVersion, err = s.activityKeptVersion(ctx, "")
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
@@ -156,6 +156,11 @@ func (s *Store) BuildActivityReportArtifacts(
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating pg activity report")
 	if err == nil && ctx.Err() == nil && inputs != nil {
+		for id := range inputs.transcripts {
+			if !inputs.candidates[id] {
+				delete(inputs.transcripts, id)
+			}
+		}
 		s.runtimeState().activityInputs.Put(lowerBound+"|"+upperBound, inputVersion, []pgActivityInputs{*inputs})
 	}
 	if err == nil && selection != "" {
@@ -623,58 +628,21 @@ func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity
 			yield func(activity.IntervalCandidate) error,
 		) error {
 			var pairs []activity.IntervalCandidate
-			if inputs == nil {
-				query := `SELECT session_id, ordinal, role, timestamp, model
-				FROM messages
-				WHERE session_id = ANY($1) AND timestamp IS NOT NULL
-				ORDER BY session_id, ordinal`
-				rows, queryErr := s.pg.QueryContext(
-					ctx, query, pgx.QueryExecModeDescribeExec, ids,
-				)
-				if queryErr != nil {
-					return fmt.Errorf(
-						"querying pg activity report candidates: %w", queryErr)
+			var copyBuffer []activity.TranscriptMessage
+			lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
+			err := s.activityTranscriptSource(ctx, ids, inputs, func(id string, session []activity.TranscriptMessage) {
+				if inputs != nil {
+					copyBuffer = append(copyBuffer[:0], session...)
+					session = copyBuffer
 				}
-				defer rows.Close()
-				var sessionID, id string
-				var session []activity.TranscriptMessage
-				var m activity.TranscriptMessage
-				lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
-				for rows.Next() {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					if err := rows.Scan(&id, &m.Ordinal, &m.Role, &m.At, &m.Model); err != nil {
-						return fmt.Errorf("scanning pg activity report message: %w", err)
-					}
-					if id != sessionID {
-						pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
-						sessionID, session = id, session[:0]
-					}
-					m.At = m.At.UTC()
-					us := m.At.UnixMicro()
-					m.Starts = us >= lowerMicro && us < upperMicro
-					session = append(session, m)
+				for i := range session {
+					us := session[i].At.UnixMicro()
+					session[i].Starts = us >= lowerMicro && us < upperMicro
 				}
-				if err := rows.Err(); err != nil {
-					return err
-				}
-				pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
-			} else {
-				transcripts, err := s.activityTranscriptInputs(ctx, ids, inputs)
-				if err != nil {
-					return err
-				}
-				var session []activity.TranscriptMessage
-				lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
-				for _, id := range ids {
-					session = append(session[:0], transcripts[id]...)
-					for i := range session {
-						us := session[i].At.UnixMicro()
-						session[i].Starts = us >= lowerMicro && us < upperMicro
-					}
-					pairs = activity.AppendTranscriptPairs(pairs, id, session)
-				}
+				pairs = activity.AppendTranscriptPairs(pairs, id, session)
+			})
+			if err != nil {
+				return err
 			}
 			sort.Slice(pairs, func(i, j int) bool {
 				return activity.CandidateLess(pairs[i], pairs[j])
@@ -724,6 +692,10 @@ func (s *Store) activityReportUsage(
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
 
+	raw, err := s.activityUsageInputs(ctx, ids, lowerBound, upperBound, inputs)
+	if err != nil {
+		return nil, nil, err
+	}
 	rateResolver := export.NewPricingResolverWithDigest(pricing, pricingDigest)
 	if len(ids) == 0 {
 		block, err := rateResolver.BuildBlock()
@@ -733,10 +705,6 @@ func (s *Store) activityReportUsage(
 		return out, &block, nil
 	}
 
-	raw, err := s.activityUsageInputs(ctx, ids, lowerBound, upperBound, inputs)
-	if err != nil {
-		return nil, nil, err
-	}
 	type ordered struct {
 		row     activity.UsageRow
 		scan    pgDailyUsageScanRow
@@ -752,11 +720,22 @@ func (s *Store) activityReportUsage(
 		if r.messageOrdinal.Valid {
 			ord = r.messageOrdinal.Int64
 		}
-		rowsAcc = append(rowsAcc, ordered{ts: r.ts.Time, ordinal: ord, scan: r,
-			row: activity.UsageRow{SessionID: r.sessionID, Model: r.model,
-				Timestamp: startedAtString(r.ts), Agent: r.agent, ProviderID: r.providerID,
-				ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID,
-				SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}})
+		rowsAcc = append(rowsAcc, ordered{
+			ts:      r.ts.Time,
+			ordinal: ord,
+			scan:    r,
+			row: activity.UsageRow{
+				SessionID:       r.sessionID,
+				Model:           r.model,
+				Timestamp:       startedAtString(r.ts),
+				Agent:           r.agent,
+				ProviderID:      r.providerID,
+				ClaudeMessageID: r.claudeMessageID,
+				ClaudeRequestID: r.claudeRequestID,
+				SourceUUID:      r.sourceUUID,
+				UsageDedupKey:   r.usageDedupKey,
+			},
+		})
 	}
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {

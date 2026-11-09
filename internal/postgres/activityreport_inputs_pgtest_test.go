@@ -12,7 +12,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type activityInputReadCounter struct {
@@ -78,6 +80,12 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	require.NoError(t, err)
 	defer fresh.Close()
 	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), changed)
+	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+	repriced := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, money.MustParseDollars("0.024"), repriced.Report.Totals.Cost)
+	assert.Len(t, counter.transcriptReads, 2)
+	assert.Len(t, counter.usageReads, 2)
+
 }
 
 func TestPGActivityReportInputClock(t *testing.T) {
@@ -152,4 +160,26 @@ func TestPGActivityReportInputRetry(t *testing.T) {
 			assert.Len(t, got.Sessions, 1)
 		})
 	}
+}
+
+func TestPGActivityReportInputEmptySelectionAfterPush(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+	assert.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
+		{SessionID: "a", Ordinal: 0, Role: "assistant", Content: "changed answer", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
+	}))
+	pgKeptPush(t, syncer, false)
+	empty := pgKeptBuild(t, store, db.AnalyticsFilter{Timezone: "UTC", Project: "empty"}, q, true)
+	assert.Empty(t, empty.Sessions)
+	assert.Zero(t, empty.Report.Totals.OutputTokens)
+	got := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 700, got.Report.Totals.OutputTokens)
+	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	defer fresh.Close()
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
 }
