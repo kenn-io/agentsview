@@ -46,31 +46,34 @@ func annotateClaudeWebSearchRequestsContext(
 	if len(counts) == 0 {
 		return ctx.Err()
 	}
-	searches := func(msg *ParsedMessage) (int, error) {
-		total := 0
+	// Count each search once per response, even when a later record of the
+	// response repeats an earlier tool call. A message without a message ID
+	// is its own response.
+	responseKeys := make([]string, len(messages))
+	responseTotals := make(map[string]int)
+	responseSearches := make(map[[2]string]struct{})
+	for i := range messages {
+		msg := &messages[i]
+		key := msg.ClaudeMessageID
+		if key == "" {
+			key = "\x00" + strconv.Itoa(i)
+		}
+		responseKeys[i] = key
 		for _, tc := range msg.ToolCalls {
 			if err := ctx.Err(); err != nil {
-				return 0, err
+				return err
 			}
 			if tc.ToolName != claudeWebSearchToolName ||
 				tc.ToolUseID == "" {
 				continue
 			}
-			total += counts[tc.ToolUseID]
+			search := [2]string{key, tc.ToolUseID}
+			if _, seen := responseSearches[search]; seen {
+				continue
+			}
+			responseSearches[search] = struct{}{}
+			responseTotals[key] += counts[tc.ToolUseID]
 		}
-		return total, nil
-	}
-	responseTotals := make(map[string]int)
-	for i := range messages {
-		msg := &messages[i]
-		if msg.ClaudeMessageID == "" {
-			continue
-		}
-		total, err := searches(msg)
-		if err != nil {
-			return err
-		}
-		responseTotals[msg.ClaudeMessageID] += total
 	}
 	for i := range messages {
 		if err := ctx.Err(); err != nil {
@@ -83,13 +86,7 @@ func annotateClaudeWebSearchRequestsContext(
 		if usageWebSearchRequests(string(msg.TokenUsage)) > 0 {
 			continue
 		}
-		total, ok := responseTotals[msg.ClaudeMessageID]
-		if !ok {
-			var err error
-			if total, err = searches(msg); err != nil {
-				return err
-			}
-		}
+		total := responseTotals[responseKeys[i]]
 		if total <= 0 {
 			continue
 		}
@@ -144,10 +141,11 @@ func collectClaudeWebSearchCountsContext(
 	return counts, ctx.Err()
 }
 
-// needsClaudeFullParseForWebSearchCounts reports whether an appended search
-// result belongs to a tool call outside the appended batch. In that case the
-// stored assistant row must be replaced so its usage can receive the billed
-// search count.
+// needsClaudeFullParseForWebSearchCounts reports whether an appended batch
+// carries a billed search result. Its tool call may be stored already, and a
+// tool result can split one response so that earlier records of the response,
+// with their own searches, are stored too. Only a full parse sees the whole
+// response, so its stored rows can receive the response's search total.
 func needsClaudeFullParseForWebSearchCounts(
 	ctx context.Context, entries []dagEntry,
 ) (bool, error) {
@@ -155,16 +153,7 @@ func needsClaudeFullParseForWebSearchCounts(
 	if err != nil {
 		return false, err
 	}
-	if len(counts) == 0 {
-		return false, nil
-	}
-	appendedToolUseIDs := claudeAppendedToolUseIDs(entries)
-	for toolUseID := range counts {
-		if _, ok := appendedToolUseIDs[toolUseID]; !ok {
-			return true, nil
-		}
-	}
-	return false, nil
+	return len(counts) > 0, nil
 }
 
 // singleClaudeToolResultIDContext returns the tool_use_id of a record's only
