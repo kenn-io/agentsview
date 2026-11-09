@@ -463,3 +463,32 @@ func TestPGUsageCacheUnrelatedPushDuringEveryExtraction(t *testing.T) {
 	_, err = store.usageCache.GetDailyUsage(t.Context(), db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"})
 	require.NoError(t, err)
 }
+
+func TestPGUsageCacheChronologicalFractionalTimestamps(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		t.Run(map[bool]string{false: "messages", true: "session-fallback"}[fallback], func(t *testing.T) {
+			_, _, store, _ := keptUsageFixture(t)
+			ctx := t.Context()
+			_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at) VALUES
+ ('earlier','project-a','test-machine','copilot','2026-01-01 09:00:00Z'),('later','project-a','test-machine','copilot','2026-01-01 09:00:00.000001Z');
+ INSERT INTO messages(session_id,ordinal,role,content,timestamp,model,token_usage,source_uuid) VALUES
+ ('earlier',0,'assistant','','2026-01-01 09:00:00Z','paid-a','{"output_tokens":10}','shared-uuid'),
+ ('later',0,'assistant','','2026-01-01 09:00:00.000001Z','paid-a','{"output_tokens":30}','shared-uuid');
+ INSERT INTO usage_events(session_id,source,model,output_tokens,cost_microdollars,cost_source,occurred_at,dedup_key) VALUES
+ ('earlier','session','paid-a',0,100,'copilot-reported','2026-01-01 09:00:00Z','first-cost'),
+ ('earlier','session','paid-a',0,200,'copilot-reported','2026-01-01 09:00:00.000001Z','last-cost')`)
+			require.NoError(t, err)
+			if fallback {
+				_, err := store.pg.ExecContext(ctx, `UPDATE messages SET timestamp=NULL WHERE session_id='earlier'`)
+				require.NoError(t, err)
+			}
+			directory := t.TempDir()
+			attachUsageCacheProbe(t, store, directory)
+			filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+			requireCachedUsageMatchesDirect(t, store, filter)
+			require.NoError(t, store.usageCache.Close())
+			attachUsageCacheProbe(t, store, directory)
+			requireCachedUsageMatchesDirect(t, store, filter)
+		})
+	}
+}

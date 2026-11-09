@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/usagefacts"
@@ -194,7 +193,7 @@ func pgUsageCacheTime(value sql.NullTime) string {
 	if !value.Valid {
 		return ""
 	}
-	return value.Time.UTC().Format(time.RFC3339Nano)
+	return value.Time.UTC().Format("2006-01-02T15:04:05.000000000Z")
 }
 
 func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string, emit func(string, usagefacts.Fact) error) (db.UsageSourceSnapshot, error) {
@@ -218,12 +217,9 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 			params[i] = pb.add(id)
 		}
 		selected := strings.Join(params, ",")
-		rowsSQL := pgDailyUsageRowsSQLWithWhere(pgUsageMessageEligibility+` AND m.session_id IN (`+selected+`)`, pgUsageEventEligibility+` AND ue.session_id IN (`+selected+`)`)
-		rowsSQL = strings.Replace(rowsSQL, "m.ordinal AS message_ordinal,", "m.ordinal AS message_ordinal, m.role AS message_role,", 1)
-		rowsSQL = strings.Replace(rowsSQL, "ue.message_ordinal,", "ue.message_ordinal, ''::text AS message_role,", 1)
-		query := pgDailyUsageRowSelectFromRowsWithMachine(rowsSQL, true)
-		ranking := fmt.Sprintf(`CASE WHEN u.usage_source='message' THEN LEAST(GREATEST(COALESCE(agentsview_json_integer(u.token_usage,ARRAY['output_tokens'],'output_tokens')::numeric,0),0),%d) WHEN u.usage_source='session' THEN GREATEST(u.output_tokens,0) ELSE LEAST(GREATEST(u.output_tokens,0),%d) END::bigint`, db.MaxPlausibleTokens, db.MaxPlausibleTokens)
-		query = strings.Replace(query, "\nFROM (", ", "+ranking+", u.message_role\nFROM (", 1) + ` ORDER BY u.session_id, u.ts ASC NULLS FIRST, COALESCE(u.message_ordinal,-1), u.usage_dedup_key`
+		rowsSQL := pgDailyUsageRowsSQLWithColumns(pgUsageMessageEligibility+` AND m.session_id IN (`+selected+`)`, pgUsageEventEligibility+` AND ue.session_id IN (`+selected+`)`, ", m.role AS message_role", ", ''::text AS message_role")
+		extraColumns := ", (" + pgSnapshotOutputTokensSQL() + ")::bigint, u.message_role"
+		query := pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, true, "u.session_id", false, false, extraColumns) + ` ORDER BY u.session_id, u.ts ASC NULLS FIRST, COALESCE(u.message_ordinal,-1), u.usage_dedup_key`
 		rows, err := view.pg.QueryContext(ctx, query, pb.args...)
 		if err != nil {
 			return snapshot, fmt.Errorf("extracting PostgreSQL usage facts: %w", err)

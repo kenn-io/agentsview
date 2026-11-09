@@ -231,10 +231,7 @@ func (c *usageFillCoordinator) replaceExternalAccounts(ctx context.Context, targ
 	if err != nil {
 		return err
 	}
-	if currentRevision > target {
-		return errUsageCacheSourceChanged
-	}
-	if currentRevision == target {
+	if currentRevision >= target {
 		return nil
 	}
 	identities := newUsageDedupIdentitySet()

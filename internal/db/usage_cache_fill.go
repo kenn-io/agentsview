@@ -1424,9 +1424,6 @@ func installSpoolSessions(
 func (c *usageFillCoordinator) ensureCursor(ctx context.Context, target int64) error {
 	for {
 		current, err := c.cursorHighWater(ctx)
-		if err == nil && c.archive.usageSource != nil && current > target {
-			return errUsageCacheSourceChanged
-		}
 		if err != nil || current >= target {
 			return err
 		}

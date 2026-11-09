@@ -158,66 +158,6 @@ func pgUsageRowsSQLWithWhere(
 	)
 }
 
-const pgDailyUsageRowsSQLTemplate = `
-SELECT
-	m.session_id,
-	m.ordinal AS message_ordinal,
-	'message' AS usage_source,
-	COALESCE(m.timestamp, s.started_at) AS ts,
-	m.timestamp AS pricing_ts,
-	m.model,
-	m.provider_id,
-	m.token_usage,
-	0 AS input_tokens,
-	0 AS output_tokens,
-	0 AS cache_creation_input_tokens,
-	0 AS cache_read_input_tokens,
-	0 AS reasoning_tokens,
-	NULL AS cost_microdollars,
-	'' AS cost_source,
-	m.claude_message_id,
-	m.claude_request_id,
-	m.source_uuid,
-	'' AS usage_dedup_key,
-	s.project,
-	s.agent,
-	s.machine
-FROM messages m
-JOIN sessions s ON m.session_id = s.id
-WHERE %s
-
-UNION ALL
-
-SELECT
-	ue.session_id,
-	ue.message_ordinal,
-	ue.source AS usage_source,
-	COALESCE(ue.occurred_at, s.started_at) AS ts,
-	ue.occurred_at AS pricing_ts,
-	ue.model,
-	ue.provider_id,
-	'' AS token_usage,
-	ue.input_tokens,
-	ue.output_tokens,
-	ue.cache_creation_input_tokens,
-	ue.cache_read_input_tokens,
-	ue.reasoning_tokens,
-	ue.cost_microdollars,
-	ue.cost_source,
-	'' AS claude_message_id,
-	'' AS claude_request_id,
-	'' AS source_uuid,
-	CASE
-		WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
-		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
-	END AS usage_dedup_key,
-	s.project,
-	s.agent,
-	s.machine
-FROM usage_events ue
-JOIN sessions s ON s.id = ue.session_id
-WHERE %s`
-
 const pgDailyUsageMessageRowsSQLTemplate = `
 SELECT
 	m.session_id,
@@ -241,7 +181,7 @@ SELECT
 	'' AS usage_dedup_key,
 	s.project,
 	s.agent,
-	s.machine
+	s.machine%s
 FROM %s m
 JOIN sessions s ON m.session_id = s.id
 WHERE %s`
@@ -272,19 +212,18 @@ SELECT
 	END AS usage_dedup_key,
 	s.project,
 	s.agent,
-	s.machine
+	s.machine%s
 FROM %s ue
 JOIN sessions s ON s.id = ue.session_id
 WHERE %s`
 
-func pgDailyUsageRowsSQLWithWhere(
-	messageWhere, usageEventWhere string,
-) string {
-	return fmt.Sprintf(
-		pgDailyUsageRowsSQLTemplate,
-		messageWhere,
-		usageEventWhere,
-	)
+func pgDailyUsageRowsSQLWithWhere(messageWhere, usageEventWhere string) string {
+	return pgDailyUsageRowsSQLWithColumns(messageWhere, usageEventWhere, "", "")
+}
+
+func pgDailyUsageRowsSQLWithColumns(messageWhere, usageEventWhere, messageColumns, eventColumns string) string {
+	return fmt.Sprintf(pgDailyUsageMessageRowsSQLTemplate, messageColumns, "messages", messageWhere) + "\n\nUNION ALL\n\n" +
+		fmt.Sprintf(pgDailyUsageEventRowsSQLTemplate, eventColumns, "usage_events", usageEventWhere)
 }
 
 func pgDailyUsageRowsSQLWithTimestampCTEs(
@@ -330,6 +269,7 @@ usage_event_timestamp_rows AS MATERIALIZED (
 )
 ` + fmt.Sprintf(
 		pgDailyUsageMessageRowsSQLTemplate,
+		"",
 		"message_timestamp_rows",
 		messageTimestampJoinWhere,
 	) + `
@@ -338,6 +278,7 @@ UNION ALL
 
 ` + fmt.Sprintf(
 		pgDailyUsageEventRowsSQLTemplate,
+		"",
 		"usage_event_timestamp_rows",
 		eventTimestampJoinWhere,
 	) + `
@@ -346,6 +287,7 @@ UNION ALL
 
 ` + fmt.Sprintf(
 		pgDailyUsageMessageRowsSQLTemplate,
+		"",
 		"messages",
 		messageFallbackWhere,
 	) + `
@@ -354,6 +296,7 @@ UNION ALL
 
 ` + fmt.Sprintf(
 		pgDailyUsageEventRowsSQLTemplate,
+		"",
 		"usage_events",
 		eventFallbackWhere,
 	)
@@ -494,19 +437,19 @@ func pgDailyUsageRowSelectFromRowsWithMachine(
 	rowsSQL string, includeMachine bool,
 ) string {
 	return pgDailyUsageRowSelectFromRowsWithSession(
-		rowsSQL, includeMachine, "u.session_id", false, false)
+		rowsSQL, includeMachine, "u.session_id", false, false, "")
 }
 
 func pgDailyUsageRowSelectFromSnapshotRowsWithMachine(
 	rowsSQL string, includeMachine bool,
 ) string {
 	return pgDailyUsageRowSelectFromRowsWithSession(
-		rowsSQL, includeMachine, "u.snapshot_attribution_session_id", true, false)
+		rowsSQL, includeMachine, "u.snapshot_attribution_session_id", true, false, "")
 }
 
 func pgDailyUsageRowSelectFromRowsWithSession(
 	rowsSQL string, includeMachine bool, sessionColumn string,
-	reloadSessionMetadata, includeSessionGroups bool,
+	reloadSessionMetadata, includeSessionGroups bool, extraColumns string,
 ) string {
 	projectColumn := "u.project"
 	agentColumn := "u.agent"
@@ -565,7 +508,7 @@ SELECT
 	u.source_uuid,
 	u.usage_dedup_key,
 	` + projectColumn + ` AS project,
-	` + agentColumn + ` AS agent` + machineColumn + sessionMetadataColumns + `
+	` + agentColumn + ` AS agent` + machineColumn + sessionMetadataColumns + extraColumns + `
 FROM (` + rowsSQL + `) u` + metadataJoin + `
 WHERE 1=1`
 }
@@ -790,7 +733,7 @@ func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter, includeSessi
 		pb, pgUsageSnapshotInputFilter(f), bounds, dialect,
 	)
 	rowsSQL, filterWhere := pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f, dialect)
-	return pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, false, "u.snapshot_attribution_session_id", true, includeSessionGroups) + "\nAND (" + filterWhere + ")"
+	return pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, false, "u.snapshot_attribution_session_id", true, includeSessionGroups, "") + "\nAND (" + filterWhere + ")"
 }
 
 func pgUsageSnapshotInputFilter(f db.UsageFilter) db.UsageFilter {
@@ -830,6 +773,21 @@ func appendPGExactUsageWindow(where, ts string, pb *paramBuilder, f db.UsageFilt
 	return where
 }
 
+func pgSnapshotOutputTokensSQL() string {
+	return fmt.Sprintf(`CASE
+				WHEN u.claude_message_id = '' OR u.claude_request_id = '' THEN 0
+				ELSE CASE
+					WHEN u.usage_source = 'message' THEN LEAST(GREATEST(COALESCE(
+						CAST(agentsview_json_integer(
+							u.token_usage, ARRAY['output_tokens'], 'output_tokens') AS NUMERIC),
+						0), 0), %[1]d)
+					WHEN u.usage_source = 'session'
+						THEN GREATEST(u.output_tokens, 0)
+					ELSE LEAST(GREATEST(u.output_tokens, 0), %[1]d)
+				END
+			END`, db.MaxPlausibleTokens)
+}
+
 // pgSnapshotRankedDailyUsageRowsSQL keeps the greatest output snapshot and the
 // maximum billed web-search count for each Claude request before rows cross
 // into Go. Rows without complete Claude request identity bypass the window.
@@ -842,18 +800,7 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 	filterWhere = appendPGUsageSessionFilterClauses(filterWhere, pb, f, dialect)
 	filterWhere = "u.snapshot_attribution_session_id = '' OR (" +
 		strings.ReplaceAll(filterWhere, "s.", "attributed.") + ")"
-	outputTokens := fmt.Sprintf(`CASE
-				WHEN u.claude_message_id = '' OR u.claude_request_id = '' THEN 0
-				ELSE CASE
-					WHEN u.usage_source = 'message' THEN LEAST(GREATEST(COALESCE(
-						CAST(agentsview_json_integer(
-							u.token_usage, ARRAY['output_tokens'], 'output_tokens') AS NUMERIC),
-						0), 0), %[1]d)
-					WHEN u.usage_source = 'session'
-						THEN GREATEST(u.output_tokens, 0)
-					ELSE LEAST(GREATEST(u.output_tokens, 0), %[1]d)
-				END
-			END`, db.MaxPlausibleTokens)
+	outputTokens := pgSnapshotOutputTokensSQL()
 	webSearchRequests := `CASE
 				WHEN u.usage_source = 'message' THEN GREATEST(COALESCE(
 					CAST(agentsview_json_integer(
@@ -2218,6 +2165,11 @@ func (s *Store) GetTopSessionsByCost(
 	if cache := s.cachedUsage(); cache != nil {
 		result, err := cache.GetTopSessionsByCost(ctx, f, limit)
 		if !directUsageRequired(err) {
+			for i := range result {
+				if timestamp, parseErr := time.Parse(time.RFC3339Nano, result[i].StartedAt); parseErr == nil {
+					result[i].StartedAt = startedAtString(sql.NullTime{Time: timestamp, Valid: true})
+				}
+			}
 			return result, err
 		}
 	}
