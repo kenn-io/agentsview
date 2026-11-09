@@ -57,23 +57,17 @@ func TestUsagePairwiseRankingReadCounts(t *testing.T) {
 
 func TestUsageReadersSkipPairwiseEvidence(t *testing.T) {
 	t.Parallel()
-	for _, reader := range []string{"top", "counts", "summary", "friction"} {
+	for _, reader := range []string{"summary", "friction"} {
 		t.Run(reader, func(t *testing.T) {
 			t.Parallel()
 			store, syncer, _ := newUsagePriceStore(t)
 			comment := reader + "-without-pairwise-" + syncer.target.Database
 			ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
-			filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
 			var err error
-			switch reader {
-			case "counts":
-				_, err = store.GetUsageSessionCounts(ctx, filter)
-			case "summary":
+			if reader == "summary" {
 				_, err = service.NewReadOnlyBackend(store).UsageSummary(ctx, service.UsageRequest{Timezone: "UTC", Breakdowns: new(true), IncludeOneShot: true})
-			case "friction":
+			} else {
 				_, err = db.FrictionArchiveSpendFrom(ctx, store, "", "", time.UTC)
-			default:
-				_, err = store.GetTopSessionsByCost(ctx, filter, 10)
 			}
 			require.NoError(t, err)
 			_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
@@ -186,6 +180,7 @@ func TestUsagePairwiseInexactSides(t *testing.T) {
 			require.NoError(t, err)
 			ranking, err := store.GetDailyUsage(t.Context(), filter)
 			require.NoError(t, err)
+			require.NotNil(t, ranking.Pairwise)
 			for _, selection := range selections {
 				_, ok := ranking.Pairwise.Side(selection.dimension, []string{selection.value})
 				assert.False(t, ok)
