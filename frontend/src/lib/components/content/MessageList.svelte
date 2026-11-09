@@ -848,6 +848,17 @@
     return match ? `${match.ordinal}:${match.blockKey}:${match.occurrence}` : "";
   });
 
+  // Row of the current match in ascending display order. The reveal effect
+  // re-runs when the match moves within the rendered rows (filters, mode,
+  // history loading in front of it), not when a live refresh appends rows
+  // after it: that must leave the user's scroll position alone. A $derived
+  // is needed so the effect sees the number, not the rebuilt items array.
+  let searchMatchRow = $derived.by(() => {
+    const ordinal = inSessionSearch.resolvedCurrent?.ordinal;
+    if (ordinal === undefined) return -1;
+    return displayItemsAsc.findIndex((item) => item.ordinals.includes(ordinal));
+  });
+
   async function revealSearchMatch(match: Match, sessionId: string, reqId: number): Promise<boolean> {
     return revealMatch({
       ordinal: match.ordinal,
@@ -868,11 +879,11 @@
     const request = inSessionSearch.navigationRevision;
     const key = searchRevealKey;
     const sessionId = messages.sessionId;
-    const count = displayItemsAsc.length;
+    const matchRow = searchMatchRow;
     const newestFirst = ui.sortNewestFirst;
     if (!inSessionSearch.isActive || !key || !sessionId || !containerRef) return;
     void request;
-    void count;
+    void matchRow;
     void newestFirst;
     return untrack(() => {
       const match = inSessionSearch.resolvedCurrent;
