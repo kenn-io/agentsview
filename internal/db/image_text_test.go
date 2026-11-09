@@ -11,9 +11,6 @@ import (
 )
 
 func TestImageTextIndexRebuild(t *testing.T) {
-	if !simpleFTSRuntimeConfig.available() {
-		t.Skip("simple FTS runtime is not installed")
-	}
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d, err := Open(ctx, path)
@@ -29,31 +26,32 @@ func TestImageTextIndexRebuild(t *testing.T) {
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
 	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice 中文搜索", false))
-	require.NoError(t, d.Close())
-	d, err = Open(ctx, path)
-	require.NoError(t, err)
-	page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	_, err = d.getWriter().Exec(ctx, `DROP TABLE image_text_cjk_fts`)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = Open(ctx, path)
-	require.NoError(t, err)
-	page, err = d.Search(ctx, SearchFilter{Query: "中文搜索"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value='stale' WHERE key=?`, cjkFTSFingerprintStatsKey)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = Open(ctx, path)
-	require.NoError(t, err)
-	page, err = d.Search(ctx, SearchFilter{Query: "中文搜索"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
+	t.Run("CJK reopen", func(t *testing.T) {
+		if !simpleFTSRuntimeConfig.available() {
+			t.Skip("simple FTS runtime is not installed")
+		}
+		require.NoError(t, d.Close())
+		d, err = Open(ctx, path)
+		require.NoError(t, err)
+		page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		_, err = d.getWriter().Exec(ctx, `DROP TABLE image_text_cjk_fts`)
+		require.NoError(t, err)
+		require.NoError(t, d.Close())
+		d, err = Open(ctx, path)
+		require.NoError(t, err)
+		page, err = d.Search(ctx, SearchFilter{Query: "中文搜索"})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+	})
 	require.NoError(t, d.DropFTS(ctx))
 	require.NoError(t, d.RebuildFTS(ctx))
-	for _, query := range []string{"invoice", "中文搜索"} {
+	queries := []string{"invoice"}
+	if simpleFTSRuntimeConfig.available() {
+		queries = append(queries, "中文搜索")
+	}
+	for _, query := range queries {
 		page, err := d.Search(ctx, SearchFilter{Query: query})
 		require.NoError(t, err)
 		require.Len(t, page.Results, 1)

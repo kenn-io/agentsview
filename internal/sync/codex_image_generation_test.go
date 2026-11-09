@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"database/sql"
+	"fmt"
 	"image/color"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -76,4 +79,67 @@ func TestCodexGeneratedImageStoredAsImageResult(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestCodexGeneratedImageRestoredByFullResync(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b08"
+	png := testjsonl.SolidPNGBase64(2, 2, color.RGBA{G: 180, A: 255})
+	root := t.TempDir()
+	writeCodexRollout(t, root, "01", "rollout-2024-01-01T10-00-00-"+uuid+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "user", "2024-01-01T10:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "draw a green square", "2024-01-01T10:00:01Z"),
+		testjsonl.CodexImageGenerationCallJSON("ig_1", "A green square", png, "2024-01-01T10:00:02Z"),
+	))
+	sessionID := "codex:" + uuid
+	resultContent := func(t *testing.T, database *db.DB) string {
+		t.Helper()
+		messages, err := database.GetAllMessages(t.Context(), sessionID)
+		require.NoError(t, err)
+		for _, message := range messages {
+			for _, call := range message.ToolCalls {
+				return call.ResultContent
+			}
+		}
+		return ""
+	}
+	want := `[{"image_url":"data:image/png;base64,` + png + `","type":"input_image"}]`
+
+	database := dbtest.OpenTestDB(t)
+	agentDirs := map[parser.AgentType][]string{parser.AgentCodex: {root}}
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, want, resultContent(t, database))
+
+	// Model an archive written before data version 153, which kept no image:
+	// no result event and no result summary that could restore it.
+	const previousVersion = 152
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		for _, statement := range []string{
+			`DELETE FROM tool_result_events WHERE session_id = ?`,
+			`UPDATE tool_calls SET result_content = NULL, result_content_length = NULL WHERE session_id = ?`,
+		} {
+			if _, err := tx.ExecContext(t.Context(), statement, sessionID); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", previousVersion))
+		return err
+	}))
+	require.NoError(t, database.SetSessionDataVersion(t.Context(), sessionID, previousVersion))
+	require.Empty(t, resultContent(t, database), "the modeled archive holds no image")
+	engine.Close()
+	dbPath := database.Path()
+	require.NoError(t, database.Close())
+
+	database, err := db.OpenIsolated(t.Context(), dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
+	t.Cleanup(engine.Close)
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+	require.Zero(t, stats.Failed)
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), sessionID))
+	assert.Equal(t, want, resultContent(t, database))
 }
