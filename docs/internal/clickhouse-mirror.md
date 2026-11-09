@@ -464,10 +464,14 @@ A lock can outlive its holder:
 session has a current snapshot. Sessions pushed since the last refresh form a
 delta: their rows are prepared and priced in Go once per snapshot, sent to the
 read as an external table, and replace that session's stored rows. A refresh
-empties the delta. Before the first refresh, or while a session lacks a current
-snapshot, reads use raw rows. When the stored price copies no longer match the
-price records, for example after the records were cleared, reads keep the
-prepared rows and price them through the per-request join.
+empties the delta. A snapshot from which the refresh keeps no row, such as a
+trashed session's or one whose messages name a model but report no tokens, has
+nothing to prepare and never joins the delta. Each snapshot stores that answer
+in its `prepares_usage` column, so the check reads no usage arrays. Before the
+first refresh, or while a session lacks a current snapshot, reads use raw rows.
+When the stored price copies no longer match the price records, for example
+after the records were cleared, reads keep the prepared rows and price them
+through the per-request join.
 
 **When a push rebuilds.** Because reads stay exact while the table is behind, a
 rebuild only changes what reads cost, and it rewrites the whole table. On a

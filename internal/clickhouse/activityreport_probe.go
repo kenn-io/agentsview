@@ -323,15 +323,15 @@ func (s *Store) preparedCoveredSnapshots(ctx context.Context, stamp string) (map
 
 // compareUsageCoverage fills the number of sessions without a current
 // snapshot, the snapshots the prepared rows do not cover, and the covered
-// snapshots that no longer exist. A snapshot without usage facts or events
-// prepares no rows, so it is covered whether or not the refresh saw it; its
-// array sizes come from the size subcolumns, since under FINAL length()
-// reads the arrays.
+// snapshots that no longer exist. A snapshot from which the refresh keeps no
+// row, such as one of a trashed session or one whose messages report no
+// tokens, is covered whether or not the refresh saw it. The stored
+// chSnapshotPreparesUsage flag says which snapshots those are without reading
+// their usage arrays.
 func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnapshotKey]bool, live *usageCoverage) error {
 	rows, err := s.queryContext(ctx, `SELECT 0, id, push_version, machine, false FROM sessions
 		UNION ALL
-		SELECT 1, id, push_version, toString(revision),
-			usage_messages.size0 != 0 OR usage_events.size0 != 0 FROM usage_session_snapshots`)
+		SELECT 1, id, push_version, toString(revision), `+chSnapshotPreparesUsage+` FROM usage_session_snapshots`)
 	if err != nil {
 		return fmt.Errorf("reading usage coverage: %w", err)
 	}
@@ -345,8 +345,8 @@ func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnaps
 		var table uint8
 		var id, revision string
 		var version uint64
-		var hasUsage bool
-		if err := rows.Scan(&table, &id, &version, &revision, &hasUsage); err != nil {
+		var preparesUsage bool
+		if err := rows.Scan(&table, &id, &version, &revision, &preparesUsage); err != nil {
 			return fmt.Errorf("scanning usage coverage: %w", err)
 		}
 		if table == 0 {
@@ -360,7 +360,7 @@ func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnaps
 		live.revisions[id] = revision
 		key := usageSnapshotKey{id: id, revision: revision}
 		current[key] = true
-		if hasUsage && !covered[key] {
+		if preparesUsage && !covered[key] {
 			live.changed = append(live.changed, id)
 			live.changedKeys = append(live.changedKeys, key)
 		}

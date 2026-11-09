@@ -635,6 +635,61 @@ func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
 	requireFresh()
 }
 
+// A snapshot whose usage the refresh drops entirely has no prepared rows to
+// fall behind, so after a refresh it is current. Such snapshots are messages
+// that name a model but report no tokens, Claude's synthetic messages, and
+// trashed sessions. Counting them as pushed since the refresh made every read
+// prepare them again and send their ids to the server. A mirror created before
+// the snapshots recorded this gains it on the next schema step.
+func TestPreparedUsageCoversSnapshotsWithoutPreparedRows(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, syncer, store := newPreparedUsageStore(t)
+	const unreportedID, syntheticID = "ch-usage-unreported", "ch-usage-synthetic"
+	const ts = "2026-01-12T05:00:00.000Z"
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		{Session: fixtureSession(unreportedID, "delta", "no tokens", ts, 1), Messages: []db.Message{
+			usagePriceMessage(unreportedID, 0, ts, "round-test", "")}, ReplaceMessages: true, DataVersion: 1},
+		{Session: fixtureSession(syntheticID, "delta", "synthetic", ts, 1), Messages: []db.Message{
+			usagePriceMessage(syntheticID, 0, ts, "<synthetic>", `{"input_tokens":10}`)}, ReplaceMessages: true, DataVersion: 1},
+	})
+	require.NoError(t, err)
+	require.NoError(t, local.SoftDeleteSession(ctx, usagePriceTierID))
+	pushPreparedUsage(t, syncer)
+	var withUsage uint64
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT count() FROM usage_session_snapshots
+		WHERE id IN (?, ?, ?) AND usage_messages.size0 != 0`, unreportedID, syntheticID, usagePriceTierID).Scan(&withUsage))
+	require.EqualValues(t, 3, withUsage, "each snapshot must carry usage messages the refresh drops")
+	runPreparedUsageRefresh(t, store)
+
+	requireChanged := func(store *Store, want []string) {
+		t.Helper()
+		state, err := store.preparedUsageState(ctx)
+		require.NoError(t, err)
+		require.True(t, state.ready)
+		require.Equal(t, want, state.changed)
+		require.Empty(t, state.stale)
+	}
+	requireChanged(store, nil)
+
+	// A snapshot with tokens pushed after the refresh still needs its rows
+	// prepared at read time.
+	const reportedID = "ch-usage-reported"
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		{Session: fixtureSession(reportedID, "delta", "tokens", ts, 1), Messages: []db.Message{
+			usagePriceMessage(reportedID, 0, ts, "round-test", `{"input_tokens":10}`)}, ReplaceMessages: true, DataVersion: 1},
+	})
+	require.NoError(t, err)
+	pushPreparedUsage(t, syncer)
+	requireChanged(store, []string{reportedID})
+
+	execPreparedUsage(t, store, "ALTER TABLE usage_session_snapshots DROP COLUMN prepares_usage SETTINGS mutations_sync=2")
+	require.ErrorContains(t, CheckSchemaCompat(ctx, store.DB()), "usage_session_snapshots.prepares_usage")
+	require.NoError(t, EnsureSchemaOn(ctx, store.DB()))
+	require.NoError(t, CheckSchemaCompat(ctx, store.DB()))
+	requireChanged(NewStoreFromDB(store.DB()), []string{reportedID})
+}
+
 // A server that cannot exchange tables, such as one whose data directory is
 // on NFS, fails every refresh of a refreshable view that replaces its
 // target. There, each push must leave prepared usage filled from the

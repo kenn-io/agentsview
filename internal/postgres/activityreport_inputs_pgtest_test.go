@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -170,4 +171,46 @@ func TestPGActivityReportInputEmptySelectionAfterPush(t *testing.T) {
 	assert.Zero(t, empty.Report.Totals.OutputTokens)
 	got := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 700, got.Report.Totals.OutputTokens)
+}
+
+func TestPGActivityReportInputMessageCounts(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	messages := []db.Message{
+		{SessionID: "a", Ordinal: 0, Role: "user", Content: "range start", Timestamp: "2026-06-14T00:00:00Z"},
+		{SessionID: "a", Ordinal: 1, Role: "user", Content: "start", Timestamp: "2026-06-14T10:00:00Z"},
+		{SessionID: "a", Ordinal: 2, Role: "assistant", Content: "system", Timestamp: "2026-06-14T10:01:00Z", IsSystem: true},
+		{SessionID: "a", Ordinal: 3, Role: "user", Content: "result", Timestamp: "2026-06-14T10:02:00Z", SourceSubtype: "tool_result"},
+		{SessionID: "a", Ordinal: 4, Role: "assistant", Content: "boundary", Timestamp: "2026-06-14T10:05:00Z"},
+	}
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: "a", Project: "project-a", Machine: "test-machine", Agent: "claude",
+		StartedAt: new("2026-06-14T00:00:00Z"), EndedAt: new("2026-06-14T10:05:00Z"), MessageCount: len(messages),
+	}))
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", messages))
+	pgKeptPush(t, syncer, false)
+	counter := &activityInputReadCounter{storeExecutor: store.pg}
+	store.pg = counter
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	q.Bucket = activity.BucketSpec{Unit: activity.BucketDay, NominalSeconds: 86400}
+	q.Partial = true
+	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 5*time.Minute + 500*time.Nanosecond)
+	before := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 2, before.Report.Buckets[0].UserMessages)
+	assert.Zero(t, before.Report.Buckets[0].AssistantMessages)
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Microsecond)
+	after := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 2, after.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 1, after.Report.Buckets[0].AssistantMessages)
+	q.RangeStart = q.RangeStart.Add(time.Microsecond)
+	shifted := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 1, shifted.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 1, shifted.Report.Buckets[0].AssistantMessages)
+	assert.Len(t, counter.transcriptReads, 1)
+	messages[2].IsSystem = false
+	messages[3].SourceSubtype = ""
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", messages))
+	pgKeptPush(t, syncer, false)
+	changed := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 2, changed.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 2, changed.Report.Buckets[0].AssistantMessages)
 }

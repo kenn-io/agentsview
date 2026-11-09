@@ -31,6 +31,7 @@ type pgActivityInputs struct {
 // shared handles, and timestamps keep PostgreSQL's microsecond precision.
 type pgActivityMessage struct {
 	ordinal     int32
+	counted     bool
 	us          int64
 	role, model unique.Handle[string]
 }
@@ -128,7 +129,9 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 		}
 	}
 	if len(missing) > 0 {
-		rows, err := s.pg.QueryContext(ctx, `SELECT session_id, ordinal, role, timestamp, model
+		rows, err := s.pg.QueryContext(ctx, `SELECT session_id, ordinal, role, timestamp, model,
+ role IN ('user', 'assistant') AND is_system = false
+ AND COALESCE(source_subtype, '') <> 'tool_result'
  FROM messages WHERE session_id = ANY($1) AND timestamp IS NOT NULL
  ORDER BY session_id, ordinal`, pgx.QueryExecModeDescribeExec, missing)
 		if err != nil {
@@ -150,7 +153,7 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 			} else {
 				compact := make([]pgActivityMessage, len(session))
 				for i, m := range session {
-					compact[i] = pgActivityMessage{ordinal: int32(m.Ordinal), us: m.At.UnixMicro(), role: handles.Intern(m.Role), model: handles.Intern(m.Model)}
+					compact[i] = pgActivityMessage{ordinal: int32(m.Ordinal), counted: m.Counted, us: m.At.UnixMicro(), role: handles.Intern(m.Role), model: handles.Intern(m.Model)}
 				}
 				inputs.transcripts[id] = compact
 			}
@@ -163,7 +166,7 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 			}
 			var next string
 			var m activity.TranscriptMessage
-			if err := rows.Scan(&next, &m.Ordinal, &m.Role, &m.At, &m.Model); err != nil {
+			if err := rows.Scan(&next, &m.Ordinal, &m.Role, &m.At, &m.Model, &m.Counted); err != nil {
 				return fmt.Errorf("scanning pg activity report message: %w", err)
 			}
 			if id != next {
@@ -187,7 +190,7 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 			messages := inputs.transcripts[id]
 			expanded = slices.Grow(expanded[:0], len(messages))[:len(messages)]
 			for i, m := range messages {
-				expanded[i] = activity.TranscriptMessage{Ordinal: int(m.ordinal), At: time.UnixMicro(m.us).UTC(), Role: m.role.Value(), Model: m.model.Value()}
+				expanded[i] = activity.TranscriptMessage{Ordinal: int(m.ordinal), Counted: m.counted, At: time.UnixMicro(m.us).UTC(), Role: m.role.Value(), Model: m.model.Value()}
 			}
 			yield(id, expanded)
 		}

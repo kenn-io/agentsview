@@ -74,7 +74,6 @@ func TestPGActivityReportReadersAvoidPreparedStatements(t *testing.T) {
 	_, err = view.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, q, nil)
 	require.NoError(t, err)
 	for _, reader := range []string{
-		"%SELECT session_id, role, timestamp FROM messages%",
 		"%AS web_search_requests%",
 		"%SELECT session_id, ordinal, role, timestamp, model%",
 		"%WITH terminal_events AS%",

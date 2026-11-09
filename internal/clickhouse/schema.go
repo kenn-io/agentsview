@@ -808,7 +808,7 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 	if snapshot, err := usageSessionSnapshotSpec(); err != nil {
 		return err
 	} else if cols, ok := existing[snapshot.name]; ok {
-		for _, c := range snapshot.columns {
+		for _, c := range append(slices.Clip(snapshot.columns), col(chSnapshotPreparesUsage, "Bool")) {
 			if _, has := cols[c.name]; !has {
 				missing = append(missing, snapshot.name+"."+c.name)
 			}
