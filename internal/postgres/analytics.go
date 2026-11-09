@@ -2862,14 +2862,15 @@ func (s *Store) populateFrustrationMarkers(
 		in := "(" + strings.Join(placeholders, ",") + ")"
 		// Read each version once and keep the prompt scan on messages, with
 		// both branches sharing one statement's snapshot.
-		q := `SELECT id, ` + versionColumn + `::text, '', false
+		q := `SELECT id, ` + versionColumn + `::text, ''
 			FROM sessions
 			WHERE id IN ` + in + `
 			UNION ALL
-			SELECT session_id, NULL, content, is_system
+			SELECT session_id, NULL, content
 			FROM messages
 			WHERE role = 'user'
 			  AND source_subtype <> 'tool_result'
+			  AND NOT is_system
 			  AND session_id IN ` + in
 		msgRows, err := s.pg.QueryContext(ctx, q, pb.args...)
 		if err != nil {
@@ -2881,9 +2882,8 @@ func (s *Store) populateFrustrationMarkers(
 		for msgRows.Next() {
 			var sessionID, content string
 			var version *string
-			var isSystem bool
 			if err := msgRows.Scan(
-				&sessionID, &version, &content, &isSystem,
+				&sessionID, &version, &content,
 			); err != nil {
 				return fmt.Errorf(
 					"scanning frustration marker: %w", err,
@@ -2891,9 +2891,6 @@ func (s *Store) populateFrustrationMarkers(
 			}
 			if version != nil {
 				scannedVersions[sessionID] = *version
-				continue
-			}
-			if isSystem {
 				continue
 			}
 			if signals.IsFrustrationMarker(content) {
