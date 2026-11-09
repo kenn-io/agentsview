@@ -295,9 +295,8 @@ func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 	require.NoError(t, err, "Open restricted")
 	t.Cleanup(func() { _ = restricted.Close() })
 
-	indexes := []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing", "idx_sessions_id_tail"}
-	for _, index := range indexes {
-		_, err = admin.ExecContext(t.Context(), `DROP INDEX `+index)
+	for _, index := range preparationIndexesPG {
+		_, err = admin.ExecContext(t.Context(), `DROP INDEX `+index.name)
 		require.NoError(t, err)
 	}
 	_, err = admin.ExecContext(t.Context(), `DROP TRIGGER trg_sessions_automation_audit ON sessions;
@@ -342,8 +341,8 @@ func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 	require.NoError(t, syncer.EnsureSchema(t.Context()),
 		"restricted preparation must tolerate index and raw custody DDL permissions")
 	assert.True(t, syncer.schemaDone)
-	for _, index := range indexes {
-		assert.False(t, pgHasIndex(t.Context(), admin, index), "restricted publisher cannot install %s", index)
+	for _, index := range preparationIndexesPG {
+		assert.False(t, pgHasIndex(t.Context(), admin, index.name), "restricted publisher cannot install %s", index.name)
 	}
 	var automated bool
 	require.NoError(t, restricted.QueryRowContext(t.Context(), `SELECT is_automated FROM sessions WHERE id='restricted-stale'`).Scan(&automated))
