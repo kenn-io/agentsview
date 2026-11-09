@@ -48,6 +48,9 @@ type UsageCacheSource interface {
 	UsageSessionNames(context.Context, []string) (map[string][2]string, error)
 }
 
+// IsUsageCacheConflict reports an exhausted source or publication conflict.
+func IsUsageCacheConflict(err error) bool { return errors.Is(err, errUsageCacheSourceChanged) }
+
 // UsageCacheReader exposes aggregate reads backed by the shared cache engine.
 type UsageCacheReader struct{ engine *DB }
 
@@ -87,9 +90,6 @@ func (db *DB) captureExternalUsage(ctx context.Context, filter UsageFilter, ids 
 		return snapshot, err
 	}
 	snapshot.exactAccountRevision = true
-	for i := range snapshot.Versions {
-		snapshot.Versions[i].CaptureRevision = snapshot.ChangeRevision
-	}
 	snapshot.location = filter.Location()
 	snapshot.Intervals = usageQueryIntervals(filter)
 	snapshot.PricingDigest, err = export.EffectivePricingDigest(snapshot.PricingRows)
@@ -165,11 +165,17 @@ func (c *usageFillCoordinator) extractExternalSessions(ctx context.Context, vers
 	if err != nil {
 		return nil, nil, err
 	}
+	capturedVersions := make(map[string]usageSourceVersion, len(snapshot.Versions))
+	for _, version := range snapshot.Versions {
+		capturedVersions[version.SessionID] = version
+	}
 	for _, version := range versions {
 		if version.CapturePricingDigest != "" && version.CapturePricingDigest != capturedPricing {
 			return nil, nil, errUsageCacheSourceChanged
 		}
-		if version.CaptureRevision != 0 && version.CaptureRevision != snapshot.ChangeRevision {
+		captured := capturedVersions[version.SessionID]
+		captured.SessionID = version.SessionID
+		if !version.Equal(captured) {
 			return nil, nil, errUsageCacheSourceChanged
 		}
 	}

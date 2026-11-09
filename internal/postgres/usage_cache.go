@@ -302,7 +302,6 @@ func (source *pgUsageCacheSource) ReadUsageAccounts(ctx context.Context) (string
 	}
 	defer rows.Close()
 	var accounts []db.UsageSourceAccount
-	defer rows.Close()
 	for rows.Next() {
 		var account db.UsageSourceAccount
 		var timestamp sql.NullTime
@@ -328,4 +327,8 @@ func (source *pgUsageCacheSource) UsageSessionNames(ctx context.Context, ids []s
 		names[id] = [2]string{meta.displayName, meta.sessionName}
 	}
 	return names, err
+}
+
+func directUsageRequired(err error) bool {
+	return errors.Is(err, errPGUsageCacheUnavailable) || db.IsUsageCacheConflict(err)
 }

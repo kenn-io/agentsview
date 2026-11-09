@@ -28,7 +28,6 @@ func (kind usageQueryKind) readsJournaledTotals() bool {
 }
 
 type usageSourceVersion struct {
-	CaptureRevision       int64
 	CapturePricingDigest  string
 	UsageGeneration       string
 	MessageOrdinal        sql.NullInt64

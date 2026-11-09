@@ -18,10 +18,20 @@ import (
 
 type usageCacheProbe struct {
 	*pgUsageCacheSource
-	mu        sync.Mutex
-	extracted []string
-	before    func(context.Context, []string) error
-	after     func() error
+	mu             sync.Mutex
+	extracted      []string
+	before         func(context.Context, []string) error
+	after          func() error
+	beforeAccounts func(context.Context) error
+}
+
+func (probe *usageCacheProbe) ReadUsageAccounts(ctx context.Context) (string, int64, []db.UsageSourceAccount, error) {
+	if probe.beforeAccounts != nil {
+		if err := probe.beforeAccounts(ctx); err != nil {
+			return "", 0, nil, err
+		}
+	}
+	return probe.pgUsageCacheSource.ReadUsageAccounts(ctx)
 }
 
 func (probe *usageCacheProbe) StreamUsage(ctx context.Context, ids []string, emit func(string, usagefacts.Fact) error) (db.UsageSourceSnapshot, error) {
@@ -368,4 +378,88 @@ func TestPGUsageCacheCloseCancelsOwnedFill(t *testing.T) {
 	require.Error(t, <-done)
 	attachUsageCacheProbe(t, store, directory)
 	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{Timezone: "UTC"})
+}
+
+func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at,group_key)
+ SELECT 'expensive-'||n,'project-a','test-machine','codex','2026-01-01'::timestamptz,'expensive-'||n FROM generate_series(1,101)n;
+ INSERT INTO usage_events(session_id,source,model,input_tokens,output_tokens,occurred_at,dedup_key)
+ SELECT id,'provider','paid-a',1,600,started_at,id FROM sessions WHERE id LIKE 'expensive-%'`)
+	require.NoError(t, err)
+	attachUsageCacheProbe(t, store, t.TempDir())
+	direct := &Store{pg: store.pg}
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	for _, grouped := range []bool{false, true} {
+		filter.TopSessionsByGroup = grouped
+		for _, selection := range []db.UsageTokenTypes{0, db.UsageTokenTypeOutput, db.UsageTokenTypeInput} {
+			filter.TopSessionsSort = "cost"
+			if selection != 0 {
+				filter.TopSessionsSort = "tokens"
+			}
+			filter.TopSessionsTokenTypes = selection
+			want, err := direct.GetTopSessionsByCost(ctx, filter, 1)
+			require.NoError(t, err)
+			got, err := store.GetTopSessionsByCost(ctx, filter, 1)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			if selection == db.UsageTokenTypeOutput {
+				require.Equal(t, "paid-b", got[0].SessionID)
+			}
+			if grouped {
+				require.Len(t, got, 2, "omitted groups retain their totals in the remainder")
+			}
+		}
+	}
+}
+
+func TestPGUsageCacheBusySourceReturnsCurrentDirectRead(t *testing.T) {
+	for _, accounts := range []bool{false, true} {
+		t.Run(map[bool]string{false: "sessions", true: "accounts"}[accounts], func(t *testing.T) {
+			_, _, store, _ := keptUsageFixture(t)
+			ctx := t.Context()
+			_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',1,2,3,'account-one')`)
+			require.NoError(t, err)
+			directory := t.TempDir()
+			probe := attachUsageCacheProbe(t, store, directory)
+			mutation := func(ctx context.Context) error {
+				query := `UPDATE usage_events SET output_tokens=output_tokens+1 WHERE session_id='paid-a'`
+				if accounts {
+					query = `UPDATE cursor_usage_events SET charged_microdollars=charged_microdollars+1 WHERE id=1`
+				}
+				_, err := store.pg.ExecContext(ctx, query)
+				return err
+			}
+			if accounts {
+				probe.beforeAccounts = mutation
+			} else {
+				probe.before = func(ctx context.Context, _ []string) error { return mutation(ctx) }
+			}
+			filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+			got, err := store.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			probe.before, probe.beforeAccounts = nil, nil
+			direct := &Store{pg: store.pg}
+			want, err := direct.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			require.NoError(t, store.usageCache.Close())
+			attachUsageCacheProbe(t, store, directory)
+			requireCachedUsageMatchesDirect(t, store, filter)
+		})
+	}
+}
+
+func TestPGUsageCacheUnrelatedPushDuringEveryExtraction(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	_, err := store.pg.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,started_at,display_name) VALUES('outside','other','test-machine','codex','2025-01-01','outside')`)
+	require.NoError(t, err)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	probe.before = func(ctx context.Context, _ []string) error {
+		_, err := store.pg.ExecContext(ctx, `UPDATE sessions SET display_name=display_name||'!' WHERE id='outside'`)
+		return err
+	}
+	_, err = store.usageCache.GetDailyUsage(t.Context(), db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"})
+	require.NoError(t, err)
 }

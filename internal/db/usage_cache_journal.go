@@ -239,7 +239,6 @@ func (cache *usageCache) refreshJournaledUsageWindow(ctx context.Context, snapsh
 		version, ok := versions[id]
 		if !ok {
 			version.SessionID = id
-			version.CaptureRevision = refresh.ChangeRevision
 		}
 		refresh.Versions = append(refresh.Versions, version)
 	}

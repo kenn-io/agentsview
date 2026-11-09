@@ -220,8 +220,15 @@ func readUsageCachedSessions(
 	return results, nil
 }
 
+func (c *usageFillCoordinator) fillContext() (context.Context, context.CancelFunc) {
+	if c.archive.usageSource != nil {
+		return context.WithTimeout(c.ctx, 10*time.Minute)
+	}
+	return c.ctx, func() {}
+}
+
 func (c *usageFillCoordinator) fillSessions(versions []usageSourceVersion) {
-	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Minute)
+	ctx, cancel := c.fillContext()
 	defer cancel()
 	results, err := c.fillSessionsDetached(ctx, versions)
 	c.completeSessionCalls(versions, results, err)
@@ -1465,7 +1472,7 @@ func (c *usageFillCoordinator) cursorHighWater(ctx context.Context) (int64, erro
 }
 
 func (c *usageFillCoordinator) fillCursor() {
-	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Minute)
+	ctx, cancel := c.fillContext()
 	defer cancel()
 	var err error
 	for err == nil {
