@@ -482,6 +482,7 @@ func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testi
 			{"parent machine", db.UsageFilter{Machine: "parent-machine"}, true},
 			{"child machine", db.UsageFilter{Machine: "child-machine"}, false},
 			{"winning model", db.UsageFilter{Model: "claude-opus-4-6"}, true},
+			{"winning model and parent project", db.UsageFilter{Model: "claude-opus-4-6", ProjectLabels: []string{"parent-project"}}, true},
 			{"losing model", db.UsageFilter{Model: "partial-model"}, false},
 			{"exclude winning model", db.UsageFilter{ExcludeModel: "claude-opus-4-6"}, false},
 			{"exclude losing model", db.UsageFilter{ExcludeModel: "partial-model"}, true},
@@ -503,14 +504,19 @@ func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testi
 				assert.Equal(t, wantInput, daily.Totals.InputTokens)
 				assert.Equal(t, wantOutput, daily.Totals.OutputTokens)
 				for _, grouped := range []bool{false, true} {
-					filter.TopSessionsByGroup = grouped
-					top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+					topFilter := filter
+					topFilter.TopSessionsByGroup = grouped
+					top, err := store.GetTopSessionsByCost(ctx, topFilter, 10)
 					require.NoError(t, err)
 					require.Len(t, top, wantCount)
 					if tc.want {
 						assert.Equal(t, "claude:daily-streamed", top[0].SessionID)
 						assert.Equal(t, wantInput, top[0].InputTokens)
 						assert.Equal(t, wantOutput, top[0].OutputTokens)
+						if grouped {
+							assert.Equal(t, "parent-machine", top[0].Machine)
+							assert.Equal(t, "2026-05-20T10:00:00Z", top[0].StartedAt)
+						}
 					}
 				}
 				counts, err := store.GetUsageSessionCounts(ctx, filter)
@@ -946,53 +952,6 @@ func TestStoreGetTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 	assert.Equal(t, 2, top[0].CacheCreationTokens)
 	assert.Equal(t, 3, top[0].CacheReadTokens)
 	assert.Equal(t, 65, top[0].TotalTokens)
-}
-
-func TestStoreGetUsageSessionCountsFiltersAfterCrossSessionSnapshotSelection(
-	t *testing.T,
-) {
-	_, store := prepareUsageSchema(
-		t, "agentsview_usage_counts_filtered_snapshot_test")
-	ctx := t.Context()
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent, started_at,
-			message_count, user_message_count
-		) VALUES
-			('count-parent', 'test-machine', 'parent-project', 'claude',
-			 '2026-05-20T10:00:00Z'::timestamptz, 1, 1),
-			('count-child', 'test-machine', 'child-project', 'claude',
-			 '2026-05-20T10:01:00Z'::timestamptz, 1, 1);
-		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage, claude_message_id, claude_request_id
-		) VALUES
-			('count-parent', 0, 'assistant', 'partial',
-			 '2026-05-20T10:00:00Z'::timestamptz, 7, 'partial-model',
-			 '{"input_tokens":10,"output_tokens":5}',
-			 'count-message', 'count-request'),
-			('count-child', 0, 'assistant', 'complete',
-			 '2026-05-20T10:01:00Z'::timestamptz, 8, 'complete-model',
-			 '{"input_tokens":1000,"output_tokens":631}',
-			 'count-message', 'count-request')`)
-	require.NoError(t, err)
-
-	partialCounts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
-		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
-		Model: "partial-model",
-	})
-	require.NoError(t, err)
-	assert.Zero(t, partialCounts.Total,
-		"the discarded partial model must not count a session")
-
-	completeParentCounts, err := store.GetUsageSessionCounts(ctx, db.UsageFilter{
-		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
-		Model: "complete-model", ProjectLabels: []string{"parent-project"},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1, completeParentCounts.Total)
-	assert.Equal(t, 1, completeParentCounts.ByProject["parent-project"])
-	assert.NotContains(t, completeParentCounts.ByProject, "child-project")
 }
 
 func TestStoreGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
