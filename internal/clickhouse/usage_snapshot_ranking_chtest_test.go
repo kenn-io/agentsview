@@ -36,9 +36,10 @@ func TestUsageSnapshotRanking(t *testing.T) {
 			missingBoth, missingMessage, missingRequest, sharedA,
 			snapshot(a, 5, late, `{"input_tokens":10,"output_tokens":20}`),
 		}, UsageEvents: []db.UsageEvent{{Source: "hermes", Model: "claude-test", InputTokens: 11, OutputTokens: 12, OccurredAt: early, DedupKey: "ranking-event"}}, ReplaceMessages: true, DataVersion: 1},
-		{Session: fixtureSession(b, "rank-beta", "b", late, 3), Messages: []db.Message{
+		{Session: fixtureSession(b, "rank-beta", "b", late, 4), Messages: []db.Message{
 			snapshot(b, 0, late, `{"input_tokens":10,"output_tokens":20}`),
 			snapshot(b, 1, late, `{"input_tokens":10,"output_tokens":20}`), sharedB,
+			snapshot(b, 3, early, `{"input_tokens":10,"output_tokens":20}`),
 		}, ReplaceMessages: true, DataVersion: 1},
 	}
 	_, err := local.WriteSessionBatchAtomic(t.Context(), writes)
@@ -73,7 +74,7 @@ func TestUsageSnapshotRanking(t *testing.T) {
 			assert.Equal(t, a, session)
 			assert.Equal(t, sql.NullInt64{Int64: 1, Valid: true}, ordinal)
 			assert.EqualValues(t, 20, output)
-			assert.EqualValues(t, 45, suppressed)
+			assert.EqualValues(t, 65, suppressed)
 			assert.EqualValues(t, 7, searches)
 			assert.False(t, rows.Next())
 			require.NoError(t, rows.Err())
