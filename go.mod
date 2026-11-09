@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
 	github.com/aws/smithy-go v1.28.7
 	github.com/ccoveille/go-safecast/v2 v2.0.1
-	github.com/cenkalti/backoff/v7 v7.0.2
+	github.com/cenkalti/backoff/v7 v7.0.3
 	github.com/coder/websocket v1.8.15
 	github.com/danielgtaylor/huma/v2 v2.40.0
 	github.com/dlclark/regexp2/v2 v2.12.0
@@ -32,7 +32,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
-	github.com/shirou/gopsutil/v4 v4.26.9
+	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
@@ -40,11 +40,11 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 	github.com/thlib/go-timezone-local v0.0.9
 	github.com/tidwall/gjson v1.20.0
-	github.com/yuin/goldmark/v2 v2.1.12
+	github.com/yuin/goldmark/v2 v2.1.13
 	go.kenn.io/docbank v0.17.0
 	go.kenn.io/kata v0.22.0
 	go.kenn.io/kit v0.48.4
-	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
 	golang.org/x/mod v0.42.0
 	golang.org/x/net v0.62.0
@@ -53,8 +53,8 @@ require (
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	hegel.dev/go/hegel v0.9.29
-	modernc.org/libc v1.79.1
-	modernc.org/sqlite v1.61.0
+	modernc.org/libc v1.80.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
