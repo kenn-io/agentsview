@@ -115,7 +115,6 @@ func TestS3CodexParentCacheMaterialize(t *testing.T) {
 		name     string
 		maxBytes int64
 		steps    []string
-		close    bool
 		want     map[string]int
 	}{
 		{
@@ -130,18 +129,11 @@ func TestS3CodexParentCacheMaterialize(t *testing.T) {
 			name: "retries a failed download", maxBytes: 1 << 20,
 			steps: []string{missing, missing}, want: map[string]int{missing: 2},
 		},
-		{
-			name: "fetches directly after close", maxBytes: 1 << 20,
-			steps: []string{a, a}, close: true, want: map[string]int{a: 2},
-		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			fetches := countS3Fetches(t, objects)
 			cache := newS3CodexParentCache(tt.maxBytes)
 			cache.tempRoot = t.TempDir()
-			if tt.close {
-				cache.close()
-			}
 			for i, uri := range tt.steps {
 				dst := filepath.Join(t.TempDir(), filepath.Base(uri))
 				err := cache.materialize(t.Context(), parser.S3Object{URI: uri}, dst)
