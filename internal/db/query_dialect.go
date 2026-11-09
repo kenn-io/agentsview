@@ -376,15 +376,15 @@ func DuckDBQueryDialect() QueryDialect {
 		trueLiteral:      "TRUE",
 		falseLiteral:     "FALSE",
 		dateStartExpr: func(q func(string) string) string {
-			return "CAST(COALESCE(" + q("started_at") + ", " +
-				q("created_at") + ") AS TIMESTAMP)"
+			return "COALESCE(" + q("started_at") + ", " +
+				q("created_at") + ")"
 		},
 		dateEndExpr: func(q func(string) string) string {
-			return "CAST(COALESCE(" + q("ended_at") +
+			return "COALESCE(" + q("ended_at") +
 				", (SELECT MAX(m.timestamp) FROM messages m" +
 				" WHERE m.session_id = " + outerSessionID(q) +
 				" AND m.timestamp IS NOT NULL), " + q("started_at") +
-				", " + q("created_at") + ") AS TIMESTAMP)"
+				", " + q("created_at") + ")"
 		},
 		dateParam: func(ph string) string {
 			return "CAST(" + ph + " AS TIMESTAMP)"
@@ -419,8 +419,8 @@ func DuckDBQueryDialect() QueryDialect {
 			if hostPh != "" {
 				cond += " AND lower(pl->>'host') = " + hostPh
 			}
-			return "len(list_filter(CAST(json_extract(NULLIF(" + col +
-				", ''), '$[*]') AS JSON[]), lambda pl: " + cond + ")) > 0"
+			return "len(list_filter(json_extract(NULLIF(" + col +
+				", ''), '$[*]'), lambda pl: " + cond + ")) > 0"
 		},
 	}
 }

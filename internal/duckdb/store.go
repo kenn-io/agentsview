@@ -826,9 +826,9 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				-1 AS ordinal,
 				CASE
 					WHEN COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
-						THEN COALESCE(s.display_name, s.session_name, '')
+						THEN COALESCE(s.display_name, s.session_name)
 					WHEN s.first_message ILIKE ? ESCAPE '\'
-						THEN COALESCE(s.first_message, '')
+						THEN s.first_message
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
 				1.0 AS rank, 2 AS match_priority, 0 AS match_pos

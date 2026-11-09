@@ -152,7 +152,7 @@ func (s analyticsSQL) Autonomy(ctx context.Context, ids []string, _ db.Analytics
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id,
 			SUM(CASE WHEN role = 'user' AND is_system = FALSE
-				AND COALESCE(source_subtype, '') != 'tool_result' THEN 1 ELSE 0 END) AS user_count,
+				AND source_subtype != 'tool_result' THEN 1 ELSE 0 END) AS user_count,
 			SUM(CASE WHEN role = 'assistant' AND has_tool_use = TRUE THEN 1 ELSE 0 END) AS tool_count
 		FROM messages
 		WHERE session_id IN `+ph+`
@@ -241,7 +241,7 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	q := `SELECT session_id, content, is_system
 		FROM messages
-		WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN (` +
+		WHERE role = 'user' AND source_subtype <> 'tool_result' AND session_id IN (` +
 		strings.Join(placeholders, ",") + `)`
 	msgRows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
@@ -573,7 +573,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 				NULL AS cost_microdollars, '' AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
 			s.group_key AS group_key, COALESCE(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
@@ -589,7 +589,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			'' AS source_uuid,
 			CASE
 				WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
-				ELSE ue.session_id || ':' || ue.source || ':id:' || CAST(ue.id AS VARCHAR)
+				ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 			END AS usage_dedup_key,
 				ue.input_tokens AS input_tokens, ue.output_tokens AS output_tokens,
 				ue.cache_creation_input_tokens AS cache_create,
@@ -599,7 +599,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 				ue.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
 			s.group_key AS group_key, COALESCE(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
@@ -861,7 +861,7 @@ func duckUsageCTEFromRaw(
 					ELSE attributed.is_automated END AS is_automated,
 				CASE WHEN attributed.id IS NULL THEN ranked.display_name ELSE COALESCE(
 					attributed.display_name, attributed.session_name,
-					attributed.first_message, attributed.project, attributed.id
+					attributed.first_message, attributed.project
 				) END AS display_name,
 				CASE WHEN attributed.id IS NULL THEN ranked.group_key ELSE attributed.group_key END AS group_key,
 				CASE WHEN attributed.id IS NULL THEN ranked.session_name ELSE COALESCE(attributed.session_name, '') END AS session_name,
