@@ -82,6 +82,10 @@ func TestDuckDBFrustrationMemoSkipsMissingFingerprint(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `UPDATE sessions SET agentsview_push_fingerprint = NULL`)
 	require.NoError(t, err)
+	// A system row is not a prompt, so its marker text must not count.
+	_, err = conn.ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content, is_system)
+		SELECT session_id, 99, 'user', 'this is broken', true FROM messages LIMIT 1`)
+	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	store, err := NewStore(ctx, path)
 	require.NoError(t, err)

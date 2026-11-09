@@ -239,9 +239,10 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	if len(args) == 0 {
 		return nil
 	}
-	q := `SELECT session_id, content, is_system
+	q := `SELECT session_id, content
 		FROM messages
-		WHERE role = 'user' AND source_subtype <> 'tool_result' AND session_id IN (` +
+		WHERE role = 'user' AND source_subtype <> 'tool_result'
+			AND NOT is_system AND session_id IN (` +
 		strings.Join(placeholders, ",") + `)`
 	msgRows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
@@ -250,14 +251,11 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	defer msgRows.Close()
 	for msgRows.Next() {
 		var sessionID, content string
-		var isSystem bool
-		if err := msgRows.Scan(
-			&sessionID, &content, &isSystem,
-		); err != nil {
+		if err := msgRows.Scan(&sessionID, &content); err != nil {
 			return fmt.Errorf("scanning duckdb frustration marker: %w", err)
 		}
 		i, ok := idx[sessionID]
-		if !ok || isSystem {
+		if !ok {
 			continue
 		}
 		if signals.IsFrustrationMarker(content) {

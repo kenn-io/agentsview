@@ -4271,9 +4271,10 @@ func (db *DB) populateFrustrationMarkers(
 	}
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
-		q := `SELECT session_id, ordinal, content, is_system
+		q := `SELECT session_id, content
 			FROM messages
-			WHERE role = 'user' AND source_subtype <> 'tool_result' AND session_id IN ` + ph
+			WHERE role = 'user' AND source_subtype <> 'tool_result'
+				AND is_system = 0 AND session_id IN ` + ph
 		msgRows, err := db.getReader().QueryContext(ctx, q, args...)
 		if err != nil {
 			return fmt.Errorf(
@@ -4283,17 +4284,13 @@ func (db *DB) populateFrustrationMarkers(
 		defer msgRows.Close()
 		for msgRows.Next() {
 			var sessionID, content string
-			var ordinal int
-			var isSystem bool
-			if err := msgRows.Scan(
-				&sessionID, &ordinal, &content, &isSystem,
-			); err != nil {
+			if err := msgRows.Scan(&sessionID, &content); err != nil {
 				return fmt.Errorf(
 					"scanning frustration marker: %w", err,
 				)
 			}
 			i, ok := idx[sessionID]
-			if !ok || isSystem {
+			if !ok {
 				continue
 			}
 			if signals.IsFrustrationMarker(content) {

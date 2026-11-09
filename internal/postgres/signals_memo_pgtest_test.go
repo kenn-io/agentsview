@@ -137,9 +137,13 @@ func TestFrustrationMemo(t *testing.T) {
 			syncer, local, _, ctx := newSessionProvenancePushSync(t, schema)
 			url := testPGURL(t)
 			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
-			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1}
+			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 2}
 			require.NoError(t, local.UpsertSession(ctx, session))
-			messages := []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "this is broken"}}
+			// The system row is not a prompt, so its marker text must not count.
+			messages := []db.Message{
+				{SessionID: id, Ordinal: 0, Role: "user", Content: "this is broken"},
+				{SessionID: id, Ordinal: 1, Role: "user", Content: "this is broken", IsSystem: true},
+			}
 			require.NoError(t, local.InsertMessages(ctx, messages))
 			require.NoError(t, local.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{
 				QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
