@@ -138,7 +138,8 @@ func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
 
 func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	fake := &fakeEmbeddingsManager{}
-	s := newEmbeddingsTestServer(t, fake)
+	var started bool
+	s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{messages: fake, buildStarted: &started}))
 
 	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
 		vector.BuildRequest{FullRebuild: true})
@@ -149,6 +150,7 @@ func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.True(t, body.Started)
+	assert.True(t, started)
 
 	require.Len(t, fake.startBuildCalls, 1)
 	assert.True(t, fake.startBuildCalls[0].FullRebuild)
@@ -447,6 +449,7 @@ type fakeEmbeddingsRuntime struct {
 	includeAutomated bool
 	busy             bool
 	setupBuild       **vector.BuildRequest
+	buildStarted     *bool
 }
 
 func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
@@ -460,7 +463,11 @@ func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
 	}
 }
 func (r fakeEmbeddingsRuntime) IncludeAutomated() bool { return r.includeAutomated }
-func (r fakeEmbeddingsRuntime) BuildStarted()          {}
+func (r fakeEmbeddingsRuntime) BuildStarted() {
+	if r.buildStarted != nil {
+		*r.buildStarted = true
+	}
+}
 func (r fakeEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
 	return EmbeddingsSetupStatus{Enabled: true, Busy: r.busy}, nil
 }

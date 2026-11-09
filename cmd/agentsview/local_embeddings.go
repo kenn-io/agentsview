@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"sync"
 	"time"
 
@@ -53,15 +52,25 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	return localEmbeddingEndpoint(ctx, opts)
 }
 
-func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig, name string, in *bufio.Scanner, out io.Writer) error {
+func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig, name string, in *bufio.Scanner, out io.Writer, setup bool, progress func(int64, int64)) (bool, error) {
 	_, server, err := c.Server(name)
 	if err != nil {
-		return err
+		return false, err
 	}
+	asked := false
 	_, err = resolveLocalEmbeddings(ctx, server, func(_ context.Context, size int64) (bool, error) {
-		return confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", (size+999999)/1000000)), nil
-	}, nil)
-	return err
+		asked = true
+		message := fmt.Sprintf("Download approximately %d MB for local semantic search?", (size+999999)/1000000)
+		if setup {
+			message = fmt.Sprintf("Turn on search by meaning? Downloads approximately %d MB once, shared by Kenn apps.", (size+999999)/1000000)
+		}
+		approved := confirmScanned(in, out, message)
+		if !approved && setup {
+			return false, errors.New("search setup declined")
+		}
+		return approved, nil
+	}, progress)
+	return asked, err
 }
 
 func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server config.VectorEmbeddingsServerConfig, role embedconfig.Role, retryRateLimits bool) kitvec.EncodeFunc {
@@ -103,8 +112,6 @@ func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server confi
 	}
 }
 
-var errSetupJoined = errors.New("joined existing search setup")
-
 func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner, cfg config.Config, client embeddingsDaemonClient, req vector.BuildRequest) error {
 	selected := cfg
 	if req.Using != "" {
@@ -114,46 +121,17 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	if err != nil {
 		return err
 	}
-	_, server, err := cfg.Vector.Embeddings.Server(req.Using)
-	if err != nil {
-		return err
-	}
-	rebuildNote := ""
-	if req.FullRebuild {
-		rebuildNote = " This rebuild re-embeds every document."
-	}
-	confirmed := false
-	var approvedBytes int64
 	var progress buildProgressPrinter
-	_, err = resolveLocalEmbeddings(ctx, server, func(_ context.Context, size int64) (bool, error) {
-		message := fmt.Sprintf("Turn on search by meaning? Downloads approximately %d MB once, shared by Kenn apps.", (size+999999)/1000000)
-		message += rebuildNote
-		if !confirmScanned(in, out, message) {
-			return false, errors.New("search setup declined")
-		}
-		confirmed, approvedBytes = true, size
-		return true, nil
-	}, func(done, total int64) {
+	asked, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, req.Using, in, out, true, func(done, total int64) {
 		progress.printDownload(out, done, total)
 	})
 	if err != nil {
 		return err
 	}
-	if !confirmed {
-		message := fmt.Sprintf("Turn on search by meaning using %s (%s)?", status.Provider, cfg.Vector.Embeddings.Model)
-		message += rebuildNote
-		if !confirmScanned(in, out, message) {
-			return errors.New("search setup declined")
-		}
+	if !asked && !confirmScanned(in, out, fmt.Sprintf("Turn on search by meaning using %s (%s)?", status.Provider, cfg.Vector.Embeddings.Model)) {
+		return errors.New("search setup declined")
 	}
-	if err := client.startSetup(ctx, approvedBytes, req); err != nil {
-		if apiErr, ok := errors.AsType[*daemonAPIError](err); ok && apiErr.status == http.StatusConflict {
-			fmt.Fprintln(out, "a build is already running (daemon)")
-			if err := pollDaemonSetup(ctx, out, client); err != nil {
-				return err
-			}
-			return errSetupJoined
-		}
+	if err := client.startSetup(ctx, req); err != nil {
 		return err
 	}
 	if err := pollDaemonSetup(ctx, out, client); err != nil {
@@ -163,7 +141,6 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 }
 
 func pollDaemonSetup(ctx context.Context, out io.Writer, client embeddingsDaemonClient) error {
-	var progress buildProgressPrinter
 	for {
 		status, err := client.status(ctx)
 		if err != nil {
@@ -173,9 +150,6 @@ func pollDaemonSetup(ctx context.Context, out io.Writer, client embeddingsDaemon
 			setup := status.Setup
 			if setup.Error != "" {
 				return errors.New(setup.Error)
-			}
-			if setup.DownloadedBytes != 0 || setup.TotalBytes != 0 {
-				progress.printDownload(out, setup.DownloadedBytes, setup.TotalBytes)
 			}
 			if !setup.Busy {
 				return nil

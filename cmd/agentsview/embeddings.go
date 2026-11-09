@@ -429,51 +429,35 @@ func runEmbeddingsBuild(
 	if err != nil {
 		return err
 	}
-	var client *embeddingsDaemonClient
 	setup := !cfg.Vector.Enabled
-	var setupBusy bool
+	var client embeddingsDaemonClient
 	if setup {
 		tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 0)
 		if err != nil {
 			return err
 		}
-		if tr.Mode == transportHTTP {
-			if tr.ReadOnly {
-				return errors.New("semantic search setup requires a writable daemon")
-			}
-			if shouldReplaceDaemonRuntime(tr.Runtime, version) {
-				return errEmbeddingsSetupDaemonRestart
-			}
-			client = &embeddingsDaemonClient{baseURL: tr.URL, token: cfg.AuthToken, store: daemonEmbeddingStore(spec.Name)}
-		} else {
-			return errors.New("search setup requires a daemon; start it with `agentsview daemon start` and retry `agentsview index embeddings build`, or use Settings → Embeddings → Turn on")
+		if tr.Mode != transportHTTP || tr.ReadOnly {
+			return errors.New("search setup requires a writable daemon; start it with `agentsview daemon start` and retry `agentsview index embeddings build`, or use Settings → Embeddings → Turn on")
 		}
-	} else if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		c, err := resolveEmbeddingsDaemonClient(cfg)
-		if err != nil {
-			return err
+		if shouldReplaceDaemonRuntime(tr.Runtime, version) {
+			return errEmbeddingsSetupDaemonRestart
 		}
-		c.store = daemonEmbeddingStore(spec.Name)
-		client = &c
-	}
-	if client != nil {
+		client = embeddingsDaemonClient{baseURL: tr.URL, token: cfg.AuthToken, store: daemonEmbeddingStore(spec.Name)}
 		status, err := client.status(ctx)
 		if err != nil {
 			return err
 		}
 		if status.Setup == nil {
-			if setup {
-				return errEmbeddingsSetupDaemonRestart
-			}
-		} else {
-			setup = setup || status.Setup.Action == "turn-on"
-			setupBusy = status.Setup.Busy
+			return errEmbeddingsSetupDaemonRestart
 		}
-	}
-	if setup {
 		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
 		if err != nil {
 			return err
+		}
+	} else {
+		cfg, err = loadDaemonClientConfig(config.ScopeVector)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
 		}
 	}
 	includeAutomated := cfg.Vector.IncludeAutomated
@@ -486,24 +470,10 @@ func runEmbeddingsBuild(
 		RepairInvalid: opts.RepairInvalid, IncludeAutomated: includeAutomated, Using: opts.Using,
 	}
 	confirmation := bufio.NewScanner(in)
-	confirmed := false
-	if setupBusy {
-		fmt.Fprintln(out, "a build is already running (daemon)")
-		if err := pollDaemonSetup(ctx, out, *client); err != nil {
-			return err
-		}
-	} else if setup {
-		err := setupEmbeddingsBuild(ctx, out, confirmation, cfg, *client, req)
-		if !errors.Is(err, errSetupJoined) {
-			return err
-		}
-		confirmed = true
+	if setup {
+		return setupEmbeddingsBuild(ctx, out, confirmation, cfg, client, req)
 	}
-	cfg, err = loadDaemonClientConfig(config.ScopeVector)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-	if opts.FullRebuild && !opts.Yes && !confirmed {
+	if opts.FullRebuild && !opts.Yes {
 		proceed, err := confirmFullRebuild(ctx, confirmation, out, cfg, includeAutomated, spec.Name)
 		if err != nil {
 			return err
@@ -513,11 +483,11 @@ func runEmbeddingsBuild(
 			return nil
 		}
 	}
-	if err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out); err != nil {
+	if _, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out, false, nil); err != nil {
 		return err
 	}
-	if client != nil {
-		return buildViaDaemon(ctx, out, *client, req)
+	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+		return runEmbeddingsBuildDaemon(ctx, out, cfg, req)
 	}
 	return runEmbeddingsBuildDirect(ctx, out, cfg, req)
 }
@@ -719,6 +689,15 @@ func runDirectBuild(
 			}
 		}
 	}
+}
+
+func runEmbeddingsBuildDaemon(ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest) error {
+	client, err := resolveEmbeddingsDaemonClient(cfg)
+	if err != nil {
+		return err
+	}
+	client.store = daemonEmbeddingStore(req.Store)
+	return buildViaDaemon(ctx, out, client, req)
 }
 
 // buildViaDaemon starts a build via POST /build, printing a status line
@@ -1054,13 +1033,13 @@ type daemonAPIError struct {
 
 func (e *daemonAPIError) Error() string { return e.message }
 
-func (c embeddingsDaemonClient) startSetup(ctx context.Context, approvedBytes int64, req vector.BuildRequest) error {
+func (c embeddingsDaemonClient) startSetup(ctx context.Context, req vector.BuildRequest) error {
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return err
 	}
 	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{
-		ApprovedBytes: new(approvedBytes), Build: &apiclient.EmbeddingsBuildRequest{
+		Build: &apiclient.EmbeddingsBuildRequest{
 			Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop),
 			RepairInvalid: new(req.RepairInvalid), IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
 		},
