@@ -935,9 +935,9 @@ change journal invalidates changed sessions and their matching snapshot peers.
 Each visit selects sessions, pairs messages against the current clock, selects
 usage snapshots, and prices the surviving rows again. Message counts reuse the
 pairing read; tool events are read fresh. Journal replacement and unavailable or
-regressed revisions rebuild the inputs. Large change sets use a full read, and inputs
-above the budget aren't retained. Hosted stores and transaction views use their
-existing reads.
+regressed revisions rebuild the inputs. Large change sets use a full read, and
+inputs above the budget aren't retained. Hosted stores and transaction views use
+their existing reads.
 
 ### PostgreSQL push preparation indexes
 
