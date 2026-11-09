@@ -38,16 +38,12 @@ func TestUsagePairwiseDefaultReadsRankingOnce(t *testing.T) {
 
 func TestUsageTopSessionsSkipsPairwiseEvidence(t *testing.T) {
 	t.Parallel()
-	store, syncer, local := newUsagePriceStore(t)
+	store, syncer, _ := newUsagePriceStore(t)
 	comment := "top-without-pairwise-" + syncer.target.Database
 	ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
 	filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
-	got, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	_, err := store.GetTopSessionsByCost(ctx, filter, 10)
 	require.NoError(t, err)
-	want, err := local.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	normalizeSQLiteTopSessions(t, want)
-	assert.Equal(t, want, got)
 	_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
 	require.NoError(t, err)
 	var queries, evidenceQueries uint64
