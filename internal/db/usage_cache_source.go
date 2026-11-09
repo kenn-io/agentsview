@@ -272,101 +272,60 @@ func (c *usageFillCoordinator) replaceExternalAccounts(ctx context.Context, targ
 	return err
 }
 
-func (db *DB) prepareExternalUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor, journal bool, report func(string)) (usagePreparedWindow, error) {
-	empty := []string{}
-	probe, err := db.captureExternalUsage(ctx, filter, &empty, nil)
+func (db *DB) captureExternalJournaledUsageWindow(ctx context.Context, filter UsageFilter, cursor bool, databaseID string, zone usageZoneCoverage, lost, window []string) (usageQuerySnapshot, usageQuerySnapshot, []string, bool, error) {
+	requested := slices.Concat(window, lost)
+	snapshot, err := db.captureExternalUsage(ctx, filter, &requested, &zone.revision.Int64)
 	if err != nil {
-		return usagePreparedWindow{}, err
+		return snapshot, usageQuerySnapshot{}, nil, false, err
 	}
-	cache, release, err := db.usageCache.acquireGeneration(ctx, probe.DatabaseID)
-	if err != nil {
-		return usagePreparedWindow{}, err
+	if snapshot.DatabaseID != databaseID {
+		return snapshot, usageQuerySnapshot{}, nil, false, errUsageCacheSourceChanged
 	}
-	defer release()
-	identity := usageTimezoneIdentityFor(filter.Location(), nil)
-	zone, lost, window, err := cache.captureUsageZoneWindow(ctx, identity, filter, kind)
-	if err != nil {
-		return usagePreparedWindow{}, err
-	}
-	if journal && kind != usageQueryKindActivity && zone.revision.Valid && !zone.foreignPricing && zone.pricing == probe.PricingIdentity && zone.revision.Int64 <= probe.ChangeRevision {
-		requested := slices.Concat(window, lost)
-		snapshot, err := db.captureExternalUsage(ctx, filter, &requested, &zone.revision.Int64)
-		if err != nil {
-			return usagePreparedWindow{}, err
-		}
-		if snapshot.DatabaseID != probe.DatabaseID || snapshot.PricingIdentity != zone.pricing {
-			return usagePreparedWindow{}, errUsageCacheSourceChanged
-		}
-		if !cursor {
-			snapshot.CursorHighWater = 0
-		}
-		refreshIDs := slices.Concat(snapshot.ChangeIDs, lost)
-		slices.Sort(refreshIDs)
-		refreshIDs = slices.Compact(refreshIDs)
-		refresh := snapshot
-		refresh.Sessions, refresh.Versions = nil, nil
-		for i, session := range snapshot.Sessions {
-			if _, ok := slices.BinarySearch(refreshIDs, session.ID); ok {
-				refresh.Sessions = append(refresh.Sessions, session)
-				refresh.Versions = append(refresh.Versions, snapshot.Versions[i])
-			}
-		}
-		installs, timings, err := cache.refreshJournaledUsageWindow(ctx, &snapshot, refresh, refreshIDs, report)
-		if err != nil {
-			return usagePreparedWindow{}, err
-		}
-		if err := cache.claimUsageZone(ctx, identity, zone, snapshot.ChangeRevision, snapshot.PricingIdentity, installs); err != nil {
-			return usagePreparedWindow{}, err
-		}
-		return usagePreparedWindow{snapshot: snapshot, installs: installs, journaled: true, kind: kind, installSeq: zone.installSeq, timings: timings}, nil
-	}
-	snapshot, err := db.captureExternalUsage(ctx, filter, nil, nil)
-	if err != nil {
-		return usagePreparedWindow{}, err
-	}
-	if snapshot.DatabaseID != probe.DatabaseID {
-		return usagePreparedWindow{}, errUsageCacheSourceChanged
+	if zone.revision.Int64 > snapshot.ChangeRevision || snapshot.PricingIdentity != zone.pricing {
+		return usageQuerySnapshot{}, usageQuerySnapshot{}, nil, false, nil
 	}
 	if !cursor {
 		snapshot.CursorHighWater = 0
 	}
-	// A complete source capture permits removal of stale deleted owners before
-	// its first global coverage claim. Bounded windows retain their own proof.
-	if filter.From == "" && filter.To == "" {
-		rows, err := cache.db.QueryContext(ctx, `SELECT session_id FROM usage_cached_sessions`)
-		if err != nil {
-			return usagePreparedWindow{}, err
-		}
-		active := make(map[string]bool, len(snapshot.Sessions))
-		for _, session := range snapshot.Sessions {
-			active[session.ID] = true
-		}
-		var deleted []string
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return usagePreparedWindow{}, err
-			}
-			if !active[id] {
-				deleted = append(deleted, id)
-			}
-		}
-		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-			return usagePreparedWindow{}, err
-		}
-		if err := cache.fill.deleteNotificationSessions(deleted, snapshot.ChangeRevision); err != nil {
-			return usagePreparedWindow{}, err
+	refreshIDs := slices.Concat(snapshot.ChangeIDs, lost)
+	slices.Sort(refreshIDs)
+	refreshIDs = slices.Compact(refreshIDs)
+	refresh := snapshot
+	refresh.Sessions, refresh.Versions = nil, nil
+	for i, session := range snapshot.Sessions {
+		if _, ok := slices.BinarySearch(refreshIDs, session.ID); ok {
+			refresh.Sessions = append(refresh.Sessions, session)
+			refresh.Versions = append(refresh.Versions, snapshot.Versions[i])
 		}
 	}
-	installs, timings, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, report)
+	return snapshot, refresh, refreshIDs, true, nil
+}
+
+// A complete source capture permits removal of stale deleted owners before
+// its first global coverage claim. Bounded windows retain their own proof.
+func (cache *usageCache) sweepAbsentUsageOwners(ctx context.Context, snapshot usageQuerySnapshot) error {
+	rows, err := cache.db.QueryContext(ctx, `SELECT session_id FROM usage_cached_sessions`)
 	if err != nil {
-		return usagePreparedWindow{}, err
+		return err
 	}
-	prepared := usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}
-	if filter.From == "" && filter.To == "" && kind != usageQueryKindActivity {
-		prepared.claimZone = &zone
+	active := make(map[string]bool, len(snapshot.Sessions))
+	for _, session := range snapshot.Sessions {
+		active[session.ID] = true
 	}
-	return prepared, nil
+	var deleted []string
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if !active[id] {
+			deleted = append(deleted, id)
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	return cache.fill.deleteNotificationSessions(deleted, snapshot.ChangeRevision)
 }

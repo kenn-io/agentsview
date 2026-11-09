@@ -44,13 +44,14 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 }
 
 type usagePreparedWindow struct {
-	claimZone  *usageZoneCoverage
-	snapshot   usageQuerySnapshot
-	installs   map[string]usageRollupInstall
-	journaled  bool
-	kind       usageQueryKind
-	installSeq int64
-	timings    usageRollupRequestTimings
+	claimDatabaseID string
+	claimZone       *usageZoneCoverage
+	snapshot        usageQuerySnapshot
+	installs        map[string]usageRollupInstall
+	journaled       bool
+	kind            usageQueryKind
+	installSeq      int64
+	timings         usageRollupRequestTimings
 }
 
 // usageWindowObserver provides deterministic synchronization for tests.
@@ -128,9 +129,6 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 	started := time.Now()
 	report("Reading archived sessions for this report")
 	filter.Progress = nil
-	if db.usageSource != nil {
-		return db.prepareExternalUsageWindow(ctx, filter, kind, cursor, journal, report)
-	}
 	var prepared usagePreparedWindow
 	var err error
 	if journal && kind != usageQueryKindActivity {
@@ -161,13 +159,23 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return usagePreparedWindow{}, err
 	}
+	full := db.usageSource != nil && filter.From == "" && filter.To == ""
+	if full {
+		if err := cache.sweepAbsentUsageOwners(ctx, snapshot); err != nil {
+			return usagePreparedWindow{}, err
+		}
+	}
 	timings.sweep = time.Since(sweepStarted)
 	installs, measured, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, report)
 	if err != nil {
 		return usagePreparedWindow{}, err
 	}
 	timings.fill, timings.rollup = measured.fill, measured.rollup
-	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}, nil
+	result := usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}
+	if full && snapshot.DatabaseID == prepared.claimDatabaseID {
+		result.claimZone = prepared.claimZone
+	}
+	return result, nil
 }
 
 func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot, window *usageQuerySnapshot, report func(string)) (map[string]usageRollupInstall, usageRollupRequestTimings, error) {

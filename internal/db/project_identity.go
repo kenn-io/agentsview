@@ -412,6 +412,10 @@ func (db *DB) CopyArchiveIdentityFrom(ctx context.Context, sourcePath string) er
 }
 
 func (db *DB) GetDatabaseID(ctx context.Context) (string, error) {
+	if db.usageSource != nil {
+		probe, err := db.usageSource.CaptureUsage(ctx, UsageSourceRequest{IDs: &[]string{}})
+		return probe.DatabaseID, err
+	}
 	id, _, err := db.databaseIDAndUsagePricingRevision(ctx)
 	if err != nil {
 		return "", err

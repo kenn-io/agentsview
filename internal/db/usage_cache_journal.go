@@ -120,14 +120,14 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		return nil
 	}
 	if !zone.revision.Valid || zone.foreignPricing {
-		return usagePreparedWindow{}, false, fallback()
+		return usagePreparedWindow{claimZone: &zone, claimDatabaseID: databaseID}, false, fallback()
 	}
 	snapshot, refresh, refreshIDs, trusted, err := db.captureJournaledUsageWindow(ctx, filter, kind, cursor, databaseID, zone, lost, window)
 	if err != nil {
 		return usagePreparedWindow{}, false, err
 	}
 	if !trusted {
-		return usagePreparedWindow{snapshot: snapshot}, false, fallback()
+		return usagePreparedWindow{snapshot: snapshot, claimZone: &zone, claimDatabaseID: databaseID}, false, fallback()
 	}
 	captureDuration := time.Since(started)
 	installs, timings, err := cache.refreshJournaledUsageWindow(ctx, &snapshot, refresh, refreshIDs, report)
@@ -175,6 +175,9 @@ func (cache *usageCache) captureUsageZoneWindow(ctx context.Context, identity us
 }
 
 func (db *DB) captureJournaledUsageWindow(ctx context.Context, filter UsageFilter, kind usageQueryKind, cursor bool, databaseID string, zone usageZoneCoverage, lost, window []string) (usageQuerySnapshot, usageQuerySnapshot, []string, bool, error) {
+	if db.usageSource != nil {
+		return db.captureExternalJournaledUsageWindow(ctx, filter, cursor, databaseID, zone, lost, window)
+	}
 	var refresh usageQuerySnapshot
 	refreshIDs := make([]string, 0)
 	trusted := false
