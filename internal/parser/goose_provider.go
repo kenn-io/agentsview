@@ -190,13 +190,13 @@ func gooseCursorSchema(
 		},
 		{
 			name: "messages", rowID: "id", sessionID: "session_id",
-			identity: "session_id || char(31) || COALESCE(message_id, '') || char(31) || CAST(created_timestamp AS TEXT)",
+			identity: "session_id || char(31) || COALESCE(message_id, '') || char(31) || created_timestamp",
 		},
 	}
 	if hasUsage {
 		tables = append(tables, sqliteCursorTable{
 			name: "usage_ledger", rowID: "id", sessionID: "session_id",
-			identity: "session_id || char(31) || COALESCE(model, '') || char(31) || CAST(created_timestamp AS TEXT)",
+			identity: "session_id || char(31) || COALESCE(model, '') || char(31) || created_timestamp",
 		})
 	}
 	return version, tables, nil

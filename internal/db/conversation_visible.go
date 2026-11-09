@@ -107,7 +107,7 @@ WHEN (OLD.visible_digest IS NOT NEW.visible_digest OR OLD.visible_text_bytes IS 
  AND OLD.gap IS NEW.gap AND OLD.deleted IS NEW.deleted AND OLD.removed IS NEW.removed
 BEGIN
  INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1')
- ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  UPDATE conversation_messages SET revision=(SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key='conversation_publication_revision')
  WHERE session_id=NEW.session_id AND message_id=NEW.message_id;
 END;
@@ -117,7 +117,7 @@ WHEN (OLD.agent IS NOT NEW.agent OR OLD.is_automated IS NOT NEW.is_automated OR 
  AND (EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=NEW.id AND removed=0) OR EXISTS(SELECT 1 FROM conversation_session_changes WHERE session_id=NEW.id))
 BEGIN
  INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1')
- ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+ ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
  INSERT INTO conversation_session_changes(session_id,revision,deleted)
  SELECT NEW.id,CAST(value AS INTEGER),(NEW.deleted_at IS NOT NULL) FROM archive_metadata WHERE key='conversation_publication_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted;

@@ -4654,7 +4654,7 @@ func countIcodemateContainerRootSessions(ctx context.Context,
 	err := database.Reader().QueryRow(ctx, `
 		SELECT COUNT(*) FROM sessions
 		WHERE agent = ?
-		  AND lower(file_path) NOT LIKE '%.jsonl'
+		  AND file_path NOT LIKE '%.jsonl'
 		  AND message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
 		  AND deleted_at IS NULL

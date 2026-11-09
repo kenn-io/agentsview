@@ -83,9 +83,9 @@ func (db *DB) MessageContentFingerprints(ctx context.Context,
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
 		rows, err := db.getReader().Query(ctx, `
-			SELECT session_id, COUNT(*), COALESCE(SUM(content_length), 0),
-				COALESCE(MAX(content_length), 0),
-				COALESCE(MIN(content_length), 0)
+			SELECT session_id, COUNT(*), SUM(content_length),
+				MAX(content_length),
+				MIN(content_length)
 			FROM messages
 			WHERE session_id IN (`+ph+`)
 			GROUP BY session_id`,

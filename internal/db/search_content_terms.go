@@ -60,7 +60,7 @@ var termsSQLByDialect = map[string]termsSQLFragments{
 		prefilterText: "COALESCE(dialogue_text, content)",
 		bodyAgg:       "GROUP_CONCAT(content, char(10) ORDER BY ordinal)",
 		timestamp:     "COALESCE(m.timestamp,'')",
-		sessionSort:   "COALESCE(s.ended_at, s.started_at, s.created_at, '')",
+		sessionSort:   "COALESCE(s.ended_at, s.started_at, s.created_at)",
 		orderBySort:   "julianday(sort_ts) DESC",
 	},
 	"postgres": {

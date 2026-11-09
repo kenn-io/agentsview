@@ -603,8 +603,8 @@ func putConversationRowsTx(tx transactionQueries, rows []conversationRow, fresh 
 	}
 	var revision int64
 	if fresh {
-		if err := tx.QueryRow(`INSERT INTO archive_metadata(key,value) VALUES(?,CAST(? AS TEXT))
-		 ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+CAST(excluded.value AS INTEGER) AS TEXT) RETURNING CAST(value AS INTEGER)`, conversationRevisionKey, len(rows)).Scan(&revision); err != nil {
+		if err := tx.QueryRow(`INSERT INTO archive_metadata(key,value) VALUES(?,?)
+		 ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+CAST(excluded.value AS INTEGER) RETURNING CAST(value AS INTEGER)`, conversationRevisionKey, len(rows)).Scan(&revision); err != nil {
 			return err
 		}
 		revision -= int64(len(rows))
@@ -649,7 +649,7 @@ func putConversationSessionChangeTx(tx transactionQueries, sessionID, gap string
 	}
 	var revision int64
 	if err := tx.QueryRow(`INSERT INTO archive_metadata(key,value) VALUES(?,'1')
-	 ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) RETURNING CAST(value AS INTEGER)`, conversationRevisionKey).Scan(&revision); err != nil {
+	 ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING CAST(value AS INTEGER)`, conversationRevisionKey).Scan(&revision); err != nil {
 		return err
 	}
 	_, err := tx.Exec(`INSERT INTO conversation_session_changes(session_id,revision,gap,deleted) VALUES(?,?,?,?)

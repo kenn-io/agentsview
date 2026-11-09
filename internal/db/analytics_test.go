@@ -2655,9 +2655,9 @@ func TestAnalyticsToolsToolCallsQueryAggregatesInSQL(t *testing.T) {
 	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
 
 	assert.Contains(t, normalized,
-		"select tc.session_id, tc.category, trim(coalesce(tc.tool_name, '')), count(*)")
+		"select tc.session_id, tc.category, trim(tc.tool_name), count(*)")
 	assert.Contains(t, normalized,
-		"group by tc.session_id, tc.category, trim(coalesce(tc.tool_name, ''))")
+		"group by tc.session_id, tc.category, trim(tc.tool_name)")
 }
 
 func TestGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
@@ -3217,7 +3217,7 @@ func TestAnalyticsSkillsToolCallsQueryAggregatesInSQL(t *testing.T) {
 		"left join messages m on m.session_id = tc.session_id "+
 			"and m.id = tc.message_id")
 	assert.Contains(t, normalized,
-		"trim(coalesce(tc.skill_name, '')) != ''")
+		"trim(tc.skill_name) != ''")
 	assert.Contains(t, normalized,
 		"group by tc.session_id, trim(tc.skill_name), "+
 			"coalesce(m.timestamp, '')")

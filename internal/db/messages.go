@@ -741,7 +741,7 @@ func (db *DB) getMessagesLinear(
 // sqliteRevisionCol selects the session transcript revision as a window
 // statement's first column; it binds the session ID once more, ahead of
 // the statement's other arguments.
-const sqliteRevisionCol = `(SELECT COALESCE(transcript_revision,'') FROM sessions WHERE id = ?)`
+const sqliteRevisionCol = `(SELECT transcript_revision FROM sessions WHERE id = ?)`
 
 // getMessagesAroundAnchor implements MessageWindow's Around mode: the
 // before, anchor, and after rows merged into one ascending slice. The
@@ -2321,18 +2321,14 @@ func bumpTranscriptRevision(
 	// derived results never saw. Incremental sync recomputes later; the
 	// atomic replace path re-stamps inside this transaction.
 	query := `UPDATE sessions
-		 SET transcript_revision = CAST(
-			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
-		 ),
+		 SET transcript_revision = CAST(transcript_revision AS INTEGER) + 1,
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		     secrets_rules_version = '',
 		     friction_rules_version = ''
 		 WHERE id = ?`
 	if !touchModified {
 		query = `UPDATE sessions
-		 SET transcript_revision = CAST(
-			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
-		 ),
+		 SET transcript_revision = CAST(transcript_revision AS INTEGER) + 1,
 		     secrets_rules_version = '',
 		     friction_rules_version = ''
 		 WHERE id = ?`
@@ -2726,7 +2722,7 @@ func sessionAutomationStateTx(
 				FROM messages m
 				WHERE m.session_id = s.id
 				  AND m.role = 'user'
-				  AND COALESCE(m.source_subtype, '') <> 'tool_result'
+				  AND m.source_subtype <> 'tool_result'
 				  AND m.is_system = 0
 				  AND TRIM(m.content) <> ''
 				ORDER BY m.ordinal
@@ -2852,7 +2848,7 @@ func MatchLegacyVSCodeReplyAnchors(old, incoming []LegacyVSCodeReplyAnchor) map[
 
 func loadLegacyVSCodeReplyAnchorsTx(tx transactionQueries, schema, sessionID string) ([]LegacyVSCodeReplyAnchor, error) {
 	rows, err := tx.Query(fmt.Sprintf(`
-  SELECT a.ordinal, u.content, a.timestamp, COALESCE(a.source_uuid, ''), s.agent
+  SELECT a.ordinal, u.content, a.timestamp, a.source_uuid, s.agent
   FROM %[1]s.messages a
   JOIN %[1]s.messages u ON u.session_id = a.session_id AND u.ordinal = a.ordinal - 1
   JOIN %[1]s.sessions s ON s.id = a.session_id
@@ -3793,7 +3789,7 @@ func soleToolResultEventTx(ctx context.Context,
 			SELECT 1 FROM tool_result_events
 			WHERE session_id = ? AND tool_call_message_ordinal = ?
 			  AND call_index = ?
-			  AND COALESCE(content, '') <> ''
+			  AND content <> ''
 			LIMIT 2
 		)`,
 		sessionID, messageOrdinal, callIndex,
@@ -3809,7 +3805,7 @@ func soleToolResultEventTx(ctx context.Context,
 	if err := tx.QueryRowContext(ctx,
 		`SELECT content FROM tool_result_events
 		 WHERE session_id = ? AND tool_call_message_ordinal = ?
-		   AND call_index = ? AND COALESCE(content, '') <> ''`,
+		   AND call_index = ? AND content <> ''`,
 		sessionID, messageOrdinal, callIndex,
 	).Scan(&content); err != nil {
 		return nil, fmt.Errorf(

@@ -19,7 +19,7 @@ func usageChangeJournalSQL() (string, string) {
  INSERT INTO archive_metadata (key, value)
   VALUES ('usage_change_revision', '1')
  ON CONFLICT(key) DO UPDATE SET
-  value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+  value = CAST(value AS INTEGER) + 1,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
 	const pricingRevisionBody = `
  INSERT INTO archive_metadata (key, value)

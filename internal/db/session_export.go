@@ -837,8 +837,8 @@ SELECT
 	 FROM messages m
 	 WHERE m.session_id = sessions.id
 	   AND m.role = 'assistant'
-	   AND COALESCE(m.is_system, 0) = 0) AS assistant_message_count,
-	COALESCE(sessions.is_automated, 0) AS is_automated,
+	   AND m.is_system = 0) AS assistant_message_count,
+	sessions.is_automated AS is_automated,
 	sessions.parent_session_id,
 	sessions.relationship_type,
 	sessions.total_output_tokens,

@@ -595,7 +595,7 @@ func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) 
 	}
 	if _, err := conn.ExecContext(ctx, `
 		UPDATE usage_cache_metadata
-		SET value = CAST(MAX(CAST(value AS INTEGER), ?) AS TEXT)
+		SET value = MAX(CAST(value AS INTEGER), ?)
 		WHERE key = ?`, through, usageCacheMetadataDeletionRevision,
 	); err != nil {
 		return err

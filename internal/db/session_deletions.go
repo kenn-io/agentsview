@@ -21,7 +21,7 @@ BEGIN
  INSERT INTO archive_metadata (key, value)
   VALUES ('session_deletion_publication_revision', '1')
  ON CONFLICT(key) DO UPDATE SET
-  value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+  value = CAST(value AS INTEGER) + 1,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
  INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
   SELECT NEW.id, NEW.project, CAST(value AS INTEGER), 0

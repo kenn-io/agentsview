@@ -3080,7 +3080,7 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 		"SELECT message_count, COALESCE(file_mtime, 0),"+
 			" COALESCE(file_hash, ''), COALESCE(local_modified_at, ''), COALESCE(sync_marker, '')"+
 			", (SELECT json_group_array(label) FROM (SELECT label FROM session_labels WHERE session_id = sessions.id ORDER BY label)),"+
-			" COALESCE(parent_session_id, ''), COALESCE(relationship_type, ''),"+
+			" COALESCE(parent_session_id, ''), relationship_type,"+
 			" COALESCE((SELECT ep.parent_session_id FROM session_external_parents ep WHERE ep.session_id = sessions.id), '') FROM sessions WHERE id = ?",
 		id,
 	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt, &syncMarker, &labels, &parent, &relationship, &launcherParent)
@@ -3430,7 +3430,7 @@ func messageRangeTotalsTx(ctx context.Context,
 	err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*),
 			COALESCE(SUM(role = 'user' AND is_system = 0
-				AND COALESCE(source_subtype, '') <> 'tool_result'), 0),
+				AND source_subtype <> 'tool_result'), 0),
 			COALESCE(SUM(CASE WHEN has_output_tokens != 0
 				THEN output_tokens ELSE 0 END), 0),
 			COALESCE(MAX(has_output_tokens != 0), 0),
@@ -4439,7 +4439,7 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 				args[i] = id
 			}
 			rows, err := db.getReader().QueryContext(ctx, `
-			SELECT id, machine, agent, COALESCE(cwd, ''),
+			SELECT id, machine, agent, cwd,
 			       COALESCE(file_path, ''), COALESCE(file_hash, ''),
 			       session_name
 			FROM sessions
@@ -5363,10 +5363,7 @@ func (db *DB) MarkSessionSourceMissing(
 	defer db.mu.Unlock()
 	result, err := db.getWriter().ExecContext(ctx, `
 		UPDATE sessions
-		SET source_missing_at = COALESCE(
-		        source_missing_at,
-		        strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		    ),
+		SET source_missing_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		    local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE machine = ? AND agent = ? AND id = ? AND file_path = ?
 		  AND source_missing_at IS NULL
