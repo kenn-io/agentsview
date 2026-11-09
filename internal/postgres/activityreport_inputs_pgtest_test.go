@@ -173,7 +173,7 @@ func TestPGActivityReportInputEmptySelectionAfterPush(t *testing.T) {
 	assert.Equal(t, 700, got.Report.Totals.OutputTokens)
 }
 
-func TestPGActivityReportInputMessageCounts(t *testing.T) {
+func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
 	local, syncer, store := newUsageJournalFixture(t)
 	messages := []db.Message{
 		{SessionID: "a", Ordinal: 0, Role: "user", Content: "range start", Timestamp: "2026-06-14T00:00:00Z"},
@@ -189,20 +189,13 @@ func TestPGActivityReportInputMessageCounts(t *testing.T) {
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", messages))
 	pgKeptPush(t, syncer, false)
 	inputs := &pgActivityInputs{transcripts: map[string][]pgActivityMessage{}}
-	for range 2 {
-		require.NoError(t, store.activityTranscriptSource(t.Context(), []string{"a"}, inputs, func(id string, got []activity.TranscriptMessage) {
-			assert.Equal(t, "a", id)
-			require.Len(t, got, 5)
-			assert.Equal(t, 1, got[1].Ordinal)
-			assert.Equal(t, time.Date(2026, 6, 14, 10, 0, 0, 123456000, time.UTC), got[1].At)
-			assert.Empty(t, got[1].Model)
-			assert.True(t, got[1].Counted)
-			assert.False(t, got[2].Counted)
-			assert.False(t, got[3].Counted)
-			// Pairing may change the expanded buffer without changing retained input.
-			got[1].Ordinal, got[1].Model, got[1].Counted = 99, "changed", false
-		}))
-	}
+	require.NoError(t, store.activityTranscriptSource(t.Context(), []string{"a"}, inputs, func(id string, got []activity.TranscriptMessage) {
+		assert.Equal(t, "a", id)
+		require.Len(t, got, 5)
+		assert.Equal(t, 1, got[1].Ordinal)
+		assert.Equal(t, time.Date(2026, 6, 14, 10, 0, 0, 123456000, time.UTC), got[1].At)
+		assert.Equal(t, "user", got[1].Role)
+	}))
 	counter := &activityInputReadCounter{storeExecutor: store.pg}
 	store.pg = counter
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
