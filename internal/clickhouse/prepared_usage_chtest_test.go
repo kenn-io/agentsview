@@ -31,7 +31,7 @@ func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	// A stopped view remembers the refresh each push requests and runs it
 	// once resumed, so the test controls when prepared usage catches up.
 	_, err := store.DB().ExecContext(ctx, "ALTER TABLE prepare_usage MODIFY REFRESH EVERY 1 DAY")
@@ -210,7 +210,7 @@ func TestPreparedUsageServesRangeUsageReads(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	// The stopped view holds the push's refresh until the raw rows are read.
 	_, err := store.DB().ExecContext(ctx, "SYSTEM STOP VIEW prepare_usage")
 	require.NoError(t, err)
@@ -484,7 +484,7 @@ func TestPreparedUsageReadAcrossRefreshCountsNewSessionOnce(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	exec := func(stmts ...string) {
 		t.Helper()
 		for _, stmt := range stmts {
@@ -540,7 +540,7 @@ func TestSessionUsageReadsMessagesOfInterruptedPush(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
@@ -560,7 +560,7 @@ func TestSessionUsageReadsMessagesOfInterruptedPush(t *testing.T) {
 
 	after, err := store.GetSessionUsage(ctx, usagePriceRoundID, true)
 	require.NoError(t, err)
-	fresh, err := NewStoreFromDB(store.DB()).GetSessionUsage(ctx, usagePriceRoundID, true)
+	fresh, err := NewStoreFromDB(store.DB(), store.bulk).GetSessionUsage(ctx, usagePriceRoundID, true)
 	require.NoError(t, err)
 	require.NotEqual(t, before, fresh, "the interrupted push must have changed the raw rows")
 	require.Equal(t, fresh, after)
@@ -587,7 +587,7 @@ func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	push := func() {
 		t.Helper()
 		result, err := syncer.Push(ctx, false, nil)
@@ -622,7 +622,7 @@ func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
 		t.Helper()
 		got, err := store.GetDailyUsage(ctx, f)
 		require.NoError(t, err)
-		fresh, err := NewStoreFromDB(store.DB()).GetDailyUsage(ctx, f)
+		fresh, err := NewStoreFromDB(store.DB(), store.bulk).GetDailyUsage(ctx, f)
 		require.NoError(t, err)
 		require.Equal(t, fresh, got)
 	}
@@ -687,7 +687,7 @@ func TestPreparedUsageCoversSnapshotsWithoutPreparedRows(t *testing.T) {
 	require.ErrorContains(t, CheckSchemaCompat(ctx, store.DB()), "usage_session_snapshots.prepares_usage")
 	require.NoError(t, EnsureSchemaOn(ctx, store.DB()))
 	require.NoError(t, CheckSchemaCompat(ctx, store.DB()))
-	requireChanged(NewStoreFromDB(store.DB()), []string{reportedID})
+	requireChanged(NewStoreFromDB(store.DB(), store.bulk), []string{reportedID})
 }
 
 // A server that cannot exchange tables, such as one whose data directory is
@@ -709,7 +709,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	ids := []string{usagePriceRoundID, usagePriceTierID, usagePriceSnapAID, usagePriceSnapBID, usagePriceMixedID, usagePriceCopilotID}
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-12", Timezone: "UTC"},
 		time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -977,7 +977,7 @@ func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T)
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	ready, err := NewStoreFromDB(syncer.conn).preparedUsageReady(ctx)
+	ready, err := newTestStore(t, syncer.conn, syncer.target).preparedUsageReady(ctx)
 	require.NoError(t, err)
 	require.True(t, ready, "the push must rebuild prepared usage")
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_6 released"},
@@ -1001,7 +1001,7 @@ func TestRefreshPreparedUsageWithRetiredLockWithoutTableExchange(t *testing.T) {
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	ready, err := NewStoreFromDB(syncer.conn).preparedUsageReady(ctx)
+	ready, err := newTestStore(t, syncer.conn, syncer.target).preparedUsageReady(ctx)
 	require.NoError(t, err)
 	require.True(t, ready, "the push must rebuild prepared usage")
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_3 released"}, preparedUsageTables(t, conn, "prepare"),
@@ -1119,7 +1119,7 @@ func newPreparedUsageStore(t *testing.T) (*db.DB, *Sync, *Store) {
 	t.Helper()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
 	pushPreparedUsage(t, syncer)
 	runPreparedUsageRefresh(t, store)
@@ -1203,7 +1203,7 @@ func TestPreparedUsageRebuildWaitsForEnoughChange(t *testing.T) {
 	writeLongUsageSession(t, local, 1)
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
 	syncer := newTestSync(t, local, Target{URL: dsn, Database: database}, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	changed := func() []string {
 		t.Helper()
 		state, err := store.preparedUsageState(ctx)
@@ -1249,7 +1249,7 @@ func TestPreparedUsageViewRefreshWaitsForEnoughChange(t *testing.T) {
 	local, target := seedUsagePriceFixture(t)
 	writeLongUsageSession(t, local, 1)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	execPreparedUsage(t, store, "ALTER TABLE prepare_usage MODIFY REFRESH EVERY 1 DAY", "SYSTEM STOP VIEW prepare_usage")
 	pushPreparedUsage(t, syncer)
 	runPreparedUsageRefresh(t, store)

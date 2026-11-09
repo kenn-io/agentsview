@@ -141,7 +141,7 @@ func TestDashboardFactsMatchMessageScans(t *testing.T) {
 	read := func() [2]dashboardPanels {
 		t.Helper()
 		// A fresh store per read, so no memo answers from an earlier phase.
-		return [2]dashboardPanels{readFrom(NewStoreFromDB(conn), filter), readFrom(NewStoreFromDB(conn), hourFilter)}
+		return [2]dashboardPanels{readFrom(newTestStore(t, conn, target), filter), readFrom(newTestStore(t, conn, target), hourFilter)}
 	}
 
 	both := read()
@@ -221,7 +221,7 @@ func TestVelocityKeepsSessionPublishedBetweenReads(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	reads := analyticsSQL{NewStoreFromDB(conn)}
+	reads := analyticsSQL{newTestStore(t, conn, Target{URL: dsn, Database: database})}
 	known, knownArgs, _ := chAnalyticsFactSets(db.AnalyticsFilter{From: "2026-03-01", To: "2026-03-03"})
 	setFactsVersion(0)
 	velocities, err := reads.knownVelocities(ctx, known, knownArgs)

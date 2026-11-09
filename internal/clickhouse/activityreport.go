@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -17,6 +18,7 @@ import (
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
+	chnative "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
@@ -707,26 +709,14 @@ func (s *Store) activityReportUsage(
 				return nil, nil, err
 			}
 			s.activityUsageQueries.Add(1)
-			rowsAcc, err := s.scanActivityUsageRows(readCtx, query, args)
+			kept, err := s.readActivityUsageKept(readCtx, query, args)
 			if err != nil {
 				return nil, nil, err
 			}
-			order := sortActivityUsage(rowsAcc)
-			// The encode serves only later requests, so it runs beside this
-			// one; both only read the scanned rows.
 			if memoSlot != "" {
-				s.keeping.Go(func() {
-					s.activityUsageRows.Put(memoSlot, memoVersion, []*activityUsageKept{keepActivityUsage(rowsAcc, order)})
-				})
+				s.activityUsageRows.Put(memoSlot, memoVersion, []*activityUsageKept{kept})
 			}
-			ordered = func(yield func(*clickActivityReportUsageRow) bool) {
-				for _, index := range order {
-					if !yield(&rowsAcc[index].scan) {
-						return
-					}
-				}
-			}
-			count = len(rowsAcc)
+			ordered, count = kept.all(), kept.count
 		}
 	}
 
@@ -913,20 +903,16 @@ func (s *Store) activityUsageRange(
 	}
 	sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, where, args)
 	s.activityUsageQueries.Add(1)
-	fresh, err := s.scanActivityUsageRows(readCtx, "SELECT "+chPreparedUsageColumns+" FROM ("+sourceSQL+")", sourceArgs)
+	rows, err := s.readActivityUsageKept(readCtx, "SELECT "+chPreparedUsageColumns+" FROM ("+sourceSQL+")", sourceArgs)
 	if err != nil {
 		return nil, err
 	}
-	order := sortActivityUsage(fresh)
-	var rows *activityUsageKept
 	if incremental {
 		replaced := make(map[string]bool, len(changed))
 		for _, id := range changed {
 			replaced[id] = true
 		}
-		rows = mergeActivityUsage(prev.rows, replaced, fresh, order)
-	} else {
-		rows = keepActivityUsage(fresh, order)
+		rows = mergeActivityUsage(prev.rows, replaced, rows)
 	}
 	// Only ranges in progress read this memo, so a range that has ended is
 	// never read again.
@@ -1125,62 +1111,99 @@ func clickUsageNormalizedColumns() string {
 func (s *Store) scanActivityUsageRows(
 	ctx context.Context, query string, args []any,
 ) ([]clickSessionUsageOrderedRow, error) {
-	rows, err := s.queryContext(ctx, query, args...)
+	rows, err := s.bulk.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying clickhouse activity usage: %w", err)
 	}
 	defer rows.Close()
-	// Rows are scanned into chunks and copied once into a slice of the exact
-	// length: growing one slice by appending would copy a large read several
-	// times over. The first chunk grows as usual, so a small read stays small.
-	const chunkRows = 4096
-	var chunks [][]clickSessionUsageOrderedRow
 	// Non-nil even when empty: the caller indexes the result through a
 	// sorted index slice, and NilAway cannot see that an empty result yields
 	// no indexes.
-	chunk := make([]clickSessionUsageOrderedRow, 0)
+	out := make([]clickSessionUsageOrderedRow, 0)
 	for rows.Next() {
-		var r clickActivityReportUsageRow
-		var ts, pricingTS any
-		if err := rows.Scan(
-			&r.sessionID, &r.messageOrdinal, &ts, &pricingTS, &r.source, &r.model,
-			&r.providerID, &r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
-			&r.usageDedupKey,
-			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheCr1h, &r.cacheRd,
-			&r.reasoningTok, &r.webSearchRequests, &r.cost, &r.costSource,
-		); err != nil {
-			return nil, fmt.Errorf("scanning clickhouse activity usage: %w", err)
+		var r clickSessionUsageOrderedRow
+		if err := scanActivityUsageRow(rows, &r); err != nil {
+			return nil, err
 		}
-		r.ts = formatDBTime(ts)
-		r.pricingTS = formatDBTime(pricingTS)
-		ordinal := int64(-1)
-		if r.messageOrdinal.Valid {
-			ordinal = r.messageOrdinal.Int64
-		}
-		parsedTS, ok := readbase.ParseAnalyticsTime(r.ts)
-		if len(chunk) == chunkRows {
-			chunks = append(chunks, chunk)
-			chunk = make([]clickSessionUsageOrderedRow, 0, chunkRows)
-		}
-		chunk = append(chunk, clickSessionUsageOrderedRow{
-			scan:    r,
-			ts:      parsedTS,
-			validTS: ok,
-			ordinal: ordinal,
-		})
+		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating clickhouse activity usage: %w", err)
 	}
-	s.activityUsageRowsRead.Add(int64(len(chunks)*chunkRows + len(chunk)))
-	if len(chunks) == 0 {
-		return chunk, nil
+	s.activityUsageRowsRead.Add(int64(len(out)))
+	return out, nil
+}
+
+// readActivityUsageKept reads the usage rows query selects, in the columns
+// of chPreparedUsageColumns, and keeps them in report order. A full-history
+// read returns over a million rows, so it runs on the native connection
+// (see openBulk) and packs each row as it arrives: a slice of a million
+// wide rows is seconds of garbage collection and cache misses to sort.
+func (s *Store) readActivityUsageKept(
+	ctx context.Context, query string, args []any,
+) (*activityUsageKept, error) {
+	rows, err := s.bulk.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying clickhouse activity usage: %w", err)
 	}
-	rowsAcc := make([]clickSessionUsageOrderedRow, 0, len(chunks)*chunkRows+len(chunk))
-	for _, c := range chunks {
-		rowsAcc = append(rowsAcc, c...)
+	defer rows.Close()
+	sorter := newKeptUsageSorter()
+	var r clickSessionUsageOrderedRow
+	for rows.Next() {
+		if err := scanActivityUsageRow(rows, &r); err != nil {
+			return nil, err
+		}
+		sorter.add(&r)
 	}
-	return append(rowsAcc, chunk...), nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating clickhouse activity usage: %w", err)
+	}
+	kept := sorter.finish()
+	s.activityUsageRowsRead.Add(int64(kept.count))
+	return kept, nil
+}
+
+// scanActivityUsageRow scans the current row, in the columns of
+// chPreparedUsageColumns, into out. The destinations match the column
+// types exactly, which the native API requires.
+func scanActivityUsageRow(rows chnative.Rows, out *clickSessionUsageOrderedRow) error {
+	var r clickActivityReportUsageRow
+	var messageOrdinal, cost *int64
+	var ts, pricingTS *time.Time
+	var input, output, cacheCr, cacheCr1h, cacheRd, reasoning, webSearch int64
+	if err := rows.Scan(
+		&r.sessionID, &messageOrdinal, &ts, &pricingTS, &r.source, &r.model,
+		&r.providerID, &r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
+		&r.usageDedupKey,
+		&input, &output, &cacheCr, &cacheCr1h, &cacheRd,
+		&reasoning, &webSearch, &cost, &r.costSource,
+	); err != nil {
+		return fmt.Errorf("scanning clickhouse activity usage: %w", err)
+	}
+	r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h = int(input), int(output), int(cacheCr), int(cacheCr1h)
+	r.cacheRd, r.reasoningTok, r.webSearchRequests = int(cacheRd), int(reasoning), int(webSearch)
+	if cost != nil {
+		r.cost = sql.NullInt64{Int64: *cost, Valid: true}
+	}
+	*out = clickSessionUsageOrderedRow{ordinal: -1}
+	if messageOrdinal != nil {
+		out.ordinal = *messageOrdinal
+		r.messageOrdinal = sql.NullInt64{Int64: out.ordinal, Valid: true}
+	}
+	if ts != nil {
+		out.ts, out.validTS = ts.UTC(), true
+		r.ts = out.ts.Format(time.RFC3339Nano)
+	}
+	switch {
+	case pricingTS == nil:
+	case out.validTS && pricingTS.Equal(out.ts):
+		// Most rows are priced at their own timestamp; share its text.
+		r.pricingTS = r.ts
+	default:
+		r.pricingTS = pricingTS.UTC().Format(time.RFC3339Nano)
+	}
+	out.scan = r
+	return nil
 }
 
 func clickSessionUsageRowLess(
@@ -1373,14 +1396,15 @@ func (e *keptUsageEncoder) ref(field int, v string) uint64 {
 	return id
 }
 
-// add appends a scanned row.
-func (e *keptUsageEncoder) add(r *clickSessionUsageOrderedRow) {
-	scan := &r.scan
+// add appends a row and returns its session's dictionary index. us is the
+// timestamp in microseconds and is read only when validTS.
+func (e *keptUsageEncoder) add(r *clickActivityReportUsageRow, us int64, validTS bool) uint64 {
 	refs := keptUsageRefs{
-		e.ref(0, scan.sessionID), e.ref(1, scan.source), e.ref(2, scan.model),
-		e.ref(3, scan.providerID), e.ref(4, scan.agent), e.ref(5, scan.costSource),
+		e.ref(0, r.sessionID), e.ref(1, r.source), e.ref(2, r.model),
+		e.ref(3, r.providerID), e.ref(4, r.agent), e.ref(5, r.costSource),
 	}
-	e.write(scan, refs, r.ts.UnixMicro(), r.validTS)
+	e.write(r, refs, us, validTS)
+	return refs[0]
 }
 
 // addKept appends a row decoded from the kept read whose dictionary this
@@ -1450,95 +1474,83 @@ func (e *keptUsageEncoder) finish() *activityUsageKept {
 	return e.k
 }
 
-// keptArenaSize is the arena space a row's inline strings take.
-func keptArenaSize(r *clickActivityReportUsageRow) int {
-	size := len(r.ts) + len(r.claudeMessageID) + len(r.claudeRequestID) + len(r.sourceUUID) + len(r.usageDedupKey)
-	if r.pricingTS != r.ts {
-		size += len(r.pricingTS)
-	}
-	return size
-}
-
-// keepActivityUsage encodes rows in the given order.
-func keepActivityUsage(rows []clickSessionUsageOrderedRow, order []int) *activityUsageKept {
-	size := 0
-	for _, index := range order {
-		size += keptArenaSize(&rows[index].scan)
-	}
-	e := newKeptUsageEncoder(nil, size, len(order))
-	for _, index := range order {
-		e.add(&rows[index])
-	}
-	return e.finish()
-}
-
 // rows decodes the kept rows in report order. Each row is decoded into the
 // same value, so the pointer is valid only until the next row.
 func (k *activityUsageKept) rows() iter.Seq[*keptUsageRow] {
 	return func(yield func(*keptUsageRow) bool) {
 		data, arena := k.data, k.arena
-		uvarint := func() uint64 {
-			v, n := binary.Uvarint(data)
-			data = data[n:]
-			return v
-		}
-		varint := func() int64 {
-			v, n := binary.Varint(data)
-			data = data[n:]
-			return v
-		}
-		str := func() string {
-			n := uvarint()
-			v := arena[:n]
-			arena = arena[n:]
-			return v
-		}
 		var r keptUsageRow
 		var us int64
 		for range k.count {
-			flags := data[0]
-			data = data[1:]
-			r = keptUsageRow{}
-			for i := range r.refs {
-				r.refs[i] = uvarint()
-			}
-			r.sessionID = k.dict[r.refs[0]]
-			r.source = k.dict[r.refs[1]]
-			r.model = k.dict[r.refs[2]]
-			r.providerID = k.dict[r.refs[3]]
-			r.agent = k.dict[r.refs[4]]
-			r.costSource = k.dict[r.refs[5]]
-			if flags&keptTSValid != 0 {
-				us += varint()
-				r.us, r.validTS = us, true
-			}
-			r.ts = str()
-			r.pricingTS = r.ts
-			if flags&keptPricingIsTS == 0 {
-				r.pricingTS = str()
-			}
-			r.claudeMessageID = str()
-			r.claudeRequestID = str()
-			r.sourceUUID = str()
-			r.usageDedupKey = str()
-			if flags&keptOrdinalValid != 0 {
-				r.messageOrdinal.Int64, r.messageOrdinal.Valid = varint(), true
-			}
-			r.inputTok = int(varint())
-			r.outputTok = int(varint())
-			r.cacheCr = int(varint())
-			r.cacheCr1h = int(varint())
-			r.cacheRd = int(varint())
-			r.reasoningTok = int(varint())
-			r.webSearchRequests = int(varint())
-			if flags&keptCostValid != 0 {
-				r.cost.Int64, r.cost.Valid = varint(), true
+			data, arena = k.decode(data, arena, us, &r)
+			if r.validTS {
+				us = r.us
 			}
 			if !yield(&r) {
 				return
 			}
 		}
 	}
+}
+
+// decode decodes the row data and arena start with into r and returns what
+// follows it. A row stores its timestamp as a delta from prevUS, the
+// timestamp of the last earlier row that has one.
+func (k *activityUsageKept) decode(data []byte, arena string, prevUS int64, r *keptUsageRow) ([]byte, string) {
+	uvarint := func() uint64 {
+		v, n := binary.Uvarint(data)
+		data = data[n:]
+		return v
+	}
+	varint := func() int64 {
+		v, n := binary.Varint(data)
+		data = data[n:]
+		return v
+	}
+	str := func() string {
+		n := uvarint()
+		v := arena[:n]
+		arena = arena[n:]
+		return v
+	}
+	flags := data[0]
+	data = data[1:]
+	*r = keptUsageRow{}
+	for i := range r.refs {
+		r.refs[i] = uvarint()
+	}
+	r.sessionID = k.dict[r.refs[0]]
+	r.source = k.dict[r.refs[1]]
+	r.model = k.dict[r.refs[2]]
+	r.providerID = k.dict[r.refs[3]]
+	r.agent = k.dict[r.refs[4]]
+	r.costSource = k.dict[r.refs[5]]
+	if flags&keptTSValid != 0 {
+		r.us, r.validTS = prevUS+varint(), true
+	}
+	r.ts = str()
+	r.pricingTS = r.ts
+	if flags&keptPricingIsTS == 0 {
+		r.pricingTS = str()
+	}
+	r.claudeMessageID = str()
+	r.claudeRequestID = str()
+	r.sourceUUID = str()
+	r.usageDedupKey = str()
+	if flags&keptOrdinalValid != 0 {
+		r.messageOrdinal.Int64, r.messageOrdinal.Valid = varint(), true
+	}
+	r.inputTok = int(varint())
+	r.outputTok = int(varint())
+	r.cacheCr = int(varint())
+	r.cacheCr1h = int(varint())
+	r.cacheRd = int(varint())
+	r.reasoningTok = int(varint())
+	r.webSearchRequests = int(varint())
+	if flags&keptCostValid != 0 {
+		r.cost.Int64, r.cost.Valid = varint(), true
+	}
+	return data, arena
 }
 
 // all decodes the kept rows in report order. Each row is decoded into the
@@ -1553,68 +1565,103 @@ func (k *activityUsageKept) all() iter.Seq[*clickActivityReportUsageRow] {
 	}
 }
 
-// sortActivityUsage returns the indexes of rows in report order: time, then
-// session, then ordinal. The wide rows stay in place.
-func sortActivityUsage(rows []clickSessionUsageOrderedRow) []int {
-	order := make([]int, len(rows))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(i, j int) bool {
-		a, b := &rows[order[i]], &rows[order[j]]
-		if a.validTS && b.validTS && !a.ts.Equal(b.ts) {
-			return a.ts.Before(b.ts)
-		}
-		if a.scan.sessionID != b.scan.sessionID {
-			return a.scan.sessionID < b.scan.sessionID
-		}
-		return a.ordinal < b.ordinal
-	})
-	return order
+// keptUsageKey is where a row sits in an arrival-order encoding and what
+// orders it: time, then session, then ordinal, then arrival.
+type keptUsageKey struct {
+	us, ordinal int64
+	// data and arena are the row's offsets in the arrival encoding.
+	data, arena int
+	session     uint64
+	validTS     bool
 }
 
-// keptUsageBefore reports whether the scanned row a comes before the kept
-// row b in the order sortActivityUsage gives.
-func keptUsageBefore(a *clickSessionUsageOrderedRow, b *keptUsageRow) bool {
-	if a.validTS && b.validTS {
-		if us := a.ts.UnixMicro(); us != b.us {
-			return us < b.us
+// keptUsageSorter packs rows as they arrive and keeps them in report order:
+// time, then session, then ordinal, with rows that tie in arrival order.
+// Sorting small keys and copying each packed row once costs a fraction of
+// sorting the wide scanned rows.
+type keptUsageSorter struct {
+	e    *keptUsageEncoder
+	keys []keptUsageKey
+}
+
+func newKeptUsageSorter() *keptUsageSorter {
+	return &keptUsageSorter{e: newKeptUsageEncoder(nil, 0, 0)}
+}
+
+func (s *keptUsageSorter) add(r *clickSessionUsageOrderedRow) {
+	key := keptUsageKey{
+		us: r.ts.UnixMicro(), ordinal: r.ordinal, validTS: r.validTS,
+		data: len(s.e.data), arena: s.e.arena.Len(),
+	}
+	key.session = s.e.add(&r.scan, key.us, r.validTS)
+	s.keys = append(s.keys, key)
+}
+
+func (s *keptUsageSorter) finish() *activityUsageKept {
+	arrival := &activityUsageKept{dict: s.e.k.dict, arena: s.e.arena.String(), data: s.e.data}
+	dict := arrival.dict
+	slices.SortFunc(s.keys, func(a, b keptUsageKey) int {
+		if a.validTS && b.validTS && a.us != b.us {
+			return cmp.Compare(a.us, b.us)
 		}
+		if a.session != b.session {
+			if c := strings.Compare(dict[a.session], dict[b.session]); c != 0 {
+				return c
+			}
+		}
+		if c := cmp.Compare(a.ordinal, b.ordinal); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.data, b.data)
+	})
+	e := newKeptUsageEncoder(dict, len(arrival.arena), len(s.keys))
+	var r keptUsageRow
+	for _, key := range s.keys {
+		arrival.decode(arrival.data[key.data:], arrival.arena[key.arena:], 0, &r)
+		r.us = key.us
+		e.addKept(&r)
 	}
-	if a.scan.sessionID != b.sessionID {
-		return a.scan.sessionID < b.sessionID
+	return e.finish()
+}
+
+// keptUsageBefore reports whether a comes before b in report order.
+func keptUsageBefore(a, b *keptUsageRow) bool {
+	if a.validTS && b.validTS && a.us != b.us {
+		return a.us < b.us
 	}
-	return a.ordinal < db.UsageRowMessageOrdinal(b.messageOrdinal)
+	if a.sessionID != b.sessionID {
+		return a.sessionID < b.sessionID
+	}
+	return db.UsageRowMessageOrdinal(a.messageOrdinal) < db.UsageRowMessageOrdinal(b.messageOrdinal)
 }
 
 // mergeActivityUsage returns prev without the rows of the sessions in
 // replaced, merged in report order with fresh, the replaced sessions'
-// current rows, taken in the order order gives.
-func mergeActivityUsage(
-	prev *activityUsageKept, replaced map[string]bool, fresh []clickSessionUsageOrderedRow, order []int,
-) *activityUsageKept {
-	size := len(prev.arena)
-	for _, index := range order {
-		size += keptArenaSize(&fresh[index].scan)
-	}
-	e := newKeptUsageEncoder(prev.dict, size, prev.count+len(order))
+// current rows.
+func mergeActivityUsage(prev *activityUsageKept, replaced map[string]bool, fresh *activityUsageKept) *activityUsageKept {
+	e := newKeptUsageEncoder(prev.dict, len(prev.arena)+len(fresh.arena), prev.count+fresh.count)
 	dropped := make([]bool, len(prev.dict))
 	for _, session := range prev.sessions {
 		dropped[session] = replaced[prev.dict[session]]
+	}
+	// Each fresh row's strings point into fresh's arena and dictionary, so
+	// copying the decoded value keeps it valid.
+	pending := make([]keptUsageRow, 0, fresh.count)
+	for r := range fresh.rows() {
+		pending = append(pending, *r)
 	}
 	next := 0
 	for r := range prev.rows() {
 		if dropped[r.refs[0]] {
 			continue
 		}
-		for next < len(order) && keptUsageBefore(&fresh[order[next]], r) {
-			e.add(&fresh[order[next]])
-			next++
+		for ; next < len(pending) && keptUsageBefore(&pending[next], r); next++ {
+			e.add(&pending[next].clickActivityReportUsageRow, pending[next].us, pending[next].validTS)
 		}
 		e.addKept(r)
 	}
-	for ; next < len(order); next++ {
-		e.add(&fresh[order[next]])
+	for ; next < len(pending); next++ {
+		e.add(&pending[next].clickActivityReportUsageRow, pending[next].us, pending[next].validTS)
 	}
 	return e.finish()
 }

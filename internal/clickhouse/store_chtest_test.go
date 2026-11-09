@@ -514,10 +514,10 @@ func TestMachineSelectorLookupIncludesUnmergedIdentity(t *testing.T) {
 	// Only the newest version owns the session identity.
 	_, err := conn.ExecContext(ctx, `INSERT INTO sessions (id, machine, push_version) VALUES ('updated', 'current-host', 2)`)
 	require.NoError(t, err)
-	ids, err := NewStoreFromDB(conn).GetMatchingMachineIDs(ctx, []string{"retired-host"})
+	ids, err := newTestStore(t, conn, Target{URL: dsn, Database: database}).GetMatchingMachineIDs(ctx, []string{"retired-host"})
 	require.NoError(t, err)
 	assert.Empty(t, ids)
-	ids, err = NewStoreFromDB(conn).GetMatchingMachineIDs(ctx, []string{"current-host"})
+	ids, err = newTestStore(t, conn, Target{URL: dsn, Database: database}).GetMatchingMachineIDs(ctx, []string{"current-host"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"current-host"}, ids)
 }

@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -40,7 +42,9 @@ type Store struct {
 	conn *sql.DB
 	// pages serves the session list, sidebar filters, and one-session reads
 	// apart from conn's dashboard and Usage scans; see pageMaxOpenConns.
-	pages         *sql.DB
+	pages *sql.DB
+	// bulk reads the Activity usage rows; see openBulk.
+	bulk          chdriver.Conn
 	cursorMu      sync.RWMutex
 	cursorSecret  []byte
 	customPricing map[string]config.CustomModelRate
@@ -89,9 +93,6 @@ type Store struct {
 		sync.Mutex
 		last string
 	}
-	// keeping tracks the encodes of activity usage reads being kept; see
-	// activityReportUsage. Close waits for them.
-	keeping sync.WaitGroup
 	// activitySessionListings keeps candidate listings per parts and predicate.
 	activitySessionListings kept.Memo[activitySessionListing]
 	projectIdentityMaps     kept.Memo[map[string]export.ProjectMapEntry]
@@ -135,15 +136,24 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 		conn.Close()
 		return nil, err
 	}
-	s := NewStoreFromDB(conn)
+	database, err := t.DatabaseName()
+	if err != nil {
+		return nil, errors.Join(err, conn.Close(), pages.Close())
+	}
+	bulk, err := openBulk(ctx, t.URL, database)
+	if err != nil {
+		return nil, errors.Join(err, conn.Close(), pages.Close())
+	}
+	s := NewStoreFromDB(conn, bulk)
 	s.pages = pages
 	return s, nil
 }
 
-// NewStoreFromDB wraps an already open connection, which serves page reads
-// too. The caller owns the connection's compatibility checks.
-func NewStoreFromDB(conn *sql.DB) *Store {
-	s := &Store{conn: conn, pages: conn}
+// NewStoreFromDB wraps already open connections: conn serves page reads too,
+// and bulk serves the reads that return millions of rows; see openBulk. The
+// caller owns the connections' compatibility checks.
+func NewStoreFromDB(conn *sql.DB, bulk chdriver.Conn) *Store {
+	s := &Store{conn: conn, pages: conn, bulk: bulk}
 	s.usageVersions.tables = map[string]usageTableVersion{}
 	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
 	s.sessionAggregateRows.Size = aggregateRowBytes
@@ -163,8 +173,7 @@ func (s *Store) DB() *sql.DB { return s.conn }
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		s.stopBackground()
-		s.keeping.Wait()
-		s.closeErr = s.conn.Close()
+		s.closeErr = errors.Join(s.conn.Close(), s.bulk.Close())
 		if s.pages != s.conn {
 			s.closeErr = errors.Join(s.closeErr, s.pages.Close())
 		}

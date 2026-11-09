@@ -164,7 +164,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	state, err := NewStoreFromDB(store.DB()).preparedUsageState(ctx)
+	state, err := NewStoreFromDB(store.DB(), store.bulk).preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.True(t, state.ready, "the host with snapshots keeps prepared reads")
 	require.Equal(t, []string{"older-snapshot", "other-host"}, state.raw)
@@ -185,7 +185,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	}
 	read := func() reads {
 		t.Helper()
-		fresh := NewStoreFromDB(store.DB())
+		fresh := NewStoreFromDB(store.DB(), store.bulk)
 		var r reads
 		r.day, err = fresh.GetActivityReport(ctx, filter, day)
 		require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	mixed := read()
 	snapshotHost := filter
 	snapshotHost.Machine = "test-machine"
-	withSnapshots, err := NewStoreFromDB(store.DB()).GetActivityReport(ctx, snapshotHost, day)
+	withSnapshots, err := NewStoreFromDB(store.DB(), store.bulk).GetActivityReport(ctx, snapshotHost, day)
 	require.NoError(t, err)
 	require.Equal(t, 22+40, mixed.day.Totals.OutputTokens-withSnapshots.Totals.OutputTokens,
 		"the raw host's current tokens are counted, and its stale prepared rows are not")
@@ -207,7 +207,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	// With the snapshot readiness keys gone, every read is raw.
 	_, err = store.DB().ExecContext(ctx, "DELETE FROM sync_metadata WHERE startsWith(key, ?)", usageSnapshotReadyKeyBase+":")
 	require.NoError(t, err)
-	state, err = NewStoreFromDB(store.DB()).preparedUsageState(ctx)
+	state, err = NewStoreFromDB(store.DB(), store.bulk).preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.False(t, state.ready)
 	raw := read()

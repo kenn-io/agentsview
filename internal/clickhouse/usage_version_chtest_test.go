@@ -202,7 +202,7 @@ func TestUsageReadsStayFreshAfterPushDuringIdentityProbe(t *testing.T) {
 					store.coverageCache.mu.Unlock()
 					require.NotEmpty(t, fingerprint)
 				}
-				want, err := read(t.Context(), NewStoreFromDB(syncer.conn))
+				want, err := read(t.Context(), newTestStore(t, syncer.conn, syncer.target))
 				require.NoError(t, err)
 				require.NotEqual(t, before, want)
 				got, err := read(t.Context(), store)

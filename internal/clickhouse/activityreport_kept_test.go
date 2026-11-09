@@ -5,13 +5,14 @@ import (
 	"slices"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
 
 	"github.com/stretchr/testify/require"
 )
 
 // A kept activity usage read must give back every field of every row, in
-// the order it was kept, or a reopened report silently changes its totals.
+// report order, or a reopened report silently changes its totals.
 func TestKeptActivityUsageRoundTrip(t *testing.T) {
 	rows := []clickSessionUsageOrderedRow{
 		{scan: clickActivityReportUsageRow{
@@ -35,12 +36,14 @@ func TestKeptActivityUsageRoundTrip(t *testing.T) {
 			cost: sql.NullInt64{Int64: -5, Valid: true},
 		}},
 	}
-	order := []int{2, 0, 1}
-	kept := keepActivityUsage(rows, order)
-	var want []clickActivityReportUsageRow
-	for _, index := range order {
-		want = append(want, rows[index].scan)
+	for i := range rows {
+		rows[i].ts, rows[i].validTS = readbase.ParseAnalyticsTime(rows[i].scan.ts)
+		rows[i].ordinal = db.UsageRowMessageOrdinal(rows[i].scan.messageOrdinal)
 	}
+	kept := keepTestUsage(rows)
+	// Session A's rows in time order; session B's row has no timestamp, so
+	// it sorts by session after them.
+	want := []clickActivityReportUsageRow{rows[2].scan, rows[0].scan, rows[1].scan}
 	var got []clickActivityReportUsageRow
 	for r := range kept.all() {
 		got = append(got, *r)
@@ -58,6 +61,15 @@ func keptTestRow(session, source, ts string, ordinal int64, message, request str
 		},
 		ts: parsed, validTS: ok, ordinal: ordinal,
 	}
+}
+
+// keepTestUsage keeps rows the way a read keeps the rows it scans.
+func keepTestUsage(rows []clickSessionUsageOrderedRow) *activityUsageKept {
+	sorter := newKeptUsageSorter()
+	for i := range rows {
+		sorter.add(&rows[i])
+	}
+	return sorter.finish()
 }
 
 func keptTestRows(k *activityUsageKept) []clickActivityReportUsageRow {
@@ -89,20 +101,20 @@ func TestMergedActivityUsageMatchesFreshRead(t *testing.T) {
 		keptTestRow("session-b", "message", "2026-09-01T10:00:04Z", 3, "", "", 9),
 		keptTestRow("session-new", "message", "2026-09-01T09:59:59Z", 1, "", "", 10),
 	}
-	prev := keepActivityUsage(before, sortActivityUsage(before))
+	prev := keepTestUsage(before)
 	replaced := map[string]bool{"session-b": true, "session-gone": true, "session-new": true}
-	merged := mergeActivityUsage(prev, replaced, pushed, sortActivityUsage(pushed))
+	merged := mergeActivityUsage(prev, replaced, keepTestUsage(pushed))
 
 	after := slices.Concat(unchanged, pushed)
-	want := keepActivityUsage(after, sortActivityUsage(after))
+	want := keepTestUsage(after)
 	require.Equal(t, keptTestRows(want), keptTestRows(merged))
 	require.Equal(t, want.count, merged.count)
 
 	// A second merge starts from the first one's dictionary.
 	again := []clickSessionUsageOrderedRow{keptTestRow("session-a", "message", "2026-09-01T10:00:05Z", 3, "", "", 11)}
-	merged = mergeActivityUsage(merged, map[string]bool{}, again, sortActivityUsage(again))
+	merged = mergeActivityUsage(merged, map[string]bool{}, keepTestUsage(again))
 	after = slices.Concat(after, again)
-	require.Equal(t, keptTestRows(keepActivityUsage(after, sortActivityUsage(after))), keptTestRows(merged))
+	require.Equal(t, keptTestRows(keepTestUsage(after)), keptTestRows(merged))
 }
 
 // Selecting candidates from a range's kept rows must return what the
@@ -121,7 +133,7 @@ func TestActivityUsageSelectionKeepsClaudePeers(t *testing.T) {
 		keptTestRow("peer", "message", "2026-09-01T10:00:06Z", 3, "m2", "", 7),
 		keptTestRow("other", "message", "2026-09-01T10:00:07Z", 1, "m2", "r2", 8),
 	}
-	kept := keepActivityUsage(rows, sortActivityUsage(rows))
+	kept := keepTestUsage(rows)
 	selection, count := activityUsageSelection(kept, []string{"candidate"})
 	var outputs []int
 	for r := range selection {
