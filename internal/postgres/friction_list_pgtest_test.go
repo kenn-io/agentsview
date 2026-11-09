@@ -205,7 +205,6 @@ func TestFrictionListParity(t *testing.T) {
 
 	patternFilters := map[string]db.FrictionPatternFilter{
 		"all":             {},
-		"linked":          {Linked: true},
 		"kind":            {Kind: "pattern"},
 		"since":           {Since: "2026-09-14"},
 		"page":            {Limit: 1},
@@ -378,10 +377,6 @@ func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
 	store.DetectFrictionAvailability(ctx)
 	assert.False(t, store.FrictionIssueLinksWritable(), "filing refuses before contacting Kata")
 
-	rows, _, err = store.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Linked: true})
-	require.NoError(t, err)
-	assert.Empty(t, rows)
-
 	// Once a migration adds the tables, the same store reads links.
 	for _, statement := range strings.Split(frictionReviewDDL, ";\n") {
 		if strings.Contains(statement, "friction_issue_links") || strings.Contains(statement, "friction_filing_state") {
@@ -402,10 +397,6 @@ func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, &link, rows[0].Issue)
 	assert.Nil(t, rows[0].Filing)
-	rows, _, err = store.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Linked: true})
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "fl1:aaa", rows[0].Fingerprint)
 }
 
 // Filing needs every link and filing-state write: the replacing saves' ON

@@ -9,15 +9,11 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/kata"
 )
 
-// Reopen checks recent linked patterns for recurrence after an issue was closed.
+// Reopen reopens linked issues closed as done when a digest since `since` holds a finding that occurred after the close.
 func (f *Filer) Reopen(ctx context.Context, since string, loc *time.Location) (int, error) {
-	if f.Kata.Status(ctx, false).State != kata.StateReady {
-		return 0, nil
-	}
 	if loc == nil {
 		loc = time.UTC
 	}
@@ -25,8 +21,7 @@ func (f *Filer) Reopen(ctx context.Context, since string, loc *time.Location) (i
 	if err != nil {
 		return 0, err
 	}
-	start = start.AddDate(0, 0, -1)
-	filter := db.FrictionPatternFilter{Linked: true, Since: start.Format(time.DateOnly), Limit: db.MaxFrictionListLimit}
+	filter := db.FrictionPatternFilter{Since: since, Limit: db.MaxFrictionListLimit}
 	count := 0
 	for {
 		rows, next, err := f.Store.ListFrictionPatterns(ctx, filter)
@@ -34,6 +29,9 @@ func (f *Filer) Reopen(ctx context.Context, since string, loc *time.Location) (i
 			return count, err
 		}
 		for _, p := range rows {
+			if p.Issue == nil {
+				continue
+			}
 			if err := ctx.Err(); err != nil {
 				return count, err
 			}
@@ -64,8 +62,6 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, star
 	if is.Status == "open" || is.ClosedReason != "done" || is.ClosedAt == nil {
 		return false, nil
 	}
-	closed := is.ClosedAt.In(loc).Format(time.DateOnly)
-	qualified := ""
 	occurrenceDate := ""
 	for day := start; day.Format(time.DateOnly) <= p.LastSeenDate; day = day.AddDate(0, 0, 1) {
 		date := day.Format(time.DateOnly)
@@ -77,34 +73,23 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, star
 			}
 			for _, finding := range findings {
 				if finding.OccurredAt != nil && finding.OccurredAt.After(*is.ClosedAt) {
-					qualified = date
 					occurrenceDate = finding.OccurredAt.In(loc).Format(time.DateOnly)
 					break
 				}
 			}
-			if qualified != "" || next == "" {
+			if occurrenceDate != "" || next == "" {
 				break
 			}
 			filter.Cursor = next
 		}
-		if qualified != "" {
+		if occurrenceDate != "" {
 			break
 		}
 	}
-	if qualified == "" {
+	if occurrenceDate == "" {
 		return false, nil
 	}
-	current, err := f.pattern(ctx, p.Fingerprint)
-	if err != nil {
-		return false, err
-	}
-	if current.Issue == nil || current.Issue.IssueUID != p.Issue.IssueUID {
-		return false, nil
-	}
-	body := fmt.Sprintf("This pattern recurred on %s after the issue was closed on %s.", occurrenceDate, closed)
-	if link := friction.DigestURL(f.PublicURL, qualified); link != "" {
-		body += "\n\n" + link
-	}
+	body := fmt.Sprintf("This pattern recurred on %s.", occurrenceDate)
 	key := "friction-recur-" + p.Issue.IssueUID + "-" + is.ClosedAt.UTC().Format(time.RFC3339Nano)
 	if err := f.Kata.Comment(ctx, p.Issue.IssueUID, key, body); err != nil {
 		apiErr, ok := errors.AsType[*kata.APIError](err)

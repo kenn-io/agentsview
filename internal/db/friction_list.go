@@ -63,8 +63,6 @@ type FrictionPatternFilter struct {
 	Fingerprints []string
 	// FilingState keeps patterns in this automatic filing state.
 	FilingState string
-	// Linked keeps patterns with a Kata issue link.
-	Linked bool
 	// MinSessions keeps patterns seen in at least this many sessions.
 	MinSessions int
 	Limit       int
@@ -256,9 +254,6 @@ func (db *DB) ListFrictionPatterns(
 	if f.Since != "" {
 		preds = append(preds, "p.last_seen_date >= ?")
 		args = append(args, f.Since)
-	}
-	if f.Linked {
-		preds = append(preds, "l.issue_uid IS NOT NULL")
 	}
 	if f.FilingState != "" {
 		preds = append(preds, "f.state = ?")

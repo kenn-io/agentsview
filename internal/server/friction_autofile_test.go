@@ -105,7 +105,7 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 	}
 }
 
-func TestFrictionJobReopensWhereLinksCannotBeSaved(t *testing.T) {
+func TestFrictionJobDoesNotFileWhereLinksCannotBeSaved(t *testing.T) {
 	s := katatest.New(t)
 	dir := tempDirWithRetryCleanup(t)
 	cfg := config.Config{
@@ -116,8 +116,6 @@ func TestFrictionJobReopensWhereLinksCannotBeSaved(t *testing.T) {
 	cfg.Friction.Kata.MinSessions = 1
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	seedFrictionDigest(t, database, "2026-09-14")
-	fp := frictionTestSnapshot("2026-09-14").Signals[0].Fingerprint()
-	linkedUID := seedClosedFrictionIssue(t, database, s, fp)
 	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
 	runner := &review.Runner{Store: database, Loc: time.UTC, Now: func() time.Time { return fixed }, BackfillDays: 7}
 	server.New(cfg, linksUnwritableStore{database}, nil,
@@ -128,6 +126,31 @@ func TestFrictionJobReopensWhereLinksCannotBeSaved(t *testing.T) {
 
 	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
 	assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"), "no issue is created without a place for its link")
+}
+
+func TestFrictionJobReopensRecurringIssue(t *testing.T) {
+	s := katatest.New(t)
+	dir := tempDirWithRetryCleanup(t)
+	cfg := config.Config{
+		Host: "127.0.0.1", DataDir: dir, DBPath: filepath.Join(dir, "test.db"), WriteTimeout: 30 * time.Second,
+	}
+	cfg.Friction.BackfillDays = 7
+	cfg.Friction.Kata.AutoFile = true
+	cfg.Friction.Kata.MinSessions = 2
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	seedFrictionDigest(t, database, "2026-09-14")
+	fp := frictionTestSnapshot("2026-09-14").Signals[0].Fingerprint()
+	linkedUID := seedClosedFrictionIssue(t, database, s, fp)
+	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
+	runner := &review.Runner{Store: database, Loc: time.UTC, Now: func() time.Time { return fixed }, BackfillDays: 7}
+	server.New(cfg, database, nil,
+		server.WithFriction(runner, nil),
+		server.WithKataConn(kata.NewConn(kata.Config{
+			Enabled: true, Hub: true, Endpoint: s.Endpoint(), Project: katatest.DefaultProjectName,
+		})))
+
+	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
+	assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"), "a linked pattern is not filed again")
 	got, ok := s.Issue(linkedUID)
 	require.True(t, ok)
 	assert.Equal(t, "open", got.Status)

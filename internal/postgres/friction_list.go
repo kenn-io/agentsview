@@ -144,12 +144,6 @@ func (s *Store) ListFrictionPatterns(
 		preds = append(preds, "p.session_count >= "+pb.add(f.MinSessions))
 	}
 	issueColumns, issueJoin := s.frictionIssueSelect(ctx)
-	if f.Linked {
-		if !strings.Contains(issueJoin, "friction_issue_links") {
-			return []db.FrictionPattern{}, "", nil
-		}
-		preds = append(preds, "l.issue_uid IS NOT NULL")
-	}
 	if f.FilingState != "" {
 		if !strings.Contains(issueJoin, "friction_filing_state") {
 			// A schema without filing state has no pattern in any state.

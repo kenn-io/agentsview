@@ -1,10 +1,6 @@
 package server
 
 import (
-	"bytes"
-	"context"
-	"errors"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -70,7 +66,7 @@ func TestAutomaticFilingHoldsAWorkLease(t *testing.T) {
 			d, ok := s.db.(*db.DB)
 			require.True(t, ok)
 			runner.Store = d
-			seedAutoFileDigest(t, d, false)
+			seedAutoFileDigest(t, d)
 			if tt.draining {
 				tracker.mu.Lock()
 				tracker.draining = true
@@ -95,28 +91,15 @@ func TestAutomaticFilingHoldsAWorkLease(t *testing.T) {
 	}
 }
 
-func seedAutoFileDigest(t *testing.T, d *db.DB, twoPatterns bool) {
+func seedAutoFileDigest(t *testing.T, d *db.DB) {
 	t.Helper()
 	const date = "2026-09-14"
 	sig := friction.Signal{
 		Kind: friction.KindCorrection, SubjectID: "claude:s1", SubjectKind: friction.SubjectSession,
 		Detector: "correction.coding", Text: "no, use the other flag", Ordinal: new(4),
 	}
-	signals := []friction.Signal{sig}
-	if twoPatterns {
-		second := sig
-		second.Text = "no, use the other file"
-		signals = append(signals, second)
-	}
-	updates := make([]db.FrictionPatternUpdate, 0, len(signals))
-	for _, signal := range signals {
-		updates = append(updates, db.FrictionPatternUpdate{
-			Fingerprint: signal.Fingerprint(), Kind: string(signal.Kind), Title: signal.Title(),
-			Date: date, SubjectID: signal.SubjectID, Ordinal: signal.Ordinal, Occurrences: 1,
-		})
-	}
 	snap := review.Snapshot{
-		Date: date, Signals: signals, SessionsScanned: 1,
+		Date: date, Signals: []friction.Signal{sig}, SessionsScanned: 1,
 		Timezone: "UTC", RulesVersion: friction.RulesVersion,
 	}
 	snapJSON, err := review.EncodeSnapshot(snap)
@@ -126,91 +109,8 @@ func seedAutoFileDigest(t *testing.T, d *db.DB, twoPatterns bool) {
 		BuiltAt: time.Date(2026, 9, 15, 1, 0, 0, 0, time.UTC), Revision: 1, SessionsScanned: 1,
 		SnapshotJSON: snapJSON, SummaryJSON: friction.RenderSummaryJSON(snap.DigestSnapshot),
 		Markdown: friction.RenderMarkdown(snap.DigestSnapshot), MarkdownSHA256: "s", RunID: "r",
-	}, nil, updates))
-}
-
-type failingFrictionStore struct {
-	*db.DB
-	reconcileErr error
-	reopenErr    error
-}
-
-func (s failingFrictionStore) ListFrictionPatterns(ctx context.Context, f db.FrictionPatternFilter) ([]db.FrictionPattern, string, error) {
-	if f.Linked {
-		if s.reopenErr != nil {
-			return nil, "", s.reopenErr
-		}
-		return s.DB.ListFrictionPatterns(ctx, f)
-	}
-	return nil, "", s.reconcileErr
-}
-
-type partialFrictionStore struct {
-	*db.DB
-	failure error
-}
-
-func (s partialFrictionStore) SaveFrictionFilingState(context.Context, db.FrictionFilingState) error {
-	return s.failure
-}
-
-func TestAutoFileReopensAfterReconcileError(t *testing.T) {
-	ks := katatest.New(t)
-	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
-	runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }}
-	s := testServer(t, 0, WithFriction(runner, nil), WithKataConn(kata.NewConn(kata.Config{
-		Enabled: true, Hub: true, Endpoint: ks.Endpoint(), Project: katatest.DefaultProjectName,
-	})))
-	s.cfg.Friction.Kata.AutoFile = true
-	s.cfg.Friction.Kata.MinSessions = 1
-	s.cfg.Friction.BackfillDays = 7
-	d := s.db.(*db.DB)
-	runner.Store = d
-	seedAutoFileDigest(t, d, false)
-	reconcileErr := errors.New("reconcile failed")
-	reopenErr := errors.New("reopen failed")
-	s.db = failingFrictionStore{DB: d, reconcileErr: reconcileErr, reopenErr: reopenErr}
-	err := s.autoFileFriction(t.Context())
-	require.ErrorIs(t, err, reconcileErr)
-	require.ErrorIs(t, err, reopenErr)
-}
-
-func TestAutoFileLogsPartialReport(t *testing.T) {
-	ks := katatest.New(t)
-	target, err := url.Parse(ks.Endpoint())
-	require.NoError(t, err)
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	creates := 0
-	watch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/issues") {
-			creates++
-			if creates == 2 {
-				http.Error(w, "create failed", http.StatusBadRequest)
-				return
-			}
-		}
-		proxy.ServeHTTP(w, r)
-	}))
-	t.Cleanup(watch.Close)
-	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
-	runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }}
-	s := testServer(t, 0, WithFriction(runner, nil), WithKataConn(kata.NewConn(kata.Config{
-		Enabled: true, Hub: true, Endpoint: watch.URL, Project: katatest.DefaultProjectName,
-	})))
-	s.cfg.Friction.Kata.AutoFile = true
-	s.cfg.Friction.Kata.MinSessions = 1
-	s.cfg.Friction.BackfillDays = 7
-	d := s.db.(*db.DB)
-	runner.Store = d
-	seedAutoFileDigest(t, d, true)
-	failure := errors.New("filing state failed")
-	s.db = partialFrictionStore{DB: d, failure: failure}
-	var logs bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(old)
-	err = s.autoFileFriction(t.Context())
-	require.ErrorIs(t, err, failure)
-	assert.Contains(t, logs.String(), "automatic filing created 1")
-	assert.Len(t, ks.RequestsMatching(http.MethodPost, "/issues"), 1)
+	}, nil, []db.FrictionPatternUpdate{{
+		Fingerprint: sig.Fingerprint(), Kind: string(sig.Kind), Title: sig.Title(),
+		Date: date, SubjectID: sig.SubjectID, Ordinal: sig.Ordinal, Occurrences: 1,
+	}}))
 }

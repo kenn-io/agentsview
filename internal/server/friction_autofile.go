@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"log"
 	"time"
 
@@ -35,7 +34,7 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 	s.mu.RUnlock()
 	runner := s.frictionRunner
 	store, ok := s.db.(filing.Store)
-	if !ok {
+	if !ok || !frictionLinksWritable(store) {
 		return nil
 	}
 	// The catch-up released its work lease; hold one so an idle daemon
@@ -54,18 +53,17 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 		Exclusive: func(work func() error) error { return s.SerializeArchiveWrite(ctx, work) },
 	}
 	since := latest.AddDate(0, 0, 1-max(backfill, 1)).Format(time.DateOnly)
-	var rep filing.ReconcileReport
-	if frictionLinksWritable(store) {
-		rep, err = f.Reconcile(ctx, filing.Policy{
-			Kinds: policy.FileKinds(), Since: since,
-			MinSessions: policy.FileMinSessions(), MaxNew: frictionAutoFilePerPass,
-		})
+	rep, err := f.Reconcile(ctx, filing.Policy{
+		Kinds: policy.FileKinds(), Since: since,
+		MinSessions: policy.FileMinSessions(), MaxNew: frictionAutoFilePerPass,
+	})
+	reopened := 0
+	if err == nil {
+		reopened, err = f.Reopen(ctx, since, runner.Loc)
 	}
-	reconcileErr := err
-	reopened, err := f.Reopen(ctx, since, runner.Loc)
 	if rep != (filing.ReconcileReport{}) || reopened != 0 {
 		log.Printf("friction: automatic filing created %d, linked %d, will retry %d, needs a person %d, reopened %d",
 			rep.Created, rep.Linked, rep.Retry, rep.NeedsPerson, reopened)
 	}
-	return errors.Join(reconcileErr, err)
+	return err
 }
