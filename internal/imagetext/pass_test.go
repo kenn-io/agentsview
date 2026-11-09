@@ -32,7 +32,7 @@ func TestImageTextPassAndSearch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice 42\n-----BEGIN RSA PRIVATE KEY-----\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\n-----END RSA PRIVATE KEY-----"}]]}`, glmocr.DefaultDeploymentFingerprint)
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice 42"}]]}`, glmocr.DefaultDeploymentFingerprint)
 	}))
 	t.Cleanup(srv.Close)
 	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
@@ -49,18 +49,6 @@ func TestImageTextPassAndSearch(t *testing.T) {
 	err = manager.Run(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, requests)
-	search, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, search.Results, 1)
-	require.Equal(t, "one", search.Results[0].SessionID)
-	require.Equal(t, 3, search.Results[0].Ordinal)
-	require.Equal(t, "image_text", search.Results[0].MatchKind)
-	require.Contains(t, search.Results[0].Snippet, "<mark>invoice</mark>")
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: 4, Role: "assistant", Content: "later"}}))
-	search, err = d.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, search.Results, 1)
-	require.Equal(t, 3, search.Results[0].Ordinal)
 	ref, _, err := assets.Put(assetDir, "image/png", png)
 	require.NoError(t, err)
 	offload := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
@@ -102,8 +90,11 @@ func TestImageTextFailureAndRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, requests)
 	var failures int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures FROM image_text_cache`).Scan(&failures))
+	var retry string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures,retry_at FROM image_text_cache`).Scan(&failures, &retry))
 	require.Equal(t, 1, failures)
+	require.NotEmpty(t, retry)
+	require.NotEqual(t, "9999-12-31T23:59:59Z", retry)
 	raw, err := sql.Open("sqlite3", d.Path())
 	require.NoError(t, err)
 	_, err = raw.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
@@ -112,9 +103,9 @@ func TestImageTextFailureAndRetry(t *testing.T) {
 	err = manager.Run(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 2, requests)
-	page, err := d.SearchContent(ctx, db.ContentSearchFilter{Pattern: "retry succeeded", Sources: []string{"tool_result"}, IncludeOneShot: true, IncludeAutomated: true})
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
+	var succeeded int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded FROM image_text_cache`).Scan(&succeeded))
+	require.Equal(t, 1, succeeded)
 }
 
 func TestImageTextProcessorKey(t *testing.T) {
@@ -166,25 +157,6 @@ func TestImageTextPassDrainsPages(t *testing.T) {
 	require.Equal(t, 21, requests)
 }
 
-func TestImageTextInvalidInputIsTerminal(t *testing.T) {
-	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	body := []byte("this is not a png")
-	content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(body))
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "invalid", Project: "demo", Agent: "test", MessageCount: 1}))
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "invalid", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	policy, err := (config.ImageTextConfig{Enabled: true}).Policy()
-	require.NoError(t, err)
-	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
-	require.NoError(t, err)
-	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
-	var retry string
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
-	require.Equal(t, "9999-12-31T23:59:59Z", retry)
-}
-
 func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
 	ctx := t.Context()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
@@ -221,11 +193,6 @@ func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
 	page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "other", Project: "demo", Agent: "test", MessageCount: 1}))
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "other", Role: "assistant", Content: "missing", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: offloaded}}}}))
-	page, err = d.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 2)
 }
 
 func TestImageTextCachesEmptyNormalizedOutput(t *testing.T) {
@@ -290,6 +257,10 @@ func TestImageTextRetriesRepairedAsset(t *testing.T) {
 	manager := Manager{DB: d, Client: client}
 	require.NoError(t, manager.Run(ctx))
 	require.Zero(t, requests)
+	var retry string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
+	require.NotEmpty(t, retry)
+	require.NotEqual(t, "9999-12-31T23:59:59Z", retry)
 	require.NoError(t, os.WriteFile(path, png, 0600))
 	raw, err := sql.Open("sqlite3", d.Path())
 	require.NoError(t, err)
@@ -298,17 +269,13 @@ func TestImageTextRetriesRepairedAsset(t *testing.T) {
 	require.NoError(t, raw.Close())
 	require.NoError(t, manager.Run(ctx))
 	require.Equal(t, 1, requests)
-	page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
+	var succeeded int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded FROM image_text_cache`).Scan(&succeeded))
+	require.Equal(t, 1, succeeded)
 }
 
 func TestImageTextTerminalBecomesEligible(t *testing.T) {
-	for _, changedType := range []bool{false, true} {
-		name := "new occurrence"
-		if changedType {
-			name = "changed media type"
-		}
+	for _, name := range []string{"new occurrence", "changed media type", "invalid bytes"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
 			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
@@ -317,6 +284,9 @@ func TestImageTextTerminalBecomesEligible(t *testing.T) {
 			encoded := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage"))
 			gif := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/gif;base64,%s"}]`, encoded)
 			png := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, encoded)
+			if name == "invalid bytes" {
+				gif = `[{"type":"input_image","image_url":"data:image/png;base64,dGhpcyBpcyBub3QgYSBwbmc="}]`
+			}
 			requests := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
@@ -336,10 +306,13 @@ func TestImageTextTerminalBecomesEligible(t *testing.T) {
 			var retry string
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
 			require.Equal(t, "9999-12-31T23:59:59Z", retry)
+			if name == "invalid bytes" {
+				return
+			}
 			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "session", Ordinal: 2, Role: "assistant", Content: "append"}}))
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
 			require.Equal(t, "9999-12-31T23:59:59Z", retry)
-			if changedType {
+			if name == "changed media type" {
 				var before, after int64
 				require.NoError(t, d.Reader().QueryRow(ctx, `SELECT id FROM tool_calls WHERE tool_use_id='call'`).Scan(&before))
 				_, err = d.WriteSessionIncremental(ctx, "session", nil, db.IncrementalSessionUpdate{SubagentLinks: []db.ToolCallSubagentLink{{ToolUseID: "call", HasResult: true, ResultContent: png}}})
@@ -351,10 +324,9 @@ func TestImageTextTerminalBecomesEligible(t *testing.T) {
 			}
 			require.NoError(t, manager.Run(ctx))
 			require.Equal(t, 1, requests)
-			page, err := d.Search(ctx, db.SearchFilter{Query: "recovered"})
-			require.NoError(t, err)
-			require.Len(t, page.Results, 1)
-			require.Equal(t, "session", page.Results[0].SessionID)
+			var succeeded int
+			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded FROM image_text_cache`).Scan(&succeeded))
+			require.Equal(t, 1, succeeded)
 		})
 	}
 }

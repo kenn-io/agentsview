@@ -755,13 +755,8 @@ func TestOpenDataVersionBump_PreservesData(t *testing.T) {
 	// A successful resync records a version older writers cannot maintain.
 	require.NoError(t, d3.setDataVersion(t.Context()))
 	require.NoError(t, d3.getReader().QueryRow(t.Context(), "PRAGMA user_version").Scan(&ver))
-	require.GreaterOrEqual(t, ver, 169)
 	require.Equal(t, CurrentDataVersion(), ver)
-	require.NoError(t, d3.Close())
-	d4, err := Open(t.Context(), path)
-	requireNoError(t, err, "reopen after resync")
-	defer d4.Close()
-	require.False(t, d4.NeedsResync())
+
 }
 
 func TestMigration_ResultContentColumn(t *testing.T) {

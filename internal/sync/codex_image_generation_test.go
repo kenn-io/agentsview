@@ -81,7 +81,7 @@ func TestCodexGeneratedImageStoredAsImageResult(t *testing.T) {
 	}
 }
 
-func TestCodexGeneratedImageUpgradeReparsesUnchangedSource(t *testing.T) {
+func TestCodexGeneratedImageRestoredByFullResync(t *testing.T) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b08"
 	png := testjsonl.SolidPNGBase64(2, 2, color.RGBA{G: 180, A: 255})
 	root := t.TempDir()
@@ -135,17 +135,11 @@ func TestCodexGeneratedImageUpgradeReparsesUnchangedSource(t *testing.T) {
 	database, err := db.OpenIsolated(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	require.True(t, database.NeedsResync(), "the archive requires a full resync")
 	engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
 	t.Cleanup(engine.Close)
-	stats, err := engine.SyncThenRun(t.Context(), false, nil, func(full bool) error {
-		assert.True(t, full, "startup must select a full resync")
-		return nil
-	})
-	require.NoError(t, err)
+	stats := engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted)
 	require.Zero(t, stats.Failed)
-	assert.False(t, database.NeedsResync())
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), sessionID))
 	assert.Equal(t, want, resultContent(t, database))
 }

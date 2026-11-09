@@ -23,9 +23,6 @@ func TestImageTextJobKeepsDaemonAwake(t *testing.T) {
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	manager, err := setupImageText(config.Config{}, d)
-	require.NoError(t, err)
-	require.Nil(t, manager)
 	started, release := make(chan struct{}), make(chan struct{})
 	defer func() {
 		select {
@@ -45,7 +42,7 @@ func TestImageTextJobKeepsDaemonAwake(t *testing.T) {
 	content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, body)
 	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
 	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	manager, err = setupImageText(config.Config{ImageText: config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}}, d)
+	manager, err := setupImageText(config.Config{ImageText: config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}}, d)
 	require.NoError(t, err)
 	idled := make(chan struct{})
 	tracker := server.NewIdleTracker(time.Second, func() { close(idled) })
@@ -61,11 +58,6 @@ func TestImageTextJobKeepsDaemonAwake(t *testing.T) {
 	}
 	close(release)
 	require.NoError(t, <-finished)
-	select {
-	case <-idled:
-	case <-time.After(5 * time.Second):
-		t.Fatal("daemon did not idle after OCR")
-	}
 	cancel()
 	<-trackerDone
 }

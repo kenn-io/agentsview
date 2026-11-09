@@ -225,6 +225,14 @@ func TestImageTextSearchUsesCurrentResultEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "session", page.Results[0].SessionID)
+	require.Equal(t, 1, page.Results[0].Ordinal)
+	require.Equal(t, "image_text", page.Results[0].MatchKind)
+	require.Contains(t, page.Results[0].Snippet, "<mark>currentimageword</mark>")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Ordinal: 2, Role: "assistant", Content: "later"}}))
+	page, err = d.Search(ctx, SearchFilter{Query: "currentimageword"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, 1, page.Results[0].Ordinal)
 }
 
 func TestImageTextSearchRespectsMessageVisibility(t *testing.T) {
