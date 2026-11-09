@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -563,6 +564,86 @@ func TestPGUsageCachePushedNullTimestampDedup(t *testing.T) {
 			require.Empty(t, probe.takeExtracted())
 		})
 	}
+}
+
+func TestPGUsageCacheToOnlyExcludesUndatedUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		exceptions  bool
+		datedTokens bool
+		wantTokens  int
+	}{
+		{"ordinary", false, true, 30},
+		{"exceptions", true, true, 30},
+		{"undated billed session", false, false, 0},
+	} {
+		for _, warm := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/warm=%t", tc.name, warm), func(t *testing.T) {
+				local, syncer, store := newUsageJournalFixture(t)
+				ctx := t.Context()
+				require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "model-a", OutputPerMTok: money.MustParseDollars("10")}}))
+				require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session-a", Project: "project-a", Machine: "test-machine", Agent: "copilot"}))
+				messages := []db.Message{
+					{SessionID: "session-a", Ordinal: 0, Role: "assistant", Content: "undated", Model: "model-a", TokenUsage: []byte(`{"output_tokens":10}`)},
+					{SessionID: "session-a", Ordinal: 1, Role: "user", Content: "dated", Timestamp: "2026-01-01T09:00:00Z"},
+				}
+				if tc.datedTokens {
+					messages[1].Role, messages[1].Model, messages[1].TokenUsage = "assistant", "model-a", []byte(`{"output_tokens":30}`)
+				}
+				if tc.exceptions {
+					messages[0].SourceUUID, messages[1].SourceUUID = "undated-uuid", "dated-uuid"
+				}
+				require.NoError(t, local.InsertMessages(ctx, messages))
+				pushed, err := syncer.Push(ctx, false, nil)
+				require.NoError(t, err)
+				require.Empty(t, pushed.Errors)
+				attachUsageCacheProbe(t, store, t.TempDir())
+				if warm {
+					all, err := store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+					require.NoError(t, err)
+					require.Equal(t, tc.wantTokens+10, all.Totals.OutputTokens)
+				}
+				filter := db.UsageFilter{To: "2026-01-01", Timezone: "UTC"}
+				direct := &Store{pg: store.pg}
+				want, err := direct.GetDailyUsage(ctx, filter)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantTokens, want.Totals.OutputTokens)
+				require.Equal(t, int64(tc.wantTokens*10), want.Totals.TotalCost.Microdollars)
+				requireCachedUsageMatchesDirect(t, store, filter)
+			})
+		}
+	}
+}
+
+func TestPGUsageCacheSessionReadsExcludeOverlappingAccounts(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session-a", Project: "project-a", Machine: "test-machine", Agent: "copilot", StartedAt: new("2026-01-01T09:00:00Z")}))
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "session-a", []db.UsageEvent{{SessionID: "session-a", Source: "provider", Model: "model-a", OutputTokens: 30, Cost: new(money.Money{Microdollars: 300}), CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-01-01T09:00:00Z", DedupKey: "event"}}))
+	require.NoError(t, local.InsertCursorUsageEvents(ctx, []db.CursorUsageEvent{{OccurredAt: "2026-01-01T08:00:00Z", Model: "model-a", OutputTokens: 10, Charged: money.Money{Microdollars: 100}, DedupKey: "session-a:provider:event"}}))
+	pushed, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	attachUsageCacheProbe(t, store, t.TempDir())
+	filter := db.UsageFilter{Timezone: "UTC"}
+	daily, err := store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 10, daily.Totals.OutputTokens, "daily usage includes the earlier account winner")
+	direct := &Store{pg: store.pg}
+	wantTop, err := direct.GetTopSessionsByCost(ctx, filter, 20)
+	require.NoError(t, err)
+	require.Len(t, wantTop, 1)
+	require.Equal(t, "session-a", wantTop[0].SessionID)
+	require.Equal(t, 30, wantTop[0].OutputTokens)
+	require.Equal(t, int64(300), wantTop[0].Cost.Microdollars)
+	gotTop, err := store.usageCache.GetTopSessionsByCost(ctx, filter, 20)
+	require.NoError(t, err)
+	normalizeUsageTopTimes(wantTop)
+	normalizeUsageTopTimes(gotTop)
+	assert.Equal(t, wantTop, gotTop, "account exceptions must not compete in session-only ranking")
+	counts, err := store.usageCache.GetUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, counts.Total, "the session remains billed after daily usage warms account exceptions")
 }
 
 func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
