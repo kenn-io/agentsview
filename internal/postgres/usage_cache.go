@@ -60,7 +60,7 @@ func usageJournalOID(ctx context.Context, q storeExecutor) (uint32, error) {
 }
 
 func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db.UsageSourceSnapshot, error) {
-	var snapshot db.UsageSourceSnapshot
+	snapshot := db.UsageSourceSnapshot{MissingTimestampsLast: true}
 	oid, err := usageJournalOID(ctx, view.pg)
 	if err != nil {
 		return snapshot, usageJournalError(err)

@@ -731,6 +731,7 @@ journal retain direct reads. Repeated source or publication conflicts use direct
 reads for that request. Failure to create the cache directory uses temporary
 storage; later cache storage failures report an error. Pairwise retains
 its exactness fallback and can make two extra filtered cache reads.
+A remote fact-fill batch that exceeds ten minutes returns a deadline error.
 
 A first bounded visit fills candidate sessions for its date window. Widening the
 window adds missing sessions. Only a complete, verified all-history read can

@@ -465,7 +465,7 @@ func aggregateUsageRollupExceptions(
 	plain, general, discarded := rankUsageRollupSnapshots(facts)
 	plain = filterUsageRollupOwners(plain, sessions, filter)
 	general = filterUsageRollupOwners(general, sessions, filter)
-	general = deduplicateUsageRollupGeneral(general)
+	general = deduplicateUsageRollupGeneral(general, snapshot.MissingTimestampsLast)
 	survivors := slices.Concat(plain, general)
 	type key struct {
 		session, agent, date, model, providerID, priced, pattern, rateHash string
@@ -526,7 +526,7 @@ func aggregateUsageRollupExceptions(
 		}
 		if priced.AuthoritativeCost != nil {
 			candidate, exists := authoritative[fact.AttributionSessionID]
-			if !exists || compareUsageAuthoritativeOrder(candidate.fact, fact) < 0 {
+			if !exists || usageFactTimestampOrder(snapshot.MissingTimestampsLast, compareUsageAuthoritativeOrder)(candidate.fact, fact) < 0 {
 				authoritative[fact.AttributionSessionID] = authoritativeCandidate{
 					fact: fact, cost: priced.AuthoritativeCost.Microdollars, group: group,
 				}
@@ -711,7 +711,7 @@ func usageCursorAutomatedScopePasses(filter UsageFilter, isHeadless bool) bool {
 	}
 }
 
-func deduplicateUsageRollupGeneral(facts []usageRollupFact) []usageRollupFact {
+func deduplicateUsageRollupGeneral(facts []usageRollupFact, missingLast bool) []usageRollupFact {
 	byKey := make(map[string][]usageRollupFact)
 	for _, fact := range facts {
 		byKey[usageRollupGeneralKey(fact)] = append(
@@ -720,7 +720,7 @@ func deduplicateUsageRollupGeneral(facts []usageRollupFact) []usageRollupFact {
 	keys := SortedKeys(byKey)
 	result := make([]usageRollupFact, 0, len(keys))
 	for _, key := range keys {
-		result = append(result, slices.MinFunc(byKey[key], compareUsageGeneralWinner))
+		result = append(result, slices.MinFunc(byKey[key], usageFactTimestampOrder(missingLast, compareUsageGeneralWinner)))
 	}
 	return result
 }
@@ -792,6 +792,23 @@ func compareUsageGeneralWinner(left, right usageRollupFact) int {
 		return order
 	}
 	return compareUsageFactTies(left, right)
+}
+
+// usageFactTimestampOrder keeps SQLite's empty-first string order unless the
+// source sorts missing timestamps after dated ones.
+func usageFactTimestampOrder(missingLast bool, compare func(left, right usageRollupFact) int) func(left, right usageRollupFact) int {
+	if !missingLast {
+		return compare
+	}
+	return func(left, right usageRollupFact) int {
+		switch {
+		case left.DedupTimestamp == "" && right.DedupTimestamp != "":
+			return 1
+		case left.DedupTimestamp != "" && right.DedupTimestamp == "":
+			return -1
+		}
+		return compare(left, right)
+	}
 }
 
 func compareUsageFactTies(left, right usageRollupFact) int {

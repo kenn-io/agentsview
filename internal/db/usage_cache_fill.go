@@ -446,7 +446,7 @@ func newUsageFactSpool(ctx context.Context) (*usageFactSpool, error) {
 			claude_message_id TEXT NOT NULL, claude_request_id TEXT NOT NULL,
 			source_uuid TEXT NOT NULL, usage_dedup_key TEXT NOT NULL,
 			token_eligible INTEGER NOT NULL, activity_eligible INTEGER NOT NULL,
-            ranking_output_tokens INTEGER,
+			ranking_output_tokens INTEGER,
 			PRIMARY KEY(session_id, fact_index)
 		) WITHOUT ROWID;
 		CREATE TABLE sessions (

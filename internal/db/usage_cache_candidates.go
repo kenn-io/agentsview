@@ -87,7 +87,10 @@ type usageQuerySnapshot struct {
 	PricingRows          []export.EffectivePricingRow
 	PricingDigest        string
 	PricingIdentity      string
-	location             *time.Location
+	// MissingTimestampsLast follows a source whose ascending order places
+	// undated usage after dated usage, as PostgreSQL's NULLS LAST default does.
+	MissingTimestampsLast bool
+	location              *time.Location
 }
 
 // Close exists to make the snapshot boundary explicit to callers. Capture

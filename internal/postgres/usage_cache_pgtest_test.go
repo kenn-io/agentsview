@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -595,4 +596,66 @@ func TestPGUsageCacheNullableSessionFilters(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPGUsageCachePushedNullTimestampDedup(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "model-a", OutputPerMTok: money.MustParseDollars("10")}}))
+	for _, id := range []string{"undated", "dated"} {
+		var started *string
+		if id == "dated" {
+			started = new("2026-01-01T09:00:00Z")
+		}
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project-a", Machine: "test-machine", Agent: "copilot", StartedAt: started}))
+	}
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{
+		{SessionID: "undated", Ordinal: 0, Role: "assistant", Content: "undated", Model: "model-a", TokenUsage: []byte(`{"output_tokens":10}`), SourceUUID: "shared-uuid"},
+		{SessionID: "dated", Ordinal: 0, Role: "assistant", Content: "dated", Model: "model-a", Timestamp: "2026-01-01T09:00:00Z", TokenUsage: []byte(`{"output_tokens":30}`), SourceUUID: "shared-uuid"},
+	}))
+	pushed, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	filter := db.UsageFilter{Timezone: "UTC"}
+	want, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 30, want.Totals.OutputTokens)
+	directory := t.TempDir()
+	attachUsageCacheProbe(t, store, directory)
+	requireCachedUsageMatchesDirect(t, store, filter)
+	require.NoError(t, store.Close())
+	restarted, err := NewStore(ctx, testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	probe := attachUsageCacheProbe(t, restarted, directory)
+	requireCachedUsageMatchesDirect(t, restarted, filter)
+	require.Empty(t, probe.takeExtracted())
+}
+
+func TestPGUsageCachePushedNullTimestampAuthoritativeCost(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "reported", Project: "project-a", Machine: "test-machine", Agent: "copilot"}))
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "model-a", OutputPerMTok: money.MustParseDollars("10")}}))
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "reported", []db.UsageEvent{
+		{SessionID: "reported", Source: "session", Model: "model-a", OutputTokens: 10, Cost: new(money.Money{Microdollars: 100}), CostSource: db.CopilotReportedCostSource, DedupKey: "undated"},
+		{SessionID: "reported", Source: "session", Model: "model-a", OutputTokens: 30, Cost: new(money.Money{Microdollars: 200}), CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-01-01T09:00:00Z", DedupKey: "dated"},
+	}))
+	pushed, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	filter := db.UsageFilter{Timezone: "UTC"}
+	want, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, int64(100), want.Totals.TotalCost.Microdollars)
+	directory := t.TempDir()
+	attachUsageCacheProbe(t, store, directory)
+	requireCachedUsageMatchesDirect(t, store, filter)
+	require.NoError(t, store.Close())
+	restarted, err := NewStore(ctx, testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	probe := attachUsageCacheProbe(t, restarted, directory)
+	requireCachedUsageMatchesDirect(t, restarted, filter)
+	require.Empty(t, probe.takeExtracted())
 }
