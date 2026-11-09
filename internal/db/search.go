@@ -315,6 +315,7 @@ type SearchResult struct {
 	Ordinal        int      `json:"ordinal"`
 	SessionEndedAt string   `json:"session_ended_at"`
 	Snippet        string   `json:"snippet"`
+	MatchKind      string   `json:"match_kind,omitempty"`
 	Rank           float64  `json:"rank"`
 }
 
@@ -452,7 +453,11 @@ func (db *DB) Search(
 	}
 	defer func() { _ = tx.Rollback() }()
 	var walk *searchRankWalk
-	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
+	var hasImageText bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM image_text_cache WHERE succeeded=1)`).Scan(&hasImageText); err != nil {
+		return SearchPage{}, err
+	}
+	if !hasImageText && f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
 		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
 		if err != nil {
 			return SearchPage{}, err
@@ -499,6 +504,36 @@ func (db *DB) Search(
 	}
 	args = append(args, bestArgs...)
 
+	imageBranchSQL := ""
+	imageQuery := strings.ReplaceAll(strings.ReplaceAll(f.Query, "rendered:", "text:"), "content:", "text:")
+	imageTable := "image_text_fts"
+	if ftsQuery.table == "messages_cjk_fts" {
+		imageTable = "image_text_cjk_fts"
+	}
+	if hasImageText {
+		args = append(args, imageQuery)
+		args = append(args, nameProjectArgs...)
+		args = append(args, ftsSessionsArgs...)
+		imageBranchSQL = fmt.Sprintf(`
+			UNION ALL
+			SELECT session_id,project,agent,machine,name,session_ended_at,ordinal,NULL,image_rowid,NULL,0.5,0,'image_text'
+			FROM (
+			 SELECT s.id AS session_id,s.project,s.agent,s.machine,
+			 COALESCE(s.display_name,s.session_name,s.first_message,'') AS name,
+			 COALESCE(s.ended_at,s.started_at,'') AS session_ended_at,
+			 COALESCE(e.tool_call_message_ordinal,m.ordinal) AS ordinal,
+			 c.rowid AS image_rowid,
+			 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY c.rowid,o.image_hash) AS rn
+			 FROM %s JOIN image_text_cache c ON c.rowid=%s.rowid AND c.succeeded=1
+			 JOIN image_text_occurrences o ON o.image_hash=c.image_hash
+			 JOIN sessions s ON s.id=o.session_id
+			 LEFT JOIN tool_result_events e ON e.id=o.event_id
+			 LEFT JOIN tool_calls tc ON tc.id=o.call_id
+			 LEFT JOIN messages m ON m.id=tc.message_id
+			 WHERE %s MATCH ? AND s.deleted_at IS NULL %s
+			 AND s.id NOT IN (%s)
+			) WHERE rn=1`, imageTable, imageTable, imageTable, nameProjectClause, ftsSessionsSQL)
+	}
 	nameBranchSQL := ""
 	if includeNames {
 		args = append(args, likePattern)        // CASE COALESCE(display_name,session_name) LIKE
@@ -507,6 +542,9 @@ func (db *DB) Search(
 		args = append(args, likePattern)        // name WHERE first_message LIKE
 		args = append(args, nameProjectArgs...) // optional name branch project and dates
 		args = append(args, ftsSessionsArgs...) // NOT IN WHERE
+		if hasImageText {
+			args = append(args, imageQuery)
+		}
 		nameBranchSQL = fmt.Sprintf(`
 			UNION ALL
 
@@ -514,7 +552,7 @@ func (db *DB) Search(
 			SELECT s.id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
-				-1 AS ordinal, NULL AS best_rowid,
+				-1 AS ordinal, NULL AS best_rowid, NULL AS image_rowid,
 				CASE
 					WHEN COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
 						THEN COALESCE(s.display_name, s.session_name, '')
@@ -522,8 +560,8 @@ func (db *DB) Search(
 						THEN COALESCE(s.first_message, '')
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
-				0.0 AS rank,
-				0 AS match_pos
+				1.0 AS rank,
+				0 AS match_pos, '' AS match_kind
 			FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
 				OR s.first_message LIKE ? ESCAPE '\')
@@ -537,10 +575,15 @@ func (db *DB) Search(
 				%s
 				AND s.id NOT IN (
 					%s
-				)`, nameProjectClause, ftsSessionsSQL)
+				)`+func() string {
+			if hasImageText {
+				return ` AND NOT EXISTS (SELECT 1 FROM ` + imageTable + ` JOIN image_text_cache ic ON ic.rowid=` + imageTable + `.rowid AND ic.succeeded=1 JOIN image_text_occurrences io ON io.image_hash=ic.image_hash WHERE io.session_id=s.id AND ` + imageTable + ` MATCH ?)`
+			}
+			return ``
+		}(), nameProjectClause, ftsSessionsSQL)
 	}
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
-	args = append(args, f.Query)             // paged snippet MATCH
+	args = append(args, imageQuery, f.Query) // paged image and message snippet MATCH
 
 	// Relevance ordering needs match_pos before pagination. Recency ordering
 	// does not, so it avoids scanning every matching message for the position.
@@ -548,21 +591,22 @@ func (db *DB) Search(
 	query := fmt.Sprintf(`
 		%spage AS MATERIALIZED (
 		SELECT session_id, project, agent, machine, name,
-			session_ended_at, ordinal, best_rowid, snippet, rank, match_pos
+			session_ended_at, ordinal, best_rowid, image_rowid, snippet, rank, match_pos, match_kind
 		FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
-				best.best_ordinal AS ordinal, best.best_rowid,
+				best.best_ordinal AS ordinal, best.best_rowid, NULL AS image_rowid,
 				NULL AS snippet,
 				best.best_rank AS rank,
-				%s AS match_pos
+				%s AS match_pos, '' AS match_kind
 			FROM (
 				%s
 			) AS best
 			JOIN messages m ON m.id = best.best_rowid
 			JOIN sessions s ON m.session_id = s.id
+			%s
 			%s
 		)
 		ORDER BY %s
@@ -570,24 +614,27 @@ func (db *DB) Search(
 		)
 		SELECT session_id, project, agent, machine, name,
 			session_ended_at, ordinal,
-			CASE WHEN best_rowid IS NULL THEN snippet ELSE (
+			CASE WHEN image_rowid IS NOT NULL THEN (SELECT snippet(IMAGE_FTS, 0, '<mark>', '</mark>', '...', %d) FROM IMAGE_FTS WHERE IMAGE_FTS.rowid=page.image_rowid AND IMAGE_FTS MATCH ?) WHEN best_rowid IS NULL THEN snippet ELSE (
 				SELECT snippet(messages_fts, -1, '<mark>', '</mark>', '...', %d)
 				FROM messages_fts
 				WHERE messages_fts.rowid = page.best_rowid AND %s
 			) END AS snippet,
-			rank, match_pos
+			rank, match_pos, match_kind
 		FROM page
 		ORDER BY %s`,
 		withSQL,
 		matchPosSQL,
 		bestSQL,
+		imageBranchSQL,
 		nameBranchSQL,
 		orderBy, // ORDER BY (%s)
+		snippetTokenLength,
 		snippetTokenLength,
 		matchSQL,
 		orderBy,
 	)
 	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
+	query = strings.ReplaceAll(query, "IMAGE_FTS", imageTable)
 
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -602,7 +649,7 @@ func (db *DB) Search(
 		if err := rows.Scan(
 			&r.SessionID, &r.Project, &r.Agent, &r.Machine, &r.Name,
 			&r.SessionEndedAt, &r.Ordinal,
-			&r.Snippet, &r.Rank, &matchPos,
+			&r.Snippet, &r.Rank, &matchPos, &r.MatchKind,
 		); err != nil {
 			return SearchPage{},
 				fmt.Errorf("scanning result: %w", err)

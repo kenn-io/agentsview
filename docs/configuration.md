@@ -2746,3 +2746,17 @@ Images dropped by the image policy have no bytes to hash, so they report
 Results refresh when the session reopens and when its transcript changes, at
 most every 15 seconds while matches are already shown. Successful Docbank
 answers are reused for one minute. No migration or resync is required.
+
+### Image text
+
+Enable image text extraction when a local GLM-OCR service is available:
+
+```toml
+[image_text]
+enabled = true
+# endpoint = "http://127.0.0.1:30004/glmocr/parse"
+```
+
+The endpoint must use a loopback address. See
+[search text in images](commands.md#search-text-in-images) for supported images
+and search modes.

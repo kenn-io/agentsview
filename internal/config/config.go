@@ -1069,6 +1069,7 @@ type Config struct {
 	DuckDB               DuckDBConfig                `json:"duckdb,omitempty" toml:"duckdb"`
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
+	ImageText            ImageTextConfig             `json:"image_text,omitempty" toml:"image_text"`
 	Integrations         IntegrationsConfig          `json:"integrations,omitempty" toml:"integrations"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
 	Kata                 KataConfig                  `json:"-" toml:"kata"`
@@ -1910,6 +1911,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DuckDB                         DuckDBConfig           `toml:"duckdb"`
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
+		ImageText                      ImageTextConfig        `toml:"image_text"`
 		Integrations                   IntegrationsConfig     `toml:"integrations"`
 		Insights                       InsightsConfig         `toml:"insights"`
 		Kata                           KataConfig             `toml:"kata"`
@@ -2234,6 +2236,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Vector.Embed.BackstopInterval = file.Vector.Embed.BackstopInterval
 	}
 	c.mergeRecallExtractTOML(file.Recall, meta)
+	if meta.IsDefined("image_text") {
+		c.ImageText = file.ImageText
+	}
 	if meta.IsDefined("integrations") {
 		c.Integrations = file.Integrations
 	}

@@ -30,6 +30,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/docbank/document/ocr"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -18159,4 +18160,25 @@ func TestResyncAllUsageOnlyDropsFrictionDigestText(t *testing.T) {
 	got, err := env.db.GetFrictionDigest(t.Context(), "2024-01-01")
 	require.NoError(t, err)
 	assert.Nil(t, got, "usage-only archive must not retain digest text")
+}
+
+func TestImageTextSurvivesFullResync(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	ctx := t.Context()
+	env.writeClaudeSession(t, "test-proj", "present.jsonl", testjsonl.NewSessionBuilder().AddClaudeUser(tsEarly, "hello").AddClaudeAssistant(tsEarlyS5, "answer").String())
+	require.Equal(t, 1, env.engine.SyncAll(ctx, nil).Synced)
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	images := db.RetainedToolResultImages(content)
+	require.Len(t, images, 1)
+	require.NoError(t, env.db.UpsertSession(ctx, db.Session{ID: "orphan-image", Project: "demo", Agent: "claude", MessageCount: 1}))
+	require.NoError(t, env.db.InsertMessages(ctx, []db.Message{{SessionID: "orphan-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, env.db.SaveImageText(ctx, images[0].SHA256, identity, "invoice 42", false))
+	stats := env.engine.ResyncAll(ctx, nil)
+	require.False(t, stats.Aborted, "%v", stats.Warnings)
+	page, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "orphan-image", page.Results[0].SessionID)
 }

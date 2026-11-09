@@ -947,4 +947,32 @@ describe("CommandPalette", () => {
 
     unmount(component);
   });
+
+  it("labels only image-text matches before the snippet and opens their ordinal", async () => {
+    mockSearchStore.results = [
+      makeSearchResult({
+        session_id: "codex:ocr",
+        ordinal: 12,
+        snippet: "deploy <mark>banner</mark>",
+        matchKind: "image_text",
+      }),
+      makeSearchResult({ session_id: "codex:msg", snippet: "message hit" }),
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+
+    const [ocr, message] = document.querySelectorAll<HTMLElement>(".item-snippet");
+    const label = ocr!.firstElementChild;
+    expect(label?.classList.contains("item-match-kind")).toBe(true);
+    expect(label?.textContent).toBe("Image text");
+    expect(ocr!.querySelector("mark")?.textContent).toBe("banner");
+    expect(message!.querySelector(".item-match-kind")).toBeNull();
+    expect(message!.textContent).toBe("message hit");
+
+    document.querySelector<HTMLButtonElement>(".palette-item")!.click();
+    await tick();
+    expect(mockUi.scrollToOrdinal).toHaveBeenCalledWith(12, "codex:ocr");
+
+    unmount(component);
+  });
 });

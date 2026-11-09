@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"os"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/assets"
@@ -694,4 +695,62 @@ func retainedInlineFile(raw jsontext.Value, index int) (RetainedImage, bool) {
 	hash := sha256.New()
 	mediaType, size, _, ok := streamInlineData(uri, hash, block.Type == "input_image")
 	return RetainedImage{Index: index, MediaType: mediaType, Size: new(size), SHA256: hex.EncodeToString(hash.Sum(nil))}, ok
+}
+
+// ReadRetainedImage reads the indexed retained image without changing its stored form.
+func ReadRetainedImage(content string, index int, assetsDir string) ([]byte, error) {
+	var found jsontext.Value
+	n := 0
+	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
+		var blocks []jsontext.Value
+		if json.Unmarshal(raw, &blocks) != nil {
+			return
+		}
+		for _, block := range blocks {
+			if _, ok := retainedImageBlock(block, n); !ok {
+				continue
+			}
+			if n == index {
+				found = block
+			}
+			n++
+		}
+	})
+	if found == nil {
+		return nil, fmt.Errorf("retained image %d missing", index)
+	}
+	if p, ok := parseOffloadedImagePlaceholder(found); ok {
+		hash, ext, ok := assetImageDigest(p.ImageRef)
+		name := hash + ext
+		if !ok {
+			return nil, fmt.Errorf("invalid image reference")
+		}
+		root, err := os.OpenRoot(assetsDir)
+		if err != nil {
+			return nil, err
+		}
+		defer root.Close()
+		if !assets.IsCompleteObject(root, name, p.ByteSize, hash) {
+			return nil, fmt.Errorf("invalid image asset")
+		}
+		return root.ReadFile(name)
+	}
+	var block struct {
+		Type     string         `json:"type"`
+		ImageURL jsontext.Value `json:"image_url"`
+		URI      jsontext.Value `json:"uri"`
+	}
+	if err := json.Unmarshal(found, &block, json.MatchCaseInsensitiveNames(true)); err != nil {
+		return nil, err
+	}
+	uri := block.ImageURL
+	if block.Type == "file" {
+		uri = block.URI
+	}
+	var buf bytes.Buffer
+	_, _, _, ok := streamInlineData(uri, &buf, block.Type == "input_image")
+	if !ok {
+		return nil, fmt.Errorf("invalid inline image")
+	}
+	return buf.Bytes(), nil
 }

@@ -5091,6 +5091,9 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	stmts := []string{
+		"DROP TRIGGER IF EXISTS image_text_cjk_ai", "DROP TRIGGER IF EXISTS image_text_cjk_ad", "DROP TRIGGER IF EXISTS image_text_cjk_au",
+		"DROP TRIGGER IF EXISTS image_text_ai", "DROP TRIGGER IF EXISTS image_text_ad", "DROP TRIGGER IF EXISTS image_text_au",
+		"DROP TABLE IF EXISTS image_text_cjk_fts", "DROP TABLE IF EXISTS image_text_fts",
 		"DROP TRIGGER IF EXISTS messages_cjk_ai",
 		"DROP TRIGGER IF EXISTS messages_cjk_ad",
 		"DROP TRIGGER IF EXISTS messages_cjk_au",
@@ -5139,7 +5142,7 @@ func (db *DB) RebuildFTS(ctx context.Context) error {
 	if err := ensureCJKFTS(ctx, w, true); err != nil {
 		return fmt.Errorf("rebuild CJK fts index: %w", err)
 	}
-	return nil
+	return ensureImageTextFTS(ctx, w, true)
 }
 
 // bulkImportWALAutocheckpointBytes is the WAL growth between automatic
@@ -5391,6 +5394,9 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 
 	if err := ensureCJKFTS(ctx, w, false); err != nil {
 		return fmt.Errorf("initializing CJK FTS: %w", err)
+	}
+	if err := ensureImageTextFTS(ctx, w, false); err != nil {
+		return err
 	}
 
 	var recallFTSCount int

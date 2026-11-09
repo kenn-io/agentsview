@@ -180,6 +180,7 @@
   "command_palette_recency": "Récence",
   "command_palette_searching": "Recherche en cours...",
   "command_palette_no_results": "Aucun résultat",
+  "command_palette_match_image_text": "Texte d’image",
   "command_palette_copy_session_id": "Copier l'ID de la session",
   "command_palette_recent_sessions": "Sessions récentes",
   "session_breadcrumb_back_to_sessions": "Retour aux sessions",

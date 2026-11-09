@@ -2299,7 +2299,10 @@ func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
 	if err := bumpTranscriptRevision(tx, sessionID, true); err != nil {
 		return err
 	}
-	return refreshSessionCommitLinksTx(tx, sessionID)
+	if err := refreshSessionCommitLinksTx(tx, sessionID); err != nil {
+		return err
+	}
+	return refreshImageTextOccurrencesTx(tx, sessionID)
 }
 
 // bumpInsertedTranscriptRevisionTx advances the revision for a session
@@ -2310,7 +2313,10 @@ func bumpInsertedTranscriptRevisionTx(tx transactionQueries, sessionID string) e
 	if err := bumpTranscriptRevision(tx, sessionID, false); err != nil {
 		return err
 	}
-	return refreshSessionCommitLinksTx(tx, sessionID)
+	if err := refreshSessionCommitLinksTx(tx, sessionID); err != nil {
+		return err
+	}
+	return refreshImageTextOccurrencesTx(tx, sessionID)
 }
 
 func bumpTranscriptRevision(

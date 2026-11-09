@@ -180,6 +180,7 @@
   "command_palette_recency": "最新性",
   "command_palette_searching": "検索中...",
   "command_palette_no_results": "結果はありません",
+  "command_palette_match_image_text": "画像テキスト",
   "command_palette_copy_session_id": "セッションIDをコピーする",
   "command_palette_recent_sessions": "最近のセッション",
   "session_breadcrumb_back_to_sessions": "セッションに戻る",

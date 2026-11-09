@@ -182,6 +182,7 @@
   "command_palette_recency": "Yenilik",
   "command_palette_searching": "Axtarılır...",
   "command_palette_no_results": "Nəticə yoxdur",
+  "command_palette_match_image_text": "Şəkil mətni",
   "command_palette_copy_session_id": "Sessiya ID-sini kopyala",
   "command_palette_recent_sessions": "Son sessiyalar",
   "session_breadcrumb_back_to_sessions": "Sessiyalara qayıt",

@@ -177,6 +177,7 @@
   "command_palette_recency": "最近",
   "command_palette_searching": "正在搜索...",
   "command_palette_no_results": "无结果",
+  "command_palette_match_image_text": "图片文字",
   "command_palette_copy_session_id": "复制会话 ID",
   "command_palette_recent_sessions": "最近会话",
   "session_breadcrumb_back_to_sessions": "返回会话列表",

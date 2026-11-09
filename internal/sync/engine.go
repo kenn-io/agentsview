@@ -4005,6 +4005,20 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
+	if copyDerivedText {
+		if err := newDB.CopyImageTextFrom(ctx, origPath); err != nil {
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings, "image text copy failed, aborting swap: "+err.Error())
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats, err
+		}
+	}
+
 	stats.OrphanedCopied = len(orphaned)
 	copiedSessionIDs = append(copiedSessionIDs, orphaned...)
 	abortPreserved := func(err error) (SyncStats, error) {

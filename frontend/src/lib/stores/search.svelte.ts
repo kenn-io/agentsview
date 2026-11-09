@@ -17,6 +17,7 @@ export interface PaletteSearchResult {
   ordinal: number;
   timestamp: string;
   snippet: string;
+  matchKind?: string;
   rank: number;
   snippetFormat: SnippetFormat;
 }
@@ -70,6 +71,7 @@ function normalizeFullText(results: SearchResult[]): PaletteSearchResult[] {
     ordinal: result.ordinal,
     timestamp: result.session_ended_at,
     snippet: result.snippet,
+    matchKind: result.match_kind,
     rank: result.rank,
     snippetFormat: "highlighted-html",
   }));

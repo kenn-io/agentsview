@@ -182,6 +182,7 @@
   "command_palette_recency": "Recientes",
   "command_palette_searching": "Buscando...",
   "command_palette_no_results": "Sin resultados",
+  "command_palette_match_image_text": "Texto de imagen",
   "command_palette_copy_session_id": "Copiar el ID de la sesión",
   "command_palette_recent_sessions": "Sesiones recientes",
   "session_breadcrumb_back_to_sessions": "Volver a las sesiones",

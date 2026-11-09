@@ -1310,3 +1310,17 @@ To use an existing dedicated instance, run:
 TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
   CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres/... -v
 ```
+
+### Image text
+
+When `[image_text]` is enabled, the daemon extracts text from retained inline
+and offloaded PNG, JPEG, and WebP tool-result images using the configured local
+GLM-OCR service. It caches normalized text by decoded image hash and processor
+identity, and tracks current occurrences in the same transaction as tool results.
+Startup and periodic passes backfill existing archives and process pending images
+in bounded pages. Failed requests and missing assets retry with backoff;
+unsupported and oversized images are terminal. A full archive rebuild preserves
+cache entries for retained images and rebuilds their occurrences. Removing the
+last occurrence removes its cached text. The web keyword search and SQLite
+substring and regex `tool_result` searches include this text. Usage-only archives
+do not store image text.

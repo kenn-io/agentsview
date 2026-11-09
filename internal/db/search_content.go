@@ -485,6 +485,13 @@ func (db *DB) substringSearchPage(
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 	}
+	if hasSource(f, "tool_result") {
+		branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, "c.text LIKE ? ESCAPE '\\'", false)...)
+		args = append(args, like)
+		args = append(args, scopeArgs...)
+		args = append(args, like)
+		args = append(args, scopeArgs...)
+	}
 	if len(branches) == 0 {
 		return ContentSearchPage{}, nil
 	}
@@ -848,6 +855,14 @@ func (db *DB) regexCandidateRows(
 			FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
 			`+eventAnchorJoin+`
 			WHERE %s AND tre.%s`, wEv, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
+		args = append(args, scopeArgs...)
+	}
+	if hasSource(f, "tool_result") {
+		w := prefilterClause("c.text")
+		branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, w, true)[0])
+		args = append(args, scopeArgs...)
+		w = prefilterClause("c.text")
+		branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, w, true)[1])
 		args = append(args, scopeArgs...)
 	}
 	if len(branches) == 0 {
@@ -2120,4 +2135,20 @@ func (f ContentSearchFilter) SemanticSnippet(content, approx string) string {
 	}
 	start, end := FTSSnippetRange(f.Pattern, content)
 	return f.BuildSnippet(content, start, end)
+}
+
+func imageTextSearchBranches(f ContentSearchFilter, scope, eventAnchorJoin, predicate string, regex bool) []string {
+	legacy := ""
+	if regex {
+		legacy = ", 0 AS legacy_thinking"
+	}
+	cache := `JOIN image_text_occurrences o ON o.session_id=s.id
+ JOIN image_text_cache c ON c.rowid=(SELECT c2.rowid FROM image_text_cache c2 WHERE c2.image_hash=o.image_hash AND c2.succeeded=1 ORDER BY c2.updated_at DESC, c2.rowid DESC LIMIT 1)`
+	call := fmt.Sprintf(`SELECT tc.session_id,s.project,s.agent,s.transcript_revision,'tool_result','assistant',tc.tool_name,mm.ordinal,COALESCE(mm.timestamp,''),c.text,COALESCE(s.ended_at,s.started_at,''),5 AS src,tc.id AS row_id%s
+ FROM tool_calls tc JOIN messages mm ON mm.id=tc.message_id JOIN sessions s ON s.id=tc.session_id %s
+ WHERE o.call_id=tc.id AND %s AND NOT EXISTS (SELECT 1 FROM tool_result_events tre WHERE tre.session_id=tc.session_id AND tre.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'') AND tc.%s`, legacy, cache, predicate, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "mm", SQLiteQueryDialect()))
+	event := fmt.Sprintf(`SELECT tre.session_id,s.project,s.agent,s.transcript_revision,'tool_result','assistant','',tre.tool_call_message_ordinal,COALESCE(tre.timestamp,''),c.text,COALESCE(s.ended_at,s.started_at,''),6 AS src,tre.id AS row_id%s
+ FROM tool_result_events tre JOIN sessions s ON s.id=tre.session_id %s %s
+ WHERE o.event_id=tre.id AND %s AND tre.%s`, legacy, eventAnchorJoin, cache, predicate, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect()))
+	return []string{call, event}
 }

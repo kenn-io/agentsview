@@ -1,0 +1,39 @@
+package main
+
+import (
+	"context"
+	"time"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/imagetext"
+	"go.kenn.io/agentsview/internal/poller"
+	"go.kenn.io/agentsview/internal/recall/extract"
+	"go.kenn.io/docbank/document/glmocr"
+)
+
+func setupImageText(cfg config.Config, database *db.DB) (*imagetext.Manager, error) {
+	if !cfg.ImageText.Enabled || cfg.ArchiveContent.UsageOnly() {
+		return nil, nil
+	}
+	policy, err := cfg.ImageText.Policy()
+	if err != nil {
+		return nil, err
+	}
+	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
+	if err != nil {
+		return nil, err
+	}
+	processor, err := imagetext.ProcessorKey(policy)
+	if err != nil {
+		return nil, err
+	}
+	return &imagetext.Manager{DB: database, Client: client, Processor: processor}, nil
+}
+
+func imageTextJob(manager *imagetext.Manager) poller.Job {
+	return poller.Job{Name: "image-text", Interval: time.Minute, RunAtStart: true, Run: func(ctx context.Context) error {
+		_, _, err := manager.TryPass(ctx, extract.PassOptions{})
+		return err
+	}}
+}

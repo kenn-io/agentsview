@@ -375,6 +375,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		emitter = extractTeeEmitter{primary: emitter, scheduler: extractSched}
 	}
 
+	imageTextManager, err := setupImageText(cfg, database)
+	if err != nil {
+		fatal("setting up image text: %v", err)
+	}
+
 	var ingestion *daemonIngestion
 	var frictionReviews *frictionReviewer
 	if cfg.Friction.Enabled {
@@ -587,11 +592,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	codexCloudSync := newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)
 	codexCloudTrigger := &codexCloudTrigger{}
 	codexCloudMonitor := newCodexCloudMonitor(codexCloudSync, codexCloudTrigger, idleTracker)
-	scheduler := poller.Start(ctx,
-		pricingRefreshJob(database, pricingRefreshRunner),
-		codexCloudSyncJob(codexCloudSync, idleTracker),
-		codexCloudLiveJob(codexCloudMonitor, idleTracker),
-	)
+	jobs := []poller.Job{pricingRefreshJob(database, pricingRefreshRunner), codexCloudSyncJob(codexCloudSync, idleTracker), codexCloudLiveJob(codexCloudMonitor, idleTracker)}
+	if imageTextManager != nil {
+		jobs = append(jobs, imageTextJob(imageTextManager))
+	}
+	scheduler := poller.Start(ctx, jobs...)
 	codexCloudTrigger.scheduler.Store(scheduler)
 	defer func() {
 		stop()
