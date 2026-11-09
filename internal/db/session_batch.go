@@ -538,6 +538,15 @@ func (db *DB) writeOneSessionBatchTx(
 				return 0, err
 			}
 		} else {
+			// The rows keep their pins, but a caller that copies the old
+			// transcript still needs them for the copy.
+			if sourceIDsOnly && pinSnapshot != nil {
+				snapshot, err := savePinsTx(queries, write.Session.ID, msgs)
+				if err != nil {
+					return 0, err
+				}
+				*pinSnapshot = snapshot
+			}
 			// Keep IDs held by open clients. Parser metadata can still change
 			// without changing the transcript, so refresh those rows in place.
 			byOrdinal := make(map[int]Message, len(stored))
