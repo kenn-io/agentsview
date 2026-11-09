@@ -131,3 +131,23 @@ func TestDuckValueLiteralFormatsNamedScalarKinds(t *testing.T) {
 		})
 	}
 }
+
+func TestDuckSQLWithArgsExecutesStringListAsUnnestSet(t *testing.T) {
+	ctx := t.Context()
+	duck := openTestDuckDB(t)
+
+	stmt, err := duckSQLWithArgs(
+		`SELECT list_sort(list(v)) FROM (VALUES ('a'), ('it''s'), ('b'), ('c')) t(v) WHERE v IN (SELECT unnest(?))`,
+		[]string{"it's", "b", "missing?"})
+	require.NoError(t, err)
+
+	var got []any
+	require.NoError(t, duck.QueryRowContext(ctx, stmt).Scan(&got))
+	assert.Equal(t, []any{"b", "it's"}, got)
+
+	stmt, err = duckSQLWithArgs(`SELECT count(*) FROM (SELECT unnest(?))`, []string{})
+	require.NoError(t, err)
+	var n int
+	require.NoError(t, duck.QueryRowContext(ctx, stmt).Scan(&n))
+	assert.Zero(t, n)
+}
