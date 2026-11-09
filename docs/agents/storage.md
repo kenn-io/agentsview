@@ -943,11 +943,11 @@ their existing reads.
 
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
 `idx_sessions_source_missing` bound the parser-version check and empty repair
-queries. `idx_sessions_id_tail` serves
-[raw session ID lookups](#raw-session-id-lookups). Owner preparation installs missing indexes automatically. Each first
-build scans `sessions` and blocks writes until installation commits. Restricted
-publishers keep writing before owner installation, using the existing queries
-until the indexes are available.
+queries. `idx_sessions_id_tail` serves [raw session ID
+lookups](#raw-session-id-lookups). Owner preparation installs missing indexes
+automatically. Each first build scans `sessions` and blocks writes until
+installation commits. Restricted publishers keep writing before owner
+installation, using the existing queries until the indexes are available.
 
 ### Raw session ID lookups
 
