@@ -266,8 +266,11 @@ These defaults have costs:
   instead of Kit's server, and these defaults leave its GPU underused. To get
   the endpoint defaults, name Ollama as a server with
   `endpoint = "http://localhost:11434/v1"`.
-- **A hung server takes up to 5 minutes to fail.** A build or search waits for
-  the full timeout before it reports the failure.
+- **A hung server takes a long time to fail.** The 5-minute timeout applies to
+  each attempt, and retries and batch splits add attempts. A search makes up
+  to `max_retries` attempts, 3 by default, so it can wait about 15 minutes. A
+  build halves a batch of 8 three times and then retries the single input, so
+  it can wait about 30 minutes before it reports the failure.
 - **CPU builds are slow.** The first build of a large archive on Kit's server
   can take hours. Later builds embed only new or changed content. A
   [remote server](#named-embeddings-servers) with a GPU can run the first
