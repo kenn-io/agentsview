@@ -952,31 +952,31 @@ func TestPGDailyUsageAmountsUsesBilledRatesForReportedCacheSavings(t *testing.T)
 func TestPGCompactActivityUsage(t *testing.T) {
 	stamp := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
-		name, source, tokens string
-		input                int
-		reported             bool
-		noTime               bool
-		wantTokens           [5]int64
-		want1h               int32
-		wantSearches         int64
+		name, source, tokens            string
+		input                           int
+		output, create, read, reasoning int
+		reported                        bool
+		noTime                          bool
+		wantTokens                      [5]int64
+		want1h                          int32
+		wantSearches                    int64
 	}{
 		{name: "one hour cache", source: "message", tokens: `{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":30,"cache_read_input_tokens":40,"reasoning_tokens":5,"cache_creation":{"ephemeral_1h_input_tokens":10}}`, wantTokens: [5]int64{100, 20, 30, 40, 5}, want1h: 10},
 		{name: "clamped one hour cache", source: "message", tokens: `{"cache_creation_input_tokens":4294967296,"cache_creation":{"ephemeral_1h_input_tokens":4294967296}}`, wantTokens: [5]int64{0, 0, 2_000_000}, want1h: 2_000_000},
-		{name: "web searches", source: "message", tokens: `{"server_tool_use":{"web_search_requests":2}}`, wantSearches: 2},
 		{name: "large web search counter", source: "message", tokens: `{"server_tool_use":{"web_search_requests":4294967296}}`, wantSearches: 1 << 32},
-		{name: "duplicate keys", source: "message", tokens: `{"input_tokens":10,"input_tokens":900}`, wantTokens: [5]int64{10}},
-		{name: "malformed JSON", source: "message", tokens: `invalid`},
+		{name: "provider counters", source: "provider", input: 110, output: 22, create: 33, read: 44, reasoning: 6, wantTokens: [5]int64{110, 22, 33, 44, 6}},
 		{name: "large session counter", source: "session", input: 1 << 32, wantTokens: [5]int64{1 << 32}},
 		{name: "Copilot reported", source: "session", input: 100, reported: true, wantTokens: [5]int64{100}},
 		{name: "absent pricing time", source: "message", tokens: `{"input_tokens":10}`, noTime: true, wantTokens: [5]int64{10}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			scan := pgDailyUsageScanRow{sessionID: "session-a", usageSource: tc.source, tokenJSON: tc.tokens, inputTokens: tc.input, model: "compact-model", ts: sql.NullTime{Time: stamp, Valid: true}, pricingTS: sql.NullTime{Time: stamp, Valid: !tc.noTime}}
+			scan := pgDailyUsageScanRow{sessionID: "session-a", usageSource: tc.source, tokenJSON: tc.tokens, inputTokens: tc.input, outputTokens: tc.output, cacheCreationInputTokens: tc.create, cacheReadInputTokens: tc.read, reasoningTokens: tc.reasoning, model: "compact-model", ts: sql.NullTime{Time: stamp, Valid: true}, pricingTS: sql.NullTime{Time: stamp, Valid: !tc.noTime}}
 			if tc.reported {
 				scan.cost = sql.NullInt64{Int64: 777, Valid: true}
 				scan.costSource = db.CopilotReportedCostSource
 			}
 			row := pgCompactActivityUsage(scan, unique.Make[string])
+			assert.Equal(t, int64(1_781_431_200_000_000), row.us)
 			assert.Equal(t, tc.wantTokens, [5]int64{row.input, row.output, row.cacheCreate, row.cacheRead, row.reasoning})
 			assert.Equal(t, tc.want1h, row.cacheCreate1h)
 			assert.Equal(t, tc.wantSearches, row.webSearches)

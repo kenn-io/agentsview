@@ -140,7 +140,6 @@ func TestPGActivityReportRowStatusBillsWebSearchRequests(t *testing.T) {
 			providerID:        unique.Make(""),
 			input:             100_000,
 			output:            100_000,
-			webSearches:       2,
 			pricingTimeAbsent: true,
 		}, 2, resolver)
 	require.NoError(t, err)
