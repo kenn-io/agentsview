@@ -620,15 +620,10 @@ func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity
 			yield func(activity.IntervalCandidate) error,
 		) error {
 			var pairs []activity.IntervalCandidate
-			var copyBuffer []activity.TranscriptMessage
 			// pgx truncates SQL timestamp bounds to microseconds.
 			lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
 			countLowerMicro := q.RangeStart.UnixMicro()
 			err := s.activityTranscriptSource(ctx, ids, inputs, func(id string, session []activity.TranscriptMessage) {
-				if inputs != nil {
-					copyBuffer = append(copyBuffer[:0], session...)
-					session = copyBuffer
-				}
 				for i := range session {
 					us := session[i].At.UnixMicro()
 					if counted != nil && session[i].Counted && us >= countLowerMicro && us < upperMicro {
@@ -704,29 +699,29 @@ func (s *Store) activityReportUsage(
 
 	type ordered struct {
 		row     activity.UsageRow
-		scan    pgDailyUsageScanRow
-		ts      time.Time
+		scan    pgActivityUsageRow
+		us      int64
 		ordinal int64
 	}
 	rowsAcc := make([]ordered, 0, len(raw))
 	for _, r := range raw {
 		if read != nil {
-			read[r.sessionID] = struct{}{}
+			read[r.sessionID.Value()] = struct{}{}
 		}
 		ord := int64(-1)
-		if r.messageOrdinal.Valid {
-			ord = r.messageOrdinal.Int64
+		if r.ordinalValid {
+			ord = int64(r.ordinal)
 		}
 		rowsAcc = append(rowsAcc, ordered{
-			ts:      r.ts.Time,
+			us:      r.us,
 			ordinal: ord,
 			scan:    r,
 			row: activity.UsageRow{
-				SessionID:       r.sessionID,
-				Model:           r.model,
-				Timestamp:       startedAtString(r.ts),
-				Agent:           r.agent,
-				ProviderID:      r.providerID,
+				SessionID:       r.sessionID.Value(),
+				Model:           r.model.Value(),
+				Timestamp:       FormatISO8601(time.UnixMicro(r.us).UTC()),
+				Agent:           r.agent.Value(),
+				ProviderID:      r.providerID.Value(),
 				ClaudeMessageID: r.claudeMessageID,
 				ClaudeRequestID: r.claudeRequestID,
 				SourceUUID:      r.sourceUUID,
@@ -737,8 +732,8 @@ func (s *Store) activityReportUsage(
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {
 		a, b := rowsAcc[i], rowsAcc[j]
-		if !a.ts.Equal(b.ts) {
-			return a.ts.Before(b.ts)
+		if a.us != b.us {
+			return a.us < b.us
 		}
 		if a.row.SessionID != b.row.SessionID {
 			return a.row.SessionID < b.row.SessionID
@@ -748,9 +743,8 @@ func (s *Store) activityReportUsage(
 	baseRows := make([]activity.UsageRow, len(rowsAcc))
 	for i, o := range rowsAcc {
 		row := o.row
-		row.InputTokens, row.OutputTokens, _, _, _ = pgDailyUsageRowTokens(o.scan)
-		row.WebSearchRequests = pgUsageRowWebSearchRequests(
-			o.scan.usageSource, o.scan.tokenJSON)
+		row.InputTokens, row.OutputTokens = int(o.scan.input), int(o.scan.output)
+		row.WebSearchRequests = int(o.scan.webSearches)
 		baseRows[i] = row
 	}
 	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
@@ -764,13 +758,13 @@ func (s *Store) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		inputTok, outputTok, _, _, _ := pgDailyUsageRowTokens(o.scan)
+		inputTok, outputTok := int(o.scan.input), int(o.scan.output)
 		costRow := o.scan
 		var sessionCost *money.Money
-		if o.scan.costSource == db.CopilotReportedCostSource && o.scan.cost.Valid {
-			v := money.Money{Microdollars: o.scan.cost.Int64}
+		if o.scan.copilotReported && o.scan.costValid {
+			v := money.Money{Microdollars: o.scan.cost}
 			sessionCost = &v
-			costRow.cost = sql.NullInt64{}
+			costRow.costValid = false
 			rateResolver.RecordUnattributedReported()
 		}
 		cost, priced, contributes, priceErr := pgActivityReportRowStatusWithWebSearchRequests(
@@ -779,7 +773,7 @@ func (s *Store) activityReportUsage(
 			return nil, nil, priceErr
 		}
 		costSource := export.CostSourceComputed
-		if costRow.cost.Valid {
+		if costRow.costValid {
 			costSource = export.CostSourceReported
 		}
 		row := o.row
@@ -801,33 +795,26 @@ func (s *Store) activityReportUsage(
 	return out, &block, nil
 }
 
-func pgActivityReportRowStatus(
-	r pgDailyUsageScanRow, pricing *export.PricingResolver,
-) (cost money.Money, priced, contributes bool, err error) {
-	return pgActivityReportRowStatusWithWebSearchRequests(
-		r, pgDailyUsageRowWebSearchRequests(r), pricing)
-}
-
 func pgActivityReportRowStatusWithWebSearchRequests(
-	r pgDailyUsageScanRow, webSearches int, pricing *export.PricingResolver,
+	r pgActivityUsageRow, webSearches int, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
+	pricingTS := sql.NullTime{Time: time.UnixMicro(r.us).UTC(), Valid: !r.pricingTimeAbsent}
 	pricedModel, lookup := pricing.ResolveAt(
-		r.model, pgUsageLookupModel(r.model, r.pricingTS),
-		pgUsagePricingTimestamp(r.pricingTS),
+		r.model.Value(), pgUsageLookupModel(r.model.Value(), pricingTS),
+		pgUsagePricingTimestamp(pricingTS),
 	)
-	inTok, outTok, crTok, rdTok, reasoningTok := pgDailyUsageRowTokens(r)
-	cr1hTok := pgUsageRowCacheCreation1hTokens(
-		r.usageSource, r.tokenJSON, crTok)
-	if r.cost.Valid {
-		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
-		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
+	inTok, outTok, crTok, rdTok, reasoningTok := int(r.input), int(r.output), int(r.cacheCreate), int(r.cacheRead), int(r.reasoning)
+	cr1hTok := int(r.cacheCreate1h)
+	if r.costValid {
+		pricing.RecordResolvedReported(r.model.Value(), pricedModel, lookup)
+		return money.Money{Microdollars: r.cost}, true, true, nil
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 && webSearches == 0 {
 		return money.Money{}, true, false, nil
 	}
 	if !lookup.OK {
-		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+		pricing.RecordResolvedComputed(r.model.Value(), pricedModel, lookup)
 		fee, feeErr := export.WebSearchFee(webSearches)
 		if feeErr != nil {
 			return money.Money{}, false, false, feeErr
@@ -835,26 +822,26 @@ func pgActivityReportRowStatusWithWebSearchRequests(
 		return fee, false, true, nil
 	}
 	pricedModel, lookup, err = pricing.ResolveBilledAt(
-		r.providerID, r.model, pgUsageLookupModel(r.model, r.pricingTS),
-		pgUsagePricingTimestamp(r.pricingTS))
+		r.providerID.Value(), r.model.Value(), pgUsageLookupModel(r.model.Value(), pricingTS),
+		pgUsagePricingTimestamp(pricingTS))
 	if err != nil {
 		return money.Money{}, false, false, err
 	}
-	requestScoped := db.UsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
+	requestScoped := db.UsageRowIsRequestScoped(r.usageSource.Value(), sql.NullInt64{Int64: int64(r.ordinal), Valid: r.ordinalValid})
 	cost, err = lookup.Rates.CostForTokensScoped(
 		requestScoped,
 		inTok, outTok, reasoningTok, crTok, cr1hTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
-			fmt.Errorf("pricing pg activity usage for model %q: %w", r.model, err)
+			fmt.Errorf("pricing pg activity usage for model %q: %w", r.model.Value(), err)
 	}
 	cost, err = export.AddWebSearchFee(cost, webSearches)
 	if err != nil {
 		return money.Money{}, false, false,
-			fmt.Errorf("pricing pg activity usage for model %q: %w", r.model, err)
+			fmt.Errorf("pricing pg activity usage for model %q: %w", r.model.Value(), err)
 	}
 	db.RecordComputedUsagePricing(
-		pricing, r.model, pricedModel, lookup,
+		pricing, r.model.Value(), pricedModel, lookup,
 		requestScoped, inTok, crTok, rdTok)
 	return cost, true, true, nil
 }

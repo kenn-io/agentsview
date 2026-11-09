@@ -15,6 +15,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // clickActivityMessage is one message's pairing input. Role and model
@@ -191,15 +192,7 @@ func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSess
 	defer rows.Close()
 	read := map[string]activitySessionInputs{}
 	// Roles and models take few values; look each up in the global table once.
-	handles := map[string]unique.Handle[string]{}
-	handle := func(v string) unique.Handle[string] {
-		h, ok := handles[v]
-		if !ok {
-			h = unique.Make(v)
-			handles[v] = h
-		}
-		return h
-	}
+	handles := stringutil.Interner{}
 	for rows.Next() {
 		var id, role, model string
 		var ordinal int
@@ -209,7 +202,7 @@ func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSess
 			return nil, fmt.Errorf("scanning pairing message: %w", err)
 		}
 		entry := read[id]
-		m := clickActivityMessage{ordinal: ordinal, us: noTimestamp, role: handle(role), model: handle(model), counted: counted}
+		m := clickActivityMessage{ordinal: ordinal, us: noTimestamp, role: handles.Intern(role), model: handles.Intern(model), counted: counted}
 		if ts.Valid {
 			m.us = ts.Time.UnixMicro()
 		}
