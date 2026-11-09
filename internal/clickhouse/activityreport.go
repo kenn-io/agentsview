@@ -71,6 +71,13 @@ type activityReportBackend struct {
 	pairing       *activityReportPairing
 }
 
+// ActivityReportSecondRead lets usage run beside the sweep. Pairing already
+// reads in its own goroutine and the sweep reads nothing, so overlapping them
+// takes no connection that the serial order would not.
+func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
+	return func() {}, true
+}
+
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
