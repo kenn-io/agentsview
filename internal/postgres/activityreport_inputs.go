@@ -85,7 +85,8 @@ func pgActivityInputBytes(e pgActivityInputs) int64 {
 		}
 	}
 	for h := range shared {
-		size += int64(len(h.Value()))
+		// Include the canonical string header and estimated interning-table storage.
+		size += int64(len(h.Value())) + 64
 	}
 	for id := range e.candidates {
 		size += int64(len(id)) + 64
