@@ -192,8 +192,8 @@ func buildTermsSearchSQL(
 		), members AS (
 			SELECT h.session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name) AS display_name,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
-				COALESCE(s.relationship_type,'') AS relationship_type,
+				s.transcript_revision AS transcript_revision,
+				s.relationship_type AS relationship_type,
 				COALESCE(s.parent_session_id,'') AS parent_session_id,
 				m.role, h.ordinal, %s AS ts, %s AS content, h.is_sidechain,
 				%s AS sort_ts,
