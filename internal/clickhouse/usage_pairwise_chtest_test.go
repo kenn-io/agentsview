@@ -16,17 +16,25 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-func TestUsagePairwiseEligibleReadsRankingOnce(t *testing.T) {
+func TestUsagePairwiseRankingReadCounts(t *testing.T) {
 	t.Parallel()
-	for _, selected := range []bool{false, true} {
-		t.Run(map[bool]string{false: "default", true: "selected"}[selected], func(t *testing.T) {
+	for _, scenario := range []string{"default", "selected", "fallback"} {
+		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
-			store, syncer, _ := newUsagePriceStore(t)
+			store, syncer, local := newUsagePriceStore(t)
 			comment := "pairwise-ranking-" + syncer.target.Database
 			ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
 			backend := service.NewReadOnlyBackend(store)
 			req := service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-12", To: "2026-01-12", Timezone: "UTC", Agent: "hermes", IncludeOneShot: true}}
-			if selected {
+			wantQueries := uint64(1)
+			if scenario == "fallback" {
+				seedUsagePairwiseDuplicates(t, local)
+				_, err := syncer.Push(t.Context(), false, nil)
+				require.NoError(t, err)
+				req.Agent = ""
+				wantQueries = 2
+			}
+			if scenario != "default" {
 				req.LeftDimension, req.LeftValue = "model", "round-test"
 				req.RightDimension, req.RightValue = "model", "tier-test"
 				req.FallbackToDefault = true
@@ -41,7 +49,7 @@ func TestUsagePairwiseEligibleReadsRankingOnce(t *testing.T) {
 				WHERE type = 'QueryFinish' AND log_comment = ?
 				AND startsWith(trimLeft(query, ' \n\t\r'), 'WITH usage_raw AS')
 				AND position(query, 'FROM usage_classified') > 0`, comment).Scan(&queries))
-			assert.Equal(t, uint64(1), queries)
+			assert.Equal(t, wantQueries, queries)
 		})
 	}
 }
@@ -153,15 +161,7 @@ func TestUsagePairwiseInexactSides(t *testing.T) {
 			selections := []struct{ dimension, value string }{{"model", "tier-test"}, {"model", "only-dropped"}, {"project", "loser,raw"}, {"project", "absent"}}
 			filter := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
 			if scenario == "duplicates" {
-				for i, project := range []string{"winner", "loser,raw", "absent"} {
-					stamp := "2026-01-12T05:00:00Z"
-					m := usagePriceMessage(project, 0, stamp, []string{"round-test", "tier-test", "only-dropped"}[i], `{"input_tokens":2000}`)
-					m.SourceUUID = "shared-source"
-					// Order the winner before each losing row.
-					m.Timestamp = []string{stamp, "2026-01-12T05:01:00Z", "2026-01-12T05:02:00Z"}[i]
-					_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: fixtureSession(project, project, "duplicate", stamp, 1), Messages: []db.Message{m}, DataVersion: 1, ReplaceMessages: true}})
-					require.NoError(t, err)
-				}
+				seedUsagePairwiseDuplicates(t, local)
 			} else {
 				cost := money.Money{Microdollars: 9_100_000_000_000_000_000}
 				for _, id := range []string{"large-a", "large-b"} {
@@ -184,23 +184,19 @@ func TestUsagePairwiseInexactSides(t *testing.T) {
 				_, ok := ranking.Pairwise.Side(selection.dimension, []string{selection.value})
 				assert.False(t, ok)
 			}
-			if scenario == "duplicates" {
-				comment := "pairwise-fallback-" + syncer.target.Database
-				ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
-				_, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(ctx, service.UsagePairwiseComparisonRequest{
-					UsageRequest:  service.UsageRequest{From: "2026-01-12", To: "2026-01-12", Timezone: "UTC", IncludeOneShot: true},
-					LeftDimension: "model", LeftValue: "round-test", RightDimension: "model", RightValue: "tier-test", FallbackToDefault: true,
-				})
-				require.NoError(t, err)
-				_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
-				require.NoError(t, err)
-				var queries uint64
-				require.NoError(t, store.conn.QueryRowContext(t.Context(), `
-					SELECT count() FROM system.query_log
-					WHERE type = 'QueryFinish' AND log_comment = ?
-					AND position(query, 'FROM usage_classified') > 0`, comment).Scan(&queries))
-				assert.Equal(t, uint64(2), queries, "ranking plus the inexact filtered side")
-			}
 		})
+	}
+}
+
+func seedUsagePairwiseDuplicates(t *testing.T, local *db.DB) {
+	t.Helper()
+	for i, project := range []string{"winner", "loser,raw", "absent"} {
+		stamp := "2026-01-12T05:00:00Z"
+		m := usagePriceMessage(project, 0, stamp, []string{"round-test", "tier-test", "only-dropped"}[i], `{"input_tokens":2000}`)
+		m.SourceUUID = "shared-source"
+		// Order the winner before each losing row.
+		m.Timestamp = []string{stamp, "2026-01-12T05:01:00Z", "2026-01-12T05:02:00Z"}[i]
+		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: fixtureSession(project, project, "duplicate", stamp, 1), Messages: []db.Message{m}, DataVersion: 1, ReplaceMessages: true}})
+		require.NoError(t, err)
 	}
 }

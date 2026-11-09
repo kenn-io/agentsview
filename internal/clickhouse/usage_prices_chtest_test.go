@@ -721,7 +721,6 @@ func TestTopSessionsStoredPricesMatchSQLite(t *testing.T) {
 		}
 		for name, filter := range filters {
 			for rankingName, ranking := range rankings {
-				filter.Breakdowns = true
 				filter.TopSessionsSort = ranking.sort
 				filter.TopSessionsTokenTypes = ranking.tokenTypes
 				name := name + "/" + rankingName
