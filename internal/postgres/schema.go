@@ -691,7 +691,6 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
     occurred_at TIMESTAMPTZ NOT NULL,
     accepted_at TIMESTAMPTZ NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events (occurred_at);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_friction_activity
     ON sessions(COALESCE(ended_at, started_at))

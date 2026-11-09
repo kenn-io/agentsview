@@ -1425,7 +1425,6 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
     occurred_at TEXT NOT NULL,
     accepted_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events (occurred_at);
 
 CREATE TABLE IF NOT EXISTS friction_digests (
     date             TEXT PRIMARY KEY,

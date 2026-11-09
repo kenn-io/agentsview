@@ -30,11 +30,7 @@ func (s *Server) humaAppendDiagnostic(ctx context.Context, in *diagnosticAppendI
 	if in.Body.OccurredAt != nil {
 		e.OccurredAt = *in.Body.OccurredAt
 	}
-	check := e
-	if check.OccurredAt.IsZero() {
-		check.OccurredAt = time.Now()
-	}
-	if err := db.ValidateDiagnostic(check, time.Now()); err != nil {
+	if err := db.ValidateDiagnostic(e, time.Now()); err != nil {
 		return nil, apiError(http.StatusUnprocessableEntity, err.Error())
 	}
 	var stored db.DiagnosticEvent

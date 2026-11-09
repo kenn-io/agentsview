@@ -33,9 +33,6 @@ func newDiagnosticsCommand() *cobra.Command {
 			}
 		}
 		e := db.DiagnosticEvent{ID: id, Source: source, Message: message, OccurredAt: occurred}
-		if err := db.ValidateDiagnostic(e, time.Now()); err != nil {
-			return err
-		}
 		svc, cleanup, err := resolveWritableService(cmd)
 		if err != nil {
 			return err

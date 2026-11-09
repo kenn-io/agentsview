@@ -37,7 +37,7 @@ func ValidateDiagnostic(e DiagnosticEvent, now time.Time) error {
 	if strings.TrimSpace(e.Message) == "" || utf8.RuneCountInString(e.Message) > 500 || !utf8.ValidString(e.Message) {
 		return errors.New("message must contain 1–500 characters")
 	}
-	if e.OccurredAt.IsZero() || e.OccurredAt.After(now.Add(5*time.Minute)) {
+	if e.OccurredAt.After(now.Add(5*time.Minute)) {
 		return errors.New("occurred_at must not be in the future")
 	}
 	return nil
