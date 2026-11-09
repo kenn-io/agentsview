@@ -374,7 +374,10 @@ type interval struct {
 	sessionID string
 	start     time.Time
 	end       time.Time
-	model     string // model attributed to this interval
+	// tail is the start of the interval's last piece, for an interval that
+	// joins touching pieces; bucket membership depends on it.
+	tail  time.Time
+	model string // model attributed to this interval
 }
 
 // parseTS parses an RFC3339(/Nano) timestamp; ok=false on empty/invalid.
@@ -550,9 +553,10 @@ type usageAgg struct {
 	models       map[string]money.Money // model -> cost (for primary/mixed)
 }
 
+// sessionIntervalAgg sums durations, which add exactly, so a session's
+// minutes do not depend on how its activity was split into intervals.
 type sessionIntervalAgg struct {
-	minutes       float64
-	modelMins     map[string]float64
+	duration      time.Duration
 	modelDuration map[string]time.Duration
 	first, last   time.Time
 	hasIv         bool
@@ -1059,7 +1063,7 @@ func buildSessionsTableFromDedupedUsage(
 			Agent: s.Agent, TimingQuality: "untimed", IsAutomated: s.IsAutomated, IsSubagent: s.IsSubagent,
 		}
 		if a := agg[s.SessionID]; a != nil && a.hasIv {
-			mins := a.minutes
+			mins := a.duration.Minutes()
 			row.AgentMinutes = &mins
 			row.TimingQuality = "timed"
 			f := a.first.Format(time.RFC3339)
@@ -1072,8 +1076,8 @@ func buildSessionsTableFromDedupedUsage(
 			if err := addKey(byAgent, s.Agent, mins, money.Money{}, kind); err != nil {
 				return fmt.Errorf("summing activity agent minutes: %w", err)
 			}
-			for m, mm := range a.modelMins {
-				if err := addKey(byModel, m, mm, money.Money{}, kind); err != nil {
+			for m, d := range a.modelDuration {
+				if err := addKey(byModel, m, d.Minutes(), money.Money{}, kind); err != nil {
 					return fmt.Errorf("summing activity model minutes: %w", err)
 				}
 			}

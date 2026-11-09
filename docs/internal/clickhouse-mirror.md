@@ -292,6 +292,26 @@ segment tree over message timestamps finds the lowest eligible ordinal even when
 timestamps run backwards, so ordinal and timestamp behavior matches the old SQL,
 including reversed clocks and the tail pairing after the last message.
 
+**Each session keeps its runs.** After pairing a session over all time, serve
+caps each interval at the gap, trims it against the session's earlier activity,
+and joins touching pieces with the same model into runs. It keeps those runs
+and the times of the session's counted user and assistant messages in memory,
+keyed by session, push version, and gap cap, within a 256 MiB budget. A refresh
+reads and pairs only the sessions whose push version changed, clips every kept
+session's runs to the range, and sweeps the runs in start order through
+`activity.BuildRunArtifactsWithSurvivorUsage`. A long range has about twenty
+times fewer runs than interval candidates. A run's pieces do not depend on the
+range: clipping after the trim gives the pieces that clipping each candidate
+first gives, and the candidates a range leaves out of pairing are ones the
+aggregator rejects for that range anyway. Runs keep their piece boundaries, so a
+range end inside a run still finds the start of the last piece left, which
+bucket membership needs. The shared aggregator sums interval durations as
+integers and converts to minutes once, so minutes do not depend on how activity
+was split into intervals, on every backend. Storing runs in ClickHouse at push
+time was rejected: it needs a schema change, upgraded pushers on every machine,
+and a re-push of existing sessions. A server that has just started still reads
+every session once.
+
 **Usage is stored, not parsed.** The insert-maintained `usage_messages` table
 stores token counters that its view computes from `token_usage` at insert time,
 together with the usage-relevant message columns and a time index. The usage
@@ -646,7 +666,7 @@ single-session Usage reads keep parts versions. A push that changes those
 versions replaces the slot; a push that does not leaves it in place. Usage reads
 filtered by `active`, `stale`, or `unclean` termination compare session times
 with the current time, so their rows are never kept. Kept reads include usage
-rows, analytics session listings, Activity pairing inputs per session version,
+rows, analytics session listings, Activity runs per session version,
 candidate listings, project label maps, and the whole report of an ended range.
 
 Ungrouped Top sessions are the exception. Each request reloads display metadata

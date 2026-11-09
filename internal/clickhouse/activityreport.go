@@ -77,8 +77,14 @@ func (b activityReportBackend) ActivityReportUsage(
 	return b.activityReportUsage(ctx, b.candidates, ids, b.rangeStartUTC, b.rangeEndUTC, q)
 }
 
-func (b activityReportBackend) ActivityReportCandidateSource([]string, activity.Query) activity.CandidateSource {
-	return b.pairing.candidateSource()
+// ActivityReportCandidateSource is the candidate stream the report's runs
+// stand for. Reports sweep the runs; see ActivityReportRunSource.
+func (b activityReportBackend) ActivityReportCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
+	return b.activityCandidateSource(b.candidates, ids, q)
+}
+
+func (b activityReportBackend) ActivityReportRunSource([]string, activity.Query) activity.RunSource {
+	return b.pairing.runSource()
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
@@ -164,7 +170,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	// set, so pair while usage loads instead of serializing the two stages.
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
-	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, versions, q)
+	pairs := s.startActivityReportPairs(pairCtx, ids, versions, q)
 	backend := activityReportBackend{
 		Store: s, candidates: candidates,
 		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs,
@@ -302,26 +308,25 @@ func chDeltaRowTime(value any) (time.Time, bool) {
 }
 
 // countMessages adds the user and assistant message counts to artifacts.
-// The pairing inputs hold every message of the candidate sessions, so the
+// The derived sessions keep the times of the counted messages, so the
 // counts need no read of their own.
 func (pairing *activityReportPairing) countMessages(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
-	select {
-	case <-pairing.done:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	if pairing.err != nil {
-		return pairing.err
+	if err := pairing.wait(ctx); err != nil {
+		return err
 	}
 	counts := activity.NewMessageAccumulator(q, artifacts)
+	from := func(micros []int64) []int64 {
+		i, _ := slices.BinarySearchFunc(micros, q.RangeStart, func(us int64, start time.Time) int {
+			return time.UnixMicro(us).Compare(start)
+		})
+		return micros[i:]
+	}
 	for _, id := range ids {
-		for _, m := range pairing.inputs[id].messages {
-			if m.counted && m.stamped() && !m.at().Before(q.RangeStart) {
-				counts.Add(id, m.role.Value(), m.at())
-			}
-		}
+		session := pairing.sessions[id]
+		counts.AddSorted(id, "user", from(session.users))
+		counts.AddSorted(id, "assistant", from(session.assistants))
 	}
 	return nil
 }
@@ -463,23 +468,21 @@ func (s *Store) readActivityPrepared(
 	return digest, nil
 }
 
-// activityReportPairing holds pairing started ahead of its consumer.
+// activityReportPairing holds a report's derived sessions and their runs
+// clipped to the range, started ahead of their consumer.
 type activityReportPairing struct {
 	done     chan struct{}
-	paired   []activity.IntervalCandidate
-	terminal []activity.IntervalCandidate
-	inputs   map[string]activitySessionInputs
+	sessions map[string]activitySessionDerived
+	runs     []activity.Run
 	err      error
 }
 
-// startActivityReportPairs runs activityReportPairs in the background for
-// the sessions selected by `candidates`. The set is evaluated inside each
-// statement; `ids` is the session list the caller already loaded, and
-// candidates for any session outside it are dropped so the stream matches
-// the metadata the aggregator was given even if a push lands between the
-// two queries.
+// startActivityReportPairs derives the candidate sessions' activity in
+// the background. Runs come only from the sessions in ids, the list the
+// caller already loaded, so the stream matches the metadata the aggregator
+// was given even if a push lands between the two queries.
 func (s *Store) startActivityReportPairs(
-	ctx context.Context, candidates chSessionSet, ids []string, versions map[string]uint64, q activity.Query,
+	ctx context.Context, ids []string, versions map[string]uint64, q activity.Query,
 ) *activityReportPairing {
 	pairing := &activityReportPairing{done: make(chan struct{})}
 	if len(ids) == 0 {
@@ -488,26 +491,85 @@ func (s *Store) startActivityReportPairs(
 	}
 	go func() {
 		defer close(pairing.done)
-		pairing.paired, pairing.terminal, pairing.inputs, pairing.err = s.activityReportPairs(ctx, candidates, ids, versions, q)
+		pairing.sessions, pairing.err = s.activityReportDerived(ctx, ids, versions, q.GapCapSeconds)
+		if pairing.err != nil {
+			return
+		}
+		pairing.runs = clipActivityRuns(pairing.sessions, ids, q)
 	}()
 	return pairing
 }
 
-// candidateSource streams the paired intervals once pairing completes.
-func (pairing *activityReportPairing) candidateSource() activity.CandidateSource {
-	return func(
-		ctx context.Context,
-		yield func(activity.IntervalCandidate) error,
-	) error {
-		select {
-		case <-pairing.done:
-		case <-ctx.Done():
-			return ctx.Err()
+// clipActivityRuns clips the sessions' runs to the report range and orders
+// them by start.
+func clipActivityRuns(sessions map[string]activitySessionDerived, ids []string, q activity.Query) []activity.Run {
+	n := 0
+	for _, session := range sessions {
+		n += session.runs.Runs()
+	}
+	runs := make([]activity.Run, 0, n)
+	for _, id := range ids {
+		runs = sessions[id].runs.AppendClipped(runs, id, q.RangeStart, q.EffectiveEnd)
+	}
+	activity.SortRuns(runs)
+	return runs
+}
+
+func (pairing *activityReportPairing) wait(ctx context.Context) error {
+	select {
+	case <-pairing.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return pairing.err
+}
+
+// runSource streams the runs once they are derived.
+func (pairing *activityReportPairing) runSource() activity.RunSource {
+	return func(ctx context.Context, yield func(activity.Run) error) error {
+		if err := pairing.wait(ctx); err != nil {
+			return err
 		}
-		if pairing.err != nil {
-			return pairing.err
+		for _, run := range pairing.runs {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := yield(run); err != nil {
+				return err
+			}
 		}
-		paired, terminal := pairing.paired, pairing.terminal
+		return nil
+	}
+}
+
+// ActivityReportCandidateSource exposes the backend's mechanical pairing
+// stream for cross-backend contract tests. Activity semantics remain in the
+// shared aggregator.
+func (s *Store) ActivityReportCandidateSource(
+	ids []string, q activity.Query,
+) activity.CandidateSource {
+	return s.activityCandidateSource(chSessionSetFromIDs(ids), ids, q)
+}
+
+// activityCandidateSource reads and pairs the sessions in candidates and
+// streams their candidates in start order. Candidates of sessions outside
+// ids are dropped.
+func (s *Store) activityCandidateSource(
+	candidates chSessionSet, ids []string, q activity.Query,
+) activity.CandidateSource {
+	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
+		if len(ids) == 0 {
+			return nil
+		}
+		inputs, err := s.readActivitySessionInputs(ctx, candidates)
+		if err != nil {
+			return err
+		}
+		lower := q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second)
+		paired, terminal, err := s.pairActivitySessions(ctx, inputs, ids, lower, q.EffectiveEnd, q)
+		if err != nil {
+			return err
+		}
 		messageSource := func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
 			for _, c := range paired {
 				if err := ctx.Err(); err != nil {
@@ -519,19 +581,7 @@ func (pairing *activityReportPairing) candidateSource() activity.CandidateSource
 			}
 			return nil
 		}
-
 		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
-	}
-}
-
-// ActivityReportCandidateSource exposes the backend's mechanical pairing
-// stream for cross-backend contract tests. Activity semantics remain in the
-// shared aggregator.
-func (s *Store) ActivityReportCandidateSource(
-	ids []string, q activity.Query,
-) activity.CandidateSource {
-	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
-		return s.startActivityReportPairs(ctx, chSessionSetFromIDs(ids), ids, nil, q).candidateSource()(ctx, yield)
 	}
 }
 

@@ -61,8 +61,7 @@ func BuildReportArtifacts(
 	}
 
 	rowsProcessed := int64(0)
-	source := backend.ActivityReportCandidateSource(ids, q)
-	artifacts, err := BuildCandidateArtifactsFromSourceWithSurvivorUsage(readCtx, Params{
+	params := Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
 		Loc:           q.Loc,
@@ -70,21 +69,44 @@ func BuildReportArtifacts(
 		Partial:       q.Partial,
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
-	}, sessions, func(
-		ctx context.Context, yield func(IntervalCandidate) error,
-	) error {
+	}
+	scanning := func() {
 		ReportProgress(onProgress, Progress{
 			Phase: ProgressScanningActivity, SessionsTotal: len(sessions),
 		})
-		return source(ctx, func(candidate IntervalCandidate) error {
-			rowsProcessed++
-			ReportProgress(onProgress, Progress{
-				Phase:         ProgressScanningActivity,
-				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
-			})
-			return yield(candidate)
+	}
+	processed := func() {
+		rowsProcessed++
+		ReportProgress(onProgress, Progress{
+			Phase:         ProgressScanningActivity,
+			SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
 		})
-	}, loadUsage)
+	}
+	var artifacts CandidateArtifacts
+	var err error
+	if runs, ok := backend.(RunSourceBackend); ok {
+		source := runs.ActivityReportRunSource(ids, q)
+		artifacts, err = BuildRunArtifactsWithSurvivorUsage(readCtx, params, sessions, func(
+			ctx context.Context, yield func(Run) error,
+		) error {
+			scanning()
+			return source(ctx, func(run Run) error {
+				processed()
+				return yield(run)
+			})
+		}, loadUsage)
+	} else {
+		source := backend.ActivityReportCandidateSource(ids, q)
+		artifacts, err = BuildCandidateArtifactsFromSourceWithSurvivorUsage(readCtx, params, sessions, func(
+			ctx context.Context, yield func(IntervalCandidate) error,
+		) error {
+			scanning()
+			return source(ctx, func(candidate IntervalCandidate) error {
+				processed()
+				return yield(candidate)
+			})
+		}, loadUsage)
+	}
 	if err != nil {
 		if ready != nil {
 			cancel(err)
