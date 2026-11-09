@@ -62,10 +62,14 @@ func (f *Filer) Reopen(ctx context.Context, since, latest string, loc *time.Loca
 			if p.Issue == nil {
 				continue
 			}
+			occurred := occurrences[p.Fingerprint]
+			if !occurred.After(f.EvaluatedOccurrences[p.Issue.IssueUID]) {
+				continue
+			}
 			if err := ctx.Err(); err != nil {
 				return count, err
 			}
-			changed, err := f.reopenIfRecurred(ctx, p, occurrences[p.Fingerprint], loc)
+			changed, err := f.reopenIfRecurred(ctx, p, occurred, loc)
 			if errors.Is(err, kata.ErrNotReady) || errors.Is(err, kata.ErrUnavailable) || kata.StatusOf(err) >= http.StatusInternalServerError {
 				return count, nil
 			}
@@ -88,6 +92,9 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, occu
 		return false, err
 	}
 	if is.Status != "closed" || is.ClosedReason != "done" || is.ClosedAt == nil || !occurred.After(*is.ClosedAt) {
+		if f.EvaluatedOccurrences != nil {
+			f.EvaluatedOccurrences[p.Issue.IssueUID] = occurred
+		}
 		return false, nil
 	}
 	current, err := f.pattern(ctx, p.Fingerprint)
@@ -105,5 +112,9 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, occu
 			return false, err
 		}
 	}
-	return f.Kata.Reopen(ctx, p.Issue.IssueUID)
+	changed, err := f.Kata.Reopen(ctx, p.Issue.IssueUID)
+	if err == nil && changed && f.EvaluatedOccurrences != nil {
+		f.EvaluatedOccurrences[p.Issue.IssueUID] = occurred
+	}
+	return changed, err
 }

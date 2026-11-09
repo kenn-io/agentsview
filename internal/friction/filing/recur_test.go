@@ -105,6 +105,7 @@ func TestReopenSkipsUnlinkedPattern(t *testing.T) {
 	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
 	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
 	require.NoError(t, err)
+	f.EvaluatedOccurrences = make(map[string]time.Time)
 	f.Store = unlinkOnPatternListStore{DB: d, fingerprint: correction.Fingerprint()}
 
 	n, err := f.Reopen(t.Context(), "2026-09-16", "2026-09-18", nil)
@@ -114,6 +115,13 @@ func TestReopenSkipsUnlinkedPattern(t *testing.T) {
 	got := mustIssue(t, s, is.UID)
 	assert.Equal(t, "closed", got.Status)
 	assert.Empty(t, got.Comments)
+
+	f.Store = d
+	_, err = f.Link(t.Context(), correction.Fingerprint(), is.UID)
+	require.NoError(t, err)
+	n, err = f.Reopen(t.Context(), "2026-09-16", "2026-09-18", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
 }
 
 func TestReopenFromRebuiltDigestWithoutPatternUpdate(t *testing.T) {
@@ -239,6 +247,7 @@ func TestReopenRetry(t *testing.T) {
 	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
 	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
 	require.NoError(t, err)
+	f.EvaluatedOccurrences = make(map[string]time.Time)
 	s.Fail(http.MethodPost, "/actions/reopen", katatest.Fault{Status: 503, Code: "unavailable"})
 	n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
 	require.NoError(t, err)
@@ -250,6 +259,45 @@ func TestReopenRetry(t *testing.T) {
 	got := mustIssue(t, s, is.UID)
 	assert.Equal(t, "open", got.Status)
 	assert.Len(t, got.Comments, 1)
+}
+
+type countingGetKata struct {
+	filing.Kata
+	calls int
+}
+
+func (k *countingGetKata) GetIssue(ctx context.Context, ref string) (kata.Issue, error) {
+	k.calls++
+	return k.Kata.GetIssue(ctx, ref)
+}
+
+func TestReopenReadsIssueOnlyForNewOccurrences(t *testing.T) {
+	s := katatest.New(t)
+	sig := toolError("go: cannot find main module", "claude:s1")
+	f, d := newFiler(t, s, katatest.DefaultProjectName, sig)
+	occurred := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	seedRecurrenceSignal(t, d, "2026-09-15", "claude:s1", &occurred, sig)
+	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "open"})
+	_, err := f.Link(t.Context(), sig.Fingerprint(), is.UID)
+	require.NoError(t, err)
+	spy := &countingGetKata{Kata: f.Kata}
+	f.Kata = spy
+	f.EvaluatedOccurrences = make(map[string]time.Time)
+
+	for range 2 {
+		n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
+		require.NoError(t, err)
+		assert.Zero(t, n)
+	}
+	assert.Equal(t, 1, spy.calls)
+
+	s.CloseIssue(is.UID, occurred.Add(time.Hour))
+	seedRecurrenceSignal(t, d, "2026-09-16", "claude:s2", new(occurred.Add(24*time.Hour)), sig)
+	n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, 2, spy.calls)
+	assert.Equal(t, "open", mustIssue(t, s, is.UID).Status)
 }
 
 type failingGetKata struct {
@@ -281,10 +329,13 @@ func TestReopenWhenKataNotReady(t *testing.T) {
 			}
 			spy := &failingGetKata{Kata: f.Kata, err: tt.err}
 			f.Kata = spy
-			n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
-			require.NoError(t, err)
-			assert.Zero(t, n)
-			assert.Equal(t, 1, spy.calls)
+			f.EvaluatedOccurrences = make(map[string]time.Time)
+			for i := range 2 {
+				n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
+				require.NoError(t, err)
+				assert.Zero(t, n)
+				assert.Equal(t, i+1, spy.calls)
+			}
 		})
 	}
 }

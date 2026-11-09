@@ -91,6 +91,9 @@ type Filer struct {
 	// archive write barrier, so a write that meets archive maintenance waits
 	// for it instead of failing after Kata created the issue.
 	Exclusive func(func() error) error
+	// EvaluatedOccurrences tracks successful recurrence checks by issue UID.
+	// A nil map disables caching; callers must serialize access to a shared map.
+	EvaluatedOccurrences map[string]time.Time
 }
 
 // Result is the outcome of filing one pattern.

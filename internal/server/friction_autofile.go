@@ -49,9 +49,13 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if s.frictionEvaluatedOccurrences == nil {
+		s.frictionEvaluatedOccurrences = make(map[string]time.Time)
+	}
 	f := &filing.Filer{
 		Kata: s.kataConn(), Store: store, PublicURL: s.frictionPublicURL(),
-		Exclusive: func(work func() error) error { return s.SerializeArchiveWrite(ctx, work) },
+		Exclusive:            func(work func() error) error { return s.SerializeArchiveWrite(ctx, work) },
+		EvaluatedOccurrences: s.frictionEvaluatedOccurrences,
 	}
 	since := latest.AddDate(0, 0, 1-max(backfill, 1)).Format(time.DateOnly)
 	rep, err := f.Reconcile(ctx, filing.Policy{
