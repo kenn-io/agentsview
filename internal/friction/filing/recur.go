@@ -32,7 +32,7 @@ func (f *Filer) Reopen(ctx context.Context, since string, loc *time.Location) (i
 			if err := ctx.Err(); err != nil {
 				return count, err
 			}
-			changed, err := f.reopenIfRecurred(ctx, p, loc)
+			changed, err := f.reopenIfRecurred(ctx, p, since, loc)
 			if errors.Is(err, kata.ErrNotReady) || errors.Is(err, kata.ErrUnavailable) || kata.StatusOf(err) >= http.StatusInternalServerError {
 				return count, nil
 			}
@@ -51,7 +51,7 @@ func (f *Filer) Reopen(ctx context.Context, since string, loc *time.Location) (i
 	}
 }
 
-func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, loc *time.Location) (bool, error) {
+func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, since string, loc *time.Location) (bool, error) {
 	is, err := f.Kata.GetIssue(ctx, p.Issue.IssueUID)
 	if err != nil {
 		return false, err
@@ -60,25 +60,36 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, loc 
 		return false, nil
 	}
 	closed := is.ClosedAt.In(loc).Format(time.DateOnly)
-	filter := db.FrictionFindingFilter{Fingerprint: p.Fingerprint, Date: p.LastSeenDate, Limit: db.MaxFrictionListLimit}
-	found := false
-	for {
-		findings, next, err := f.Store.ListFrictionFindings(ctx, filter)
-		if err != nil {
-			return false, err
-		}
-		for _, finding := range findings {
-			if (finding.OccurredAt != nil && finding.OccurredAt.After(*is.ClosedAt)) || (finding.OccurredAt == nil && p.LastSeenDate > closed) {
-				found = true
+	start := max(closed, since)
+	day, err := time.Parse(time.DateOnly, start)
+	if err != nil {
+		return false, err
+	}
+	qualified := ""
+	for ; day.Format(time.DateOnly) <= p.LastSeenDate; day = day.AddDate(0, 0, 1) {
+		date := day.Format(time.DateOnly)
+		filter := db.FrictionFindingFilter{Fingerprint: p.Fingerprint, Date: date, Limit: db.MaxFrictionListLimit}
+		for {
+			findings, next, err := f.Store.ListFrictionFindings(ctx, filter)
+			if err != nil {
+				return false, err
+			}
+			for _, finding := range findings {
+				if (finding.OccurredAt != nil && finding.OccurredAt.After(*is.ClosedAt)) || (finding.OccurredAt == nil && date > closed) {
+					qualified = date
+					break
+				}
+			}
+			if qualified != "" || next == "" {
 				break
 			}
+			filter.Cursor = next
 		}
-		if found || next == "" {
+		if qualified != "" {
 			break
 		}
-		filter.Cursor = next
 	}
-	if !found {
+	if qualified == "" {
 		return false, nil
 	}
 	current, err := f.pattern(ctx, p.Fingerprint)
@@ -88,11 +99,11 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, loc 
 	if current.Issue == nil || current.Issue.IssueUID != p.Issue.IssueUID {
 		return false, nil
 	}
-	body := fmt.Sprintf("This pattern recurred on %s after the issue was closed on %s.", p.LastSeenDate, closed)
-	if link := friction.DigestURL(f.PublicURL, p.LastSeenDate); link != "" {
+	body := fmt.Sprintf("This pattern recurred on %s after the issue was closed on %s.", qualified, closed)
+	if link := friction.DigestURL(f.PublicURL, qualified); link != "" {
 		body += "\n\n" + link
 	}
-	key := "friction-recur-" + p.Issue.IssueUID + "-" + p.LastSeenDate
+	key := "friction-recur-" + p.Issue.IssueUID + "-" + is.ClosedAt.UTC().Format(time.RFC3339)
 	if err := f.Kata.Comment(ctx, p.Issue.IssueUID, key, body); err != nil {
 		apiErr, ok := errors.AsType[*kata.APIError](err)
 		if !ok || apiErr.Code != "idempotency_mismatch" {

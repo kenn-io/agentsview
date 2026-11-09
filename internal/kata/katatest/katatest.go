@@ -200,6 +200,15 @@ func (s *Server) Issue(uid string) (Issue, bool) {
 	return Issue{}, false
 }
 
+// CloseIssue closes an existing issue at the given time.
+func (s *Server) CloseIssue(uid string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if is := s.findLocked(0, uid); is != nil {
+		is.Status, is.ClosedReason, is.ClosedAt = "closed", "done", &at
+	}
+}
+
 func cloneIssue(is Issue) Issue {
 	if is.Priority != nil {
 		p := *is.Priority

@@ -11,8 +11,8 @@ The latest release is
 
 **New features**
 
-- Reopen linked Kata issues when a pattern returns on a later digest day after
-  the issue was closed as done.
+- With automatic filing on, reopen linked Kata issues when a digest finding
+  shows the pattern returned after the issue was closed as done.
 
 **Bug fixes**
 

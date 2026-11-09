@@ -25,11 +25,9 @@ func (s *Server) frictionAutoFileOn() bool {
 	return autoFile && s.frictionRunner != nil && kataCfg.Enabled && kataCfg.Hub
 }
 
-// autoFileFriction files patterns when auto_file is on and reopens recurring
-// linked issues on every Kata hub.
+// autoFileFriction files patterns and reopens recurring linked issues.
 func (s *Server) autoFileFriction(ctx context.Context) error {
-	cfg := s.kataConn().Config()
-	if s.frictionRunner == nil || !cfg.Enabled || !cfg.Hub {
+	if !s.frictionAutoFileOn() {
 		return nil
 	}
 	s.mu.RLock()
@@ -57,7 +55,7 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 	}
 	since := latest.AddDate(0, 0, 1-max(backfill, 1)).Format(time.DateOnly)
 	var rep filing.ReconcileReport
-	if policy.AutoFile && frictionLinksWritable(store) {
+	if frictionLinksWritable(store) {
 		rep, err = f.Reconcile(ctx, filing.Policy{
 			Kinds: policy.FileKinds(), Since: since,
 			MinSessions: policy.FileMinSessions(), MaxNew: frictionAutoFilePerPass,
