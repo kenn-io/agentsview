@@ -1285,6 +1285,9 @@ var preparationIndexesPG = []struct{ name, ddl string }{
 	{"idx_sessions_data_version", `CREATE INDEX IF NOT EXISTS idx_sessions_data_version ON sessions(data_version)`},
 	{"idx_sessions_parentless_workers", `CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers ON sessions(id) WHERE ` + db.ParentlessWorkerSQL},
 	{"idx_sessions_source_missing", `CREATE INDEX IF NOT EXISTS idx_sessions_source_missing ON sessions(id) WHERE deletion_cause = 'source_missing'`},
+	// Raw session ID lookups seek on the ID tail instead of scanning every
+	// session; see Store.FindSessionIDsByRawSuffix.
+	{"idx_sessions_id_tail", `CREATE INDEX IF NOT EXISTS idx_sessions_id_tail ON sessions((` + pgSessionIDTailExpr + `))`},
 }
 
 // createMissingPreparationIndexesPG serializes publishers upgrading the same
@@ -1359,10 +1362,6 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 		// fetch (user ordinals by session), mirroring the SQLite index.
 		`CREATE INDEX IF NOT EXISTS idx_messages_session_role
 		 ON messages(session_id, role)`,
-		// Raw session ID lookups seek on the ID tail instead of scanning
-		// every session; see Store.FindSessionIDsByRawSuffix.
-		`CREATE INDEX IF NOT EXISTS idx_sessions_id_tail
-		 ON sessions((` + pgSessionIDTailExpr + `))`,
 	}
 	for _, ddl := range indexes {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
@@ -2607,12 +2606,10 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	// unique index exists. Fall back to EnsureSchema when it is missing
 	// so repeated pushes cannot duplicate cursor usage rows.
 	// A push may provision the schema for a read-only serve role. Include
-	// the Activity and session ID tail indexes so that upgrading through
-	// push installs them too.
+	// the Activity index so that upgrading through push installs it too.
 	return accountUsageTokensWidePG(ctx, db) &&
 		pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup") &&
-		pgHasIndex(ctx, db, "idx_tool_result_events_terminal") &&
-		pgHasIndex(ctx, db, "idx_sessions_id_tail")
+		pgHasIndex(ctx, db, "idx_tool_result_events_terminal")
 }
 
 // CheckDataVersionCompat rejects PG datasets containing rows written by a

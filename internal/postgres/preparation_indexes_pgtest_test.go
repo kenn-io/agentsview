@@ -50,7 +50,7 @@ func TestPGPreparationIndexesUpgradeAndBoundEmptyChecks(t *testing.T) {
 		pg := store.DB()
 
 		// Each missing index must independently trigger the ordinary push upgrade.
-		for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"} {
+		for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing", "idx_sessions_id_tail"} {
 			t.Run(index, func(t *testing.T) {
 				_, err := pg.ExecContext(t.Context(), `DROP INDEX `+index)
 				require.NoError(t, err)
@@ -77,7 +77,7 @@ func TestPGPreparationIndexesConcurrentInstallersBothSucceed(t *testing.T) {
 	pg := store.DB()
 	_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,machine,project,agent) VALUES('existing','machine','project','codex')`)
 	require.NoError(t, err)
-	for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"} {
+	for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing", "idx_sessions_id_tail"} {
 		_, err := pg.ExecContext(t.Context(), `DROP INDEX `+index)
 		require.NoError(t, err)
 	}
@@ -113,7 +113,7 @@ func TestPGPreparationIndexesConcurrentInstallersBothSucceed(t *testing.T) {
 	require.NoError(t, blocker.Commit())
 	require.NoError(t, <-results, "first publisher upgrades the shared archive")
 	require.NoError(t, <-results, "second publisher upgrades the shared archive")
-	for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"} {
+	for _, index := range []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing", "idx_sessions_id_tail"} {
 		assert.True(t, pgHasIndex(t.Context(), pg, index), index)
 	}
 }

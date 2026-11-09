@@ -295,7 +295,7 @@ func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 	require.NoError(t, err, "Open restricted")
 	t.Cleanup(func() { _ = restricted.Close() })
 
-	indexes := []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing"}
+	indexes := []string{"idx_sessions_data_version", "idx_sessions_parentless_workers", "idx_sessions_source_missing", "idx_sessions_id_tail"}
 	for _, index := range indexes {
 		_, err = admin.ExecContext(t.Context(), `DROP INDEX `+index)
 		require.NoError(t, err)

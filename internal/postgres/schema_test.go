@@ -661,7 +661,6 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
-		"idx_sessions_id_tail":            true,
 	}
 	state.syncMetadataKeys = map[string]bool{
 		sourceCurationBackfillMetadataKey: true,
@@ -1080,52 +1079,6 @@ func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {
 	assert.Contains(t, strings.ToLower(state.executedSQL()),
 		"idx_cursor_usage_events_dedup",
 		"fallback must recreate the cursor dedup index")
-}
-
-// A mirror from before the session ID tail index must leave the push fast
-// path, or a push would never build the index for the serve role to use.
-func TestSyncEnsureSchemaRunsDDLWhenSessionIDTailIndexMissing(t *testing.T) {
-	pg, state := newSchemaProbeDB(t, map[string][]string{
-		"sessions": {
-			"has_total_output_tokens",
-			"has_peak_context_tokens",
-		},
-		"messages": {
-			"has_context_tokens",
-			"has_output_tokens",
-		},
-	})
-	state.existingTables = map[string]bool{
-		"commit_links":                                    true,
-		"model_pricing":                                   true,
-		"model_pricing_bands":                             true,
-		"genai_pricing":                                   true,
-		"source_archives":                                 true,
-		"source_project_identity_observations":            true,
-		"source_project_identity_observation_scopes":      true,
-		"source_session_project_identity_snapshots":       true,
-		"source_session_project_identity_snapshot_scopes": true,
-		"source_worktree_project_mappings":                true,
-		"source_worktree_project_mapping_scopes":          true,
-		"cursor_usage_events":                             true,
-		"friction_findings":                               true,
-		"friction_digests":                                true,
-		"friction_digest_sessions":                        true,
-		"friction_patterns":                               true,
-		"friction_issue_links":                            true,
-		"friction_filing_state":                           true,
-	}
-	state.existingIndexes = map[string]bool{
-		"idx_cursor_usage_events_dedup":   true,
-		"idx_tool_result_events_terminal": true,
-	}
-	syncer := &Sync{pg: pg, schema: "agentsview"}
-
-	require.NoError(t, syncer.EnsureSchema(t.Context()))
-
-	assert.Contains(t, strings.ToLower(state.executedSQL()),
-		"create index if not exists idx_sessions_id_tail",
-		"fallback must build the session ID tail index")
 }
 
 func TestSyncEnsureSchemaRunsDDLWhenSchemaIncompatible(t *testing.T) {

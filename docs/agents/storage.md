@@ -943,7 +943,8 @@ their existing reads.
 
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
 `idx_sessions_source_missing` bound the parser-version check and empty repair
-queries. Owner preparation installs missing indexes automatically. Each first
+queries. `idx_sessions_id_tail` serves
+[raw session ID lookups](#raw-session-id-lookups). Owner preparation installs missing indexes automatically. Each first
 build scans `sessions` and blocks writes until installation commits. Restricted
 publishers keep writing before owner installation, using the existing queries
 until the indexes are available.
@@ -957,7 +958,10 @@ shares the raw ID's tail, the text after its last `:` or `~`
 the exact suffix forms:
 
 - SQLite and PostgreSQL index the tail expression as `idx_sessions_id_tail`.
-  The query must repeat the indexed expression exactly.
+  The query must repeat the indexed expression exactly. PostgreSQL installs it
+  as a [push preparation index](#postgresql-push-preparation-indexes), so a
+  restricted publisher keeps pushing and lookups scan until an owner installs
+  it.
 - ClickHouse keeps an `id_tail` bloom filter skipping index on `sessions`.
   The candidate subquery reads with `final = 0` because FINAL widens each
   matching granule to every overlapping key range in other parts. The outer
