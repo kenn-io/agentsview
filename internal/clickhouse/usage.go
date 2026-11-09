@@ -1394,9 +1394,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				if !top {
-					s.dailyUsageRows.Put(memoSlot, memoVersion, keptRows)
-				}
+				s.dailyUsageRows.Put(memoSlot, memoVersion, keptRows)
 				return nil
 			}
 		}
