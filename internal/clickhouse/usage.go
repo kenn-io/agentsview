@@ -182,10 +182,16 @@ const chUsageMatchingMessageSourceEligibility = `
 const chUsageMatchingMessageEligibility = chUsageMatchingMessageSourceEligibility + `
 			AND s.deleted_at IS NULL`
 
-const chUsageEventSourceEligibility = `
-			ue.model != ''`
+// chUsageEventUsable renders the condition a usage event meets when its
+// usage counts, from the expression of its model field.
+func chUsageEventUsable(model string) string {
+	return model + ` != ''`
+}
 
-const chUsageEventEligibility = chUsageEventSourceEligibility + `
+var chUsageEventSourceEligibility = `
+			` + chUsageEventUsable("ue.model")
+
+var chUsageEventEligibility = chUsageEventSourceEligibility + `
 			AND s.deleted_at IS NULL`
 
 func chUsageSourceWheres(
