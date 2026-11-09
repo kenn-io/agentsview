@@ -58,6 +58,85 @@ fetching bodies; a display label alone does not establish repository identity.
 The project reference follows the evidence rules in
 [Session Export](/docs/session-export/#project-evidence).
 
+## Follow changes live
+
+A subscriber such as a sync client or dashboard can follow archive changes as
+they happen and resume after a disconnect with no gap and no repeat. Open the
+server-sent events stream on the local daemon:
+
+```http
+GET /api/v1/changes/stream?after=CURSOR
+```
+
+Omit `after` on the first connection. Afterwards, pass the `to` value of the
+last `changes` event you finished processing. Treat cursors as opaque. The
+stream uses the same authentication as `/api/v1/events`, including the `?token=`
+fallback for browser `EventSource` clients. It reads the archive and never
+writes it, so message records appear only after the conversation change index
+exists. The first `export conversations changes` call builds it, as does
+`POST /api/v1/export/conversations/initialize`. Until then the stream carries
+session records only. A server without a local SQLite archive answers HTTP 501.
+
+The stream sends these events. Each `data` line is one JSON object:
+
+| Event       | Data                                                                                                                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `ready`     | `schema_version`, `archive_id`, `database_id`, and `head`, the cursor of the newest change when the connection opened. |
+| `changes`   | `schema_version`, `archive_id`, `database_id`, `from`, `to`, `reset`, `sessions`, and `messages`.                      |
+| `heartbeat` | A timestamp, sent on the same interval as `/api/v1/events`.                                                            |
+| `error`     | `{"error": "..."}` when a read fails. The stream then closes; reconnect with the last `to` you processed.              |
+
+How `changes` events fit together:
+
+- The first event starts at the `after` cursor. Each later event's `from` equals
+  the previous event's `to`. When the cursor is already current, no `changes`
+  event arrives until something changes.
+- The stream first replays everything after the cursor in pages of at most 500
+  message and session changes, then stays open and sends new changes as the
+  daemon publishes them. Changes that arrive together are sent as one event.
+- `reset` is `true`, with an empty `from`, when `after` is empty, belongs to
+  another database generation, or is not a cursor this archive issued. The
+  replay then starts at the beginning of the archive. Replace your copy with
+  what follows instead of merging into it. A full resync during a connection
+  produces the same reset.
+- Like the changes listing, this is compact current state. A record changed
+  twice before you read it arrives once, in its newest state.
+
+Each event carries the current state of every session a change touches. A
+message change also sends its session, so the session totals are always current.
+A session object has:
+
+- `session_id` and `deleted`. A trashed or deleted session has `deleted: true`,
+  empty fields, a `null` project, and `null` usage.
+- `agent` and `automation` (`interactive`, `automated`, or `subagent`).
+- `project`, the same project reference the changes listing uses.
+- `models`, `started_at`, `last_activity_at`, and `message_count`.
+- `usage`, the session's token and cost totals.
+
+A message object has no text and no digest of its text:
+
+- `session_id`, `message_id`, `revision`, `deleted`, `role`, and `timestamp`,
+  matching the changes listing.
+- `model` and `project`.
+- `usage`, or `null` when the message recorded none.
+
+A usage object has `input_tokens`, `output_tokens`, `cache_creation_tokens`,
+`cache_read_tokens`, `cost_microdollars`, and `priced`. Cost is an exact integer
+number of microdollars from AgentsView's model pricing, using the same rules as
+session summaries. `priced` is `true` only when every counted usage has a price.
+Otherwise `cost_microdollars` covers only the priced part, and a session without
+usage reports zeros with `priced: false`.
+
+Token usage written after its message, such as usage a later sync adds without
+changing the text, sends the session again with new totals. The message itself
+is not sent again, so its `usage` keeps the value from its last revision. Two
+kinds of cost change send nothing:
+
+- Model pricing updates change computed costs without sending any session.
+  Reconnect without a cursor to recompute every total.
+- When two Claude sessions share a streamed response, a write to one session can
+  move that shared usage between them. Only the written session is sent.
+
 ## Read only the text you need
 
 ```bash

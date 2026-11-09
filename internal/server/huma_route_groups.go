@@ -37,6 +37,7 @@ func (s *Server) registerTypedAPIRoutes() {
 	s.registerPinRoutes()
 	s.registerImportRoutes()
 	s.registerConversationExportRoutes()
+	s.registerChangeStreamRoutes()
 	s.registerAssetRoutes()
 	s.registerEmbeddingsRoutes()
 }

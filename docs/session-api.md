@@ -111,6 +111,9 @@ known.
 
 The HTTP `/api/v1/events` stream sends `events_ready` on every connection
 after subscribing to changes.
+To receive the changed session and message records themselves, with a cursor
+for resuming, use the
+[change stream](/docs/conversation-export/#follow-changes-live).
 
 The web UI and generated API clients use shared metadata endpoints for filter
 options:

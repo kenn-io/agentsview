@@ -12548,6 +12548,94 @@ paths:
       summary: List branches
       tags:
         - Metadata
+  /api/v1/changes/stream:
+    get:
+      description: Streams content-free session and message changes. ready names the archive and its newest cursor. changes carries every change from `from` to `to`; each event's `from` equals the previous event's `to`, and reset is true when the stream restarted from the beginning of the archive. heartbeat keeps the connection open. error reports a failed read before the stream closes; reconnect with the last `to` received.
+      operationId: get-api-v1-changes-stream
+      parameters:
+        - description: Cursor from the last changes event's to field. Empty, foreign, or invalid cursors restart from the beginning of the archive.
+          explode: false
+          in: query
+          name: after
+          schema:
+            description: Cursor from the last changes event's to field. Empty, foreign, or invalid cursors restart from the beginning of the archive.
+            type: string
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Follow archive changes
+      tags:
+        - Changes
   /api/v1/codex-cloud/status:
     get:
       operationId: get-api-v1-codex-cloud-status
