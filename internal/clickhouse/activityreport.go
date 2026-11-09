@@ -956,25 +956,32 @@ func (s *Store) readActivityUsageSlices(
 	for i := range levels {
 		levels[i] = strconv.FormatFloat(float64(i+1)/activityUsageMaxSlices, 'f', -1, 64)
 	}
+	// The scalar subquery runs before the count, so the generation it names
+	// is the one every slice reads unless a refresh swaps the table later.
 	var count uint64
 	var cuts []time.Time
+	var generation string
 	if err := s.bulk.QueryRow(ctx,
-		"SELECT count(), quantiles("+strings.Join(levels, ", ")+")(assumeNotNull(ts)) FROM prepared_usage WHERE "+where,
+		"SELECT count(), quantiles("+strings.Join(levels, ", ")+")(assumeNotNull(ts)), ("+chPreparedUsageGenerationSQL+
+			") FROM prepared_usage WHERE "+where,
 		args...,
-	).Scan(&count, &cuts); err != nil {
+	).Scan(&count, &cuts, &generation); err != nil {
 		return nil, fmt.Errorf("sizing clickhouse activity usage slices: %w", err)
 	}
 	bounds, err := activityUsageSlices(lowerBound, upperBound, int(count/uint64(s.usageSliceRows)), cuts)
 	if err != nil {
 		return nil, err
 	}
-	if len(bounds) == 1 {
+	readOnce := func() (*activityUsageKept, error) {
 		sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, where, args)
 		readCtx, err := withUsageDeltaTables(ctx, state)
 		if err != nil {
 			return nil, err
 		}
 		return s.readActivityUsageKept(readCtx, "SELECT "+chPreparedUsageColumns+" FROM ("+sourceSQL+")", sourceArgs)
+	}
+	if len(bounds) == 1 {
+		return readOnce()
 	}
 	sorters := make([]*keptUsageSorter, len(bounds))
 	g, readCtx := errgroup.WithContext(ctx)
@@ -999,8 +1006,29 @@ func (s *Store) readActivityUsageSlices(
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+	if s.afterUsageSlices != nil {
+		s.afterUsageSlices()
+	}
+	// A refresh replaces prepared_usage whole. If it did so while the slices
+	// ran, some slices read the old rows and some the new, and a message
+	// whose timestamp a push corrected across a slice boundary is dropped
+	// or counted twice. One query reads a single generation.
+	var after string
+	if err := s.bulk.QueryRow(ctx, chPreparedUsageGenerationSQL).Scan(&after); err != nil {
+		return nil, fmt.Errorf("checking clickhouse prepared usage generation: %w", err)
+	}
+	if after != generation {
+		return readOnce()
+	}
 	return joinActivityUsageSlices(sorters), nil
 }
+
+// chPreparedUsageGenerationSQL names the prepared_usage table a query would
+// read now. A refresh exchanges in a new table and a rebuild creates one, so
+// the name changes whenever the table's rows are replaced. Databases without
+// table UUIDs fall back on the metadata time.
+const chPreparedUsageGenerationSQL = `SELECT concat(toString(uuid), '|', toString(metadata_modification_time))
+	FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'`
 
 // activityUsageSlice is an inclusive range of RFC 3339 bounds.
 type activityUsageSlice struct{ lower, upper string }

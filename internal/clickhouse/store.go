@@ -48,9 +48,12 @@ type Store struct {
 	// usageSliceRows is the fewest stored rows worth a slice of their own in
 	// an Activity range read; see readActivityUsageSlices.
 	usageSliceRows int
-	cursorMu       sync.RWMutex
-	cursorSecret   []byte
-	customPricing  map[string]config.CustomModelRate
+	// afterUsageSlices, when set, runs once a sliced range read has read
+	// every slice. Tests use it to refresh prepared usage mid-read.
+	afterUsageSlices func()
+	cursorMu         sync.RWMutex
+	cursorSecret     []byte
+	customPricing    map[string]config.CustomModelRate
 
 	// vectorMu guards the searcher and reason installed by the serve gate.
 	vectorMu                  sync.RWMutex
