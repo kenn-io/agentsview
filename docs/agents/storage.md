@@ -933,9 +933,9 @@ PostgreSQL keeps ongoing Activity reports' ordered transcript metadata and raw
 usage inputs in memory with a 128 MiB estimated-size budget. The usage
 change journal invalidates changed sessions and their matching snapshot peers.
 Each visit selects sessions, pairs messages against the current clock, selects
-usage snapshots, and prices the surviving rows again. Tool events and message
-counts are read fresh. Journal replacement and unavailable or regressed
-revisions rebuild the inputs. Large change sets use a full read, and inputs
+usage snapshots, and prices the surviving rows again. Message counts reuse the
+pairing read; tool events are read fresh. Journal replacement and unavailable or
+regressed revisions rebuild the inputs. Large change sets use a full read, and inputs
 above the budget aren't retained. Hosted stores and transaction views use their
 existing reads.
 

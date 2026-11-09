@@ -621,6 +621,7 @@ func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity
 		) error {
 			var pairs []activity.IntervalCandidate
 			var copyBuffer []activity.TranscriptMessage
+			// pgx truncates SQL timestamp bounds to microseconds.
 			lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
 			countLowerMicro := q.RangeStart.UnixMicro()
 			err := s.activityTranscriptSource(ctx, ids, inputs, func(id string, session []activity.TranscriptMessage) {
