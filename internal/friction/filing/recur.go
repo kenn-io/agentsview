@@ -66,6 +66,7 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, sinc
 		return false, err
 	}
 	qualified := ""
+	occurrenceDate := ""
 	for ; day.Format(time.DateOnly) <= p.LastSeenDate; day = day.AddDate(0, 0, 1) {
 		date := day.Format(time.DateOnly)
 		filter := db.FrictionFindingFilter{Fingerprint: p.Fingerprint, Date: date, Limit: db.MaxFrictionListLimit}
@@ -77,6 +78,10 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, sinc
 			for _, finding := range findings {
 				if (finding.OccurredAt != nil && finding.OccurredAt.After(*is.ClosedAt)) || (finding.OccurredAt == nil && date > closed) {
 					qualified = date
+					occurrenceDate = date
+					if finding.OccurredAt != nil {
+						occurrenceDate = finding.OccurredAt.In(loc).Format(time.DateOnly)
+					}
 					break
 				}
 			}
@@ -99,7 +104,7 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, sinc
 	if current.Issue == nil || current.Issue.IssueUID != p.Issue.IssueUID {
 		return false, nil
 	}
-	body := fmt.Sprintf("This pattern recurred on %s after the issue was closed on %s.", qualified, closed)
+	body := fmt.Sprintf("This pattern recurred on %s after the issue was closed on %s.", occurrenceDate, closed)
 	if link := friction.DigestURL(f.PublicURL, qualified); link != "" {
 		body += "\n\n" + link
 	}

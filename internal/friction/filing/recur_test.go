@@ -78,6 +78,25 @@ func TestReopenRecurringPattern(t *testing.T) {
 	}
 }
 
+func TestReopenReportsOccurrenceDateAndDigestDay(t *testing.T) {
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	occurred := time.Date(2026, 9, 17, 1, 0, 0, 0, time.UTC)
+	seedRecurrence(t, d, "2026-09-15", "claude:s1", &occurred)
+	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
+	require.NoError(t, err)
+
+	n, err := f.Reopen(t.Context(), "2026-09-01", time.FixedZone("UTC-4", -4*60*60))
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	got := mustIssue(t, s, is.UID)
+	assert.Equal(t, "open", got.Status)
+	require.Len(t, got.Comments, 1)
+	assert.Equal(t, "This pattern recurred on 2026-09-16 after the issue was closed on 2026-09-15.\n\nhttps://av.example.test/base/friction?date=2026-09-15", got.Comments[0])
+}
+
 func TestReopenEarlierSurvivingDigest(t *testing.T) {
 	s := katatest.New(t)
 	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
