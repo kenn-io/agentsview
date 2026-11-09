@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -637,8 +638,13 @@ func TestIssueRejectsMismatchedProjectUID(t *testing.T) {
 
 func TestReopenCommentLabel(t *testing.T) {
 	s := katatest.New(t)
-	is := s.AddIssue(katatest.Issue{Title: "t", Status: "closed", ClosedReason: "done"})
+	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	is := s.AddIssue(katatest.Issue{Title: "t", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
 	c := readyClient(t, s)
+	before, err := c.GetIssue(t.Context(), is.UID)
+	require.NoError(t, err)
+	require.NotNil(t, before.ClosedAt)
+	assert.True(t, closed.Equal(*before.ClosedAt))
 
 	changed, err := c.Reopen(t.Context(), is.UID)
 	require.NoError(t, err)
@@ -654,6 +660,7 @@ func TestReopenCommentLabel(t *testing.T) {
 
 	after, ok := s.Issue(is.UID)
 	require.True(t, ok)
+	assert.Nil(t, after.ClosedAt)
 	assert.Equal(t, []string{"Recurred"}, after.Comments, "same comment key does not duplicate")
 	assert.Equal(t, []string{"friction:recurred"}, after.Labels)
 

@@ -9,6 +9,11 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- Reopen linked Kata issues when a pattern returns on a later digest day after
+  the issue was closed as done.
+
 **Bug fixes**
 
 - Antigravity app and IDE sessions now show their project and working directory

@@ -114,6 +114,10 @@ kinds = ["error", "workaround"] # Optional; empty means every kind that can be f
 min_sessions = 2 # Optional; file only patterns seen in at least this many sessions.
 ```
 
+- On a hub with Kata enabled, the hourly job reopens a linked issue closed as
+  `done` when its pattern appears on a later digest day within `backfill_days`.
+  It adds a comment with the recurrence and close dates and, when configured,
+  a link to the digest. This also runs when automatic filing is off.
 - Each hour, after it builds digests, the Friction Log job files unlinked
   patterns of a chosen kind last seen within `[friction] backfill_days` and
   seen in at least `min_sessions` sessions (default 2). It uses the same

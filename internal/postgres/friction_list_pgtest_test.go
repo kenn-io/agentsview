@@ -203,6 +203,7 @@ func TestFrictionListParity(t *testing.T) {
 
 	patternFilters := map[string]db.FrictionPatternFilter{
 		"all":             {},
+		"linked":          {Linked: true},
 		"kind":            {Kind: "pattern"},
 		"since":           {Since: "2026-09-14"},
 		"page":            {Limit: 1},
@@ -374,6 +375,10 @@ func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
 	assert.Nil(t, rows[0].Filing)
 	store.DetectFrictionAvailability(ctx)
 	assert.False(t, store.FrictionIssueLinksWritable(), "filing refuses before contacting Kata")
+
+	rows, _, err = store.ListFrictionPatterns(ctx, db.FrictionPatternFilter{Linked: true})
+	require.NoError(t, err)
+	assert.Empty(t, rows)
 
 	// Once a migration adds the tables, the same store reads links.
 	for _, statement := range strings.Split(frictionReviewDDL, ";\n") {

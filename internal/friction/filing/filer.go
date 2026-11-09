@@ -66,6 +66,8 @@ type Kata interface {
 	FindByMetadata(ctx context.Context, key, value string) ([]kata.Issue, error)
 	CreateIssue(ctx context.Context, idempotencyKey string, req kata.CreateIssue) (kata.CreateResult, error)
 	GetIssue(ctx context.Context, ref string) (kata.Issue, error)
+	Reopen(ctx context.Context, ref string) (bool, error)
+	Comment(ctx context.Context, ref, key, body string) error
 }
 
 var _ Kata = (*kata.Conn)(nil)

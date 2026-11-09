@@ -161,12 +161,17 @@ func TestListFrictionDigests(t *testing.T) {
 func TestListFrictionPatterns(t *testing.T) {
 	d := testDB(t)
 	seedFrictionListFixture(t, d)
+	require.NoError(t, d.SaveFrictionIssueLink(t.Context(), FrictionIssueLink{
+		Fingerprint: "fl1:aaa", KataInstanceUID: "i", KataProjectUID: "p", IssueUID: "u",
+		QualifiedID: "agentsview#f001", Source: FrictionIssueSourceManual, LinkedAt: time.Now(),
+	}))
 	tests := []struct {
 		name       string
 		filter     FrictionPatternFilter
 		want       []string
 		wantCursor string
 	}{
+		{"linked", FrictionPatternFilter{Linked: true}, []string{"fl1:aaa"}, ""},
 		{"ranked", FrictionPatternFilter{}, []string{"fl1:bbb", "fl1:aaa", "fl1:ccc"}, ""},
 		{"kind", FrictionPatternFilter{Kind: "pattern"}, []string{"fl1:ccc"}, ""},
 		{"since", FrictionPatternFilter{Since: "2026-09-14"}, []string{"fl1:bbb", "fl1:aaa"}, ""},

@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/kata"
@@ -117,4 +119,39 @@ func TestFrictionJobFilesWhenInstalledAfterTheServer(t *testing.T) {
 
 	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
 	require.NotNil(t, patternIssue(t, te, frictionTestSnapshot(date).Signals[0].Fingerprint()))
+}
+
+func TestFrictionJobReopensOnHubWithAutoFileOff(t *testing.T) {
+	for _, hub := range []bool{true, false} {
+		t.Run(fmt.Sprintf("hub_%t", hub), func(t *testing.T) {
+			s := katatest.New(t)
+			fixed := time.Date(2026, 9, 17, 2, 30, 0, 0, time.UTC)
+			runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }, BackfillDays: 7}
+			te := setupWithServerOpts(t, []server.Option{
+				server.WithFriction(runner, nil),
+				server.WithKataConn(kata.NewConn(kata.Config{Enabled: true, Hub: hub, Endpoint: s.Endpoint(), Project: katatest.DefaultProjectName})),
+			}, func(c *config.Config) { c.Friction.BackfillDays = 7 })
+			runner.Store = te.db
+			const date = "2026-09-16"
+			seedFrictionDigest(t, te.db, date)
+			fp := frictionTestSnapshot(date).Signals[0].Fingerprint()
+			closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+			require.NoError(t, te.db.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{
+				Fingerprint: fp, KataInstanceUID: "instance", KataProjectUID: "project", IssueUID: is.UID,
+				QualifiedID: "agentsview#" + is.ShortID, Source: db.FrictionIssueSourceManual, LinkedAt: closed,
+			}))
+			require.NoError(t, review.Job(runner, nil).Run(t.Context()))
+			got, ok := s.Issue(is.UID)
+			require.True(t, ok)
+			if hub {
+				assert.Equal(t, "open", got.Status)
+				assert.Len(t, got.Comments, 1)
+			} else {
+				assert.Equal(t, "closed", got.Status)
+				assert.Empty(t, got.Comments)
+			}
+			assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"))
+		})
+	}
 }

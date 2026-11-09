@@ -41,8 +41,13 @@ var (
 // seedDigest stores one digest holding sigs, with a recurrence row for each.
 func seedDigest(t *testing.T, d *db.DB, sigs ...friction.Signal) {
 	t.Helper()
+	seedDigestOn(t, d, digestDate, sigs...)
+}
+
+func seedDigestOn(t *testing.T, d *db.DB, date string, sigs ...friction.Signal) {
+	t.Helper()
 	snap := review.Snapshot{
-		Date: digestDate, Signals: sigs, SessionsScanned: 1,
+		Date: date, Signals: sigs, SessionsScanned: 1,
 		Timezone: "UTC", RulesVersion: friction.RulesVersion,
 	}
 	snapJSON, err := review.EncodeSnapshot(snap)
@@ -51,11 +56,11 @@ func seedDigest(t *testing.T, d *db.DB, sigs ...friction.Signal) {
 	for _, sig := range sigs {
 		patterns = append(patterns, db.FrictionPatternUpdate{
 			Fingerprint: sig.Fingerprint(), Kind: string(sig.Kind), Title: sig.Title(),
-			Date: digestDate, SubjectID: sig.SubjectID, Ordinal: sig.Ordinal, Occurrences: 1,
+			Date: date, SubjectID: sig.SubjectID, Ordinal: sig.Ordinal, Occurrences: 1,
 		})
 	}
 	require.NoError(t, d.SaveFrictionDigest(t.Context(), db.FrictionDigest{
-		Date: digestDate, Timezone: "UTC", RulesVersion: friction.RulesVersion,
+		Date: date, Timezone: "UTC", RulesVersion: friction.RulesVersion,
 		BuiltAt: time.Date(2026, 9, 15, 1, 0, 0, 0, time.UTC), Revision: 1, SessionsScanned: 1,
 		SnapshotJSON: snapJSON, SummaryJSON: friction.RenderSummaryJSON(snap.DigestSnapshot),
 		Markdown: friction.RenderMarkdown(snap.DigestSnapshot), MarkdownSHA256: "sha", RunID: "run",
