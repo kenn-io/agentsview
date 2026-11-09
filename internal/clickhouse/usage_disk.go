@@ -103,6 +103,9 @@ func (s *Store) usageDiskFilter(ctx context.Context, state preparedUsageState, f
 		source, args := chPreparedUsageSourceSQL(state, "1", nil)
 		var latest sql.NullTime
 		var unknown uint64
+		if s.beforeUsageExtent != nil {
+			s.beforeUsageExtent()
+		}
 		err = s.queryRowContext(readCtx, "SELECT maxOrNull(ts), countIf(isNull(ts)) FROM (SELECT ts FROM ("+source+") UNION ALL SELECT occurred_at AS ts FROM cursor_usage_events)", args...).Scan(&latest, &unknown)
 		if err != nil || !s.usageCaptureStable(ctx) {
 			return f

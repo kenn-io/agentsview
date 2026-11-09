@@ -344,29 +344,25 @@ func TestUsageDiskDeleteDuringDateProof(t *testing.T) {
 	pushPreparedUsage(t, syncer)
 	require.NoError(t, first.openActivityReportDisk(syncer.target))
 	f := db.UsageFilter{Timezone: "UTC", From: "2026-01-01"}
-	_, err := first.GetDailyUsage(t.Context(), f)
+	unbounded, err := first.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
-	var deleted atomic.Bool
 	var deleteErr error
-	ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(*chdriver.Progress) {
-		if deleted.Load() {
-			return
-		}
-		var current uint64
-		err := restarted.DB().QueryRowContext(t.Context(), `SELECT count() FROM system.processes WHERE position(query, 'SELECT maxOrNull(ts)') > 0 AND position(query, 'system.processes') = 0`).Scan(&current)
-		if err == nil && current > 0 && deleted.CompareAndSwap(false, true) {
-			_, deleteErr = restarted.DB().ExecContext(t.Context(), `ALTER TABLE cursor_usage_events DELETE WHERE dedup_key = 'cursor:delete-proof' SETTINGS mutations_sync = 2`)
-		}
-	}))
+	deleted := false
+	restarted.beforeUsageExtent = func() {
+		restarted.beforeUsageExtent = nil
+		deleted = true
+		_, deleteErr = restarted.DB().ExecContext(t.Context(), `ALTER TABLE cursor_usage_events DELETE WHERE dedup_key = 'cursor:delete-proof' SETTINGS mutations_sync = 2`)
+	}
 	f.To = "2026-01-30"
-	got, err := restarted.GetDailyUsage(ctx, f)
+	got, err := restarted.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
-	require.True(t, deleted.Load())
+	require.True(t, deleted)
 	require.NoError(t, deleteErr)
 	want, err := newTestStore(t, syncer.conn, syncer.target).GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
+	require.NotEqual(t, unbounded.Totals.InputTokens, want.Totals.InputTokens)
 	require.Equal(t, want, got)
 }
 
