@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/kata"
 )
 
@@ -65,22 +66,22 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, star
 	occurrenceDate := ""
 	for day := start; day.Format(time.DateOnly) <= p.LastSeenDate; day = day.AddDate(0, 0, 1) {
 		date := day.Format(time.DateOnly)
-		filter := db.FrictionFindingFilter{Fingerprint: p.Fingerprint, Date: date, Limit: db.MaxFrictionListLimit}
-		for {
-			findings, next, err := f.Store.ListFrictionFindings(ctx, filter)
-			if err != nil {
-				return false, err
-			}
-			for _, finding := range findings {
-				if finding.OccurredAt != nil && finding.OccurredAt.After(*is.ClosedAt) {
-					occurrenceDate = finding.OccurredAt.In(loc).Format(time.DateOnly)
-					break
-				}
-			}
-			if occurrenceDate != "" || next == "" {
+		digest, err := f.Store.GetFrictionDigest(ctx, date)
+		if err != nil {
+			return false, err
+		}
+		if digest == nil {
+			continue
+		}
+		snapshot, err := review.DecodeSnapshot(digest.SnapshotJSON)
+		if err != nil {
+			return false, err
+		}
+		for _, signal := range snapshot.Signals {
+			if signal.Fingerprint() == p.Fingerprint && !signal.OccurredAt.IsZero() && signal.OccurredAt.After(*is.ClosedAt) {
+				occurrenceDate = signal.OccurredAt.In(loc).Format(time.DateOnly)
 				break
 			}
-			filter.Cursor = next
 		}
 		if occurrenceDate != "" {
 			break

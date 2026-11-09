@@ -21,14 +21,21 @@ import (
 func seedClosedFrictionIssue(t *testing.T, d *db.DB, s *katatest.Server, fp string) string {
 	t.Helper()
 	dbtest.SeedSession(t, d, "claude:s1", "proj")
-	session, err := d.GetSession(t.Context(), "claude:s1")
-	require.NoError(t, err)
 	occurred := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
-	applied, err := d.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
-		RulesVersion: "friction-v1", Findings: []db.FrictionFinding{{SessionID: "claude:s1", Kind: "correction", Detector: "correction.coding", Fingerprint: fp, OccurredAt: &occurred, RulesVersion: "friction-v1"}},
-	})
+	digest, err := d.GetFrictionDigest(t.Context(), "2026-09-14")
 	require.NoError(t, err)
-	require.True(t, applied)
+	require.NotNil(t, digest)
+	snapshot, err := review.DecodeSnapshot(digest.SnapshotJSON)
+	require.NoError(t, err)
+	for i := range snapshot.Signals {
+		if snapshot.Signals[i].Fingerprint() == fp {
+			snapshot.Signals[i].OccurredAt = occurred
+		}
+	}
+	digest.SnapshotJSON, err = review.EncodeSnapshot(snapshot)
+	require.NoError(t, err)
+	digest.Revision++
+	require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, nil, nil))
 	closed := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
 	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
 	require.NoError(t, d.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{
@@ -75,7 +82,7 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 
 			var linkedUID string
 			if !tt.autoFile || !tt.hub {
-				linkedUID = seedClosedFrictionIssue(t, te.db, s, fp)
+				linkedUID = seedClosedFrictionIssue(t, te.db, s, frictionTestSnapshot(date).Signals[1].Fingerprint())
 			}
 
 			w := te.get(t, "/api/v1/version")
@@ -92,9 +99,8 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 					require.True(t, ok)
 					assert.Equal(t, "closed", got.Status)
 					assert.Empty(t, got.Comments)
-				} else {
-					assert.Nil(t, patternIssue(t, te, fp))
 				}
+				assert.Nil(t, patternIssue(t, te, fp))
 				assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"))
 				return
 			}
