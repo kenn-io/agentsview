@@ -656,7 +656,7 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	require.NoError(t, err)
 	digest, err := export.EffectivePricingDigest(pricing)
 	require.NoError(t, err)
-	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil, pricing, digest)
+	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil, pricing, digest, nil)
 	require.NoError(t, err)
 
 	// The shared dedup identity leaves one survivor.
