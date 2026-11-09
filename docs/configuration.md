@@ -2243,7 +2243,7 @@ timezone = "" # Local time on SQLite, UTC on PostgreSQL; or an IANA zone.
 seat_patterns = [] # Optional path globs with one whole-segment {seat} capture.
 
 [friction.kata]
-auto_file = false # The hub files recent patterns to Kata every hour.
+auto_file = false # The hub files recent patterns to Kata every hour and reopens recurring ones.
 kinds = [] # Kinds to file automatically; empty means all that can be filed.
 min_sessions = 2 # File only patterns seen in at least this many sessions.
 ```
