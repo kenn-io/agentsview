@@ -22,9 +22,17 @@ type usageCacheProbe struct {
 	*pgUsageCacheSource
 	mu             sync.Mutex
 	extracted      []string
+	captures       int
 	before         func(context.Context, []string) error
 	after          func() error
 	beforeAccounts func(context.Context) error
+}
+
+func (probe *usageCacheProbe) CaptureUsage(ctx context.Context, request db.UsageSourceRequest) (db.UsageSourceSnapshot, error) {
+	probe.mu.Lock()
+	probe.captures++
+	probe.mu.Unlock()
+	return probe.pgUsageCacheSource.CaptureUsage(ctx, request)
 }
 
 func (probe *usageCacheProbe) ReadUsageAccounts(ctx context.Context) (string, int64, []db.UsageSourceAccount, error) {
@@ -292,11 +300,20 @@ func TestPGUsageCacheReadOnlyAndRecreatedJournal(t *testing.T) {
 	reader.usageCache = nil
 	require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
 	requireCachedUsageMatchesDirect(t, reader, filter)
+	_, err = reader.GetTopSessionsByCost(ctx, filter, 20)
+	require.NoError(t, err)
 	// Recreate only the journal while retaining its supported version and clock.
 	// The old cache must not validate against the new relation identity.
 	_, err = store.pg.ExecContext(ctx, `ALTER TABLE usage_session_changes RENAME TO usage_session_changes_retired; CREATE TABLE usage_session_changes (LIKE usage_session_changes_retired INCLUDING ALL); INSERT INTO usage_session_changes SELECT * FROM usage_session_changes_retired; GRANT SELECT ON usage_session_changes TO PUBLIC; DROP TABLE usage_session_changes_retired CASCADE; ALTER TABLE usage_events DISABLE TRIGGER USER; UPDATE usage_events SET output_tokens=1000 WHERE session_id='paid-a'; ALTER TABLE usage_events ENABLE TRIGGER USER`)
 	require.NoError(t, err)
 	requireCachedUsageMatchesDirect(t, reader, filter)
+	want, err := (&Store{pg: reader.pg}).GetTopSessionsByCost(ctx, filter, 20)
+	require.NoError(t, err)
+	got, err := reader.GetTopSessionsByCost(ctx, filter, 20)
+	require.NoError(t, err)
+	normalizeUsageTopTimes(want)
+	normalizeUsageTopTimes(got)
+	require.Equal(t, want, got, "recreated journal must invalidate the public Top sessions memo")
 }
 
 func TestPGUsageCacheUnreadableJournal(t *testing.T) {
@@ -474,7 +491,7 @@ func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
  INSERT INTO usage_events(session_id,source,model,input_tokens,output_tokens,occurred_at,dedup_key)
  SELECT id,'provider','paid-a',1,600,started_at,id FROM sessions WHERE id LIKE 'expensive-%'`)
 	require.NoError(t, err)
-	attachUsageCacheProbe(t, store, t.TempDir())
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
 	direct := &Store{pg: store.pg}
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	for _, grouped := range []bool{false, true} {
@@ -492,6 +509,21 @@ func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
 			normalizeUsageTopTimes(want)
 			normalizeUsageTopTimes(got)
 			require.Equal(t, want, got)
+			public, err := store.GetTopSessionsByCost(ctx, filter, 1)
+			require.NoError(t, err)
+			normalizeUsageTopTimes(public)
+			require.Equal(t, want, public)
+			probe.mu.Lock()
+			captured := probe.captures
+			probe.mu.Unlock()
+			repeated, err := store.GetTopSessionsByCost(ctx, filter, 1)
+			require.NoError(t, err)
+			normalizeUsageTopTimes(repeated)
+			require.Equal(t, want, repeated)
+			probe.mu.Lock()
+			afterRepeat := probe.captures
+			probe.mu.Unlock()
+			require.Equal(t, captured, afterRepeat, "unchanged repeat visits must reuse the existing Top sessions memo")
 			if selection == db.UsageTokenTypeOutput {
 				require.Equal(t, "paid-b", got[0].SessionID)
 			}
@@ -500,6 +532,23 @@ func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
 			}
 		}
 	}
+	// Limit changes share the same selection but need their complete ranked rows.
+	want, err := direct.GetTopSessionsByCost(ctx, filter, 3)
+	require.NoError(t, err)
+	got, err := store.GetTopSessionsByCost(ctx, filter, 3)
+	require.NoError(t, err)
+	normalizeUsageTopTimes(want)
+	normalizeUsageTopTimes(got)
+	require.Equal(t, want, got)
+	_, err = store.pg.ExecContext(ctx, `UPDATE usage_events SET input_tokens=10000 WHERE session_id='paid-b'`)
+	require.NoError(t, err)
+	want, err = direct.GetTopSessionsByCost(ctx, filter, 3)
+	require.NoError(t, err)
+	got, err = store.GetTopSessionsByCost(ctx, filter, 3)
+	require.NoError(t, err)
+	normalizeUsageTopTimes(want)
+	normalizeUsageTopTimes(got)
+	require.Equal(t, want, got, "a changed source must invalidate the ranked memo")
 }
 
 func TestPGUsageCacheChronologicalFractionalTimestamps(t *testing.T) {

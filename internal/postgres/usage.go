@@ -2162,22 +2162,17 @@ func (s *Store) GetTopSessionsByCost(
 	if limit > 100 {
 		limit = 100
 	}
-	if cache := s.usageCache; cache != nil {
-		result, err := cache.GetTopSessionsByCost(ctx, f, limit)
-		if !directUsageRequired(err) {
-			for i := range result {
-				if timestamp, parseErr := time.Parse(time.RFC3339Nano, result[i].StartedAt); parseErr == nil {
-					result[i].StartedAt = startedAtString(sql.NullTime{Time: timestamp, Valid: true})
-				}
-			}
-			return result, err
-		}
-	}
 	slot := db.UsageSlot(f, false)
 	if slot != "" {
 		slot += fmt.Sprintf("|%t", f.TopSessionsByGroup)
 	}
 	version := s.keptUsageVersion(ctx, slot)
+	if cache := s.usageCache; cache != nil {
+		result, err := s.cachedTopSessions(ctx, cache, f, limit, slot, version)
+		if !directUsageRequired(err) {
+			return result, err
+		}
+	}
 	out, err := s.runtimeState().topUsage.Do(ctx, slot, version, func(ctx context.Context) ([]db.TopSessionEntry, error) {
 		if slot != "" && version != "" {
 			s.forgetPricingLoad()
@@ -2219,6 +2214,27 @@ func (s *Store) GetTopSessionsByCost(
 	}
 
 	return result, nil
+}
+
+// cachedTopSessions keeps ranked cache reads beside direct ones, so an
+// unchanged repeat visit skips the cache capture. The cache ranks and limits,
+// so its slot adds the controls that the direct slot applies after the read.
+func (s *Store) cachedTopSessions(
+	ctx context.Context, cache *db.UsageCacheReader, f db.UsageFilter, limit int, slot, version string,
+) ([]db.TopSessionEntry, error) {
+	if slot != "" {
+		slot = fmt.Sprintf("cache|%s|%s|%d|%d", slot, f.TopSessionsSort, f.TopSessionsTokenTypes, limit)
+	}
+	out, err := s.runtimeState().topUsage.Do(ctx, slot, version, func(ctx context.Context) ([]db.TopSessionEntry, error) {
+		result, err := cache.GetTopSessionsByCost(ctx, f, limit)
+		for i := range result {
+			if timestamp, parseErr := time.Parse(time.RFC3339Nano, result[i].StartedAt); parseErr == nil {
+				result[i].StartedAt = startedAtString(sql.NullTime{Time: timestamp, Valid: true})
+			}
+		}
+		return result, err
+	})
+	return slices.Clone(out), err
 }
 
 func (s *Store) readTopSessions(ctx context.Context, f db.UsageFilter) ([]db.TopSessionEntry, error) {
