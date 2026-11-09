@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"regexp"
@@ -28,11 +29,11 @@ type markerPrompt struct {
 }
 
 // seedMarkerPrompts writes each prompt as session fm-<index> into a fresh
-// schema and returns a store over it with the session IDs.
-func seedMarkerPrompts(t *testing.T, schema string, prompts []markerPrompt) (*Store, []string) {
+// schema of the database at url and returns a store over it with the
+// session IDs.
+func seedMarkerPrompts(t *testing.T, url, schema string, prompts []markerPrompt) (*Store, []string) {
 	t.Helper()
 	ctx := t.Context()
-	url := testPGURL(t)
 	cleanNamedPGSchema(t, url, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	pg, err := Open(ctx, url, schema, true)
@@ -176,7 +177,7 @@ func TestFrustrationMarkerScanCountsEdgeCases(t *testing.T) {
 	for i, c := range cases {
 		prompts[i] = c.prompt
 	}
-	store, ids := seedMarkerPrompts(t, "agentsview_frustration_edges", prompts)
+	store, ids := seedMarkerPrompts(t, testPGURL(t), "agentsview_frustration_edges", prompts)
 
 	counts := scanMarkers(t, store, ids)
 	shipped := shippedContent(t, store, ids)
@@ -241,7 +242,7 @@ func TestFrustrationMarkerScanMatchesGoOnRandomPrompts(t *testing.T) {
 			prompts[i].content = b.String()
 		}
 	}
-	store, ids := seedMarkerPrompts(t, "agentsview_frustration_random", prompts)
+	store, ids := seedMarkerPrompts(t, testPGURL(t), "agentsview_frustration_random", prompts)
 
 	counts := scanMarkers(t, store, ids)
 	shipped := shippedContent(t, store, ids)
@@ -276,4 +277,36 @@ func TestFrustrationMarkerScanMatchesGoOnRandomPrompts(t *testing.T) {
 	assert.Greater(t, sqlCalm, 300)
 	assert.Greater(t, longInSQL, 20)
 	assert.Greater(t, longInGo, 20)
+}
+
+// A LATIN1 database reached with a UTF8 client encoding converts every
+// bound parameter to LATIN1 before the statement runs, so the read must not
+// bind the plain-alphabet pattern there. Go judges every prompt instead.
+func TestFrustrationMarkerScanOnLatin1Database(t *testing.T) {
+	admin, err := Open(t.Context(), testPGURL(t), "public", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, admin.Close()) })
+	database := fmt.Sprintf("frustration_latin1_%x", rand.Uint64())
+	if _, err = admin.ExecContext(t.Context(),
+		`CREATE DATABASE `+database+` ENCODING 'LATIN1' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0`); err != nil {
+		t.Skipf("cannot create a LATIN1 database: %v", err)
+	}
+	t.Cleanup(func() {
+		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), `DROP DATABASE IF EXISTS `+database+` WITH (FORCE)`)
+		assert.NoError(t, err)
+	})
+	dsn := mustParseURL(t, testPGURL(t))
+	dsn.Path = "/" + database
+	query := dsn.Query()
+	query.Set("client_encoding", "UTF8")
+	dsn.RawQuery = query.Encode()
+
+	store, ids := seedMarkerPrompts(t, dsn.String(), "agentsview_frustration_latin1", []markerPrompt{
+		{content: "this is broken again"},
+		{content: "THE api is down ok"},
+		{content: "ÉCHEC TOTAL DU BUILD"},
+		{content: "this is broken again", isSystem: true},
+	})
+
+	assert.Equal(t, []int{1, 0, 1, 0}, scanMarkers(t, store, ids))
 }

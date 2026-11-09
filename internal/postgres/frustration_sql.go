@@ -19,7 +19,7 @@ import (
 // marker, with empty content. Any other prompt, and a plain prompt SQL
 // cannot judge cheaply, comes back with its content for
 // signals.IsFrustrationMarker. Plain judging needs a UTF8 server encoding;
-// under any other encoding every prompt goes to Go.
+// other databases read pgFrustrationGoPromptsSQL instead.
 //
 // The verdict follows signals.IsFrustrationMarker in order, over the prompt
 // with its code fences replaced by a space:
@@ -78,7 +78,7 @@ const pgFrustrationPromptsSQL = `
 					THEN regexp_replace(content, $2, ' ', 'g') ELSE content END AS stripped
 			FROM (
 				SELECT session_id, content || '' AS content,
-					current_setting('server_encoding') = 'UTF8' AND content !~ $4 AS plain
+					content !~ $4 AS plain
 				FROM messages
 				WHERE role = 'user'
 				  AND source_subtype <> 'tool_result'
@@ -194,7 +194,35 @@ func isASCIILetter(r rune) bool {
 	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
 }
 
+// pgFrustrationGoPromptsSQL is pgFrustrationPromptsSQL for a database whose
+// server encoding is not UTF8: every prompt comes back with its content for
+// signals.IsFrustrationMarker. It binds only the session IDs. PostgreSQL
+// converts each parameter from the client encoding to the server encoding
+// before the statement runs, so binding the plain-alphabet pattern, which
+// holds runes such an encoding may lack, fails even when every prompt is
+// ASCII.
+const pgFrustrationGoPromptsSQL = `
+	SELECT id, %s::text, false, ''
+	FROM sessions
+	WHERE id = ANY($1)
+	UNION ALL
+	SELECT session_id, NULL, false, content
+	FROM messages
+	WHERE role = 'user'
+	  AND source_subtype <> 'tool_result'
+	  AND NOT is_system
+	  AND session_id = ANY($1)`
+
 // pgFrustrationPrompts formats pgFrustrationPromptsSQL for a version column.
 func pgFrustrationPrompts(versionColumn string) string {
 	return fmt.Sprintf(pgFrustrationPromptsSQL, versionColumn)
+}
+
+// pgFrustrationQuery returns the prompt read for the sessions in ids and its
+// arguments, for a database with the given server encoding.
+func pgFrustrationQuery(serverEncoding, versionColumn string, ids []string) (string, []any) {
+	if serverEncoding != "UTF8" {
+		return fmt.Sprintf(pgFrustrationGoPromptsSQL, versionColumn), []any{ids}
+	}
+	return pgFrustrationPrompts(versionColumn), append([]any{ids}, pgFrustrationPromptsArgs...)
 }

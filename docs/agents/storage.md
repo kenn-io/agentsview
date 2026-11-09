@@ -1152,8 +1152,12 @@ session IDs as one array parameter (`= ANY($1)`). A prompt made of ASCII and
 uses, is judged in SQL and comes back only when it is a marker, without its
 text. Go judges the rest with `signals.IsFrustrationMarker`:
 
-- prompts with any other rune, and every prompt when the server encoding is
-  not UTF8;
+- prompts with any other rune;
+- every prompt when the server encoding is not UTF8. The store reads the
+  encoding first and then runs `pgFrustrationGoPromptsSQL`, which binds only
+  the session IDs: PostgreSQL converts parameters to the server encoding
+  before the query runs, and the alphabet pattern holds runes LATIN1 and
+  similar encodings lack;
 - plain prompts longer than 16 KiB after code fences are stripped, when a
   cheap bound cannot rule out the all-capitals rule.
 

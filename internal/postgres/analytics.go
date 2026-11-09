@@ -2855,9 +2855,13 @@ func (s *Store) populateFrustrationMarkers(
 	if len(ids) == 0 {
 		return nil
 	}
+	var serverEncoding string
+	if err := s.pg.QueryRowContext(ctx, `SELECT current_setting('server_encoding')`).Scan(&serverEncoding); err != nil {
+		return fmt.Errorf("reading server encoding: %w", err)
+	}
 	scannedVersions := make(map[string]string, len(ids))
-	msgRows, err := s.pg.QueryContext(ctx, pgFrustrationPrompts(versionColumn),
-		append([]any{ids}, pgFrustrationPromptsArgs...)...)
+	query, args := pgFrustrationQuery(serverEncoding, versionColumn, ids)
+	msgRows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying frustration markers: %w", err)
 	}
