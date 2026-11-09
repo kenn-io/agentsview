@@ -133,7 +133,7 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 		percent := done * 100 / max(total, 1)
 		if percent != lastPercent {
 			lastPercent = percent
-			fmt.Fprintf(out, "Download: %d%% of %d MB\n", percent, (total+999999)/1000000)
+			printDownloadProgress(out, done, total)
 		}
 	})
 	if err != nil {
@@ -174,6 +174,10 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	return runEmbeddingsBuildDirect(ctx, out, cfg, req)
 }
 
+func printDownloadProgress(out io.Writer, done, total int64) {
+	fmt.Fprintf(out, "Download: %d%% of %d MB\n", done*100/max(total, 1), (total+999999)/1000000)
+}
+
 func pollDaemonSetup(ctx context.Context, out io.Writer, client embeddingsDaemonClient) error {
 	var downloaded, total int64
 	for {
@@ -188,7 +192,7 @@ func pollDaemonSetup(ctx context.Context, out io.Writer, client embeddingsDaemon
 			}
 			if setup.DownloadedBytes != downloaded || setup.TotalBytes != total {
 				downloaded, total = setup.DownloadedBytes, setup.TotalBytes
-				fmt.Fprintf(out, "Download: %d/%d bytes\n", downloaded, total)
+				printDownloadProgress(out, downloaded, total)
 			}
 			if !setup.Busy {
 				return nil

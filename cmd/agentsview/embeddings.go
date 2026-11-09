@@ -431,6 +431,19 @@ func runEmbeddingsBuild(
 	setup := !cfg.Vector.Enabled
 	var setupBusy bool
 	if setup {
+		if opts.Using != "" {
+			embeddings := cfg.Vector.Embeddings
+			// A fresh config gets its default model when setup is enabled.
+			if embeddings.Model == "" && embeddings.Servers == nil {
+				embeddings, err = cfg.VectorSetupEmbeddings()
+				if err != nil {
+					return err
+				}
+			}
+			if _, _, err := embeddings.Server(opts.Using); err != nil {
+				return err
+			}
+		}
 		tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 0)
 		if err != nil {
 			return err

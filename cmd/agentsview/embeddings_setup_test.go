@@ -972,3 +972,69 @@ func TestCLIEmbeddingsSetupRequiresReadableArchiveWithoutDaemon(t *testing.T) {
 		})
 	}
 }
+
+func TestCLIEmbeddingsSetupRejectsUnknownServerBeforeAutostart(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
+	dir := testDataDir(t)
+	forbidStartBackgroundServeForTransport(t, "unknown server must not start a daemon")
+	cmd := newEmbeddingsBuildCommand()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--using", "missing"})
+	err := cmd.Execute()
+	require.ErrorContains(t, err, `no server named "missing"`)
+	assert.NotContains(t, out.String(), "[y/N]")
+	assert.NoFileExists(t, filepath.Join(dir, "sessions.db"))
+}
+
+func TestCLIEmbeddingsSetupAcceptsLegacyServerBeforeAutostart(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
+	dir := testDataDir(t)
+	legacy := []byte(`{"vector":{"enabled":false,"embeddings":{"model":"test-model","dimension":3,"servers":{"legacy":{"endpoint":"http://127.0.0.1:1"}}}}}`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), legacy, 0o600))
+	startup := errors.New("startup reached")
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		return nil, startup
+	})
+	cmd := newEmbeddingsBuildCommand()
+	cmd.SetArgs([]string{"--using", "legacy"})
+	require.ErrorIs(t, cmd.Execute(), startup)
+	assert.NoFileExists(t, filepath.Join(dir, "config.toml"))
+	contents, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	require.NoError(t, err)
+	assert.Equal(t, legacy, contents)
+}
+
+func TestPollDaemonSetupPrintsDownloadProgress(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			_, _ = io.WriteString(w, `{"setup":{"busy":true,"downloaded_bytes":50,"total_bytes":100}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"setup":{"busy":false,"downloaded_bytes":100,"total_bytes":100}}`)
+	}))
+	t.Cleanup(srv.Close)
+	oldInterval := embeddingsPollInterval
+	embeddingsPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { embeddingsPollInterval = oldInterval })
+	var out strings.Builder
+	require.NoError(t, pollDaemonSetup(t.Context(), &out, embeddingsDaemonClient{baseURL: srv.URL}))
+	assert.Equal(t, "Download: 50% of 1 MB\nDownload: 100% of 1 MB\n", out.String())
+}
+
+func TestCLIEmbeddingsSetupAcceptsAutomaticServerBeforeAutostart(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
+	testDataDir(t)
+	startup := errors.New("startup reached")
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		return nil, startup
+	})
+	cmd := newEmbeddingsBuildCommand()
+	cmd.SetArgs([]string{"--using", "automatic"})
+	require.ErrorIs(t, cmd.Execute(), startup)
+}
