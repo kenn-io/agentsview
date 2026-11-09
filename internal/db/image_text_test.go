@@ -3,12 +3,55 @@ package db
 import (
 	"encoding/base64"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/docbank/document/ocr"
 )
+
+func TestImageTextCJKReopenOnlyRebuildsStaleIndex(t *testing.T) {
+	if !simpleFTSRuntimeConfig.available() {
+		t.Skip("simple FTS runtime is not installed")
+	}
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	})
+	insertSession(t, d, "image", "demo")
+	content := testInlineImageContent()
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "中文搜索", false))
+	_, err = d.getWriter().Exec(ctx, `INSERT INTO image_text_cjk_fts(rowid,text) SELECT rowid, 'sentinelword' FROM image_text_cache`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cjk_fts WHERE image_text_cjk_fts MATCH 'sentinelword'`).Scan(&count))
+	require.Equal(t, 1, count, "unchanged reopen must retain the existing index")
+	page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value='stale' WHERE key=?`, cjkFTSFingerprintStatsKey)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cjk_fts WHERE image_text_cjk_fts MATCH 'sentinelword'`).Scan(&count))
+	require.Zero(t, count, "a stale tokenizer must rebuild the index")
+	page, err = d.Search(ctx, SearchFilter{Query: "中文搜索"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+}
 
 func TestImageTextMembershipAndPruning(t *testing.T) {
 	ctx := t.Context()

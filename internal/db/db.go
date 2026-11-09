@@ -776,6 +776,7 @@ END;
 ` + messagesADTriggerDDL + messagesAUTriggerDDL
 
 const schemaCJKFTS = `
+DROP TABLE IF EXISTS image_text_cjk_fts;
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
     content, rendered,
     content='message_search_content',

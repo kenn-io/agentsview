@@ -31,30 +31,30 @@ CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_au AFTER UPDATE OF text ON main
  INSERT INTO image_text_cjk_fts(rowid,text) VALUES(new.rowid,new.text);
 END;`
 
+// ensureImageTextFTS rebuilds an index only when it is missing or rebuild is
+// set. ensureCJKFTS drops the CJK index whenever its tokenizer changes.
 func ensureImageTextFTS(ctx context.Context, w *writerHandle, rebuild bool) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var exists int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name='image_text_fts'`).Scan(&exists); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, imageTextFTS); err != nil {
-		return fmt.Errorf("creating image text FTS: %w", err)
-	}
-	if exists == 0 || rebuild {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO image_text_fts(image_text_fts) VALUES('rebuild')`); err != nil {
-			return err
-		}
-	}
+	tables := [][2]string{{"image_text_fts", imageTextFTS}}
 	if simpleFTSRuntimeConfig.available() {
-		if _, err = tx.ExecContext(ctx, imageTextCJKFTS); err != nil {
-			return fmt.Errorf("creating image text CJK FTS: %w", err)
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO image_text_cjk_fts(image_text_cjk_fts) VALUES('rebuild')`); err != nil {
+		tables = append(tables, [2]string{"image_text_cjk_fts", imageTextCJKFTS})
+	}
+	for _, table := range tables {
+		var exists int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name=?`, table[0]).Scan(&exists); err != nil {
 			return err
+		}
+		if _, err = tx.ExecContext(ctx, table[1]); err != nil {
+			return fmt.Errorf("creating %s: %w", table[0], err)
+		}
+		if exists == 0 || rebuild {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO `+table[0]+`(`+table[0]+`) VALUES('rebuild')`); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

@@ -463,7 +463,7 @@ func (db *DB) Search(
 			return SearchPage{}, err
 		}
 	}
-	if !hasImageText && f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
+	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
 		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
 		if err != nil {
 			return SearchPage{}, err
@@ -504,7 +504,7 @@ func (db *DB) Search(
 		bestArgs = []any{plainQuery}
 		ftsSessionsSQL = "SELECT session_id FROM best_rows"
 		ftsSessionsArgs = nil
-		// Name-only rows rank 0.0, after every message match, so they reach
+		// Image and name rows rank after every message match, so they reach
 		// the page only when the walk read every match.
 		includeNames = walk.complete
 	}
@@ -518,7 +518,7 @@ func (db *DB) Search(
 		 LEFT JOIN messages cm ON cm.id=tc.message_id
 		 JOIN messages im ON im.session_id=o.session_id AND im.ordinal=COALESCE(e.tool_call_message_ordinal,cm.ordinal)`
 	imageVisibilitySQL := `im.is_system = 0 AND ` + SystemPrefixSQL("im.content", "im.role")
-	if hasImageText {
+	if hasImageText && includeNames {
 		args = append(args, imageQuery)
 		args = append(args, nameProjectArgs...)
 		args = append(args, ftsSessionsArgs...)
