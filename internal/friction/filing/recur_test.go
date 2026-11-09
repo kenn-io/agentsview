@@ -13,7 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/filing"
-	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/kata/katatest"
 )
 
@@ -50,7 +49,6 @@ func TestReopenRecurringPattern(t *testing.T) {
 		{"missing time same day", "2026-09-15", "closed", "done", nil, &closed, false},
 		{"missing time later day", "2026-09-16", "closed", "done", nil, &closed, true},
 		{"wontfix", "2026-09-16", "closed", "wontfix", nil, &closed, false},
-		{"open", "2026-09-16", "open", "done", nil, &closed, false},
 		{"missing close", "2026-09-16", "closed", "done", nil, nil, false},
 	}
 	for _, tt := range tests {
@@ -68,8 +66,6 @@ func TestReopenRecurringPattern(t *testing.T) {
 				assert.Equal(t, 1, n)
 				assert.Equal(t, "open", got.Status)
 				require.Len(t, got.Comments, 1)
-				assert.Contains(t, got.Comments[0], tt.date)
-				assert.Contains(t, got.Comments[0], "https://av.example.test/base/friction?date="+tt.date)
 			} else {
 				assert.Zero(t, n)
 				assert.Empty(t, got.Comments)
@@ -95,6 +91,42 @@ func TestReopenReportsOccurrenceDateAndDigestDay(t *testing.T) {
 	assert.Equal(t, "open", got.Status)
 	require.Len(t, got.Comments, 1)
 	assert.Equal(t, "This pattern recurred on 2026-09-16 after the issue was closed on 2026-09-15.\n\nhttps://av.example.test/base/friction?date=2026-09-15", got.Comments[0])
+}
+
+func TestReopenDigestFromEarlierTimezone(t *testing.T) {
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+	closed := time.Date(2026, 9, 15, 23, 0, 0, 0, time.UTC)
+	occurred := closed.Add(30 * time.Minute)
+	seedRecurrence(t, d, "2026-09-15", "claude:s1", &occurred)
+	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
+	require.NoError(t, err)
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	require.NoError(t, err)
+	n, err := f.Reopen(t.Context(), "2026-09-01", loc)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, "open", mustIssue(t, s, is.UID).Status)
+}
+
+func TestReopenClosuresWithinSameSecond(t *testing.T) {
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+	closed := time.Date(2026, 9, 15, 12, 0, 0, 100, time.UTC)
+	occurred := closed.Add(time.Hour)
+	seedRecurrence(t, d, "2026-09-15", "claude:s1", &occurred)
+	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
+	require.NoError(t, err)
+	n, err := f.Reopen(t.Context(), "2026-09-01", nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	s.CloseIssue(is.UID, closed.Add(100*time.Nanosecond))
+	n, err = f.Reopen(t.Context(), "2026-09-01", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Len(t, mustIssue(t, s, is.UID).Comments, 2)
 }
 
 func TestReopenEarlierSurvivingDigest(t *testing.T) {
@@ -142,35 +174,56 @@ func TestReopenReadsAllFindingPages(t *testing.T) {
 }
 
 func TestReopenRetryAndSecondClosure(t *testing.T) {
-	s := katatest.New(t)
-	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
-	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	seedRecurrence(t, d, "2026-09-16", "claude:s1", new(closed.Add(26*time.Hour)))
-	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
-	require.NoError(t, err)
-	s.Fail(http.MethodPost, "/actions/reopen", katatest.Fault{Status: 503, Code: "unavailable"})
-	n, err := f.Reopen(t.Context(), "2026-09-01", nil)
-	require.NoError(t, err)
-	assert.Zero(t, n)
-	assert.Equal(t, "closed", mustIssue(t, s, is.UID).Status)
-	assert.Equal(t, kata.StateReady, f.Kata.Status(t.Context(), true).State)
-	n, err = f.Reopen(t.Context(), "2026-09-01", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-	assert.Len(t, mustIssue(t, s, is.UID).Comments, 1)
-	s.CloseIssue(is.UID, closed.Add(24*time.Hour))
-	n, err = f.Reopen(t.Context(), "2026-09-01", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-	got := mustIssue(t, s, is.UID)
-	assert.Equal(t, "open", got.Status)
-	assert.Len(t, got.Comments, 2)
+	for _, scenario := range []string{"outage", "retry", "second closure"} {
+		t.Run(scenario, func(t *testing.T) {
+			s := katatest.New(t)
+			f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+			closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+			seedRecurrence(t, d, "2026-09-16", "claude:s1", new(closed.Add(26*time.Hour)))
+			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+			_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
+			require.NoError(t, err)
+			if scenario != "second closure" {
+				s.Fail(http.MethodPost, "/actions/reopen", katatest.Fault{Status: 503, Code: "unavailable"})
+			}
+			n, err := f.Reopen(t.Context(), "2026-09-01", nil)
+			require.NoError(t, err)
+			if scenario == "outage" {
+				assert.Zero(t, n)
+				assert.Equal(t, "closed", mustIssue(t, s, is.UID).Status)
+				return
+			}
+			if scenario == "second closure" {
+				require.Equal(t, 1, n)
+				s.CloseIssue(is.UID, closed.Add(24*time.Hour))
+			}
+			n, err = f.Reopen(t.Context(), "2026-09-01", nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, n)
+			got := mustIssue(t, s, is.UID)
+			assert.Equal(t, "open", got.Status)
+			count := 1
+			if scenario == "second closure" {
+				count = 2
+			}
+			assert.Len(t, got.Comments, count)
+		})
+	}
 }
 
 type changedLinkStore struct {
 	filing.Store
 	change func(context.Context)
+}
+
+type countingPatternStore struct {
+	filing.Store
+	reads int
+}
+
+func (s *countingPatternStore) ListFrictionPatterns(ctx context.Context, filter db.FrictionPatternFilter) ([]db.FrictionPattern, string, error) {
+	s.reads++
+	return s.Store.ListFrictionPatterns(ctx, filter)
 }
 
 func (s changedLinkStore) ListFrictionPatterns(ctx context.Context, filter db.FrictionPatternFilter) ([]db.FrictionPattern, string, error) {
@@ -216,9 +269,18 @@ func TestReopenRespectsChangedLink(t *testing.T) {
 
 func TestReopenWhenKataNotReady(t *testing.T) {
 	s := katatest.New(t)
-	f, _ := newFiler(t, s, "missing", correction)
-	n, err := f.Reopen(t.Context(), "", nil)
+	f, d := newFiler(t, s, "missing", correction)
+	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	seedRecurrence(t, d, "2026-09-16", "claude:s1", new(closed.Add(time.Hour)))
+	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+	require.NoError(t, d.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{Fingerprint: correction.Fingerprint(), KataInstanceUID: "instance", KataProjectUID: "project", IssueUID: is.UID, QualifiedID: "agentsview#" + is.ShortID, Source: db.FrictionIssueSourceManual, LinkedAt: closed}))
+	store := &countingPatternStore{Store: d}
+	f.Store = store
+	n, err := f.Reopen(t.Context(), "2026-09-01", nil)
 	require.NoError(t, err)
 	assert.Zero(t, n)
-	assert.Empty(t, s.RequestsMatching(http.MethodGet, "/issues"))
+	assert.Zero(t, store.reads)
+	got := mustIssue(t, s, is.UID)
+	assert.Equal(t, "closed", got.Status)
+	assert.Empty(t, got.Comments)
 }

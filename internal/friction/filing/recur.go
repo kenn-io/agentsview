@@ -65,6 +65,7 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, sinc
 	if err != nil {
 		return false, err
 	}
+	day = day.AddDate(0, 0, -1)
 	qualified := ""
 	occurrenceDate := ""
 	for ; day.Format(time.DateOnly) <= p.LastSeenDate; day = day.AddDate(0, 0, 1) {
@@ -108,7 +109,7 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, sinc
 	if link := friction.DigestURL(f.PublicURL, qualified); link != "" {
 		body += "\n\n" + link
 	}
-	key := "friction-recur-" + p.Issue.IssueUID + "-" + is.ClosedAt.UTC().Format(time.RFC3339)
+	key := "friction-recur-" + p.Issue.IssueUID + "-" + is.ClosedAt.UTC().Format(time.RFC3339Nano)
 	if err := f.Kata.Comment(ctx, p.Issue.IssueUID, key, body); err != nil {
 		apiErr, ok := errors.AsType[*kata.APIError](err)
 		if !ok || apiErr.Code != "idempotency_mismatch" {

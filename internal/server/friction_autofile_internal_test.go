@@ -135,26 +135,6 @@ func (s failingFrictionStore) ListFrictionPatterns(ctx context.Context, f db.Fri
 	return nil, "", s.reconcileErr
 }
 
-func TestAutoFileContinuesReopeningAfterReconcileError(t *testing.T) {
-	ks := katatest.New(t)
-	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
-	runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }}
-	s := testServer(t, 0, WithFriction(runner, nil), WithKataConn(kata.NewConn(kata.Config{
-		Enabled: true, Hub: true, Endpoint: ks.Endpoint(), Project: katatest.DefaultProjectName,
-	})))
-	s.cfg.Friction.Kata.AutoFile = true
-	s.cfg.Friction.BackfillDays = 7
-	d := s.db.(*db.DB)
-	runner.Store = d
-	seedAutoFileDigest(t, d)
-	reconcileErr := errors.New("reconcile failed")
-	reopenErr := errors.New("reopen failed")
-	s.db = failingFrictionStore{DB: d, reconcileErr: reconcileErr, reopenErr: reopenErr}
-	err := s.autoFileFriction(t.Context())
-	assert.ErrorIs(t, err, reconcileErr)
-	assert.ErrorIs(t, err, reopenErr)
-}
-
 type partialFrictionStore struct {
 	*db.DB
 	failure error
@@ -172,26 +152,39 @@ func (s partialFrictionStore) SaveFrictionFilingState(context.Context, db.Fricti
 	return s.failure
 }
 
-func TestAutoFileLogsPartialReportAfterError(t *testing.T) {
-	ks := katatest.New(t)
-	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
-	runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }}
-	s := testServer(t, 0, WithFriction(runner, nil), WithKataConn(kata.NewConn(kata.Config{
-		Enabled: true, Hub: true, Endpoint: ks.Endpoint(), Project: katatest.DefaultProjectName,
-	})))
-	s.cfg.Friction.Kata.AutoFile = true
-	s.cfg.Friction.Kata.MinSessions = 1
-	s.cfg.Friction.BackfillDays = 7
-	d := s.db.(*db.DB)
-	runner.Store = d
-	seedAutoFileDigest(t, d)
-	failure := errors.New("filing state failed")
-	s.db = partialFrictionStore{DB: d, failure: failure}
-	var logs bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(old)
-	err := s.autoFileFriction(t.Context())
-	require.ErrorIs(t, err, failure)
-	assert.Contains(t, logs.String(), "automatic filing created 1")
+func TestAutoFileErrorHandling(t *testing.T) {
+	for _, scenario := range []string{"reopen after reconcile error", "partial report"} {
+		t.Run(scenario, func(t *testing.T) {
+			ks := katatest.New(t)
+			fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
+			runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }}
+			s := testServer(t, 0, WithFriction(runner, nil), WithKataConn(kata.NewConn(kata.Config{
+				Enabled: true, Hub: true, Endpoint: ks.Endpoint(), Project: katatest.DefaultProjectName,
+			})))
+			s.cfg.Friction.Kata.AutoFile = true
+			s.cfg.Friction.Kata.MinSessions = 1
+			s.cfg.Friction.BackfillDays = 7
+			d := s.db.(*db.DB)
+			runner.Store = d
+			seedAutoFileDigest(t, d)
+			if scenario == "reopen after reconcile error" {
+				reconcileErr := errors.New("reconcile failed")
+				reopenErr := errors.New("reopen failed")
+				s.db = failingFrictionStore{DB: d, reconcileErr: reconcileErr, reopenErr: reopenErr}
+				err := s.autoFileFriction(t.Context())
+				assert.ErrorIs(t, err, reconcileErr)
+				assert.ErrorIs(t, err, reopenErr)
+				return
+			}
+			failure := errors.New("filing state failed")
+			s.db = partialFrictionStore{DB: d, failure: failure}
+			var logs bytes.Buffer
+			old := log.Writer()
+			log.SetOutput(&logs)
+			defer log.SetOutput(old)
+			err := s.autoFileFriction(t.Context())
+			require.ErrorIs(t, err, failure)
+			assert.Contains(t, logs.String(), "automatic filing created 1")
+		})
+	}
 }

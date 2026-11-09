@@ -1,7 +1,6 @@
 package server_test
 
 import (
-	"fmt"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -54,6 +53,26 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 			seedFrictionDigest(t, te.db, date)
 			fp := frictionTestSnapshot(date).Signals[0].Fingerprint()
 
+			var linkedUID string
+			if !tt.autoFile || !tt.hub {
+				dbtest.SeedSession(t, te.db, "claude:s1", "proj")
+				session, err := te.db.GetSession(t.Context(), "claude:s1")
+				require.NoError(t, err)
+				occurred := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+				applied, err := te.db.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
+					RulesVersion: "friction-v1", Findings: []db.FrictionFinding{{SessionID: "claude:s1", Kind: "correction", Detector: "correction.coding", Fingerprint: fp, OccurredAt: &occurred, RulesVersion: "friction-v1"}},
+				})
+				require.NoError(t, err)
+				require.True(t, applied)
+				closed := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+				is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+				require.NoError(t, te.db.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{
+					Fingerprint: fp, KataInstanceUID: "instance", KataProjectUID: "project", IssueUID: is.UID,
+					QualifiedID: "agentsview#" + is.ShortID, Source: db.FrictionIssueSourceManual, LinkedAt: closed,
+				}))
+				linkedUID = is.UID
+			}
+
 			w := te.get(t, "/api/v1/version")
 			assertStatus(t, w, http.StatusOK)
 			version := decode[struct {
@@ -63,7 +82,14 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 
 			require.NoError(t, review.Job(runner, nil).Run(t.Context()))
 			if !tt.filed {
-				assert.Nil(t, patternIssue(t, te, fp))
+				if linkedUID != "" {
+					got, ok := s.Issue(linkedUID)
+					require.True(t, ok)
+					assert.Equal(t, "closed", got.Status)
+					assert.Empty(t, got.Comments)
+				} else {
+					assert.Nil(t, patternIssue(t, te, fp))
+				}
 				assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"))
 				return
 			}
@@ -74,7 +100,7 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 	}
 }
 
-func TestFrictionJobDoesNotFileWhereLinksCannotBeSaved(t *testing.T) {
+func TestFrictionJobReopensWhereLinksCannotBeSaved(t *testing.T) {
 	s := katatest.New(t)
 	dir := tempDirWithRetryCleanup(t)
 	cfg := config.Config{
@@ -139,43 +165,4 @@ func TestFrictionJobFilesWhenInstalledAfterTheServer(t *testing.T) {
 
 	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
 	require.NotNil(t, patternIssue(t, te, frictionTestSnapshot(date).Signals[0].Fingerprint()))
-}
-
-func TestFrictionJobKeepsIssueClosedWithAutoFileOff(t *testing.T) {
-	for _, hub := range []bool{true, false} {
-		t.Run(fmt.Sprintf("hub_%t", hub), func(t *testing.T) {
-			s := katatest.New(t)
-			fixed := time.Date(2026, 9, 17, 2, 30, 0, 0, time.UTC)
-			runner := &review.Runner{Loc: time.UTC, Now: func() time.Time { return fixed }, BackfillDays: 7}
-			te := setupWithServerOpts(t, []server.Option{
-				server.WithFriction(runner, nil),
-				server.WithKataConn(kata.NewConn(kata.Config{Enabled: true, Hub: hub, Endpoint: s.Endpoint(), Project: katatest.DefaultProjectName})),
-			}, func(c *config.Config) { c.Friction.BackfillDays = 7 })
-			runner.Store = te.db
-			const date = "2026-09-16"
-			seedFrictionDigest(t, te.db, date)
-			fp := frictionTestSnapshot(date).Signals[0].Fingerprint()
-			dbtest.SeedSession(t, te.db, "claude:s1", "proj")
-			session, err := te.db.GetSession(t.Context(), "claude:s1")
-			require.NoError(t, err)
-			occurred := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
-			applied, err := te.db.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
-				RulesVersion: "friction-v1", Findings: []db.FrictionFinding{{SessionID: "claude:s1", Kind: "correction", Detector: "correction.coding", Fingerprint: fp, OccurredAt: &occurred, RulesVersion: "friction-v1"}},
-			})
-			require.NoError(t, err)
-			require.True(t, applied)
-			closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-			require.NoError(t, te.db.SaveFrictionIssueLink(t.Context(), db.FrictionIssueLink{
-				Fingerprint: fp, KataInstanceUID: "instance", KataProjectUID: "project", IssueUID: is.UID,
-				QualifiedID: "agentsview#" + is.ShortID, Source: db.FrictionIssueSourceManual, LinkedAt: closed,
-			}))
-			require.NoError(t, review.Job(runner, nil).Run(t.Context()))
-			got, ok := s.Issue(is.UID)
-			require.True(t, ok)
-			assert.Equal(t, "closed", got.Status)
-			assert.Empty(t, got.Comments)
-			assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"))
-		})
-	}
 }

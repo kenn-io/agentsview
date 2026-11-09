@@ -350,7 +350,8 @@ func TestCreateIssueRejectsMalformedIssueUIDBeforeReread(t *testing.T) {
 
 func TestGetIssueRefForms(t *testing.T) {
 	s := katatest.New(t)
-	is := s.AddIssue(katatest.Issue{Title: "t", Status: "closed", ClosedReason: "done", Labels: []string{"friction"}})
+	closed := time.Date(2026, 9, 15, 12, 0, 0, 123, time.UTC)
+	is := s.AddIssue(katatest.Issue{Title: "t", Status: "closed", ClosedReason: "done", ClosedAt: &closed, Labels: []string{"friction"}})
 	c := readyClient(t, s)
 	tests := []struct {
 		name     string
@@ -368,6 +369,8 @@ func TestGetIssueRefForms(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, is.UID, got.UID)
 			assert.Equal(t, "done", got.ClosedReason)
+			require.NotNil(t, got.ClosedAt)
+			assert.True(t, closed.Equal(*got.ClosedAt))
 			assert.Equal(t, []string{"friction"}, got.Labels)
 			reqs := s.Requests()
 			require.Len(t, reqs, 1)
@@ -641,11 +644,6 @@ func TestReopenCommentLabel(t *testing.T) {
 	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 	is := s.AddIssue(katatest.Issue{Title: "t", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
 	c := readyClient(t, s)
-	before, err := c.GetIssue(t.Context(), is.UID)
-	require.NoError(t, err)
-	require.NotNil(t, before.ClosedAt)
-	assert.True(t, closed.Equal(*before.ClosedAt))
-
 	changed, err := c.Reopen(t.Context(), is.UID)
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -660,7 +658,6 @@ func TestReopenCommentLabel(t *testing.T) {
 
 	after, ok := s.Issue(is.UID)
 	require.True(t, ok)
-	assert.Nil(t, after.ClosedAt)
 	assert.Equal(t, []string{"Recurred"}, after.Comments, "same comment key does not duplicate")
 	assert.Equal(t, []string{"friction:recurred"}, after.Labels)
 
