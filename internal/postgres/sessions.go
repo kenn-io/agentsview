@@ -29,6 +29,7 @@ type Store struct {
 	ownedDB         *sql.DB
 	readTx          *sql.Tx
 	pricingSnapshot *pricingSnapshot
+	usageCache      *db.UsageCacheReader
 	runtimeOnce     sync.Once
 	runtime         *storeRuntime
 }

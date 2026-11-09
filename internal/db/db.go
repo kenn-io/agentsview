@@ -889,6 +889,7 @@ type DB struct {
 	reader               atomic.Pointer[sql.DB]
 	reads                readRegistry
 	usageCache           *usageCacheManager
+	usageSource          UsageCacheSource
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
 	sessionStatsFacts    *sessionStatsFactsMemo

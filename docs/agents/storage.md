@@ -717,17 +717,30 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
 
 ### Usage cache divergence
 
-SQLite's aggregate usage APIs read timezone-specific daily rollups from a
-disposable sibling database. Normalized, unpriced facts in the same database are
-the exact build substrate, not the warm aggregate read path. Per-session detail
-remains on the live row path, and PostgreSQL continues to aggregate its live
-normalized archive rows. The live path is never a fallback for a failed or stale
-SQLite aggregate read. Both implementations are co-maintained under the same
+SQLite and native PostgreSQL aggregate usage APIs read persisted,
+timezone-specific daily rollups. After a restart, Usage reuses priced rows; a
+later push refreshes changed sessions and their snapshot peers on the next read.
+Pricing changes rebuild affected prices during reads. Pushes do no cache work.
+Per-session detail continues to read archive rows.
+
+PostgreSQL stores its disposable cache under the configured data directory,
+partitioned by a credential-free target fingerprint and the change journal's
+table identity. Existing supported journals work with SELECT-only roles. Hosted
+and borrowed transaction readers, CockroachDB, and connections without a usable
+journal retain direct reads. A failed cache read reports its error.
+
+A first bounded visit fills candidate sessions for its date window. Widening the
+window adds missing sessions. Only a complete, verified all-history read can
+establish global journal coverage; later covered reads replay changed sessions
+and missing installs. The first build and repricing can take longer than warm
+reads. Format 22 rebuilds each SQLite usage cache once after upgrading; the
+31,000-session fixture previously took about 19 seconds and 92 MB.
+Both implementations are co-maintained under the same
 behavior contract: daily usage, top sessions, billed session counts, relaxed
 matching counts, and per-session usage must remain observably equal. The
 `pgtest` complete-result parity fixture is the acceptance boundary. Track the
 PostgreSQL-native optimization in
-[issue #1451](https://github.com/kenn-io/agentsview/issues/1451).
+[agentsview#1451](https://github.com/kenn-io/agentsview/issues/1451).
 
 The usage cache filename is derived from its format version and the archive
 `database_id`. A format or database-ID change selects a new generation; it does

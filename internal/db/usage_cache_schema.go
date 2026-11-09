@@ -62,7 +62,8 @@ const (
 	// Version 19 preserves account agents and uncapped billing counters.
 	// Version 20 rebuilds account billing rollups without request pricing bands.
 	// Version 21 stores group keys and labels separately from version 20 writers.
-	usageCacheFormatVersion             = 21
+	// Version 22 separates snapshot ranking from billed output.
+	usageCacheFormatVersion             = 22
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -208,6 +209,7 @@ CREATE TABLE usage_facts (
     usage_dedup_key TEXT NOT NULL DEFAULT '',
     token_eligible INTEGER NOT NULL,
     activity_eligible INTEGER NOT NULL,
+    ranking_output_tokens INTEGER,
     PRIMARY KEY (cached_session_id, fact_index)
 ) WITHOUT ROWID;
 CREATE INDEX usage_facts_claude_identity
@@ -372,6 +374,7 @@ CREATE TABLE usage_rollup_exceptions (
     claude_request_id TEXT NOT NULL,
     source_uuid TEXT NOT NULL,
     usage_dedup_key TEXT NOT NULL,
+    ranking_output_tokens INTEGER,
     PRIMARY KEY (
         rollup_install_id, group_kind, group_key, cached_session_id, fact_index
     )
@@ -920,7 +923,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        cache_read_tokens, web_search_requests,
 		        reported_cost_microdollars, cost_source, request_scoped,
 		        claude_message_id, claude_request_id, source_uuid,
-		        usage_dedup_key, token_eligible, activity_eligible
+		        usage_dedup_key, token_eligible, activity_eligible, ranking_output_tokens
 		 FROM usage_facts LIMIT 0`,
 		`SELECT source_id, agent, timestamp_ms, raw_timestamp, model,
 		        input_tokens, output_tokens, cache_creation_tokens,
@@ -953,7 +956,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		`SELECT rollup_install_id, group_kind, group_key, cached_session_id,
 		        fact_index, source_session_id, local_date, source,
 		        message_ordinal, timestamp_ms, timestamp_ns, raw_timestamp,
-		        uses_session_start, model, input_tokens, output_tokens,
+		        uses_session_start, model, input_tokens, output_tokens, ranking_output_tokens,
 		        reasoning_tokens, cache_creation_tokens,
 		        cache_creation_1h_tokens, cache_read_tokens,
 		        web_search_requests, reported_cost_microdollars, cost_source,

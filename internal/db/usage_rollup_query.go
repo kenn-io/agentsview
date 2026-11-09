@@ -306,7 +306,7 @@ func readUsageRollupExceptions(
 		e.cache_read_tokens, e.web_search_requests,
 		e.reported_cost_microdollars, e.cost_source, e.request_scoped,
 		e.is_headless, e.claude_message_id, e.claude_request_id, e.source_uuid,
-		e.usage_dedup_key, COUNT(*) OVER ()
+		e.usage_dedup_key, e.ranking_output_tokens, COUNT(*) OVER ()
 		FROM usage_rollup_exceptions e
 		JOIN usage_rollup_installs i ON i.id = e.rollup_install_id
 		WHERE `+where+`
@@ -333,7 +333,7 @@ func readUsageRollupExceptions(
 			&fact.Fact.CostSource, &requestScoped, &isHeadless,
 			&fact.Fact.ClaudeMessageID,
 			&fact.Fact.ClaudeRequestID, &fact.Fact.SourceUUID,
-			&fact.Fact.UsageDedupKey, &resultCount); err != nil {
+			&fact.Fact.UsageDedupKey, &fact.Fact.RankingOutputTokens, &resultCount); err != nil {
 			return nil, err
 		}
 		if result == nil && resultCount > 0 {
@@ -775,7 +775,7 @@ func compareUsageSnapshotAttribution(left, right usageRollupFact) int {
 }
 
 func compareUsageSnapshotWinner(left, right usageRollupFact) int {
-	if order := cmp.Compare(left.Fact.OutputTokens, right.Fact.OutputTokens); order != 0 {
+	if order := cmp.Compare(usageSnapshotRankingOutput(left.Fact), usageSnapshotRankingOutput(right.Fact)); order != 0 {
 		return order
 	}
 	if order := compareNullableInt64(left.effectiveMillis(), right.effectiveMillis(), false); order != 0 {

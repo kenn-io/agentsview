@@ -35,6 +35,9 @@ func (pgReplica) serveOptions(
 			"pg serve store is %T, not *postgres.Store", store,
 		)
 	}
+	if err := pgStore.ConfigureUsageCache(ctx, appCfg.DataDir, target.URL, target.Schema); err != nil {
+		return nil, nil, err
+	}
 	pool := pgStore.DB()
 	if pool == nil {
 		return nil, nil, db.ErrReadOnly

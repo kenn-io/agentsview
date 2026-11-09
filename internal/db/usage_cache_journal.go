@@ -239,6 +239,7 @@ func (cache *usageCache) refreshJournaledUsageWindow(ctx context.Context, snapsh
 		version, ok := versions[id]
 		if !ok {
 			version.SessionID = id
+			version.CaptureRevision = refresh.ChangeRevision
 		}
 		refresh.Versions = append(refresh.Versions, version)
 	}
@@ -305,6 +306,15 @@ func usageRollupWindowSessions(ctx context.Context, q sessionExportQuerier, time
 }
 
 func verifyPreparedUsageRollup(ctx context.Context, conn *sql.Conn, key string, prepared usagePreparedWindow) (int64, error) {
+	if prepared.snapshot.exactAccountRevision && prepared.snapshot.CursorHighWater > 0 {
+		var revision int64
+		if err := conn.QueryRowContext(ctx, `SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key=?`, usageCacheMetadataCursorHighWaterMark).Scan(&revision); err != nil {
+			return 0, err
+		}
+		if revision != prepared.snapshot.CursorHighWater {
+			return 0, errUsageCacheSourceChanged
+		}
+	}
 	if prepared.journaled {
 		return verifyJournaledUsageRollup(ctx, conn, prepared, key)
 	}

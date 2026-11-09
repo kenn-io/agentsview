@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -1612,6 +1613,12 @@ type pgDailyUsageSessionCost struct {
 }
 
 func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
+	if cache := s.cachedUsage(); cache != nil {
+		result, err := cache.GetDailyUsage(ctx, f)
+		if !errors.Is(err, errPGUsageCacheUnavailable) {
+			return result, err
+		}
+	}
 	loc := f.Location()
 
 	pricing, err := s.loadPricingMap(ctx)
@@ -2224,6 +2231,9 @@ func (s *Store) GetTopSessionsByCost(
 		return nil, err
 	}
 	result := slices.Clone(out)
+	if s.cachedUsage() != nil {
+		return db.SortAndLimitTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes), nil
+	}
 	if f.TopSessionsByGroup {
 		result, err = db.GroupTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 		if err != nil {
@@ -2232,7 +2242,10 @@ func (s *Store) GetTopSessionsByCost(
 	} else {
 		result = db.SortAndLimitTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
+	return s.finishTopSessionMetadata(ctx, result)
+}
 
+func (s *Store) finishTopSessionMetadata(ctx context.Context, result []db.TopSessionEntry) ([]db.TopSessionEntry, error) {
 	sessionIDs := make([]string, 0, len(result))
 	for _, entry := range result {
 		if entry.SessionID != "" {
@@ -2259,6 +2272,29 @@ func (s *Store) GetTopSessionsByCost(
 }
 
 func (s *Store) readTopSessions(ctx context.Context, f db.UsageFilter) ([]db.TopSessionEntry, error) {
+	if cache := s.cachedUsage(); cache != nil {
+		result, err := cache.GetTopSessionsByCost(ctx, f, 100)
+		if !errors.Is(err, errPGUsageCacheUnavailable) {
+			return result, err
+		}
+		result, err = s.readTopSessionCandidates(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+		if f.TopSessionsByGroup {
+			result, err = db.GroupTopSessions(result, 100, f.TopSessionsSort, f.TopSessionsTokenTypes)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			result = db.SortAndLimitTopSessions(result, 100, f.TopSessionsSort, f.TopSessionsTokenTypes)
+		}
+		return s.finishTopSessionMetadata(ctx, result)
+	}
+	return s.readTopSessionCandidates(ctx, f)
+}
+
+func (s *Store) readTopSessionCandidates(ctx context.Context, f db.UsageFilter) ([]db.TopSessionEntry, error) {
 	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading pg pricing: %w", err)
@@ -2380,6 +2416,12 @@ func (s *Store) readTopSessions(ctx context.Context, f db.UsageFilter) ([]db.Top
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
+	if cache := s.cachedUsage(); cache != nil {
+		result, err := cache.GetUsageSessionCounts(ctx, f)
+		if !errors.Is(err, errPGUsageCacheUnavailable) {
+			return result, err
+		}
+	}
 	pb := &paramBuilder{}
 	query := pgTopSessionsUsageRowQuery(pb, f, false, s.sessionDialect())
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
@@ -2482,6 +2524,12 @@ func appendPGUsageMatchingActivityClauses(
 func (s *Store) GetUsageMatchingSessionCount(
 	ctx context.Context, f db.UsageFilter,
 ) (int, error) {
+	if cache := s.cachedUsage(); cache != nil {
+		result, err := cache.GetUsageMatchingSessionCount(ctx, f)
+		if !errors.Is(err, errPGUsageCacheUnavailable) {
+			return result, err
+		}
+	}
 	pb := &paramBuilder{}
 
 	if f.From == "" && f.To == "" {

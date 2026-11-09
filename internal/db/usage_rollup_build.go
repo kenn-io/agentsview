@@ -378,7 +378,7 @@ func loadUsageRollupFacts(
 		f.cache_creation_1h_tokens,
 		f.cache_read_tokens, f.web_search_requests, f.reported_cost_microdollars,
 		f.cost_source, f.request_scoped, f.claude_message_id, f.claude_request_id,
-		f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible
+		f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible, f.ranking_output_tokens
 		FROM usage_rollup_build_sessions selected
 		CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
 		CROSS JOIN usage_facts f ON f.cached_session_id = cs.id
@@ -402,7 +402,7 @@ func loadUsageRollupFacts(
 			&item.Fact.WebSearchRequests, &reported, &item.Fact.CostSource,
 			&requestScoped, &item.Fact.ClaudeMessageID, &item.Fact.ClaudeRequestID,
 			&item.Fact.SourceUUID, &item.Fact.UsageDedupKey,
-			&tokenEligible, &activityEligible); err != nil {
+			&tokenEligible, &activityEligible, &item.Fact.RankingOutputTokens); err != nil {
 			return nil, err
 		}
 		if ordinal.Valid {

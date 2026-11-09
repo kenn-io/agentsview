@@ -44,6 +44,7 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 }
 
 type usagePreparedWindow struct {
+	claimZone  *usageZoneCoverage
 	snapshot   usageQuerySnapshot
 	installs   map[string]usageRollupInstall
 	journaled  bool
@@ -127,6 +128,9 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 	started := time.Now()
 	report("Reading archived sessions for this report")
 	filter.Progress = nil
+	if db.usageSource != nil {
+		return db.prepareExternalUsageWindow(ctx, filter, kind, cursor, journal, report)
+	}
 	var prepared usagePreparedWindow
 	var err error
 	if journal && kind != usageQueryKindActivity {
@@ -288,6 +292,13 @@ func (db *DB) queryUsageRollups(
 		timings := prepared.timings
 		timings.read = time.Since(readStarted)
 		if queryErr == nil {
+			if prepared.claimZone != nil {
+				queryErr = cache.claimUsageZone(ctx, usageTimezoneIdentityFor(filter.Location(), nil), *prepared.claimZone, snapshot.ChangeRevision, snapshot.PricingIdentity, prepared.installs)
+				if queryErr != nil {
+					release()
+					return usageQuerySnapshot{}, usageFactsResult{}, nil, queryErr
+				}
+			}
 			cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
 			release()
 			timings.logIfSlow(started)

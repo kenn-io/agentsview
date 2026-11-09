@@ -28,6 +28,8 @@ func (kind usageQueryKind) readsJournaledTotals() bool {
 }
 
 type usageSourceVersion struct {
+	CaptureRevision       int64
+	CapturePricingDigest  string
 	UsageGeneration       string
 	MessageOrdinal        sql.NullInt64
 	SessionID             string
@@ -75,16 +77,18 @@ type usageQueryInterval struct {
 }
 
 type usageQuerySnapshot struct {
-	ChangeRevision  int64
-	DatabaseID      string
-	Sessions        []usageQuerySession
-	Versions        []usageSourceVersion
-	Intervals       []usageQueryInterval
-	CursorHighWater int64
-	PricingRows     []export.EffectivePricingRow
-	PricingDigest   string
-	PricingIdentity string
-	location        *time.Location
+	exactAccountRevision bool
+	ChangeIDs            []string
+	ChangeRevision       int64
+	DatabaseID           string
+	Sessions             []usageQuerySession
+	Versions             []usageSourceVersion
+	Intervals            []usageQueryInterval
+	CursorHighWater      int64
+	PricingRows          []export.EffectivePricingRow
+	PricingDigest        string
+	PricingIdentity      string
+	location             *time.Location
 }
 
 // Close exists to make the snapshot boundary explicit to callers. Capture
@@ -99,6 +103,9 @@ type usageQuerySessionRecord struct {
 func (db *DB) captureUsageQuery(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
 ) (usageQuerySnapshot, error) {
+	if db.usageSource != nil {
+		return db.captureExternalUsage(ctx, filter, nil, nil)
+	}
 	return db.captureUsageSnapshot(ctx, filter, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
 		return captureUsageQueryFrom(ctx, tx, filter, kind, snapshot)
 	})
@@ -145,6 +152,9 @@ func (snapshot *usageQuerySnapshot) loadUsageEventFingerprints(ctx context.Conte
 }
 
 func (db *DB) captureUsageSessions(ctx context.Context, ids []string) (usageQuerySnapshot, error) {
+	if db.usageSource != nil {
+		return db.captureExternalUsage(ctx, UsageFilter{}, &ids, nil)
+	}
 	// Rollups use committed fills' source versions, so metadata capture skips usage-event fingerprints.
 	return db.captureUsageSnapshot(ctx, UsageFilter{}, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
 		return loadUsageSnapshotSessions(ctx, tx, ids, UsageFilter{}, false, snapshot)

@@ -527,6 +527,9 @@ func maxTimestampText(values ...string) string {
 }
 
 func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) error {
+	if archive.usageSource != nil {
+		return nil
+	}
 	var raw string
 	if err := cache.db.QueryRowContext(ctx, `
 		SELECT value FROM usage_cache_metadata WHERE key = ?`,
