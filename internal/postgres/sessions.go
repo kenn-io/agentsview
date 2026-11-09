@@ -37,6 +37,7 @@ type Store struct {
 // Views never copy locks or start detached work with their transaction.
 type storeRuntime struct {
 	activityKept       kept.Memo[pgActivityKept]
+	activityInputs     kept.Memo[pgActivityInputs]
 	frustrationMarkers db.FrustrationMarkerMemo
 
 	cursorMu     sync.RWMutex
