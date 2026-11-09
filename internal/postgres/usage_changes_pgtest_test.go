@@ -340,7 +340,7 @@ func TestUsageChangeJournalNewerVersion(t *testing.T) {
 	ctx := t.Context()
 	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
-	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version','2')`)
+	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)`, fmt.Sprint(usageChangeJournalVersionPG+1))
 	require.NoError(t, err)
 	ensureUsageChangeJournalPG(ctx, syncer.pg)
 	// Optional setup swallows installation errors. Check the installer directly
@@ -405,4 +405,84 @@ func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, through)
 	assert.Empty(t, ids)
+}
+
+func TestUsageChangeJournalUpgradesAccountGeneration(t *testing.T) {
+	_, syncer, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',10,100,'account')`)
+	require.NoError(t, err)
+	attachUsageCacheProbe(t, store, t.TempDir())
+	reader := store.usageCache
+	filter := db.UsageFilter{Timezone: "UTC"}
+	requireCachedUsageMatchesDirect(t, store, filter)
+	var oid uint32
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid`).Scan(&oid))
+	quoted, err := quoteIdentifier(syncer.schema)
+	require.NoError(t, err)
+	// Released version 1 used the global marker for account changes.
+	const v1CursorFunction = `CREATE OR REPLACE FUNCTION mark_usage_cursor_usage_events() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $v1$
+BEGIN
+    PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
+    IF TG_OP = 'DELETE' THEN
+        INSERT INTO usage_session_changes(session_id, revision)
+        SELECT DISTINCT '', 0 FROM old_rows WHERE true
+        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
+    ELSIF TG_OP = 'UPDATE' THEN
+        INSERT INTO usage_session_changes(session_id, revision)
+        SELECT DISTINCT '', 0 FROM (
+            (SELECT * FROM old_rows row_data EXCEPT SELECT * FROM new_rows row_data)
+            UNION ALL (SELECT * FROM new_rows row_data EXCEPT SELECT * FROM old_rows row_data)
+        ) changed WHERE true
+        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
+    ELSE
+        INSERT INTO usage_session_changes(session_id, revision)
+        SELECT DISTINCT '', 0 FROM new_rows WHERE true
+        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
+    END IF;
+    RETURN NULL;
+END;
+$v1$;`
+	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(v1CursorFunction, quoted))
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM usage_session_changes WHERE session_id<>'' AND session_id NOT IN (SELECT id FROM sessions); UPDATE cursor_usage_events SET output_tokens=20,charged_microdollars=200 WHERE id=1`)
+	require.NoError(t, err)
+	var revision int64
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+	var version string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version))
+	require.Equal(t, "2", version, "existing version-1 journals must migrate forward")
+	var upgradedOID uint32
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid`).Scan(&upgradedOID))
+	require.Equal(t, oid, upgradedOID, "upgrading must preserve the source incarnation")
+	through, ids, err := store.LoadUsageChanges(ctx, revision)
+	require.NoError(t, err)
+	require.Equal(t, revision, through, "upgrading must preserve the commit clock")
+	require.Empty(t, ids)
+	require.Same(t, reader, store.usageCache)
+	requireCachedUsageMatchesDirect(t, store, filter)
+	got, err := reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 1270, got.Totals.OutputTokens)
+	require.Equal(t, int64(8950), got.Totals.TotalCost.Microdollars)
+	for _, mutation := range []string{
+		`UPDATE cursor_usage_events SET output_tokens=30,charged_microdollars=300 WHERE id=1`,
+		`DELETE FROM cursor_usage_events WHERE id=1`,
+	} {
+		before, err := store.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		_, err = store.pg.ExecContext(ctx, mutation)
+		require.NoError(t, err)
+		through, ids, err = store.LoadUsageChanges(ctx, before)
+		require.NoError(t, err)
+		require.Equal(t, before+1, through)
+		require.Empty(t, ids, "account markers are not changed session IDs")
+		requireCachedUsageMatchesDirect(t, store, filter)
+	}
+	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+	after, err := store.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	require.Equal(t, through, after, "the forward migration must be idempotent")
 }

@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -687,4 +689,34 @@ func TestPGUsageCacheCancelledCallerSkipsDirectRead(t *testing.T) {
 	_, err = store.GetUsageMatchingSessionCount(ctx, filter)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, before, counter.queryAttempts.Load(), "cancelled cache requests must not start direct queries")
+}
+
+func TestPGUsageCacheGlobalChangesReuseAccounts(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',10,100,'account')`)
+	require.NoError(t, err)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	filter := db.UsageFilter{Timezone: "UTC"}
+	requireCachedUsageMatchesDirect(t, store, filter)
+	var accountReads atomic.Int64
+	probe.beforeAccounts = func(context.Context) error { accountReads.Add(1); return nil }
+	for _, tc := range []struct{ name, mutation string }{
+		{"pricing", `UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`},
+		{"identity", `INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('account-journal','project-a','test-machine',now())`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, err := probe.pgUsageCacheSource.CaptureUsage(t.Context(), db.UsageSourceRequest{})
+			require.NoError(t, err)
+			accountReads.Store(0)
+			_, err = store.pg.ExecContext(t.Context(), tc.mutation)
+			require.NoError(t, err)
+			requireCachedUsageMatchesDirect(t, store, filter)
+			after, err := probe.pgUsageCacheSource.CaptureUsage(t.Context(), db.UsageSourceRequest{})
+			require.NoError(t, err)
+			require.Greater(t, after.ChangeRevision, before.ChangeRevision)
+			assert.Equal(t, before.CursorHighWater, after.CursorHighWater, "metadata changes must preserve the account generation")
+			assert.Zero(t, accountReads.Load(), "metadata changes must not copy the account history")
+		})
+	}
 }
