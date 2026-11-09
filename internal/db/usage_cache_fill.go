@@ -814,10 +814,6 @@ type usageFactSpoolWriter struct {
 func (w *usageFactSpoolWriter) Add(
 	sessionID string, index int, fact usagefacts.Fact,
 ) error {
-	if fact.RankingOutputTokens == nil {
-		value := fact.OutputTokens
-		fact.RankingOutputTokens = &value
-	}
 	w.rows = append(w.rows, usageFactSpoolRow{
 		sessionID: sessionID, index: index, fact: fact,
 	})

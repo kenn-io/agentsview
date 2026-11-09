@@ -4,7 +4,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -624,4 +626,26 @@ func TestPGUsageCachePreJournalAccounts(t *testing.T) {
 		require.Equal(t, int64(8938), got.Totals.TotalCost.Microdollars)
 		requireCachedUsageMatchesDirect(t, store, filter)
 	}
+}
+
+func TestPGUsageCacheStorageFailureIsReported(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	directory := t.TempDir()
+	attachUsageCacheProbe(t, store, directory)
+	filter := db.UsageFilter{Timezone: "UTC"}
+	requireCachedUsageMatchesDirect(t, store, filter)
+	paths, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+	require.NoError(t, err)
+	require.Len(t, paths, 1)
+	damaged, err := sql.Open("sqlite3", paths[0])
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, damaged.Close()) })
+	_, err = damaged.ExecContext(t.Context(), `DROP TABLE usage_rollup_timezones`)
+	require.NoError(t, err)
+	filter.Project = "project-a"
+	_, err = store.GetDailyUsage(t.Context(), filter)
+	require.ErrorContains(t, err, "no such table: usage_rollup_timezones")
+	direct, err := (&Store{pg: store.pg}).GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 1250, direct.Totals.OutputTokens)
 }

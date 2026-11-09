@@ -38,7 +38,6 @@ transaction readers, CockroachDB, and unavailable journals keep direct reads.
 Repeated source conflicts use a direct read for that request. If the cache
 directory can't be created, the reader uses temporary storage; later cache
 storage errors are reported. The cache is disposable and contains no source sessions.
-A remote fact-fill batch that exceeds ten minutes returns a deadline error.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes

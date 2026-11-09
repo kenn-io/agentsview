@@ -119,6 +119,7 @@ func (db *DB) usageTopSessionMetadata(ctx context.Context, ids []string) (map[st
 	return result, err
 }
 
+// A nil ranking value uses billed output; PostgreSQL can supply its SQL value.
 func usageSnapshotRankingOutput(fact usagefacts.Fact) int64 {
 	if fact.RankingOutputTokens != nil {
 		return *fact.RankingOutputTokens
