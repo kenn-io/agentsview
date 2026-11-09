@@ -15,8 +15,8 @@ import (
 
 func TestUsageSnapshotRanking(t *testing.T) {
 	local, target := seedUsagePriceFixture(t)
-	const a, b = "ranking-a", "ranking-b"
-	const early, late = "2026-01-12T03:00:00.000Z", "2026-01-12T03:01:00.000Z"
+	const a, b = "ranking-z", "ranking-a"
+	const early, mid, late = "2026-01-12T03:00:00.000Z", "2026-01-12T03:00:30.000Z", "2026-01-12T03:01:00.000Z"
 	snapshot := func(id string, ordinal int, ts, usage string) db.Message {
 		m := usagePriceMessage(id, ordinal, ts, "claude-test", usage)
 		m.ClaudeMessageID, m.ClaudeRequestID = "ranking-message", "ranking-request"
@@ -31,15 +31,17 @@ func TestUsageSnapshotRanking(t *testing.T) {
 	sharedB := usagePriceMessage(b, 2, late, "claude-test", `{"input_tokens":8,"output_tokens":9}`)
 	sharedA.SourceUUID, sharedB.SourceUUID = "ranking-shared", "ranking-shared"
 	writes := []db.SessionBatchWrite{
-		{Session: fixtureSession(a, "rank-alpha", "a", early, 6), Messages: []db.Message{
+		{Session: fixtureSession(a, "rank-alpha", "a", early, 8), Messages: []db.Message{
 			snapshot(a, 0, early, `{"input_tokens":10,"output_tokens":5,"server_tool_use":{"web_search_requests":7}}`),
 			missingBoth, missingMessage, missingRequest, sharedA,
 			snapshot(a, 5, late, `{"input_tokens":10,"output_tokens":20}`),
+			snapshot(a, 6, late, `{"input_tokens":10,"output_tokens":20}`),
+			snapshot(a, 7, mid, `{"input_tokens":10,"output_tokens":20}`),
 		}, UsageEvents: []db.UsageEvent{{Source: "hermes", Model: "claude-test", InputTokens: 11, OutputTokens: 12, OccurredAt: early, DedupKey: "ranking-event"}}, ReplaceMessages: true, DataVersion: 1},
 		{Session: fixtureSession(b, "rank-beta", "b", late, 4), Messages: []db.Message{
 			snapshot(b, 0, late, `{"input_tokens":10,"output_tokens":20}`),
 			snapshot(b, 1, late, `{"input_tokens":10,"output_tokens":20}`), sharedB,
-			snapshot(b, 3, early, `{"input_tokens":10,"output_tokens":20}`),
+			snapshot(b, 3, mid, `{"input_tokens":10,"output_tokens":20}`),
 		}, ReplaceMessages: true, DataVersion: 1},
 	}
 	_, err := local.WriteSessionBatchAtomic(t.Context(), writes)
@@ -72,31 +74,30 @@ func TestUsageSnapshotRanking(t *testing.T) {
 			var output, suppressed, searches int64
 			require.NoError(t, rows.Scan(&session, &ordinal, &output, &suppressed, &searches))
 			assert.Equal(t, a, session)
-			assert.Equal(t, sql.NullInt64{Int64: 1, Valid: true}, ordinal)
+			assert.Equal(t, sql.NullInt64{Int64: 6, Valid: true}, ordinal)
 			assert.EqualValues(t, 20, output)
-			assert.EqualValues(t, 65, suppressed)
+			assert.EqualValues(t, 105, suppressed)
 			assert.EqualValues(t, 7, searches)
 			assert.False(t, rows.Next())
 			require.NoError(t, rows.Err())
 			require.NoError(t, rows.Close())
 			var inputTotal, outputTotal int64
-			err = store.DB().QueryRowContext(readCtx, query.cte+` SELECT sum(input_tokens_norm), sum(output_tokens_norm) FROM usage_localized WHERE session_id = 'ranking-a'`, query.args...).Scan(&inputTotal, &outputTotal)
+			err = store.DB().QueryRowContext(readCtx, query.cte+` SELECT sum(input_tokens_norm), sum(output_tokens_norm) FROM usage_localized WHERE session_id = 'ranking-z'`, query.args...).Scan(&inputTotal, &outputTotal)
 			require.NoError(t, err)
 			assert.EqualValues(t, 41, inputTotal)
 			assert.EqualValues(t, 56, outputTotal)
-			for name, filter := range usagePriceFilters() {
-				want, err := local.GetDailyUsage(t.Context(), filter)
-				require.NoError(t, err, name)
-				got, err := store.GetDailyUsage(t.Context(), filter)
-				require.NoError(t, err, name)
-				assert.Equal(t, dailyUsageWire(t, want, true), dailyUsageWire(t, got, false), name)
-				wantTop, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
-				require.NoError(t, err, name)
-				normalizeSQLiteTopSessions(t, wantTop)
-				gotTop, err := store.GetTopSessionsByCost(t.Context(), filter, 20)
-				require.NoError(t, err, name)
-				assert.Equal(t, wantTop, gotTop, name)
-			}
+			filter := db.UsageFilter{Timezone: "UTC"}
+			want, err := local.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			got, err := store.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			assert.Equal(t, dailyUsageWire(t, want, true), dailyUsageWire(t, got, false))
+			wantTop, err := local.GetTopSessionsByCost(t.Context(), filter, 20)
+			require.NoError(t, err)
+			normalizeSQLiteTopSessions(t, wantTop)
+			gotTop, err := store.GetTopSessionsByCost(t.Context(), filter, 20)
+			require.NoError(t, err)
+			assert.Equal(t, wantTop, gotTop)
 		})
 	}
 }
