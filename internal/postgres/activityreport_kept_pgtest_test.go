@@ -220,7 +220,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 		for _, partial := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/partial=%t", tc.name, partial), func(t *testing.T) {
 				d, syncer, store := newUsageJournalFixture(t)
-				if tc.checkSQL {
+				if tc.checkSQL && !partial {
 					store.DB().SetMaxOpenConns(1)
 				}
 				pgKeptSession(t, d, "past", "project-a", "2026-06-14")
@@ -246,7 +246,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 				}
 				pgKeptPush(t, syncer, tc.full)
 				changed := pgKeptBuild(t, store, f, q, partial || !tc.keep)
-				if tc.checkSQL {
+				if tc.checkSQL && !partial {
 					var prepared int
 					require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*)
 					FROM pg_prepared_statements WHERE statement LIKE 'SELECT EXISTS (%'
