@@ -2485,37 +2485,26 @@ WHERE `+where, pb.args...).Scan(&count)
 
 	bounds := pgUsageBoundsForFilter(pb, f)
 	rowsSQL := pgMatchingUsageRowsSQLForBounds(pb, f, bounds, s.sessionDialect())
-
-	rows, err := s.pg.QueryContext(
-		ctx, pgDailyUsageRowSelectFromRows(rowsSQL), pb.args...)
-	if err != nil {
+	// The padded bounds above keep every row whose local date can fall in
+	// the window. The exact instants of the window's first and last local
+	// days keep the rows whose local date does, as the top-sessions read
+	// does, so the count needs no rows outside the database.
+	from, to := pgExactUsageUTCWindow(f)
+	where := "u.ts IS NOT NULL"
+	if !from.IsZero() {
+		where += " AND u.ts >= " + pb.add(from) + "::timestamptz"
+	}
+	if !to.IsZero() {
+		where += " AND u.ts < " + pb.add(to) + "::timestamptz"
+	}
+	var count int
+	if err := s.pg.QueryRowContext(ctx, `
+SELECT COUNT(DISTINCT u.session_id)
+FROM (`+rowsSQL+`) u
+WHERE `+where, pb.args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
 	}
-	defer rows.Close()
-
-	loc := f.Location()
-	seen := make(map[string]struct{})
-	for rows.Next() {
-		r, err := scanPGDailyUsageRow(rows)
-		if err != nil {
-			return 0, fmt.Errorf("scanning matching usage session: %w", err)
-		}
-		date := usageDate(r.ts, loc)
-		if date == "" {
-			continue
-		}
-		if f.From != "" && date < f.From {
-			continue
-		}
-		if f.To != "" && date > f.To {
-			continue
-		}
-		seen[r.sessionID] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
-	}
-	return len(seen), nil
+	return count, nil
 }
 
 // pgDailyPairwiseSides folds the ranking's existing buckets, preserving its
