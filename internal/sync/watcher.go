@@ -1172,8 +1172,10 @@ func (w *Watcher) beginStopping() {
 		return
 	}
 	w.stopping = true
-	w.callbackCancel()
+	// Publish shutdown before cancellation can release the worker and let a
+	// queued flush complete as if the watcher were still running.
 	close(w.stop)
+	w.callbackCancel()
 }
 
 func (w *Watcher) stopBackend() {
