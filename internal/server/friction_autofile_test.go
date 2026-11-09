@@ -79,10 +79,7 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 			seedFrictionDigest(t, te.db, date)
 			fp := frictionTestSnapshot(date).Signals[0].Fingerprint()
 
-			var linkedUID string
-			if !tt.autoFile || !tt.hub {
-				linkedUID = seedClosedFrictionIssue(t, te.db, s, frictionTestSnapshot(date).Signals[1].Fingerprint())
-			}
+			linkedUID := seedClosedFrictionIssue(t, te.db, s, frictionTestSnapshot(date).Signals[1].Fingerprint())
 
 			w := te.get(t, "/api/v1/version")
 			assertStatus(t, w, http.StatusOK)
@@ -92,13 +89,16 @@ func TestFrictionJobFilesAutomaticallyOnTheHub(t *testing.T) {
 			assert.Equal(t, tt.autoFile && tt.hub, version.FrictionAutoFile, "the page learns whether a pause matters")
 
 			require.NoError(t, review.Job(runner, nil).Run(t.Context()))
+			got, ok := s.Issue(linkedUID)
+			require.True(t, ok)
+			if tt.autoFile && tt.hub {
+				assert.Equal(t, "open", got.Status)
+				assert.Len(t, got.Comments, 1)
+			} else {
+				assert.Equal(t, "closed", got.Status)
+				assert.Empty(t, got.Comments)
+			}
 			if !tt.filed {
-				if linkedUID != "" {
-					got, ok := s.Issue(linkedUID)
-					require.True(t, ok)
-					assert.Equal(t, "closed", got.Status)
-					assert.Empty(t, got.Comments)
-				}
 				assert.Nil(t, patternIssue(t, te, fp))
 				assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"))
 				return
@@ -131,35 +131,6 @@ func TestFrictionJobDoesNotFileWhereLinksCannotBeSaved(t *testing.T) {
 
 	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
 	assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"), "no issue is created without a place for its link")
-}
-
-func TestFrictionJobReopensRecurringIssue(t *testing.T) {
-	s := katatest.New(t)
-	dir := tempDirWithRetryCleanup(t)
-	cfg := config.Config{
-		Host: "127.0.0.1", DataDir: dir, DBPath: filepath.Join(dir, "test.db"), WriteTimeout: 30 * time.Second,
-	}
-	cfg.Friction.BackfillDays = 7
-	cfg.Friction.Kata.AutoFile = true
-	cfg.Friction.Kata.MinSessions = 2
-	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	seedFrictionDigest(t, database, "2026-09-14")
-	fp := frictionTestSnapshot("2026-09-14").Signals[0].Fingerprint()
-	linkedUID := seedClosedFrictionIssue(t, database, s, fp)
-	fixed := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
-	runner := &review.Runner{Store: database, Loc: time.UTC, Now: func() time.Time { return fixed }, BackfillDays: 7}
-	server.New(cfg, database, nil,
-		server.WithFriction(runner, nil),
-		server.WithKataConn(kata.NewConn(kata.Config{
-			Enabled: true, Hub: true, Endpoint: s.Endpoint(), Project: katatest.DefaultProjectName,
-		})))
-
-	require.NoError(t, review.Job(runner, nil).Run(t.Context()))
-	assert.Empty(t, s.RequestsMatching(http.MethodPost, "/issues"), "a linked pattern is not filed again")
-	got, ok := s.Issue(linkedUID)
-	require.True(t, ok)
-	assert.Equal(t, "open", got.Status)
-	assert.Len(t, got.Comments, 1)
 }
 
 // The local daemon starts the friction job after the server exists and

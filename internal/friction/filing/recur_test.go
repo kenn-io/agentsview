@@ -26,13 +26,6 @@ func seedRecurrence(t *testing.T, d *db.DB, date, id string, at *time.Time) {
 func seedRecurrenceSignal(t *testing.T, d *db.DB, date, id string, at *time.Time, signal friction.Signal) {
 	t.Helper()
 	dbtest.SeedSession(t, d, id, "proj")
-	session, err := d.GetSession(t.Context(), id)
-	require.NoError(t, err)
-	applied, err := d.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
-		RulesVersion: friction.RulesVersion, Findings: []db.FrictionFinding{{SessionID: id, Kind: string(signal.Kind), Detector: signal.Detector, Fingerprint: signal.Fingerprint(), OccurredAt: at, RulesVersion: friction.RulesVersion}},
-	})
-	require.NoError(t, err)
-	require.True(t, applied)
 	digest, err := d.GetFrictionDigest(t.Context(), date)
 	require.NoError(t, err)
 	if digest == nil {
@@ -123,57 +116,56 @@ func TestReopenSkipsUnlinkedPattern(t *testing.T) {
 	assert.Empty(t, got.Comments)
 }
 
-func TestReopenUsesFrozenDigest(t *testing.T) {
-	s := katatest.New(t)
-	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
-	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	seedRecurrence(t, d, "2026-09-15", "claude:s1", new(closed.Add(-time.Hour)))
-	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
-	require.NoError(t, err)
-
-	session, err := d.GetSession(t.Context(), "claude:s1")
-	require.NoError(t, err)
-	applied, err := d.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
-		Hash: "resumed", RulesVersion: friction.RulesVersion, Findings: []db.FrictionFinding{
-			{SessionID: "claude:s1", Kind: string(correction.Kind), Detector: correction.Detector, Fingerprint: correction.Fingerprint(), OccurredAt: new(closed.Add(-time.Hour)), RulesVersion: friction.RulesVersion},
-			{SessionID: "claude:s1", Kind: string(correction.Kind), Detector: correction.Detector, Fingerprint: correction.Fingerprint(), OccurredAt: new(closed.Add(time.Hour)), Seq: 1, RulesVersion: friction.RulesVersion},
-		},
-	})
-	require.NoError(t, err)
-	require.True(t, applied)
-	n, err := f.Reopen(t.Context(), "2026-09-01", "2026-09-18", nil)
-	require.NoError(t, err)
-	assert.Zero(t, n)
-	assert.Equal(t, "closed", mustIssue(t, s, is.UID).Status)
-}
-
 func TestReopenFromRebuiltDigestWithoutPatternUpdate(t *testing.T) {
-	s := katatest.New(t)
-	f, d := newFiler(t, s, katatest.DefaultProjectName)
-	old := time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC)
-	seedRecurrence(t, d, "2026-09-05", "claude:s1", &old)
 	closed := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
-	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
-	require.NoError(t, err)
-	digest, err := d.GetFrictionDigest(t.Context(), "2026-09-14")
-	require.NoError(t, err)
-	sig := correction
-	sig.OccurredAt = time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
-	digest.SnapshotJSON, err = review.EncodeSnapshot(review.Snapshot{Date: digest.Date, Timezone: "UTC", RulesVersion: friction.RulesVersion, Signals: []friction.Signal{sig}})
-	require.NoError(t, err)
-	digest.Revision++
-	require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, nil, nil))
-	require.Equal(t, "2026-09-05", patternRow(t, d, sig.Fingerprint()).LastSeenDate)
+	tests := []struct {
+		name        string
+		live, saved time.Time
+		wantOpen    bool
+	}{
+		{"live finding older than digest", time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC), time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC), true},
+		{"live finding later than digest", time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC), time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := katatest.New(t)
+			f, d := newFiler(t, s, katatest.DefaultProjectName)
+			seedRecurrence(t, d, "2026-09-05", "claude:s1", &tt.live)
+			session, err := d.GetSession(t.Context(), "claude:s1")
+			require.NoError(t, err)
+			applied, err := d.ReplaceSessionFrictionAtRevision(t.Context(), *session, db.SessionFrictionUpdate{
+				RulesVersion: friction.RulesVersion, Findings: []db.FrictionFinding{{SessionID: "claude:s1", Kind: string(correction.Kind), Detector: correction.Detector, Fingerprint: correction.Fingerprint(), OccurredAt: &tt.live, RulesVersion: friction.RulesVersion}},
+			})
+			require.NoError(t, err)
+			require.True(t, applied)
+			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+			_, err = f.Link(t.Context(), correction.Fingerprint(), is.UID)
+			require.NoError(t, err)
+			digest, err := d.GetFrictionDigest(t.Context(), "2026-09-14")
+			require.NoError(t, err)
+			sig := correction
+			sig.OccurredAt = tt.saved
+			digest.SnapshotJSON, err = review.EncodeSnapshot(review.Snapshot{Date: digest.Date, Timezone: "UTC", RulesVersion: friction.RulesVersion, Signals: []friction.Signal{sig}})
+			require.NoError(t, err)
+			digest.Revision++
+			require.NoError(t, d.SaveFrictionDigest(t.Context(), *digest, nil, nil))
+			require.Equal(t, "2026-09-05", patternRow(t, d, sig.Fingerprint()).LastSeenDate)
 
-	n, err := f.Reopen(t.Context(), "2026-09-10", "2026-09-18", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-	got := mustIssue(t, s, is.UID)
-	assert.Equal(t, "open", got.Status)
-	require.Len(t, got.Comments, 1)
-	assert.Equal(t, "This pattern recurred on 2026-09-14.", got.Comments[0])
+			n, err := f.Reopen(t.Context(), "2026-09-10", "2026-09-18", nil)
+			require.NoError(t, err)
+			got := mustIssue(t, s, is.UID)
+			if tt.wantOpen {
+				assert.Equal(t, 1, n)
+				assert.Equal(t, "open", got.Status)
+				require.Len(t, got.Comments, 1)
+				assert.Equal(t, "This pattern recurred on 2026-09-14.", got.Comments[0])
+			} else {
+				assert.Zero(t, n)
+				assert.Equal(t, "closed", got.Status)
+				assert.Empty(t, got.Comments)
+			}
+		})
+	}
 }
 
 func TestReopenReportsOccurrenceDate(t *testing.T) {
