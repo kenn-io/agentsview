@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-06
+last_edited: 2026-11-09
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -162,6 +162,10 @@ The latest release is
   rename that variable.
 
 **Improvements**
+
+- Activity opens faster on PostgreSQL when reports need rebuilding. On a
+  31,000-session test archive, a year opened in about 8.3 s instead of 10.8 s
+  after restarting the app. Message totals reuse the activity read.
 
 - `agentsview session list` counts default exclusions in its page request,
   avoiding three extra list requests and loading hundreds of child sessions.

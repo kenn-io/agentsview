@@ -185,12 +185,14 @@ func TestPGActivityReportInputMessageCounts(t *testing.T) {
 		pgKeptSession(t, local, id, map[string]string{"a": "project-a", "singleton": "project-a", "excluded": "project-b"}[id], "2026-06-14")
 	}
 	messages := []db.Message{
-		{SessionID: "a", Ordinal: 0, Role: "user", Content: "start", Timestamp: "2026-06-14T10:00:00Z"},
-		{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "system", Timestamp: "2026-06-14T10:01:00Z", IsSystem: true},
-		{SessionID: "a", Ordinal: 2, Role: "user", Content: "result", Timestamp: "2026-06-14T10:02:00Z", SourceSubtype: "tool_result"},
-		{SessionID: "a", Ordinal: 3, Role: "tool", Content: "tool", Timestamp: "2026-06-14T10:03:00Z"},
-		{SessionID: "a", Ordinal: 4, Role: "assistant", Content: "undated"},
-		{SessionID: "a", Ordinal: 5, Role: "assistant", Content: "boundary", Timestamp: "2026-06-14T10:05:00Z"},
+		{SessionID: "a", Ordinal: 0, Role: "user", Content: "before range", Timestamp: "2026-06-13T23:59:59Z"},
+		{SessionID: "a", Ordinal: 1, Role: "user", Content: "range start", Timestamp: "2026-06-14T00:00:00Z"},
+		{SessionID: "a", Ordinal: 2, Role: "user", Content: "start", Timestamp: "2026-06-14T10:00:00Z"},
+		{SessionID: "a", Ordinal: 3, Role: "assistant", Content: "system", Timestamp: "2026-06-14T10:01:00Z", IsSystem: true},
+		{SessionID: "a", Ordinal: 4, Role: "user", Content: "result", Timestamp: "2026-06-14T10:02:00Z", SourceSubtype: "tool_result"},
+		{SessionID: "a", Ordinal: 5, Role: "tool", Content: "tool", Timestamp: "2026-06-14T10:03:00Z"},
+		{SessionID: "a", Ordinal: 6, Role: "assistant", Content: "undated"},
+		{SessionID: "a", Ordinal: 7, Role: "assistant", Content: "boundary", Timestamp: "2026-06-14T10:05:00Z"},
 	}
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", messages))
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "singleton", []db.Message{
@@ -204,16 +206,20 @@ func TestPGActivityReportInputMessageCounts(t *testing.T) {
 	q.Partial = true
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 5*time.Minute + 500*time.Nanosecond)
 	before := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 2, before.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 3, before.Report.Buckets[0].UserMessages)
 	assert.Zero(t, before.Report.Buckets[0].AssistantMessages)
 	assert.NotEmpty(t, before.Membership["singleton"])
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Microsecond)
 	after := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 2, after.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 3, after.Report.Buckets[0].UserMessages)
 	assert.Equal(t, 1, after.Report.Buckets[0].AssistantMessages)
+	q.RangeStart = q.RangeStart.Add(time.Microsecond)
+	shifted := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 2, shifted.Report.Buckets[0].UserMessages)
+	assert.Equal(t, 1, shifted.Report.Buckets[0].AssistantMessages)
 	assert.Len(t, counter.transcriptReads, 1)
-	messages[1].IsSystem = false
-	messages[2].SourceSubtype = ""
+	messages[3].IsSystem = false
+	messages[4].SourceSubtype = ""
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", messages))
 	pgKeptPush(t, syncer, false)
 	changed := pgKeptBuild(t, store, f, q, true)

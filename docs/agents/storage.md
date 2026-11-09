@@ -906,10 +906,10 @@ for existing archives. PostgreSQL push must also detect its absence before
 taking the schema-current fast path. Creating the index scans existing tool
 results and can delay that first startup; it does not require a session resync.
 
-Activity pairing and message counts read every timestamped message of the
-selected sessions through `idx_messages_velocity` on
+SQLite pairs activity and counts messages in one read of every timestamped
+message in selected sessions through `idx_messages_velocity` on
 `(session_id, ordinal, role, timestamp, content_length, model, is_system, source_subtype)`.
-The index covers both queries, so they never load message rows, which carry
+The index covers that read, so it never loads message rows, which carry
 kilobytes of content, thinking, and dialogue text. On a 1.7 million message test
 archive the index takes 99 MiB, 10 MiB more than its older five-column form, and
 a busy week's pairing reads 41 MiB instead of 1.8 GiB. Writable opens widen the
