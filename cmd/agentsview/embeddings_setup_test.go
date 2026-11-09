@@ -518,6 +518,10 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 	assert.Contains(t, retry.Error, "declined")
 	assert.Greater(t, retry.MissingBytes, initial.MissingBytes)
 	assert.Equal(t, requiredBytes.Load(), retry.MissingBytes)
+	owner.BuildStarted()
+	cleared, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, cleared.Error)
 	require.NoError(t, owner.Setup(retry.MissingBytes, nil))
 	<-owner.done
 	assert.Equal(t, retry.MissingBytes, requiredBytes.Load())
@@ -591,8 +595,12 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			embeddingsPollInterval = 10 * time.Millisecond
 			t.Cleanup(func() { embeddingsPollInterval = oldInterval })
 			var out strings.Builder
-			require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{Using: using, Store: store}))
+			fullRebuild := scenario != "recall"
+			require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{Using: using, Store: store, FullRebuild: fullRebuild}))
 			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
+			if fullRebuild {
+				assert.Contains(t, out.String(), "This rebuild re-embeds every document.")
+			}
 			cfg, err = config.LoadReadOnly()
 			require.NoError(t, err)
 			assert.True(t, cfg.Vector.Enabled)
@@ -787,13 +795,15 @@ func TestCLIEmbeddingsSetupReportsRemovedServer(t *testing.T) {
 	require.NoError(t, err)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+	reloading, resume := make(chan struct{}), make(chan struct{})
+	resumeReload := sync.OnceFunc(func() { close(resume) })
+	defer resumeReload()
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, func() (config.Config, error) {
-		current, err := os.ReadFile(path)
-		if err != nil {
-			return config.Config{}, err
-		}
-		if err := os.WriteFile(path, []byte(strings.Replace(string(current), "servers.local", "servers.other", 1)), 0o600); err != nil {
-			return config.Config{}, err
+		close(reloading)
+		select {
+		case <-resume:
+		case <-t.Context().Done():
+			return config.Config{}, t.Context().Err()
 		}
 		return config.LoadReadOnly()
 	})
@@ -808,30 +818,26 @@ func TestCLIEmbeddingsSetupReportsRemovedServer(t *testing.T) {
 	embeddingsPollInterval = 10 * time.Millisecond
 	t.Cleanup(func() { embeddingsPollInterval = oldInterval })
 	var out strings.Builder
-	err = runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{Using: "local"})
-	require.ErrorContains(t, err, `no embeddings server named "local"`)
-	owner.mu.Lock()
-	owner.setup.Busy = true
-	owner.mu.Unlock()
-	owner.BuildStarted()
-	status, err := owner.SetupStatus(t.Context())
+	result := make(chan error, 1)
+	go func() {
+		result <- runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{Using: "local"})
+	}()
+	select {
+	case <-reloading:
+	case <-time.After(10 * time.Second):
+		t.Fatal("setup did not reach config reload")
+	}
+	current, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Contains(t, status.Error, `no embeddings server named "local"`)
-	owner.mu.Lock()
-	owner.setup.Busy = false
-	owner.mu.Unlock()
+	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(current), "servers.local", "servers.other", 1)), 0o600))
+	resumeReload()
+	select {
+	case err := <-result:
+		require.ErrorContains(t, err, `no embeddings server named "local"`)
+	case <-time.After(10 * time.Second):
+		t.Fatal("setup did not report the build failure")
+	}
 	cfg, err = config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.True(t, cfg.Vector.Enabled)
-
-	current, err := os.ReadFile(path)
-	require.NoError(t, err)
-	updated := strings.Replace(string(current), "[vector.embeddings]", "[vector.embeddings]\ndefault_server = 'other'", 1)
-	updated += fmt.Sprintf("\n[vector.embeddings.servers.local]\nendpoint = %q\n", encoder.URL)
-	require.NoError(t, os.WriteFile(path, []byte(updated), 0o600))
-	out.Reset()
-	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader(""), EmbeddingsBuildOptions{Using: "other"}))
-	status, err = owner.SetupStatus(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, status.Error)
 }

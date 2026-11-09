@@ -483,7 +483,7 @@ func runEmbeddingsBuild(
 			return nil
 		}
 	}
-	if _, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out, false, nil); err != nil {
+	if _, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out, false, false, nil); err != nil {
 		return err
 	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
