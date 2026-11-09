@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"time"
-	"unsafe"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -41,11 +40,10 @@ func encodeUsageRows[T any](rows []T, limit int64, size func(T) int64) ([]byte, 
 func decodeUsageRows[T any](data []byte, limit int64, size func(T) int64) ([]T, bool) {
 	dec := gob.NewDecoder(bytes.NewReader(data))
 	var count int
-	var item T
-	if err := dec.Decode(&count); err != nil || count < 0 || int64(count) > limit/int64(unsafe.Sizeof(item)) {
+	if err := dec.Decode(&count); err != nil || count < 0 {
 		return nil, false
 	}
-	rows := make([]T, 0, count)
+	rows := []T{}
 	var total int64
 	for range count {
 		var row T

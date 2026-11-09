@@ -59,17 +59,7 @@ func (d *Disk) Get(selection, version string) ([]byte, bool) {
 }
 
 func (d activityReportDisk) load(selection, key string, maxFile int64) ([]byte, bool, error) {
-	path := d.path(selection)
-	if maxFile > 0 {
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, false, err
-		}
-		if info.Size() > maxFile {
-			return nil, false, nil
-		}
-	}
-	file, err := os.Open(path)
+	file, err := os.Open(d.path(selection))
 	if err != nil {
 		return nil, false, err
 	}

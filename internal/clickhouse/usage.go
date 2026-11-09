@@ -1363,9 +1363,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 			return err
 		}
 		if rows, ok := s.dailyUsageRows.Get(memoSlot, memoVersion); ok {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 			if state.ready && len(state.raw) == 0 {
 				s.usageDisk.Keep(memoSlot, usageDiskVersion+memoVersion, func() ([]byte, error) { return encodeUsageRows(rows, dailyUsageRowsBytes, dailyUsageRowBytes) })
 			}
@@ -1377,22 +1374,15 @@ func (s *Store) forEachDailyUsageGroupRow(
 			return nil
 		}
 	}
-	// Persist only fully prepared reads taken under the caller's snapshot.
-	_, hasParts := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
-	diskReady := !top && s.usageDisk.Enabled() && state.ready && len(state.raw) == 0 && hasParts && memoSlot != "" && memoVersion != ""
+	// Persist only fully prepared reads.
+	diskReady := !top && s.usageDisk.Enabled() && state.ready && len(state.raw) == 0 && memoSlot != ""
 	if diskReady {
 		if data, ok := s.usageDisk.Get(memoSlot, usageDiskVersion+memoVersion); ok {
 			if keptRows, ok := decodeUsageRows(data, dailyUsageRowsBytes, dailyUsageRowBytes); ok {
 				for _, row := range keptRows {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
 					if err := visit(row); err != nil {
 						return err
 					}
-				}
-				if err := ctx.Err(); err != nil {
-					return err
 				}
 				s.dailyUsageRows.Put(memoSlot, memoVersion, keptRows)
 				return nil
@@ -1541,9 +1531,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating clickhouse daily usage aggregates: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if !top && retaining && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
 		s.dailyUsageRows.Put(memoSlot, memoVersion, memo)
 		if diskReady {
@@ -1661,10 +1648,9 @@ func (s *Store) GetDailyUsage(
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
-	result, err := retryUsagePriceContexts(snapshot, func(snapshot *pricingSnapshot) (db.DailyUsageResult, error) {
+	return retryUsagePriceContexts(snapshot, func(snapshot *pricingSnapshot) (db.DailyUsageResult, error) {
 		return s.dailyUsageForCatalog(ctx, f, snapshot)
 	})
-	return result, err
 }
 
 // chUsageUnstoredDigest names no price records, so a read under it prices
@@ -2221,21 +2207,14 @@ func (s *Store) GetTopSessionsByCost(
 	if err != nil {
 		return nil, err
 	}
-	_, hasParts := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
-	diskReady := s.usageDisk.Enabled() && state.ready && len(state.raw) == 0 && hasParts && memoSlot != "" && memoVersion != ""
+	diskReady := s.usageDisk.Enabled() && state.ready && len(state.raw) == 0 && memoSlot != ""
 	out, ok := s.topSessionTotals.Get(memoSlot, memoVersion)
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	if ok && diskReady {
 		s.usageDisk.Keep(memoSlot, topUsageDiskVersion+memoVersion, func() ([]byte, error) { return encodeUsageRows(out, kept.DefaultMaxBytes, db.TopSessionBytes) })
 	}
 	if !ok && diskReady {
 		if data, found := s.usageDisk.Get(memoSlot, topUsageDiskVersion+memoVersion); found {
 			out, ok = decodeUsageRows(data, kept.DefaultMaxBytes, db.TopSessionBytes)
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
 			if ok {
 				s.topSessionTotals.Put(memoSlot, memoVersion, out)
 			}
@@ -2254,9 +2233,6 @@ func (s *Store) GetTopSessionsByCost(
 			if err := s.loadTopSessionMetadata(ctx, out); err != nil {
 				return nil, err
 			}
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
 		}
 		if catalogDigest == pricing.catalog.digest && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
 			s.topSessionTotals.Put(memoSlot, memoVersion, out)
