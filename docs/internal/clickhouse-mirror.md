@@ -576,6 +576,10 @@ with the current time, so their rows are never kept. Kept reads include usage
 rows, analytics session listings, Activity pairing inputs per session version,
 candidate listings, project label maps, and the whole report of an ended range.
 
+Ungrouped Top sessions are the exception. Each request reloads display metadata
+for its ranked winners. Grouped Top sessions keep member metadata with their
+totals.
+
 Nothing rebuilds kept reads in the background. The first request after a push
 that changes a read's rows pays for that read.
 

@@ -28,6 +28,8 @@ import (
 
 const chTimestampSQL = "parseDateTime64BestEffort(?, 6, 'UTC')"
 
+const chUsageDisplayNameSQL = "ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '')"
+
 // chLoadPricing reads the mirrored model catalog and layers the reader's
 // custom rates on top. Push passes no custom rates.
 func chLoadPricing(
@@ -248,7 +250,7 @@ func chUsageRawSQLFromWheres(
 				CAST(NULL AS Nullable(Int64)) AS cost_microdollars, '' AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
+			`+chUsageDisplayNameSQL+` AS display_name,
 			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
@@ -275,7 +277,7 @@ func chUsageRawSQLFromWheres(
 				ue.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
+			`+chUsageDisplayNameSQL+` AS display_name,
 			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
@@ -439,7 +441,7 @@ func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID
 			p.cost_microdollars AS cost_microdollars, p.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
+			` + chUsageDisplayNameSQL + ` AS display_name,
 			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at,
@@ -1376,7 +1378,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 		customPred = "(model, price_model) IN (" + strings.Join(tuples, ", ") + ")"
 	}
 	pricedSQL, pricedArgs := chUsagePricedCTE(source, pricingDigest)
-	metadataSelect := ""
 	evidenceSelect := ""
 	if f.PairwiseSides && !top {
 		evidenceSelect = ", groupUniqArrayArray(inexact_models), groupUniqArrayArray(inexact_projects)"
@@ -1386,7 +1387,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 			row_ts ASC, COALESCE(row_message_ordinal, -1) ASC, row_source ASC,
 			row_usage_dedup_key ASC, model ASC, row_price_model ASC`
 	if top {
-		metadataSelect = ", any(display_name), any(started_at), any(group_key), any(session_name), any(machine)"
 		order = `ORDER BY session_id ASC, row_ts ASC, COALESCE(row_message_ordinal, -1) ASC,
 			row_source ASC, row_usage_dedup_key ASC, model ASC, row_price_model ASC`
 	}
@@ -1431,7 +1431,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 			any(billable_reasoning_tokens), any(billable_cache_creation_tokens),
 			any(billable_cache_creation_1h_tokens), any(billable_cache_read_tokens),
 			toInt64(any(reported_cost_rows)),
-			any(authoritative_cost), toInt64(any(authoritative_cost_rows))` + metadataSelect + evidenceSelect + `
+			any(authoritative_cost), toInt64(any(authoritative_cost_rows))` + evidenceSelect + `
 		FROM usage_classified
 		GROUP BY session_id, local_date, project, agent, group_machine, model, provider_id,
 			explicit_key, group_kind, group_context, group_band
@@ -1450,8 +1450,8 @@ func (s *Store) forEachDailyUsageGroupRow(
 	var memo []chDailyUsageGroupRow
 	for rows.Next() {
 		var r chDailyUsageGroupRow
-		var explicitKey, metadataMachine string
-		var ts, pricingTS, startedAt any
+		var explicitKey string
+		var ts, pricingTS any
 		targets := []any{
 			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
 			&r.providerID,
@@ -1468,9 +1468,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 			&r.reportedCostRows,
 			&r.authoritativeCost, &r.authoritativeCostRows,
 		}
-		if top {
-			targets = append(targets, &r.displayName, &startedAt, &r.groupKey, &r.sessionName, &metadataMachine)
-		}
 		if f.PairwiseSides && !top {
 			targets = append(targets, &r.inexactModels, &r.inexactProjects)
 		}
@@ -1478,10 +1475,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 			return fmt.Errorf("scanning clickhouse daily usage aggregate: %w", err)
 		}
 		r.explicit = explicitKey != ""
-		if top {
-			r.machine = metadataMachine
-			r.startedAt = formatDBTime(startedAt)
-		}
 		r.ts = formatDBTime(ts)
 		r.pricingTS = formatDBTime(pricingTS)
 		if !top {
@@ -2151,33 +2144,75 @@ func (s *Store) GetTopSessionsByCost(
 	if err != nil {
 		return nil, err
 	}
-	// Keep one total per session rather than every usage row: the totals
-	// are all a later read needs, and they are a small fraction of the rows.
+	// Keep one total per session rather than every usage row. Grouped reads
+	// also keep member metadata so repeat reads avoid scanning every title.
 	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, state, "top", f, "", pricing.digest, nil)
 	if err != nil {
 		return nil, err
 	}
-	if kept, ok := s.topSessionTotals.Get(memoSlot, memoVersion); ok {
-		if f.TopSessionsByGroup {
-			return db.GroupTopSessions(kept, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	out, ok := s.topSessionTotals.Get(memoSlot, memoVersion)
+	if !ok {
+		out, err = retryUsagePriceContexts(pricing, func(pricing *pricingSnapshot) ([]db.TopSessionEntry, error) {
+			return s.topSessionsForCatalog(ctx, f, pricing)
+		})
+		if err != nil {
+			return nil, err
 		}
-		return db.SortAndLimitTopSessions(
-			slices.Clone(kept), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
-		), nil
+		if f.TopSessionsByGroup {
+			if err := s.loadTopSessionMetadata(ctx, out); err != nil {
+				return nil, err
+			}
+		}
+		s.topSessionTotals.Put(memoSlot, memoVersion, out)
 	}
-	out, err := retryUsagePriceContexts(pricing, func(pricing *pricingSnapshot) ([]db.TopSessionEntry, error) {
-		return s.topSessionsForCatalog(ctx, f, pricing)
-	})
-	if err != nil {
-		return nil, err
-	}
-	s.topSessionTotals.Put(memoSlot, memoVersion, out)
 	if f.TopSessionsByGroup {
 		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
-	return db.SortAndLimitTopSessions(
-		slices.Clone(out), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
-	), nil
+	out = db.SortAndLimitTopSessions(slices.Clone(out), limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	if err := s.loadTopSessionMetadata(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) loadTopSessionMetadata(ctx context.Context, entries []db.TopSessionEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	ids := make([]string, len(entries))
+	byID := make(map[string]int, len(entries))
+	for i, entry := range entries {
+		ids[i] = entry.SessionID
+		byID[entry.SessionID] = i
+	}
+	table, err := usageSessionListTable("usage_top_sessions", ids)
+	if err != nil {
+		return err
+	}
+	rows, err := s.queryContext(chdriver.Context(ctx, chdriver.WithExternalTable(table)), `
+		SELECT s.id,
+			`+chUsageDisplayNameSQL+`,
+			s.started_at, s.group_key, ifNull(s.session_name, ''), s.machine
+		FROM sessions s
+		WHERE s.id IN (SELECT id FROM usage_top_sessions)`)
+	if err != nil {
+		return fmt.Errorf("querying clickhouse top-session metadata: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, displayName, groupKey, sessionName, machine string
+		var startedAt any
+		if err := rows.Scan(&id, &displayName, &startedAt, &groupKey, &sessionName, &machine); err != nil {
+			return fmt.Errorf("scanning clickhouse top-session metadata: %w", err)
+		}
+		entry := &entries[byID[id]]
+		entry.DisplayName = displayName
+		entry.StartedAt = formatDBTime(startedAt)
+		entry.GroupKey = groupKey
+		entry.SessionName = sessionName
+		entry.Machine = machine
+	}
+	return rows.Err()
 }
 
 func (s *Store) topSessionsForCatalog(
@@ -2200,9 +2235,7 @@ func (s *Store) topSessionsForCatalog(
 			a := bySession[r.sessionID]
 			if a == nil {
 				a = &acc{row: db.TopSessionEntry{
-					SessionID: r.sessionID, DisplayName: r.displayName,
-					Agent: r.agent, Project: r.project, StartedAt: r.startedAt,
-					GroupKey: r.groupKey, SessionName: r.sessionName, Machine: r.machine,
+					SessionID: r.sessionID, Agent: r.agent, Project: r.project,
 				}}
 				bySession[r.sessionID] = a
 			}
