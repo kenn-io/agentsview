@@ -2026,6 +2026,8 @@ var readOnlyRequiredTables = []string{
 	"session_plan_usage",
 	"tool_calls",
 	"tool_result_events",
+	"image_text_cache",
+	"image_text_occurrences",
 	"insights",
 	"pinned_messages",
 	"starred_sessions",

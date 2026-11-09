@@ -454,8 +454,14 @@ func (db *DB) Search(
 	defer func() { _ = tx.Rollback() }()
 	var walk *searchRankWalk
 	var hasImageText bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM image_text_cache WHERE succeeded=1)`).Scan(&hasImageText); err != nil {
-		return SearchPage{}, err
+	imageTable := "image_text_fts"
+	if ftsQuery.table == "messages_cjk_fts" {
+		imageTable = "image_text_cjk_fts"
+	}
+	if !hasFTSColumnFilter(f.Query) {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+imageTable+` JOIN image_text_cache c ON c.rowid=`+imageTable+`.rowid WHERE `+imageTable+` MATCH ? AND c.succeeded=1)`, f.Query).Scan(&hasImageText); err != nil {
+			return SearchPage{}, err
+		}
 	}
 	if !hasImageText && f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
 		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
@@ -505,11 +511,7 @@ func (db *DB) Search(
 	args = append(args, bestArgs...)
 
 	imageBranchSQL := ""
-	imageQuery := strings.ReplaceAll(strings.ReplaceAll(f.Query, "rendered:", "text:"), "content:", "text:")
-	imageTable := "image_text_fts"
-	if ftsQuery.table == "messages_cjk_fts" {
-		imageTable = "image_text_cjk_fts"
-	}
+	imageQuery := f.Query
 	if hasImageText {
 		args = append(args, imageQuery)
 		args = append(args, nameProjectArgs...)

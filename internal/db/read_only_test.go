@@ -349,6 +349,8 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 		column string
 	}{
 		{"stats", "key"},
+		{"image_text_cache", "image_hash"},
+		{"image_text_occurrences", "session_id"},
 		{"usage_events", "id"},
 		{"session_plan_usage", "session_id"},
 		{"pinned_messages", "id"},

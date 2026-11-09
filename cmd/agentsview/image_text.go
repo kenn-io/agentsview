@@ -8,7 +8,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/imagetext"
 	"go.kenn.io/agentsview/internal/poller"
-	"go.kenn.io/agentsview/internal/recall/extract"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/docbank/document/glmocr"
 )
 
@@ -31,9 +31,13 @@ func setupImageText(cfg config.Config, database *db.DB) (*imagetext.Manager, err
 	return &imagetext.Manager{DB: database, Client: client, Processor: processor}, nil
 }
 
-func imageTextJob(manager *imagetext.Manager) poller.Job {
+func imageTextJob(manager *imagetext.Manager, idle *server.IdleTracker) poller.Job {
 	return poller.Job{Name: "image-text", Interval: time.Minute, RunAtStart: true, Run: func(ctx context.Context) error {
-		_, _, err := manager.TryPass(ctx, extract.PassOptions{})
-		return err
+		done, ok := idle.BeginWork()
+		if !ok {
+			return nil
+		}
+		defer done()
+		return manager.Run(ctx)
 	}}
 }

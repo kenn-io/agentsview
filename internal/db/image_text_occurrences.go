@@ -3,9 +3,29 @@ package db
 // refreshImageTextOccurrencesTx records the current representative of each
 // image after all tool-result projections for the session have been written.
 func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) error {
+	oldRows, err := tx.Query(`SELECT image_hash FROM image_text_occurrences WHERE session_id=?`, sessionID)
+	if err != nil {
+		return err
+	}
+	var oldHashes []string
+	for oldRows.Next() {
+		var hash string
+		if err := oldRows.Scan(&hash); err != nil {
+			oldRows.Close()
+			return err
+		}
+		oldHashes = append(oldHashes, hash)
+	}
+	if err := oldRows.Err(); err != nil {
+		oldRows.Close()
+		return err
+	}
+	if err := oldRows.Close(); err != nil {
+		return err
+	}
 	rows, err := tx.Query(`SELECT tc.id, 0, COALESCE(tc.result_content, '') FROM tool_calls tc
-		WHERE tc.session_id=? AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
-		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=?`, sessionID, sessionID)
+		WHERE tc.session_id=? AND instr(lower(COALESCE(tc.result_content,'')), 'image')>0 AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
+		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND instr(lower(e.content), 'image')>0`, sessionID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -46,6 +66,10 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 			return err
 		}
 	}
-	_, err = tx.Exec(`DELETE FROM image_text_cache WHERE NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash)`)
-	return err
+	for _, hash := range oldHashes {
+		if _, err = tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=?)`, hash, hash); err != nil {
+			return err
+		}
+	}
+	return nil
 }

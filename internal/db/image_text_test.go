@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -84,4 +85,93 @@ func TestImageTextMigrationStrippingAndDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
 	require.Zero(t, count)
+}
+
+func TestImageTextBackfillNumericCursorAndTargetedPruning(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	for _, id := range []string{"10", "2", "3"} {
+		insertSession(t, d, id, "demo")
+		insertMessages(t, d, testImageMessage(id))
+	}
+	_, err := d.getWriter().Exec(ctx, `DELETE FROM image_text_occurrences`)
+	require.NoError(t, err)
+	more, err := d.BackfillImageTextOccurrences(ctx, 1)
+	require.NoError(t, err)
+	require.True(t, more)
+	for more {
+		more, err = d.BackfillImageTextOccurrences(ctx, 1)
+		require.NoError(t, err)
+	}
+	var count int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_occurrences`).Scan(&count))
+	require.Equal(t, 3, count)
+	// An unrelated cached hash must not be removed by another session's refresh.
+	_, err = d.getWriter().Exec(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded) VALUES('unrelated','p','test','m','r','saved',1)`)
+	require.NoError(t, err)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "10", []Message{{SessionID: "10", Role: "assistant", Content: "no pictures"}}))
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash='unrelated'`).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
+func TestImageTextProcessorReplacement(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	insertSession(t, d, "image", "demo")
+	insertMessages(t, d, testImageMessage("image"))
+	images := RetainedToolResultImages(testInlineImageContent())
+	require.Len(t, images, 1)
+	old, err := ocr.NewIdentity("test", "model", "old")
+	require.NoError(t, err)
+	current, err := ocr.NewIdentity("test", "model", "new")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, images[0].SHA256, old, "old words", false))
+	require.NoError(t, d.SaveImageText(ctx, images[0].SHA256, current, "new words", false))
+	page, err := d.Search(ctx, SearchFilter{Query: "old"})
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
+	page, err = d.Search(ctx, SearchFilter{Query: "new"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	var count int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
+func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	insertSession(t, d, "image", "demo")
+	insertMessages(t, d, testImageMessage("image"))
+	image := RetainedToolResultImages(testInlineImageContent())[0]
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, image.SHA256, identity, "content:invoice", false))
+	page, err := d.Search(ctx, SearchFilter{Query: `"content:invoice"`})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	page, err = d.Search(ctx, SearchFilter{Query: `"absent" OR content:invoice`})
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
+}
+
+func TestImageTextRefreshIgnoresPlainResults(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	insertSession(t, d, "plain", "demo")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "plain", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: "plain result"}}}}))
+	var count int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_occurrences`).Scan(&count))
+	require.Zero(t, count)
+}
+
+func TestRetainedImageFormsContainImageMarker(t *testing.T) {
+	for _, content := range []string{
+		`[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`,
+		`[{"type":"file","uri":"data:image/png;base64,AAEC"}]`,
+		`[{"type":"agentsview_image","version":1,"image_ref":"asset://ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc.png","media_type":"image/png","byte_size":3}]`,
+	} {
+		require.NotEmpty(t, RetainedToolResultImages(content))
+		require.Contains(t, strings.ToLower(content), "image")
+	}
 }

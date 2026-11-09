@@ -1802,8 +1802,9 @@ CREATE TABLE IF NOT EXISTS image_text_cache (
 
 CREATE TABLE IF NOT EXISTS image_text_occurrences (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    call_id INTEGER REFERENCES tool_calls(id) ON DELETE CASCADE,
-    event_id INTEGER REFERENCES tool_result_events(id) ON DELETE CASCADE,
+    -- Source rows can be replaced before the session refreshes this projection.
+    call_id INTEGER,
+    event_id INTEGER,
     image_index INTEGER NOT NULL,
     image_hash TEXT NOT NULL,
     CHECK ((call_id IS NULL) <> (event_id IS NULL)),

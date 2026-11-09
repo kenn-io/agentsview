@@ -594,7 +594,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	codexCloudMonitor := newCodexCloudMonitor(codexCloudSync, codexCloudTrigger, idleTracker)
 	jobs := []poller.Job{pricingRefreshJob(database, pricingRefreshRunner), codexCloudSyncJob(codexCloudSync, idleTracker), codexCloudLiveJob(codexCloudMonitor, idleTracker)}
 	if imageTextManager != nil {
-		jobs = append(jobs, imageTextJob(imageTextManager))
+		jobs = append(jobs, imageTextJob(imageTextManager, idleTracker))
 	}
 	scheduler := poller.Start(ctx, jobs...)
 	codexCloudTrigger.scheduler.Store(scheduler)

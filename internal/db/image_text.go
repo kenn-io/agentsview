@@ -34,7 +34,7 @@ func (db *DB) BackfillImageTextOccurrences(ctx context.Context, limit int) (bool
 	}
 	defer tx.Rollback()
 	var cursor string
-	err = tx.QueryRowContext(ctx, `SELECT CAST(value AS TEXT) FROM stats WHERE key='image_text_backfill_cursor'`).Scan(&cursor)
+	err = tx.QueryRowContext(ctx, `SELECT value FROM pg_sync_state WHERE key='image_text_backfill_cursor'`).Scan(&cursor)
 	if err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
@@ -71,18 +71,21 @@ func (db *DB) BackfillImageTextOccurrences(ctx context.Context, limit int) (bool
 	} else {
 		cursor = ids[len(ids)-1]
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO stats(key,value) VALUES('image_text_backfill_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, cursor); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO pg_sync_state(key,value) VALUES('image_text_backfill_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, cursor); err != nil {
 		return false, err
 	}
 	return cursor != "\xff", tx.Commit()
 }
 
 func (db *DB) PendingImageText(ctx context.Context, processor string, now time.Time, limit int) ([]PendingImageText, error) {
-	rows, err := db.getReader().QueryContext(ctx, `SELECT COALESCE(e.content,tc.result_content,''),o.image_index,o.image_hash
- FROM image_text_occurrences o LEFT JOIN tool_calls tc ON tc.id=o.call_id LEFT JOIN tool_result_events e ON e.id=o.event_id
- LEFT JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.processor=?
+	rows, err := db.getReader().QueryContext(ctx, `WITH pending AS (
+ SELECT o.image_hash FROM image_text_occurrences o LEFT JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.processor=?
  WHERE c.image_hash IS NULL OR (c.succeeded=0 AND c.retry_at<=?)
- GROUP BY o.image_hash ORDER BY o.image_hash LIMIT ?`, processor, now.UTC().Format(time.RFC3339), limit)
+ GROUP BY o.image_hash ORDER BY o.image_hash LIMIT ?)
+ SELECT COALESCE(e.content,tc.result_content,''),o.image_index,o.image_hash
+ FROM pending p JOIN image_text_occurrences o ON o.image_hash=p.image_hash
+ LEFT JOIN tool_calls tc ON tc.id=o.call_id LEFT JOIN tool_result_events e ON e.id=o.event_id
+ ORDER BY o.image_hash,o.session_id`, processor, now.UTC().Format(time.RFC3339), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -109,9 +112,20 @@ func (db *DB) SaveImageText(ctx context.Context, hash string, identity ocr.Ident
 			ON CONFLICT(image_hash,processor) DO UPDATE SET failures=failures+1, retry_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+' || min(3600, 60 * (1 << min(failures, 6))) || ' seconds')`, hash, identity.Fingerprint, identity.Provider, identity.Model, identity.Revision, time.Now().UTC().Add(time.Minute).Format(time.RFC3339), hash)
 		return err
 	}
-	_, err := db.getWriter().ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded,updated_at) SELECT ?,?,?,?,?,?,1,strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded,updated_at) SELECT ?,?,?,?,?,?,1,strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)
 		ON CONFLICT(image_hash,processor) DO UPDATE SET text=excluded.text,succeeded=1,failures=0,retry_at='',updated_at=excluded.updated_at`, hash, identity.Fingerprint, identity.Provider, identity.Model, identity.Revision, text, hash)
-	return err
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM image_text_cache WHERE image_hash=? AND processor<>? AND EXISTS (SELECT 1 FROM image_text_cache WHERE image_hash=? AND processor=? AND succeeded=1)`, hash, identity.Fingerprint, hash, identity.Fingerprint); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (db *DB) SaveImageTextTerminal(ctx context.Context, hash string, identity ocr.Identity) error {

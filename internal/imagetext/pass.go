@@ -9,11 +9,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/docbank/document/glmocr"
 	"go.kenn.io/docbank/document/ocr"
 )
@@ -22,14 +20,9 @@ type Manager struct {
 	DB        *db.DB
 	Client    *glmocr.Client
 	Processor string
-	mu        sync.Mutex
 }
 
-func (m *Manager) TryPass(ctx context.Context, _ extract.PassOptions) (bool, extract.PassResult, error) {
-	if !m.mu.TryLock() {
-		return false, extract.PassResult{}, nil
-	}
-	defer m.mu.Unlock()
+func (m *Manager) Run(ctx context.Context) error {
 	identity := m.Client.Identity()
 	if m.Processor != "" {
 		identity.Fingerprint = m.Processor
@@ -37,75 +30,93 @@ func (m *Manager) TryPass(ctx context.Context, _ extract.PassOptions) (bool, ext
 	for {
 		more, err := m.DB.BackfillImageTextOccurrences(ctx, 20)
 		if err != nil {
-			return true, extract.PassResult{}, err
+			return err
 		}
 		if !more {
 			break
 		}
 		if err := ctx.Err(); err != nil {
-			return true, extract.PassResult{}, err
+			return err
 		}
 	}
 	for {
 		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
 		if err != nil {
-			return true, extract.PassResult{}, err
+			return err
 		}
 		if len(pending) == 0 {
-			break
+			return nil
 		}
-		for _, item := range pending {
-			if err := ctx.Err(); err != nil {
-				return true, extract.PassResult{}, err
+		for i := 0; i < len(pending); {
+			j := i + 1
+			for j < len(pending) && pending[j].Hash == pending[i].Hash {
+				j++
 			}
-			var image *db.RetainedImage
-			images := db.RetainedToolResultImages(item.Content)
-			for i := range images {
-				if images[i].Index == item.Index && images[i].SHA256 == item.Hash {
-					image = &images[i]
-					break
-				}
+			if err := m.processImage(ctx, identity, pending[i:j]); err != nil {
+				return err
 			}
-			if image == nil {
-				if err := m.DB.SaveImageText(ctx, item.Hash, identity, "", true); err != nil {
-					return true, extract.PassResult{}, err
-				}
-				continue
-			}
-			if image.Size == nil || *image.Size > glmocr.MaxDocumentBytes || (image.MediaType != "image/png" && image.MediaType != "image/jpeg" && image.MediaType != "image/webp") {
-				if err := m.DB.SaveImageTextTerminal(ctx, item.Hash, identity); err != nil {
-					return true, extract.PassResult{}, err
-				}
-				continue
-			}
-			body, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir())
-			var text string
-			if err == nil {
-				var source ocr.Source
-				source, err = ocr.NewSource(io.NopCloser(bytes.NewReader(body)), image.MediaType, int64(len(body)), item.Hash)
-				if err == nil {
-					imageCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-					result, processErr := m.Client.Process(imageCtx, source)
-					cancel()
-					err = processErr
-					if err == nil {
-						var parts []string
-						for _, unit := range result.Document.Units {
-							parts = append(parts, unit.Text)
-						}
-						text = strings.TrimSpace(strings.Join(parts, "\n"))
-					}
-				}
-			}
-			if ctx.Err() != nil {
-				return true, extract.PassResult{}, ctx.Err()
-			}
-			if err := m.DB.SaveImageText(ctx, item.Hash, identity, text, err != nil || text == ""); err != nil {
-				return true, extract.PassResult{}, err
-			}
+			i = j
 		}
 	}
-	return true, extract.PassResult{}, nil
+}
+
+func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, items []db.PendingImageText) error {
+	retry := false
+	for _, item := range items {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var image *db.RetainedImage
+		images := db.RetainedToolResultImages(item.Content)
+		for i := range images {
+			if images[i].Index == item.Index && images[i].SHA256 == item.Hash {
+				image = &images[i]
+				break
+			}
+		}
+		if image == nil {
+			retry = true
+			continue
+		}
+		if image.Size == nil || *image.Size <= 0 || *image.Size > glmocr.MaxDocumentBytes || (image.MediaType != "image/png" && image.MediaType != "image/jpeg" && image.MediaType != "image/webp") {
+			continue
+		}
+		body, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir())
+		if err != nil {
+			retry = true
+			continue
+		}
+		source, err := ocr.NewSource(io.NopCloser(bytes.NewReader(body)), image.MediaType, int64(len(body)), item.Hash)
+		if err != nil {
+			continue
+		}
+		imageCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		result, err := m.Client.Process(imageCtx, source)
+		cancel()
+		if err != nil {
+			if ocr.ErrorKindOf(err) != ocr.ErrorInvalidInput {
+				retry = true
+			}
+			continue
+		}
+		var parts []string
+		for _, unit := range result.Document.Units {
+			parts = append(parts, unit.Text)
+		}
+		text := strings.TrimSpace(strings.Join(parts, "\n"))
+		if text == "" {
+			retry = true
+			continue
+		}
+		return m.DB.SaveImageText(ctx, item.Hash, identity, text, false)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if retry {
+		return m.DB.SaveImageText(ctx, items[0].Hash, identity, "", true)
+	}
+	return m.DB.SaveImageTextTerminal(ctx, items[0].Hash, identity)
 }
 
 // ProcessorKey includes the output policy while excluding the service address.

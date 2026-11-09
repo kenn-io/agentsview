@@ -2143,7 +2143,7 @@ func imageTextSearchBranches(f ContentSearchFilter, scope, eventAnchorJoin, pred
 		legacy = ", 0 AS legacy_thinking"
 	}
 	cache := `JOIN image_text_occurrences o ON o.session_id=s.id
- JOIN image_text_cache c ON c.rowid=(SELECT c2.rowid FROM image_text_cache c2 WHERE c2.image_hash=o.image_hash AND c2.succeeded=1 ORDER BY c2.updated_at DESC, c2.rowid DESC LIMIT 1)`
+ JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.succeeded=1`
 	call := fmt.Sprintf(`SELECT tc.session_id,s.project,s.agent,s.transcript_revision,'tool_result','assistant',tc.tool_name,mm.ordinal,COALESCE(mm.timestamp,''),c.text,COALESCE(s.ended_at,s.started_at,''),5 AS src,tc.id AS row_id%s
  FROM tool_calls tc JOIN messages mm ON mm.id=tc.message_id JOIN sessions s ON s.id=tc.session_id %s
  WHERE o.call_id=tc.id AND %s AND NOT EXISTS (SELECT 1 FROM tool_result_events tre WHERE tre.session_id=tc.session_id AND tre.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'') AND tc.%s`, legacy, cache, predicate, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "mm", SQLiteQueryDialect()))
