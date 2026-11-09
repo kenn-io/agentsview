@@ -162,10 +162,12 @@ func TestReopenUsesFindingTime(t *testing.T) {
 	for _, tt := range []struct {
 		name, date string
 		occurred   time.Time
+		loc        *time.Location
 		want       bool
 	}{
-		{"session crosses midnight", "2026-09-16", time.Date(2026, 9, 15, 10, 5, 0, 0, time.UTC), false},
-		{"same day after close", "2026-09-15", time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC), true},
+		{"session crosses midnight", "2026-09-16", time.Date(2026, 9, 15, 10, 5, 0, 0, time.UTC), nil, false},
+		{"same day after close", "2026-09-15", time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC), nil, true},
+		{"digest from earlier timezone", "2026-09-15", time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC), time.FixedZone("UTC+14", 14*60*60), true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := katatest.New(t)
@@ -175,7 +177,7 @@ func TestReopenUsesFindingTime(t *testing.T) {
 			is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
 			_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
 			require.NoError(t, err)
-			n, err := f.Reopen(t.Context(), "2026-09-01", nil)
+			n, err := f.Reopen(t.Context(), "2026-09-01", tt.loc)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, n == 1)
 			assert.Equal(t, tt.want, mustIssue(t, s, is.UID).Status == "open")

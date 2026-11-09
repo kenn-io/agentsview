@@ -60,9 +60,6 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, loc 
 		return false, nil
 	}
 	closed := is.ClosedAt.In(loc).Format(time.DateOnly)
-	if p.LastSeenDate < closed {
-		return false, nil
-	}
 	filter := db.FrictionFindingFilter{Fingerprint: p.Fingerprint, Date: p.LastSeenDate, Limit: db.MaxFrictionListLimit}
 	found := false
 	for {
