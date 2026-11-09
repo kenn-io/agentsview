@@ -1141,6 +1141,55 @@ PostgreSQL and DuckDB apply the same write rule so their tool-call fingerprints
 match SQLite. Anyone reading the archive or a mirror by hand sees the empty
 column and must join the events table to recover the text.
 
+### PostgreSQL frustration marker reads
+
+Signals counts frustration markers for sessions the in-memory memo does not
+hold. PostgreSQL and CockroachDB read the session versions and those
+sessions' prompts in one statement, `pgFrustrationPromptsSQL`, with the
+session IDs as one array parameter (`= ANY($1)`). A prompt made of ASCII and
+`signals.PlainPromptSymbols`, the alphabet the
+[ClickHouse read](../internal/clickhouse-mirror.md#dashboard-facts) also
+uses, is judged in SQL and comes back only when it is a marker, without its
+text. Go judges the rest with `signals.IsFrustrationMarker`:
+
+- prompts with any other rune, and every prompt when the server encoding is
+  not UTF8;
+- plain prompts longer than 16 KiB after code fences are stripped, when a
+  cheap bound cannot rule out the all-capitals rule.
+
+The SQL follows `IsFrustrationMarker` step by step. Port it with these rules:
+
+- PostgreSQL patterns are POSIX ARE and CockroachDB patterns are RE2, so use
+  only syntax both read the same way. `\b` means backspace in ARE, and the
+  ARE word escapes and `lower()` follow the server locale. Write word
+  boundaries as `(^|[^0-9A-Za-z_])` and `($|[^0-9A-Za-z_])`, letters as ASCII
+  case pairs, whitespace as the ASCII class `unicode.IsSpace` accepts, and
+  non-ASCII runes as literal characters.
+- Measure lengths with `octet_length`; Go compares bytes.
+- Count matches with `cardinality(regexp_split_to_array(...)) - 1`.
+  CockroachDB has no `regexp_count`. Cast numeric parameters, because
+  CockroachDB does not infer their types.
+- Prefer boolean `~` tests to `regexp_replace` over long text. On a 484 MiB
+  fixture a boolean pass took about 1 s and a replacing pass 11 to 17 s, so
+  counting every word of every prompt took 55 s against 6.6 s for the Go
+  scan. The caps rule is therefore ruled out with a bound: all-capital words
+  are at most the `[A-Z]{2,}` runs, and words of two or more letters are at
+  least 32 per match of 32 such words in a row and at least
+  `FrustrationCapsMinWords`. When that ratio is below the threshold, so is
+  the exact one. SQL counts every word only for stripped prompts of at most
+  16 KiB, which covers typed prompts and short prompts after a fenced paste.
+  `translate()` is slower still (42 s), so the SQL never uses it.
+
+On a fixture of 2,500 sessions with 41,162 prompts (484 MiB of prompt text,
+1.9% of it outside the plain alphabet), one Signals load with an empty memo
+took 4.1 s instead of 6.6 s. It sent 15.8 MiB to Go instead of 485.5 MiB, and
+Go allocated 139 MiB instead of 1.62 GiB, with the same per-session counts.
+
+`frustration_sql_pgtest_test.go` compares the counts with
+`IsFrustrationMarker` on hand-labeled edge cases and on a seeded random
+corpus, and checks which prompts come back with text. Run it against
+CockroachDB as well when changing the SQL.
+
 ## DuckDB Mirror
 
 - Treat DuckDB as a disposable read mirror of SQLite, never as a system of

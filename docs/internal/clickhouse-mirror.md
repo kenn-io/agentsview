@@ -598,9 +598,9 @@ peaks near 290 MiB, with the same per-session counts.
   those words, so on the production mirror such a filter dropped almost none of
   the 4.25 GiB of prompt text.
 
-SQLite and PostgreSQL keep their scans in Go, which skip system rows in SQL.
-DuckDB judges plain prompts in SQL the same way; only the ClickHouse layout
-changed.
+SQLite keeps its scan in Go, which skips system rows in SQL. DuckDB and
+PostgreSQL judge plain prompts in SQL as well; see
+[PostgreSQL frustration marker reads](../agents/storage.md#postgresql-frustration-marker-reads).
 
 **Go judges each prompt in a few passes.** SQLite and PostgreSQL send every
 prompt of a session their memo misses to `IsFrustrationMarker`, and DuckDB and
