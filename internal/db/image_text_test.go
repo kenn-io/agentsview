@@ -175,3 +175,44 @@ func TestRetainedImageFormsContainImageMarker(t *testing.T) {
 		require.Contains(t, strings.ToLower(content), "image")
 	}
 }
+
+func TestImageTextSearchSidechainOccurrence(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	insertSession(t, d, "session", "demo")
+	content := testInlineImageContent()
+	messages := []Message{
+		{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "main", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}},
+		{SessionID: "session", Ordinal: 2, Role: "assistant", Content: "side", IsSidechain: true, ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}},
+	}
+	require.NoError(t, d.InsertMessages(ctx, messages))
+	hash := RetainedToolResultImages(content)[0].SHA256
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice", false))
+	for _, mode := range []string{"substring", "regex"} {
+		page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: "invoice", Mode: mode, Sources: []string{"tool_result"}, Scope: "subordinate", IncludeOneShot: true, IncludeAutomated: true})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		require.Equal(t, 2, page.Matches[0].Ordinal)
+		require.True(t, page.Matches[0].Sidechain)
+	}
+}
+
+func TestImageTextDuplicateInSameResult(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	insertSession(t, d, "session", "demo")
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	hash := RetainedToolResultImages(content)[0].SHA256
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice", false))
+	for _, mode := range []string{"substring", "regex"} {
+		page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: "invoice", Mode: mode, Sources: []string{"tool_result"}, IncludeOneShot: true, IncludeAutomated: true, Limit: 1})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		require.Zero(t, page.NextCursor)
+	}
+}

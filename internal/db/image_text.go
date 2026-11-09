@@ -77,15 +77,30 @@ func (db *DB) BackfillImageTextOccurrences(ctx context.Context, limit int) (bool
 	return cursor != "\xff", tx.Commit()
 }
 
-func (db *DB) PendingImageText(ctx context.Context, processor string, now time.Time, limit int) ([]PendingImageText, error) {
-	rows, err := db.getReader().QueryContext(ctx, `WITH pending AS (
- SELECT o.image_hash FROM image_text_occurrences o LEFT JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.processor=?
+func (db *DB) PendingImageText(ctx context.Context, processor string, now time.Time, limit int) ([]string, error) {
+	rows, err := db.getReader().QueryContext(ctx, `SELECT o.image_hash FROM image_text_occurrences o LEFT JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.processor=?
  WHERE c.image_hash IS NULL OR (c.succeeded=0 AND c.retry_at<=?)
- GROUP BY o.image_hash ORDER BY o.image_hash LIMIT ?)
- SELECT COALESCE(e.content,tc.result_content,''),o.image_index,o.image_hash
- FROM pending p JOIN image_text_occurrences o ON o.image_hash=p.image_hash
- LEFT JOIN tool_calls tc ON tc.id=o.call_id LEFT JOIN tool_result_events e ON e.id=o.event_id
- ORDER BY o.image_hash,o.session_id`, processor, now.UTC().Format(time.RFC3339), limit)
+ GROUP BY o.image_hash ORDER BY o.image_hash LIMIT ?`, processor, now.UTC().Format(time.RFC3339), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		out = append(out, hash)
+	}
+	return out, rows.Err()
+}
+
+// ImageTextSources pages retained copies so a widely shared image stays bounded.
+func (db *DB) ImageTextSources(ctx context.Context, hash string, offset, limit int) ([]PendingImageText, error) {
+	rows, err := db.getReader().QueryContext(ctx, `SELECT COALESCE(e.content,tc.result_content,''),o.image_index,o.image_hash
+ FROM image_text_occurrences o LEFT JOIN tool_calls tc ON tc.id=o.call_id LEFT JOIN tool_result_events e ON e.id=o.event_id
+ WHERE o.image_hash=? ORDER BY o.session_id,o.call_id,o.event_id,o.image_index LIMIT ? OFFSET ?`, hash, limit, offset)
 	if err != nil {
 		return nil, err
 	}

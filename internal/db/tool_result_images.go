@@ -698,7 +698,7 @@ func retainedInlineFile(raw jsontext.Value, index int) (RetainedImage, bool) {
 }
 
 // ReadRetainedImage reads the indexed retained image without changing its stored form.
-func ReadRetainedImage(content string, index int, assetsDir string) ([]byte, error) {
+func ReadRetainedImage(content string, index int, assetsDir string) ([]byte, bool, error) {
 	var found jsontext.Value
 	n := 0
 	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
@@ -717,23 +717,29 @@ func ReadRetainedImage(content string, index int, assetsDir string) ([]byte, err
 		}
 	})
 	if found == nil {
-		return nil, fmt.Errorf("retained image %d missing", index)
+		return nil, false, fmt.Errorf("retained image %d missing", index)
 	}
 	if p, ok := parseOffloadedImagePlaceholder(found); ok {
 		hash, ext, ok := assetImageDigest(p.ImageRef)
 		name := hash + ext
 		if !ok {
-			return nil, fmt.Errorf("invalid image reference")
+			return nil, true, fmt.Errorf("invalid image reference")
 		}
 		root, err := os.OpenRoot(assetsDir)
 		if err != nil {
-			return nil, err
+			return nil, true, err
 		}
 		defer root.Close()
-		if !assets.IsCompleteObject(root, name, p.ByteSize, hash) {
-			return nil, fmt.Errorf("invalid image asset")
+		file, err := root.Open(name)
+		if err != nil {
+			return nil, true, err
 		}
-		return root.ReadFile(name)
+		defer file.Close()
+		body, err := io.ReadAll(io.LimitReader(file, p.ByteSize+1))
+		if err != nil {
+			return nil, true, err
+		}
+		return body, true, nil
 	}
 	var block struct {
 		Type     string         `json:"type"`
@@ -741,7 +747,7 @@ func ReadRetainedImage(content string, index int, assetsDir string) ([]byte, err
 		URI      jsontext.Value `json:"uri"`
 	}
 	if err := json.Unmarshal(found, &block, json.MatchCaseInsensitiveNames(true)); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	uri := block.ImageURL
 	if block.Type == "file" {
@@ -750,7 +756,7 @@ func ReadRetainedImage(content string, index int, assetsDir string) ([]byte, err
 	var buf bytes.Buffer
 	_, _, _, ok := streamInlineData(uri, &buf, block.Type == "input_image")
 	if !ok {
-		return nil, fmt.Errorf("invalid inline image")
+		return nil, false, fmt.Errorf("invalid inline image")
 	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), false, nil
 }

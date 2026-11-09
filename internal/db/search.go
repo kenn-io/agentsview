@@ -525,7 +525,7 @@ func (db *DB) Search(
 			 COALESCE(s.ended_at,s.started_at,'') AS session_ended_at,
 			 COALESCE(e.tool_call_message_ordinal,m.ordinal) AS ordinal,
 			 c.rowid AS image_rowid,
-			 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY c.rowid,o.image_hash) AS rn
+			 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY c.rowid,COALESCE(e.tool_call_message_ordinal,m.ordinal),o.call_id,o.event_id,o.image_index) AS rn
 			 FROM %s JOIN image_text_cache c ON c.rowid=%s.rowid AND c.succeeded=1
 			 JOIN image_text_occurrences o ON o.image_hash=c.image_hash
 			 JOIN sessions s ON s.id=o.session_id

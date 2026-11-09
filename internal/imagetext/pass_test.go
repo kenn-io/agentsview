@@ -297,3 +297,116 @@ func TestImageTextInvalidInputIsTerminal(t *testing.T) {
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT retry_at FROM image_text_cache`).Scan(&retry))
 	require.Equal(t, "9999-12-31T23:59:59Z", retry)
 }
+
+func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	assetDir := t.TempDir()
+	d.SetAssetsDir(assetDir)
+	png := []byte("\x89PNG\r\n\x1a\nimage")
+	ref, _, err := assets.Put(assetDir, "image/png", png)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(assetDir, strings.TrimPrefix(ref, "asset://"))))
+	offloaded := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
+	inline := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "same", Project: "demo", Agent: "test", MessageCount: 21}))
+	var messages []db.Message
+	for i := 0; i < 20; i++ {
+		messages = append(messages, db.Message{SessionID: "same", Ordinal: i, Role: "assistant", Content: "missing", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: offloaded}}})
+	}
+	messages = append(messages, db.Message{SessionID: "same", Ordinal: 20, Role: "assistant", Content: "inline", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: inline}}})
+	require.NoError(t, d.InsertMessages(ctx, messages))
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	}))
+	t.Cleanup(srv.Close)
+	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
+	require.NoError(t, err)
+	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
+	require.NoError(t, err)
+	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
+	require.Equal(t, 1, requests)
+	page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+}
+
+func TestImageTextCachesEmptyNormalizedOutput(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	png := []byte("\x89PNG\r\n\x1a\nimage")
+	content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "empty", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "empty", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"<script>hidden</script>"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	}))
+	t.Cleanup(srv.Close)
+	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
+	require.NoError(t, err)
+	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
+	require.NoError(t, err)
+	manager := Manager{DB: d, Client: client}
+	require.NoError(t, manager.Run(ctx))
+	require.NoError(t, manager.Run(ctx))
+	require.Equal(t, 1, requests)
+	var text string
+	var succeeded int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT text,succeeded FROM image_text_cache`).Scan(&text, &succeeded))
+	require.Empty(t, text)
+	require.Equal(t, 1, succeeded)
+}
+
+func TestImageTextRetriesRepairedAsset(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	dir := t.TempDir()
+	d.SetAssetsDir(dir)
+	png := []byte("\x89PNG\r\n\x1a\nimage")
+	ref, _, err := assets.Put(dir, "image/png", png)
+	require.NoError(t, err)
+	path := filepath.Join(dir, strings.TrimPrefix(ref, "asset://"))
+	corrupt := append([]byte(nil), png...)
+	corrupt[len(corrupt)-1] ^= 1
+	require.NoError(t, os.WriteFile(path, corrupt, 0600))
+	content := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "image", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	}))
+	t.Cleanup(srv.Close)
+	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
+	require.NoError(t, err)
+	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
+	require.NoError(t, err)
+	manager := Manager{DB: d, Client: client}
+	require.NoError(t, manager.Run(ctx))
+	require.Zero(t, requests)
+	require.NoError(t, os.WriteFile(path, png, 0600))
+	raw, err := sql.Open("sqlite3", d.Path())
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	require.NoError(t, manager.Run(ctx))
+	require.Equal(t, 1, requests)
+	page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+}

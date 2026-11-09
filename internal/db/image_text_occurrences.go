@@ -1,7 +1,6 @@
 package db
 
-// refreshImageTextOccurrencesTx records the current representative of each
-// image after all tool-result projections for the session have been written.
+// refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
 func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) error {
 	oldRows, err := tx.Query(`SELECT image_hash FROM image_text_occurrences WHERE session_id=?`, sessionID)
 	if err != nil {
@@ -24,13 +23,12 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 		return err
 	}
 	rows, err := tx.Query(`SELECT tc.id, 0, COALESCE(tc.result_content, '') FROM tool_calls tc
-		WHERE tc.session_id=? AND tc.result_content LIKE '%image%' AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
+		WHERE tc.session_id=? AND tc.result_content LIKE '%image%'
 		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND e.content LIKE '%image%'`, sessionID, sessionID)
 	if err != nil {
 		return err
 	}
 	var occurrences []ImageTextOccurrence
-	seen := make(map[string]bool)
 	for rows.Next() {
 		var row ImageTextRow
 		if err := rows.Scan(&row.CallID, &row.EventID, &row.Content); err != nil {
@@ -38,8 +36,7 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 			return err
 		}
 		for _, image := range RetainedToolResultImages(row.Content) {
-			if image.SHA256 != "" && !seen[image.SHA256] {
-				seen[image.SHA256] = true
+			if image.SHA256 != "" {
 				occurrences = append(occurrences, ImageTextOccurrence{CallID: row.CallID, EventID: row.EventID, Index: image.Index, Hash: image.SHA256})
 			}
 		}

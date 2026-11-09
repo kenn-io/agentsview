@@ -1807,9 +1807,11 @@ CREATE TABLE IF NOT EXISTS image_text_occurrences (
     event_id INTEGER,
     image_index INTEGER NOT NULL,
     image_hash TEXT NOT NULL,
-    CHECK ((call_id IS NULL) <> (event_id IS NULL)),
-    PRIMARY KEY (session_id, image_hash)
+    CHECK ((call_id IS NULL) <> (event_id IS NULL))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_image_text_occurrences_call ON image_text_occurrences(call_id, image_index) WHERE call_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_image_text_occurrences_event ON image_text_occurrences(event_id, image_index) WHERE event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_image_text_occurrences_session ON image_text_occurrences(session_id);
 CREATE INDEX IF NOT EXISTS idx_image_text_occurrences_hash ON image_text_occurrences(image_hash);
 
 CREATE TRIGGER IF NOT EXISTS image_text_session_delete AFTER DELETE ON sessions BEGIN
