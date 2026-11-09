@@ -69,7 +69,7 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 	if snapshot.ChangeRevision == 0 {
 		return snapshot, errPGUsageCacheUnavailable
 	}
-	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=''), 1)`).Scan(&snapshot.CursorHighWater)
+	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=`+usageAccountChangeKeyPG+`), 1)`).Scan(&snapshot.CursorHighWater)
 	if err != nil {
 		return snapshot, usageJournalError(err)
 	}

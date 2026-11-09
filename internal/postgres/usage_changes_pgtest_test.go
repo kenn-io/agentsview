@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -446,8 +447,40 @@ END;
 $v1$;`
 	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(v1CursorFunction, quoted))
 	require.NoError(t, err)
-	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM usage_session_changes WHERE session_id<>'' AND session_id NOT IN (SELECT id FROM sessions); UPDATE cursor_usage_events SET output_tokens=20,charged_microdollars=200 WHERE id=1`)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM usage_session_changes WHERE session_id<>'' AND session_id NOT IN (SELECT id FROM sessions)`)
 	require.NoError(t, err)
+	// A writer has already fired the old trigger when setup begins. The
+	// migration must wait for its commit before seeding the account marker.
+	raceCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	writer, err := syncer.pg.BeginTx(raceCtx, nil)
+	require.NoError(t, err)
+	defer writer.Rollback()
+	_, err = writer.ExecContext(raceCtx, `UPDATE cursor_usage_events SET output_tokens=20,charged_microdollars=200 WHERE id=1`)
+	require.NoError(t, err)
+	upgrade, err := syncer.pg.BeginTx(raceCtx, nil)
+	require.NoError(t, err)
+	defer upgrade.Rollback()
+	var pid int
+	require.NoError(t, upgrade.QueryRowContext(raceCtx, `SELECT pg_backend_pid()`).Scan(&pid))
+	done := make(chan error, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		err := installUsageChangeJournalPG(raceCtx, upgrade)
+		if err == nil {
+			err = upgrade.Commit()
+		}
+		done <- err
+	}()
+	defer func() { _ = writer.Rollback(); cancel(); <-finished }()
+	require.Eventually(t, func() bool {
+		var blocked bool
+		err := store.pg.QueryRowContext(raceCtx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND relation='cursor_usage_events'::regclass AND NOT granted)`, pid).Scan(&blocked)
+		return err == nil && blocked
+	}, 3*time.Second, 10*time.Millisecond, "migration must wait for the old account writer")
+	require.NoError(t, writer.Commit())
+	require.NoError(t, <-done)
 	var revision int64
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
 	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))

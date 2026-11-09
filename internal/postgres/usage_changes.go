@@ -11,7 +11,8 @@ import (
 )
 
 // Statement triggers mark each changed session pending with revision 0 in one
-// set-based write. The empty session ID marks pricing and identity changes.
+// set-based write. The empty session ID marks pricing and identity changes, and
+// usageAccountChangeKeyPG marks Cursor account changes.
 const markUsageChangeFunctionBodyPG = `
 BEGIN
     PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
@@ -60,24 +61,35 @@ BEGIN
 END;
 `
 
-const usageChangeJournalVersionPG = 1
+// Version 2 moved Cursor account changes off the empty marker.
+const usageChangeJournalVersionPG = 2
+
+// PostgreSQL text cannot hold the NUL key the SQLite journal uses.
+const usageAccountChangeKeyPG = `E'\001cursor'`
+
+// Seeding with the current revision keeps the key at or above any account
+// generation a cache recorded from an earlier marker.
+const seedUsageAccountChangeSQL = `INSERT INTO usage_session_changes(session_id, revision)
+ SELECT ` + usageAccountChangeKeyPG + `, value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
+ ON CONFLICT(session_id) DO NOTHING;
+`
 
 // Messages and plan usage reach the journal through the sessions.updated_at
-// bump every released publisher writes with them.
-var usageChangeTablesPG = []struct{ table, sessionColumn string }{
-	{"sessions", "id"},
-	{"usage_events", "session_id"},
-	{"model_pricing", ""},
-	{"model_pricing_bands", ""},
-	{"genai_pricing", ""},
-	{"cursor_usage_events", ""},
-	{"source_archives", ""},
-	{"source_project_identity_observations", ""},
-	{"source_project_identity_observation_scopes", ""},
-	{"source_session_project_identity_snapshots", ""},
-	{"source_session_project_identity_snapshot_scopes", ""},
-	{"source_worktree_project_mappings", ""},
-	{"source_worktree_project_mapping_scopes", ""},
+// bump every released publisher writes with them. Each key is a SQL expression.
+var usageChangeTablesPG = []struct{ table, sessionKey string }{
+	{"sessions", `"id"`},
+	{"usage_events", `"session_id"`},
+	{"model_pricing", "''"},
+	{"model_pricing_bands", "''"},
+	{"genai_pricing", "''"},
+	{"cursor_usage_events", usageAccountChangeKeyPG},
+	{"source_archives", "''"},
+	{"source_project_identity_observations", "''"},
+	{"source_project_identity_observation_scopes", "''"},
+	{"source_session_project_identity_snapshots", "''"},
+	{"source_session_project_identity_snapshot_scopes", "''"},
+	{"source_worktree_project_mappings", "''"},
+	{"source_worktree_project_mapping_scopes", "''"},
 }
 
 var dropUsageChangeJournalSQL = func() string {
@@ -123,25 +135,25 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 	if err := lockSyncMetadataRow(ctx, tx, "usage_change_journal_lock"); err != nil {
 		return err
 	}
-	// Any recorded version, including a newer binary's, stays untouched.
-	var version string
-	err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = 'usage_change_journal_version'`).Scan(&version)
-	if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	var schema string
-	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
-		return err
-	}
-	quoted, err := quoteIdentifier(schema)
+	quoted, err := usageChangeSchemaPG(ctx, tx)
 	if err != nil {
+		return err
+	}
+	// Version 1 upgrades in place. Any other recorded version, including a
+	// newer binary's, stays untouched.
+	var version string
+	err = tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = 'usage_change_journal_version'`).Scan(&version)
+	if version == "1" {
+		return upgradeUsageChangeJournalPG(ctx, tx, quoted)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	var ddl strings.Builder
 	ddl.WriteString(`CREATE TABLE IF NOT EXISTS usage_session_changes(session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL);
  CREATE INDEX IF NOT EXISTS idx_usage_session_changes_revision ON usage_session_changes(revision);
  INSERT INTO sync_metadata(key, value) VALUES('usage_change_revision', (extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text) ON CONFLICT(key) DO NOTHING;
-`)
+` + seedUsageAccountChangeSQL)
 	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;
  REVOKE ALL ON FUNCTION stamp_usage_change() FROM PUBLIC;
@@ -150,27 +162,8 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.revision = 0) EXECUTE FUNCTION stamp_usage_change();
 `)
 	for _, table := range usageChangeTablesPG {
-		sessionKey, filter := "''", "true"
-		columns := "*"
-		if table.table == "sessions" {
-			// Audit stamps don't change report inputs. Compare every other
-			// column, including columns added after journal installation.
-			columns = "id, to_jsonb(row_data) - 'automation_audit_hash'"
-		}
-		if table.sessionColumn != "" {
-			sessionKey, err = quoteIdentifier(table.sessionColumn)
-			if err != nil {
-				return err
-			}
-		}
-		if table.table == "model_pricing" || table.table == "model_pricing_bands" {
-			filter = `model_pattern NOT LIKE '\_%'`
-		}
 		function := "mark_usage_" + table.table
-		fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
- SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;
- REVOKE ALL ON FUNCTION %s() FROM PUBLIC;
-`, function, quoted, fmt.Sprintf(markUsageChangeFunctionBodyPG, sessionKey, filter, columns), function)
+		ddl.WriteString(markUsageChangeFunctionPG(table.table, table.sessionKey, quoted))
 		for _, trigger := range []struct{ event, referencing string }{
 			{"INSERT", "NEW TABLE AS new_rows"},
 			{"UPDATE", "OLD TABLE AS old_rows NEW TABLE AS new_rows"},
@@ -193,6 +186,41 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)`, strconv.Itoa(usageChangeJournalVersionPG))
+	return err
+}
+
+func usageChangeSchemaPG(ctx context.Context, tx *sql.Tx) (string, error) {
+	var schema string
+	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return "", err
+	}
+	return quoteIdentifier(schema)
+}
+
+func markUsageChangeFunctionPG(table, sessionKey, quoted string) string {
+	filter, columns := "true", "*"
+	if table == "sessions" {
+		// Audit stamps don't change report inputs. Compare every other
+		// column, including columns added after journal installation.
+		columns = "id, to_jsonb(row_data) - 'automation_audit_hash'"
+	}
+	if table == "model_pricing" || table == "model_pricing_bands" {
+		filter = `model_pattern NOT LIKE '\_%'`
+	}
+	function := "mark_usage_" + table
+	return fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;
+ REVOKE ALL ON FUNCTION %s() FROM PUBLIC;
+`, function, quoted, fmt.Sprintf(markUsageChangeFunctionBodyPG, sessionKey, filter, columns), function)
+}
+
+// upgradeUsageChangeJournalPG moves version-1 account changes to their own key
+// and keeps the table, counter, stamp function, and grants. The table lock waits
+// for writers that fired the version-1 trigger, so the seed covers their stamps.
+func upgradeUsageChangeJournalPG(ctx context.Context, tx *sql.Tx, quoted string) error {
+	_, err := tx.ExecContext(ctx, `LOCK TABLE cursor_usage_events IN SHARE ROW EXCLUSIVE MODE;
+`+markUsageChangeFunctionPG("cursor_usage_events", usageAccountChangeKeyPG, quoted)+seedUsageAccountChangeSQL+
+		`UPDATE sync_metadata SET value = '2' WHERE key = 'usage_change_journal_version'`)
 	return err
 }
 
@@ -230,7 +258,7 @@ func (s *Store) LoadUsageChanges(ctx context.Context, afterRevision int64) (int6
 func (s *Store) loadUsageChanges(ctx context.Context, afterRevision int64) (int64, []string, error) {
 	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id
  FROM (SELECT `+usageChangeRevisionSQL+` AS revision) r
- LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision AND c.session_id <> ''
+ LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision AND c.session_id NOT IN ('', `+usageAccountChangeKeyPG+`)
  ORDER BY c.revision, c.session_id`, strconv.Itoa(usageChangeJournalVersionPG), afterRevision)
 	if err != nil {
 		return 0, nil, err
