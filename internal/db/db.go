@@ -656,7 +656,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (167: retain Claude-format hook output as non-dialogue system rows.
 // Re-parse unchanged sources in place; source and session identities are
 // unchanged.)
-const dataVersion = 167
+// (168: fill Antigravity working directories, projects, and sub-agent parents
+// from conversation_summaries.db. Re-parse unchanged antigravity and
+// antigravity-cli sources in place, so remote mirrors that are otherwise
+// unchanged catch up; source and session identities are unchanged.)
+const dataVersion = 168
 
 const archiveOnlyVersionBase = 1 << 20
 

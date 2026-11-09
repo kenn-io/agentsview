@@ -59,7 +59,7 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 			parser.AgentQoder,
 			parser.AgentIcodemate,
 		},
-		db.ScopedDataVersionProviders(previous, db.CurrentDataVersion()),
+		db.ScopedDataVersionProviders(previous, previous+1),
 	)
 
 	archivePath := database.Path()

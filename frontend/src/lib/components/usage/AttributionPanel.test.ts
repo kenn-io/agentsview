@@ -582,6 +582,21 @@ describe("AttributionPanel job groups", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["list", "treemap"] as const)(
+    "labels a project with no name in the %s view",
+    async (view) => {
+      usage.toggles.attribution.view = view;
+      const component = mountPanel();
+      await tick();
+      const labels = Array.from(
+        document.querySelectorAll(".list-label, .rail-label"),
+        (label) => label.textContent,
+      );
+      expect(labels).toEqual(["hermes-cron", "Unassigned project"]);
+      await unmount(component);
+    },
+  );
+
   it("reports the analytics kind for a displayed project error", async () => {
     usage.selectedProjectKey = "pl1:sha256:first";
     usageServiceMocks.getApiV1UsageTopSessions.mockRejectedValueOnce(new Error("Project failed"));
