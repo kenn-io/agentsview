@@ -408,6 +408,8 @@ func vectorDocumentEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSe
 	return set, nil
 }
 
+var errEmbeddingsSetupDaemonRestart = errors.New("restart the daemon with `agentsview daemon restart`, then retry `agentsview index embeddings build` or use Settings → Embeddings → Turn on")
+
 // runEmbeddingsBuild enables search when needed and runs a build through
 // the writable local daemon or directly against the archive.
 func runEmbeddingsBuild(
@@ -452,6 +454,9 @@ func runEmbeddingsBuild(
 			if tr.ReadOnly {
 				return errors.New("semantic search setup requires a writable daemon")
 			}
+			if shouldReplaceDaemonRuntime(tr.Runtime, version) {
+				return errEmbeddingsSetupDaemonRestart
+			}
 			client = &embeddingsDaemonClient{baseURL: tr.URL, token: cfg.AuthToken, store: daemonEmbeddingStore(spec.Name)}
 		} else {
 			if tr.DirectReadOnly {
@@ -478,7 +483,11 @@ func runEmbeddingsBuild(
 		if err != nil {
 			return err
 		}
-		if status.Setup != nil {
+		if status.Setup == nil {
+			if setup {
+				return errEmbeddingsSetupDaemonRestart
+			}
+		} else {
 			setup = setup || status.Setup.Action == "turn-on"
 			setupBusy = status.Setup.Busy
 		}
@@ -803,6 +812,15 @@ func (p *buildProgressPrinter) print(w io.Writer, phase string, done, total int6
 	p.printed = true
 	p.lastPhase, p.lastDone, p.lastTotal = phase, done, total
 	printBuildProgress(w, phase, done, total)
+}
+
+func (p *buildProgressPrinter) printDownload(w io.Writer, done, total int64) {
+	percent := done * 100 / max(total, 1)
+	if p.printed && p.lastPhase == "download" && p.lastDone == percent && p.lastTotal == total {
+		return
+	}
+	p.printed, p.lastPhase, p.lastDone, p.lastTotal = true, "download", percent, total
+	fmt.Fprintf(w, "Download: %d%% of %d MB\n", percent, (total+999999)/1000000)
 }
 
 // printBuildProgress writes one progress line for either build path. Before

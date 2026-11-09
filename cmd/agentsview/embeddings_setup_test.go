@@ -25,6 +25,7 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/vector"
+	"go.kenn.io/kit/daemon"
 	"go.kenn.io/kit/embedlocal"
 )
 
@@ -932,7 +933,9 @@ func TestCLIEmbeddingsFreshSetupAutostartsAndSyncs(t *testing.T) {
 		ts := startTestServer(t, ln, server.New(*cfg, database, nil, append(owner.ServerOptions(), server.WithBaseContext(t.Context()))...).Handler())
 		endpoint := serverEndpoint(t, ts)
 		writeDaemonRuntimeForTest(t, cfg.DataDir, endpoint.Host, endpoint.Port, version, false)
-		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
+		runtime := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+		require.NotNil(t, runtime)
+		return runtime, nil
 	})
 	oldInterval := embeddingsPollInterval
 	embeddingsPollInterval = 10 * time.Millisecond
@@ -1048,4 +1051,46 @@ func TestCLIEmbeddingsSetupAcceptsAutomaticServerBeforeAutostart(t *testing.T) {
 	cmd := newEmbeddingsBuildCommand()
 	cmd.SetArgs([]string{"--using", "automatic"})
 	require.ErrorIs(t, cmd.Execute(), startup)
+}
+
+func TestCLIEmbeddingsSetupRejectsOlderDaemonBeforeConsent(t *testing.T) {
+	for _, missingStatus := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing-status=%t", missingStatus), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+			setTestVersion(t, "2.0.0")
+			dir := testDataDir(t)
+			path := filepath.Join(dir, "config.toml")
+			contents := []byte("[vector]\nenabled = false\n")
+			require.NoError(t, os.WriteFile(path, contents, 0o600))
+			var posts atomic.Int64
+			mux := http.NewServeMux()
+			serverVersion := "1.0.0"
+			if missingStatus {
+				serverVersion = version
+			}
+			mux.Handle("GET /api/ping", daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: serverVersion}))
+			mux.HandleFunc("GET /api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"running":false}`)
+			})
+			mux.HandleFunc("POST /api/v1/embeddings/setup", func(w http.ResponseWriter, _ *http.Request) {
+				posts.Add(1)
+				w.WriteHeader(http.StatusNotFound)
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			endpoint := serverEndpoint(t, srv)
+			writeDaemonRuntimeForTest(t, dir, endpoint.Host, endpoint.Port, serverVersion, false)
+			var out strings.Builder
+			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+			require.ErrorIs(t, err, errEmbeddingsSetupDaemonRestart)
+			assert.ErrorContains(t, err, "agentsview daemon restart")
+			assert.NotContains(t, out.String(), "[y/N]")
+			assert.Zero(t, posts.Load())
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, contents, after)
+		})
+	}
 }
