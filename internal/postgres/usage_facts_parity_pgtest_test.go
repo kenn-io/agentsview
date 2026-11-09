@@ -179,6 +179,17 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	require.NotEmpty(t, remoteWithBreakdowns.Daily.AgentBreakdowns)
 	require.Equal(t, localWithBreakdowns, remoteWithBreakdowns,
 		"cross-backend daily breakdown result")
+
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "event-only", Project: "event-project", Machine: "parity-machine", Agent: "copilot", StartedAt: new("2026-08-12T09:00:00Z")}))
+	require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), "event-only", []db.UsageEvent{{SessionID: "event-only", Source: "message", Model: "model-priced", OutputTokens: 30, OccurredAt: "2026-08-12T09:00:00Z", DedupKey: "event"}}))
+	pushed, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	filter.Project = "event-project"
+	matching, err := (&Store{pg: remote.pg}).GetUsageMatchingSessionCount(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 1, matching, "a modeled usage event counts regardless of its source label")
+	requireCachedUsageMatchesDirect(t, remote, filter)
 }
 
 func TestUsageCSVFiltersParity(t *testing.T) {

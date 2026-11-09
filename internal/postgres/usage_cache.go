@@ -213,8 +213,8 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 				params[i] = pb.add(id)
 			}
 			selected := strings.Join(params, ",")
-			rowsSQL := pgDailyUsageRowsSQLWithColumns(pgUsageMessageEligibility+` AND m.session_id IN (`+selected+`)`, pgUsageEventEligibility+` AND ue.session_id IN (`+selected+`)`, ", m.role AS message_role", ", ''::text AS message_role")
-			extraColumns := ", (" + pgSnapshotOutputTokensSQL() + ")::bigint, u.message_role"
+			rowsSQL := pgDailyUsageRowsSQLWithColumns(pgUsageMessageEligibility+` AND m.session_id IN (`+selected+`)`, pgUsageEventEligibility+` AND ue.session_id IN (`+selected+`)`, ", m.role = 'assistant' AS activity_eligible", ", true AS activity_eligible")
+			extraColumns := ", (" + pgSnapshotOutputTokensSQL() + ")::bigint, u.activity_eligible"
 			query := pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, true, "u.session_id", false, false, extraColumns) + ` ORDER BY u.session_id, u.ts ASC NULLS FIRST, COALESCE(u.message_ordinal,-1), u.usage_dedup_key`
 			rows, err := view.pg.QueryContext(ctx, query, pb.args...)
 			if err != nil {
@@ -223,14 +223,14 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 			defer rows.Close()
 			for rows.Next() {
 				var rankingOutput int64
-				var role string
-				row, err := scanPGDailyUsageRowWithMachine(rows, true, &rankingOutput, &role)
+				var activityEligible bool
+				row, err := scanPGDailyUsageRowWithMachine(rows, true, &rankingOutput, &activityEligible)
 				if err != nil {
 					_ = rows.Close()
 					return err
 				}
 				input, output, write, read, reasoning := pgDailyUsageRowTokens(row)
-				fact := usagefacts.Fact{Source: row.usageSource, Model: row.model, ProviderID: row.providerID, RawTimestamp: pgUsageCacheTime(row.pricingTS), UsesSessionStart: !row.pricingTS.Valid, InputTokens: int64(input), OutputTokens: int64(output), RankingOutputTokens: &rankingOutput, ReasoningTokens: int64(reasoning), CacheCreationTokens: int64(write), CacheReadTokens: int64(read), CacheCreation1hTokens: int64(pgUsageRowCacheCreation1hTokens(row.usageSource, row.tokenJSON, write)), WebSearchRequests: int64(pgDailyUsageRowWebSearchRequests(row)), CostSource: row.costSource, ClaudeMessageID: row.claudeMessageID, ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID, UsageDedupKey: row.usageDedupKey, TokenEligible: true, ActivityEligible: row.usageSource != "message" || role == "assistant"}
+				fact := usagefacts.Fact{Source: row.usageSource, Model: row.model, ProviderID: row.providerID, RawTimestamp: pgUsageCacheTime(row.pricingTS), UsesSessionStart: !row.pricingTS.Valid, InputTokens: int64(input), OutputTokens: int64(output), RankingOutputTokens: &rankingOutput, ReasoningTokens: int64(reasoning), CacheCreationTokens: int64(write), CacheReadTokens: int64(read), CacheCreation1hTokens: int64(pgUsageRowCacheCreation1hTokens(row.usageSource, row.tokenJSON, write)), WebSearchRequests: int64(pgDailyUsageRowWebSearchRequests(row)), CostSource: row.costSource, ClaudeMessageID: row.claudeMessageID, ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID, UsageDedupKey: row.usageDedupKey, TokenEligible: true, ActivityEligible: activityEligible}
 				fact.TimestampMillis, _, _ = usagefacts.ParseTimestamp(fact.RawTimestamp)
 				fact.TimestampNanos = usagefacts.ParseTimestampNanos(fact.RawTimestamp)
 				if row.messageOrdinal.Valid {
