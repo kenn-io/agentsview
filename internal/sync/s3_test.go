@@ -266,23 +266,23 @@ func TestProcessS3CodexForkRetriesUntilParentAvailable(t *testing.T) {
 	mtime := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC).UnixNano()
 
 	oldFetch := fetchS3Object
-	oldFindParent := findCodexS3ParentSessionURIs
+	oldFindParent := findCodexS3ParentSessionObjects
 	t.Cleanup(func() {
 		fetchS3Object = oldFetch
-		findCodexS3ParentSessionURIs = oldFindParent
+		findCodexS3ParentSessionObjects = oldFindParent
 	})
 	parentAvailable := false
 	var fetched []string
-	findCodexS3ParentSessionURIs = func(
+	findCodexS3ParentSessionObjects = func(
 		gotRoot, gotChild, gotParent string,
-	) []string {
+	) []parser.S3Object {
 		require.Empty(t, gotRoot)
 		require.Equal(t, childPath, gotChild)
 		require.Equal(t, parentID, gotParent)
 		if !parentAvailable {
 			return nil
 		}
-		return []string{parentPath}
+		return []parser.S3Object{{URI: parentPath}}
 	}
 	fetchS3Object = func(got string) (io.ReadCloser, error) {
 		fetched = append(fetched, got)
@@ -382,14 +382,14 @@ func TestProcessS3CodexForkOfRevertedThreadSkipsReplayedPageTurns(t *testing.T) 
 		),
 	}
 	oldFetch := fetchS3Object
-	oldFindParent := findCodexS3ParentSessionURIs
+	oldFindParent := findCodexS3ParentSessionObjects
 	t.Cleanup(func() {
 		fetchS3Object = oldFetch
-		findCodexS3ParentSessionURIs = oldFindParent
+		findCodexS3ParentSessionObjects = oldFindParent
 	})
-	findCodexS3ParentSessionURIs = func(_, _, gotParent string) []string {
+	findCodexS3ParentSessionObjects = func(_, _, gotParent string) []parser.S3Object {
 		require.Equal(t, parentID, gotParent)
-		return []string{headPath, pagePath}
+		return []parser.S3Object{{URI: headPath}, {URI: pagePath}}
 	}
 	for _, tt := range []struct {
 		name         string
