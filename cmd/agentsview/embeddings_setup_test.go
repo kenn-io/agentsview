@@ -543,16 +543,15 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 	})
 	for _, tc := range []struct {
-		name, store, using, wantStore                  string
-		full, download, decline, autostart, setupError bool
+		name, store, using, wantStore       string
+		full, download, decline, setupError bool
 	}{
-		{"configured", "", "local", "messages", true, false, false, false, false},
-		{"recall", "recall", "local", "recall", false, false, false, false, false},
-		{"download", "", "", "messages", true, true, false, false, false},
-		{"configured-declined", "", "local", "messages", false, false, true, false, false},
-		{"download-declined", "", "", "messages", false, true, true, false, false},
-		{"autostart", "", "local", "messages", false, false, false, true, false},
-		{"setup-error", "", "local", "messages", false, false, false, false, true},
+		{"configured", "", "local", "messages", true, false, false, false},
+		{"recall", "recall", "local", "recall", false, false, false, false},
+		{"download", "", "", "messages", true, true, false, false},
+		{"configured-declined", "", "local", "messages", false, false, true, false},
+		{"download-declined", "", "", "messages", false, true, true, false},
+		{"setup-error", "", "local", "messages", false, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -609,25 +608,16 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 					}
 				},
 				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
-					require.NoError(t, json.UnmarshalRead(r.Body, &setupRequest))
+					if !assert.NoError(t, json.UnmarshalRead(r.Body, &setupRequest)) {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
 					accepted.Store(true)
 					w.WriteHeader(http.StatusAccepted)
 					_, _ = io.WriteString(w, `{"started":true}`)
 				},
 			}
-			var started bool
-			if tc.autostart {
-				t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
-				stubStartBackgroundServeForTransport(t, func(_ context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
-					started = true
-					startEmbeddingsTestDaemon(t, cfg.DataDir, handlers)
-					runtime := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
-					require.NotNil(t, runtime)
-					return runtime, nil
-				})
-			} else {
-				startEmbeddingsTestDaemon(t, dir, handlers)
-			}
+			startEmbeddingsTestDaemon(t, dir, handlers)
 			var out strings.Builder
 			input := "yes\n"
 			if tc.decline {
@@ -644,9 +634,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			if tc.autostart {
-				assert.True(t, started)
-			}
 			assert.GreaterOrEqual(t, polls.Load(), int64(2))
 			if tc.full {
 				assert.Contains(t, out.String(), "This rebuild re-embeds every document.")
@@ -664,56 +651,49 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 	}
 }
 
-func TestCLIEmbeddingsSetupRequiresDaemon(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	dir := testDataDir(t)
-	path := filepath.Join(dir, "config.toml")
-	contents := []byte("[vector]\nenabled = false\n")
-	require.NoError(t, os.WriteFile(path, contents, 0o600))
-	var out strings.Builder
-	err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-	require.ErrorContains(t, err, "search setup requires a writable daemon")
-	assert.ErrorContains(t, err, "agentsview daemon start")
-	assert.ErrorContains(t, err, "agentsview index embeddings build")
-	assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
-	assert.NotContains(t, out.String(), "[y/N]")
-}
-
-func TestCLIEmbeddingsSetupRejectsOlderDaemonBeforeConsent(t *testing.T) {
-	for _, missingStatus := range []bool{false, true} {
-		t.Run(fmt.Sprintf("missing-status=%t", missingStatus), func(t *testing.T) {
+func TestCLIEmbeddingsSetupRequiresWritableDaemon(t *testing.T) {
+	for _, state := range []string{"absent", "older", "missing status"} {
+		t.Run(state, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 			setTestVersion(t, "2.0.0")
 			dir := testDataDir(t)
-			path := filepath.Join(dir, "config.toml")
-			contents := []byte("[vector]\nenabled = false\n")
-			require.NoError(t, os.WriteFile(path, contents, 0o600))
-			mux := http.NewServeMux()
-			serverVersion := "1.0.0"
-			if missingStatus {
-				serverVersion = version
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
+			if state != "absent" {
+				serverVersion := "1.0.0"
+				if state == "missing status" {
+					serverVersion = version
+				}
+				mux := http.NewServeMux()
+				mux.Handle("GET /api/ping", daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: serverVersion}))
+				if state == "missing status" {
+					mux.HandleFunc("GET /api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = io.WriteString(w, `{"running":false}`)
+					})
+				}
+				srv := httptest.NewServer(mux)
+				t.Cleanup(srv.Close)
+				endpoint := serverEndpoint(t, srv)
+				writeDaemonRuntimeForTest(t, dir, endpoint.Host, endpoint.Port, serverVersion, false)
 			}
-			mux.Handle("GET /api/ping", daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: serverVersion}))
-			mux.HandleFunc("GET /api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"running":false}`)
-			})
-			srv := httptest.NewServer(mux)
-			t.Cleanup(srv.Close)
-			endpoint := serverEndpoint(t, srv)
-			writeDaemonRuntimeForTest(t, dir, endpoint.Host, endpoint.Port, serverVersion, false)
 			var out strings.Builder
 			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-			require.ErrorIs(t, err, errEmbeddingsSetupDaemonRestart)
-			assert.ErrorContains(t, err, "agentsview daemon restart")
+			if state == "absent" {
+				require.ErrorContains(t, err, "search setup requires a writable daemon")
+				assert.ErrorContains(t, err, "agentsview daemon start")
+				assert.ErrorContains(t, err, "agentsview index embeddings build")
+				assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
+			} else {
+				require.ErrorIs(t, err, errEmbeddingsSetupDaemonRestart)
+				assert.ErrorContains(t, err, "agentsview daemon restart")
+			}
 			assert.NotContains(t, out.String(), "[y/N]")
 		})
 	}
 }
 
-func TestLiveEmbeddingsSetupReportsRemovedServer(t *testing.T) {
+func TestLiveEmbeddingsSetupFailurePersistsUntilBuildStarts(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
 	encoder := newEmbeddingsStubServer(t, 3)
@@ -738,17 +718,15 @@ func TestLiveEmbeddingsSetupReportsRemovedServer(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, owner.Close()) })
-	ln, port := listenLoopback(t)
-	cfg.Host, cfg.Port = "127.0.0.1", port
-	ts := startTestServer(t, ln, server.New(cfg, database, nil, append(owner.ServerOptions(), server.WithBaseContext(t.Context()))...).Handler())
 	require.NoError(t, owner.Setup(0, &vector.BuildRequest{Using: "local"}))
 	<-owner.done
 	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.Contains(t, status.Error, `no embeddings server named "local"`)
-	client := embeddingsDaemonClient{baseURL: ts.URL}
-	require.NoError(t, client.startBuild(t.Context(), vector.BuildRequest{Using: "other"}))
-	require.NoError(t, pollDaemonBuildStatus(t.Context(), io.Discard, client))
+	manager := owner.Manager("")
+	require.NoError(t, manager.StartBuild(vector.BuildRequest{Using: "other"}))
+	owner.BuildStarted()
+	require.Eventually(t, func() bool { return manager.Status().LastResult != nil }, 10*time.Second, 10*time.Millisecond)
 	status, err = owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, status.Error)
