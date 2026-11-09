@@ -59,7 +59,7 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 	})
 	reopened := 0
 	if err == nil {
-		reopened, err = f.Reopen(ctx, since, runner.Loc)
+		reopened, err = f.Reopen(ctx, since, latest.Format(time.DateOnly), runner.Loc)
 	}
 	if rep != (filing.ReconcileReport{}) || reopened != 0 {
 		log.Printf("friction: automatic filing created %d, linked %d, will retry %d, needs a person %d, reopened %d",
