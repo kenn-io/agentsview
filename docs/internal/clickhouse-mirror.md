@@ -656,6 +656,14 @@ totals.
 Nothing rebuilds kept reads in the background. The first request after a push
 that changes a read's rows pays for that read.
 
+**Usage on disk.** Fully prepared Usage selections keep their ordered priced
+rows across restarts, including the rows used by Top sessions and Comparison.
+A file holds at most 128 MiB, and the mirror's Usage cache holds at most
+256 MiB. Serve removes the least recently opened files first. It checks the
+source and pricing before reusing or publishing a selection. A changed source
+rebuilds the selection on the next read; pushes do no cache rebuilding. Raw,
+mixed, and time-dependent selections stay on their existing read path.
+
 **Reports on disk.** When a client opens an ended day, its report is written to
 the report cache described in
 [ClickHouse sync](../clickhouse-sync.md#agentsview-clickhouse-serve), one file

@@ -25,7 +25,7 @@ type Report struct {
 	Done      activity.Progress
 }
 
-type activityReportDisk struct{ dir, build string }
+type activityReportDisk struct{ dir, build, suffix string }
 
 // Reports keeps ended ranges in memory and requested days on disk.
 // Each memo holds up to 128 MiB; disk-backed reports also have an eight-entry cap.
@@ -86,7 +86,7 @@ func (s *Reports) Path(selection string) string { return s.disk.path(selection) 
 func (s *Reports) Sweep(now time.Time) (int, error) { return s.disk.sweep(now) }
 
 // StartSweep owns the sweep until Close, independently of the startup context.
-func (s *Reports) StartSweep(ctx context.Context) {
+func (s *Reports) StartSweep(ctx context.Context, others ...func(time.Time)) {
 	if s.disk.dir == "" || s.cancel != nil {
 		return
 	}
@@ -98,7 +98,11 @@ func (s *Reports) StartSweep(ctx context.Context) {
 		ticker := time.NewTicker(activityReportSweepInterval)
 		defer ticker.Stop()
 		for {
-			removed, err := s.Sweep(time.Now())
+			now := time.Now()
+			for _, sweep := range others {
+				sweep(now)
+			}
+			removed, err := s.Sweep(now)
 			if err != nil {
 				log.Printf("%s: sweeping kept activity reports: %v", s.subdir, err)
 			}
@@ -152,7 +156,14 @@ func (s *Reports) OpenDisk(subdir, id string) error {
 
 func (d activityReportDisk) path(selection string) string {
 	name := sha256.Sum256([]byte(selection))
-	return filepath.Join(d.dir, hex.EncodeToString(name[:16])+".json")
+	return filepath.Join(d.dir, hex.EncodeToString(name[:16])+d.fileSuffix())
+}
+
+func (d activityReportDisk) fileSuffix() string {
+	if d.suffix == "" {
+		return ".json"
+	}
+	return d.suffix
 }
 
 func (d activityReportDisk) header(key string) []byte {
@@ -249,7 +260,7 @@ func (d activityReportDisk) sweep(now time.Time) (int, error) {
 			continue
 		case strings.HasPrefix(name, activityReportTempPrefix):
 			maxAge = activityReportTempAge
-		case strings.HasSuffix(name, ".json"):
+		case strings.HasSuffix(name, d.fileSuffix()):
 			maxAge = activityReportUnopened
 		default:
 			continue

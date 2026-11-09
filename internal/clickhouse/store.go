@@ -77,6 +77,7 @@ type Store struct {
 	deltaCache usageDeltaCache
 	// The usage row memos keep recent range reads per rows and filter.
 	dailyUsageRows       kept.Memo[chDailyUsageGroupRow]
+	usageDisk            kept.Disk
 	sessionAggregateRows kept.Memo[chUsageAggregateRow]
 	usageSessionRows     kept.Memo[chUsageSessionRow]
 	// topSessionTotals keeps each session's totals per top-sessions read.
