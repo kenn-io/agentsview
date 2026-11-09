@@ -332,7 +332,7 @@ func TestPGUsageBenchmarkReadPreflightRejectsMismatchedCompleteResult(t *testing
 	require.NoError(t, err)
 	counts.Total++
 	remote := pgUsageCountsOverride{Store: fixture.remote, counts: counts}
-	require.Error(t, completeUsageParity(t.Context(), fixture.local, remote, filter),
+	require.Error(t, completeUsageParity(t.Context(), fixture.local, remote, filter, "snapshot-winner"),
 		"complete preflight must reject a non-empty PostgreSQL count mismatch")
 
 	recorded := &pgUsageMethodRecorder{Store: fixture.remote}

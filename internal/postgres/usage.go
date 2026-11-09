@@ -2191,6 +2191,7 @@ func (s *Store) GetTopSessionsByCost(
 	} else {
 		result = db.SortAndLimitTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
+
 	sessionIDs := make([]string, 0, len(result))
 	for _, entry := range result {
 		if entry.SessionID != "" {

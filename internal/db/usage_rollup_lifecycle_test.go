@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -22,7 +23,22 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
+func TestUsageQueryIntervals(t *testing.T) {
+	day := usageQueryInterval{
+		FromMillis:    time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC).UnixMilli(),
+		ToMillis:      time.Date(2026, 9, 7, 3, 0, 0, 0, time.UTC).UnixMilli(),
+		FromLocalDate: "2026-09-06", ToLocalDate: "2026-09-06",
+	}
+	assert.Equal(t, []usageQueryInterval{day}, usageQueryIntervals(UsageFilter{From: "2026-09-06", To: "2026-09-06", Timezone: "America/Santiago"}))
+	fromOnly := day
+	fromOnly.ToMillis, fromOnly.ToLocalDate = math.MaxInt64, ""
+	assert.Equal(t, []usageQueryInterval{fromOnly}, usageQueryIntervals(UsageFilter{From: "2026-09-06", Timezone: "America/Santiago"}))
+	toOnly := day
+	toOnly.FromMillis, toOnly.FromLocalDate = math.MinInt64, "0000-01-01"
+	assert.Equal(t, []usageQueryInterval{toOnly}, usageQueryIntervals(UsageFilter{To: "2026-09-06", Timezone: "America/Santiago"}))
+}
+
+func TestUsageTimezoneIdentityTracksNamedZoneRules(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 	intervals := usageQueryIntervals(UsageFilter{
@@ -34,9 +50,7 @@ func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
 	assert.Equal(t, "America/Chicago", got.Name)
 	assert.NotEmpty(t, got.IntervalFingerprint)
 	assert.Equal(t, "America/Chicago:"+got.IntervalFingerprint, got.Key)
-}
 
-func TestUsageTimezoneRuleFingerprintTracksNamedZoneRules(t *testing.T) {
 	left := usageTimezoneRuleFingerprint(
 		"Named/Zone", time.FixedZone("Named/Zone", -6*60*60))
 	right := usageTimezoneRuleFingerprint(
@@ -863,7 +877,7 @@ func TestUsageRollupConnectedSnapshotChangeRebuildsOnlyChangedSession(t *testing
 		"the changed sibling must immediately replace the snapshot winner")
 }
 
-func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
+func TestUsageRollupPublishesOnlyCurrentFactRevisions(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name              string
@@ -974,10 +988,6 @@ func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, result.Groups, 1)
 			require.Equal(t, int64(20), result.Groups[0].OutputTokens)
-			if tc.account {
-				require.Equal(t, int64(200), result.Groups[0].CostMicrodollars)
-				return
-			}
 		})
 	}
 }

@@ -294,11 +294,11 @@ func requireCompleteUsageParity(
 	t testing.TB, local, remote db.Store, filter db.UsageFilter,
 ) {
 	t.Helper()
-	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter))
+	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter, "snapshot-winner"))
 }
 
 func completeUsageParity(
-	ctx context.Context, local, remote db.Store, filter db.UsageFilter,
+	ctx context.Context, local, remote usageAggregateReader, filter db.UsageFilter, sessionID ...string,
 ) error {
 	localDaily, err := local.GetDailyUsage(ctx, filter)
 	if err != nil {
@@ -308,18 +308,30 @@ func completeUsageParity(
 	if err != nil {
 		return fmt.Errorf("remote GetDailyUsage: %w", err)
 	}
-	// Compare public results; Pairwise holds backend-specific read metadata.
-	localDaily.Pairwise, remoteDaily.Pairwise = nil, nil
+	// Full-store parity ignores backend-specific ranking metadata; cache parity
+	// compares the aggregate result and normalizes stored timestamp formatting.
+	fullStore := len(sessionID) > 0
+	if fullStore {
+		localDaily.Pairwise, remoteDaily.Pairwise = nil, nil
+	}
 	if !reflect.DeepEqual(localDaily, remoteDaily) {
 		return fmt.Errorf("complete daily result differs")
 	}
-	localTop, err := local.GetTopSessionsByCost(ctx, filter, 10)
+	limit := 20
+	if fullStore {
+		limit = 10
+	}
+	localTop, err := local.GetTopSessionsByCost(ctx, filter, limit)
 	if err != nil {
 		return fmt.Errorf("local GetTopSessionsByCost: %w", err)
 	}
-	remoteTop, err := remote.GetTopSessionsByCost(ctx, filter, 10)
+	remoteTop, err := remote.GetTopSessionsByCost(ctx, filter, limit)
 	if err != nil {
 		return fmt.Errorf("remote GetTopSessionsByCost: %w", err)
+	}
+	if !fullStore {
+		normalizeUsageTopTimes(localTop)
+		normalizeUsageTopTimes(remoteTop)
 	}
 	if !reflect.DeepEqual(localTop, remoteTop) {
 		return fmt.Errorf("complete top-session result differs")
@@ -346,11 +358,14 @@ func completeUsageParity(
 	if localMatching != remoteMatching {
 		return fmt.Errorf("complete matching-session-count result differs")
 	}
-	localSession, err := local.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	if !fullStore {
+		return nil
+	}
+	localSession, err := local.(db.Store).GetSessionUsage(ctx, sessionID[0], filter.Breakdowns)
 	if err != nil {
 		return fmt.Errorf("local GetSessionUsage: %w", err)
 	}
-	remoteSession, err := remote.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	remoteSession, err := remote.(db.Store).GetSessionUsage(ctx, sessionID[0], filter.Breakdowns)
 	if err != nil {
 		return fmt.Errorf("remote GetSessionUsage: %w", err)
 	}

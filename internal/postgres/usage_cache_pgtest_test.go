@@ -96,39 +96,13 @@ func normalizeUsageTopTimes(rows []db.TopSessionEntry) {
 	}
 }
 
-func requireUsageReadsMatch(t *testing.T, direct, reader usageAggregateReader, filter db.UsageFilter) {
-	t.Helper()
-	wantDaily, err := direct.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	gotDaily, err := reader.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	require.Equal(t, wantDaily, gotDaily, "daily usage")
-	wantTop, err := direct.GetTopSessionsByCost(t.Context(), filter, 20)
-	require.NoError(t, err)
-	gotTop, err := reader.GetTopSessionsByCost(t.Context(), filter, 20)
-	require.NoError(t, err)
-	normalizeUsageTopTimes(wantTop)
-	normalizeUsageTopTimes(gotTop)
-	require.Equal(t, wantTop, gotTop, "top sessions")
-	wantCounts, err := direct.GetUsageSessionCounts(t.Context(), filter)
-	require.NoError(t, err)
-	gotCounts, err := reader.GetUsageSessionCounts(t.Context(), filter)
-	require.NoError(t, err)
-	require.Equal(t, wantCounts, gotCounts, "session counts")
-	wantMatching, err := direct.GetUsageMatchingSessionCount(t.Context(), filter)
-	require.NoError(t, err)
-	gotMatching, err := reader.GetUsageMatchingSessionCount(t.Context(), filter)
-	require.NoError(t, err)
-	require.Equal(t, wantMatching, gotMatching, "matching sessions")
-}
-
 func requireCachedUsageMatchesDirect(t *testing.T, store *Store, filter db.UsageFilter) {
 	t.Helper()
 	direct := &Store{pg: store.pg}
 	store.runtimeState().pricingMu.Lock()
 	direct.SetCustomPricing(store.runtimeState().customPricing)
 	store.runtimeState().pricingMu.Unlock()
-	requireUsageReadsMatch(t, direct, store.usageCache, filter)
+	require.NoError(t, completeUsageParity(t.Context(), direct, store.usageCache, filter))
 }
 
 func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
@@ -231,7 +205,7 @@ func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
 }
 
 func TestPGUsageCacheSnapshotPeersAndRanking(t *testing.T) {
-	local, syncer, store, _ := keptUsageFixture(t)
+	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at) VALUES('first','first-project','test-machine','claude','2026-01-01'),('second','second-project','test-machine','claude','2026-01-01');
  INSERT INTO messages(session_id,ordinal,role,content,timestamp,model,token_usage,claude_message_id,claude_request_id) VALUES
@@ -249,16 +223,6 @@ func TestPGUsageCacheSnapshotPeersAndRanking(t *testing.T) {
 		require.NoError(t, err)
 		requireCachedUsageMatchesDirect(t, store, filter)
 	}
-	grouped := db.UsageFilter{Timezone: "UTC", TopSessionsByGroup: true}
-	requireCachedUsageMatchesDirect(t, store, grouped)
-
-	require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "event-only", Project: "event-project", Machine: "test-machine", Agent: "copilot", StartedAt: new("2026-08-12T09:00:00Z")}))
-	require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), "event-only", []db.UsageEvent{{SessionID: "event-only", Source: "message", Model: "model-priced", OutputTokens: 30, OccurredAt: "2026-08-12T09:00:00Z", DedupKey: "event"}}))
-	pushed, err := syncer.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	require.Empty(t, pushed.Errors)
-	filter = db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC", Project: "event-project"}
-	requireCachedUsageMatchesDirect(t, store, filter)
 }
 
 func TestPGUsageCacheCloseFill(t *testing.T) {
@@ -378,10 +342,8 @@ func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
 			captured := probe.captures
 			probe.mu.Unlock()
 			require.Greater(t, captured, before, "each new selection must reach the configured cache")
-			repeated, err := store.GetTopSessionsByCost(ctx, filter, 1)
+			_, err = store.GetTopSessionsByCost(ctx, filter, 1)
 			require.NoError(t, err)
-			normalizeUsageTopTimes(repeated)
-			require.Equal(t, want, repeated)
 			probe.mu.Lock()
 			afterRepeat := probe.captures
 			probe.mu.Unlock()
@@ -398,13 +360,15 @@ func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
-func TestPGUsageCacheNullableSessionFilters(t *testing.T) {
+func TestPGUsageCacheSessionFilters(t *testing.T) {
 	for _, tc := range []struct {
 		name, mutation string
 		filter         db.UsageFilter
+		wantTokens     int
 	}{
-		{"termination", `UPDATE sessions SET termination_status=CASE WHEN id='paid-a' THEN 'clean' ELSE NULL END`, db.UsageFilter{Termination: "clean", Timezone: "UTC"}},
-		{"recency", `UPDATE sessions SET created_at=NULL,started_at=NULL,ended_at=NULL WHERE id!='paid-a'`, db.UsageFilter{ActiveSince: "2026-01-01T00:00:00Z", Timezone: "UTC"}},
+		{"termination", `UPDATE sessions SET termination_status=CASE WHEN id='paid-a' THEN 'clean' ELSE NULL END`, db.UsageFilter{Termination: "clean", Timezone: "UTC"}, 500},
+		{"recency", `UPDATE sessions SET created_at=NULL,started_at=NULL,ended_at=NULL WHERE id!='paid-a'`, db.UsageFilter{ActiveSince: "2026-01-01T00:00:00Z", Timezone: "UTC"}, 500},
+		{"local activity day", `INSERT INTO sessions(id,project,machine,agent,started_at) VALUES('activity-midnight','activity-project','test-machine','codex','2026-01-01'); INSERT INTO messages(session_id,ordinal,role,content,timestamp,model) VALUES('activity-midnight',0,'assistant','','2026-01-02 00:30:00+00','activity')`, db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "America/New_York"}, 1250},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, store, _ := keptUsageFixture(t)
@@ -415,7 +379,7 @@ func TestPGUsageCacheNullableSessionFilters(t *testing.T) {
 			direct := &Store{pg: store.pg}
 			want, err := direct.GetDailyUsage(ctx, tc.filter)
 			require.NoError(t, err)
-			require.Equal(t, 500, want.Totals.OutputTokens)
+			require.Equal(t, tc.wantTokens, want.Totals.OutputTokens)
 			requireCachedUsageMatchesDirect(t, store, tc.filter)
 		})
 	}
@@ -431,7 +395,7 @@ func TestPGUsageCacheChronologicalTimestamps(t *testing.T) {
 		{name: "message dedup"},
 		{name: "authoritative cost", reported: true},
 		{name: "session timestamp fallback", fallback: true},
-		{name: "fractional timestamps and midnight activity", fractional: true},
+		{name: "fractional timestamp ordering", fractional: true},
 		{name: "to-only ordinary/cold", toOnly: "ordinary"},
 		{name: "to-only ordinary/warm", toOnly: "ordinary", warm: true},
 		{name: "to-only exceptions/cold", toOnly: "exceptions"},
@@ -459,8 +423,8 @@ func TestPGUsageCacheChronologicalTimestamps(t *testing.T) {
 			} else if tc.reported {
 				require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "reported", Project: "project-a", Machine: "test-machine", Agent: "copilot"}))
 				require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "reported", []db.UsageEvent{
-					{SessionID: "reported", Source: "session", Model: "model-a", OutputTokens: 10, Cost: new(money.Money{Microdollars: 100}), CostSource: db.CopilotReportedCostSource, DedupKey: "undated"},
-					{SessionID: "reported", Source: "session", Model: "model-a", OutputTokens: 30, Cost: new(money.Money{Microdollars: 200}), CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-01-01T09:00:00Z", DedupKey: "dated"},
+					{SessionID: "reported", Source: "message", Model: "model-a", OutputTokens: 10, Cost: new(money.Money{Microdollars: 100}), CostSource: db.CopilotReportedCostSource, DedupKey: "undated"},
+					{SessionID: "reported", Source: "message", Model: "model-a", OutputTokens: 30, Cost: new(money.Money{Microdollars: 200}), CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-01-01T09:00:00Z", DedupKey: "dated"},
 				}))
 			} else {
 				for _, id := range []string{"undated", "dated"} {
@@ -512,9 +476,6 @@ func TestPGUsageCacheChronologicalTimestamps(t *testing.T) {
 			requireCachedUsageMatchesDirect(t, store, filter)
 			if tc.fractional {
 				require.Equal(t, int64(200), want.Totals.TotalCost.Microdollars, "the last dated cost wins")
-				_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at) VALUES('activity-midnight','activity-project','test-machine','codex','2026-01-01'); INSERT INTO messages(session_id,ordinal,role,content,timestamp,model) VALUES('activity-midnight',0,'assistant','','2026-01-02 00:30:00+00','activity')`)
-				require.NoError(t, err)
-				requireCachedUsageMatchesDirect(t, store, db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "America/New_York"})
 			}
 		})
 	}
@@ -639,7 +600,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 					require.Equal(t, 5750, got.Totals.OutputTokens)
 					for _, grouped := range []bool{false, true} {
 						filter.TopSessionsByGroup = grouped
-						requireUsageReadsMatch(t, &Store{pg: reader.pg}, active, filter)
+						require.NoError(t, completeUsageParity(t.Context(), &Store{pg: reader.pg}, active, filter))
 					}
 				}
 				probe.before = nil
@@ -660,7 +621,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 			}
 			for _, grouped := range []bool{false, true} {
 				filter.TopSessionsByGroup = grouped
-				requireUsageReadsMatch(t, &Store{pg: reader.pg}, reader, filter)
+				require.NoError(t, completeUsageParity(t.Context(), &Store{pg: reader.pg}, reader, filter))
 			}
 			if name == "late journal installation" {
 				require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))

@@ -4,30 +4,15 @@ package db
 
 import (
 	"encoding/json"
-	"math"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestCaptureUsageQueryIntervalsAndBoundedCandidates(t *testing.T) {
-	day := usageQueryInterval{
-		FromMillis:    time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC).UnixMilli(),
-		ToMillis:      time.Date(2026, 9, 7, 3, 0, 0, 0, time.UTC).UnixMilli(),
-		FromLocalDate: "2026-09-06", ToLocalDate: "2026-09-06",
-	}
-	assert.Equal(t, []usageQueryInterval{day}, usageQueryIntervals(UsageFilter{From: "2026-09-06", To: "2026-09-06", Timezone: "America/Santiago"}))
-	fromOnly := day
-	fromOnly.ToMillis, fromOnly.ToLocalDate = math.MaxInt64, ""
-	assert.Equal(t, []usageQueryInterval{fromOnly}, usageQueryIntervals(UsageFilter{From: "2026-09-06", Timezone: "America/Santiago"}))
-	toOnly := day
-	toOnly.FromMillis, toOnly.FromLocalDate = math.MinInt64, "0000-01-01"
-	assert.Equal(t, []usageQueryInterval{toOnly}, usageQueryIntervals(UsageFilter{To: "2026-09-06", Timezone: "America/Santiago"}))
-
+func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 	database := usageCandidateFixture(t)
 	filter := UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
