@@ -19,6 +19,7 @@ import (
 )
 
 func seedRecurrence(t *testing.T, d *db.DB, date, id string, at *time.Time) {
+	t.Helper()
 	seedRecurrenceSignal(t, d, date, id, at, correction)
 }
 
@@ -84,6 +85,38 @@ func TestReopenRecurringPattern(t *testing.T) {
 			}
 		})
 	}
+}
+
+type unlinkOnDigestStore struct {
+	*db.DB
+	fingerprint string
+}
+
+func (s unlinkOnDigestStore) GetFrictionDigest(ctx context.Context, date string) (*db.FrictionDigest, error) {
+	_, err := s.DeleteFrictionIssueLink(ctx, s.fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	return s.DB.GetFrictionDigest(ctx, date)
+}
+
+func TestReopenSkipsUnlinkedPattern(t *testing.T) {
+	s := katatest.New(t)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+	closed := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	seedRecurrence(t, d, "2026-09-16", "claude:s1", new(closed.Add(26*time.Hour)))
+	is := s.AddIssue(katatest.Issue{Title: "issue", Status: "closed", ClosedReason: "done", ClosedAt: &closed})
+	_, err := f.Link(t.Context(), correction.Fingerprint(), is.UID)
+	require.NoError(t, err)
+	f.Store = unlinkOnDigestStore{DB: d, fingerprint: correction.Fingerprint()}
+
+	n, err := f.Reopen(t.Context(), "2026-09-16", nil)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	assert.Nil(t, patternRow(t, d, correction.Fingerprint()).Issue)
+	got := mustIssue(t, s, is.UID)
+	assert.Equal(t, "closed", got.Status)
+	assert.Empty(t, got.Comments)
 }
 
 func TestReopenUsesFrozenDigest(t *testing.T) {

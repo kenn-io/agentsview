@@ -90,6 +90,13 @@ func (f *Filer) reopenIfRecurred(ctx context.Context, p db.FrictionPattern, star
 	if occurrenceDate == "" {
 		return false, nil
 	}
+	current, err := f.pattern(ctx, p.Fingerprint)
+	if err != nil {
+		return false, err
+	}
+	if current.Issue == nil || current.Issue.IssueUID != p.Issue.IssueUID {
+		return false, nil
+	}
 	body := fmt.Sprintf("This pattern recurred on %s.", occurrenceDate)
 	key := "friction-recur-" + p.Issue.IssueUID + "-" + is.ClosedAt.UTC().Format(time.RFC3339Nano)
 	if err := f.Kata.Comment(ctx, p.Issue.IssueUID, key, body); err != nil {
