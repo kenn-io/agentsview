@@ -310,16 +310,14 @@ func TestVectorStoreSpecIncludesRecall(t *testing.T) {
 	assert.Equal(t, vector.RecallIndexSpec(), spec)
 }
 
-// TestEmbeddingsDisabledReturnsError asserts every subcommand refuses with
-// the exact "vector search is not enabled" message when [vector] is off
-// (the default), before attempting any daemon detection or I/O.
+// TestEmbeddingsDisabledReturnsError checks the management commands when
+// vector search is disabled.
 func TestEmbeddingsDisabledReturnsError(t *testing.T) {
 	tests := []struct {
 		name   string
 		newCmd func() *cobra.Command
 		args   []string
 	}{
-		{"build", newEmbeddingsBuildCommand, nil},
 		{"list", newEmbeddingsListCommand, nil},
 		{"activate", newEmbeddingsActivateCommand, []string{"1"}},
 		{"retire", newEmbeddingsRetireCommand, []string{"1"}},
@@ -336,7 +334,7 @@ func TestEmbeddingsDisabledReturnsError(t *testing.T) {
 			err := cmd.Execute()
 			require.Error(t, err)
 			assert.Equal(t,
-				"vector search is not enabled: set [vector] enabled = true in config.toml",
+				"vector search is not enabled: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on",
 				err.Error())
 		})
 	}

@@ -200,7 +200,7 @@ func setupRequestError(err error) error {
 	return err
 }
 
-func (v *liveVectorServing) Setup(approvedBytes int64) error {
+func (v *liveVectorServing) Setup(approvedBytes int64, build *vector.BuildRequest) error {
 	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
 		return err
@@ -217,9 +217,19 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 			return setupRequestError(err)
 		}
 	}
-	_, deployment, err := embeddings.Server("")
+	name := ""
+	if build != nil {
+		name = build.Using
+		if err := vector.ValidateBuildRequest(*build); err != nil {
+			return err
+		}
+		if _, err := vectorStoreSpec(build.Store); err != nil {
+			return fmt.Errorf("%w: %w", vector.ErrInvalidBuildRequest, err)
+		}
+	}
+	_, deployment, err := embeddings.Server(name)
 	if err != nil {
-		return setupRequestError(err)
+		return fmt.Errorf("%w: %w", vector.ErrInvalidBuildRequest, err)
 	}
 	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
@@ -232,7 +242,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes)
+		err := v.activate(deployment, approvedBytes, build)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -241,6 +251,9 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 			v.setup.Action = ""
 		}
 		manager := v.serving.manager
+		if build != nil && build.Store == vector.RecallIndexSpec().Name {
+			manager = v.serving.recallManager
+		}
 		close(v.done)
 		v.mu.Unlock()
 		if err == nil && manager != nil {
@@ -250,7 +263,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	return nil
 }
 
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, build *vector.BuildRequest) error {
 	cfg := v.cfg
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
@@ -294,7 +307,15 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		v.startSchedulers()
 		v.mu.Unlock()
 	}
-	err = v.serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
+	manager := v.serving.manager
+	req := vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated}
+	if build != nil {
+		req = *build
+		if req.Store == vector.RecallIndexSpec().Name {
+			manager = v.serving.recallManager
+		}
+	}
+	err = manager.StartBuild(req)
 	if errors.Is(err, vector.ErrBuildRunning) {
 		return nil
 	}

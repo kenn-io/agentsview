@@ -59,7 +59,8 @@ func (e *unknownServerError) Error() string {
 
 func (e *unknownServerError) Is(target error) bool { return target == ErrUnknownServer }
 
-func validateBuildRequest(req BuildRequest) error {
+// ValidateBuildRequest rejects incompatible build modes.
+func ValidateBuildRequest(req BuildRequest) error {
 	if req.RepairInvalid && req.FullRebuild {
 		return fmt.Errorf("%w: repair-invalid and full-rebuild are mutually exclusive",
 			ErrInvalidBuildRequest)
@@ -293,7 +294,7 @@ func recoveringEncoder(enc kitvec.EncodeFunc) kitvec.EncodeFunc {
 // The goroutine runs against the manager's detached lifecycle context so it
 // outlives the HTTP request that triggered it but still stops on Shutdown.
 func (m *Manager) StartBuild(req BuildRequest) error {
-	if err := validateBuildRequest(req); err != nil {
+	if err := ValidateBuildRequest(req); err != nil {
 		return err
 	}
 	me, err := m.resolveEncoder(req)
@@ -314,7 +315,7 @@ func (m *Manager) StartBuild(req BuildRequest) error {
 // should drop a scheduled run rather than queue it: it returns (false, nil)
 // without starting anything if a build is already running.
 func (m *Manager) TryBuild(ctx context.Context, req BuildRequest) (bool, error) {
-	if err := validateBuildRequest(req); err != nil {
+	if err := ValidateBuildRequest(req); err != nil {
 		return false, err
 	}
 	me, err := m.resolveEncoder(req)

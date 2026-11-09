@@ -115,7 +115,7 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.RepairInvalid, "repair-invalid", false,
 		"Regenerate only documents with malformed, non-finite, or zero-norm stored vectors")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false,
-		"Skip the full-rebuild confirmation prompt; local downloads still ask")
+		"Skip the full-rebuild confirmation prompt; setup and downloads still ask")
 	cmd.Flags().StringVar(&opts.Using, "using", "",
 		"Named embeddings server from [vector.embeddings.servers] to run this "+
 			"build against (default: the config's default_server)")
@@ -235,13 +235,20 @@ func parseGenerationID(raw string) (int64, error) {
 // requireVectorEnabled rejects every embeddings subcommand up front when
 // [vector] is not configured, with the exact message the brief specifies.
 func requireVectorEnabled(cfg config.Config) error {
-	if cfg.ArchiveContent.UsageOnly() {
-		return fmt.Errorf("%w: embeddings require transcript content", db.ErrArchiveContentExcluded)
+	if err := requireEmbeddingsContent(cfg); err != nil {
+		return err
 	}
 	if !cfg.Vector.Enabled {
 		return errors.New(
-			"vector search is not enabled: set [vector] enabled = true in config.toml",
+			"vector search is not enabled: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on",
 		)
+	}
+	return nil
+}
+
+func requireEmbeddingsContent(cfg config.Config) error {
+	if cfg.ArchiveContent.UsageOnly() {
+		return fmt.Errorf("%w: embeddings require transcript content", db.ErrArchiveContentExcluded)
 	}
 	return nil
 }
@@ -401,36 +408,78 @@ func vectorDocumentEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSe
 	return set, nil
 }
 
-// runEmbeddingsBuild loads config, gates on [vector] enabled, confirms a
-// requested full rebuild (unless --yes), and then dispatches to the daemon
-// or direct build path depending on whether a writable local daemon owns
-// the archive.
+// runEmbeddingsBuild enables search when needed and runs a build through
+// the writable local daemon or directly against the archive.
 func runEmbeddingsBuild(
 	ctx context.Context, out io.Writer, in io.Reader, opts EmbeddingsBuildOptions,
 ) error {
-	cfg, err := loadDaemonClientConfig(config.ScopeVector)
+	cfg, err := config.LoadReadOnlyFor(config.ScopeVector)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	if err := requireVectorEnabled(cfg); err != nil {
+	if err := cfg.ApplyDeploymentAuth(); err != nil {
+		return fmt.Errorf("loading daemon auth: %w", err)
+	}
+	if err := requireEmbeddingsContent(cfg); err != nil {
 		return err
 	}
 	spec, err := vectorStoreSpec(opts.Store)
 	if err != nil {
 		return err
 	}
-
+	var client *embeddingsDaemonClient
+	setup := !cfg.Vector.Enabled
+	var setupBusy bool
+	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+		c, err := resolveEmbeddingsDaemonClient(cfg)
+		if err != nil {
+			return err
+		}
+		c.store = daemonEmbeddingStore(spec.Name)
+		client = &c
+		status, err := c.status(ctx)
+		if err != nil {
+			return err
+		}
+		if status.Setup != nil {
+			setup = setup || status.Setup.Action == "turn-on"
+			setupBusy = status.Setup.Busy
+		}
+	}
+	if setup {
+		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
+		if err != nil {
+			return err
+		}
+	}
+	if _, _, err := cfg.Vector.Embeddings.Server(opts.Using); err != nil {
+		return err
+	}
 	includeAutomated := cfg.Vector.IncludeAutomated
 	if opts.IncludeAutomatedSet {
 		includeAutomated = opts.IncludeAutomated
 	}
 	includeAutomated = spec.NormalizeIncludeAutomated(includeAutomated)
-
+	req := vector.BuildRequest{
+		Store: spec.Name, FullRebuild: opts.FullRebuild, Backstop: opts.Backstop,
+		RepairInvalid: opts.RepairInvalid, IncludeAutomated: includeAutomated, Using: opts.Using,
+	}
+	if err := vector.ValidateBuildRequest(req); err != nil {
+		return err
+	}
 	confirmation := bufio.NewScanner(in)
+	if setupBusy {
+		return joinDaemonSetup(ctx, out, confirmation, cfg, *client, req, opts, false)
+	}
+	if setup {
+		return setupEmbeddingsBuild(ctx, out, confirmation, cfg, client, req, opts)
+	}
+	cfg, err = loadDaemonClientConfig(config.ScopeVector)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
 	if opts.FullRebuild && !opts.Yes {
-		proceed, err := confirmFullRebuild(
-			ctx, confirmation, out, cfg, includeAutomated, spec.Name,
-		)
+		proceed, err := confirmFullRebuild(ctx, confirmation, out, cfg, includeAutomated, spec.Name)
 		if err != nil {
 			return err
 		}
@@ -439,21 +488,11 @@ func runEmbeddingsBuild(
 			return nil
 		}
 	}
-
 	if err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out); err != nil {
 		return err
 	}
-
-	req := vector.BuildRequest{
-		Store:            strings.TrimSpace(opts.Store),
-		FullRebuild:      opts.FullRebuild,
-		Backstop:         opts.Backstop,
-		RepairInvalid:    opts.RepairInvalid,
-		IncludeAutomated: includeAutomated,
-		Using:            opts.Using,
-	}
-	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		return runEmbeddingsBuildDaemon(ctx, out, cfg, req)
+	if client != nil {
+		return buildViaDaemon(ctx, out, *client, req)
 	}
 	return runEmbeddingsBuildDirect(ctx, out, cfg, req)
 }
@@ -655,19 +694,6 @@ func runDirectBuild(
 			}
 		}
 	}
-}
-
-// runEmbeddingsBuildDaemon resolves the local daemon and runs the build
-// through its HTTP API.
-func runEmbeddingsBuildDaemon(
-	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
-) error {
-	client, err := resolveEmbeddingsDaemonClient(cfg)
-	if err != nil {
-		return err
-	}
-	client.store = daemonEmbeddingStore(req.Store)
-	return buildViaDaemon(ctx, out, client, req)
 }
 
 // buildViaDaemon starts a build via POST /build, printing a status line
@@ -993,6 +1019,23 @@ type daemonAPIError struct {
 }
 
 func (e *daemonAPIError) Error() string { return e.message }
+
+func (c embeddingsDaemonClient) startSetup(ctx context.Context, approvedBytes int64, req vector.BuildRequest) error {
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return err
+	}
+	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{
+		ApprovedBytes: new(approvedBytes), Build: &apiclient.EmbeddingsBuildRequest{
+			Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop),
+			RepairInvalid: new(req.RepairInvalid), IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
+		},
+	}})
+	if response == nil {
+		return err
+	}
+	return embeddingResponseError(response.StatusCode, response.Body, err)
+}
 
 func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) error {
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)

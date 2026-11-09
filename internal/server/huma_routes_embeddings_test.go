@@ -446,6 +446,7 @@ type fakeEmbeddingsRuntime struct {
 	messages, recall EmbeddingsManager
 	includeAutomated bool
 	busy             bool
+	setupBuild       **vector.BuildRequest
 }
 
 func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
@@ -462,7 +463,12 @@ func (r fakeEmbeddingsRuntime) IncludeAutomated() bool { return r.includeAutomat
 func (r fakeEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
 	return EmbeddingsSetupStatus{Enabled: true, Busy: r.busy}, nil
 }
-func (fakeEmbeddingsRuntime) Setup(int64) error { return nil }
+func (r fakeEmbeddingsRuntime) Setup(_ int64, build *vector.BuildRequest) error {
+	if r.setupBuild != nil {
+		*r.setupBuild = build
+	}
+	return nil
+}
 
 func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
 	manager := &fakeEmbeddingsManager{status: vector.BuildStatus{
@@ -479,4 +485,24 @@ func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
 	assert.True(t, status.LastResult.Activated)
 	require.NotNil(t, status.Setup)
 	assert.True(t, status.Setup.Busy)
+}
+
+func TestEmbeddingsSetupUsesConfiguredScopeWhenOmitted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want bool
+	}{
+		{"omitted", map[string]any{"using": "local"}, true},
+		{"explicit false", map[string]any{"include_automated": false}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var build *vector.BuildRequest
+			s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{includeAutomated: true, setupBuild: &build}))
+			w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/setup", map[string]any{"build": tc.body})
+			assertRecorderStatus(t, w, http.StatusAccepted)
+			require.NotNil(t, build)
+			assert.Equal(t, tc.want, build.IncludeAutomated)
+		})
+	}
 }

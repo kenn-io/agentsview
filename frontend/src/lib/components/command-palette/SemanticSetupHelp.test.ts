@@ -319,8 +319,7 @@ describe("SemanticSetupHelp", () => {
 
   it("replaces the generic search 501 message with localized ready copy", async () => {
     const generic =
-      "semantic search not available: enable [vector] in config.toml and " +
-      "run 'agentsview index embeddings build'";
+      "semantic search not available: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on";
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
 
     const { component } = mountHelp(vi.fn(), generic);

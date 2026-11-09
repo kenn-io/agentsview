@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedlocal"
@@ -191,6 +192,10 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				return result
 			}
 			awaitBuild()
+			owner.mu.Lock()
+			owner.setup.Error = "earlier setup error"
+			owner.mu.Unlock()
+			assert.Empty(t, status().Setup.Error)
 			assert.EqualValues(t, 1, reloads.Load())
 			assert.Empty(t, status().Setup.Action)
 			assert.Equal(t, recipe == "fresh", installs.Load() > 0)
@@ -282,7 +287,7 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	movedPath := filepath.Join(t.TempDir(), "moved.db")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), fmt.Appendf(nil, "[vector]\nenabled = true\ndb_path = %q\n", movedPath), 0o600))
 	releaseHeld()
-	require.NoError(t, owner.Setup(0))
+	require.NoError(t, owner.Setup(0, nil))
 	<-owner.done
 	setup, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
@@ -323,9 +328,9 @@ func TestLiveEmbeddingsSetupProgress(t *testing.T) {
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
-	require.NoError(t, owner.Setup(0))
+	require.NoError(t, owner.Setup(0, nil))
 	<-started
-	require.ErrorIs(t, owner.Setup(0), vector.ErrBuildRunning)
+	require.ErrorIs(t, owner.Setup(0, nil), vector.ErrBuildRunning)
 	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.True(t, status.Busy)
@@ -395,7 +400,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				return
 			}
 			if failure == "model inspection" {
-				err := owner.Setup(0)
+				err := owner.Setup(0, nil)
 				require.ErrorIs(t, err, inspectionError)
 				assert.NotErrorIs(t, err, vector.ErrInvalidBuildRequest)
 				return
@@ -403,7 +408,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 			if failure == "config read" {
 				require.NoError(t, os.Mkdir(filepath.Join(dir, "config.toml"), 0o700))
 				var pathError *os.PathError
-				err := owner.Setup(0)
+				err := owner.Setup(0, nil)
 				require.ErrorAs(t, err, &pathError)
 				assert.NotErrorIs(t, err, vector.ErrInvalidBuildRequest)
 				return
@@ -413,7 +418,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				require.NoError(t, err)
 				assert.Empty(t, status.Action)
 			}
-			err = owner.Setup(0)
+			err = owner.Setup(0, nil)
 			require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
 		})
 	}
@@ -498,7 +503,7 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 	initial, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	require.Positive(t, initial.MissingBytes)
-	require.NoError(t, owner.Setup(initial.MissingBytes))
+	require.NoError(t, owner.Setup(initial.MissingBytes, nil))
 	<-owner.done
 	assert.False(t, approved.Load())
 	retry, err := owner.SetupStatus(t.Context())
@@ -508,8 +513,368 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 	assert.Contains(t, retry.Error, "declined")
 	assert.Greater(t, retry.MissingBytes, initial.MissingBytes)
 	assert.Equal(t, requiredBytes.Load(), retry.MissingBytes)
-	require.NoError(t, owner.Setup(retry.MissingBytes))
+	require.NoError(t, owner.Setup(retry.MissingBytes, nil))
 	<-owner.done
 	assert.Equal(t, retry.MissingBytes, requiredBytes.Load())
 	assert.True(t, approved.Load(), "Retry must approve the verified size disclosed after repair was refused")
+}
+
+func TestCLIEmbeddingsSetup(t *testing.T) {
+	for _, tc := range []struct {
+		enabledAfterStart bool
+		store             string
+	}{{false, ""}, {true, ""}, {false, "recall"}} {
+		t.Run(fmt.Sprintf("enabled-after-start=%t/store=%s", tc.enabledAfterStart, tc.store), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			encoder := newEmbeddingsStubServer(t, 3)
+			defer encoder.Close()
+			writeEmbeddingsTestConfig(t, dir, encoder.URL)
+			path := filepath.Join(dir, "config.toml")
+			contents, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(contents), "enabled = true", "enabled = false", 1)), 0o600))
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, owner.Close()) }()
+			ln, port := listenLoopback(t)
+			cfg.Host, cfg.Port = "127.0.0.1", port
+			ts := startTestServer(t, ln, server.New(cfg, database, nil, append(owner.ServerOptions(), server.WithBaseContext(t.Context()))...).Handler())
+			endpoint := serverEndpoint(t, ts)
+			writeDaemonRuntimeForTest(t, dir, endpoint.Host, endpoint.Port, "test", false)
+			if tc.enabledAfterStart {
+				require.NoError(t, os.WriteFile(path, contents, 0o600))
+			}
+			oldInterval := embeddingsPollInterval
+			embeddingsPollInterval = 10 * time.Millisecond
+			t.Cleanup(func() { embeddingsPollInterval = oldInterval })
+			var out strings.Builder
+			err = runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{Using: "local", Store: tc.store})
+			require.NoError(t, err)
+			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
+			cfg, err = config.LoadReadOnly()
+			require.NoError(t, err)
+			assert.True(t, cfg.Vector.Enabled)
+			if tc.store == "recall" {
+				assert.NotNil(t, owner.Manager("recall").Status().LastResult)
+				assert.Nil(t, owner.Manager("").Status().LastResult)
+				return
+			}
+			search := newRootCommand()
+			var result strings.Builder
+			search.SetOut(&result)
+			search.SetArgs([]string{"session", "search", "database pooling", "--hybrid", "--json", "--include-one-shot"})
+			require.NoError(t, search.Execute())
+			assert.Contains(t, result.String(), "session-one")
+		})
+	}
+}
+
+func TestCLIEmbeddingsSetupDeclined(t *testing.T) {
+	for _, input := range []string{"no\n", ""} {
+		t.Run(fmt.Sprintf("input=%q", input), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			writeEmbeddingsTestConfig(t, dir, "http://127.0.0.1:1")
+			path := filepath.Join(dir, "config.toml")
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+			before = []byte(strings.Replace(string(before), "enabled = true", "enabled = false", 1))
+			require.NoError(t, os.WriteFile(path, before, 0o600))
+			var out strings.Builder
+			require.ErrorContains(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader(input), EmbeddingsBuildOptions{Yes: true}), "search setup declined")
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			assert.Contains(t, out.String(), "[y/N]")
+			_, err = os.Stat(filepath.Join(dir, "vectors.db"))
+			assert.True(t, os.IsNotExist(err))
+		})
+	}
+}
+
+func TestCLIDirectEmbeddingsSetup(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	encoder := newEmbeddingsStubServer(t, 3)
+	defer encoder.Close()
+	writeEmbeddingsTestConfig(t, dir, encoder.URL)
+	path := filepath.Join(dir, "config.toml")
+	contents, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(contents), "enabled = true", "enabled = false", 1)), 0o600))
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+	var out strings.Builder
+	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.True(t, cfg.Vector.Enabled)
+	assert.Contains(t, out.String(), "Embedded 1 documents")
+}
+
+func TestCLIEmbeddingsSetupDownload(t *testing.T) {
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+	})
+	for _, size := range []int64{100, 101} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+			encoder := newEmbeddingsStubServer(t, 768)
+			defer encoder.Close()
+			installed := false
+			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+				return embedlocal.Status{DownloadBytes: 100}, nil
+			}
+			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+				if !installed {
+					return "", embedlocal.ErrNotFound
+				}
+				return encoder.URL, nil
+			}
+			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+				approved, err := opts.Confirm(ctx, size)
+				if err != nil {
+					return embedlocal.Installation{}, err
+				}
+				if !approved {
+					return embedlocal.Installation{}, errors.New("download was not approved")
+				}
+				opts.Progress(size, size)
+				installed = true
+				return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
+			}
+			var out strings.Builder
+			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+			cfg, loadErr := config.LoadReadOnly()
+			require.NoError(t, loadErr)
+			require.NoError(t, err)
+			assert.True(t, cfg.Vector.Enabled)
+			assert.Contains(t, out.String(), "Download: 100% of 1 MB")
+			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
+		})
+	}
+}
+
+func TestSetupRejectsInvalidBuildBeforeEnable(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	owner := liveVectorServingFixture(t, cfg, database, vectorServing{})
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, append(owner.ServerOptions(), server.WithBaseContext(t.Context()))...).Handler())
+	for _, body := range []string{
+		`{"build":{"repair_invalid":true,"full_rebuild":true}}`,
+		`{"build":{"repair_invalid":true,"backstop":true}}`,
+		`{"build":{"using":"missing"}}`,
+	} {
+		response := embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(body), http.StatusBadRequest)
+		assert.Contains(t, string(response), "invalid embeddings build request")
+		status, statusErr := owner.SetupStatus(t.Context())
+		require.NoError(t, statusErr)
+		assert.False(t, status.Enabled)
+		assert.False(t, status.Busy)
+	}
+}
+
+func TestCLIDirectEmbeddingsSetupMigratesLegacyConfig(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	encoder := newEmbeddingsStubServer(t, 768)
+	t.Cleanup(encoder.Close)
+	oldEndpoint := localEmbeddingEndpoint
+	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return encoder.URL, nil }
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"port":7357,"codex_sessions_dirs":["/legacy/codex"]}`), 0o600))
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+	var out strings.Builder
+	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, 7357, cfg.Port)
+	assert.Equal(t, []string{"/legacy/codex"}, cfg.ResolveDirs(parser.AgentCodex))
+	assert.True(t, cfg.Vector.Enabled)
+}
+
+func TestCLIEmbeddingsSetupFollowsConcurrentBuild(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dir, "http://127.0.0.1:1")
+	path := filepath.Join(dir, "config.toml")
+	contents, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(contents), "enabled = true", "enabled = false", 1)), 0o600))
+	var builds atomic.Int64
+	startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+			builds.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(w, `{"started":true}`)
+		},
+		"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"detail":"an embeddings build is already running"}`)
+		},
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"running":false,"setup":{"action":"turn-on","busy":false},"last_result":{"embedded":1}}`)
+		},
+	})
+	var out strings.Builder
+	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
+	assert.EqualValues(t, 1, builds.Load())
+	assert.Contains(t, out.String(), "a build is already running (daemon)")
+	assert.Contains(t, out.String(), "Embedded 0 documents")
+}
+
+func TestCLIEmbeddingsSetupDaemonRepairConsent(t *testing.T) {
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+	})
+	for _, consent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("consent=%t", consent), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+			encoder := newEmbeddingsStubServer(t, 768)
+			t.Cleanup(encoder.Close)
+			var installed atomic.Bool
+			var installs atomic.Int64
+			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+				return embedlocal.Status{DownloadBytes: 100}, nil
+			}
+			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+				if !installed.Load() {
+					return "", embedlocal.ErrNotFound
+				}
+				return encoder.URL, nil
+			}
+			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+				installs.Add(1)
+				approved, err := opts.Confirm(ctx, 101)
+				if err != nil {
+					return embedlocal.Installation{}, err
+				}
+				if !approved {
+					return embedlocal.Installation{}, errors.New("download was not approved")
+				}
+				installed.Store(true)
+				return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
+			}
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, owner.Close()) }()
+			ln, port := listenLoopback(t)
+			cfg.Host, cfg.Port = "127.0.0.1", port
+			ts := startTestServer(t, ln, server.New(cfg, database, nil, append(owner.ServerOptions(), server.WithBaseContext(t.Context()))...).Handler())
+			endpoint := serverEndpoint(t, ts)
+			writeDaemonRuntimeForTest(t, dir, endpoint.Host, endpoint.Port, "test", false)
+			oldInterval := embeddingsPollInterval
+			embeddingsPollInterval = 10 * time.Millisecond
+			t.Cleanup(func() { embeddingsPollInterval = oldInterval })
+			input := "no\n"
+			if consent {
+				input = "yes\n"
+			}
+			var out strings.Builder
+			err = runEmbeddingsBuild(t.Context(), &out, strings.NewReader(input), EmbeddingsBuildOptions{})
+			assert.Contains(t, out.String(), "Downloads approximately 1 MB")
+			assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"))
+			cfg, loadErr := config.LoadReadOnly()
+			require.NoError(t, loadErr)
+			if consent {
+				require.NoError(t, err)
+				assert.EqualValues(t, 1, installs.Load())
+				assert.True(t, cfg.Vector.Enabled)
+				assert.Contains(t, out.String(), "Embedded 1 documents")
+			} else {
+				require.ErrorContains(t, err, "search setup declined")
+				assert.EqualValues(t, 1, installs.Load())
+				assert.False(t, cfg.Vector.Enabled)
+			}
+		})
+	}
+}
+
+func TestCLIEmbeddingsSetupJoinsDifferentStore(t *testing.T) {
+	oldEndpoint := localEmbeddingEndpoint
+	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
+	for _, busy := range []bool{true, false} {
+		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			writeTestConfig(t, dir, "[vector]\nenabled = false\n")
+			var statusCalls atomic.Int64
+			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+				if busy {
+					assert.GreaterOrEqual(t, statusCalls.Load(), int64(2), "provider preparation must wait for setup")
+				}
+				return "http://127.0.0.1:1", nil
+			}
+			var builds atomic.Int64
+			startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, "recall", r.URL.Query().Get("store"))
+					call := statusCalls.Add(1)
+					first := call == 1
+					w.Header().Set("Content-Type", "application/json")
+					if first && busy {
+						_, _ = io.WriteString(w, `{"setup":{"action":"turn-on","busy":true}}`)
+						return
+					}
+					if call == 3 {
+						_, _ = io.WriteString(w, `{"running":true,"setup":{"enabled":true,"busy":false}}`)
+						return
+					}
+					_, _ = io.WriteString(w, `{"running":false,"setup":{"enabled":true,"busy":false},"last_result":{}}`)
+				},
+				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, _ *http.Request) {
+					assert.False(t, busy)
+					w.WriteHeader(http.StatusConflict)
+					_, _ = io.WriteString(w, `{"detail":"an embeddings build is already running"}`)
+				},
+				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+					assert.GreaterOrEqual(t, statusCalls.Load(), int64(4), "the concurrent build must finish first")
+					var request vector.BuildRequest
+					require.NoError(t, json.UnmarshalRead(r.Body, &request))
+					assert.Equal(t, "recall", request.Store)
+					assert.True(t, request.Backstop)
+					builds.Add(1)
+					w.WriteHeader(http.StatusAccepted)
+					_, _ = io.WriteString(w, `{"started":true}`)
+				},
+			})
+			var out strings.Builder
+			require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{Store: "recall", Backstop: true}))
+			assert.EqualValues(t, 1, builds.Load())
+			if busy {
+				assert.NotContains(t, out.String(), "[y/N]")
+			}
+		})
+	}
+}
+
+func TestEmbeddingsBuildHelpExplainsYes(t *testing.T) {
+	cmd := newEmbeddingsBuildCommand()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--help"})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, out.String(), "setup and downloads still ask")
 }
