@@ -171,8 +171,8 @@ func TestAutoFileReopensAfterReconcileError(t *testing.T) {
 	reopenErr := errors.New("reopen failed")
 	s.db = failingFrictionStore{DB: d, reconcileErr: reconcileErr, reopenErr: reopenErr}
 	err := s.autoFileFriction(t.Context())
-	assert.ErrorIs(t, err, reconcileErr)
-	assert.ErrorIs(t, err, reopenErr)
+	require.ErrorIs(t, err, reconcileErr)
+	require.ErrorIs(t, err, reopenErr)
 }
 
 func TestAutoFileLogsPartialReport(t *testing.T) {
