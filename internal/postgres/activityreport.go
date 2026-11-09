@@ -8,7 +8,6 @@ import (
 	"slices"
 	"sort"
 	"time"
-	"unique"
 
 	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/activity"
@@ -797,13 +796,6 @@ func (s *Store) activityReportUsage(
 		return nil, nil, fmt.Errorf("building pricing block: %w", err)
 	}
 	return out, &block, nil
-}
-
-func pgActivityReportRowStatus(
-	r pgDailyUsageScanRow, pricing *export.PricingResolver,
-) (cost money.Money, priced, contributes bool, err error) {
-	return pgActivityReportRowStatusWithWebSearchRequests(
-		pgCompactActivityUsage(r, unique.Make[string]), pgDailyUsageRowWebSearchRequests(r), pricing)
 }
 
 func pgActivityReportRowStatusWithWebSearchRequests(

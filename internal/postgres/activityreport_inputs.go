@@ -43,8 +43,21 @@ type pgActivityUsageRow struct {
 	ordinalValid, costValid, copilotReported, pricingTimeAbsent bool
 }
 
+// pgActivityStrings avoids repeated global interning lookups within one read.
+type pgActivityStrings map[string]unique.Handle[string]
+
+func (interned pgActivityStrings) handle(v string) unique.Handle[string] {
+	h, ok := interned[v]
+	if !ok {
+		h = unique.Make(v)
+		interned[v] = h
+	}
+	return h
+}
+
 func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Handle[string]) pgActivityUsageRow {
 	input, output, create, read, reasoning := pgDailyUsageRowTokens(r)
+	// Message cache counts are clamped to MaxPlausibleTokens before narrowing.
 	return pgActivityUsageRow{
 		sessionID: handle(r.sessionID), usageSource: handle(r.usageSource), model: handle(r.model), providerID: handle(r.providerID), agent: handle(r.agent),
 		claudeMessageID: r.claudeMessageID, claudeRequestID: r.claudeRequestID, sourceUUID: r.sourceUUID, usageDedupKey: r.usageDedupKey,
@@ -137,15 +150,7 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 				inputs.transcripts[id] = nil
 			}
 		}
-		handles := map[string]unique.Handle[string]{}
-		handle := func(v string) unique.Handle[string] {
-			h, ok := handles[v]
-			if !ok {
-				h = unique.Make(v)
-				handles[v] = h
-			}
-			return h
-		}
+		handles := pgActivityStrings{}
 		finish := func(id string, session []activity.TranscriptMessage) {
 			if len(session) == 0 {
 				return
@@ -155,7 +160,7 @@ func (s *Store) activityTranscriptSource(ctx context.Context, ids []string, inpu
 			} else {
 				compact := make([]pgActivityMessage, len(session))
 				for i, m := range session {
-					compact[i] = pgActivityMessage{ordinal: int32(m.Ordinal), us: m.At.UnixMicro(), role: handle(m.Role), model: handle(m.Model)}
+					compact[i] = pgActivityMessage{ordinal: int32(m.Ordinal), us: m.At.UnixMicro(), role: handles.handle(m.Role), model: handles.handle(m.Model)}
 				}
 				inputs.transcripts[id] = compact
 			}
@@ -222,22 +227,14 @@ func (s *Store) readActivityUsageInputs(ctx context.Context, ids []string, lower
 		return nil, fmt.Errorf("querying activity report usage: %w", err)
 	}
 	defer rows.Close()
-	handles := map[string]unique.Handle[string]{}
-	handle := func(v string) unique.Handle[string] {
-		h, ok := handles[v]
-		if !ok {
-			h = unique.Make(v)
-			handles[v] = h
-		}
-		return h
-	}
+	handles := pgActivityStrings{}
 	var out []pgActivityUsageRow
 	for rows.Next() {
 		r, err := scanPGDailyUsageRow(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scanning activity report usage: %w", err)
 		}
-		out = append(out, pgCompactActivityUsage(r, handle))
+		out = append(out, pgCompactActivityUsage(r, handles.handle))
 	}
 	return out, rows.Err()
 }

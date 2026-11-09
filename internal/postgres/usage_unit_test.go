@@ -967,6 +967,7 @@ func TestPGCompactActivityUsagePricing(t *testing.T) {
 		contributes          bool
 	}{
 		{name: "one hour cache", source: "message", tokens: `{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":30,"cache_read_input_tokens":40,"reasoning_tokens":5,"cache_creation":{"ephemeral_1h_input_tokens":10}}`, wantTokens: [5]int64{100, 20, 30, 40, 5}, want1h: 10, wantCost: 330, contributes: true},
+		{name: "clamped one hour cache", source: "message", tokens: `{"cache_creation_input_tokens":4294967296,"cache_creation":{"ephemeral_1h_input_tokens":4294967296}}`, wantTokens: [5]int64{0, 0, 2_000_000}, want1h: 2_000_000, wantCost: 10_000_000, contributes: true},
 		{name: "web searches", source: "message", tokens: `{"server_tool_use":{"web_search_requests":2}}`, wantSearches: 2, wantCost: 20000, contributes: true},
 		{name: "large web search counter", source: "message", tokens: `{"server_tool_use":{"web_search_requests":4294967296}}`, wantSearches: 1 << 32, wantCost: 42_949_672_960_000, contributes: true},
 		{name: "duplicate keys", source: "message", tokens: `{"input_tokens":10,"input_tokens":900}`, wantTokens: [5]int64{10}, wantCost: 10, contributes: true},
@@ -995,11 +996,13 @@ func TestPGCompactActivityUsagePricing(t *testing.T) {
 			assert.Equal(t, tc.wantCost, cost.Microdollars)
 			assert.True(t, priced)
 			assert.Equal(t, tc.contributes, contributes)
-			legacyCost, legacyPriced, legacyContributes, err := pgActivityReportRowStatus(scan, export.NewPricingResolver(rates))
-			require.NoError(t, err)
-			assert.Equal(t, cost, legacyCost)
-			assert.Equal(t, priced, legacyPriced)
-			assert.Equal(t, contributes, legacyContributes)
 		})
 	}
+}
+
+func pgActivityReportRowStatus(
+	r pgDailyUsageScanRow, pricing *export.PricingResolver,
+) (cost money.Money, priced, contributes bool, err error) {
+	return pgActivityReportRowStatusWithWebSearchRequests(
+		pgCompactActivityUsage(r, unique.Make[string]), pgDailyUsageRowWebSearchRequests(r), pricing)
 }
