@@ -287,7 +287,16 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	releaseHeld()
 	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
 	var out strings.Builder
+	err = runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{FullRebuild: true})
+	require.ErrorContains(t, err, "search setup is incomplete")
+	assert.ErrorContains(t, err, "agentsview index embeddings build")
+	assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
+	assert.ErrorContains(t, err, "--full-rebuild")
+	assert.Empty(t, out.String())
 	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
+	assert.Contains(t, out.String(), "Search setup is incomplete.")
+	assert.Contains(t, out.String(), "Finish search setup?")
+	assert.NotContains(t, out.String(), "Search by meaning is off.")
 	setup, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, setup.Error)
@@ -529,6 +538,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 		{"declined", "built-in", "no\n", 1000001, false},
 		{"flagged", "built-in", "yes\n", 0, true},
 		{"setup-error", "ollama", "yes\n", 0, false},
+		{"enabled", "ollama", "yes\n", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -543,7 +553,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 					w.Header().Set("Content-Type", "application/json")
 					reads++
 					if posts == 0 {
-						fmt.Fprintf(w, `{"setup":{"action":"turn-on","provider":%q,"missing_bytes":%d}}`, tc.provider, tc.missing)
+						fmt.Fprintf(w, `{"setup":{"action":"turn-on","provider":%q,"missing_bytes":%d,"enabled":%t}}`, tc.provider, tc.missing, tc.name == "enabled")
 						return
 					}
 					if reads == 2 && tc.missing > 0 {
@@ -590,6 +600,10 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, 1, posts)
 			assert.Equal(t, tc.missing, approved)
+			if tc.name == "enabled" {
+				assert.Contains(t, out.String(), "Search setup is incomplete.")
+				assert.Contains(t, out.String(), "Finish search setup?")
+			}
 			if tc.missing > 0 {
 				assert.Contains(t, out.String(), "2 MB")
 				assert.Contains(t, out.String(), "Download: 100%")

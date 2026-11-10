@@ -442,7 +442,11 @@ func runEmbeddingsBuild(
 			flag = "include-automated"
 		}
 		if flag != "" {
-			return fmt.Errorf("search by meaning is off: turn it on with 'agentsview index embeddings build' (no build flags) or Settings → Embeddings → Turn on, then rerun with --%s", flag)
+			problem, action := "search by meaning is off", "turn it on"
+			if cfg.Vector.Enabled {
+				problem, action = "search setup is incomplete", "finish setup"
+			}
+			return fmt.Errorf("%s: %s with 'agentsview index embeddings build' (no build flags) or Settings → Embeddings → Turn on, then rerun with --%s", problem, action, flag)
 		}
 		tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 0)
 		if err != nil {
@@ -1062,19 +1066,25 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 		return errors.New("search setup is unavailable")
 	}
 	setup := status.Setup
-	fmt.Fprintln(out, "Search by meaning is off.")
+	action, question := "Turning it on", "Turn on search by meaning?"
+	if cfg.Vector.Enabled || setup.Enabled {
+		fmt.Fprintln(out, "Search setup is incomplete.")
+		action, question = "Finishing setup", "Finish search setup?"
+	} else {
+		fmt.Fprintln(out, "Search by meaning is off.")
+	}
 	approved := int64(0)
 	if setup.Provider == "built-in" && setup.MissingBytes > 0 {
 		approved = setup.MissingBytes
-		fmt.Fprintf(out, "Turning it on downloads %d MB once, shared by all Kenn apps.\n", (approved+999999)/1000000)
+		fmt.Fprintf(out, "%s downloads %d MB once, shared by all Kenn apps.\n", action, (approved+999999)/1000000)
 	} else {
 		provider := setup.Provider
 		if provider == "ollama" {
 			provider = "Ollama"
 		}
-		fmt.Fprintf(out, "Turning it on uses %s with %s.\n", provider, cfg.Vector.Embeddings.Model)
+		fmt.Fprintf(out, "%s uses %s with %s.\n", action, provider, cfg.Vector.Embeddings.Model)
 	}
-	if !confirmScanned(in, out, "Turn on search by meaning?") {
+	if !confirmScanned(in, out, question) {
 		return errors.New("search setup declined")
 	}
 	if err := client.startSetup(ctx, approved); err != nil {
