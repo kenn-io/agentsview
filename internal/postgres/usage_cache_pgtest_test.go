@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -175,6 +176,23 @@ func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestPGUsageCachePairwiseComparisonMatchesDirect(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	attachUsageCacheProbe(t, store, t.TempDir())
+	direct := &Store{pg: store.pg}
+	req := service.UsagePairwiseComparisonRequest{
+		UsageRequest:  service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true},
+		LeftDimension: "model", LeftValue: "paid-a", RightDimension: "model", RightValue: "paid-b", FallbackToDefault: true,
+	}
+	want, err := service.NewReadOnlyBackend(direct).UsagePairwiseComparison(t.Context(), req)
+	require.NoError(t, err)
+	got, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), req)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
+	require.NoError(t, completeUsageParity(t.Context(), direct, store.usageCache, filter))
 }
 
 func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {

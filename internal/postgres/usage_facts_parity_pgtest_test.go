@@ -308,12 +308,10 @@ func completeUsageParity(
 	if err != nil {
 		return fmt.Errorf("remote GetDailyUsage: %w", err)
 	}
-	// Full-store parity ignores backend-specific ranking metadata; cache parity
-	// compares the aggregate result and normalizes stored timestamp formatting.
+	// Pairwise ranking metadata is private to each backend; compare its public
+	// result through the service instead.
 	fullStore := len(sessionID) > 0
-	if fullStore {
-		localDaily.Pairwise, remoteDaily.Pairwise = nil, nil
-	}
+	localDaily.Pairwise, remoteDaily.Pairwise = nil, nil
 	if !reflect.DeepEqual(localDaily, remoteDaily) {
 		return fmt.Errorf("complete daily result differs")
 	}
