@@ -55,6 +55,7 @@ function makeDigest(signals: FrictionSignal[]): FrictionDigestResponse {
     revision: 2,
     sessions_scanned: 3,
     markdown_sha256: "0".repeat(64),
+    diagnostics: [],
     summary: {
       date: DATE,
       schema_version: 1,
@@ -313,10 +314,8 @@ describe("FrictionPage", () => {
       machine: "machine-a",
     });
     friction.digest = {
-      ...makeDigest([
-        event,
-        { ...event, subject_id: "diagnostic:2", machine: "machine-b" },
-      ]),
+      ...makeDigest([event, { ...event, subject_id: "diagnostic:2", machine: "machine-b" }]),
+      diagnostics: [{ source: "worker", message: "launch failed", count: 2 }],
       p0_alerts: [],
       patterns: [],
     };

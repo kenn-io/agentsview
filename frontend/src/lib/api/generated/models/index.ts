@@ -226,6 +226,7 @@ export * from "./exportPricingFallback.ts";
 export * from "./exportProjectIdentity.ts";
 export * from "./exportProjectMapEntry.ts";
 export * from "./fillStats.ts";
+export * from "./frictionDiagnosticGroup.ts";
 export * from "./frictionDigestItem.ts";
 export * from "./frictionDigestResponse.ts";
 export * from "./frictionDigestResponseSessions.ts";

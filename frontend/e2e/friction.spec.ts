@@ -51,6 +51,7 @@ function digest(date: string, signals: Record<string, unknown>[]) {
     revision: 1,
     sessions_scanned: 2,
     markdown_sha256: "0".repeat(64),
+    diagnostics: [],
     summary: {
       date,
       schema_version: 1,

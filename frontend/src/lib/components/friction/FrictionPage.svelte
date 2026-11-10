@@ -232,7 +232,7 @@
 
         {#each sections as section (section.kind)}
           {#if section.signals.length > 0}
-            <FrictionSignalSection {section} sessions={digest.sessions} {issues} />
+            <FrictionSignalSection {section} sessions={digest.sessions} {issues} diagnostics={digest.diagnostics} />
           {/if}
         {/each}
       {:else}

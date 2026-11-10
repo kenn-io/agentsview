@@ -10,9 +10,12 @@ import (
 // MaxCannedFrictionPatterns bounds the patterns sent to the model.
 const MaxCannedFrictionPatterns = 20
 
+// MaxCannedFrictionDiagnostics bounds the diagnostic groups sent to the model.
+const MaxCannedFrictionDiagnostics = 20
+
 // CannedFrictionReviewInput is the deterministic Friction Log input for the
 // friction_review template. It carries the stored digest summary object,
-// pattern titles and counts, and the P0 list. Session finding text, evidence,
+// pattern titles and counts, the P0 list, and grouped diagnostics. Session finding text, evidence,
 // and transcript content never enter it. It is never written back to any
 // friction table.
 type CannedFrictionReviewInput struct {
@@ -23,6 +26,9 @@ type CannedFrictionReviewInput struct {
 	Summary      map[string]any          `json:"summary"`
 	TopPatterns  []CannedFrictionPattern `json:"top_patterns"`
 	P0Alerts     []CannedFrictionP0      `json:"p0_alerts"`
+	// Diagnostics are the digest's grouped external failures, capped at
+	// MaxCannedFrictionDiagnostics.
+	Diagnostics []friction.DiagnosticGroup `json:"diagnostics,omitempty"`
 }
 
 // CannedFrictionPattern is one fingerprint as seen in a single digest. Counts
@@ -150,6 +156,12 @@ func CannedFrictionEvidenceRefs(r CannedFrictionReviewInput) []CannedEvidenceRef
 		refs = append(refs, CannedEvidenceRef{
 			ID:          "friction:p0_alerts",
 			Description: "Tools failing in three or more distinct sessions.",
+		})
+	}
+	if len(r.Diagnostics) > 0 {
+		refs = append(refs, CannedEvidenceRef{
+			ID:          "friction:diagnostics",
+			Description: "Failures reported outside agent sessions, by source and message.",
 		})
 	}
 	for _, p := range r.TopPatterns {

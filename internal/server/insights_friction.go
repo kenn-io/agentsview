@@ -139,6 +139,9 @@ func (s *Server) buildFrictionReviewPayload(
 		),
 		P0Alerts: insight.CannedFrictionP0Alerts(p0.P0Alerts),
 	}
+	if diagnostics := friction.GroupDiagnostics(snap.Signals); len(diagnostics) > 0 {
+		input.Diagnostics = diagnostics[:min(len(diagnostics), insight.MaxCannedFrictionDiagnostics)]
+	}
 	filters := insight.CannedSessionFilters{
 		Timezone:       digest.Timezone,
 		IncludeOneShot: true,

@@ -54,23 +54,6 @@ export function groupSignals(signals: readonly FrictionSignal[]): SignalSection[
   );
 }
 
-// The Markdown digest renders diagnostics as one bullet per exact
-// source/message pair in first-seen order (`x{n}`). The page mirrors that
-// shape; the machine is neither part of the key nor shown.
-export function diagnosticRows(signals: readonly FrictionSignal[]) {
-  const rows = new Map<string, { count: number; first: FrictionSignal }>();
-  for (const signal of signals) {
-    const key = JSON.stringify([signal.label, signal.text]);
-    const row = rows.get(key);
-    if (row) {
-      row.count += 1;
-    } else {
-      rows.set(key, { count: 1, first: signal });
-    }
-  }
-  return [...rows.values()];
-}
-
 export interface InterruptionRow {
   subjectId: string;
   count: number;

@@ -92,7 +92,7 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 		}
 	}
 
-	if diagnostics := groupDiagnostics(groups[KindDiagnostic]); len(diagnostics) > 0 {
+	if diagnostics := GroupDiagnostics(groups[KindDiagnostic]); len(diagnostics) > 0 {
 		b.WriteString("\n## Diagnostics\n\n")
 		for _, group := range diagnostics {
 			fmt.Fprintf(&b, "- %s: %s x%d\n", code(group.Source), code(group.Message), group.Count)
@@ -101,23 +101,29 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 	return b.Bytes()
 }
 
-// diagnosticGroup counts events with the same source and message.
-type diagnosticGroup struct {
-	Source, Message string
-	Count           int
+// DiagnosticGroup counts diagnostic events with the same source and message.
+// The Markdown, the digest API, and the model summary all use this grouping.
+type DiagnosticGroup struct {
+	Source  string `json:"source"`
+	Message string `json:"message"`
+	Count   int    `json:"count"`
 }
 
-// groupDiagnostics groups source and message pairs in order of first occurrence.
-func groupDiagnostics(signals []Signal) []diagnosticGroup {
-	groups := []diagnosticGroup{}
+// GroupDiagnostics groups the diagnostic signals' source and message pairs in
+// order of first occurrence. Other kinds are skipped.
+func GroupDiagnostics(signals []Signal) []DiagnosticGroup {
+	groups := []DiagnosticGroup{}
 	index := map[[2]string]int{}
 	for _, signal := range signals {
+		if signal.Kind != KindDiagnostic {
+			continue
+		}
 		key := [2]string{signal.Label, signal.Text}
 		if i, ok := index[key]; ok {
 			groups[i].Count++
 		} else {
 			index[key] = len(groups)
-			groups = append(groups, diagnosticGroup{Source: signal.Label, Message: signal.Text, Count: 1})
+			groups = append(groups, DiagnosticGroup{Source: signal.Label, Message: signal.Text, Count: 1})
 		}
 	}
 	return groups

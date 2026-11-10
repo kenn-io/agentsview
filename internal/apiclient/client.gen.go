@@ -29314,6 +29314,16 @@ type FillStats struct {
 	Stale     int64 `json:"Stale"`
 }
 
+type FrictionDiagnosticGroup struct {
+	Count   int64  `json:"count"`
+	Message string `json:"message" validate:"required"`
+	Source  string `json:"source" validate:"required"`
+}
+
+func (f FrictionDiagnosticGroup) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(f))
+}
+
 type FrictionDigestItem struct {
 	BuiltAt         time.Time `json:"built_at" validate:"required"`
 	Date            string    `json:"date" validate:"required"`
@@ -29330,6 +29340,7 @@ func (f FrictionDigestItem) Validate() error {
 type FrictionDigestResponse struct {
 	BuiltAt         time.Time                  `json:"built_at" validate:"required"`
 	Date            string                     `json:"date" validate:"required"`
+	Diagnostics     []FrictionDiagnosticGroup  `json:"diagnostics" validate:"required"`
 	MarkdownSha256  string                     `json:"markdown_sha256" validate:"required"`
 	P0Alerts        []FrictionP0Alert          `json:"p0_alerts" validate:"required"`
 	Patterns        []FrictionPatternItem      `json:"patterns" validate:"required"`
@@ -29352,6 +29363,16 @@ func (f FrictionDigestResponse) Validate() error {
 	}
 	if err := typesValidator.Var(f.Date, "required"); err != nil {
 		errors = errors.Append("Date", err)
+	}
+	if err := typesValidator.Var(f.Diagnostics, "required"); err != nil {
+		errors = errors.Append("Diagnostics", err)
+	}
+	for i, item := range f.Diagnostics {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Diagnostics[%d]", i), err)
+			}
+		}
 	}
 	if err := typesValidator.Var(f.MarkdownSha256, "required"); err != nil {
 		errors = errors.Append("MarkdownSha256", err)

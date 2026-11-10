@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/friction"
 )
 
 func testFrictionFinding(session, kind, title, fingerprint string) CannedFrictionOccurrence {
@@ -105,8 +107,8 @@ func TestCannedFrictionEvidenceRefs(t *testing.T) {
 		},
 		{
 			name:   "diagnostics_only",
-			review: CannedFrictionReviewInput{Summary: map[string]any{"sessions_scanned": float64(0), "diagnostics": float64(3)}},
-			want:   []string{"friction:summary"},
+			review: CannedFrictionReviewInput{Summary: map[string]any{"sessions_scanned": float64(0), "diagnostics": float64(3)}, Diagnostics: []friction.DiagnosticGroup{{Source: "worker", Message: "launch failed", Count: 3}}},
+			want:   []string{"friction:diagnostics", "friction:summary"},
 		},
 		{
 			name: "all_refs_sorted",

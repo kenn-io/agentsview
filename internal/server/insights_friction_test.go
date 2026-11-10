@@ -236,6 +236,8 @@ func TestGenerateFrictionReviewInsight_SavesAndCaches(t *testing.T) {
 		frictionIntTitle,
 		"- friction:pattern:01",
 		"- friction:p0_alerts",
+		`"diagnostics":[{"source":"worker","message":"launch failed","count":2}]`,
+		"- friction:diagnostics",
 	} {
 		assert.Contains(t, prompt, want)
 	}

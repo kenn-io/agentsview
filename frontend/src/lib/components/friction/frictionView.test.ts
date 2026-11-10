@@ -3,7 +3,6 @@ import type { FrictionPatternItem, FrictionSignal } from "../../api/generated/in
 import {
   FRICTION_KINDS,
   codeSegments,
-  diagnosticRows,
   groupSignals,
   headlinePatterns,
   interruptionRows,
@@ -91,13 +90,12 @@ describe("groupSignals", () => {
 });
 
 describe("diagnostics", () => {
-  it("groups the same source and message across machines", () => {
+  it("shows a diagnostic section after the session kinds", () => {
     const signals = [
       sig({ kind: "diagnostic", label: "worker", text: "launch failed", machine: "one" }),
       sig({ kind: "diagnostic", label: "worker", text: "launch failed", machine: "two" }),
       sig({ kind: "diagnostic", label: "worker", text: "other failure" }),
     ];
-    expect(diagnosticRows(signals).map((row) => row.count)).toEqual([2, 1]);
     expect(groupSignals(signals).at(-1)?.kind).toBe("diagnostic");
   });
 });

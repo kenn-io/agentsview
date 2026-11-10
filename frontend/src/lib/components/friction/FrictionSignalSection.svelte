@@ -1,10 +1,9 @@
 <script lang="ts">
-  import type { FrictionIssueItem } from "../../api/generated/index.js";
+  import type { FrictionDiagnosticGroup, FrictionIssueItem } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
   import FrictionFinding from "./FrictionFinding.svelte";
   import FrictionSessionRef from "./FrictionSessionRef.svelte";
   import {
-    diagnosticRows,
     interruptionRows,
     isDiagnosticSubject,
     signalDims,
@@ -18,9 +17,11 @@
     sessions: FrictionSessions | null | undefined;
     // Kata issues by pattern fingerprint, shown beside each finding.
     issues?: Record<string, FrictionIssueItem>;
+    // Diagnostic rows, grouped by the server as in the Markdown.
+    diagnostics?: FrictionDiagnosticGroup[];
   }
 
-  let { section, sessions, issues = {} }: Props = $props();
+  let { section, sessions, issues = {}, diagnostics = [] }: Props = $props();
 
   const TITLES: Record<FrictionKind, () => string> = {
     correction: m.friction_section_corrections,
@@ -33,11 +34,10 @@
     diagnostic: m.friction_section_diagnostics,
   };
 
-  // Interruptions render one row per session and diagnostics one row per
-  // source and message, each with a count, as in the Markdown.
+  // Interruptions render one row per session with a count, as in the
+  // Markdown.
   const rows = $derived.by(() => {
     if (section.kind === "interruption") return interruptionRows(section.signals);
-    if (section.kind === "diagnostic") return diagnosticRows(section.signals);
     return section.signals.map((first) => ({ first, count: 1 }));
   });
 </script>
@@ -52,11 +52,20 @@
     <span class="count">{section.signals.length}</span>
   </h2>
   <ul class="signal-list">
-    {#each rows as { first: signal, count }}
-      <li class="signal-row" data-kind={signal.kind}>
-        <FrictionFinding finding={signal} subjectId={signal.subject_id} {count} />
-        <!-- Diagnostics have no session to open and are never filed. -->
-        {#if section.kind !== "diagnostic"}
+    {#if section.kind === "diagnostic"}
+      <!-- Diagnostics have no session to open and are never filed. -->
+      {#each diagnostics as group}
+        <li class="signal-row" data-kind="diagnostic">
+          <FrictionFinding
+            finding={{ kind: "diagnostic", label: group.source, text: group.message, tool_name: "", evidence: "" }}
+            count={group.count}
+          />
+        </li>
+      {/each}
+    {:else}
+      {#each rows as { first: signal, count }}
+        <li class="signal-row" data-kind={signal.kind}>
+          <FrictionFinding finding={signal} subjectId={signal.subject_id} {count} />
           <span class="row-context">
             <FrictionSessionRef
               subjectId={signal.subject_id}
@@ -76,9 +85,9 @@
               {/if}
             {/if}
           </span>
-        {/if}
-      </li>
-    {/each}
+        </li>
+      {/each}
+    {/if}
   </ul>
 </section>
 

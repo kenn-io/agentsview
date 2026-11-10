@@ -606,6 +606,7 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"friction_patterns":                               true,
 		"friction_issue_links":                            true,
 		"friction_filing_state":                           true,
+		"diagnostic_events":                               true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
@@ -657,6 +658,7 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"friction_patterns":                               true,
 		"friction_issue_links":                            true,
 		"friction_filing_state":                           true,
+		"diagnostic_events":                               true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
