@@ -2911,8 +2911,8 @@ schemas keep their existing ordering behavior.
   rewrite that leaves size and mtime unchanged still misses the skip cache; a
   member-level fingerprint digests every parse input of that one composer (the
   raw `composerData` document plus its bubble and header rows' keys and
-  values), so an equal-length bubble rewrite, a header reorder, or a rename that leaves
-  `lastUpdatedAt` untouched still reads as changed. A chat deleted inside
+  values), so an equal-length bubble rewrite, a header reorder, or a rename that
+  leaves `lastUpdatedAt` untouched still reads as changed. A chat deleted inside
   Cursor IDE is retired through stored-source-hint tombstones on `state.vscdb`
   change events and through complete-container ownership reconciliation. A
   `state.vscdb` watcher event hashes each composer's `composerData` document

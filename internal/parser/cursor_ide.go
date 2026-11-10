@@ -23,9 +23,10 @@ import (
 // per key. A "composerData:<uuid>" key is one chat session; its
 // fullConversationHeadersOnly array or composerConvHeaders chunk rows list
 // that session's turns in order, each pointing at a sibling
-// "bubbleId:<composerId>:<bubbleUuid>" row holding the turn's text. conversationMap, the alternative inline-message field, was
-// observed empty on every real (including large) conversation, so it is not a
-// usable source in the observed _v: 16 schema.
+// "bubbleId:<composerId>:<bubbleUuid>" row holding the turn's text.
+// conversationMap, the alternative inline-message field, was observed empty
+// on every real (including large) conversation, so it is not a usable source
+// in the observed _v: 16 schema.
 const (
 	cursorIDEIDPrefix = "cursor-ide:"
 	// CursorIDEDBRelPath is the container's path relative to the provider
@@ -319,9 +320,9 @@ func listCursorIDEComposerIDs(ctx context.Context, conn *sql.DB) ([]string, erro
 
 // listCursorIDEComposerTokens streams every composer whose document lists
 // at least one inline or declared chunked header, in ascending composer-ID
-// order, with the digest of that document. It reads only composerData rows; NULL, malformed,
-// and headerless values are left out, and the whole-container pass keeps
-// handling them.
+// order, with the digest of that document. It reads only composerData rows;
+// NULL, malformed, and headerless values are left out, and the whole-container
+// pass keeps handling them.
 func listCursorIDEComposerTokens(
 	ctx context.Context, conn *sql.DB,
 	yield func(composerID, token string) error,
