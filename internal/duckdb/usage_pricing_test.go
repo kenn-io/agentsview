@@ -25,6 +25,8 @@ import (
 // one SQL group (the price_model CASE keeps the eras in separate
 // groups before tokens are summed).
 func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
+	pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	ctx := t.Context()
 	local := newLocalDB(t)
 
@@ -72,7 +74,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	preSession.Agent = "kimi"
 	postSession := syncSession(
 		"duck-kimi-post", "alpha", "post cutoff",
-		"2026-07-20T12:00:00.000Z", 2)
+		"2026-07-19T00:00:00.000Z", 2)
 	postSession.Agent = "kimi"
 
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
@@ -80,7 +82,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 			Session: preSession,
 			Messages: []db.Message{
 				kimiMessage("duck-kimi-pre", 0,
-					"kimi-for-coding", "2026-07-18T12:00:00.000Z"),
+					"gateway-kimi", "2026-07-18T12:00:00.000Z"),
 			},
 			DataVersion:     1,
 			ReplaceMessages: true,
@@ -91,9 +93,9 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 				// Same model, same day, both eras: the SQL price_model
 				// CASE must split this group before summing.
 				kimiMessage("duck-kimi-post", 0,
-					"kimi-for-coding", "2026-07-18T12:00:00.000Z"),
+					"gateway-kimi", "2026-07-18T12:00:00.000Z"),
 				kimiMessage("duck-kimi-post", 1,
-					"kimi-for-coding", "2026-07-19T00:00:00.000Z"),
+					"gateway-kimi", "2026-07-19T00:00:00.000Z"),
 			},
 			DataVersion:     1,
 			ReplaceMessages: true,
@@ -111,7 +113,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 		From:     "2026-07-01",
 		To:       "2026-07-31",
 		Timezone: "UTC",
-		Model:    "kimi-for-coding",
+		Model:    "gateway-kimi",
 	})
 	require.NoError(t, err)
 
@@ -122,13 +124,21 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 		"post-cutoff day prices at K3 rates")
 
 	require.NotNil(t, got.Pricing, "pricing block")
-	require.Contains(t, got.Pricing.Models, "kimi-for-coding")
-	resolutions := got.Pricing.Models["kimi-for-coding"].Resolutions
+	require.Contains(t, got.Pricing.Models, "gateway-kimi")
+	resolutions := got.Pricing.Models["gateway-kimi"].Resolutions
 	require.Len(t, resolutions, 2)
 	assert.Equal(t, "kimi-k3", resolutions[0].PricedModel)
 	assert.Equal(t, "moonshot/kimi-k2.6", resolutions[1].PricedModel)
 	assert.NotContains(t, got.Pricing.Models, "moonshot/kimi-k2.6")
 	assert.NotContains(t, got.Pricing.Models, "kimi-k3")
+	usage, err := store.GetSessionUsage(ctx, "duck-kimi-pre", true)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("1.51"), usage.Cost)
+	for _, tc := range []struct{ day, cost string }{{"2026-07-18", "1.51"}, {"2026-07-19", "4.80"}} {
+		report, err := store.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC"}, duckDayQuery(t, tc.day, "UTC"))
+		require.NoError(t, err)
+		assert.Equal(t, money.MustParseDollars(tc.cost), report.Totals.Cost)
+	}
 }
 
 func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {

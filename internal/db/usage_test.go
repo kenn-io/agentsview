@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -5312,6 +5313,8 @@ func TestGetDailyUsage_CodebuffCostOnly(t *testing.T) {
 // UTC cutoff and K3 rates at and after it. The explicit k2d6-agent alias stays
 // on K2.6, while static k3/k3-agent rows price flat at K3.
 func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
+	pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -5360,6 +5363,12 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 		wantCost       money.Money
 		wantPriceModel string // key expected in the pricing block
 	}{
+		{
+			name: "gateway before cutoff", model: "gateway-kimi", ts: "2026-07-18T23:59:58Z", wantCost: k26Cost, wantPriceModel: "moonshot/kimi-k2.6",
+		},
+		{
+			name: "gateway at cutoff", model: "gateway-kimi", ts: "2026-07-19T00:00:00Z", wantCost: k3Cost, wantPriceModel: "kimi-k3",
+		},
 		{
 			name:           "kimi-for-coding one second before cutoff",
 			model:          "kimi-for-coding",
@@ -5441,7 +5450,11 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 
 	for i, tt := range tests {
 		sessionID := "kimi-dates-" + strconv.Itoa(i)
-		insertSession(t, d, sessionID, "proj", func(s *Session) {
+		project := "proj"
+		if tt.model == "gateway-kimi" {
+			project = "gateway-project"
+		}
+		insertSession(t, d, sessionID, project, func(s *Session) {
 			s.Agent = "kimi"
 			s.StartedAt = new(tt.ts)
 		})
@@ -5480,6 +5493,17 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 			}
 		})
 	}
+	for i, tc := range tests[:2] {
+		session, err := d.GetSessionUsage(ctx, "kimi-dates-"+strconv.Itoa(i), true)
+		require.NoError(t, err)
+		assert.Equal(t, tc.wantCost, session.Cost)
+		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: tc.ts[:10], Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		report, err := d.GetActivityReport(ctx, AnalyticsFilter{Project: "gateway-project", Timezone: "UTC"}, q)
+		require.NoError(t, err)
+		assert.Equal(t, tc.wantCost, report.Totals.Cost)
+	}
+
 }
 
 // TestGetDailyUsage_GPTReserveLunaPricing proves Codex Luna Reserve turns
@@ -5606,6 +5630,63 @@ func TestGetDailyUsage_CodexAutoReviewLunaPricing(t *testing.T) {
 	requireNoError(t, err, "GetSessionUsage auto-review")
 	assert.True(t, session.HasCost, "HasCost")
 	assert.Empty(t, session.UnpricedModels, "UnpricedModels")
+}
+
+func TestGetDailyUsage_PriceAsAliasRepricesCachedRollups(t *testing.T) {
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	d := testDB(t)
+	d.SetEmptyCatalogPricing(FallbackRateMap())
+	ctx := t.Context()
+	const canonical, alias = "gpt-6-sol", "private-gateway-sol-deployment"
+	ts := "2026-10-01T12:00:00Z"
+	models := []string{canonical, alias}
+	for modelIndex, model := range models {
+		id := fmt.Sprintf("price-as-%d-0", modelIndex)
+		insertSession(t, d, id, "proj", func(s *Session) {
+			s.Agent = "pi"
+			s.StartedAt = new(ts)
+		})
+		insertMessages(t, d, Message{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Timestamp: ts, Model: model,
+			TokenUsage: jsontext.Value(`{"input_tokens":272000,"output_tokens":1000}`),
+		})
+	}
+	daily := func(model string) *DailyUsageResult {
+		t.Helper()
+		got, err := d.GetDailyUsage(ctx, UsageFilter{
+			From: "2026-10-01", To: "2026-10-01", Timezone: "UTC", Model: model,
+		})
+		require.NoError(t, err)
+		return &got
+	}
+	base := daily(canonical)
+	require.Positive(t, base.Totals.TotalCost.Microdollars)
+	unpriced := func() {
+		t.Helper()
+		for _, model := range models[1:] {
+			assert.Zero(t, daily(model).Totals.TotalCost.Microdollars, model)
+		}
+		session, err := d.GetSessionUsage(ctx, "price-as-1-0", false)
+		require.NoError(t, err)
+		assert.False(t, session.HasCost)
+		assert.Equal(t, []string{alias}, session.UnpricedModels)
+	}
+	// Build and cache rollups before the alias exists.
+	unpriced()
+
+	priceAs := map[string]config.CustomModelRate{alias: {PriceAs: canonical}}
+	pricingpkg.SetConfiguredAliases(config.PricingAliases(priceAs))
+	d.SetCustomPricing(priceAs)
+	for _, model := range models[1:] {
+		got := daily(model)
+		assert.Equal(t, base.Totals.TotalCost, got.Totals.TotalCost, model)
+	}
+
+	pricingpkg.SetConfiguredAliases(nil)
+	d.SetCustomPricing(nil)
+	unpriced()
+
 }
 
 func TestGetDailyUsage_CodexNamespacedPricing(t *testing.T) {

@@ -1,8 +1,11 @@
 package pricing
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/money"
@@ -113,9 +116,80 @@ func DateAliasedModels() []string {
 	return slices.Clone(kimiAmbiguousDateAliases)
 }
 
+// configuredAliases holds the operator's custom_model_pricing price_as
+// mappings, installed once at startup by SetConfiguredAliases.
+type configuredAliases struct {
+	aliases []FixedPricingAlias
+	digest  string
+}
+
+var configured atomic.Pointer[configuredAliases]
+
+// SetConfiguredAliases installs operator mappings from a reported model
+// name to the catalog model it prices as, replacing any earlier set; nil
+// clears them. A name containing "/" matches only exactly; a bare name
+// also matches any provider-prefixed form, as non-Exact built-in aliases
+// do. Configured mappings take precedence over the built-in ones.
+func SetConfiguredAliases(priceAs map[string]string) {
+	if len(priceAs) == 0 {
+		configured.Store(nil)
+		return
+	}
+	aliases := make([]FixedPricingAlias, 0, len(priceAs))
+	for name, canonical := range priceAs {
+		aliases = append(aliases, FixedPricingAlias{
+			Name: name, Canonical: canonical, Exact: strings.Contains(name, "/"),
+		})
+	}
+	// Exact names come first so they win over a bare name's prefix match.
+	slices.SortFunc(aliases, func(a, b FixedPricingAlias) int {
+		if a.Exact != b.Exact {
+			if a.Exact {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	digest := sha256.New()
+	for _, alias := range aliases {
+		_, _ = digest.Write([]byte(alias.Name + "\x00" + alias.Canonical + "\x00"))
+	}
+	configured.Store(&configuredAliases{
+		aliases: aliases, digest: hex.EncodeToString(digest.Sum(nil)),
+	})
+}
+
+func configuredPricingAliases() []FixedPricingAlias {
+	if c := configured.Load(); c != nil {
+		return c.aliases
+	}
+	return nil
+}
+
+// ConfiguredAliasTarget returns the explicitly configured target for model.
+func ConfiguredAliasTarget(model string) string {
+	name := pricingAliasName(model)
+	for _, alias := range configuredPricingAliases() {
+		if alias.Name == model || (!alias.Exact && alias.Name == name) {
+			return alias.Canonical
+		}
+	}
+	return ""
+}
+
+// ConfiguredAliasesDigest identifies configured mappings for cache invalidation.
+func ConfiguredAliasesDigest() string {
+	if c := configured.Load(); c != nil {
+		return c.digest
+	}
+	return ""
+}
+
 // FixedPricingAliases returns the timestamp-independent reported-name
-// mappings, copied for caller safety. DuckDB renders these as SQL CASE
-// arms so aggregate usage prices the same canonical models as SQLite.
+// mappings, copied for caller safety. DuckDB and
+// ClickHouse render these as SQL CASE arms so aggregate usage prices the
+// same canonical models as SQLite.
 func FixedPricingAliases() []FixedPricingAlias {
 	return slices.Clone(fixedPricingAliases)
 }

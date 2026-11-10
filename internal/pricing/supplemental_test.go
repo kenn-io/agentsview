@@ -318,6 +318,30 @@ func TestSeedVersion_FoldsInSupplementalVersion(t *testing.T) {
 		"SeedVersion must differ from FallbackVersion")
 }
 
+func TestSetConfiguredAliases(t *testing.T) {
+	t.Cleanup(func() { SetConfiguredAliases(nil) })
+	SetConfiguredAliases(map[string]string{
+		"gateway-sol":       "gpt-6-sol",
+		"gateway/exact-sol": "gpt-6.1-sol",
+		"exact-sol":         "gpt-5.6-sol",
+	})
+	for model, want := range map[string]string{
+		"gateway-sol":       "gpt-6-sol",
+		"any/gateway-sol":   "gpt-6-sol",
+		"gateway/exact-sol": "gpt-6.1-sol",
+		"other/exact-sol":   "gpt-5.6-sol",
+		"gateway-sol-2":     "",
+	} {
+		assert.Equal(t, want, ConfiguredAliasTarget(model), model)
+	}
+	changed := ConfiguredAliasesDigest()
+	assert.NotEmpty(t, changed)
+	SetConfiguredAliases(map[string]string{"gateway-sol": "gpt-6.1-sol"})
+	assert.NotEqual(t, changed, ConfiguredAliasesDigest())
+	SetConfiguredAliases(nil)
+	assert.Empty(t, ConfiguredAliasesDigest())
+}
+
 func TestFixedPricingAliasesReturnsCopy(t *testing.T) {
 	first := FixedPricingAliases()
 	require.NotEmpty(t, first)

@@ -593,6 +593,9 @@ func fallbackPricingRates(
 	// when this read-only path cannot seed model_pricing rows.
 	rates := db.FallbackRateMap()
 	for model, rate := range custom {
+		if rate.PriceAs != "" {
+			continue
+		}
 		rates[model] = export.ModelRates{
 			InputPerMTok: money.Money{
 				Microdollars: rate.InputMicrodollarsPerMTok,

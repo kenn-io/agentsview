@@ -4,16 +4,58 @@ package clickhouse
 
 import (
 	"testing"
+	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/storage"
 )
+
+func TestClickHouseConfiguredAliasKimiPricing(t *testing.T) {
+	pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
+		{ModelPattern: "moonshot/kimi-k2.6", InputPerMTok: money.MustParseDollars("2")},
+		{ModelPattern: "kimi-k3", InputPerMTok: money.MustParseDollars("3")},
+	}))
+	for _, tc := range []struct{ id, ts string }{{"alias-before", "2026-07-18T23:59:59Z"}, {"alias-after", "2026-07-19T00:00:00Z"}} {
+		_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session:     db.Session{ID: tc.id, Project: "alias-test", Machine: "test", Agent: "pi", StartedAt: &tc.ts, MessageCount: 1, UserMessageCount: 1},
+			Messages:    []db.Message{{SessionID: tc.id, Ordinal: 0, Role: "assistant", Timestamp: tc.ts, Model: "gateway-kimi", TokenUsage: []byte(`{"input_tokens":1000000}`)}},
+			DataVersion: 1, ReplaceMessages: true,
+		}})
+		require.NoError(t, err)
+	}
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.NoError(t, syncer.syncModelPricing(ctx))
+	store, err := NewStore(ctx, target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	for _, tc := range []struct{ id, day, cost string }{{"alias-before", "2026-07-18", "0.95"}, {"alias-after", "2026-07-19", "3"}} {
+		daily, err := store.GetDailyUsage(ctx, db.UsageFilter{From: tc.day, To: tc.day, Timezone: "UTC", Model: "gateway-kimi"})
+		require.NoError(t, err)
+		assert.Equal(t, money.MustParseDollars(tc.cost), daily.Totals.TotalCost)
+		session, err := store.GetSessionUsage(ctx, tc.id, true)
+		require.NoError(t, err)
+		assert.Equal(t, money.MustParseDollars(tc.cost), session.Cost)
+		query, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: tc.day, Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		report, err := store.BuildActivityReportArtifacts(ctx, db.AnalyticsFilter{Project: "alias-test", Timezone: "UTC"}, query, nil)
+		require.NoError(t, err)
+		assert.Equal(t, money.MustParseDollars(tc.cost), report.Report.Totals.Cost)
+	}
+}
 
 func TestClickHouseUsageCostFromFixture(t *testing.T) {
 	t.Parallel()

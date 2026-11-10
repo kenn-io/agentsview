@@ -11,6 +11,11 @@ The latest release is
 
 **New features**
 
+- A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
+  name exactly like a catalog model, such as a private gateway deployment name
+  that serves `gpt-6-sol`. The name inherits that model's long-context tiers
+  and catalog updates, and changing the mapping reprices cached usage. See
+  [Custom Model Pricing](/docs/token-usage/#custom-model-pricing).
 - With automatic filing on, reopen linked Kata issues when a digest finding
   shows the pattern returned after the issue was closed as done.
 

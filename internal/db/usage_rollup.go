@@ -154,7 +154,7 @@ func usagePricingIdentity(rows []export.EffectivePricingRow) (string, error) {
 }
 
 func usagePricingIdentityWithDigest(digest string) string {
-	return digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + usageSessionPricingIdentityVersion
+	return digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + pricingpkg.ConfiguredAliasesDigest() + "\x00" + usageSessionPricingIdentityVersion
 }
 
 func writeUsageRatesHash(digest hash.Hash, rates export.ModelRates) {

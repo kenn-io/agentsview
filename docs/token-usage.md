@@ -563,6 +563,7 @@ output_microdollars_per_mtok = 800_000
 | `cache_creation_microdollars_per_mtok`    | Integer microdollars per million cache-creation tokens (optional)                                                                                           |
 | `cache_creation_1h_microdollars_per_mtok` | Integer microdollars per million 1-hour-TTL cache-creation tokens (optional; when omitted or `0`, 1h writes bill at `cache_creation_microdollars_per_mtok`) |
 | `cache_read_microdollars_per_mtok`        | Integer microdollars per million cache-read tokens (optional)                                                                                               |
+| `price_as`                                | Target model whose rates and tiers this name uses; excludes rate fields                                                                                    |
 
 The table key is the model name as it appears in your session data (match the
 string the agent itself writes, dots and all — quote the key if it contains
@@ -573,6 +574,20 @@ model, so omitted fields are treated as zero rather than falling through to
 another catalog. A custom row is flat and suppresses any fetched request bands
 for that model. Models without a custom entry continue to resolve through the
 stored catalog.
+
+To use a catalog model's rates and later updates for a deployment name:
+
+```toml
+[custom_model_pricing."gateway-deployment"]
+price_as = "gpt-6-sol"
+```
+
+A bare key also matches a provider-prefixed name; a key containing `/` matches
+only that exact name. An exact custom rate takes precedence. The target may be
+a catalog model or another custom rate, but not another `price_as` entry.
+Unknown targets remain unpriced. Empty rate tables set all rates to zero.
+Restart after changing mappings, and use the same configuration on machines
+that share a mirror.
 
 ### Model aliases
 
