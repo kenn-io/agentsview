@@ -621,11 +621,11 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {
 		return err
 	}
-	version, _, err := readUserVersion(ctx, tx)
+	version, archiveOnly, err := readUserVersion(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if version == 169 {
+	if !archiveOnly && len(ScopedDataVersionProviders(version, dataVersion)) > 0 {
 		if err := advanceDataVersion(ctx, tx, dataVersion); err != nil {
 			return err
 		}

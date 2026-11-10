@@ -615,6 +615,21 @@ func TestCommitLinksBackfillFailureRetries(t *testing.T) {
 	require.Len(t, got.Commits, 1)
 }
 
+func TestCommitLinksBackfillAdvancesOlderScopedVersion(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	insertMessages(t, d, commitMessages("s1", `{"command":["bash","-lc","git commit"]}`, "[main abc1234] Fix")...)
+	_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2'; PRAGMA user_version=168`)
+	require.NoError(t, err)
+	require.NoError(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
+	var version int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+	assert.Equal(t, 170, version)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
+}
+
 func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	old := testDB(t)
 	insertSession(t, old, "written", "project-a")

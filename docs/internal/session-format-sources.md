@@ -1532,8 +1532,8 @@ fixtures retain this field; missing identities remain source-local.
   prompt after a batch poll.
   An archived `shell` call records `command` as an array. Scripts passed to
   `sh`, `bash`, or `zsh` with `-c` or `-lc` are read as-is; other arrays are
-  quoted word by word. Arrays starting with `env`, including `env -C`, are not
-  classified.
+  quoted word by word. Arrays with leading `env` directory-changing options,
+  including `env -C`, are not classified.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)
