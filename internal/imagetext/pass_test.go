@@ -154,6 +154,9 @@ func TestImageTextFailureClassification(t *testing.T) {
 			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
 			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 			require.NoError(t, manager.Run(ctx))
+			page, err := d.Search(ctx, db.SearchFilter{Query: "succeeded"})
+			require.NoError(t, err)
+			require.Empty(t, page.Results)
 			var failures int
 			var retry string
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures,retry_at FROM image_text_cache`).Scan(&failures, &retry))
@@ -187,6 +190,10 @@ func TestImageTextFailureClassification(t *testing.T) {
 			var succeeded int
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded FROM image_text_cache`).Scan(&succeeded))
 			require.Equal(t, 1, succeeded)
+			page, err = d.Search(ctx, db.SearchFilter{Query: "succeeded"})
+			require.NoError(t, err)
+			require.Len(t, page.Results, 1)
+			require.Equal(t, "one", page.Results[0].SessionID)
 		})
 	}
 }
