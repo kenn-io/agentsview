@@ -22,7 +22,9 @@ func TestImageTextMemoEvictsLeastRecentlyUsed(t *testing.T) {
 	require.Empty(t, memo.images(`[{"type":"text","text":"image"}]`))
 	require.Equal(t, 2, memo.items.Len())
 	image := `{"type":"input_image","image_url":"data:image/png;base64,YQ=="}`
-	memo = newImageTextMemo(2, 1)
-	require.Len(t, memo.images("["+image+"]"), 1)
-	require.Zero(t, memo.items.Len())
+	memo = newImageTextMemo(2, 2*retainedImagesCost(RetainedToolResultImages(a))-1)
+	require.Len(t, memo.images(a), 1)
+	require.Len(t, memo.images("["+image+","+image+"]"), 2)
+	require.True(t, memo.items.Has(sha256.Sum256([]byte(a))))
+	require.Equal(t, 1, memo.items.Len())
 }

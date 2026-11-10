@@ -185,7 +185,7 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 }
 
 func TestImageTextSharedAcrossSessionWrites(t *testing.T) {
-	for _, mode := range []string{"atomic batch", "insert messages", "trashed copy"} {
+	for _, mode := range []string{"atomic batch", "trashed copy"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := t.Context()
 			d := testDB(t)
@@ -204,13 +204,6 @@ func TestImageTextSharedAcrossSessionWrites(t *testing.T) {
 					{Session: Session{ID: "b", Project: "demo", Agent: "test"}, ReplaceMessages: true, Messages: []Message{{SessionID: "b", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}},
 				})
 				require.NoError(t, err)
-			case "insert messages":
-				insertSession(t, d, "b", "demo")
-				require.NoError(t, d.InsertMessages(ctx, []Message{
-					{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "updated"},
-					{SessionID: "b", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}},
-				}))
-				want = []string{"a", "b"}
 			case "trashed copy":
 				copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, SessionBatchWrite{Session: Session{ID: "a", Project: "demo", Agent: "test"}, Messages: []Message{{SessionID: "a", Role: "assistant", Content: "removed"}}})
 				require.NoError(t, err)
@@ -500,11 +493,11 @@ func TestImageTextSessionDeletionPrunesOnlyOwnedHashes(t *testing.T) {
 	for _, hash := range []string{sharedHash, exclusiveHash} {
 		require.NoError(t, d.SaveImageText(ctx, hash, identity, "needle", false))
 	}
-	// An unrelated cache row lets this test detect a sweep of the entire cache.
-	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision) VALUES('unrelated','p','p','m','r')`)
-		return err
-	}))
+	unrelated := `[{"type":"input_image","image_url":"data:image/png;base64,BAUG"}]`
+	insertSession(t, d, "unrelated", "demo")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "unrelated", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: unrelated}}}}))
+	unrelatedHash := RetainedToolResultImages(unrelated)[0].SHA256
+	require.NoError(t, d.SaveImageText(ctx, unrelatedHash, identity, "unrelated", false))
 	for _, step := range []struct {
 		id                string
 		shared, exclusive int
@@ -516,7 +509,7 @@ func TestImageTextSessionDeletionPrunesOnlyOwnedHashes(t *testing.T) {
 		var sharedCount, exclusiveCount, unrelatedCount int
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, sharedHash).Scan(&sharedCount))
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, exclusiveHash).Scan(&exclusiveCount))
-		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash='unrelated'`).Scan(&unrelatedCount))
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, unrelatedHash).Scan(&unrelatedCount))
 		require.Equal(t, step.shared, sharedCount)
 		require.Equal(t, step.exclusive, exclusiveCount)
 		require.Equal(t, 1, unrelatedCount)

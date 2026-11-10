@@ -225,7 +225,7 @@ func TestClickHouseImageTextContentPageOrder(t *testing.T) {
 	require.Len(t, images, 2)
 	identity := ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}
 	require.NoError(t, local.SaveImageText(ctx, images[0].SHA256, identity, "needle zebra", false))
-	require.NoError(t, local.SaveImageText(ctx, images[1].SHA256, identity, "needle apple", false))
+	require.NoError(t, local.SaveImageText(ctx, images[1].SHA256, identity, "needle apple "+strings.Repeat("界", 250)+" invoice example", false))
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -244,25 +244,10 @@ func TestClickHouseImageTextContentPageOrder(t *testing.T) {
 	require.Len(t, page.Matches, 1)
 	require.Contains(t, page.Matches[0].Snippet, "zebra")
 	require.Zero(t, page.NextCursor)
-}
-
-func TestClickHouseImageTextLateMatchSnippet(t *testing.T) {
-	ctx := t.Context()
-	local, target := seedFixture(t)
-	content := inlineImage("late")
-	writeImageSession(t, local, content, "no image", "2026-01-12T00:00:00.000Z")
-	identity := ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}
-	require.NoError(t, local.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, strings.Repeat("界", 250)+" invoice example", false))
-	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	_, err := syncer.Push(ctx, false, nil)
+	search, err := store.Search(ctx, db.SearchFilter{Query: "invoice"})
 	require.NoError(t, err)
-	store, err := NewStore(ctx, target)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	page, err := store.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, imageSessionID, page.Results[0].SessionID)
-	require.Equal(t, 1, page.Results[0].Ordinal)
-	require.Contains(t, page.Results[0].Snippet, "invoice")
+	require.Len(t, search.Results, 1)
+	require.Equal(t, imageSessionID, search.Results[0].SessionID)
+	require.Equal(t, 1, search.Results[0].Ordinal)
+	require.Contains(t, search.Results[0].Snippet, "invoice")
 }
