@@ -1343,7 +1343,7 @@ When `[image_text]` is enabled, the daemon extracts text from retained inline
 and offloaded tool-result images using the configured local GLM-OCR service. It
 caches normalized text by decoded image hash and processor identity, and tracks
 current occurrences in the same transaction as tool results. The first enabled pass builds occurrences for existing archives. Extraction
-passes run for at most two minutes, including requests in flight. Each image is read from a copy whose bytes match its hash, and
+passes start requests for two minutes; each request stops after Docbank's timeout. Each image is read from a copy whose bytes match its hash, and
 its type is detected from those bytes. Failed requests and missing, corrupt, or
 oversized copies retry with backoff; verified bytes that are not PNG, JPEG, or
 WebP, or that GLM-OCR rejects, are terminal. A full archive rebuild preserves

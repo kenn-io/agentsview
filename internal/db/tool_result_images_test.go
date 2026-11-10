@@ -31,6 +31,13 @@ func TestReadRetainedImageInlineLimit(t *testing.T) {
 	require.Equal(t, body, got)
 }
 
+func TestReadRetainedImageSkipsInvalidBlocks(t *testing.T) {
+	content := `[{"type":"text","text":"hello"},{"type":"input_image","image_url":"data:image/png;base64,%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+	body, err := ReadRetainedImage(content, 0, "", 32)
+	require.NoError(t, err)
+	require.Equal(t, []byte{1, 2, 3}, body)
+}
+
 func TestReadRetainedImageAssetLimit(t *testing.T) {
 	body := bytes.Repeat([]byte("x"), 1024*1024)
 	dir := t.TempDir()

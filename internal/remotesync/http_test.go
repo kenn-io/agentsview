@@ -1480,6 +1480,7 @@ func TestHTTPCompatibilityVersionDoesNotForceImport(t *testing.T) {
 	require.NotNil(t, prepared.mirrorImport)
 	assert.Empty(t, prepared.mirrorImport.fullReason)
 	assert.False(t, prepared.mirrorImport.journal.FullImport)
+	assert.False(t, prepared.mirrorImport.pending.Stats.PruneHostWideScope)
 }
 
 func TestHTTPMirrorJournalFlipFailureRetainsArmedWork(t *testing.T) {

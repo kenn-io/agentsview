@@ -10,7 +10,7 @@ import (
 
 // The same corpus version invalidates ordinary FTS and the CJK fingerprint.
 const (
-	searchCorpusVersion         = "2"
+	searchCorpusVersion         = "1"
 	searchCorpusVersionStatsKey = "message_search_corpus_version"
 )
 
@@ -31,7 +31,7 @@ func refreshDialogueFTS(ctx context.Context, w *writerHandle, progress OpenProgr
 				return err
 			}
 			defer func() { _ = tx.Rollback() }()
-			if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS messages_au;"+messagesAUTriggerDDL); err != nil {
+			if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS messages_au; DROP VIEW IF EXISTS message_search_content;"+schemaFTS); err != nil {
 				return fmt.Errorf("refreshing message update FTS trigger: %w", err)
 			}
 			return tx.Commit()

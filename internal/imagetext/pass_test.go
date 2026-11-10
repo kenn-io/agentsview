@@ -106,19 +106,68 @@ func TestImageTextPassDeadline(t *testing.T) {
 		}
 		start := time.Now()
 		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
-		require.Equal(t, 120*time.Second, time.Since(start))
+		require.Equal(t, 140*time.Second, time.Since(start))
 		pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 30)
 		require.NoError(t, err)
-		require.Len(t, pending, 21)
+		require.Len(t, pending, 20)
 		var failures int
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE failures > 0`).Scan(&failures))
 		require.Zero(t, failures)
 		var succeeded int
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE succeeded=1`).Scan(&succeeded))
-		require.Equal(t, 1, succeeded)
+		require.Equal(t, 2, succeeded)
 		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE succeeded=1`).Scan(&succeeded))
-		require.Equal(t, 2, succeeded)
+		require.Equal(t, 4, succeeded)
+	})
+}
+
+func TestImageTextSlowImageDoesNotBlockOthers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		d := imageTextTestDB(t)
+		for _, id := range []string{"fast", "slow"} {
+			body := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n" + id))
+			content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, body)
+			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: id, Project: "demo", Agent: "test"}))
+			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: id, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+		}
+		slow := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nslow"))
+		var requestErr error
+		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+			var request struct {
+				Images []string `json:"images"`
+			}
+			requestErr = json.UnmarshalRead(r.Body, &request)
+			if requestErr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if len(request.Images) != 1 {
+				requestErr = fmt.Errorf("invalid OCR request: %d images", len(request.Images))
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if strings.HasSuffix(request.Images[0], slow) {
+				<-r.Context().Done()
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+		})
+		manager := Manager{DB: d, Client: client}
+		start := time.Now()
+		require.Error(t, manager.Run(ctx))
+		require.NoError(t, requestErr)
+		require.Equal(t, glmocr.DefaultTimeout, time.Since(start))
+		var failures int
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures FROM image_text_cache`).Scan(&failures))
+		require.Equal(t, 1, failures)
+		require.NoError(t, manager.Run(ctx))
+		page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		require.Equal(t, "fast", page.Results[0].SessionID)
 	})
 }
 

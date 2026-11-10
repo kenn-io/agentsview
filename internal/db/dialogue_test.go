@@ -121,6 +121,34 @@ END`,
 	}
 }
 
+func TestDialogueFTSCorpusVersionAddsImageTextWithoutRebuild(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	seedSearchSession(t, d, "version", "proj", nil)
+	insertMessages(t, d, Message{SessionID: "version", Role: "user", Content: "existingneedle"})
+	_, err := d.getWriter().Exec(ctx, `DROP TRIGGER image_text_ai; DROP TRIGGER image_text_ad; DROP TRIGGER image_text_au;
+ DROP VIEW message_search_content;
+ CREATE VIEW message_search_content AS SELECT id, session_id, content AS rendered, COALESCE(dialogue_text, content) AS content FROM messages;`)
+	require.NoError(t, err)
+	var details []string
+	require.NoError(t, refreshDialogueFTS(ctx, d.getWriter(), func(p OpenProgress) { details = append(details, p.Detail) }))
+	require.Empty(t, details)
+	_, err = d.getWriter().Exec(ctx, `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text) VALUES(-1,'hash','processor','provider','model','revision','oldneedle')`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE image_text_cache SET text='newneedle' WHERE id=-1`)
+	require.NoError(t, err)
+	for _, item := range []struct {
+		term  string
+		count int
+	}{{"oldneedle", 0}, {"newneedle", 1}, {"existingneedle", 1}} {
+		var count int
+		require.NoError(t, d.getReader().QueryRow(ctx, `SELECT count(*) FROM messages_fts WHERE messages_fts MATCH ?`, item.term).Scan(&count))
+		require.Equal(t, item.count, count, item.term)
+	}
+	_, err = d.getWriter().Exec(ctx, `INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)`)
+	require.NoError(t, err)
+}
+
 func TestDropFTSInterruptedKeepsIndexConsistent(t *testing.T) {
 	d := testDB(t)
 	_, err := d.getWriter().Exec(t.Context(), `CREATE TRIGGER stats_fail BEFORE DELETE ON stats

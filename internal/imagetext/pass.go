@@ -24,7 +24,7 @@ type Manager struct {
 	Processor string
 }
 
-// passBudget bounds extraction, including a request in flight.
+// passBudget bounds when a pass starts requests; Docbank's request timeout bounds the one in flight.
 var passBudget = 2 * time.Minute
 
 const pageSize = 20
@@ -33,37 +33,26 @@ func (m *Manager) Run(ctx context.Context) error {
 	if err := m.DB.BackfillImageTextOccurrences(ctx); err != nil {
 		return err
 	}
-	passCtx, cancel := context.WithTimeout(ctx, passBudget)
-	defer cancel()
+	deadline := time.Now().Add(passBudget)
 	identity := m.Client.Identity()
 	if m.Processor != "" {
 		identity.Fingerprint = m.Processor
 	}
 	cutoff := time.Now()
 	for {
-		pending, err := m.DB.PendingImageText(passCtx, identity.Fingerprint, cutoff, pageSize)
-		if err != nil {
-			return passError(ctx, passCtx, err)
-		}
-		if len(pending) == 0 {
-			return nil
+		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, cutoff, pageSize)
+		if err != nil || len(pending) == 0 {
+			return err
 		}
 		for _, hash := range pending {
-			if err := m.processImage(passCtx, identity, hash); err != nil {
-				return passError(ctx, passCtx, err)
+			if !time.Now().Before(deadline) {
+				return nil
+			}
+			if err := m.processImage(ctx, identity, hash); err != nil {
+				return err
 			}
 		}
 	}
-}
-
-func passError(parent, pass context.Context, err error) error {
-	if parent.Err() != nil {
-		return parent.Err()
-	}
-	if errors.Is(pass.Err(), context.DeadlineExceeded) {
-		return nil
-	}
-	return err
 }
 
 func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash string) error {

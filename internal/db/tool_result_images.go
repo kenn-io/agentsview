@@ -9,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"mime"
@@ -294,10 +295,6 @@ func decodeInlineImage(raw jsontext.Value) (mediaType string, decoded []byte, ok
 }
 
 func streamInlineData(raw jsontext.Value, dst io.Writer, imageOnly bool) (string, int64, int64, bool) {
-	return streamInlineDataLimit(raw, dst, imageOnly, -1)
-}
-
-func streamInlineDataLimit(raw jsontext.Value, dst io.Writer, imageOnly bool, limit int64) (string, int64, int64, bool) {
 	var uri string
 	if json.Unmarshal(raw, &uri) != nil {
 		return "", 0, 0, false
@@ -307,9 +304,6 @@ func streamInlineDataLimit(raw jsontext.Value, dst io.Writer, imageOnly bool, li
 		return "", 0, 0, false
 	}
 	decoded := base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
-	if limit >= 0 {
-		decoded = io.LimitReader(decoded, limit+1)
-	}
 	size, err := io.Copy(dst, decoded)
 	return mediaType, size, int64(len(uri)), err == nil
 }
@@ -664,7 +658,7 @@ func RetainedToolResultImages(content string) []RetainedImage {
 			return
 		}
 		for _, block := range blocks {
-			if image, ok := retainedImageBlock(block, len(images), true); ok {
+			if image, ok := retainedImageBlock(block, len(images), nil); ok {
 				images = append(images, image)
 			}
 		}
@@ -674,7 +668,7 @@ func RetainedToolResultImages(content string) []RetainedImage {
 
 // retainedImageBlock reads one tool-result block as retained image evidence. A
 // placeholder left by the drop policy has no image_ref, so it has no digest.
-func retainedImageBlock(raw jsontext.Value, index int, hashImage bool) (RetainedImage, bool) {
+func retainedImageBlock(raw jsontext.Value, index int, body io.Writer) (RetainedImage, bool) {
 	if p, ok := parseOffloadedImagePlaceholder(raw); ok {
 		digest, _, ok := assetImageDigest(p.ImageRef)
 		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize), SHA256: digest}, ok && (p.Version == nil || *p.Version == 1)
@@ -683,22 +677,22 @@ func retainedImageBlock(raw jsontext.Value, index int, hashImage bool) (Retained
 	if json.Unmarshal(raw, &p, json.MatchCaseInsensitiveNames(true)) == nil && p.Type == "agentsview_image" && p.ImageRef == "" {
 		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize)}, p.MediaType != "" && p.ByteSize >= 0 && (p.Version == nil || *p.Version == 1)
 	}
-	return retainedInlineFile(raw, index, hashImage)
+	return retainedInlineFile(raw, index, body)
 }
 
-func retainedInlineFile(raw jsontext.Value, index int, hashImage bool) (RetainedImage, bool) {
+func retainedInlineFile(raw jsontext.Value, index int, body io.Writer) (RetainedImage, bool) {
 	uri, imageOnly, ok := retainedInlineURI(raw)
 	if !ok {
 		return RetainedImage{}, false
 	}
-	out := io.Discard
-	hash := sha256.New()
-	if hashImage {
-		out = hash
+	var hash hash.Hash
+	if body == nil {
+		hash = sha256.New()
+		body = hash
 	}
-	mediaType, size, _, ok := streamInlineData(uri, out, imageOnly)
+	mediaType, size, _, ok := streamInlineData(uri, body, imageOnly)
 	image := RetainedImage{Index: index, MediaType: mediaType, Size: new(size)}
-	if hashImage {
+	if hash != nil {
 		image.SHA256 = hex.EncodeToString(hash.Sum(nil))
 	}
 	return image, ok
@@ -725,6 +719,7 @@ func retainedInlineURI(raw jsontext.Value) (jsontext.Value, bool, bool) {
 // ReadRetainedImage reads the indexed retained image with a bounded byte limit.
 func ReadRetainedImage(content string, index int, assetsDir string, limit int64) ([]byte, error) {
 	var found jsontext.Value
+	var buf bytes.Buffer
 	count := 0
 	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
 		if found != nil {
@@ -738,7 +733,12 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 			if found != nil {
 				break
 			}
-			_, recognized := retainedImageBlock(block, count, false)
+			body := io.Discard
+			if count == index {
+				buf.Reset()
+				body = &buf
+			}
+			_, recognized := retainedImageBlock(block, count, body)
 			if recognized {
 				if count == index {
 					found = block
@@ -750,11 +750,7 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 	if found == nil {
 		return nil, fmt.Errorf("retained image %d missing", index)
 	}
-	return readRetainedImageBlock(found, index, assetsDir, limit)
-}
-
-func readRetainedImageBlock(found jsontext.Value, index int, assetsDir string, limit int64) ([]byte, error) {
-	var body []byte
+	body := buf.Bytes()
 	if p, ok := parseOffloadedImagePlaceholder(found); ok {
 		hash, ext, ok := assetImageDigest(p.ImageRef)
 		if !ok {
@@ -773,16 +769,8 @@ func readRetainedImageBlock(found jsontext.Value, index int, assetsDir string, l
 		if body, err = io.ReadAll(io.LimitReader(file, limit+1)); err != nil {
 			return nil, err
 		}
-	} else {
-		uri, imageOnly, ok := retainedInlineURI(found)
-		if !ok {
-			return nil, errors.New("invalid inline image")
-		}
-		var buf bytes.Buffer
-		if _, _, _, ok := streamInlineDataLimit(uri, &buf, imageOnly, limit); !ok {
-			return nil, errors.New("invalid inline image")
-		}
-		body = buf.Bytes()
+	} else if _, _, ok := retainedInlineURI(found); !ok {
+		return nil, errors.New("invalid inline image")
 	}
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("retained image %d exceeds %d bytes", index, limit)
