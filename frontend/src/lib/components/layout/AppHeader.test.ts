@@ -410,8 +410,6 @@ describe("AppHeader export actions", () => {
       component = mount(AppHeader, { target: document.body });
       await tick();
 
-      const bar = document.querySelector(".kit-top-bar")!;
-      expect(bar.classList.contains("no-current-tab")).toBe(!readable);
       expect(document.querySelector(".kit-top-bar__tabs")).not.toBeNull();
       expect(currentTabs()).toEqual(readable ? ["Friction Log"] : []);
     });
@@ -455,7 +453,7 @@ describe("AppHeader export actions", () => {
       text: trigger().querySelector(".kit-select-dropdown__value")?.textContent,
       label: trigger().getAttribute("aria-label"),
     });
-    expect(shown()).toEqual({ text: "—", label: "Primary navigation" });
+    expect(shown()).toEqual({ text: "—", label: "Primary navigation: —" });
 
     router.route = "sessions";
     await tick();
@@ -463,14 +461,14 @@ describe("AppHeader export actions", () => {
 
     router.route = "settings";
     await tick();
-    expect(shown()).toEqual({ text: "—", label: "Primary navigation" });
+    expect(shown()).toEqual({ text: "—", label: "Primary navigation: —" });
 
     router.route = "usage";
     await tick();
     expect(shown()).toEqual({ text: "Usage", label: "Primary navigation: Usage" });
   });
 
-  it("selects no option in the open collapsed menu on Settings", async () => {
+  it("selects no destination in the open collapsed menu on Settings", async () => {
     // jsdom has no scrollIntoView; the menu scrolls its highlight into view.
     Element.prototype.scrollIntoView = vi.fn();
     onTestFinished(() => {
@@ -491,7 +489,10 @@ describe("AppHeader export actions", () => {
       await tick();
       const options = [...document.querySelectorAll('.kit-top-bar__nav-select [role="option"]')];
       expect(options.length).toBeGreaterThan(0);
+      // With no current tab, kit-ui adds a disabled "—" placeholder row
+      // that holds the selection; no destination is selected.
       const names = options
+        .filter((option) => !option.matches(":disabled"))
         .filter((option) => option.getAttribute("aria-selected") === "true")
         .map((option) => option.textContent?.trim());
       trigger().click();

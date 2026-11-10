@@ -458,34 +458,6 @@ html:root.dark.high-contrast .kit-popover-card {
   opacity: 1;
 }
 
-:root .kit-top-bar .kit-top-bar__tab {
-  /* Ten destinations share the bar with search: quieter, tighter tabs keep
-     them below the page content and leave search its full width. */
-  padding: 3px 9px;
-  font-size: 12.5px;
-  font-weight: 400;
-  color: var(--text-muted);
-}
-
-:root .kit-top-bar .kit-top-bar__tab:hover:not(:disabled),
-:root .kit-top-bar .kit-top-bar__tab.active {
-  color: var(--text-primary);
-}
-
-/* The selected destination keeps the same weight as the others, so the
-   tabs after it never shift between pages; the shared raised pill and
-   primary ink mark it in both themes. */
-:root .kit-top-bar .kit-top-bar__tab.active {
-  background: var(--selected-strong-bg);
-  box-shadow: var(--selected-strong-edge);
-}
-
-/* Separate the tab strip from the search field: kit-ui's 8px bar gap made
-   them read as one control. */
-:root .kit-top-bar .kit-top-bar__search {
-  margin-inline-start: 16px;
-}
-
 html,
 body {
   height: 100%;

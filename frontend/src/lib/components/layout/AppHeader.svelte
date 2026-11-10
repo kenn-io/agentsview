@@ -42,7 +42,6 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { reportTelemetry } from "../../utils/telemetry.js";
   import ProjectTypeahead from "./ProjectTypeahead.svelte";
-  import { topBarNoCurrentTab } from "./topBarNoCurrentTab.js";
   import TranscriptControls from "./TranscriptControls.svelte";
   import ImportModal from "../import/ImportModal.svelte";
   import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
@@ -149,24 +148,16 @@
   </button>
 {/snippet}
 
-<!-- Temporary: topBarNoCurrentTab corrects the pinned TopBar's fallback to
-     the first tab on routes without one. Remove the wrapper with it. -->
-<div
-  class="top-bar-host"
-  use:topBarNoCurrentTab={{
-    active: activeTab,
-    tabIds: tabs.map((tab) => tab.id),
-    placeholder: "—",
-    navLabel: m.nav_primary(),
-  }}
->
+<!-- kit-ui charges the 16px gap before the search field to the collapse
+     math, so 284 keeps the tabs collapsing at the same window width as a
+     300px field did before that gap was counted. -->
 <TopBar
   {tabs}
   active={activeTab}
-  class={activeTab === "" ? "no-current-tab" : ""}
+  compact
   onchange={(id) => router.navigate(id as Route)}
   bind:collapsed={navCollapsed}
-  searchMinWidth={navCollapsed ? 48 : 300}
+  searchMinWidth={navCollapsed ? 48 : 284}
   ariaLabel={m.nav_primary()}
 >
   {#snippet left()}
@@ -364,7 +355,6 @@
     </button>
   {/snippet}
 </TopBar>
-</div>
 
 <ImportModal
   bind:open={showImportModal}
@@ -403,8 +393,9 @@
   }
 
   /* The closed trigger keeps a fixed width so the bar never reflows (and
-     the tabs never collapse) when the picker opens. 128px leaves the
-     1440px bar about 20px of slack before its tabs collapse. */
+     the tabs never collapse) when the picker opens. With ten tabs on a
+     server that can sync, 128px leaves the 1440px bar about 12px of slack
+     before its tabs collapse. */
   .project-picker {
     --project-picker-open-width: 340px;
     position: relative;
@@ -457,42 +448,6 @@
       calc((50vh - 6px) * var(--agentsview-zoom-compensation, 1)),
       var(--project-row)
     );
-  }
-
-  .top-bar-host {
-    display: contents;
-  }
-
-  /* Settings (and Friction when its tab is hidden) is not a tab, but
-     kit-ui TopBar falls back to marking the first tab current. Render that
-     tab like its neighbours; :root plus the bar class outranks the app.css
-     active rule, and hover still lifts it like any other tab. Remove with
-     topBarNoCurrentTab once kit-ui is bumped. */
-  :global(:root .kit-top-bar.no-current-tab .kit-top-bar__tab.active) {
-    background: transparent;
-    box-shadow: none;
-    color: var(--text-muted);
-  }
-
-  :global(:root .kit-top-bar.no-current-tab .kit-top-bar__tab.active:hover:not(:disabled)) {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
-  }
-
-  /* The open collapsed menu: the fallback option looks like the others
-     and carries no check. */
-  :global(:root .kit-top-bar.no-current-tab .kit-select-dropdown__option.selected) {
-    color: var(--text-secondary);
-    font-weight: inherit;
-  }
-
-  :global(:root .kit-top-bar.no-current-tab .kit-select-dropdown__option.selected:hover:not(:disabled)),
-  :global(:root .kit-top-bar.no-current-tab .kit-select-dropdown__option.selected.highlighted) {
-    color: var(--text-primary);
-  }
-
-  :global(.kit-top-bar.no-current-tab .kit-select-dropdown__option .kit-select-dropdown__check svg) {
-    visibility: hidden;
   }
 
   /* FitStages' sizing contract: the host is sized by the flexible search
