@@ -20,7 +20,9 @@ The latest release is
   hosts no longer double-count tokens and cost when a tool result splits one
   model response across several transcript records. These transcripts omit
   `requestId`, so AgentsView now treats the response's message ID alone as its
-  identity. The SQLite usage cache rebuilds once after the upgrade.
+  identity. Web searches spread across such a response are now all billed.
+  After the upgrade, the SQLite usage cache rebuilds once and the next sync
+  reparses Claude, Cowork, Qoder, and iCodeMate sessions in place.
 - Prune removes matching parent and child session chains in one pass, even
   without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.

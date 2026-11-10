@@ -664,7 +664,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Re-parse DeepSeek Harness sources in place; source and session identities
 // are unchanged.)
 // (170: reparse Codex sources for recovered commit links.)
-const dataVersion = 170
+// (171: credit every record of a Claude response split by a tool result with
+// the response's web-search total. Re-parse Claude-format sources in place;
+// source and session identities are unchanged.)
+const dataVersion = 171
 
 const archiveOnlyVersionBase = 1 << 20
 
