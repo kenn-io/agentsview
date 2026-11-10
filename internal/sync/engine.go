@@ -13740,6 +13740,8 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(ctx context.Context,
 // remaining content. The emitted result still counts as present for
 // ownership reconciliation, so a preserved session stays active rather than
 // being marked source-missing.
+// This guard applies to forced full sync as well. Read-only parse-diff bypasses
+// it so the report can compare the incomplete parse with the archive.
 // The returned verifyFailed reports that an archive read failed during
 // verification: the caller must not skip-cache the pass as clean, so the
 // dropped result is re-attempted instead of frozen behind a cached skip.

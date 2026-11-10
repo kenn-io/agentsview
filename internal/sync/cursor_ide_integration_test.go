@@ -1490,3 +1490,21 @@ func TestCursorIDEForcedFullSyncPreservesPartialHeaders(t *testing.T) {
 	assert.Equal(t, "b1", messages[0].SourceUUID)
 	assert.Equal(t, "b2", messages[1].SourceUUID)
 }
+
+func TestCursorIDEForcedFullSyncPreservesPartialInlineChat(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "state.vscdb")
+	composer := cursorIDERetentionComposer("inline-partial", 0, 2)
+	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{composer})
+	engine, database := newCursorIDESyncEngine(t, root)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	execCursorIDEStateDB(t, path, `DELETE FROM cursorDiskKV WHERE key = ?`, "bubbleId:inline-partial:b2")
+	stats := engine.SyncAllForceParse(t.Context(), nil)
+	require.True(t, stats.ProcessingComplete())
+	messages, err := database.GetMessages(t.Context(), "cursor-ide:inline-partial", 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "b1", messages[0].SourceUUID)
+	assert.Equal(t, "b2", messages[1].SourceUUID)
+}

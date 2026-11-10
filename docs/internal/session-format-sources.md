@@ -2921,8 +2921,9 @@ schemas keep their existing ordering behavior.
   bubble or header rows, composers whose value became NULL or headerless, and a
   replacement database whose composer documents are byte-identical wait for
   the 15-minute scheduled reconciliation, which reparses the whole database
-  whenever its container fingerprint moved. A malformed `composerData` value
-  fails that scheduled pass until it is fixed.
+  whenever its container fingerprint moved. Forced full sync preserves an
+  archived transcript when a partial parse omits its turns. A malformed
+  `composerData` value fails that scheduled pass until it is fixed.
 
 ## Amp (`amp`)
 

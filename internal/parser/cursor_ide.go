@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -512,6 +513,61 @@ func cursorIDECwd(doc cursorIDEComposerDoc) string {
 	return ""
 }
 
+// loadCursorIDEHeaderChunks reads the declared chunk keys in numeric order.
+func loadCursorIDEHeaderChunks(ctx context.Context, q cursorIDEQuerier, composerID string, count, chunkCount int) ([]cursorIDEComposerHeader, bool, error) {
+	prefix := cursorIDEHeaderKeyPrefix + composerID + ":"
+	end := cursorIDEHeaderKeyPrefix + composerID + ";"
+	if chunkCount <= 0 {
+		return nil, true, nil
+	}
+	// Six-digit indexes sort numerically. Larger indexes need the whole
+	// composer's range and a numeric bound because their widths differ.
+	if chunkCount <= 999999 {
+		end = fmt.Sprintf("%s%06d", prefix, chunkCount)
+	}
+	rows, err := q.QueryContext(ctx, `SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key`, prefix, end)
+	if err != nil {
+		return nil, false, fmt.Errorf("loading cursor IDE headers for %s: %w", composerID, err)
+	}
+	defer rows.Close()
+	type headerChunk struct {
+		index   int
+		headers []cursorIDEComposerHeader
+	}
+	var chunks []headerChunk
+	incomplete := false
+	for rows.Next() {
+		var key string
+		var raw []byte
+		if err := rows.Scan(&key, &raw); err != nil {
+			return nil, false, fmt.Errorf("loading cursor IDE headers for %s: %w", composerID, err)
+		}
+		suffix := strings.TrimPrefix(key, prefix)
+		index, err := strconv.Atoi(suffix)
+		if err != nil || index < 0 || index >= chunkCount || fmt.Sprintf("%06d", index) != suffix {
+			continue
+		}
+		var headers []cursorIDEComposerHeader
+		if len(raw) == 0 {
+			incomplete = true
+		} else if err := json.Unmarshal(raw, &headers); err != nil {
+			return nil, false, fmt.Errorf("decoding cursor IDE headers %s: %w", key, err)
+		} else if len(headers) == 0 {
+			incomplete = true
+		}
+		chunks = append(chunks, headerChunk{index: index, headers: headers})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("loading cursor IDE headers for %s: %w", composerID, err)
+	}
+	sort.Slice(chunks, func(i, j int) bool { return chunks[i].index < chunks[j].index })
+	var headers []cursorIDEComposerHeader
+	for _, chunk := range chunks {
+		headers = append(headers, chunk.headers...)
+	}
+	return headers, incomplete || len(chunks) < chunkCount || len(headers) < count, nil
+}
+
 // parseCursorIDEComposer decodes one composer into a ParseResult using an
 // already-open connection. Returns (nil, nil) for a composer with zero
 // renderable messages (an empty draft, or one whose bubbles were all wiped by
@@ -557,28 +613,10 @@ func parseCursorIDEComposer(
 	}
 	headerIncomplete := false
 	if len(doc.Headers) == 0 && doc.HeaderLog.Count > 0 {
-		for i := 0; i < doc.HeaderLog.ChunkCount; i++ {
-			key := fmt.Sprintf("%s%s:%06d", cursorIDEHeaderKeyPrefix, composerID, i)
-			var rawChunk []byte
-			err := tx.QueryRowContext(ctx, `SELECT value FROM cursorDiskKV WHERE key = ?`, key).Scan(&rawChunk)
-			if errors.Is(err, sql.ErrNoRows) || (err == nil && len(rawChunk) == 0) {
-				headerIncomplete = true
-				continue
-			}
-			if err != nil {
-				return nil, fmt.Errorf("loading cursor IDE headers %s: %w", key, err)
-			}
-			var headers []cursorIDEComposerHeader
-			if err := json.Unmarshal(rawChunk, &headers); err != nil {
-				return nil, fmt.Errorf("decoding cursor IDE headers %s: %w", key, err)
-			}
-			if len(headers) == 0 {
-				headerIncomplete = true
-			}
-			doc.Headers = append(doc.Headers, headers...)
-		}
-		if len(doc.Headers) < doc.HeaderLog.Count {
-			headerIncomplete = true
+		var err error
+		doc.Headers, headerIncomplete, err = loadCursorIDEHeaderChunks(ctx, tx, composerID, doc.HeaderLog.Count, doc.HeaderLog.ChunkCount)
+		if err != nil {
+			return nil, err
 		}
 	}
 	// An incomplete header log still identifies the source to reconciliation.
