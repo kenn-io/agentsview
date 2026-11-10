@@ -64,10 +64,13 @@ func decodeChangeStreamPosition(cursor string) (changeStreamPosition, bool) {
 }
 
 // ChangeStreamHead identifies the archive and its newest change position.
+// LocalMachineID is this installation's machine identity, or empty when the
+// archive has none recorded.
 type ChangeStreamHead struct {
-	ArchiveID  string
-	DatabaseID string
-	Head       string
+	ArchiveID      string
+	DatabaseID     string
+	Head           string
+	LocalMachineID string
 }
 
 // ChangeStreamUsage is a content-free token and cost total. Cost sums the
@@ -82,10 +85,15 @@ type ChangeStreamUsage struct {
 	Priced              bool  `json:"priced"`
 }
 
-// ChangeStreamSession is a session's current state. A deleted or trashed
-// session carries only its ID.
+// ChangeStreamSession is a session's current state. MachineID identifies the
+// machine the session originated on, in the form per-machine reporting
+// snapshots use. It is nil when that is unknown: the archive no longer holds
+// the session's record, or the session is stored under this installation's
+// "local" key and no installation identity is recorded. A deleted or trashed
+// session carries only its ID and MachineID.
 type ChangeStreamSession struct {
 	SessionID      string                   `json:"session_id"`
+	MachineID      *string                  `json:"machine_id"`
 	Deleted        bool                     `json:"deleted"`
 	Agent          string                   `json:"agent"`
 	Automation     string                   `json:"automation"`
@@ -97,11 +105,13 @@ type ChangeStreamSession struct {
 	Usage          *ChangeStreamUsage       `json:"usage"`
 }
 
-// ChangeStreamMessage is a message's current state without its text. A
-// deleted message carries no model, project, or usage.
+// ChangeStreamMessage is a message's current state without its text.
+// MachineID is its session's. A deleted message carries no model, project, or
+// usage.
 type ChangeStreamMessage struct {
 	SessionID string                   `json:"session_id"`
 	MessageID string                   `json:"message_id"`
+	MachineID *string                  `json:"machine_id"`
 	Revision  string                   `json:"revision"`
 	Deleted   bool                     `json:"deleted"`
 	Role      string                   `json:"role"`
@@ -176,7 +186,13 @@ func (db *DB) ReadChangeStreamHead(ctx context.Context) (ChangeStreamHead, error
 	if err != nil {
 		return ChangeStreamHead{}, err
 	}
-	return ChangeStreamHead{ArchiveID: heads.archiveID, DatabaseID: heads.databaseID, Head: head}, tx.Commit()
+	machines, err := loadMachineIdentities(ctx, tx)
+	if err != nil {
+		return ChangeStreamHead{}, fmt.Errorf("reading machine identities: %w", err)
+	}
+	return ChangeStreamHead{
+		ArchiveID: heads.archiveID, DatabaseID: heads.databaseID, Head: head, LocalMachineID: machines.local,
+	}, tx.Commit()
 }
 
 type changeStreamMessageRow struct {
@@ -289,6 +305,9 @@ func (db *DB) ReadChangeStream(
 	for _, row := range messages.rows {
 		message := row.message
 		i, ok := byID[message.SessionID]
+		if ok {
+			message.MachineID = sessions[i].MachineID
+		}
 		if !ok || message.Deleted || sessions[i].Deleted {
 			message.Model = ""
 		} else {
@@ -488,11 +507,25 @@ func (db *DB) readChangeStreamSessionsTx(
 	if len(ids) == 0 {
 		return sessions, usage, nil
 	}
+	machines, err := loadMachineIdentities(ctx, tx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading machine identities: %w", err)
+	}
 	observations := map[string]export.ProjectIdentityObservation{}
 	var live []string
 	for start := 0; start < len(ids); start += maxSQLVars {
 		chunk := ids[start:min(start+maxSQLVars, len(ids))]
-		err := readChangeStreamSessionRowsTx(ctx, tx, chunk, func(session ChangeStreamSession, obs export.ProjectIdentityObservation) {
+		// Trashed sessions keep their record, so they keep their origin too.
+		err := readChangeStreamSessionMachinesTx(ctx, tx, chunk, func(id, machine string) {
+			if origin := machines.origin(machine, archiveID); origin != "" {
+				sessions[index[id]].MachineID = &origin
+			}
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		err = readChangeStreamSessionRowsTx(ctx, tx, chunk, func(session ChangeStreamSession, obs export.ProjectIdentityObservation) {
+			session.MachineID = sessions[index[session.SessionID]].MachineID
 			sessions[index[session.SessionID]] = session
 			observations[session.SessionID] = obs
 			live = append(live, session.SessionID)
@@ -645,6 +678,27 @@ func (db *DB) computeChangeStreamUsageTx(
 		}
 	}
 	return nil
+}
+
+// readChangeStreamSessionMachinesTx reads the stored machine key of each
+// session in ids that the archive still holds, trashed or not.
+func readChangeStreamSessionMachinesTx(
+	ctx context.Context, tx *sql.Tx, ids []string, fn func(id, machine string),
+) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id,machine FROM sessions WHERE id IN (`+placeholderList(len(ids))+`)`,
+		stringArgs(ids)...)
+	if err != nil {
+		return fmt.Errorf("reading changed session machines: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, machine string
+		if err := rows.Scan(&id, &machine); err != nil {
+			return err
+		}
+		fn(id, machine)
+	}
+	return errors.Join(rows.Err(), rows.Close())
 }
 
 // readChangeStreamSessionRowsTx reads the sessions in ids that exist and are

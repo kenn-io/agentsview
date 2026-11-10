@@ -22,7 +22,7 @@ export const getGetApiV1ChangesStreamUrl = (params?: GetApiV1ChangesStreamParams
 };
 
 /**
- * Streams content-free session and message changes. ready names the archive and its newest cursor. changes carries every change from `from` to `to`; each event's `from` equals the previous event's `to`, and reset is true when the stream restarted from the beginning of the archive. heartbeat keeps the connection open. error reports a failed read before the stream closes; reconnect with the last `to` received.
+ * Streams content-free session and message changes. ready names the archive, its newest cursor, and this installation's machine identity; each session and message carries the identity of the machine it originated on. changes carries every change from `from` to `to`; each event's `from` equals the previous event's `to`, and reset is true when the stream restarted from the beginning of the archive. heartbeat keeps the connection open. error reports a failed read before the stream closes; reconnect with the last `to` received.
  * @summary Follow archive changes
  */
 export const getApiV1ChangesStream = async (

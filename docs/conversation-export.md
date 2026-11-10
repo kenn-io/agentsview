@@ -93,12 +93,12 @@ subscriber disconnects, the configured `sync_interval` applies again.
 
 The stream sends these events. Each `data` line is one JSON object:
 
-| Event       | Data                                                                                                                   |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `ready`     | `schema_version`, `archive_id`, `database_id`, and `head`, the cursor of the newest change when the connection opened. |
-| `changes`   | `schema_version`, `archive_id`, `database_id`, `from`, `to`, `reset`, `sessions`, and `messages`.                      |
-| `heartbeat` | A timestamp, sent on the same interval as `/api/v1/events`.                                                            |
-| `error`     | `{"error": "..."}` when a read fails. The stream then closes; reconnect with the last `to` you processed.              |
+| Event       | Data                                                                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ready`     | `schema_version`, `archive_id`, `database_id`, `head`, the cursor of the newest change when the connection opened, and `local_machine_id`. |
+| `changes`   | `schema_version`, `archive_id`, `database_id`, `from`, `to`, `reset`, `sessions`, and `messages`.                                          |
+| `heartbeat` | A timestamp, sent on the same interval as `/api/v1/events`.                                                                                |
+| `error`     | `{"error": "..."}` when a read fails. The stream then closes; reconnect with the last `to` you processed.                                  |
 
 How `changes` events fit together:
 
@@ -121,7 +121,8 @@ message change also sends its session, so the session totals are always current.
 A session object has:
 
 - `session_id` and `deleted`. A trashed or deleted session has `deleted: true`,
-  empty fields, a `null` project, and `null` usage.
+  a `null` project, `null` usage, and empty fields other than `machine_id`.
+- `machine_id`, the machine the session originated on.
 - `agent` and `automation` (`interactive`, `automated`, or `subagent`).
 - `project`, the same project reference the changes listing uses.
 - `models`, `started_at`, `last_activity_at`, and `message_count`.
@@ -131,8 +132,28 @@ A message object has no text and no digest of its text:
 
 - `session_id`, `message_id`, `revision`, `deleted`, `role`, and `timestamp`,
   matching the changes listing.
+- `machine_id`, the same value as its session's.
 - `model` and `project`.
 - `usage`, or `null` when the message recorded none.
+
+An archive can hold copies of sessions synced from other machines. To tell which
+sessions started on this machine, compare each record's `machine_id` with the
+`local_machine_id` from `ready`. They are equal strings for this machine's
+sessions. Both use the originating machine identities of
+[per-machine reporting exports](reporting-export.md#report-an-archive-that-contains-several-machines):
+
+- `local_machine_id` is this installation's identity. The daemon records it when
+  it starts. It is `null` only when the archive has no recorded installation
+  identity.
+- A copy from another machine carries that machine's identity. A recorded
+  machine alias resolves to the identity it names.
+- A session stored without a machine carries `archive:<archive_id>`.
+- A trashed session and its messages keep their `machine_id`. A permanently
+  deleted session no longer has a record, so its `deleted` session and message
+  records carry `machine_id: null`.
+- A message keeps the `machine_id` it was sent with until the message changes.
+  When a session's machine changes, the session is sent again with the new
+  value; use the session's value as current.
 
 A usage object has `input_tokens`, `output_tokens`, `cache_creation_tokens`,
 `cache_read_tokens`, `cost_microdollars`, and `priced`. Cost is an exact integer

@@ -60,7 +60,8 @@ func (s *Server) registerChangeStreamRoutes() {
 }
 
 func changeStreamDescription(op *huma.Operation) {
-	op.Description = "Streams content-free session and message changes. ready names the archive and its newest cursor. " +
+	op.Description = "Streams content-free session and message changes. ready names the archive, its newest cursor, " +
+		"and this installation's machine identity; each session and message carries the identity of the machine it originated on. " +
 		"changes carries every change from `from` to `to`; each event's `from` equals the previous event's `to`, " +
 		"and reset is true when the stream restarted from the beginning of the archive. heartbeat keeps the connection open. " +
 		"error reports a failed read before the stream closes; reconnect with the last `to` received."
@@ -71,10 +72,11 @@ type changeStreamInput struct {
 }
 
 type changeStreamReadyEvent struct {
-	SchemaVersion int    `json:"schema_version"`
-	ArchiveID     string `json:"archive_id"`
-	DatabaseID    string `json:"database_id"`
-	Head          string `json:"head"`
+	SchemaVersion  int     `json:"schema_version"`
+	ArchiveID      string  `json:"archive_id"`
+	DatabaseID     string  `json:"database_id"`
+	Head           string  `json:"head"`
+	LocalMachineID *string `json:"local_machine_id"`
 }
 
 type changeStreamChangesEvent struct {
@@ -125,12 +127,16 @@ func (s *Server) humaChangeStream(
 			sendChangeStreamError(stream, err)
 			return
 		}
-		if !stream.SendJSON("ready", changeStreamReadyEvent{
+		ready := changeStreamReadyEvent{
 			SchemaVersion: changeStreamSchemaVersion,
 			ArchiveID:     head.ArchiveID,
 			DatabaseID:    head.DatabaseID,
 			Head:          head.Head,
-		}) {
+		}
+		if head.LocalMachineID != "" {
+			ready.LocalMachineID = &head.LocalMachineID
+		}
+		if !stream.SendJSON("ready", ready) {
 			return
 		}
 		heartbeat := time.NewTicker(sessionwatch.PollInterval * sessionwatch.HeartbeatTicks)

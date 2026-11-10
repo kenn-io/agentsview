@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/sync"
@@ -32,6 +34,7 @@ type changeStreamUsageWire struct {
 
 type changeStreamSessionWire struct {
 	SessionID      string                 `json:"session_id"`
+	MachineID      *string                `json:"machine_id"`
 	Deleted        bool                   `json:"deleted"`
 	Agent          string                 `json:"agent"`
 	Automation     string                 `json:"automation"`
@@ -46,6 +49,7 @@ type changeStreamSessionWire struct {
 type changeStreamMessageWire struct {
 	SessionID string                 `json:"session_id"`
 	MessageID string                 `json:"message_id"`
+	MachineID *string                `json:"machine_id"`
 	Revision  string                 `json:"revision"`
 	Deleted   bool                   `json:"deleted"`
 	Role      string                 `json:"role"`
@@ -67,10 +71,11 @@ type changeStreamChangesWire struct {
 }
 
 type changeStreamReadyWire struct {
-	SchemaVersion int    `json:"schema_version"`
-	ArchiveID     string `json:"archive_id"`
-	DatabaseID    string `json:"database_id"`
-	Head          string `json:"head"`
+	SchemaVersion  int     `json:"schema_version"`
+	ArchiveID      string  `json:"archive_id"`
+	DatabaseID     string  `json:"database_id"`
+	Head           string  `json:"head"`
+	LocalMachineID *string `json:"local_machine_id"`
 }
 
 type changeStreamClient struct {
@@ -167,10 +172,17 @@ const changeStreamModel = controlledSessionUsageModel
 // seeded rates that costs 3000 + 3000 + 375 + 600 = 6975 microdollars.
 func seedChangeStreamSession(t *testing.T, te *testEnv, id string) {
 	t.Helper()
+	seedChangeStreamSessionFrom(t, te, id, "local")
+}
+
+// seedChangeStreamSessionFrom seeds the same session under a stored machine
+// key, as sync records a session from this machine or a copy from another.
+func seedChangeStreamSessionFrom(t *testing.T, te *testEnv, id, machine string) {
+	t.Helper()
 	ctx := t.Context()
 	started := "2026-05-01T10:00:00Z"
 	require.NoError(t, te.db.UpsertSession(ctx, db.Session{
-		ID: id, Project: "sample", Machine: "local", Agent: "claude", StartedAt: &started, MessageCount: 2,
+		ID: id, Project: "sample", Machine: machine, Agent: "claude", StartedAt: &started, MessageCount: 2,
 	}))
 	require.NoError(t, te.db.InsertMessages(ctx, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user", Content: "Check the build", SourceUUID: id + "-user", Timestamp: "2026-05-01T10:00:00Z"},
@@ -223,9 +235,9 @@ func TestChangeStreamReplaysArchiveFromEmptyCursor(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(events[1].Data), &objects))
 	require.Len(t, objects.Sessions, 1)
 	require.Len(t, objects.Messages, 2)
-	assert.ElementsMatch(t, []string{"session_id", "deleted", "agent", "automation", "project", "models", "started_at", "last_activity_at", "message_count", "usage"},
+	assert.ElementsMatch(t, []string{"session_id", "machine_id", "deleted", "agent", "automation", "project", "models", "started_at", "last_activity_at", "message_count", "usage"},
 		slices.Collect(maps.Keys(objects.Sessions[0])))
-	assert.ElementsMatch(t, []string{"session_id", "message_id", "revision", "deleted", "role", "timestamp", "model", "project", "usage"},
+	assert.ElementsMatch(t, []string{"session_id", "message_id", "machine_id", "revision", "deleted", "role", "timestamp", "model", "project", "usage"},
 		slices.Collect(maps.Keys(objects.Messages[0])))
 
 	changes := stream.changes(t, 1)[0]
@@ -627,4 +639,75 @@ func TestChangeStreamShortensSyncIntervalWhileConnected(t *testing.T) {
 		require.FailNow(t, "the last subscriber leaving must clear the override")
 	}
 	assert.Zero(t, interval(), "the configured interval returns after the last subscriber leaves")
+}
+
+func TestChangeStreamNamesEachRecordsOriginMachine(t *testing.T) {
+	const (
+		localID  = "0123456789abcdef0123456789abcdef"
+		remoteID = "fedcba9876543210fedcba9876543210"
+	)
+	te := setup(t, func(c *config.Config) { c.InstallationID = localID })
+	ctx := t.Context()
+	_, err := te.db.EnsureInstallationIdentity(ctx, localID)
+	require.NoError(t, err)
+	seedSessionUsagePricing(t, te.db)
+	seedChangeStreamSessionFrom(t, te, "native", localID)
+	seedChangeStreamSessionFrom(t, te, "native-legacy", "local")
+	seedChangeStreamSessionFrom(t, te, "copy", remoteID)
+	// An older archive recorded the other machine by host name; an alias
+	// maps that name to the machine's identity.
+	seedChangeStreamSessionFrom(t, te, "copy-legacy", "other-host")
+	require.NoError(t, te.db.SetSyncState(ctx, db.MachineAliasKeyPrefix+"other-host", remoteID))
+	_, err = te.db.EnsureConversationExportInitialized(ctx)
+	require.NoError(t, err)
+
+	stream := openChangeStream(t, te, "")
+	ready := stream.ready(t)
+	require.NotNil(t, ready.LocalMachineID)
+	assert.Equal(t, localID, *ready.LocalMachineID)
+	replay := stream.changes(t, 1)[0]
+	want := map[string]string{"native": localID, "native-legacy": localID, "copy": remoteID, "copy-legacy": remoteID}
+	sessionOrigins := map[string]string{}
+	for _, session := range replay.Sessions {
+		require.NotNil(t, session.MachineID, session.SessionID)
+		sessionOrigins[session.SessionID] = *session.MachineID
+	}
+	assert.Equal(t, want, sessionOrigins)
+	require.Len(t, replay.Messages, 8)
+	for _, message := range replay.Messages {
+		require.NotNil(t, message.MachineID, message.MessageID)
+		assert.Equal(t, want[message.SessionID], *message.MachineID, message.MessageID)
+	}
+
+	// A session whose machine changes is sent again with its new origin.
+	require.NoError(t, te.db.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE sessions SET machine = ? WHERE id = 'copy-legacy'`, localID)
+		return err
+	}))
+	te.broadcaster.Emit("sessions")
+	moved := stream.changes(t, 2)[1]
+	require.Len(t, moved.Sessions, 1)
+	assert.Equal(t, "copy-legacy", moved.Sessions[0].SessionID)
+	require.NotNil(t, moved.Sessions[0].MachineID)
+	assert.Equal(t, localID, *moved.Sessions[0].MachineID)
+
+	// A trashed session keeps its record, so it and its messages keep their
+	// origin. A permanently deleted session's record is gone, so its origin
+	// is unknown.
+	require.NoError(t, te.db.SoftDeleteSession(ctx, "copy"))
+	require.NoError(t, te.db.DeleteSession(ctx, "native"))
+	te.broadcaster.Emit("sessions")
+	update := stream.changes(t, 3)[2]
+	assert.Equal(t, moved.To, update.From)
+	deleted := map[string]*string{}
+	for _, session := range update.Sessions {
+		assert.True(t, session.Deleted, session.SessionID)
+		deleted[session.SessionID] = session.MachineID
+	}
+	assert.Equal(t, map[string]*string{"copy": new(remoteID), "native": nil}, deleted)
+	require.Len(t, update.Messages, 4)
+	for _, message := range update.Messages {
+		assert.True(t, message.Deleted)
+		assert.Equal(t, deleted[message.SessionID], message.MachineID, message.SessionID+"/"+message.MessageID)
+	}
 }
