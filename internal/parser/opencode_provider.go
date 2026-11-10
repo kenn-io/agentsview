@@ -1424,34 +1424,6 @@ func (c *StoredMemberFreshnessCursor) Lookup(
 	}
 }
 
-// Rest drains trailing stored rows not consumed by Lookup.
-func (c *StoredMemberFreshnessCursor) Rest(ctx context.Context, fn func(StoredMemberFreshness) error) error {
-	for {
-		for c.index < len(c.rows) {
-			row := c.rows[c.index]
-			c.index++
-			if fn != nil {
-				if err := fn(row); err != nil {
-					return err
-				}
-			}
-		}
-		if c.done {
-			return nil
-		}
-		rows, done, err := c.pager(ctx, c.after, storedMemberFreshnessPageSize)
-		if err != nil {
-			return err
-		}
-		c.rows, c.index, c.done = rows, 0, done
-		if len(rows) > 0 {
-			c.after = rows[len(rows)-1].Path
-		} else {
-			c.done = true
-		}
-	}
-}
-
 // covers reports whether the stored side vouches for path at watermarkNS.
 func (c *StoredMemberFreshnessCursor) covers(
 	ctx context.Context, path string, watermarkNS int64,

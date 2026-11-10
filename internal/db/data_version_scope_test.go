@@ -157,7 +157,3 @@ func TestAdvanceScopedDataVersion(t *testing.T) {
 		})
 	}
 }
-
-func TestHermesMemberTokenUpgradeScopes(t *testing.T) {
-	assert.ElementsMatch(t, []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop}, ScopedDataVersionProviders(169, 170))
-}

@@ -89,13 +89,8 @@ func hermesMemberToken(ctx context.Context, conn *sql.DB, id string) (string, er
 
 func hermesStoredMemberToken(value string) (string, bool) {
 	parts := strings.Split(value, ":")
-	if len(parts) != 3 || parts[0] != "hst1" || len(parts[1]) != 64 || len(parts[2]) != 64 {
+	if len(parts) != 3 || parts[0] != "hst1" {
 		return "", false
-	}
-	for _, part := range parts[1:] {
-		if _, err := hex.DecodeString(part); err != nil {
-			return "", false
-		}
 	}
 	return parts[1], true
 }
@@ -186,7 +181,10 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 	if err != nil || !tracks {
 		return nil, false, err
 	}
-	cursor := NewStoredMemberFreshnessCursor(pager)
+	cursor, found, err := firstUnsuppressedStoredPage(ctx, pager)
+	if err != nil || !found {
+		return nil, false, ctx.Err()
+	}
 	var sources []SourceRef
 	orphan := func(row StoredMemberFreshness) error {
 		if row.Suppressed {
@@ -230,7 +228,9 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 	if err != nil {
 		return nil, false, err
 	}
-	if err := cursor.Rest(ctx, orphan); err != nil {
+	// Absolute virtual paths sort below byte 0xff. Drain trailing rows through
+	// Lookup's existing Passed callback, which reports orphans.
+	if _, _, err := cursor.Lookup(ctx, "\xff"); err != nil {
 		return nil, false, err
 	}
 	// Close the streaming token query before using the one snapshot connection

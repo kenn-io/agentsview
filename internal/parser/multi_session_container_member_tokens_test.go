@@ -386,7 +386,9 @@ func TestStoredMemberFreshnessCursorReportsOnlyMissingRows(t *testing.T) {
 				require.True(t, ok)
 				assert.Equal(t, path, row.Path)
 			}
-			require.NoError(t, cursor.Rest(t.Context(), cursor.Passed))
+			_, found, err := cursor.Lookup(t.Context(), "\xff")
+			require.NoError(t, err)
+			assert.False(t, found)
 			assert.Equal(t, []string{"a", "c", "e"}, missing)
 		})
 	}

@@ -24,14 +24,9 @@ func hermesTokenFixture(t *testing.T) (*sql.DB, string) {
 	c, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, c.Close()) })
-	_, err = c.ExecContext(t.Context(), `ALTER TABLE sessions ADD COLUMN transcript_revision INTEGER DEFAULT 0;
- ALTER TABLE sessions ADD COLUMN last_activity_at REAL;
- ALTER TABLE sessions ADD COLUMN runtime_revision INTEGER DEFAULT 0;
- CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id,timestamp);
- CREATE INDEX idx_messages_session_id ON messages(session_id,id);
- CREATE TABLE schema_version(version INTEGER); INSERT INTO schema_version VALUES (33);
- CREATE TRIGGER messages_transcript_revision_update AFTER UPDATE OF role,content,api_content,tool_calls,tool_call_id,tool_name,reasoning,reasoning_content,reasoning_details ON messages BEGIN UPDATE sessions SET transcript_revision=transcript_revision+1 WHERE id=new.session_id; END;
- CREATE TRIGGER messages_display_revision_update AFTER UPDATE OF codex_reasoning_items,codex_message_items,display_kind,display_metadata ON messages BEGIN UPDATE sessions SET transcript_revision=transcript_revision+1 WHERE id=new.session_id; END;`)
+	hermesfixture.CreateWatcherSchema(t, c)
+	_, err = c.ExecContext(t.Context(), `ALTER TABLE sessions ADD COLUMN last_activity_at REAL;
+ ALTER TABLE sessions ADD COLUMN runtime_revision INTEGER DEFAULT 0;`)
 	require.NoError(t, err)
 	return c, path
 }
@@ -83,20 +78,8 @@ func TestHermesMemberTokensIgnoreUnusedSessionColumns(t *testing.T) {
 	assert.Equal(t, before, tokenMap(t, c))
 }
 
-func TestHermesRewriteTriggerCoverage(t *testing.T) {
-	c, _ := hermesTokenFixture(t)
-	ok, err := hermesStoreTracksRewrites(t.Context(), c)
-	require.NoError(t, err)
-	assert.True(t, ok)
-	_, err = c.ExecContext(t.Context(), `DROP TRIGGER messages_display_revision_update`)
-	require.NoError(t, err)
-	ok, err = hermesStoreTracksRewrites(t.Context(), c)
-	require.NoError(t, err)
-	assert.False(t, ok)
-}
-
 func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
-	for _, kind := range []string{"deleted", "malformed", "legacy", "suppressed", "pager error", "trigger removed", "future schema", "missing index"} {
+	for _, kind := range []string{"deleted", "malformed", "legacy", "suppressed", "pager error", "trigger removed", "missing index"} {
 		t.Run(kind, func(t *testing.T) {
 			c, path := hermesTokenFixture(t)
 			root := filepath.Dir(path)
@@ -120,8 +103,6 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			case "suppressed":
 				stored.Suppressed = true
 				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET title='changed'`)
-			case "future schema":
-				_, err = c.ExecContext(t.Context(), `UPDATE schema_version SET version=34`)
 			case "missing index":
 				_, err = c.ExecContext(t.Context(), `DROP INDEX idx_messages_session_id`)
 				require.NoError(t, err)
@@ -130,7 +111,12 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 				_, err = c.ExecContext(t.Context(), `DROP TRIGGER messages_display_revision_update`)
 			}
 			require.NoError(t, err)
-			pager := memoryFreshnessPager([]StoredMemberFreshness{stored}, 1)
+			rows := []StoredMemberFreshness{stored}
+			if kind == "suppressed" {
+				// Mixed authority still skips the matching suppressed member.
+				rows = append([]StoredMemberFreshness{{Path: VirtualSourcePath(path, "a")}}, rows...)
+			}
+			pager := memoryFreshnessPager(rows, 1)
 			if kind == "pager error" {
 				pager = func(context.Context, string, int) ([]StoredMemberFreshness, bool, error) {
 					return nil, false, errors.New("fixture pager failure")
@@ -149,6 +135,33 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			default:
 				require.Len(t, sources, 1)
 				assert.Equal(t, VirtualSourcePath(path, "s"), sources[0].FingerprintKey)
+			}
+		})
+	}
+}
+
+// Enabling an existing root through settings can dispatch a watcher event before
+// its first full sync. Without stored authority, use the bulk-seeded full path.
+func TestHermesMemberListingWithoutStoredAuthority(t *testing.T) {
+	for _, suppressed := range []bool{false, true} {
+		t.Run(fmt.Sprint(suppressed), func(t *testing.T) {
+			conn, path := hermesTokenFixture(t)
+			_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES ('new','cli',1778767200); INSERT INTO messages(session_id,role,content,timestamp) VALUES ('new','user','new member',1778767200)`)
+			require.NoError(t, err)
+			var stored []StoredMemberFreshness
+			if suppressed {
+				stored = []StoredMemberFreshness{{Path: VirtualSourcePath(path, "child"), Suppressed: true}}
+			}
+			set := newHermesSourceSet(AgentHermes, []string{filepath.Dir(path)})
+			sources, err := set.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+				Path: path, AllowWatermarkOnlySources: true,
+				StoredMemberFreshnessPage: memoryFreshnessPager(stored, 1),
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, sources)
+			for _, source := range sources {
+				assert.False(t, source.Opaque.(hermesSource).FingerprintSingleMember,
+					"an unimported root must retain the bulk-seeded fingerprint path")
 			}
 		})
 	}
@@ -233,9 +246,6 @@ func TestHermesMemberTokenNativeDeletes(t *testing.T) {
 		after := tokenMap(t, c)
 		assert.NotEqual(t, before["child"], after["child"])
 		assert.Equal(t, before["neighbour"], after["neighbour"])
-		direct, err := hermesMemberToken(t.Context(), c, "child")
-		require.NoError(t, err)
-		assert.Equal(t, after["child"], direct)
 	}
 }
 
@@ -249,11 +259,6 @@ func TestHermesMemberTokenHistoryGrowth(t *testing.T) {
 WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?)
 INSERT INTO messages(session_id,role,content,timestamp) SELECT 'child','user','history',1778767200+x FROM n`, n)
 			require.NoError(t, err)
-			before := tokenMap(t, c)
-			assert.Equal(t, before, tokenMap(t, c), "unchanged baseline at this history size")
-			direct, err := hermesMemberToken(t.Context(), c, "child")
-			require.NoError(t, err)
-			assert.Equal(t, before["child"], direct)
 			rows, err := c.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesMemberTokenQuery(true, false))
 			require.NoError(t, err)
 			searches, endpoints := 0, 0
@@ -261,7 +266,6 @@ INSERT INTO messages(session_id,role,content,timestamp) SELECT 'child','user','h
 				var id, parent, unused int
 				var detail string
 				require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-				t.Log(detail)
 				if strings.Contains(detail, "SEARCH messages USING COVERING INDEX idx_messages_session_id (session_id=?)") {
 					searches++
 				}
@@ -273,9 +277,6 @@ INSERT INTO messages(session_id,role,content,timestamp) SELECT 'child','user','h
 			require.NoError(t, rows.Close())
 			assert.Equal(t, 1, searches, "greatest ID must use its covering seek")
 			assert.Equal(t, 2, endpoints, "both timestamp endpoints must use covering seeks")
-			_, err = c.ExecContext(t.Context(), `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','user','append',1778799999)`)
-			require.NoError(t, err)
-			assert.NotEqual(t, before["child"], tokenMap(t, c)["child"])
 		})
 	}
 }

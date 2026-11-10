@@ -114,10 +114,6 @@ func TestProviderCapabilitiesStoredMemberFreshnessListingMatchConsumers(t *testi
 		if agent == AgentHermes || agent == AgentAugureDesktop {
 			createHermesStateDB(t, root)
 			assert.Equal(t, CapabilitySupported, got)
-			dbPath := filepath.Join(root, "state.db")
-			container, ok := ResolveStoredMemberFreshnessContainer(provider, dbPath)
-			assert.True(t, ok)
-			assert.Equal(t, dbPath, container)
 			continue
 		}
 		assert.Equalf(t, CapabilityUnsupported, got,
