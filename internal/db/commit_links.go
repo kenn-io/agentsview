@@ -447,7 +447,7 @@ func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string
 			return err
 		}
 	}
-	return refreshIncrementalImageTextOccurrencesTx(tx, sessionID, msgs, update)
+	return refreshIncrementalImageTextOccurrencesTx(tx, sessionID, msgs, ids)
 }
 
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {

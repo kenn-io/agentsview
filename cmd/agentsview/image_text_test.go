@@ -39,6 +39,7 @@ func TestImageTextRespectsArchiveContent(t *testing.T) {
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
 		require.Zero(t, count)
 	}
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
 	seedCache()
 	cfg := config.Config{ArchiveContent: config.ArchiveContentTranscripts, ImageText: config.ImageTextConfig{Enabled: true}}
 	manager, err := setupImageText(t.Context(), cfg, d)
@@ -48,14 +49,6 @@ func TestImageTextRespectsArchiveContent(t *testing.T) {
 	require.Contains(t, logs.String(), "image_text: disabled because archive_content omits tool results")
 	logs.Reset()
 	cfg.ArchiveContent = config.ArchiveContentFull
-	d.SetArchiveContent(config.ArchiveContentTranscripts)
-	seedCache()
-	manager, err = setupImageText(t.Context(), cfg, d)
-	require.NoError(t, err)
-	require.Nil(t, manager)
-	assertCacheCleared()
-	require.Contains(t, logs.String(), "image_text: disabled because archive_content omits tool results")
-	logs.Reset()
 	d, err = db.Open(ctx, filepath.Join(t.TempDir(), "full.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })

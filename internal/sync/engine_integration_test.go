@@ -18176,6 +18176,10 @@ func TestImageTextSurvivesFullResync(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, env.db.BackfillImageTextOccurrences(ctx))
 			require.NoError(t, env.db.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice 42", false))
+			before, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
+			require.NoError(t, err)
+			require.Len(t, before.Results, 1)
+			require.Equal(t, "orphan-image", before.Results[0].SessionID)
 			engine := env.engine
 			if mode == "transcripts" {
 				env.engine.Close()
@@ -18190,6 +18194,10 @@ func TestImageTextSurvivesFullResync(t *testing.T) {
 				var count int
 				require.NoError(t, env.db.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE text='invoice 42'`).Scan(&count))
 				require.Equal(t, 1, count)
+				after, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
+				require.NoError(t, err)
+				require.Len(t, after.Results, 1)
+				require.Equal(t, "orphan-image", after.Results[0].SessionID)
 			}
 		})
 	}

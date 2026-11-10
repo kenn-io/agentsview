@@ -87,3 +87,44 @@ func TestImageTextSearchPaginationByRelevance(t *testing.T) {
 	require.Equal(t, 1, ordinals["image-b"])
 	require.Equal(t, -1, ordinals["name"])
 }
+
+func TestImageTextCanOutrankMessageInSameSession(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	for i := range 50 {
+		id := fmt.Sprintf("background-%02d", i)
+		insertSession(t, d, id, "demo")
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", Content: "ordinary background"}}))
+	}
+	image := `[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+	insertSession(t, d, "image-only", "control")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image-only", Ordinal: 1, Role: "assistant", Content: "screenshot", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: image}}}}))
+	insertSession(t, d, "both", "demo")
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "both", Ordinal: 0, Role: "assistant", Content: strings.Repeat("background ", 200) + "invoice"},
+		{SessionID: "both", Ordinal: 1, Role: "assistant", Content: "screenshot", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: image}}},
+	}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(image)[0].SHA256, identity, "invoice invoice invoice", false))
+	control, err := d.Search(ctx, SearchFilter{Query: "invoice", Project: "control", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, control.Results, 1)
+	for _, project := range []string{"", "demo"} {
+		t.Run("project="+project, func(t *testing.T) {
+			page, err := d.Search(ctx, SearchFilter{Query: "invoice", Project: project, Limit: 10})
+			require.NoError(t, err)
+			var result SearchResult
+			for _, candidate := range page.Results {
+				if candidate.SessionID == "both" {
+					result = candidate
+				}
+			}
+			require.Equal(t, "both", result.SessionID)
+			require.Equal(t, 1, result.Ordinal)
+			require.Equal(t, control.Results[0].Rank, result.Rank)
+			require.Equal(t, 3, strings.Count(result.Snippet, "<mark>invoice</mark>"))
+		})
+	}
+}

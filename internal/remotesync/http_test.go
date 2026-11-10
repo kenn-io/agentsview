@@ -1473,7 +1473,7 @@ func TestHTTPCompatibilityVersionDoesNotForceFullImport(t *testing.T) {
 	database, hs := newMirrorSync(t, remote, t.TempDir())
 	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
-	require.NoError(t, database.SetRemoteImportDataVersion(t.Context(), hs.Host, 170))
+	require.NoError(t, database.SetRemoteImportDataVersion(t.Context(), hs.Host, db.ImageTextDataVersion-1))
 	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })

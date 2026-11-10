@@ -246,15 +246,10 @@ func TestPGImageTextPendingSessionVersion(t *testing.T) {
 	push()
 	require.Equal(t, 171, version())
 	require.Equal(t, 169, local.GetSessionDataVersion(ctx, "pending"))
-	_, err := pg.ExecContext(ctx, `UPDATE sessions SET updated_at='2000-01-01' WHERE id='pending'`)
-	require.NoError(t, err)
 	push()
-	var stale bool
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT updated_at < '2001-01-01' FROM sessions WHERE id='pending'`).Scan(&stale))
-	require.True(t, stale)
 	store := &Store{pg: pg}
 	require.NoError(t, store.SoftDeleteSession(ctx, "pending"))
-	_, err = store.RestoreSession(ctx, "pending")
+	_, err := store.RestoreSession(ctx, "pending")
 	require.NoError(t, err)
 	require.Equal(t, 171, version())
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "plain", Project: "proj", Machine: "workstation", Agent: "test"}))

@@ -207,6 +207,12 @@ func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
 	content := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
 	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
 	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	healthy := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nhealthy"))
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "healthy", Project: "demo", Agent: "test"}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "healthy", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, healthy)}}}}))
+	missing := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":"asset://%s.png","media_type":"image/png","byte_size":10}]`, strings.Repeat("a", 64))
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "missing", Project: "demo", Agent: "test"}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "missing", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: missing}}}}))
 	requests := 0
 	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -217,56 +223,25 @@ func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
 	require.NoError(t, manager.Run(ctx))
 	require.Contains(t, logs.String(), "no readable copy")
 	require.Contains(t, logs.String(), "content hash mismatch")
-	require.Zero(t, requests)
+	require.Equal(t, 1, requests)
 	var failures int
 	var retryAt string
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures, retry_at FROM image_text_cache`).Scan(&failures, &retryAt))
+	hash := db.RetainedToolResultImages(content)[0].SHA256
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures, retry_at FROM image_text_cache WHERE image_hash=?`, hash).Scan(&failures, &retryAt))
 	require.Equal(t, 1, failures)
 	retry, err := time.Parse(time.RFC3339, retryAt)
 	require.NoError(t, err)
 	require.True(t, retry.After(time.Now()))
 	require.NoError(t, os.WriteFile(path, png, 0o600))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
+		_, err := tx.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z' WHERE image_hash=?`, hash)
 		return err
 	}))
 	require.NoError(t, manager.Run(ctx))
-	require.Equal(t, 1, requests)
-	var text string
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT text FROM image_text_cache`).Scan(&text))
-	require.Equal(t, "retry succeeded", text)
-}
-
-func TestImageTextMissingAssetDoesNotBlockOtherImages(t *testing.T) {
-	ctx := t.Context()
-	d := imageTextTestDB(t)
-	d.SetAssetsDir(t.TempDir())
-	for i := range 2 {
-		id := fmt.Sprintf("healthy-%d", i)
-		body := fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d", i)
-		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(body))
-		require.NoError(t, d.UpsertSession(ctx, db.Session{ID: id, Project: "demo", Agent: "test", MessageCount: 1}))
-		require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: id, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	}
-	missing := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":"asset://%s.png","media_type":"image/png","byte_size":10}]`, strings.Repeat("a", 64))
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "missing", Project: "demo", Agent: "test", MessageCount: 1}))
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "missing", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: missing}}}}))
-	requests := 0
-	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
-	})
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 3)
-	require.NoError(t, err)
-	require.Len(t, pending, 3)
-	require.Equal(t, strings.Repeat("a", 64), pending[0])
-	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
 	require.Equal(t, 2, requests)
-	page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 2)
+	var text string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT text FROM image_text_cache WHERE image_hash=?`, hash).Scan(&text))
+	require.Equal(t, "retry succeeded", text)
 }
 
 func TestImageTextProcessorKey(t *testing.T) {

@@ -365,9 +365,12 @@ func hasFTSColumnFilter(query string) bool {
 //     After pagination, a rowid lookup with MATCH builds each snippet without
 //     segment duplicates. Ordinal is the matched message's ordinal (≥ 0).
 //
-//  2. Name branch — display_name / first_message LIKE matches that are NOT
-//     already covered by the FTS branch. Ordinal is -1 (no specific message
-//     to navigate to).
+//  2. Image branch — OCR text matches; a session keeps whichever of its best
+//     message and best image ranks better (message wins ties).
+//
+//  3. Name branch — display_name / first_message LIKE matches that are NOT
+//     already covered by the FTS or image branches. Ordinal is -1 (no
+//     specific message to navigate to).
 func (db *DB) Search(
 	ctx context.Context, f SearchFilter,
 ) (SearchPage, error) {
@@ -506,24 +509,16 @@ func (db *DB) Search(
 	imageVisibilitySQL := `im.is_system = 0 AND ` + SystemPrefixSQL("im.content", "im.role")
 	args = append(args, f.Query)
 	args = append(args, nameProjectArgs...)
-	args = append(args, ftsArgs...)
 	imageBranchSQL := fmt.Sprintf(`
 			UNION ALL
-			SELECT session_id,project,agent,machine,name,session_ended_at,ordinal,NULL,image_rowid,NULL,image_rank,0
-			FROM (
-			 SELECT s.id AS session_id,s.project,s.agent,s.machine,
+			SELECT s.id,s.project,s.agent,s.machine,
 			 COALESCE(s.display_name,s.session_name,s.first_message,'') AS name,
 			 COALESCE(s.ended_at,s.started_at,'') AS session_ended_at,
-			 im.ordinal AS ordinal,
-			 c.rowid AS image_rowid,
-			 messages_fts.rank AS image_rank,
-			 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY messages_fts.rank,im.ordinal,o.call_id,o.event_id,o.image_index) AS rn
+			 im.ordinal,NULL,c.rowid,NULL,messages_fts.rank,0
 			 FROM messages_fts JOIN image_text_cache c ON c.rowid=messages_fts.rowid AND c.succeeded=1
 			 %s
 			 JOIN sessions s ON s.id=o.session_id
-			 WHERE messages_fts MATCH ? AND s.deleted_at IS NULL AND %s %s
-			 AND NOT EXISTS (SELECT 1 FROM sessions s2 JOIN messages m2 ON m2.session_id=s2.id CROSS JOIN messages_fts WHERE messages_fts.rowid=m2.id AND `+innerWhereSQL+` AND s2.id=s.id)
-			) WHERE rn=1`, imageOccurrenceSQL, imageVisibilitySQL, nameProjectClause)
+			 WHERE messages_fts MATCH ? AND s.deleted_at IS NULL AND %s %s`, imageOccurrenceSQL, imageVisibilitySQL, nameProjectClause)
 	nameBranchSQL := ""
 	if includeNames {
 		args = append(args, likePattern)        // CASE COALESCE(display_name,session_name) LIKE
@@ -575,7 +570,7 @@ func (db *DB) Search(
 		%spage AS MATERIALIZED (
 		SELECT session_id, project, agent, machine, name,
 			session_ended_at, ordinal, best_rowid, image_rowid, snippet, rank, match_pos
-		FROM (
+		FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY rank, image_rowid IS NOT NULL, ordinal, image_rowid) AS rn FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
@@ -591,7 +586,7 @@ func (db *DB) Search(
 			JOIN sessions s ON m.session_id = s.id
 			%s
 			%s
-		)
+		)) WHERE rn = 1
 		ORDER BY %s
 		LIMIT ? OFFSET ?
 		)

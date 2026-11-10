@@ -4006,7 +4006,7 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 	if copyDerivedText && !newDB.ArchiveContent().OmitsToolContent() {
-		if err := newDB.CopyImageTextFrom(ctx, origPath); err != nil {
+		if err := newDB.CopyImageTextWithOccurrencesFrom(ctx, origPath); err != nil {
 			stats.Aborted = true
 			stats.Warnings = append(stats.Warnings, "image text copy failed, aborting swap: "+err.Error())
 			newDB.Close()

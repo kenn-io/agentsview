@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 )
 
@@ -56,7 +57,7 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 }
 
 // refreshIncrementalImageTextOccurrencesTx refreshes only changed tool results.
-func refreshIncrementalImageTextOccurrencesTx(tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate) error {
+func refreshIncrementalImageTextOccurrencesTx(tx transactionQueries, sessionID string, msgs []Message, updated []string) error {
 	ids := make(map[string]bool)
 	ordinals := make(map[int]bool)
 	for _, msg := range msgs {
@@ -71,15 +72,8 @@ func refreshIncrementalImageTextOccurrencesTx(tx transactionQueries, sessionID s
 			}
 		}
 	}
-	for _, link := range update.SubagentLinks {
-		if link.HasResult {
-			ids[link.ToolUseID] = true
-		}
-	}
-	for _, result := range update.ToolCallResultUpdates {
-		if len(result.Events) > 0 {
-			ids[result.ToolUseID] = true
-		}
+	for _, id := range updated {
+		ids[id] = true
 	}
 	delete(ids, "")
 	for id := range ids {
@@ -153,4 +147,26 @@ func imageTextOccurrencesQuery(tx transactionQueries, sessionID, callFilter, eve
 		}
 	}
 	return occurrences, rows.Err()
+}
+
+// CopyImageTextWithOccurrencesFrom carries the old image cache across a resync and enables occurrences only when the old archive had.
+func (db *DB) CopyImageTextWithOccurrencesFrom(ctx context.Context, sourcePath string) error {
+	enabled, err := imageTextOccurrencesEnabledAt(ctx, sourcePath)
+	if err != nil {
+		return err
+	}
+	if err := db.CopyImageTextFrom(ctx, sourcePath); err != nil || !enabled {
+		return err
+	}
+	return db.BackfillImageTextOccurrences(ctx)
+}
+
+func imageTextOccurrencesEnabledAt(ctx context.Context, path string) (enabled bool, err error) {
+	src, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))
+	if err != nil {
+		return false, err
+	}
+	defer src.Close()
+	err = src.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM stats WHERE key=? AND value!=0)`, imageTextBackfillKey).Scan(&enabled)
+	return enabled, err
 }

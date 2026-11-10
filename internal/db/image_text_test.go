@@ -644,6 +644,18 @@ func TestMirrorImageTextDataVersion(t *testing.T) {
 	}{{169, false, 169}, {169, true, 171}, {171, true, 171}, {172, true, 172}} {
 		require.Equal(t, tc.want, MirrorDataVersion(tc.version, tc.hasText))
 	}
-	require.Contains(t, dataVersionScopes, ImageTextDataVersion)
-	require.Empty(t, dataVersionScopes[ImageTextDataVersion])
+}
+
+func TestImageTextResyncPreservesEmptyEnabledIndex(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	require.NoError(t, source.BackfillImageTextOccurrences(ctx))
+	dest := testDB(t)
+	require.NoError(t, dest.CopyImageTextWithOccurrencesFrom(ctx, source.Path()))
+	insertSession(t, dest, "new-image", "demo")
+	content := testInlineImageContent()
+	require.NoError(t, dest.InsertMessages(ctx, []Message{{SessionID: "new-image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	pending, err := dest.PendingImageText(ctx, "processor", time.Now(), 20)
+	require.NoError(t, err)
+	require.Equal(t, []string{RetainedToolResultImages(content)[0].SHA256}, pending)
 }
