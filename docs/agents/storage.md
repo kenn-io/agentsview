@@ -955,6 +955,17 @@ and unavailable or regressed revisions rebuild the inputs. Large change sets
 use a full read, and inputs above the budget aren't retained. Hosted stores and
 transaction views use their existing reads.
 
+DuckDB keeps each session's runs and counted message times in memory per
+session and gap cap, within a 128 MiB budget, at the session's
+`agentsview_push_fingerprint`. A push changes that fingerprint whenever a
+session's messages or tool events change, so entries survive mirror
+replacements and a refresh pairs only changed sessions. A session without a
+fingerprint is paired on every report. Like PostgreSQL, DuckDB pairs over all
+time and clips runs at the effective end cast to its microsecond `TIMESTAMP`. On
+the same scratch data, the kept runs took 74 MiB, and a refresh with ten changed
+sessions spent 328 ms pairing instead of 3.4 s, 224 ms sweeping instead of
+1.1 s, and 31 ms counting messages instead of 540 ms.
+
 ### PostgreSQL push preparation indexes
 
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
