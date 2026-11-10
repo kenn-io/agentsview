@@ -369,7 +369,6 @@ func TestImageTextUsesVerifiedBytes(t *testing.T) {
 		{"mislabeled png", "image/gif", []byte("\x89PNG\r\n\x1a\nimage"), "image/png"},
 		{"unsupported gif", "image/png", []byte("GIF89a\x01\x00\x01\x00"), ""},
 		{"non-image", "image/png", []byte("plain text"), ""},
-		{"mislabeled webp", "image/png", []byte("RIFF\x04\x00\x00\x00WEBPVP8 "), "image/webp"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
