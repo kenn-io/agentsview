@@ -97,9 +97,7 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 			if err != nil {
 				return err
 			}
-			imageCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			result, err := m.Client.Process(imageCtx, source)
-			cancel()
+			result, err := m.Client.Process(ctx, source)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()

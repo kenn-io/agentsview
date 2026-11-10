@@ -378,9 +378,12 @@ func TestImageTextPassStopsAtBudget(t *testing.T) {
 		requests := 0
 		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
 			requests++
-			time.Sleep(90 * time.Second)
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+			select {
+			case <-time.After(90 * time.Second):
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+			case <-r.Context().Done():
+			}
 		})
 		require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "session", Project: "demo", Agent: "test", MessageCount: 3}))
 		for i := range 3 {
