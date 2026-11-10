@@ -55,7 +55,12 @@ for (const termCount of [3, 12]) {
 
 test("enlarging the terms field keeps its resize handle and some counts in view", async ({
   page,
+  browserName,
 }) => {
+  test.skip(
+    browserName === "webkit",
+    "Playwright's WebKit does not resize any textarea from a synthesized mouse drag, even one without app styles",
+  );
   await openTrends(page, 12);
   await expect(page.locator(".term-table-wrap tbody tr")).toHaveCount(12);
   const field = page.locator("#trend-terms");
