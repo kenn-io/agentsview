@@ -13753,19 +13753,6 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 	if file.Agent != parser.AgentCursorIDE || len(results) == 0 || e.forceParse {
 		return results, false
 	}
-	// Incomplete header logs with no turns identify the source but cannot
-	// replace an archive or create an empty session, even in forced sync.
-	kept = results[:0]
-	for _, r := range results {
-		if r.Session.IsTruncated && len(r.Messages) == 0 {
-			continue
-		}
-		kept = append(kept, r)
-	}
-	results = kept
-	if len(results) == 0 {
-		return results, false
-	}
 	type messageSourceUUIDReader interface {
 		ListMessageSourceUUIDs(context.Context, string) ([]string, error)
 	}
@@ -13783,7 +13770,7 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 			kept = results[:0]
 			for _, r := range results {
 				if r.Session.IsTruncated {
-					verifyFailed = true
+					verifyFailed = verifyFailed || len(r.Messages) > 0
 					continue
 				}
 				kept = append(kept, r)
@@ -13796,6 +13783,11 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 	for _, r := range results {
 		if !r.Session.IsTruncated {
 			kept = append(kept, r)
+			continue
+		}
+		// A truncated result with no turns identifies the source but cannot
+		// replace an archive or create an empty session.
+		if len(r.Messages) == 0 {
 			continue
 		}
 		id := applyIDPrefixToID(e.idPrefix, r.Session.ID)

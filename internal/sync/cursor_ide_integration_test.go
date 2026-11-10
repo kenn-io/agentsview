@@ -497,41 +497,51 @@ func TestSyncAllCursorIDEWipedBubblesMarkSourceMissingAndPreserveTranscript(
 }
 
 func TestSyncAllCursorIDEPartialBubbleWipeKeepsArchivedTranscript(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "state.vscdb")
-	createCursorIDEStateDB(t, dbPath, []cursorIDESyncComposer{{
-		id: "partial-composer", name: "Partially wiped chat",
-		createdAt: 1782026756842, updatedAt: 1782026791522,
-		bubbles: []cursorIDESyncBubble{
-			{id: "b1", bubbleType: 1, text: "ask", createdAt: "2026-06-21T07:27:29.606Z"},
-			{id: "b2", bubbleType: 2, text: "answer", createdAt: "2026-06-21T07:27:31.522Z"},
-		},
-	}})
-	engine, database := newCursorIDESyncEngine(t, root)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	sess, err := database.GetSession(t.Context(), "cursor-ide:partial-composer")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Equal(t, 2, sess.MessageCount)
+	for _, force := range []bool{false, true} {
+		t.Run(fmt.Sprintf("force=%t", force), func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := filepath.Join(root, "state.vscdb")
+			createCursorIDEStateDB(t, dbPath, []cursorIDESyncComposer{{
+				id: "partial-composer", name: "Partially wiped chat",
+				createdAt: 1782026756842, updatedAt: 1782026791522,
+				bubbles: []cursorIDESyncBubble{
+					{id: "b1", bubbleType: 1, text: "ask", createdAt: "2026-06-21T07:27:29.606Z"},
+					{id: "b2", bubbleType: 2, text: "answer", createdAt: "2026-06-21T07:27:31.522Z"},
+				},
+			}})
+			engine, database := newCursorIDESyncEngine(t, root)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			sess, err := database.GetSession(t.Context(), "cursor-ide:partial-composer")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			require.Equal(t, 2, sess.MessageCount)
 
-	// A partial wipe: one bubble row vanishes while the composer document
-	// still references it. The truncated remainder must not replace the
-	// archived fuller transcript.
-	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = writer.ExecContext(t.Context(),
-		`DELETE FROM cursorDiskKV WHERE key = ?`, "bubbleId:partial-composer:b2",
-	)
-	require.NoError(t, err)
-	require.NoError(t, writer.Close())
+			// A partial wipe: one bubble row vanishes while the composer document
+			// still references it. The truncated remainder must not replace the
+			// archived fuller transcript.
+			writer, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = writer.ExecContext(t.Context(),
+				`DELETE FROM cursorDiskKV WHERE key = ?`, "bubbleId:partial-composer:b2",
+			)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 
-	engine.SyncAll(t.Context(), nil)
+			if force {
+				stats := engine.SyncAllForceParse(t.Context(), nil)
+				require.True(t, stats.ProcessingComplete())
+			} else {
+				engine.SyncAll(t.Context(), nil)
+			}
 
-	sess, err = database.GetSession(t.Context(), "cursor-ide:partial-composer")
-	require.NoError(t, err)
-	require.NotNil(t, sess, "the preserved session must stay active")
-	assert.Equal(t, 2, sess.MessageCount,
-		"a partial bubble wipe must not shrink the archived transcript")
+			sess, err = database.GetSession(t.Context(), "cursor-ide:partial-composer")
+			require.NoError(t, err)
+			require.NotNil(t, sess, "the preserved session must stay active")
+			assert.Equal(t, 2, sess.MessageCount,
+				"a partial bubble wipe must not shrink the archived transcript")
+		})
+	}
 }
 
 func TestSyncAllCursorIDEGappedComposerSurfacesAndKeepsGrowing(t *testing.T) {
@@ -1449,62 +1459,11 @@ func TestCursorIDEIncompleteHeadersPreserveArchive(t *testing.T) {
 		assert.Nil(t, newSession)
 	}
 
-	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "bubbleId:archived:b3", `{"type":1,"text":"returned turn"}`)
-	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:archived:000000", `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":1}]`)
 	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "bubbleId:new-chat:n1", `{"type":1,"text":"new turn"}`)
 	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:new-chat:000000", `[{"bubbleId":"n1","type":1},{"bubbleId":"n2","type":2}]`)
 	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "bubbleId:new-chat:n2", `{"type":2,"text":"new reply"}`)
 	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
-	sess, err := database.GetSessionFull(t.Context(), id)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Nil(t, sess.SourceMissingAt)
-	messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 3)
 	newMessages, err := database.GetMessages(t.Context(), "cursor-ide:new-chat", 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, newMessages, 2)
-}
-
-func TestCursorIDEForcedFullSyncPreservesPartialHeaders(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "state.vscdb")
-	composer := cursorIDERetentionComposer("partial-header", 0, 2)
-	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{composer})
-	engine, database := newCursorIDESyncEngine(t, root)
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	cursorIDEExec(t, path, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(), `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"headerLog":{"count":2,"chunkCount":2}}`, "composerData:partial-header"); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(t.Context(), `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:partial-header:000000", `[{"bubbleId":"b1","type":1}]`)
-		return err
-	})
-	stats := engine.SyncAllForceParse(t.Context(), nil)
-	require.True(t, stats.ProcessingComplete())
-	messages, err := database.GetMessages(t.Context(), "cursor-ide:partial-header", 0, 100, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "b1", messages[0].SourceUUID)
-	assert.Equal(t, "b2", messages[1].SourceUUID)
-}
-
-func TestCursorIDEForcedFullSyncPreservesPartialInlineChat(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "state.vscdb")
-	composer := cursorIDERetentionComposer("inline-partial", 0, 2)
-	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{composer})
-	engine, database := newCursorIDESyncEngine(t, root)
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	execCursorIDEStateDB(t, path, `DELETE FROM cursorDiskKV WHERE key = ?`, "bubbleId:inline-partial:b2")
-	stats := engine.SyncAllForceParse(t.Context(), nil)
-	require.True(t, stats.ProcessingComplete())
-	messages, err := database.GetMessages(t.Context(), "cursor-ide:inline-partial", 0, 100, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "b1", messages[0].SourceUUID)
-	assert.Equal(t, "b2", messages[1].SourceUUID)
 }

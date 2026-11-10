@@ -1279,8 +1279,10 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 		truncated, malformed, nullFirst bool
 	}{
 		{"ordered", `{"_v":18,"fullConversationHeadersOnly":[],"headerLog":{"count":2,"chunkCount":2}}`, `[{"bubbleId":"b2","type":2}]`, `[{"bubbleId":"b1","type":1}]`, []string{"b2", "b1"}, false, false, false},
+		{"large chunk count", `{"headerLog":{"count":2,"chunkCount":1000000000}}`, `[{"bubbleId":"b1","type":1}]`, `[{"bubbleId":"b2","type":2}]`, []string{"b1", "b2"}, true, false, false},
 		{"lagging count and extra row", `{"headerLog":{"count":1,"chunkCount":1}}`, `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2}]`, `[{"bubbleId":"stale","type":1}]`, []string{"b1", "b2"}, false, false, false},
 		{"missing", `{"headerLog":{"count":1,"chunkCount":2}}`, ``, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, false},
+		{"missing middle", `{"headerLog":{"count":2,"chunkCount":3}}`, `[{"bubbleId":"b1","type":1}]`, `[{"bubbleId":"b2","type":2}]`, []string{"b1", "b2"}, true, false, false},
 		{"all missing", `{"headerLog":{"count":2,"chunkCount":1}}`, ``, ``, nil, true, false, false},
 		{"null", `{"headerLog":{"count":1,"chunkCount":2}}`, ``, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, true},
 		{"empty", `{"headerLog":{"count":1,"chunkCount":2}}`, `[]`, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, false},
@@ -1293,7 +1295,13 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 			execCursorIDEDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, tc.root, "composerData:"+id)
 			for i, chunk := range []string{tc.first, tc.second} {
 				if chunk != "" {
-					execCursorIDEDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, fmt.Sprintf("composerConvHeaders:%s:%06d", id, i), chunk)
+					index := i
+					if tc.name == "large chunk count" {
+						index += 999999
+					} else if tc.name == "missing middle" && i == 1 {
+						index = 2
+					}
+					execCursorIDEDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, fmt.Sprintf("composerConvHeaders:%s:%06d", id, index), chunk)
 				}
 			}
 			if tc.nullFirst {
@@ -1304,7 +1312,13 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 			defer conn.Close()
 			info, err := os.Stat(path)
 			require.NoError(t, err)
-			result, err := parseCursorIDEComposer(t.Context(), conn, path, id, "test", info)
+			ctx := t.Context()
+			if tc.name == "large chunk count" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
+				defer cancel()
+			}
+			result, err := parseCursorIDEComposer(ctx, conn, path, id, "test", info)
 			if tc.malformed {
 				require.ErrorContains(t, err, "decoding cursor IDE headers composerConvHeaders:chunk-test:000001")
 				return
@@ -1329,38 +1343,6 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 				assert.Equal(t, "answer", result.Messages[0].Content)
 				assert.Equal(t, "hello", result.Messages[1].Content)
 			}
-		})
-	}
-}
-
-func TestCursorIDEHeaderChunksSparseDeclaredRange(t *testing.T) {
-	for _, tc := range []struct {
-		name, root, firstKey, lastKey string
-	}{
-		{"missing middle", `{"headerLog":{"count":2,"chunkCount":3}}`, "000000", "000002"},
-		{"large chunk count", `{"headerLog":{"count":2,"chunkCount":1000000000}}`, "999999", "1000000"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			const id = "sparse"
-			path := createCursorIDEDB(t, []cursorIDETestComposer{{id: id, bubbles: []cursorIDETestBubble{
-				{id: "b1", bubbleType: 1, text: "first"}, {id: "b2", bubbleType: 2, text: "second"},
-			}}})
-			execCursorIDEDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, tc.root, "composerData:"+id)
-			execCursorIDEDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?), (?, ?)`, "composerConvHeaders:sparse:"+tc.firstKey, `[{"bubbleId":"b1","type":1}]`, "composerConvHeaders:sparse:"+tc.lastKey, `[{"bubbleId":"b2","type":2}]`)
-			conn, err := openCursorIDEDB(path)
-			require.NoError(t, err)
-			defer conn.Close()
-			info, err := os.Stat(path)
-			require.NoError(t, err)
-			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-			defer cancel()
-			result, err := parseCursorIDEComposer(ctx, conn, path, id, "test", info)
-			require.NoError(t, err)
-			require.NotNil(t, result)
-			assert.True(t, result.Session.IsTruncated)
-			require.Len(t, result.Messages, 2)
-			assert.Equal(t, "b1", result.Messages[0].SourceUUID)
-			assert.Equal(t, "b2", result.Messages[1].SourceUUID)
 		})
 	}
 }
