@@ -262,6 +262,11 @@
     </EmptyState>
   {:else}
     <div class="re-list">
+      <!-- The phone layout has other columns and defaults, so crossing the
+           breakpoint starts a fresh table: a width set in one layout must
+           not carry into the other. Within a layout the table stays, so
+           row heights and sideways scroll survive a window resize. -->
+      {#key stacked.current}
       <VirtualTable
         items={rows}
         rowKey={(row) => `${row.kind}:${key(row.file)}`}
@@ -364,6 +369,7 @@
           {/if}
         {/snippet}
       </VirtualTable>
+      {/key}
     </div>
     {#if hasMore}
       <button class="re-load-more" onclick={loadMore} disabled={loading}>

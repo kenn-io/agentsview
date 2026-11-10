@@ -374,6 +374,95 @@ test.describe("Recent Edits feed", () => {
     await expect.poll(() => keptColumns(page)).toEqual(["edits"]);
   });
 
+  test("a width set in one layout does not carry into the other", async ({ page }) => {
+    await withRecentEdits(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    const headers = page.locator(".re-list thead th");
+    const width = (i: number) =>
+      headers.nth(i).evaluate((th) => Math.round(th.getBoundingClientRect().width));
+
+    // Wide: widen Edits (third column) well past its 84px default.
+    await headers.nth(2).getByRole("separator").focus();
+    for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowRight");
+    await expect.poll(() => keptColumns(page)).toEqual(["edits"]);
+    const wideEdits = await width(2);
+    expect(wideEdits).toBeGreaterThan(100);
+
+    // Phone: Edits (second column) starts at the phone default again.
+    await page.setViewportSize({ width: 400, height: 800 });
+    await expect(headers).toHaveCount(3);
+    await expect.poll(() => width(1)).toBe(52);
+    await headers.nth(1).getByRole("separator").focus();
+    await page.keyboard.press("ArrowLeft");
+
+    // Wide again: Edits has its kept desktop width, not the phone one.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(headers).toHaveCount(4);
+    await expect.poll(() => width(2)).toBe(wideEdits);
+  });
+
+  test("a window resize keeps an expanded file's height and the rows in view", async ({
+    page,
+  }) => {
+    const edits = Array.from({ length: 10 }, (_, i) => ({
+      session_id: `session-${i}`,
+      ordinal: i,
+      call_index: 0,
+      tool_name: "Edit",
+      category: "Edit",
+      timestamp: "2026-11-05T10:00:00Z",
+    }));
+    const files = Array.from({ length: 80 }, (_, i) => ({
+      ...fileRow("tools", `/src/pkg/file-${String(i).padStart(2, "0")}.go`, 10, "2026-11-05T10:00:00Z"),
+      edits,
+    }));
+    await page.route("**/api/v1/recent-edits?*", (route) =>
+      route.fulfill({ json: { has_more: false, files } }),
+    );
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/recent-edits");
+    await expect(page.locator(".re-file-row").first()).toBeVisible();
+
+    // Expand the first file, then scroll it out of view above.
+    await page.locator(".re-file-row").first().click();
+    await expect(page.locator(".re-edits-row")).toHaveCount(1);
+    const anchor = await page.locator(".re-list").evaluate((list) => {
+      let scroller: HTMLElement | null = list.parentElement;
+      while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
+        scroller = scroller.parentElement;
+      }
+      const el = scroller ?? (document.scrollingElement as HTMLElement);
+      el.scrollTop += 1200;
+      return el.scrollTop;
+    });
+    expect(anchor).toBeGreaterThan(600);
+    const firstInView = () =>
+      page.locator(".re-file-row").evaluateAll((rows) => {
+        const row = rows.find((r) => r.getBoundingClientRect().top >= 120)!;
+        return {
+          path: row.querySelector(".re-path")!.getAttribute("title"),
+          top: Math.round(row.getBoundingClientRect().top),
+        };
+      });
+    const before = await firstInView();
+    const fileWidth = () =>
+      page.locator(".re-list thead th").nth(1).evaluate((th) => th.getBoundingClientRect().width);
+    const wideFile = await fileWidth();
+
+    // Narrow the window below the page's 1088px cap: File gives way, and
+    // the rows in view stay put.
+    await page.setViewportSize({ width: 1000, height: 800 });
+    // The old remount resized the columns only once it rebuilt the table,
+    // so waiting for File to narrow also waits for any rebuild.
+    await expect.poll(fileWidth).toBeLessThan(wideFile - 50);
+    // Same row, within subpixel rounding of the same place.
+    const after = await firstInView();
+    expect(after.path).toBe(before.path);
+    expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(2);
+  });
+
   test("expand file row and jump to session transcript", async ({ page }) => {
     // Navigate to Recent Edits via its TopBar tab.
     await clickNavTab(page, "Recent Edits");
