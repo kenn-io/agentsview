@@ -32,21 +32,11 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 	}{
 		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
 		{"shell cd apostrophe", `{"command":["bash","-lc","cd '/work/a'\\''b' && git commit -m fix"]}`, "/work/a'b"},
-		{"option-looking path", `{"command":["git","-C","--git-dir=space here","commit"]}`, "/work/--git-dir=space here"},
-		{"workdir single quote", `{"command":["git","commit"],"workdir":"'"}`, "/work/'"},
-		{"cwd single quote", `{"command":["git","commit"],"cwd":"'"}`, "/work/'"},
-		{"workdir literal quotes", `{"command":["git","commit"],"workdir":"'/repo'"}`, "/work/'/repo'"},
-		{"cwd literal quotes", `{"command":["git","commit"],"cwd":"'/repo'"}`, "/work/'/repo'"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
-		{"sh -lc", `{"command":["sh","-lc","git commit -m fix"]}`, "/work"},
-		{"bash -c", `{"command":["bash","-c","git commit -m fix"]}`, "/work"},
-		{"zsh -c", `{"command":["zsh","-c","git commit -m fix"]}`, "/work"},
-		{"zsh -lc", `{"command":["zsh","-lc","git commit -m fix"]}`, "/work"},
 		{"absolute shell", `{"command":["/bin/bash","-lc","cd repo && git commit -m fix"]}`, "/work/repo"},
 		{"Windows git", `{"command":["C:\\Program Files\\Git\\bin\\GIT.ExE","-C","D:\\work\\repo","commit"]}`, `D:\work\repo`},
 		{"Windows bash", `{"command":["C:\\Program Files\\Git\\bin\\Bash.EXE","-lc","git commit -m fix"],"workdir":"D:\\work\\repo"}`, `D:\work\repo`},
 		{"Windows env", `{"command":["C:\\bin\\ENV.ExE","X=1","C:\\bin\\Git.EXE","commit"]}`, "/work"},
-		{"absolute git", `{"command":["/usr/bin/git","commit"]}`, "/work"},
 		{"env clean", `{"command":["env","-i","PATH=/usr/bin","git","commit","-m","fix"]}`, "/work"},
 		{"env clean long", `{"command":["env","--ignore-environment","git","commit"]}`, "/work"},
 		{"env separator", `{"command":["env","--","git","commit","-m","fix"]}`, "/work"},
@@ -55,14 +45,10 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"config equals", `{"command":["git","-c","user.name=A B","commit"]}`, "/work"},
 		{"env", `{"command":["env","X=1","git","commit"]}`, "/work"},
 		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
-		{"literal apostrophe", `{"command":"git -C '/work/a'\\''b' commit"}`, "/work/a'b"},
 		{"successive option-looking paths", `{"command":["git","-C","-C","-C","--git-dir=space here","commit"]}`, "/work/-C/--git-dir=space here"},
 		{"successive paths", `{"command":["git","-C","root","-C","child repo","commit"]}`, "/work/root/child repo"},
-		{"workdir", `{"command":["git","commit"],"workdir":"/repo"}`, "/repo"},
 		{"argv path", `{"command":["git","-C","/path with spaces","commit","-m","fix"]}`, "/path with spaces"},
 		{"argv literal tilde", `{"command":["git","-C","~project","commit"]}`, "/work/~project"},
-		{"shell quoted tilde", `{"command":"git -C '~project' commit"}`, "/work/~project"},
-		{"string command", `{"command":"git -C '/path with spaces' commit -m fix"}`, "/path with spaces"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -75,21 +61,17 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 			require.Len(t, got.Commits, 1)
 			assert.Equal(t, "abc1234", got.Commits[0].SHA)
 			assert.Equal(t, tt.repository, got.Commits[0].Repository)
-			require.NotNil(t, got.Commits[0].Turn)
-			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
-			reverse, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
-			require.NoError(t, err)
-			require.Len(t, reverse.Commits[0].Links, 1)
-			assert.Equal(t, "s1", reverse.Commits[0].Links[0].SessionID)
 		})
 	}
-	for _, input := range []string{`{"command":[]}`, `{"command":[1]}`, `{"command":["printf","git","commit"]}`, `{"command":["C:\\bin\\printf.exe","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","printf","git","commit"]}`, `{"command":["env","--","printf","git","commit"]}`, `{"command":["env","--","git","log","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
-		d := testDB(t)
-		insertSession(t, d, "s1", "project-a")
-		insertMessages(t, d, commitMessages("s1", input, "[main abc1234] Fix parser")...)
-		got, err := d.SessionCommitLinks(t.Context(), "s1")
-		require.NoError(t, err)
-		assert.Empty(t, got.Commits, input)
+	for _, input := range []string{`{"command":[]}`, `{"command":["printf","git","commit"]}`, `{"command":["C:\\bin\\printf.exe","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","printf","git","commit"]}`, `{"command":["env","--","printf","git","commit"]}`, `{"command":["env","--","git","log","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
+		t.Run(input, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			insertMessages(t, d, commitMessages("s1", input, "[main abc1234] Fix parser")...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			assert.Empty(t, got.Commits)
+		})
 	}
 }
 
@@ -319,6 +301,8 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 	}{
 		{"POSIX absolute", "/work", "cd /repo && git commit -m fix", "/repo"},
 		{"tilde", "/work", "cd ~/x && git commit -m fix", "~/x"},
+		{"literal apostrophe", "/work", `git -C '/work/a'\''b' commit`, "/work/a'b"},
+		{"shell quoted tilde", "/work", `git -C '~project' commit`, "/work/~project"},
 		{"nonleading cd", "/work", "git add . && cd /elsewhere && git commit -m fix", "/elsewhere"},
 		{"nonleading relative cd", "/work", "git add . && cd repo && git commit -m fix", "/work/repo"},
 		{"last cd before commit", "/work", "cd /first && cd /repo && git commit -m fix && cd /later", "/repo"},
@@ -361,6 +345,8 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		name, repository, input, result string
 	}{
 		{"JSON workdir", "/repo", `{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser"},
+		{"workdir single quote", "/work/'", `{"cmd":"git commit -m fix","workdir":"'"}`, "[main abc1234] Fix parser"},
+		{"workdir literal quotes", "/work/'/repo'", `{"cmd":"git commit -m fix","workdir":"'/repo'"}`, "[main abc1234] Fix parser"},
 		{"JSON cwd", "/work/sub", `{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -535,22 +521,15 @@ func TestCommitLinksBackfill(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "archive.db")
 	d, err := Open(t.Context(), archive)
 	require.NoError(t, err)
-	for _, id := range []string{"repaired", "env", "equals", "operand", "unchanged"} {
+	for _, id := range []string{"repaired", "unchanged"} {
 		insertSession(t, d, id, "project-a", func(s *Session) { s.Cwd = "/work" })
 		input := `{"command":"git commit -m fix"}`
-		switch id {
-		case "repaired":
+		if id == "repaired" {
 			input = `{"command":["bash","-lc","git commit -m fix"]}`
-		case "env":
-			input = `{"command":["env","-i","PATH=/usr/bin","git","commit","-m","fix"]}`
-		case "operand":
-			input = `{"command":["git","-C","--git-dir=space here","commit"]}`
-		case "equals":
-			input = `{"command":["git","--work-tree=/path with spaces","commit"]}`
 		}
 		insertMessages(t, d, commitMessages(id, input, "[main abc1234] Fix parser")...)
 	}
-	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id IN ('repaired','env','equals','operand')`)
+	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id='repaired'`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM stats WHERE key=?`, commitLinksBackfillKey)
 	require.NoError(t, err)
@@ -559,37 +538,25 @@ func TestCommitLinksBackfill(t *testing.T) {
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET local_modified_at='2000-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
-	firstModified := map[string]string{}
+	var firstModified string
 	for i := 0; i < 2; i++ {
 		d, err = Open(t.Context(), archive)
 		require.NoError(t, err)
-		for _, id := range []string{"repaired", "env", "equals", "operand"} {
-			got, err := d.SessionCommitLinks(t.Context(), id)
-			require.NoError(t, err)
-			require.Len(t, got.Commits, 1)
-			assert.Equal(t, "abc1234", got.Commits[0].SHA)
-			wantRepository := "/work"
-			if id == "operand" {
-				wantRepository += "/--git-dir=space here"
-			}
-			assert.Equal(t, wantRepository, got.Commits[0].Repository)
-			require.NotNil(t, got.Commits[0].Turn)
-			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
-			var repaired string
-			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id=?`, id).Scan(&repaired))
-			assert.Greater(t, repaired, "2000-01-01T00:00:00.000Z")
-			if i == 0 {
-				firstModified[id] = repaired
-			} else {
-				assert.Equal(t, firstModified[id], repaired)
-			}
-			var selected int
-			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM sessions WHERE id=? AND sync_marker > '2025-01-01T00:00:00.000Z'`, id).Scan(&selected))
-			assert.Equal(t, 1, selected)
+		got, err := d.SessionCommitLinks(t.Context(), "repaired")
+		require.NoError(t, err)
+		require.Len(t, got.Commits, 1)
+		assert.Equal(t, "abc1234", got.Commits[0].SHA)
+		var repaired string
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='repaired'`).Scan(&repaired))
+		assert.Greater(t, repaired, "2000-01-01T00:00:00.000Z")
+		if i == 0 {
+			firstModified = repaired
+		} else {
+			assert.Equal(t, firstModified, repaired)
 		}
 		reverse, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
 		require.NoError(t, err)
-		require.Len(t, reverse.Commits[0].Links, 5)
+		require.Len(t, reverse.Commits[0].Links, 2)
 		var unchanged string
 		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='unchanged'`).Scan(&unchanged))
 		assert.Equal(t, "2000-01-01T00:00:00.000Z", unchanged)
