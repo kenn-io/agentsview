@@ -381,5 +381,9 @@ func ensureCJKFTS(
 }
 
 func installCJKFTSTriggers(conn *sql.DB) error {
-	return ensureCJKFTS(context.Background(), conn, false)
+	ctx := context.Background()
+	if err := ensureCJKFTS(ctx, conn, false); err != nil {
+		return err
+	}
+	return ensureImageTextFTS(ctx, conn, false)
 }

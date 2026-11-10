@@ -33,7 +33,7 @@ END;`
 
 // ensureImageTextFTS rebuilds an index only when it is missing or rebuild is
 // set. ensureCJKFTS drops the CJK index whenever its tokenizer changes.
-func ensureImageTextFTS(ctx context.Context, w *writerHandle, rebuild bool) error {
+func ensureImageTextFTS(ctx context.Context, w cjkFTSTransactor, rebuild bool) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return err

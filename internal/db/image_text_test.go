@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/docbank/document/ocr"
@@ -36,6 +38,25 @@ func TestImageTextIndexRebuild(t *testing.T) {
 		page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
 		require.NoError(t, err)
 		require.Len(t, page.Results, 1)
+		for _, reopen := range []func() error{d.Reopen, func() error {
+			if err := d.CloseWriter(); err != nil {
+				return err
+			}
+			return d.ReopenWriter()
+		}} {
+			for _, stale := range []bool{false, true} {
+				require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+				if stale {
+					_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value='stale' WHERE key=?`, cjkFTSFingerprintStatsKey)
+					require.NoError(t, err)
+				}
+				require.NoError(t, reopen())
+				require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice 中文搜索", false))
+				page, err = d.Search(ctx, SearchFilter{Query: "中文搜索"})
+				require.NoError(t, err)
+				require.Len(t, page.Results, 1)
+			}
+		}
 		_, err = d.getWriter().Exec(ctx, `DROP TABLE image_text_cjk_fts`)
 		require.NoError(t, err)
 		require.NoError(t, d.Close())
@@ -57,6 +78,46 @@ func TestImageTextIndexRebuild(t *testing.T) {
 		require.Len(t, page.Results, 1)
 		require.Equal(t, "image", page.Results[0].SessionID)
 	}
+}
+
+func TestImageTextCopyDropsTerminalFailures(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	target := testDB(t)
+	content := testInlineImageContent()
+	for _, d := range []*DB{source, target} {
+		insertSession(t, d, "image", "demo")
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	}
+	hash := RetainedToolResultImages(content)[0].SHA256
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, source.SaveImageTextTerminal(ctx, hash, identity, map[string]bool{"image/png": true}))
+	require.NoError(t, target.CopyImageTextFrom(ctx, source.Path()))
+	pending, err := target.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
+	require.NoError(t, err)
+	require.Equal(t, []string{hash}, pending)
+}
+
+func TestImageTextTerminalDoesNotSuppressCorrectedSource(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	insertSession(t, d, "image", "demo")
+	png := testInlineImageContent()
+	gif := strings.Replace(png, "image/png", "image/gif", 1)
+	hash := RetainedToolResultImages(gif)[0].SHA256
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: gif}}}}))
+	sources, err := d.ImageTextSources(ctx, hash, 0, 20)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.Equal(t, "image/gif", RetainedToolResultImages(sources[0].Content)[0].MediaType)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "image", []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: png}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageTextTerminal(ctx, hash, identity, map[string]bool{"image/gif": true}))
+	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
+	require.NoError(t, err)
+	require.Equal(t, []string{hash}, pending)
 }
 
 func TestImageTextMembershipAndPruning(t *testing.T) {

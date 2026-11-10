@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/assets"
@@ -18,6 +19,42 @@ import (
 	"go.kenn.io/docbank/document"
 	"go.kenn.io/docbank/document/glmocr"
 )
+
+func TestImageTextPassKeepsRetryCutoff(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		time.Sleep(2500 * time.Millisecond)
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"example"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	}))
+	t.Cleanup(srv.Close)
+	policy, err := (config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}).Policy()
+	require.NoError(t, err)
+	client, err := glmocr.NewClient(policy, glmocr.ClientConfig{})
+	require.NoError(t, err)
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
+	var hashes []string
+	for i := range 2 {
+		content := fmt.Sprintf(`[{"type":"file","uri":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("\x89PNG\r\n\x1a\nimage%d", i))))
+		hashes = append(hashes, db.RetainedToolResultImages(content)[0].SHA256)
+		require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: i, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	}
+	require.NoError(t, d.SaveImageText(ctx, hashes[0], client.Identity(), "", true))
+	raw, err := sql.Open("sqlite3", d.Path())
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `UPDATE image_text_cache SET retry_at=? WHERE image_hash=?`, time.Now().UTC().Add(time.Second).Format(time.RFC3339), hashes[0])
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
+	require.Equal(t, 1, requests)
+	pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 20)
+	require.NoError(t, err)
+	require.Equal(t, []string{hashes[0]}, pending)
+}
 
 func TestImageTextFailureClassification(t *testing.T) {
 	for _, name := range []string{"service error", "corrupt offloaded asset", "invalid inline bytes"} {

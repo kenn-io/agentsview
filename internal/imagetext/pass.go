@@ -24,8 +24,9 @@ func (m *Manager) Run(ctx context.Context) error {
 	if m.Processor != "" {
 		identity.Fingerprint = m.Processor
 	}
+	cutoff := time.Now()
 	for {
-		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
+		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, cutoff, 20)
 		if err != nil {
 			return err
 		}
@@ -42,6 +43,7 @@ func (m *Manager) Run(ctx context.Context) error {
 
 func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash string) error {
 	retry := false
+	inspectedTypes := make(map[string]bool)
 	for offset := 0; ; offset += 20 {
 		items, err := m.DB.ImageTextSources(ctx, hash, offset, 20)
 		if err != nil {
@@ -66,6 +68,7 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 				retry = true
 				continue
 			}
+			inspectedTypes[image.MediaType] = true
 			if image.Size == nil || *image.Size <= 0 || *image.Size > glmocr.MaxDocumentBytes || (image.MediaType != "image/png" && image.MediaType != "image/jpeg" && image.MediaType != "image/webp") {
 				continue
 			}
@@ -110,7 +113,7 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 	if retry {
 		return m.DB.SaveImageText(ctx, hash, identity, "", true)
 	}
-	return m.DB.SaveImageTextTerminal(ctx, hash, identity)
+	return m.DB.SaveImageTextTerminal(ctx, hash, identity, inspectedTypes)
 }
 
 // ProcessorKey includes the output policy while excluding the service address.
