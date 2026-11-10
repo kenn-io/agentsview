@@ -30,7 +30,7 @@ func defaultArchiveQueryPolicy(mut func(*archiveQueryPolicy)) archiveQueryPolicy
 // failing the test on error and registering the cleanup hook.
 func resolveTestArchiveQueryBackend(
 	t *testing.T, policy archiveQueryPolicy,
-) archiveQueryBackend {
+) archiveReportBackend {
 	t.Helper()
 	backend, cleanup, err := resolveArchiveQueryBackend(t.Context(), policy)
 	require.NoError(t, err)

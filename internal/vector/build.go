@@ -187,6 +187,13 @@ func (ix *Index) Build(
 	if o.Progress != nil {
 		o.Progress(BuildProgress{Phase: "scanning"})
 	}
+	if scopeChanged {
+		// Refresh commits incrementally. An interrupted scope change must not
+		// leave the previous scope certifying a partially pruned corpus.
+		if err := ix.metaDelete(ctx, scopeIncludeAutomatedKey); err != nil {
+			return BuildResult{}, fmt.Errorf("clearing changed embedding scope: %w", err)
+		}
+	}
 	refreshStats, err := ix.Refresh(ctx, src, full, o.IncludeAutomated)
 	if err != nil {
 		return BuildResult{}, err

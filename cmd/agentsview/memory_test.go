@@ -175,31 +175,55 @@ func TestMemorySessionStartDisableSwitchSkipsRequest(t *testing.T) {
 func TestMemorySessionStartDispatchesHostedModes(t *testing.T) {
 	original := runMemorySessionStart
 	t.Cleanup(func() { runMemorySessionStart = original })
-	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "reader-token")
-
-	var got []memorySessionStartRequest
-	runMemorySessionStart = func(
-		_ context.Context, req memorySessionStartRequest,
-	) error {
-		got = append(got, req)
-		return nil
+	for _, tc := range []struct {
+		name            string
+		args            []string
+		memoryEnv       bool
+		remoteTokenFile bool
+		want            memorySessionStartRequest
+		wantClient      bool
+		wantError       string
+	}{
+		{name: "explicit contributor", args: []string{"--mode", "hosted-contributor", "--target", "team"}, want: memorySessionStartRequest{Mode: memoryModeHostedContributor, Target: "team"}},
+		{name: "explicit reader", args: []string{"--mode", "hosted-reader", "--server", "https://memory.example"}, want: memorySessionStartRequest{Mode: memoryModeHostedReader, Server: "https://memory.example", ServerToken: "reader-token"}},
+		{name: "local bypass", args: []string{"--mode", "local"}, want: memorySessionStartRequest{Mode: memoryModeLocal}},
+		{name: "local override", args: []string{"--mode", "hosted-reader", "--local"}, want: memorySessionStartRequest{Mode: memoryModeLocal}},
+		{name: "memory environment", memoryEnv: true, want: memorySessionStartRequest{Mode: memoryModeHostedReader, Server: "https://memory.example", ServerToken: "reader-token"}},
+		{name: "configured reader", args: []string{"--mode", "hosted-reader"}, remoteTokenFile: true, want: memorySessionStartRequest{Mode: memoryModeHostedReader, Server: "https://hub.example", ServerToken: "remote-only"}, wantClient: true},
+		{name: "unavailable configured credential", args: []string{"--mode", "hosted-reader"}, wantError: "remote https://hub.example request failed; try --local"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+			t.Setenv("AGENTSVIEW_SERVER_TOKEN", "reader-token")
+			t.Setenv("AGENTSVIEW_REMOTE_URL", "https://hub.example")
+			tokenPath := filepath.Join(t.TempDir(), "token")
+			if tc.remoteTokenFile {
+				require.NoError(t, os.WriteFile(tokenPath, []byte("remote-only"), 0o600))
+			}
+			t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", tokenPath)
+			if tc.memoryEnv {
+				t.Setenv("AGENTSVIEW_MEMORY_MODE", "hosted-reader")
+				t.Setenv("AGENTSVIEW_MEMORY_SERVER", "https://memory.example")
+			}
+			var got []memorySessionStartRequest
+			runMemorySessionStart = func(_ context.Context, req memorySessionStartRequest) error { got = append(got, req); return nil }
+			_, err := executeCommand(newRootCommand(), append([]string{"memory", "session-start"}, tc.args...)...)
+			if tc.wantError != "" {
+				require.EqualError(t, err, tc.wantError)
+				require.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			if tc.wantClient {
+				require.NotNil(t, got[0].HTTPClient)
+			} else {
+				require.Nil(t, got[0].HTTPClient)
+			}
+			got[0].HTTPClient = nil
+			require.Equal(t, tc.want, got[0])
+		})
 	}
-
-	_, err := executeCommand(newRootCommand(), "memory", "session-start",
-		"--mode", "hosted-contributor", "--target", "team")
-	require.NoError(t, err)
-	_, err = executeCommand(newRootCommand(), "memory", "session-start",
-		"--mode", "hosted-reader", "--server", "https://memory.example")
-	require.NoError(t, err)
-
-	require.Len(t, got, 2)
-	assert.Equal(t, memorySessionStartRequest{
-		Mode: memoryModeHostedContributor, Target: "team",
-	}, got[0])
-	assert.Equal(t, memorySessionStartRequest{
-		Mode: memoryModeHostedReader, Server: "https://memory.example",
-		ServerToken: "reader-token",
-	}, got[1])
 }
 
 func TestMemorySessionStartRejectsInvalidModeFlags(t *testing.T) {
@@ -386,4 +410,28 @@ func TestPostMemoryRefreshTargetsAuthenticatedQueueRoute(t *testing.T) {
 	require.NoError(t, postMemoryRefresh(
 		t.Context(), server.URL+"/memory-base/", "test-token",
 	))
+}
+
+func TestMemoryReaderRejectsOrphanCredentialBeforeDefault(t *testing.T) {
+	for _, credential := range []string{"available", "missing"} {
+		t.Run(credential, func(t *testing.T) {
+			t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+			calls := 0
+			ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
+			defer ts.Close()
+			t.Setenv("AGENTSVIEW_REMOTE_URL", ts.URL)
+			t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", "")
+			if credential == "missing" {
+				t.Setenv("AGENTSVIEW_REMOTE_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
+			}
+			original := runMemorySessionStart
+			t.Cleanup(func() { runMemorySessionStart = original })
+			dispatches := 0
+			runMemorySessionStart = func(context.Context, memorySessionStartRequest) error { dispatches++; return nil }
+			_, err := executeCommand(newRootCommand(), "memory", "session-start", "--mode", "hosted-reader", "--server-token-file", filepath.Join(t.TempDir(), "explicit-token"))
+			require.ErrorContains(t, err, "memory session-start: --server-token-file requires --server")
+			require.Zero(t, calls)
+			require.Zero(t, dispatches)
+		})
+	}
 }

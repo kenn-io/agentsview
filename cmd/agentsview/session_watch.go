@@ -28,7 +28,7 @@ func newSessionWatchCommand() *cobra.Command {
 			); err != nil {
 				return err
 			}
-			svc, cleanup, err := resolveService(cmd)
+			svc, cleanup, err := resolveServiceWithIntent(cmd, readTargetExplicitOnly)
 			if err != nil {
 				return err
 			}
