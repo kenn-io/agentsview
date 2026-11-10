@@ -162,17 +162,21 @@ func (s *Store) maxFinalID(ctx context.Context, table string, tp tableParts, ids
 			return 0, fmt.Errorf("reading %s top ids: %w", table, err)
 		}
 		defer rows.Close()
+		// A part's top ids are kept only once the whole read succeeds: a
+		// partial list would pass for a part with fewer ids.
+		read := map[string][]sessionIDRow{}
 		for rows.Next() {
 			var part string
 			var r sessionIDRow
 			if err := rows.Scan(&part, &r.id, &r.session); err != nil {
 				return 0, fmt.Errorf("scanning %s top id: %w", table, err)
 			}
-			ids.parts[part] = append(ids.parts[part], r)
+			read[part] = append(read[part], r)
 		}
 		if err := rows.Err(); err != nil {
 			return 0, fmt.Errorf("iterating %s top ids: %w", table, err)
 		}
+		maps.Copy(ids.parts, read)
 	}
 	threshold := int64(math.MinInt64)
 	for _, top := range ids.parts {
@@ -392,7 +396,7 @@ func (s *Store) trackedUsageCoverage(
 	defer s.coverageCache.mu.Unlock()
 	if s.coverageCache.key != key {
 		live := coverageFromRows(s.usageVersions.sessions.rows, s.usageVersions.snapshots.rows, covered)
-		live.priceCount = s.finalRowsTracker(chUsagePriceTable, pricingDigest).count
+		live.priceCount = s.priceRowsTracker(pricingDigest).count
 		s.coverageCache.key, s.coverageCache.live = key, live
 	}
 	return s.coverageCache.live, key, true

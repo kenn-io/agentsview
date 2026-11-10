@@ -2526,7 +2526,7 @@ func (s *Store) usageIdentitiesLocked(
 ) (map[string]string, bool) {
 	var changed []string
 	var trackers []*finalRows
-	var changes []*finalRowsChange
+	var changes []trackedChange
 	for _, table := range tables {
 		if f := s.finalRowsTracker(table, pricingDigest); f != nil {
 			change, err := s.prepareFinalRows(ctx, f, snapshot[table])
@@ -2534,7 +2534,10 @@ func (s *Store) usageIdentitiesLocked(
 				s.logUsageReadiness(fmt.Sprintf("row identity probe failed, serving uncached: %v", err))
 				return nil, false
 			}
-			trackers, changes = append(trackers, f), append(changes, change)
+			trackers = append(trackers, f)
+			if change != nil {
+				changes = append(changes, trackedChange{f, change})
+			}
 			continue
 		}
 		kept, exists := s.usageVersions.tables[usageVersionKey(table, pricingDigest)]
@@ -2542,7 +2545,7 @@ func (s *Store) usageIdentitiesLocked(
 			changed = append(changed, table)
 		}
 	}
-	var read []string
+	read := map[string]string{}
 	if len(changed) > 0 {
 		var err error
 		if read, err = s.readUsageRowIdentities(ctx, changed, pricingDigest); err != nil {
@@ -2550,7 +2553,7 @@ func (s *Store) usageIdentitiesLocked(
 			return nil, false
 		}
 	}
-	if len(changed) > 0 || slices.ContainsFunc(changes, func(c *finalRowsChange) bool { return c != nil }) {
+	if len(changed) > 0 || len(changes) > 0 {
 		fresh, err := s.readPartsSnapshot(ctx)
 		if err != nil {
 			s.logUsageReadiness(fmt.Sprintf("parts recheck failed, serving uncached: %v", err))
@@ -2562,15 +2565,15 @@ func (s *Store) usageIdentitiesLocked(
 			}
 		}
 	}
+	for _, c := range changes {
+		c.tracker.apply(c.change)
+	}
 	identities := make(map[string]string, len(tables))
-	for i, f := range trackers {
-		if changes[i] != nil {
-			f.apply(changes[i])
-		}
+	for _, f := range trackers {
 		identities[f.spec.table] = f.identity()
 	}
-	for i, table := range changed {
-		s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{snapshot[table].digest, read[i]}
+	for table, identity := range read {
+		s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{snapshot[table].digest, identity}
 	}
 	for _, table := range tables {
 		if _, ok := identities[table]; !ok {
@@ -2578,6 +2581,13 @@ func (s *Store) usageIdentitiesLocked(
 		}
 	}
 	return identities, true
+}
+
+// trackedChange is a tracker's new state, applied once the parts it was
+// read from prove stable.
+type trackedChange struct {
+	tracker *finalRows
+	change  *finalRowsChange
 }
 
 // maxPriceTrackers bounds the pricing digests whose price records are
@@ -2601,30 +2611,39 @@ func (s *Store) finalRowsTracker(table, pricingDigest string) *finalRows {
 		}
 		return v.snapshots
 	case pricesFinalTable.table:
-		v.priceOrder = slices.DeleteFunc(v.priceOrder, func(d string) bool { return d == pricingDigest })
-		v.priceOrder = append(v.priceOrder, pricingDigest)
-		f, ok := v.prices[pricingDigest]
-		if !ok {
-			f = &finalRows{spec: pricesFinalTable, digest: pricingDigest}
-			v.prices[pricingDigest] = f
-		}
-		if len(v.priceOrder) > maxPriceTrackers {
-			delete(v.prices, v.priceOrder[0])
-			v.priceOrder = v.priceOrder[1:]
-		}
-		return f
+		return s.priceRowsTracker(pricingDigest)
 	}
 	return nil
+}
+
+// priceRowsTracker returns the tracker of pricingDigest's price records.
+// The caller holds usageVersions.
+func (s *Store) priceRowsTracker(pricingDigest string) *finalRows {
+	v := &s.usageVersions
+	v.priceOrder = slices.DeleteFunc(v.priceOrder, func(d string) bool { return d == pricingDigest })
+	v.priceOrder = append(v.priceOrder, pricingDigest)
+	f, ok := v.prices[pricingDigest]
+	if !ok {
+		f = &finalRows{spec: pricesFinalTable, digest: pricingDigest}
+		v.prices[pricingDigest] = f
+	}
+	if len(v.priceOrder) > maxPriceTrackers {
+		delete(v.prices, v.priceOrder[0])
+		v.priceOrder = v.priceOrder[1:]
+	}
+	return f
 }
 
 func chUsageRowHashSQL(columns string) string {
 	return "reinterpretAsUInt128(sipHash128Reference(tuple(" + columns + ")))"
 }
 
-// readUsageRowIdentities returns one identity per table, in order. The
-// price table's identity covers only pricingDigest's records, which the
-// table's sort key reads without touching the other digests.
-func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string, pricingDigest string) ([]string, error) {
+// readUsageRowIdentities returns each table's identity. The price table's
+// identity covers only pricingDigest's records, which the table's sort key
+// reads without touching the other digests.
+func (s *Store) readUsageRowIdentities(
+	ctx context.Context, tables []string, pricingDigest string,
+) (map[string]string, error) {
 	queries := make([]string, len(tables))
 	var args []any
 	for i, table := range tables {
@@ -2648,7 +2667,14 @@ func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string, pri
 	if err := s.queryRowContext(ctx, "SELECT ["+strings.Join(queries, ",")+"]", args...).Scan(&identities); err != nil {
 		return nil, fmt.Errorf("reading clickhouse usage row identities: %w", err)
 	}
-	return identities, nil
+	if len(identities) != len(tables) {
+		return nil, fmt.Errorf("reading clickhouse usage row identities: got %d for %d tables", len(identities), len(tables))
+	}
+	byTable := make(map[string]string, len(tables))
+	for i, table := range tables {
+		byTable[table] = identities[i]
+	}
+	return byTable, nil
 }
 
 // usageRowMemoKeyFor renders the key. The filter is JSON and the custom

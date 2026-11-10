@@ -23,11 +23,12 @@ import (
 // The tracker relates the table's active parts to the parts it last saw.
 // Block numbers come from one counter and grow with every insert and
 // mutation, and a merge keeps the block range of the parts it combines. A
-// new part whose range the vanished parts cover exactly, at the same
-// mutation, is a merge of rows already counted: a merge never changes what
-// FINAL returns, so it costs nothing. Any other new part holds rows the
-// tracker has not seen. Each key such a part holds is read again: its rows
-// in the parts the tracker had already seen give the row FINAL returned
+// new part whose range the vanished parts cover exactly, each already at
+// the new part's mutation, is a merge of rows already counted: a merge
+// never changes what FINAL returns, so it costs nothing. Any other new
+// part holds rows the tracker has not seen. Each key such a part holds is
+// read again: its rows in the parts the tracker had already seen give the
+// row FINAL returned
 // before, and a FINAL read of the key gives the row it returns now. The
 // tracker keeps the rows of small parts, so the row before is still
 // available after a merge folds a small part into a new one. Anything else,
@@ -54,6 +55,16 @@ type partInfo struct {
 	// for none.
 	mutation int64
 	rows     uint64
+}
+
+// dataVersion is the block number the part's rows are current as of: its
+// last mutation, or its first block when none applied. A mutation numbered
+// above it has not reached the part's rows.
+func (p partInfo) dataVersion() int64 {
+	if p.mutation != 0 {
+		return p.mutation
+	}
+	return p.minBlock
 }
 
 // isPatch reports whether the part is a lightweight update's patch part,
@@ -316,7 +327,11 @@ func (f *finalRows) plan(cur map[string]partInfo) (finalRowsPlan, bool) {
 			mutation = max(mutation, q.mutation)
 			consumed[q.name] = true
 		}
-		if p.mutation != mutation {
+		// A source that had not yet taken the merged part's mutation was
+		// mutated after the state read it, which can change its rows.
+		if p.mutation != mutation || slices.ContainsFunc(sources, func(q partInfo) bool {
+			return q.dataVersion() < p.mutation
+		}) {
 			return plan, false
 		}
 		if p.rows <= smallFinalPartRows && !f.keepsRows() {
