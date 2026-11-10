@@ -215,13 +215,14 @@ test.describe("Recent Edits feed", () => {
     await page.goto("/recent-edits");
     await expect(page.locator(".re-file-row")).toHaveCount(3);
 
+    // File fills the spare width and has no handle: Project, Edits, and
+    // Last edit do.
     const handles = page.locator(".re-list thead th").getByRole("separator");
+    await expect(handles).toHaveCount(3);
     await handles.first().focus();
     await page.keyboard.press("Tab");
     await expect(handles.nth(1)).toBeFocused();
-    await page.keyboard.press("Tab");
-    await expect(handles.nth(2)).toBeFocused();
-    // Widen Edits (the third column) by one keyboard step.
+    // Widen Edits by one keyboard step.
     await page.keyboard.press("ArrowRight");
 
     const kept = await page.evaluate(() =>
@@ -241,7 +242,7 @@ test.describe("Recent Edits feed", () => {
     await page.goto("/recent-edits");
     await expect(page.locator(".re-file-row")).toHaveCount(3);
 
-    const handle = page.locator(".re-list thead th").nth(1).getByRole("separator");
+    const handle = page.locator(".re-list thead th").first().getByRole("separator");
     const box = (await handle.boundingBox())!;
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     expect(await keptColumns(page)).toEqual([]);
@@ -255,18 +256,27 @@ test.describe("Recent Edits feed", () => {
     await page.goto("/recent-edits");
     await expect(page.locator(".re-file-row")).toHaveCount(3);
     const handles = page.locator(".re-list thead th").getByRole("separator");
+    const clickLastEdit = async () => {
+      const box = (await handles.nth(2).boundingBox())!;
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    };
 
-    // Narrow Project by four keyboard steps; Last edit stretches to fill.
+    // Narrow Project by four keyboard steps; File takes the room.
     await handles.first().focus();
     for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
     await expect.poll(() => keptColumns(page)).toEqual(["project"]);
 
-    const box = (await handles.nth(3).boundingBox())!;
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await clickLastEdit();
+    expect(await keptColumns(page)).toEqual(["project"]);
+
+    // The same after a reload, when Project starts at its kept width.
+    await page.reload();
+    await expect(page.locator(".re-file-row")).toHaveCount(3);
+    await clickLastEdit();
     expect(await keptColumns(page)).toEqual(["project"]);
   });
 
-  test("after a refresh, clicking File's handle without dragging keeps no File width", async ({
+  test("after a refresh, clicking Edits' handle without dragging keeps no Edits width", async ({
     page,
   }) => {
     await withRecentEdits(page);
@@ -285,24 +295,25 @@ test.describe("Recent Edits feed", () => {
     expect(await keptColumns(page)).toEqual(["project"]);
   });
 
-  test("after a reload, clicking Last edit's handle without dragging keeps no Last edit width", async ({
+  test("File has no resize handle, takes the spare width, and ignores a stored width", async ({
     page,
   }) => {
     await withRecentEdits(page);
+    await page.addInitScript(() =>
+      localStorage.setItem("agentsview-recent-edits-columns", JSON.stringify({ file: 200 })),
+    );
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/recent-edits");
     await expect(page.locator(".re-file-row")).toHaveCount(3);
-    const handles = page.locator(".re-list thead th").getByRole("separator");
-    // Narrow File, so Last edit fills the room it leaves after a reload.
-    await handles.nth(1).focus();
-    for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
-    await expect.poll(() => keptColumns(page)).toEqual(["file"]);
 
-    await page.reload();
-    await expect(page.locator(".re-file-row")).toHaveCount(3);
-    const box = (await handles.nth(3).boundingBox())!;
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    expect(await keptColumns(page)).toEqual(["file"]);
+    const file = page.locator(".re-list thead th").nth(1);
+    await expect(file).toHaveText(/File/);
+    await expect(file.getByRole("separator")).toHaveCount(0);
+    const layout = await tableLayout(page);
+    // The four columns fill the list without sideways scrolling, and File
+    // is far wider than the stored 200px.
+    expect(layout.overflow).toBeLessThanOrEqual(2);
+    expect(layout.columns[1]).toBeGreaterThan(400);
   });
 
   test("a drag whose pointer reports no movementX still keeps the width", async ({ page }) => {
@@ -349,8 +360,9 @@ test.describe("Recent Edits feed", () => {
     await page.setViewportSize({ width: 400, height: 800 });
     await page.goto("/recent-edits");
     await expect(page.locator(".re-file-row")).toHaveCount(3);
-    // Stacked: File is the first column. Narrow it by one keyboard step.
-    await page.locator(".re-list thead th").first().getByRole("separator").focus();
+    // Stacked: File fills and has no handle; Edits is the second column.
+    // Narrow it by one keyboard step.
+    await page.locator(".re-list thead th").nth(1).getByRole("separator").focus();
     await page.keyboard.press("ArrowLeft");
     expect(await keptColumns(page)).toEqual([]);
 

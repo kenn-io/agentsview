@@ -1285,6 +1285,7 @@
   "recent_edits_col_file": "Archivo",
   "recent_edits_col_edits": "Ediciones",
   "recent_edits_col_last_edit": "Última edición",
+  "recent_edits_resize_column": "Cambiar el ancho de la columna {column}",
   "activity_insight_waiting_server": "Esperando la versión del servidor",
   "activity_insight_generate_insight": "Generar análisis",
   "activity_insight_generation_failed": "Error en la generación",

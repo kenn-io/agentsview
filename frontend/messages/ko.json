@@ -1202,6 +1202,7 @@
   "recent_edits_col_file": "파일",
   "recent_edits_col_edits": "편집",
   "recent_edits_col_last_edit": "마지막 편집",
+  "recent_edits_resize_column": "{column} 열 너비 조정",
   "activity_insight_waiting_server": "서버 버전을 기다리는 중",
   "activity_insight_generate_insight": "인사이트 생성",
   "activity_insight_generation_failed": "생성 실패",

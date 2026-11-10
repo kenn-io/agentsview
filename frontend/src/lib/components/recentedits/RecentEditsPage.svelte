@@ -6,7 +6,6 @@
     VirtualTable,
     type ColumnResize,
   } from "@kenn-io/kit-ui";
-  import { untrack } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
   import { PencilIcon, RefreshCwIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
@@ -64,47 +63,26 @@
       : ["project", "file", "edits", "time"],
   );
   // Starting widths for columns nobody resized. The project column takes a
-  // quarter of the list up to 220px, and the file column what is left.
+  // quarter of the list up to 220px; the file column fills what is left.
   const DEFAULT_WIDTHS: Record<string, number> = { edits: 84, time: 104 };
   const STACKED_WIDTHS: Record<string, number> = { edits: 52, time: 76 };
   // Widths the user set by dragging or fitting a column edge, kept across
-  // visits. Plain: the table owns the live widths once it has sized them.
+  // visits. The file column fills, so a stored file width is ignored.
   let keptWidths = loadColumnWidths();
 
   // The toolbar spans the list's width, and it is laid out before the
-  // first rows arrive, when the table sizes its columns.
+  // first rows arrive. kit-ui refits columns nobody resized when this
+  // width changes.
   let listWidth = $state(0);
-  // The width the table was built for. VirtualTable keeps the widths it
-  // sized until someone resizes a column, so after the window changes
-  // size the table is rebuilt for the new width: resized columns keep
-  // their widths and the others start over.
-  let tableWidth = $state(0);
-  $effect(() => {
-    const width = listWidth;
-    const timer = setTimeout(
-      () => (tableWidth = width),
-      untrack(() => tableWidth) === 0 ? 0 : 150,
-    );
-    return () => clearTimeout(timer);
-  });
 
   function columnWidth(column: string): number | undefined {
-    const widths = stacked.current
-      ? STACKED_WIDTHS
-      : {
-          ...DEFAULT_WIDTHS,
-          project: Math.round(Math.min(220, Math.max(100, tableWidth * 0.25))),
-          ...keptWidths,
-        };
-    if (column !== "file") return widths[column];
-    if (widths.file !== undefined) return widths.file;
-    // The file column starts with what the other columns leave inside the
-    // list's border, so the table opens without sideways scrolling.
-    if (tableWidth <= 0) return undefined;
-    const others = columns
-      .filter((c) => c !== "file")
-      .reduce((sum, c) => sum + (widths[c] ?? 0), 0);
-    return Math.max(160, tableWidth - 2 - others);
+    if (stacked.current) return STACKED_WIDTHS[column];
+    const widths: Record<string, number> = {
+      ...DEFAULT_WIDTHS,
+      project: Math.round(Math.min(220, Math.max(100, listWidth * 0.25))),
+      ...keptWidths,
+    };
+    return widths[column];
   }
 
   // kit-ui reports only widths a person set: a drag, an arrow key, or a
@@ -284,7 +262,6 @@
     </EmptyState>
   {:else}
     <div class="re-list">
-      {#key tableWidth}
       <VirtualTable
         items={rows}
         rowKey={(row) => `${row.kind}:${key(row.file)}`}
@@ -300,6 +277,7 @@
             <TableHeaderCell
               class="re-project-col"
               label={m.recent_edits_col_project()}
+              resizeLabel={m.recent_edits_resize_column({ column: m.recent_edits_col_project() })}
               width={columnWidth("project")}
               minWidth={80}
               maxWidth={640}
@@ -308,13 +286,14 @@
           <TableHeaderCell
             class="re-file-col"
             label={m.recent_edits_col_file()}
-            width={columnWidth("file")}
+            fill
             minWidth={120}
           />
           <TableHeaderCell
             class="re-count-col"
             numeric
             label={m.recent_edits_col_edits()}
+            resizeLabel={m.recent_edits_resize_column({ column: m.recent_edits_col_edits() })}
             width={columnWidth("edits")}
             minWidth={48}
             maxWidth={200}
@@ -323,6 +302,7 @@
             class="re-time-col"
             numeric
             label={m.recent_edits_col_last_edit()}
+            resizeLabel={m.recent_edits_resize_column({ column: m.recent_edits_col_last_edit() })}
             width={columnWidth("time")}
             minWidth={64}
             maxWidth={240}
@@ -384,7 +364,6 @@
           {/if}
         {/snippet}
       </VirtualTable>
-      {/key}
     </div>
     {#if hasMore}
       <button class="re-load-more" onclick={loadMore} disabled={loading}>
@@ -448,8 +427,9 @@
   }
 
   /* One table with hairline rows. kit-ui's VirtualTable owns the column
-     widths: drag a header edge to resize a column (double-click it to fit
-     the content); wider columns than the page scroll sideways. Clip, not
+     widths: the File column takes the spare width, and the others resize
+     by dragging a header edge (double-click it to fit the content). Wider
+     columns than the page scroll sideways. Clip, not
      hidden, so the sticky header still follows the page scroll; the table's
      last row border tucks under the frame's own edge. */
   .re-list {

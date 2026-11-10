@@ -1282,6 +1282,7 @@
   "recent_edits_col_file": "File",
   "recent_edits_col_edits": "Edits",
   "recent_edits_col_last_edit": "Last edit",
+  "recent_edits_resize_column": "Resize the {column} column",
   "activity_insight_waiting_server": "Waiting for server version",
   "activity_insight_generate_insight": "Generate insight",
   "activity_insight_generation_failed": "Generation failed",
