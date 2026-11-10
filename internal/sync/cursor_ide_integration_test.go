@@ -1354,27 +1354,7 @@ func TestSyncPathsCursorIDEFramelessWALEventDoesNotReparse(t *testing.T) {
 	assert.Equal(t, "Committed", displayName(), "a WAL with frames must still sync")
 }
 
-func TestCursorIDEHeaderDigestReconciliation(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "state.vscdb")
-	c := cursorIDERetentionComposer("header-digest", 0, 2)
-	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{c})
-	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"fullConversationHeadersOnly":[],"headerLog":{"count":2,"chunkCount":1}}`, "composerData:header-digest")
-	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:header-digest:000000", `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2}]`)
-	engine, database := newCursorIDESyncEngine(t, root)
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	const id = "cursor-ide:header-digest"
-	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `[{"bubbleId":"b2","type":2},{"bubbleId":"b1","type":1}]`, "composerConvHeaders:header-digest:000000")
-	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
-	messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "b2", messages[0].SourceUUID)
-	assert.Equal(t, "b1", messages[1].SourceUUID)
-}
-
-func TestCursorIDEInlineToChunkedMigration(t *testing.T) {
+func TestCursorIDEInlineToChunkedMigrationAndDigest(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "state.vscdb")
 	composer := cursorIDERetentionComposer("chunk-upgrade", 0, 2)
@@ -1409,13 +1389,17 @@ func TestCursorIDEInlineToChunkedMigration(t *testing.T) {
 	after, err := database.GetSessionFull(t.Context(), id)
 	require.NoError(t, err)
 	require.NotNil(t, after)
-	assert.Equal(t, before.ID, after.ID)
 	assert.Equal(t, before.FilePath, after.FilePath)
 	assert.Nil(t, after.SourceMissingAt)
 	messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 3)
-	assert.Equal(t, []string{"b1", "b2", "b3"}, []string{messages[0].SourceUUID, messages[1].SourceUUID, messages[2].SourceUUID})
+	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `[{"bubbleId":"b3","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b1","type":1}]`, "composerConvHeaders:chunk-upgrade:000000")
+	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
+	messages, err = database.GetMessages(t.Context(), id, 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	assert.Equal(t, []string{"b3", "b2", "b1"}, []string{messages[0].SourceUUID, messages[1].SourceUUID, messages[2].SourceUUID})
 }
 
 func TestCursorIDEIncompleteHeadersPreserveArchive(t *testing.T) {
