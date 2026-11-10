@@ -539,7 +539,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 	var firstModified string
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		d, err = Open(t.Context(), archive)
 		require.NoError(t, err)
 		got, err := d.SessionCommitLinks(t.Context(), "repaired")
