@@ -533,7 +533,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			if tc.provider == "ollama" {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(fmt.Sprintf("[vector]\nenabled = %t\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n", tc.enabled)), 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(fmt.Sprintf("[vector]\nenabled = %t\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n", tc.enabled)), 0o600))
 			}
 			var posts, reads int
 			var approved int64
@@ -560,7 +560,10 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 					var body struct {
 						ApprovedBytes int64 `json:"approved_bytes"`
 					}
-					require.NoError(t, json.UnmarshalRead(r.Body, &body))
+					if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
 					approved = body.ApprovedBytes
 					w.WriteHeader(http.StatusAccepted)
 					io.WriteString(w, `{"started":true}`)
@@ -571,8 +574,8 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(tc.input), EmbeddingsBuildOptions{FullRebuild: tc.flagged})
 			if tc.flagged {
 				require.ErrorContains(t, err, "--full-rebuild")
-				assert.ErrorContains(t, err, "agentsview index embeddings build")
-				assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
+				require.ErrorContains(t, err, "agentsview index embeddings build")
+				require.ErrorContains(t, err, "Settings → Embeddings → Turn on")
 				assert.NotContains(t, out.String(), "[y/N]")
 				assert.Zero(t, posts)
 				return
@@ -687,7 +690,10 @@ func TestCLIEmbeddingsFreshSetup(t *testing.T) {
 		var request struct {
 			Input []string `json:"input"`
 		}
-		require.NoError(t, json.UnmarshalRead(r.Body, &request))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		writeEmbeddingsResponse(t, w, len(request.Input), 768)
 	}))
 	t.Cleanup(encoder.Close)
@@ -792,7 +798,7 @@ func TestCLIEmbeddingsConcurrentSetupFailure(t *testing.T) {
 	select {
 	case <-started:
 	case <-ctx.Done():
-		t.Fatal("first setup did not start")
+		require.FailNow(t, "first setup did not start")
 	}
 	type outcome struct {
 		output string
@@ -807,13 +813,13 @@ func TestCLIEmbeddingsConcurrentSetupFailure(t *testing.T) {
 	select {
 	case <-observed:
 	case <-ctx.Done():
-		t.Fatal("second command did not observe setup")
+		require.FailNow(t, "second command did not observe setup")
 	}
 	unblock()
 	firstErr := <-first
 	result := <-second
 	require.ErrorContains(t, firstErr, "first setup failed")
-	assert.ErrorContains(t, result.err, "first setup failed")
+	require.ErrorContains(t, result.err, "first setup failed")
 	assert.NotContains(t, result.output, "[y/N]")
 	assert.EqualValues(t, 1, posts.Load())
 }
