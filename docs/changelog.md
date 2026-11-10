@@ -26,6 +26,14 @@ The latest release is
 - `agentsview diagnostics append` records failures outside agent sessions in
   the daily Friction Log, grouping repeated messages with their count.
 
+- Set how often a ClickHouse mirror refreshes its prepared usage table with
+  `prepared_usage_refresh`, such as `"EVERY 1 HOUR"`, in the target that
+  `clickhouse serve` uses. A longer schedule writes less to ClickHouse; usage
+  reads stay exact either way. The server applies the schedule in place at
+  startup, and pushes keep it whatever their own config says. The first schema
+  step after upgrading rebuilds the prepared usage table once. See
+  [ClickHouse Sync](/docs/clickhouse-sync/#prepared-usage-refresh-schedule).
+
 **Bug fixes**
 
 - Semantic search builds on Kit's built-in local embeddings server no longer

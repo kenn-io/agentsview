@@ -1479,3 +1479,55 @@ func TestPreparedUsageCheckSkippedWhenPushWritesNothing(t *testing.T) {
 	pushPreparedUsage(t, syncer)
 	require.NotEmpty(t, preparedUsageParts(t, store), "a push that wrote nothing must still fill an empty table")
 }
+
+// The server owns the prepare_usage schedule. It changes the schedule in
+// place, without rebuilding prepared_usage, and a push's schema step neither
+// changes it nor loses it when it recreates the view.
+func TestPreparedUsageRefreshScheduleOwnedByServe(t *testing.T) {
+	ctx := t.Context()
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	_, syncer, store := newPreparedUsageStore(t)
+	conn := store.DB()
+	schedule := func() string {
+		t.Helper()
+		var got string
+		require.NoError(t, conn.QueryRowContext(ctx, `SELECT extract(create_table_query, 'REFRESH (.+?) TO ')
+			FROM system.tables WHERE database = currentDatabase() AND name = 'prepare_usage'`).Scan(&got))
+		return got
+	}
+	table := func() (string, uint64) {
+		t.Helper()
+		var uuid string
+		var rows uint64
+		require.NoError(t, conn.QueryRowContext(ctx, `SELECT toString(uuid), total_rows FROM system.tables
+			WHERE database = currentDatabase() AND name = 'prepared_usage'`).Scan(&uuid, &rows))
+		return uuid, rows
+	}
+	serve := func(refresh string) {
+		t.Helper()
+		opened, err := (Backend{}).OpenServeStore(ctx, storage.ReplicaTarget{
+			URL: syncer.target.URL, Schema: syncer.target.Database, PreparedUsageRefresh: refresh,
+		})
+		require.NoError(t, err)
+		require.NoError(t, opened.Close())
+	}
+	pushTarget := Target{URL: syncer.target.URL, Database: syncer.target.Database}
+	uuid, rows := table()
+	require.NotZero(t, rows)
+
+	serve("EVERY 2 HOUR")
+	require.Equal(t, "EVERY 2 HOUR", schedule())
+	gotUUID, gotRows := table()
+	require.Equal(t, uuid, gotUUID, "a schedule change must not replace prepared_usage")
+	require.Equal(t, rows, gotRows)
+
+	require.NoError(t, EnsureSchema(ctx, pushTarget))
+	require.Equal(t, "EVERY 2 HOUR", schedule(), "a push must keep the server's schedule")
+
+	execPreparedUsage(t, store, "DROP VIEW prepare_usage SYNC")
+	require.NoError(t, EnsureSchema(ctx, pushTarget))
+	require.Equal(t, "EVERY 2 HOUR", schedule(), "a push that recreates the view must use the server's schedule")
+
+	serve("")
+	require.Equal(t, chPreparedUsageRefresh, schedule(), "a server without the setting restores the default")
+}

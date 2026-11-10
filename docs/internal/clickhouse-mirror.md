@@ -421,6 +421,17 @@ step, and a rebuild that stopped halfway finishes on the next start. The schema
 step adds a missing projection only with the refresh stopped, and always starts
 it again.
 
+**Refresh schedule.** `clickhouse serve` owns the view's schedule: a mirror has
+one server and many pushing workstations, so a single owner keeps clients with
+different `prepared_usage_refresh` settings from flipping it. At each start the
+server's schema step stores its schedule, or the default when the key is unset,
+under `agentsview_prepared_usage_refresh` in `sync_metadata`, then runs
+`ALTER TABLE prepare_usage MODIFY REFRESH`. On 25.8 and 26.8 that changes only
+the schedule: the table keeps its rows and UUID, and a running refresh
+finishes. Every schema step creates a missing view with the stored schedule, so
+a push that recreates the view keeps the server's choice. The schedule is
+outside the table comment's hash, so changing it never rebuilds the table.
+
 **Refresh without a table exchange.** Every refresh of the view ends with
 `EXCHANGE TABLES`, which ClickHouse runs as a `renameat2` call with the
 `RENAME_EXCHANGE` flag on the database's metadata files and has no fallback for.

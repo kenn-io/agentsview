@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -72,12 +73,13 @@ func (Backend) ResolveTarget(
 // role. ClickHouse has no vector phase.
 func ReplicaTarget(ch config.ClickHouseConfig) storage.ReplicaTarget {
 	return storage.ReplicaTarget{
-		URL:           ch.URL,
-		Schema:        ch.Database,
-		MachineName:   ch.MachineName,
-		AllowInsecure: ch.AllowInsecure,
-		PushVectors:   ch.PushVectorsEnabled(),
-		PushBatchSize: pushBatchSize(ch),
+		URL:                  ch.URL,
+		Schema:               ch.Database,
+		MachineName:          ch.MachineName,
+		AllowInsecure:        ch.AllowInsecure,
+		PushVectors:          ch.PushVectorsEnabled(),
+		PushBatchSize:        pushBatchSize(ch),
+		PreparedUsageRefresh: ch.PreparedUsageRefresh,
 	}
 }
 
@@ -141,7 +143,12 @@ func (Backend) OpenServeStore(
 	if err := CheckTransportSecurity(t.URL, t.AllowInsecure); err != nil {
 		return nil, err
 	}
-	if err := EnsureSchema(ctx, target(t)); err != nil {
+	// The server owns the prepared usage schedule: it is the one client per
+	// mirror, so pushes from workstations with other settings cannot flip
+	// it. See applyPreparedUsageRefresh.
+	owner := target(t)
+	owner.PreparedUsageRefresh = cmp.Or(t.PreparedUsageRefresh, chPreparedUsageRefresh)
+	if err := EnsureSchema(ctx, owner); err != nil {
 		if !IsPermissionError(err) {
 			return nil, fmt.Errorf("schema migration failed: %w", err)
 		}

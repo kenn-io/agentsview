@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -567,7 +568,7 @@ func chPreparedUsageDeltaRowsSQL() string {
 // installation prepared by a binary with a different query is rebuilt and
 // never read.
 func chPreparedUsageComment() string {
-	sum := sha256.Sum256([]byte(chPreparedUsageSortingKey + "\n" + chPreparedUsageRefresh + "\n" + chPreparedUsageQuery()))
+	sum := sha256.Sum256([]byte(chPreparedUsageSortingKey + "\n" + chPreparedUsageQuery()))
 	return "agentsview prepared usage " + hex.EncodeToString(sum[:])
 }
 
@@ -714,17 +715,53 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 }
 
 // createPreparedUsageView creates the view that refreshes prepared_usage
-// on the server. It leaves the table empty until the first refresh.
+// on the server, on the schedule the server stored, or the default when it
+// stored none. It leaves the table empty until the first refresh.
 //
-// The prepared_usage comment covers the refresh schedule and query, and a
-// change to either drops the view with the table. The view's own check also
-// covers the refresh settings.
+// The prepared_usage comment covers the refresh query, and a change to it
+// drops the view with the table. The view's own check also covers the
+// refresh settings. The schedule is in neither: an existing view keeps its
+// schedule, which only applyPreparedUsageRefresh changes.
 func createPreparedUsageView(ctx context.Context, conn *sql.DB) error {
+	stored, err := readMetadata(ctx, conn, chPreparedUsageRefreshKey)
+	if err != nil {
+		return fmt.Errorf("reading prepared usage refresh schedule: %w", err)
+	}
+	schedule := cmp.Or(stored[chPreparedUsageRefreshKey], chPreparedUsageRefresh)
 	return ensureView(ctx, conn, mirrorView{
 		name:    "prepare_usage",
-		clauses: "REFRESH " + chPreparedUsageRefresh + " TO prepared_usage EMPTY",
+		clauses: "REFRESH " + schedule + " TO prepared_usage EMPTY",
 		query:   chPreparedUsageQuery() + " SETTINGS " + chPreparedUsageRefreshSettings,
 	})
+}
+
+// chPreparedUsageRefreshKey stores in sync_metadata the prepare_usage
+// schedule the server last applied. Every schema step creates a missing view
+// with it, so a push that recreates the view keeps the server's schedule.
+const chPreparedUsageRefreshKey = "agentsview_prepared_usage_refresh"
+
+// applyPreparedUsageRefresh makes schedule the prepare_usage schedule. Only
+// the server calls it: a mirror has one server and many pushing
+// workstations, and a single owner keeps clients with different settings
+// from flipping the schedule back and forth.
+//
+// It stores the schedule before altering the view, so a push that recreates
+// the view after the store uses it. ALTER TABLE ... MODIFY REFRESH changes
+// only the schedule: the table keeps its rows, and a refresh already running
+// finishes. A database that cannot exchange tables has no view, and the
+// stored schedule waits for one.
+func applyPreparedUsageRefresh(ctx context.Context, conn *sql.DB, schedule string) error {
+	if err := writeMetadata(ctx, conn, map[string]string{chPreparedUsageRefreshKey: schedule}); err != nil {
+		return fmt.Errorf("storing prepared usage refresh schedule: %w", err)
+	}
+	hasView, err := preparedUsageViewExists(ctx, conn)
+	if err != nil || !hasView {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "ALTER TABLE prepare_usage MODIFY REFRESH "+schedule); err != nil {
+		return fmt.Errorf("setting prepared usage refresh to %s: %w", schedule, err)
+	}
+	return nil
 }
 
 func preparedUsageViewExists(ctx context.Context, conn *sql.DB) (bool, error) {

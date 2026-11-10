@@ -134,6 +134,11 @@ type ClickHouseConfig struct {
 	// batches mean fewer part rewrites but more session payloads in memory
 	// at once. Nil keeps the push default.
 	PushBatchSize *int `toml:"push_batch_size" json:"push_batch_size,omitempty"`
+	// PreparedUsageRefresh is the schedule of the prepare_usage view, such as
+	// "EVERY 1 HOUR". Only `clickhouse serve` applies it; pushes keep the
+	// schedule the server stored. Resolution validates it and spells it in
+	// upper case. Empty keeps the default.
+	PreparedUsageRefresh string `toml:"prepared_usage_refresh" json:"prepared_usage_refresh,omitempty"`
 }
 
 // PushVectorsEnabled reports whether clickhouse push should run its vector
@@ -157,14 +162,15 @@ type ResolvedClickHouseTarget struct {
 }
 
 var clickHouseConfigKeys = map[string]struct{}{
-	"url":              {},
-	"database":         {},
-	"machine_name":     {},
-	"allow_insecure":   {},
-	"projects":         {},
-	"exclude_projects": {},
-	"push_vectors":     {},
-	"push_batch_size":  {},
+	"url":                    {},
+	"database":               {},
+	"machine_name":           {},
+	"allow_insecure":         {},
+	"projects":               {},
+	"exclude_projects":       {},
+	"push_vectors":           {},
+	"push_batch_size":        {},
+	"prepared_usage_refresh": {},
 }
 
 // DuckDBConfig holds DuckDB mirror and Quack connection settings.
@@ -2164,6 +2170,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		if legacyCH.PushBatchSize != nil {
 			c.ClickHouse.PushBatchSize = legacyCH.PushBatchSize
 		}
+		if legacyCH.PreparedUsageRefresh != "" {
+			c.ClickHouse.PreparedUsageRefresh = legacyCH.PreparedUsageRefresh
+		}
 	}
 	// Merge duckdb field-by-field so env vars override only
 	// the fields they set, preserving config-file settings.
@@ -3693,15 +3702,27 @@ func (c *Config) RawClickHouseTarget(name string) (ClickHouseConfig, error) {
 func (c *Config) resolveClickHouseConfig(
 	name string, ch ClickHouseConfig, applyDefaultEnv bool,
 ) (ClickHouseConfig, error) {
+	section := "[clickhouse]"
+	if name != "" {
+		section = "[clickhouse." + name + "]"
+	}
 	if ch.PushBatchSize != nil && *ch.PushBatchSize < 1 {
-		section := "[clickhouse]"
-		if name != "" {
-			section = "[clickhouse." + name + "]"
-		}
 		return ch, fmt.Errorf(
 			"%s push_batch_size must be at least 1, got %d; remove the key to use the default",
 			section, *ch.PushBatchSize,
 		)
+	}
+	if ch.PreparedUsageRefresh != "" {
+		schedule, ok := normalizeRefreshSchedule(ch.PreparedUsageRefresh)
+		if !ok {
+			return ch, fmt.Errorf(
+				"%s prepared_usage_refresh must be EVERY or AFTER, a whole number of at least 1, and one of "+
+					"SECOND, MINUTE, HOUR, DAY, WEEK, MONTH, or YEAR, such as %q; got %q; "+
+					"remove the key to use the default",
+				section, "EVERY 1 HOUR", ch.PreparedUsageRefresh,
+			)
+		}
+		ch.PreparedUsageRefresh = schedule
 	}
 	if applyDefaultEnv {
 		if c.clickHouseEnvOverrides.URL != "" {
@@ -3732,6 +3753,23 @@ func (c *Config) resolveClickHouseConfig(
 		ch.MachineName = c.InstallationID
 	}
 	return ch, nil
+}
+
+// refreshSchedulePattern matches the subset of ClickHouse's REFRESH clause
+// that prepared_usage_refresh accepts: one EVERY or AFTER interval in a
+// single unit.
+var refreshSchedulePattern = regexp.MustCompile(
+	`^(?i)(EVERY|AFTER)\s+([1-9][0-9]*)\s+(SECOND|MINUTE|HOUR|DAY|WEEK|MONTH|YEAR)$`,
+)
+
+// normalizeRefreshSchedule spells a valid schedule in upper case with single
+// spaces, so equal schedules compare equal, and reports whether it is valid.
+func normalizeRefreshSchedule(raw string) (string, bool) {
+	m := refreshSchedulePattern.FindStringSubmatch(strings.TrimSpace(raw))
+	if m == nil {
+		return "", false
+	}
+	return strings.ToUpper(m[1] + " " + m[2] + " " + m[3]), true
 }
 
 // clickHouseURLDatabase returns the database name from a clickhouse-go DSN

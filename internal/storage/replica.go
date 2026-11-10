@@ -27,6 +27,10 @@ type ReplicaTarget struct {
 	// the backend default. Only ClickHouse reads it; PostgreSQL rejects a
 	// nonzero value.
 	PushBatchSize int
+	// PreparedUsageRefresh is the ClickHouse prepare_usage schedule that
+	// `clickhouse serve` applies. Empty selects the default. Pushes ignore
+	// it.
+	PreparedUsageRefresh string
 }
 
 // ReplicaTargetRef names one configured replica target before its settings

@@ -513,6 +513,37 @@ start with "clickhouse mirror schema is missing session_plan_usage". A serve
 role that can create tables adds the tables itself at startup, so the order does
 not matter for it.
 
+#### Prepared usage refresh schedule
+
+The `prepare_usage` view rebuilds the `prepared_usage` table on a schedule, and
+each refresh rewrites the whole table. Usage reads stay exact between refreshes:
+they compute the rows of sessions pushed since the last refresh themselves, and
+a push starts a refresh early once enough has changed. A longer schedule writes
+less to ClickHouse, and reads late in each interval do a little more work.
+
+Set the schedule with `prepared_usage_refresh` in the target that
+`clickhouse serve` uses:
+
+```toml
+[clickhouse]
+url = "clickhouse://localhost:9000/agentsview"
+prepared_usage_refresh = "EVERY 1 HOUR"
+```
+
+The value is `EVERY` or `AFTER`, a whole number of at least 1, and one of
+`SECOND`, `MINUTE`, `HOUR`, `DAY`, `WEEK`, `MONTH`, or `YEAR`, in any case.
+`EVERY` refreshes on clock boundaries, such as on the hour. `AFTER` waits that
+long after the previous refresh finishes. Serve and push refuse to start on an
+invalid value and name the key; remove the key to use the default.
+
+Only `clickhouse serve` applies the setting. Each time it starts, it changes the
+live view's schedule in place, without rewriting the table, and stores the
+schedule in the mirror. Pushes ignore their own `prepared_usage_refresh` and
+keep the stored schedule, including when a push recreates the view, so
+workstations with different settings cannot change it. A server without the key
+restores the default. A serve role that cannot create tables skips this step and
+leaves the schedule as it is.
+
 #### Required system-table permissions
 
 Schema setup needs `SELECT ON system.projections` to inspect the prepared usage
@@ -563,17 +594,18 @@ ______________________________________________________________________
 
 ## Configuration
 
-| Key                  | Description                                                           |
-| -------------------- | --------------------------------------------------------------------- |
-| `url`                | ClickHouse DSN (`clickhouse://`, `http://`, or `https://`)            |
-| `database`           | Database name; overrides the DSN path; default `agentsview`           |
-| `machine_name`       | Optional machine key for this pusher                                  |
-| `allow_insecure`     | Allow plaintext or unverified TLS to a non-loopback host              |
-| `projects`           | Inclusive project filter                                              |
-| `exclude_projects`   | Exclusive project filter                                              |
-| `push_vectors`       | Run the vector phase on push; default `true`                          |
-| `push_batch_size`    | Sessions per push batch; default `100`                                |
-| `default_clickhouse` | Named target used when more than one `[clickhouse.NAME]` block exists |
+| Key                      | Description                                                           |
+| ------------------------ | --------------------------------------------------------------------- |
+| `url`                    | ClickHouse DSN (`clickhouse://`, `http://`, or `https://`)            |
+| `database`               | Database name; overrides the DSN path; default `agentsview`           |
+| `machine_name`           | Optional machine key for this pusher                                  |
+| `allow_insecure`         | Allow plaintext or unverified TLS to a non-loopback host              |
+| `projects`               | Inclusive project filter                                              |
+| `exclude_projects`       | Exclusive project filter                                              |
+| `push_vectors`           | Run the vector phase on push; default `true`                          |
+| `push_batch_size`        | Sessions per push batch; default `100`                                |
+| `prepared_usage_refresh` | Prepared usage schedule that serve applies; default `EVERY 15 MINUTE` |
+| `default_clickhouse`     | Named target used when more than one `[clickhouse.NAME]` block exists |
 
 Environment overrides for the effective default target:
 

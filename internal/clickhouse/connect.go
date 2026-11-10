@@ -31,6 +31,10 @@ type Target struct {
 	// Database overrides the DSN path. Empty falls back to the DSN path, then
 	// DefaultDatabase.
 	Database string
+	// PreparedUsageRefresh, when set, is the prepare_usage schedule the
+	// schema step stores and applies. Only the server sets it; a push leaves
+	// it empty and creates the view with the stored schedule.
+	PreparedUsageRefresh string
 }
 
 // DatabaseName returns the database the mirror tables live in.

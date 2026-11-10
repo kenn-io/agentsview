@@ -678,7 +678,8 @@ func tableByName(name string) (tableSpec, bool) {
 // EnsureSchema creates the mirror database and every table, adds columns
 // missing from older mirrors, and records the schema version. It opens two
 // short-lived connections: one to the DSN's own database for CREATE
-// DATABASE, then one to the mirror database for the tables.
+// DATABASE, then one to the mirror database for the tables. A target that
+// names a prepared usage schedule then stores and applies it.
 func EnsureSchema(ctx context.Context, t Target) error {
 	database, err := t.DatabaseName()
 	if err != nil {
@@ -698,7 +699,13 @@ func EnsureSchema(ctx context.Context, t Target) error {
 		return err
 	}
 	defer conn.Close()
-	return EnsureSchemaOn(ctx, conn)
+	if err := EnsureSchemaOn(ctx, conn); err != nil {
+		return err
+	}
+	if t.PreparedUsageRefresh == "" {
+		return nil
+	}
+	return applyPreparedUsageRefresh(ctx, conn, t.PreparedUsageRefresh)
 }
 
 // EnsureSchemaOn creates missing tables and columns on an open mirror

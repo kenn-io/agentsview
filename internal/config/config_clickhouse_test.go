@@ -374,3 +374,76 @@ func TestResolveClickHouse_PushBatchSize(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveClickHouse_PreparedUsageRefresh(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  map[string]any
+		target  string
+		want    string
+		wantErr string
+	}{
+		{
+			name:   "unset",
+			config: map[string]any{"clickhouse": map[string]any{"url": "clickhouse://h"}},
+		},
+		{
+			name: "legacy block normalized",
+			config: map[string]any{"clickhouse": map[string]any{
+				"url": "clickhouse://h", "prepared_usage_refresh": "  every   2 hour ",
+			}},
+			want: "EVERY 2 HOUR",
+		},
+		{
+			name: "named target after",
+			config: map[string]any{"clickhouse": map[string]any{
+				"work": map[string]any{"url": "clickhouse://h", "prepared_usage_refresh": "AFTER 30 MINUTE"},
+			}},
+			target: "work",
+			want:   "AFTER 30 MINUTE",
+		},
+		{
+			name: "zero interval",
+			config: map[string]any{"clickhouse": map[string]any{
+				"url": "clickhouse://h", "prepared_usage_refresh": "EVERY 0 MINUTE",
+			}},
+			wantErr: `[clickhouse] prepared_usage_refresh must be EVERY or AFTER, a whole number of at least 1, ` +
+				`and one of SECOND, MINUTE, HOUR, DAY, WEEK, MONTH, or YEAR, such as "EVERY 1 HOUR"; ` +
+				`got "EVERY 0 MINUTE"; remove the key to use the default`,
+		},
+		{
+			name: "duration syntax in named target",
+			config: map[string]any{"clickhouse": map[string]any{
+				"work": map[string]any{"url": "clickhouse://h", "prepared_usage_refresh": "1h"},
+			}},
+			target: "work",
+			wantErr: `[clickhouse.work] prepared_usage_refresh must be EVERY or AFTER, a whole number of at least 1, ` +
+				`and one of SECOND, MINUTE, HOUR, DAY, WEEK, MONTH, or YEAR, such as "EVERY 1 HOUR"; ` +
+				`got "1h"; remove the key to use the default`,
+		},
+		{
+			name: "trailing clause",
+			config: map[string]any{"clickhouse": map[string]any{
+				"url": "clickhouse://h", "prepared_usage_refresh": "EVERY 1 HOUR TO other",
+			}},
+			wantErr: `[clickhouse] prepared_usage_refresh must be EVERY or AFTER, a whole number of at least 1, ` +
+				`and one of SECOND, MINUTE, HOUR, DAY, WEEK, MONTH, or YEAR, such as "EVERY 1 HOUR"; ` +
+				`got "EVERY 1 HOUR TO other"; remove the key to use the default`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteTOML(t, tt.config)
+			cfg := f.LoadMinimal(t)
+
+			resolved, err := cfg.ResolveClickHouseTarget(tt.target)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, resolved.PreparedUsageRefresh)
+		})
+	}
+}
