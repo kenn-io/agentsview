@@ -328,6 +328,8 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		name, repository, input, result string
 	}{
 		{"JSON workdir", "/repo", `{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser"},
+		{"JSON workdir tilde", "~/repo", `{"cmd":"git commit -m fix","workdir":"~/repo"}`, "[main abc1234] Fix parser"},
+		{"JSON workdir quoted absolute", "/repo", `{"cmd":"git commit -m fix","workdir":"'/repo'"}`, "[main abc1234] Fix parser"},
 		{"JSON cwd", "/work/sub", `{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
