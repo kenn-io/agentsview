@@ -663,9 +663,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (169: keep DeepSeek Harness native message ids as message source ids.
 // Re-parse DeepSeek Harness sources in place; source and session identities
 // are unchanged.)
-// (170: recover older Codex argv commit links; reparse Codex-format
-// sources in place while preserving source and session identities.)
-const dataVersion = 170
+const dataVersion = 169
 
 const archiveOnlyVersionBase = 1 << 20
 

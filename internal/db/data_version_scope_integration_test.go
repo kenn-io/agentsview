@@ -394,44 +394,6 @@ func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
 	}
 }
 
-func TestCodexArgvUpgradePreservesSessionIdentity(t *testing.T) {
-	assert.ElementsMatch(t, parser.CodexFormatAgents(), db.ScopedDataVersionProviders(169, 170))
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	id := "cccccccc-cccc-4ccc-8ccc-cccccccccc69"
-	source := filepath.Join(root, "rollout-"+id+".jsonl")
-	body := testjsonl.CodexSessionMetaJSON(id, root, "codex_cli_rs", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "record the fix", "2026-10-08T12:00:01Z") + "\n"
-	dbtest.WriteTestFile(t, source, []byte(body))
-	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
-	engine := sync.NewEngine(t.Context(), database, cfg)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	engine.Close()
-	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET data_version=169; PRAGMA user_version=169")
-		return err
-	}))
-	archive := database.Path()
-	require.NoError(t, database.Close())
-	database, err := db.OpenIsolated(t.Context(), archive)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	needsSync, fullRebuild, err := db.ArchiveResyncState(t.Context(), archive)
-	require.NoError(t, err)
-	assert.True(t, needsSync)
-	assert.False(t, fullRebuild)
-	engine = sync.NewEngine(t.Context(), database, cfg)
-	t.Cleanup(engine.Close)
-	assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, source, database.GetSessionFilePath(t.Context(), "codex:"+id))
-	assert.Equal(t, 170, session.DataVersion)
-	var count int
-	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
-	assert.Equal(t, 1, count)
-}
-
 func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 	scope := db.ScopedDataVersionProviders(132, 133)
 	assert.ElementsMatch(t,

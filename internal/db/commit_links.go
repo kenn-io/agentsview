@@ -17,6 +17,7 @@ import (
 
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/shellquote"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
@@ -31,7 +32,6 @@ const (
 var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
-	commitEnvNameRE           = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(detached HEAD|[^\s\[\]~^:?*\\]+) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
@@ -87,8 +87,10 @@ type CommitSessionList struct {
 
 // commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
-	resolve := func(base, dir string, shellTilde bool) string {
-		if path.IsAbs(dir) || (shellTilde && strings.HasPrefix(dir, "~")) || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
+	resolve := func(base, dir string) string {
+		dir = strings.Trim(dir, "\"'")
+		dir = strings.ReplaceAll(dir, `'\''`, "'")
+		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
 		}
 		if !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
@@ -119,17 +121,6 @@ func commitRepository(input, cwd string) string {
 		}
 		return joined
 	}
-	resolveWord := func(base, word string) string {
-		quoted := len(word) >= 2 && ((word[0] == '\'' && word[len(word)-1] == '\'') || (word[0] == '"' && word[len(word)-1] == '"'))
-		if quoted {
-			if word[0] == '\'' {
-				word = strings.ReplaceAll(word[1:len(word)-1], `'\''`, "'")
-			} else {
-				word = word[1 : len(word)-1]
-			}
-		}
-		return resolve(base, word, true)
-	}
 	var fields struct {
 		Workdir string `json:"workdir"`
 		Cwd     string `json:"cwd"`
@@ -142,107 +133,53 @@ func commitRepository(input, cwd string) string {
 	if dir == "" && !jsontext.Value(input).IsValid() && len(commitToolCallRE.FindAllStringIndex(input, -1)) == 1 && commitCommandText(input) != "" {
 		if match := commitWorkdirRE.FindStringSubmatch(commitCommandRE.ReplaceAllString(input, "")); match != nil {
 			dir = match[1]
-			if strings.HasPrefix(dir, `"`) {
-				if json.Unmarshal([]byte(dir), &dir) == nil {
-					cwd = resolve(cwd, dir, false)
-				}
-			} else {
-				cwd = resolveWord(cwd, dir)
+			if strings.HasPrefix(dir, "\"") {
+				_ = json.Unmarshal([]byte(match[1]), &dir)
 			}
-			dir = ""
 		}
 	}
 	if dir != "" {
-		cwd = resolve(cwd, dir, false)
+		cwd = resolve(cwd, dir)
 	}
-	_, dirs, direct, _ := commitArgv(input)
-	if direct {
-		for _, dir := range dirs {
-			cwd = resolve(cwd, dir, false)
+	shellWord := func(word string) string {
+		if strings.HasPrefix(word, `"`) {
+			return strings.ReplaceAll(word, `\"`, `"`)
 		}
-		return cwd
+		return word
 	}
 	command := commitCommandText(input)
 	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
 		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
-			cwd = resolveWord(cwd, matches[len(matches)-1][1])
+			cwd = resolve(cwd, shellWord(matches[len(matches)-1][1]))
 		}
 	}
 	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
 		if strings.HasPrefix(option, "-C") {
-			cwd = resolveWord(cwd, strings.TrimSpace(option[2:]))
+			cwd = resolve(cwd, shellWord(strings.TrimSpace(option[2:])))
 		}
 	}
 	return cwd
 }
 
-// commitArgv reads recorded arguments without reinterpreting their boundaries.
-func commitArgv(input string) (command string, dirs []string, direct, present bool) {
+func commitArgv(input string) (string, bool) {
 	var payload struct {
 		Command []string `json:"command"`
 	}
 	if json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
-		return "", nil, false, false
+		return "", false
 	}
 	args := payload.Command
-	name := func(executable string) string {
-		return strings.TrimSuffix(strings.ToLower(path.Base(strings.ReplaceAll(executable, `\`, "/"))), ".exe")
+	if len(args) >= 3 && (args[0] == "sh" || args[0] == "bash" || args[0] == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+		return args[2], true
 	}
-	if len(args) > 0 && name(args[0]) == "env" {
-		args = args[1:]
-		options := true
-		for len(args) > 0 {
-			switch {
-			case options && args[0] == "--":
-				args = args[1:]
-				options = false
-			case options && (args[0] == "-i" || args[0] == "--ignore-environment"):
-				args = args[1:]
-			case options && args[0] == "-u" && len(args) >= 2:
-				args = args[2:]
-			default:
-				key, _, found := strings.Cut(args[0], "=")
-				if !found || !commitEnvNameRE.MatchString(key) {
-					goto executable
-				}
-				args = args[1:]
-				options = false
-			}
-		}
+	for i, arg := range args {
+		args[i] = shellquote.POSIX(arg)
 	}
-executable:
-	if len(args) == 0 {
-		return "", nil, false, true
-	}
-	executable := name(args[0])
-	if len(args) >= 3 && (executable == "sh" || executable == "bash" || executable == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
-		return args[2], nil, false, true
-	}
-	if executable != "git" {
-		return "", nil, false, true
-	}
-	for i := 1; i < len(args); i++ {
-		switch arg := args[i]; arg {
-		case "commit":
-			return "git commit", dirs, true, true
-		case "-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env":
-			i++
-			if arg == "-C" && i < len(args) {
-				dirs = append(dirs, args[i])
-			}
-		case "-p", "-P", "--no-pager", "--paginate", "--bare", "--no-replace-objects", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-lazy-fetch", "--no-advice":
-		default:
-			option, _, hasValue := strings.Cut(arg, "=")
-			if !hasValue || (option != "--git-dir" && option != "--work-tree" && option != "--namespace" && option != "--config-env") {
-				return "", nil, false, true
-			}
-		}
-	}
-	return "", nil, false, true
+	return strings.Join(args, " "), true
 }
 
 func commitCommandText(input string) string {
-	if command, _, _, present := commitArgv(input); present {
+	if command, present := commitArgv(input); present {
 		return command
 	}
 	if jsontext.Value(input).IsValid() {

@@ -1523,14 +1523,9 @@ fixtures retain this field; missing identities remain source-local.
   need output process IDs matching earlier commit calls. The reused-process-ID
   case checks that a new native commit execution owns its repository and
   prompt after a batch poll.
-  An archived `shell` call also records `command` as an array. The `sh`,
-  `bash`, and `zsh` executables accept a script with `-c` or `-lc`. Git,
-  shell, and `env` executable paths can use Windows separators and `.exe`.
-  An `env` prefix supports `-i`, `--ignore-environment`, `-u NAME`, `--`,
-  and assignments whose names match `[A-Za-z_][A-Za-z0-9_]*`. Options must
-  precede assignments.
-  `TestCommitLinksArgvCommands` covers extraction and repository paths;
-  `TestCommitLinksBackfill` covers archive repair.
+  An archived `shell` call records `command` as an array. Scripts passed to
+  `sh`, `bash`, or `zsh` with `-c` or `-lc` are read as-is; other arrays are
+  quoted word by word.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)
