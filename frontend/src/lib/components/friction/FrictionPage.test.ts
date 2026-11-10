@@ -55,6 +55,7 @@ function makeDigest(signals: FrictionSignal[]): FrictionDigestResponse {
     revision: 2,
     sessions_scanned: 3,
     markdown_sha256: "0".repeat(64),
+    diagnostics: [],
     summary: {
       date: DATE,
       schema_version: 1,
@@ -302,6 +303,54 @@ describe("FrictionPage", () => {
     expect(text).toContain("Nothing was flagged in the 3 sessions scanned.");
     expect(sectionIds()).toEqual([]);
     expect(document.querySelector(".summary-strip")).toBeNull();
+  });
+
+  it("shows a single diagnostic group without a duplicate row count", async () => {
+    const event = sig({
+      kind: "diagnostic",
+      subject_kind: "diagnostic",
+      label: "worker",
+      text: "launch failed",
+    });
+    friction.digest = {
+      ...makeDigest([event, { ...event, subject_id: "diagnostic:2" }]),
+      diagnostics: [{ source: "worker", message: "launch failed", count: 2 }],
+      p0_alerts: [],
+      patterns: [],
+    };
+    await render();
+    const diagnostics = section("diagnostic");
+    expect(diagnostics.textContent).toContain("worker");
+    expect(diagnostics.textContent).toContain("launch failed");
+    expect(diagnostics.querySelectorAll("li .count")).toHaveLength(0);
+    expect(diagnostics.querySelector("a")).toBeNull();
+  });
+
+  it("shows row counts when diagnostics have multiple groups", async () => {
+    const worker = sig({
+      kind: "diagnostic",
+      subject_kind: "diagnostic",
+      label: "worker",
+      text: "launch failed",
+    });
+    const scheduler = sig({
+      kind: "diagnostic",
+      subject_kind: "diagnostic",
+      subject_id: "diagnostic:2",
+      label: "scheduler",
+      text: "job delayed",
+    });
+    friction.digest = {
+      ...makeDigest([worker, scheduler]),
+      diagnostics: [
+        { source: "worker", message: "launch failed", count: 1 },
+        { source: "scheduler", message: "job delayed", count: 1 },
+      ],
+      p0_alerts: [],
+      patterns: [],
+    };
+    await render();
+    expect(section("diagnostic").querySelectorAll("li .count")).toHaveLength(2);
   });
 
   it("names a finding's session by its opening message and project", async () => {

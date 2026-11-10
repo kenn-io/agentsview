@@ -46,6 +46,7 @@
     pattern: m.friction_kind_pattern,
     frustration: m.friction_kind_frustration,
     interruption: m.friction_kind_interruption,
+    diagnostic: m.friction_kind_diagnostic,
   };
 
   const p0 = $derived(sortedP0(p0Alerts));

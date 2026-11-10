@@ -25,6 +25,9 @@ func RenderSummaryJSON(s DigestSnapshot) []byte {
 		"interruptions":    len(groups[KindInterruption]),
 		"p0_alerts":        s.P0Alerts,
 	}
+	if n := len(groups[KindDiagnostic]); n > 0 {
+		value["diagnostics"] = n
+	}
 	out, err := serdejson.Pretty(value)
 	if err != nil {
 		panic(fmt.Sprintf("friction: summary JSON: %v", err))

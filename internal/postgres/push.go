@@ -94,6 +94,20 @@ func (s *Sync) Push(
 // defaultFullRunSaveTimeout bounds the progress save after a failed full push.
 const defaultFullRunSaveTimeout = 30 * time.Second
 
+// completedDiagnosticPushError marks an error returned after all push phases
+// finished, so PushWithOptions can run finalizers without restoring the run.
+type completedDiagnosticPushError struct{ err error }
+
+func (e *completedDiagnosticPushError) Error() string { return e.err.Error() }
+func (e *completedDiagnosticPushError) Unwrap() error { return e.err }
+
+func markCompletedDiagnosticPush(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &completedDiagnosticPushError{err: err}
+}
+
 // PushWithOptions is Push with per-push options; see storage.PushOptions.
 func (s *Sync) PushWithOptions(
 	ctx context.Context, opts storage.PushOptions,
@@ -102,9 +116,13 @@ func (s *Sync) PushWithOptions(
 	result, err := s.pushWithOptions(ctx, opts, onProgress)
 	run := s.fullRun
 	s.fullRun = nil
+	completedErr, completed := errors.AsType[*completedDiagnosticPushError](err)
+	if completed {
+		err = completedErr.err
+	}
 	switch {
-	case err == nil:
-		err = s.replaceRetainedCommitLinks(ctx)
+	case err == nil || errors.Is(err, db.ErrDiagnosticConflict) || completed:
+		err = errors.Join(err, s.replaceRetainedCommitLinks(ctx))
 	case run != nil:
 		// Keep what the run committed since its last checkpoint. The push
 		// may have failed because ctx ended, so save without it, but within
@@ -518,6 +536,10 @@ func (s *Sync) pushWithOptions(
 		func() error { return s.syncCursorUsageEvents(ctx, full) }); err != nil {
 		return result, err
 	}
+	diagnosticErr := s.syncDiagnosticEvents(ctx, full, markerID)
+	if diagnosticErr != nil {
+		log.Printf("pgsync: diagnostic events: %v", diagnosticErr)
+	}
 	// Candidate selection shares ListSessionsForMirrorWindow with the
 	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and
 	// deliberately unbounded above. An upper bound at cutoff would let a
@@ -719,7 +741,7 @@ func (s *Sync) pushWithOptions(
 			return result, err
 		}
 		result.Duration = time.Since(start)
-		return result, nil
+		return result, markCompletedDiagnosticPush(diagnosticErr)
 	}
 
 	pushed := make([]db.Session, 0, len(sessions))
@@ -868,7 +890,7 @@ func (s *Sync) pushWithOptions(
 		return result, err
 	}
 	result.Duration = time.Since(start)
-	return result, nil
+	return result, markCompletedDiagnosticPush(diagnosticErr)
 }
 
 // runVectorPushPhase runs the vector push phase and wraps its error. With no

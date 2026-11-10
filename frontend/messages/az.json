@@ -1748,7 +1748,7 @@
   "insights_page_template_instruction_opportunities": "Təlimat imkanları",
   "insights_page_template_friction_review": "Sürtünmə icmalı",
   "friction_review_summary_title": "Model tərəfindən yazılmış xülasə",
-  "friction_review_summary_notice": "Bu hesabatın xülasəsi və nümunə başlıqlarından model tərəfindən yazılıb. Tapıntıları, hesabatları və tapşırıqları dəyişmir.",
+  "friction_review_summary_notice": "Bu hesabatın xülasəsi, nümunə başlıqları və qruplaşdırılmış diaqnostika mənbələri və mesajlarından model tərəfindən yazılıb. Tapıntıları, hesabatları və tapşırıqları dəyişmir.",
   "friction_review_summary_empty": "Bu hesabat üçün hələ xülasə yoxdur.",
   "friction_review_summary_generate": "Xülasə yarat",
   "friction_review_summary_regenerate": "Yenidən yarat",
@@ -3106,6 +3106,8 @@
   "friction_section_patterns": "Nümunələr",
   "friction_section_frustration": "Narazılıq",
   "friction_section_interruptions": "Kəsintilər",
+  "friction_section_diagnostics": "Diaqnostika",
+  "friction_diagnostic_count": "x{count}",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3127,6 +3129,7 @@
   "friction_kind_pattern": "Nümunə",
   "friction_kind_frustration": "Narazılıq",
   "friction_kind_interruption": "Kəsinti",
+  "friction_kind_diagnostic": "Diaqnostika",
   "friction_disabled_title": "Bu serverdə sürtünmə jurnalı söndürülüb",
   "friction_disabled_hint": "Bu server xülasələr yaratmır. config.toml faylında [friction] enabled = true təyin edin və daemonu yenidən başladın. Yalnız oxunan arxiv xülasə yarada bilməz.",
   "friction_markdown_title": "Markdown",

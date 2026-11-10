@@ -174,6 +174,12 @@ func (c *pushAliasRoutingConn) QueryContext(
 			columns: []string{"coalesce"},
 			values:  [][]driver.Value{{0}},
 		}, nil
+	case strings.Contains(normalized, "select exists(select 1 from sync_metadata"),
+		strings.Contains(normalized, "select exists (select 1 from sync_metadata"):
+		return &pushAliasRoutingRows{
+			columns: []string{"exists"},
+			values:  [][]driver.Value{{false}},
+		}, nil
 	case strings.Contains(normalized, "from information_schema.tables"):
 		return &pushAliasRoutingRows{
 			columns: []string{"exists"},

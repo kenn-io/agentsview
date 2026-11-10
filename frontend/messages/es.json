@@ -1748,7 +1748,7 @@
   "insights_page_template_instruction_opportunities": "Oportunidades de instrucción",
   "insights_page_template_friction_review": "Revisión de fricción",
   "friction_review_summary_title": "Resumen escrito por un modelo",
-  "friction_review_summary_notice": "Escrito por un modelo a partir del resumen y los títulos de patrones de este informe. No modifica hallazgos, informes ni incidencias.",
+  "friction_review_summary_notice": "Escrito por un modelo a partir del resumen, los títulos de patrones y las fuentes y mensajes de diagnóstico agrupados de este informe. No modifica hallazgos, informes ni incidencias.",
   "friction_review_summary_empty": "Todavía no hay resumen para este informe.",
   "friction_review_summary_generate": "Generar resumen",
   "friction_review_summary_regenerate": "Regenerar",
@@ -3128,6 +3128,8 @@
   "friction_section_patterns": "Patrones",
   "friction_section_frustration": "Frustración",
   "friction_section_interruptions": "Interrupciones",
+  "friction_section_diagnostics": "Diagnósticos",
+  "friction_diagnostic_count": "x{count}",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3149,6 +3151,7 @@
   "friction_kind_pattern": "Patrón",
   "friction_kind_frustration": "Frustración",
   "friction_kind_interruption": "Interrupción",
+  "friction_kind_diagnostic": "Diagnóstico",
   "friction_disabled_title": "El registro de fricción está desactivado en este servidor",
   "friction_disabled_hint": "Este servidor no genera resúmenes. Configura [friction] enabled = true en config.toml y reinicia el daemon. Un archivo de solo lectura no puede generar resúmenes.",
   "friction_markdown_title": "Markdown",

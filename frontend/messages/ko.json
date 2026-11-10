@@ -1668,7 +1668,7 @@
   "insights_page_template_instruction_opportunities": "지시 개선 기회",
   "insights_page_template_friction_review": "마찰 검토",
   "friction_review_summary_title": "모델이 작성한 요약",
-  "friction_review_summary_notice": "이 다이제스트의 요약과 패턴 제목으로 모델이 작성했습니다. 발견 항목, 다이제스트, 이슈는 변경하지 않습니다.",
+  "friction_review_summary_notice": "이 다이제스트의 요약, 패턴 제목, 그룹화된 진단 출처와 메시지로 모델이 작성했습니다. 발견 항목, 다이제스트, 이슈는 변경하지 않습니다.",
   "friction_review_summary_empty": "이 다이제스트에 대한 요약이 아직 없습니다.",
   "friction_review_summary_generate": "요약 생성",
   "friction_review_summary_regenerate": "다시 생성",
@@ -3004,6 +3004,8 @@
   "friction_section_patterns": "패턴",
   "friction_section_frustration": "좌절",
   "friction_section_interruptions": "중단",
+  "friction_section_diagnostics": "진단",
+  "friction_diagnostic_count": "{count}회",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3022,6 +3024,7 @@
   "friction_kind_pattern": "패턴",
   "friction_kind_frustration": "좌절",
   "friction_kind_interruption": "중단",
+  "friction_kind_diagnostic": "진단",
   "friction_disabled_title": "이 서버에서는 마찰 로그가 꺼져 있습니다",
   "friction_disabled_hint": "이 서버는 다이제스트를 만들지 않습니다. config.toml에서 [friction] enabled = true로 설정하고 데몬을 다시 시작하세요. 읽기 전용 아카이브에서는 다이제스트를 만들 수 없습니다.",
   "friction_markdown_title": "Markdown",

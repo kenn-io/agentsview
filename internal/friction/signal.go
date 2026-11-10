@@ -31,6 +31,7 @@ const (
 	// frustration markers and interrupted turns.
 	KindFrustration  Kind = "frustration"
 	KindInterruption Kind = "interruption"
+	KindDiagnostic   Kind = "diagnostic"
 )
 
 // FileableKinds can be filed to an issue tracker. Frustration quotes the

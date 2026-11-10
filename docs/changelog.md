@@ -23,6 +23,9 @@ The latest release is
 - With automatic filing on, reopen linked Kata issues when a digest finding
   shows the pattern returned after the issue was closed as done.
 
+- `agentsview diagnostics append` records failures outside agent sessions in
+  the daily Friction Log, grouping repeated messages with their count.
+
 **Bug fixes**
 
 - Semantic search builds on Kit's built-in local embeddings server no longer
