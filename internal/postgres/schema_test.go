@@ -1230,3 +1230,46 @@ func TestServeSchemaErrorAsksForARebuildWhenColumnsAreMissing(t *testing.T) {
 
 	assert.Contains(t, serveSchemaError(missing, "agentsview").Error(), "Drop and recreate the PG schema")
 }
+
+func TestSchemaUpgradesMissingImageText(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {"has_total_output_tokens", "has_peak_context_tokens"},
+		"messages": {"has_context_tokens", "has_output_tokens"},
+	})
+	state.existingTables = map[string]bool{
+		"commit_links":                                    true,
+		"model_pricing":                                   true,
+		"model_pricing_bands":                             true,
+		"genai_pricing":                                   true,
+		"source_archives":                                 true,
+		"source_project_identity_observations":            true,
+		"source_project_identity_observation_scopes":      true,
+		"source_session_project_identity_snapshots":       true,
+		"source_session_project_identity_snapshot_scopes": true,
+		"source_worktree_project_mappings":                true,
+		"source_worktree_project_mapping_scopes":          true,
+		"cursor_usage_events":                             true,
+		"friction_findings":                               true,
+		"friction_digests":                                true,
+		"friction_digest_sessions":                        true,
+		"friction_patterns":                               true,
+		"friction_issue_links":                            true,
+		"friction_filing_state":                           true,
+	}
+	state.existingIndexes = map[string]bool{
+		"idx_cursor_usage_events_dedup":   true,
+		"idx_tool_result_events_terminal": true,
+		"idx_sessions_id_tail":            true,
+		"idx_sessions_data_version":       true,
+		"idx_sessions_parentless_workers": true,
+		"idx_sessions_source_missing":     true,
+	}
+	state.syncMetadataKeys = map[string]bool{sourceCurationBackfillMetadataKey: true, tokenCoverageRepairMetadataKey: true}
+	require.True(t, pushSchemaCurrent(t.Context(), pg))
+	state.execErrors = []schemaProbeQueryError{{contains: "from image_text", err: &pgconn.PgError{Code: "42P01", Message: "relation image_text does not exist"}}}
+	require.False(t, pushSchemaCurrent(t.Context(), pg))
+	require.ErrorContains(t, CheckSchemaCompat(t.Context(), pg), "image_text table missing required columns")
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+	require.NoError(t, syncer.EnsureSchema(t.Context()))
+	assert.Contains(t, strings.ToLower(state.executedSQL()), "create table if not exists image_text")
+}

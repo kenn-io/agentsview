@@ -137,3 +137,37 @@ func TestDuckDBImageTextFollowsIncrementalPushes(t *testing.T) {
 	assert.Empty(t, mirrorRows())
 	assert.Empty(t, found("receipt"))
 }
+
+func TestDuckDBImageTextContentPageOrder(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	const id, ts = "image-pages", "2026-01-02T03:04:05.000Z"
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
+	require.NoError(t, local.UpsertSession(ctx, syncSession(id, "shots", "look", ts, 2)))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{
+		syncMessage(id, 0, "user", "look", ts),
+		syncMessage(id, 1, "assistant", "answer", ts, db.ToolCall{ToolName: "Read", ResultContent: content}),
+	}))
+	images := db.RetainedToolResultImages(content)
+	require.Len(t, images, 2)
+	identity := ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}
+	require.NoError(t, local.SaveImageText(ctx, images[0].SHA256, identity, "needle zebra", false))
+	require.NoError(t, local.SaveImageText(ctx, images[1].SHA256, identity, "needle apple", false))
+	path := filepath.Join(t.TempDir(), "image.duckdb")
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	store := openPushedStore(t, path)
+	defer func() { require.NoError(t, store.Close()) }()
+	filter := db.ContentSearchFilter{Pattern: "needle", Mode: "substring", Sources: []string{"tool_result"}, Limit: 1, IncludeOneShot: true, IncludeAutomated: true}
+	page, err := store.SearchContent(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	require.Contains(t, page.Matches[0].Snippet, "apple")
+	require.NotZero(t, page.NextCursor)
+	filter.Cursor = page.NextCursor
+	page, err = store.SearchContent(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	require.Contains(t, page.Matches[0].Snippet, "zebra")
+	require.Zero(t, page.NextCursor)
+}

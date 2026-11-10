@@ -2164,6 +2164,10 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
+	} else if !useDiff || len(plan.updates) > 0 {
+		if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
@@ -2617,6 +2621,11 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
+	}
+	if !transcriptChanged && (!useDiff || len(plan.updates) > 0) {
+		if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {
 			return err
 		}
 	}

@@ -2555,6 +2555,13 @@ func CheckSchemaCompat(
 		return fmt.Errorf(
 			"sync_metadata table missing required columns: %w", err)
 	}
+	_, err = db.ExecContext(ctx,
+		`SELECT session_id, source_kind, message_ordinal, call_index, event_index,
+			image_index, image_hash, processor, provider, model, revision, text
+		 FROM image_text LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf("image_text table missing required columns: %w", err)
+	}
 	return nil
 }
 

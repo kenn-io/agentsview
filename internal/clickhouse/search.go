@@ -531,7 +531,7 @@ func (s *Store) collectContentSubstringMatches(
 			ordinal, ts, body
 		FROM (` + strings.Join(branches, " UNION ALL ") + `) AS matches
 		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
-			src ASC, row_id ASC, call_index ASC, event_index ASC
+			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
 	args = append(args, f.Limit+1, f.Cursor)
 	rows, err := s.queryContext(ctx, query, args...)

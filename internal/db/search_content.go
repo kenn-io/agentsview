@@ -499,7 +499,7 @@ func (db *DB) substringSearchPage(
 	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, snippet, '' FROM (" +
 		strings.Join(branches, " UNION ALL ") +
-		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC " +
+		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC " +
 		"LIMIT ? OFFSET ?"
 	args = append(args, f.Limit+1, f.Cursor)
 
@@ -876,7 +876,7 @@ func (db *DB) regexCandidateRows(
 	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, body, row_id, legacy_thinking FROM (" +
 		strings.Join(branches, " UNION ALL ") +
-		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC"
+		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC, body ASC"
 	return db.getReader().QueryContext(ctx, query, args...)
 }
 

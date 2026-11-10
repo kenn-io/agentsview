@@ -214,3 +214,33 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 		assert.Zero(t, count)
 	})
 }
+
+func TestClickHouseImageTextContentPageOrder(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
+	writeImageSession(t, local, content, "no image", "2026-01-12T00:00:00.000Z")
+	images := db.RetainedToolResultImages(content)
+	require.Len(t, images, 2)
+	identity := ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}
+	require.NoError(t, local.SaveImageText(ctx, images[0].SHA256, identity, "needle zebra", false))
+	require.NoError(t, local.SaveImageText(ctx, images[1].SHA256, identity, "needle apple", false))
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(ctx, target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	filter := db.ContentSearchFilter{Pattern: "needle", Mode: "substring", Sources: []string{"tool_result"}, Limit: 1, IncludeChildren: true, IncludeOneShot: true, IncludeAutomated: true}
+	page, err := store.SearchContent(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	require.Contains(t, page.Matches[0].Snippet, "apple")
+	require.NotZero(t, page.NextCursor)
+	filter.Cursor = page.NextCursor
+	page, err = store.SearchContent(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	require.Contains(t, page.Matches[0].Snippet, "zebra")
+	require.Zero(t, page.NextCursor)
+}
