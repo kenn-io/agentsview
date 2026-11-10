@@ -2299,7 +2299,8 @@ func probeDatabaseConn(ctx context.Context,
 	if schema {
 		return true, false, false, nil
 	}
-	fullRebuild = archiveOnly || version < dataVersion && ScopedDataVersionProviders(version, dataVersion) == nil
+	providers := ScopedDataVersionProviders(version, dataVersion)
+	fullRebuild = archiveOnly || version < dataVersion && providers == nil
 	// Archive-only archives cannot reparse sources, so any stale version
 	// needs their preservation rebuild.
 	countScoped := includeScoped || archiveOnly
@@ -2315,7 +2316,7 @@ func probeDatabaseConn(ctx context.Context,
 	if version >= dataVersion {
 		return false, false, false, nil
 	}
-	return false, countScoped || fullRebuild, fullRebuild, nil
+	return false, fullRebuild || countScoped && len(providers) > 0, fullRebuild, nil
 }
 
 // needsSchemaRepair probes for required legacy columns that may be missing in

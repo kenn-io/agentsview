@@ -42,6 +42,46 @@ func TestVersionOnlyUpgradeScope(t *testing.T) {
 	assert.NoError(t, validateDataVersionScopes(map[int][]parser.AgentType{170: {}}))
 }
 
+func TestVersionOnlyReadOnlyArchiveNeedsResync(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		version     int
+		pending     bool
+		archiveOnly bool
+		stale       bool
+	}{
+		{"version only", 169, false, false, false},
+		{"earlier parser change", 168, false, false, true},
+		{"pending parser change", 169, true, false, true},
+		{"archive only", 169, false, true, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				if tt.pending {
+					if _, err := tx.ExecContext(t.Context(), `INSERT INTO stats(key,value) VALUES (?,168)`, scopedUpgradePendingKey); err != nil {
+						return err
+					}
+				}
+				return writeUserVersion(t.Context(), tx, tt.version)
+			}))
+			if tt.archiveOnly {
+				require.NoError(t, d.EnableArchiveOnly(t.Context()))
+			}
+			path := d.Path()
+			require.NoError(t, d.Close())
+			readOnly, err := OpenReadOnly(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
+			assert.Equal(t, tt.stale, readOnly.NeedsResync())
+			needs, full, err := ArchiveResyncState(t.Context(), path)
+			require.NoError(t, err)
+			assert.Equal(t, tt.stale, needs)
+			assert.Equal(t, tt.archiveOnly, full)
+		})
+	}
+}
+
 func TestVersionOnlyUpgradePreservesParserState(t *testing.T) {
 	d := testDB(t)
 	for _, id := range []string{"current", "retry"} {
