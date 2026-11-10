@@ -820,8 +820,8 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 // pushSessionBatch writes one batch in the order the consistency design
 // requires: dependents, version-bounded delete of older dependents, then
 // session rows carrying the fingerprint. Returns the message count per
-// session. An interrupted push can leave image rows before the version marker;
-// the archive version blocks older binaries and the next push repairs the mirror.
+// session. Search hides image text older than the winning session row, including
+// when an older writer publishes a newer row after an interrupted push.
 func (s *Sync) pushSessionBatch(
 	ctx context.Context, batch []db.Session, fingerprints map[string]string,
 	version uint64, loaded map[string]sessionPayload,

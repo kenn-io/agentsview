@@ -52,7 +52,7 @@ func imageTextResultBranches(f db.ContentSearchFilter, scopeWhere, callPredicate
 				FROM tool_calls tc ` + imageTextCallJoin + `
 				JOIN sessions s ON s.id = tc.session_id
 				` + toolCallMessageJoin + `
-				WHERE it.source_kind = 'tool_call'
+				WHERE it.source_kind = 'tool_call' AND it.push_version >= s.push_version
 					AND ` + toolCallWithoutEvents + `
 					AND it.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` +
 			db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + callPredicate, `
@@ -66,7 +66,7 @@ func imageTextResultBranches(f db.ContentSearchFilter, scopeWhere, callPredicate
 				FROM tool_result_events tre ` + imageTextEventJoin + `
 				JOIN sessions s ON s.id = tre.session_id
 				` + db.LexicalEventAnchorJoinSQL(f.Scope) + `
-				WHERE it.source_kind = 'event'
+				WHERE it.source_kind = 'event' AND it.push_version >= s.push_version
 					AND it.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` +
 			db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + eventPredicate,
 	}
@@ -191,7 +191,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				) AS rn
 			FROM image_text it
 			JOIN sessions s ON s.id = it.session_id
-			WHERE `+imageTermPredicate+`
+			WHERE `+imageTermPredicate+` AND it.push_version >= s.push_version
 				AND s.deleted_at IS NULL
 				AND (it.session_id, it.message_ordinal) IN (
 					SELECT mx.session_id, mx.ordinal FROM messages mx

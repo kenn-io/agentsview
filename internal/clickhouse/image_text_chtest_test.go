@@ -300,3 +300,36 @@ func TestClickHouseImageTextPendingSessionVersion(t *testing.T) {
 	require.NoError(t, syncer.conn.QueryRowContext(ctx, `SELECT count() FROM image_text WHERE session_id=?`, imageSessionID).Scan(&count))
 	require.Zero(t, count)
 }
+
+func TestClickHouseImageTextHiddenAfterNewerSessionRow(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	image := inlineImage("interrupted")
+	writeImageSession(t, local, image, "no image", "2026-01-12T00:00:00.000Z")
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
+	require.NoError(t, local.SaveImageText(ctx, db.RetainedToolResultImages(image)[0].SHA256, ocr.Identity{Fingerprint: "processor", Provider: "test", Model: "model", Revision: "r1"}, "invoice", false))
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	store, err := NewStore(ctx, target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	check := func(want int) {
+		t.Helper()
+		global, err := store.Search(ctx, db.SearchFilter{Query: "invoice"})
+		require.NoError(t, err)
+		assert.Len(t, global.Results, want)
+		content, err := store.SearchContent(ctx, db.ContentSearchFilter{Pattern: "invoice", Mode: "substring", Sources: []string{"tool_result"}, IncludeChildren: true, IncludeAutomated: true, IncludeOneShot: true})
+		require.NoError(t, err)
+		assert.Len(t, content.Matches, want)
+	}
+	check(1)
+	_, err = syncer.conn.ExecContext(ctx, `INSERT INTO sessions SELECT * REPLACE (push_version + 1 AS push_version, 172 AS data_version, 'older' AS agentsview_push_fingerprint) FROM sessions FINAL WHERE id=?`, imageSessionID)
+	require.NoError(t, err)
+	check(0)
+	result, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	check(1)
+}
