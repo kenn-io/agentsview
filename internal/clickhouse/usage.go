@@ -234,7 +234,7 @@ func chUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 	messageWhere, messageArgs, eventWhere, eventArgs := chUsageSourceWheres(
 		f, sessionID, chUsageMessageEligibility, chUsageBoundsForFilter(f))
 	return chUsageRawSQLFromWheres(
-		true, messageWhere, messageArgs, eventWhere, eventArgs)
+		false, messageWhere, messageArgs, eventWhere, eventArgs)
 }
 
 // chUsageJoinedSessionColumns selects a raw usage row's session columns from
@@ -256,30 +256,9 @@ const chUsageUnjoinedSessionColumns = `
 			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS started_at,
 			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS activity_at`
 
-// chUsageRawSQLFromWheres renders the message and usage-event raw rows.
-// Readers join each row's session. Push pricing reads the rows without
-// their sessions: no pricing input comes from the session, and a batch is
-// priced before its session rows land. Its rows then carry empty session
-// columns, and ts is the row's own timestamp.
-func chUsageRawSQLFromWheres(
-	joinSessions bool, messageWhere string, messageArgs []any,
-	eventWhere string, eventArgs []any,
-) (string, []any) {
-	messageTS, eventTS := "m.timestamp", "ue.occurred_at"
-	messageJoin, eventJoin := "", ""
-	sessionColumns := chUsageUnjoinedSessionColumns
-	if joinSessions {
-		messageTS = "COALESCE(m.timestamp, s.started_at)"
-		eventTS = "COALESCE(ue.occurred_at, s.started_at)"
-		messageJoin = "\n\t\tJOIN sessions s ON s.id = m.session_id"
-		eventJoin = "\n\t\tJOIN sessions s ON s.id = ue.session_id"
-		sessionColumns = chUsageJoinedSessionColumns
-	}
-	query := fmt.Sprintf(`
-		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
-			'message' AS source, %[1]s AS ts,
-			m.timestamp AS pricing_ts,
-			m.model AS model, m.provider_id AS provider_id, m.token_usage AS token_json,
+// chUsageRawMessageUsage selects a messages row's usage. Message rows carry
+// the token JSON, which chUsageRawNormSource reads.
+const chUsageRawMessageUsage = `m.token_usage AS token_json,
 			m.claude_message_id AS claude_message_id,
 			m.claude_request_id AS claude_request_id,
 			m.source_uuid AS source_uuid,
@@ -288,9 +267,57 @@ func chUsageRawSQLFromWheres(
 				0 AS cache_create, 0 AS cache_read,
 				JSONExtractInt(m.token_usage, 'reasoning_tokens') AS reasoning_tokens,
 				JSONExtractInt(m.token_usage, 'cache_creation', 'ephemeral_1h_input_tokens') AS cache_create_1h,
-				JSONExtractInt(m.token_usage, 'server_tool_use', 'web_search_requests') AS web_search_requests,
+				JSONExtractInt(m.token_usage, 'server_tool_use', 'web_search_requests') AS web_search_requests,`
+
+// chUsageStoredMessageUsage selects a usage_messages row's usage. The view
+// extracted the counters from the token JSON at insert time, so message rows
+// carry them in the counter columns, which chUsageStoredNormSource reads.
+const chUsageStoredMessageUsage = `'' AS token_json,
+			m.claude_message_id AS claude_message_id,
+			m.claude_request_id AS claude_request_id,
+			m.source_uuid AS source_uuid,
+			'' AS usage_dedup_key,
+				m.usage_input AS input_tokens, m.usage_output AS output_tokens,
+				m.usage_cache_create AS cache_create, m.usage_cache_read AS cache_read,
+				m.usage_reasoning AS reasoning_tokens,
+				m.usage_cache_create_1h AS cache_create_1h,
+				m.usage_web AS web_search_requests,`
+
+// chUsageRawSQLFromWheres renders the message and usage-event raw rows.
+// Readers join each row's session and read messages.
+//
+// pricing renders the rows for push pricing, which reads them without their
+// sessions: no pricing input comes from the session, and a batch is priced
+// before its session rows land. Its rows then carry empty session columns,
+// and ts is the row's own timestamp. It reads message usage from
+// usage_messages, which holds only the usage columns and indexes every 64
+// rows. Reading messages instead read whole index granules of the wide table
+// for each session in a batch: about 1.5 million rows for 100 sessions that
+// held under 3,000 usage rows on a production mirror. Pricing callers
+// normalize with chUsageStoredNormSource.
+func chUsageRawSQLFromWheres(
+	pricing bool, messageWhere string, messageArgs []any,
+	eventWhere string, eventArgs []any,
+) (string, []any) {
+	messageTS, eventTS := "m.timestamp", "ue.occurred_at"
+	messageFrom, messageUsage := "usage_messages m", chUsageStoredMessageUsage
+	messageJoin, eventJoin := "", ""
+	sessionColumns := chUsageUnjoinedSessionColumns
+	if !pricing {
+		messageTS = "COALESCE(m.timestamp, s.started_at)"
+		eventTS = "COALESCE(ue.occurred_at, s.started_at)"
+		messageFrom, messageUsage = "messages m", chUsageRawMessageUsage
+		messageJoin = "\n\t\tJOIN sessions s ON s.id = m.session_id"
+		eventJoin = "\n\t\tJOIN sessions s ON s.id = ue.session_id"
+		sessionColumns = chUsageJoinedSessionColumns
+	}
+	query := fmt.Sprintf(`
+		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
+			'message' AS source, %[1]s AS ts,
+			m.timestamp AS pricing_ts,
+			m.model AS model, m.provider_id AS provider_id, %[8]s
 				NULL AS cost_microdollars, '' AS cost_source,%[5]s
-		FROM messages m%[3]s
+		FROM %[9]s%[3]s
 		WHERE %[6]s
 		UNION ALL
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
@@ -313,7 +340,7 @@ func chUsageRawSQLFromWheres(
 		FROM usage_events ue%[4]s
 		WHERE %[7]s`,
 		messageTS, eventTS, messageJoin, eventJoin, sessionColumns,
-		messageWhere, eventWhere)
+		messageWhere, eventWhere, messageUsage, messageFrom)
 	args := make([]any, 0, len(messageArgs)+len(eventArgs))
 	args = append(args, messageArgs...)
 	args = append(args, eventArgs...)
@@ -731,6 +758,27 @@ func chUsageRawNormSource() chUsageNormSource {
 		cacheRead:     chClampedJSONInt("token_json", "cache_read_input_tokens"),
 		reasoning:     chClampedJSONInt("token_json", "reasoning_tokens"),
 		web:           "greatest(JSONExtractInt(token_json, 'server_tool_use', 'web_search_requests'), 0)",
+		priceModel:    chPriceModelCaseSQL(),
+		priceKey:      chUsagePriceKeySQL,
+	}
+}
+
+// chUsageStoredNormSource normalizes the message rows push pricing reads
+// from usage_messages, whose counters arrive in the counter columns. It
+// clamps them as chUsageRawNormSource clamps the token JSON's values, so a
+// row gets the same price key from either table.
+func chUsageStoredNormSource() chUsageNormSource {
+	clamp := func(column string) string {
+		return fmt.Sprintf("least(greatest(%s, 0), %d)", column, db.MaxPlausibleTokens)
+	}
+	return chUsageNormSource{
+		input:         clamp("input_tokens"),
+		output:        clamp("output_tokens"),
+		cacheCreate:   clamp("cache_create"),
+		cacheCreate1h: clamp("cache_create_1h"),
+		cacheRead:     clamp("cache_read"),
+		reasoning:     clamp("reasoning_tokens"),
+		web:           "greatest(web_search_requests, 0)",
 		priceModel:    chPriceModelCaseSQL(),
 		priceKey:      chUsagePriceKeySQL,
 	}
