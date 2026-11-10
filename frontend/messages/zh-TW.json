@@ -1666,7 +1666,7 @@
   "insights_page_template_instruction_opportunities": "指令最佳化機會",
   "insights_page_template_friction_review": "摩擦檢討",
   "friction_review_summary_title": "模型撰寫的摘要",
-  "friction_review_summary_notice": "由模型根據此日報的摘要與模式標題撰寫。不會修改發現項目、日報或議題。",
+  "friction_review_summary_notice": "由模型根據此日報的摘要、模式標題，以及分組後的診斷來源與訊息撰寫。不會修改發現項目、日報或議題。",
   "friction_review_summary_empty": "此日報尚無摘要。",
   "friction_review_summary_generate": "產生摘要",
   "friction_review_summary_regenerate": "重新產生",
@@ -3001,6 +3001,8 @@
   "friction_section_patterns": "模式",
   "friction_section_frustration": "挫折",
   "friction_section_interruptions": "中斷",
+  "friction_section_diagnostics": "診斷",
+  "friction_diagnostic_count": "{count} 次",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3019,6 +3021,7 @@
   "friction_kind_pattern": "模式",
   "friction_kind_frustration": "挫折",
   "friction_kind_interruption": "中斷",
+  "friction_kind_diagnostic": "診斷",
   "friction_disabled_title": "此伺服器已關閉摩擦日誌",
   "friction_disabled_hint": "此伺服器不產生摘要。請在 config.toml 中設定 [friction] enabled = true 並重新啟動常駐程式。唯讀封存無法產生摘要。",
   "friction_markdown_title": "Markdown",

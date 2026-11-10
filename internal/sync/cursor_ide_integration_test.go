@@ -1343,3 +1343,119 @@ func TestSyncPathsCursorIDEFramelessWALEventDoesNotReparse(t *testing.T) {
 	engine.SyncPaths([]string{walPath})
 	assert.Equal(t, "Committed", displayName(), "a WAL with frames must still sync")
 }
+
+func TestCursorIDEInlineToChunkedMigrationAndDigest(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "state.vscdb")
+	composer := cursorIDERetentionComposer("chunk-upgrade", 0, 2)
+	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{composer})
+	engine, database := newCursorIDESyncEngine(t, root)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	const id = "cursor-ide:chunk-upgrade"
+	before, err := database.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.FilePath)
+	marked, err := database.MarkSessionSourceMissing(t.Context(), "local", string(parser.AgentCursorIDE), id, *before.FilePath)
+	require.NoError(t, err)
+	require.True(t, marked)
+	missing, err := database.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, missing.SourceMissingAt)
+
+	cursorIDEExec(t, path, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"fullConversationHeadersOnly":[],"headerLog":{"count":3,"chunkCount":1}}`, "composerData:chunk-upgrade"); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:chunk-upgrade:000000", `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":1}]`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "bubbleId:chunk-upgrade:b3", `{"type":1,"text":"third turn"}`)
+		return err
+	})
+
+	engine.SyncPaths([]string{path})
+	after, err := database.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, before.FilePath, after.FilePath)
+	assert.Nil(t, after.SourceMissingAt)
+	messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `[{"bubbleId":"b3","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b1","type":1}]`, "composerConvHeaders:chunk-upgrade:000000")
+	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
+	messages, err = database.GetMessages(t.Context(), id, 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	assert.Equal(t, []string{"b3", "b2", "b1"}, []string{messages[0].SourceUUID, messages[1].SourceUUID, messages[2].SourceUUID})
+}
+
+func TestCursorIDEIncompleteHeadersPreserveArchive(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "state.vscdb")
+	composer := cursorIDERetentionComposer("archived", 0, 2)
+	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{composer})
+	engine, database := newCursorIDESyncEngine(t, root)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	const id = "cursor-ide:archived"
+	rootDoc := `{"_v":18,"headerLog":{"count":2,"chunkCount":1}}`
+	cursorIDEExec(t, path, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, rootDoc, "composerData:archived"); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerData:new-chat", rootDoc); err != nil {
+			return err
+		}
+		return nil
+	})
+	for _, syncNow := range []func(){
+		func() { engine.SyncPaths([]string{path}) },
+		func() {
+			stats := engine.SyncAllForceParse(t.Context(), nil)
+			require.True(t, stats.ProcessingComplete())
+		},
+	} {
+		syncNow()
+		sess, err := database.GetSessionFull(t.Context(), id)
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Nil(t, sess.SourceMissingAt)
+		messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
+		require.NoError(t, err)
+		require.Len(t, messages, 2)
+		assert.Equal(t, composer.bubbles[0].text, messages[0].Content)
+		assert.Equal(t, composer.bubbles[1].text, messages[1].Content)
+		newSession, err := database.GetSessionFull(t.Context(), "cursor-ide:new-chat")
+		require.NoError(t, err)
+		assert.Nil(t, newSession)
+	}
+
+	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "bubbleId:new-chat:n1", `{"type":1,"text":"new turn"}`)
+	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:new-chat:000000", `[{"bubbleId":"n1","type":1},{"bubbleId":"n2","type":2}]`)
+	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "bubbleId:new-chat:n2", `{"type":2,"text":"new reply"}`)
+	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
+	newMessages, err := database.GetMessages(t.Context(), "cursor-ide:new-chat", 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, newMessages, 2)
+}
+
+func TestCursorIDEIncompleteHeadersAbortEmptyRebuild(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "state.vscdb")
+	composer := cursorIDERetentionComposer("rebuild-incomplete", 0, 2)
+	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{composer})
+	engine, database := newCursorIDESyncEngine(t, root)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"headerLog":{"count":2,"chunkCount":1}}`, "composerData:rebuild-incomplete")
+	stats := engine.ResyncAll(t.Context(), nil)
+	assert.True(t, stats.Aborted)
+	messages, err := database.GetMessages(t.Context(), "cursor-ide:rebuild-incomplete", 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "b1", messages[0].SourceUUID)
+	assert.Equal(t, "b2", messages[1].SourceUUID)
+}

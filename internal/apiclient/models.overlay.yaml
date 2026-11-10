@@ -3,6 +3,9 @@ info:
   title: Reuse AgentsView response models in the Go client
   version: 1.0.0
 actions:
+  - target: $.components.schemas.DiagnosticAppendInputBody.properties.id
+    update:
+      x-go-type: string
   - target: $.components.schemas.ActivityReport
     update:
       x-go-type: activity.Report

@@ -1733,7 +1733,7 @@
   "insights_page_template_instruction_opportunities": "指導の機会",
   "insights_page_template_friction_review": "フリクションレビュー",
   "friction_review_summary_title": "モデルが作成した要約",
-  "friction_review_summary_notice": "このダイジェストの概要とパターン名からモデルが作成した要約です。検出結果、ダイジェスト、課題は変更しません。",
+  "friction_review_summary_notice": "このダイジェストの概要、パターン名、グループ化された診断の発信元とメッセージからモデルが作成した要約です。検出結果、ダイジェスト、課題は変更しません。",
   "friction_review_summary_empty": "このダイジェストの要約はまだありません。",
   "friction_review_summary_generate": "要約を生成",
   "friction_review_summary_regenerate": "再生成",
@@ -3072,6 +3072,8 @@
   "friction_section_patterns": "パターン",
   "friction_section_frustration": "苛立ち",
   "friction_section_interruptions": "中断",
+  "friction_section_diagnostics": "診断",
+  "friction_diagnostic_count": "{count}回",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3090,6 +3092,7 @@
   "friction_kind_pattern": "パターン",
   "friction_kind_frustration": "苛立ち",
   "friction_kind_interruption": "中断",
+  "friction_kind_diagnostic": "診断",
   "friction_disabled_title": "このサーバーではフリクションログがオフです",
   "friction_disabled_hint": "このサーバーはダイジェストを作成しません。config.toml で [friction] enabled = true を設定し、デーモンを再起動してください。読み取り専用のアーカイブではダイジェストを作成できません。",
   "friction_markdown_title": "Markdown",

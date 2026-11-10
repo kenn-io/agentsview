@@ -95,6 +95,9 @@ func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle) error 
 	if err := ensureConversationVisibleSchema(ctx, tx); err != nil {
 		return err
 	}
+	if err := ensureConversationUsageSchema(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -105,6 +108,14 @@ const conversationExportInitializedKey = "conversation_export_initialized"
 func conversationExportActiveTx(tx transactionQueries) (bool, error) {
 	var active bool
 	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&active)
+	return active, err
+}
+
+// ConversationExportActive reports whether the archive maintains its
+// conversation index, without taking the writer.
+func (db *DB) ConversationExportActive(ctx context.Context) (bool, error) {
+	var active bool
+	err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&active)
 	return active, err
 }
 

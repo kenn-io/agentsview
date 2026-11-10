@@ -221,7 +221,8 @@ func (s *Server) authMiddlewareRequired(next http.Handler, force bool) http.Hand
 // Authorization header. The query-param fallback exists because
 // browser EventSource cannot set headers.
 func isSSEPath(path string) bool {
-	return strings.HasSuffix(path, "/watch") || path == "/api/v1/events"
+	return strings.HasSuffix(path, "/watch") || path == "/api/v1/events" ||
+		path == "/api/v1/changes/stream"
 }
 
 func isRemoteSyncPath(path string) bool {

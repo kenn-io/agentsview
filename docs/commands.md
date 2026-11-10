@@ -2437,6 +2437,32 @@ those files.
 
 ______________________________________________________________________
 
+### `agentsview diagnostics append`
+
+Record a failure outside an agent session for the Friction Log:
+
+```bash
+agentsview diagnostics append --source worker --message "launch failed" [--at RFC3339] [--id UUID] [--server URL] [--json]
+```
+
+The occurrence time defaults to now. Supply `--at` to place a delayed report
+on the day it happened; it can be at most five minutes in the future. The
+zero timestamp `0001-01-01T00:00:00Z` is not accepted. The
+source is limited to 64 characters and the message to 500. The command prints
+its event ID and occurrence time; reuse both with the same source and message
+to retry without counting the event twice. When supplying `--id` without `--at`,
+reusing the ID and content also returns the original event. A local append reaches a PostgreSQL
+hub on the next replica push, including a project-filtered push. An explicit
+`--server` writes to that daemon instead. Read-only servers and `--pg` cannot
+append. Events appear in digests only when Friction review is enabled on the
+archive that builds them.
+
+`POST /api/v1/diagnostics` accepts `id`, `source`, `message`, and an optional
+RFC 3339 `occurred_at`. It requires an authenticated server or a localhost
+request. Reusing an ID with different content returns HTTP 409.
+
+______________________________________________________________________
+
 ### `agentsview friction`
 
 Build and read the [Friction Log](/docs/configuration/#friction-log). Review

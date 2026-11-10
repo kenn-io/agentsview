@@ -58,7 +58,7 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 	selection := strings.Join(fields, ", ")
 	// The low bit makes a live insert beat a concurrent, older backfill of
 	// the same push version. UInt128 preserves every possible UInt64 version.
-	columns = append(columns, "revision UInt128", "INDEX usage_time timestamp TYPE minmax GRANULARITY 1")
+	columns = append(columns, "revision UInt128")
 	if _, err := conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS usage_messages ("+strings.Join(columns, ", ")+`)
 		 ENGINE = ReplacingMergeTree(revision) ORDER BY (`+strings.Join(usageMessagesOrderBy, ", ")+`)
 		 SETTINGS index_granularity = 64`); err != nil {
@@ -393,6 +393,32 @@ const chPreparedUsagePricingDigestSQL = "(SELECT max(value) FROM sync_metadata W
 // read.
 const chPriceStampSQL = `(SELECT count() FROM usage_event_prices WHERE pricing_digest = ` +
 	chPreparedUsagePricingDigestSQL + `) AS price_count`
+
+// chLiveUsageStampSQL reads the stamp a refresh would store now, for a push
+// to compare with the stored one, at a fraction of the cost of the refresh's
+// own expressions. Both snapshot values are exact without FINAL: FINAL keeps
+// the row with the highest revision of each id, and the hash covers only id
+// and revision, so the highest revision per id gives the same count and sum.
+// One scan answers both, where FINAL read the table once for each.
+//
+// The price value counts the stored rows of the digest, which ClickHouse
+// answers from part metadata. A key that two concurrent pushes both priced
+// stays stored twice until a merge, so the value can exceed the refresh's
+// count, never fall below it: a value below the stored count still proves
+// the records were cleared. It misses only a clearing whose refilled records
+// hold enough duplicates to reach the stored count again; reads stay exact
+// then, because they check the price count themselves, but price per request
+// until the next refresh. Counting with FINAL read every key of the digest,
+// about 1.9 million rows and 200 MiB in production on every push.
+//
+// The digest subquery inside the count names FINAL because the count's
+// final=0 would otherwise apply to it and read superseded digests.
+const chLiveUsageStampSQL = `SELECT snapshots.1, snapshots.2, pricing_digest, price_rows FROM (SELECT
+	(SELECT (count(), sum(sipHash64(id, revision))) FROM (
+		SELECT id, max(revision) AS revision FROM usage_session_snapshots GROUP BY id) SETTINGS final = 0) AS snapshots,
+	` + chPreparedUsagePricingDigestSQL + ` AS pricing_digest,
+	(SELECT count() FROM usage_event_prices WHERE pricing_digest = (SELECT max(value) FROM sync_metadata FINAL
+		WHERE key = '` + usagePricedDigestKey + `') SETTINGS final = 0) AS price_rows)`
 
 // chPreparedUsageRowColumns are the columns a read takes from a prepared
 // row, in the same order from the table and from rows prepared at read time.
@@ -827,7 +853,10 @@ func chExchangeSupported(ctx context.Context, conn *sql.DB) (supported bool, err
 // starts the view's refresh, which runs on the server. Where the schema step
 // found that the database cannot swap tables, it dropped the view and left a
 // rebuild lock, and the push rebuilds the table before it returns.
-func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
+//
+// wrote reports whether the push changed what the stamp covers; see
+// preparedUsageRebuildDue.
+func refreshPreparedUsage(ctx context.Context, conn *sql.DB, wrote bool) error {
 	hasView, err := preparedUsageViewExists(ctx, conn)
 	if err != nil {
 		return err
@@ -862,12 +891,12 @@ func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
 				return err
 			}
 		}
-		if err := rebuildPreparedUsage(ctx, conn); err != nil {
+		if err := rebuildPreparedUsage(ctx, conn, wrote); err != nil {
 			return fmt.Errorf("rebuilding prepared usage (the next push retries): %w", err)
 		}
 		return nil
 	}
-	due, reason, err := preparedUsageRebuildDue(ctx, conn)
+	due, reason, err := preparedUsageRebuildDue(ctx, conn, wrote)
 	if err != nil || !due {
 		return err
 	}
@@ -912,8 +941,11 @@ func finishScheduledRefreshSwitch(ctx context.Context, conn *sql.DB) error {
 // rebuilds again when the snapshots that arrived meanwhile make a rebuild due,
 // as the view queues one more refresh for a request that arrives during a
 // refresh.
-func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
-	due, _, err := preparedUsageRebuildDue(ctx, conn)
+//
+// wrote applies to the first check only; the checks after taking the lock
+// look for changes other pushes made.
+func rebuildPreparedUsage(ctx context.Context, conn *sql.DB, wrote bool) (err error) {
+	due, _, err := preparedUsageRebuildDue(ctx, conn, wrote)
 	if err != nil || !due {
 		return err
 	}
@@ -949,7 +981,7 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 	// The first pass checks again because the previous holder may have
 	// published these snapshots while this push waited for the lock.
 	for pass := range 3 {
-		due, reason, err := preparedUsageRebuildDue(ctx, conn)
+		due, reason, err := preparedUsageRebuildDue(ctx, conn, true)
 		if err != nil || !due {
 			return err
 		}
@@ -1186,20 +1218,35 @@ func releaseRebuildLock(ctx context.Context, conn *sql.DB, generation uint64) er
 //
 // The count applies the message and event conditions of
 // chUsageStoredMessageEligibility and chUsageEventEligibility to the array
-// subcolumns they read, in one scan. Counting the rows of
-// chPreparedUsageKeyedSQL would read every field of usage_facts through two
-// ARRAY JOIN scans, about four times the bytes. The normalized selection has
-// no join, dedup, or other filter, so these filters alone decide which rows
-// exist.
+// subcolumns they read. Counting the rows of chPreparedUsageKeyedSQL would
+// read every field of usage_facts through two ARRAY JOIN scans, about four
+// times the bytes. The normalized selection has no join, dedup, or other
+// filter, so these filters alone decide which rows exist.
+//
+// FINAL keeps the snapshot table from moving filters into PREWHERE, so a
+// coverage filter on the FINAL scan reads the usage arrays of every stored
+// snapshot. The subquery therefore finds the uncovered snapshots without
+// FINAL, from the id, revision, and chSnapshotPreparesUsage columns: FINAL
+// keeps the row with the highest revision of each id, so a snapshot is
+// uncovered exactly when its id's highest revision is. A snapshot whose
+// chSnapshotPreparesUsage is false adds no row to the count, so the subquery
+// skips it; of two rows with the same highest revision it keeps the id when
+// either prepares usage, because FINAL keeps the later one. The outer scan
+// applies FINAL by primary key to those few ids and counts the row FINAL
+// keeps.
 func chPreparedUsageBehindSQL() string {
 	return `SELECT sum(
 		arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,
 			s.usage_facts.usage_present, s.usage_facts.model)
 		+ arrayCount(model -> ` + chUsageEventUsable("model") + `, s.usage_events.model))
 	FROM usage_session_snapshots s
-	WHERE s.deleted_at IS NULL AND (s.id, s.revision) NOT IN (
-		SELECT session_id, snapshot_revision FROM prepared_usage
-		GROUP BY session_id, snapshot_revision SETTINGS final=0)`
+	WHERE s.deleted_at IS NULL AND (s.id, s.revision) IN (
+		SELECT id, max(revision) FROM usage_session_snapshots GROUP BY id
+		HAVING max((revision, ` + chSnapshotPreparesUsage + `)).2
+			AND (id, max(revision)) NOT IN (
+				SELECT session_id, snapshot_revision FROM prepared_usage
+				GROUP BY session_id, snapshot_revision SETTINGS final=0)
+		SETTINGS final=0)`
 }
 
 // preparedUsageRebuildDue reports whether a push should rebuild prepared_usage
@@ -1207,7 +1254,15 @@ func chPreparedUsageBehindSQL() string {
 // rebuild is due only when it changes what reads cost: the table is empty, the
 // stored price copies no longer serve reads, or reads prepare too many rows
 // themselves; see chPreparedUsageBehindShare.
-func preparedUsageRebuildDue(ctx context.Context, conn *sql.DB) (due bool, reason string, err error) {
+//
+// A push that wrote no snapshots, deletions, price records, or pricing digest
+// passes wrote=false and checks only that the table is not empty. Any push
+// that changed those inputs checks after its own writes, so this skips about
+// a second of reads on pushes with nothing to send. When such a push errors
+// before its check, or a rebuild leaves the next push to rebuild, reads stay
+// exact but slower until a push writes again or the view's scheduled refresh
+// runs.
+func preparedUsageRebuildDue(ctx context.Context, conn *sql.DB, wrote bool) (due bool, reason string, err error) {
 	var stored, live usageStamp
 	var prepared uint64
 	err = conn.QueryRowContext(ctx, `SELECT snapshot_count, snapshot_hash, pricing_digest, price_count,
@@ -1219,8 +1274,10 @@ func preparedUsageRebuildDue(ctx context.Context, conn *sql.DB) (due bool, reaso
 	if err != nil {
 		return false, "", fmt.Errorf("reading prepared usage stamp: %w", err)
 	}
-	if err := conn.QueryRowContext(ctx, `SELECT `+chSnapshotStampSQL+`,
-		`+chPreparedUsagePricingDigestSQL+` AS pricing_digest, `+chPriceStampSQL).Scan(
+	if !wrote {
+		return false, "", nil
+	}
+	if err := conn.QueryRowContext(ctx, chLiveUsageStampSQL).Scan(
 		&live.snapshotCount, &live.snapshotHash, &live.pricingDigest, &live.priceCount); err != nil {
 		return false, "", fmt.Errorf("reading current usage stamp: %w", err)
 	}
@@ -1390,5 +1447,6 @@ func (s *Sync) insertUsageSessionSnapshots(
 		row := s.sessionRow(payload, payload.fingerprint, version)
 		rows = append(rows, append(row[:len(row)-1], messages, events, version))
 	}
+	s.usageWritten = s.usageWritten || len(rows) > 0
 	return insertRowsSpec(ctx, s.conn, spec, rows)
 }

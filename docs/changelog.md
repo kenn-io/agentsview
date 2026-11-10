@@ -11,8 +11,20 @@ The latest release is
 
 **New features**
 
+- Follow archive changes live from the local daemon with
+  `GET /api/v1/changes/stream`. A sync client or dashboard receives every
+  session and message change as it is published, with token and cost totals
+  and the machine it originated on, and resumes after a disconnect from its
+  last cursor with no gap and no repeat. While a subscriber is connected, the
+  daemon syncs changed session files up to once a second instead of once per
+  `sync_interval`. See
+  [Conversation Export](/docs/conversation-export/#follow-changes-live).
+
 - With automatic filing on, reopen linked Kata issues when a digest finding
   shows the pattern returned after the issue was closed as done.
+
+- `agentsview diagnostics append` records failures outside agent sessions in
+  the daily Friction Log, grouping repeated messages with their count.
 
 **Improvements**
 

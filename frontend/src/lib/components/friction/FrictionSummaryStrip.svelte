@@ -17,6 +17,7 @@
     pattern: m.friction_section_patterns,
     frustration: m.friction_section_frustration,
     interruption: m.friction_section_interruptions,
+    diagnostic: m.friction_section_diagnostics,
   };
 </script>
 

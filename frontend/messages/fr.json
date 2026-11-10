@@ -1745,7 +1745,7 @@
   "insights_page_template_instruction_opportunities": "Opportunités d'instruction",
   "insights_page_template_friction_review": "Revue des frictions",
   "friction_review_summary_title": "Résumé rédigé par un modèle",
-  "friction_review_summary_notice": "Rédigé par un modèle à partir du résumé et des titres de motifs de ce rapport. Il ne modifie ni les constats, ni les rapports, ni les tickets.",
+  "friction_review_summary_notice": "Rédigé par un modèle à partir du résumé, des titres de motifs et des sources et messages de diagnostic regroupés de ce rapport. Il ne modifie ni les constats, ni les rapports, ni les tickets.",
   "friction_review_summary_empty": "Aucun résumé pour ce rapport pour l'instant.",
   "friction_review_summary_generate": "Générer le résumé",
   "friction_review_summary_regenerate": "Régénérer",
@@ -3128,6 +3128,8 @@
   "friction_section_patterns": "Motifs",
   "friction_section_frustration": "Frustration",
   "friction_section_interruptions": "Interruptions",
+  "friction_section_diagnostics": "Diagnostics",
+  "friction_diagnostic_count": "x{count}",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3149,6 +3151,7 @@
   "friction_kind_pattern": "Motif",
   "friction_kind_frustration": "Frustration",
   "friction_kind_interruption": "Interruption",
+  "friction_kind_diagnostic": "Diagnostic",
   "friction_disabled_title": "Le journal des frictions est désactivé sur ce serveur",
   "friction_disabled_hint": "Ce serveur ne génère pas de résumés. Définissez [friction] enabled = true dans config.toml, puis redémarrez le démon. Une archive en lecture seule ne peut pas générer de résumés.",
   "friction_markdown_title": "Markdown",
