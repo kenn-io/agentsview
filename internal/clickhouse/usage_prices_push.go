@@ -267,6 +267,7 @@ func (s *Sync) adoptUsageModels(
 		return err
 	}
 	*pricer = *next
+	s.usageWritten = true
 	if err := writeMetadata(ctx, s.conn, map[string]string{
 		usagePricedDigestKey: pricer.digest,
 	}); err != nil {
@@ -322,6 +323,7 @@ func (s *Sync) insertUsagePrices(
 	if len(inputs) == 0 {
 		return nil
 	}
+	s.usageWritten = true
 	version := newPushVersion()
 	contexts := map[string]string{}
 	priceRows := make([][]any, 0, len(inputs))
@@ -416,6 +418,7 @@ func (s *Sync) syncUsagePrices(ctx context.Context, full bool) (*usagePricer, er
 	}
 	covered := map[string]string{}
 	if whole {
+		s.usageWritten = true
 		covered[usagePricedDigestKey] = pricer.digest
 	}
 	if parts.cursor != "" && (whole || cursorDue) {
@@ -542,6 +545,7 @@ func (s *Sync) pruneUsagePrices(ctx context.Context, current string) error {
 	if len(stale) == 0 {
 		return nil
 	}
+	s.usageWritten = true
 	for _, table := range []string{"usage_event_prices", "usage_price_contexts"} {
 		for batch := range slices.Chunk(stale, pricingUpsertBatch) {
 			drops := make([]string, len(batch))
