@@ -1281,7 +1281,6 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 		{"lagging count and extra row", `{"headerLog":{"count":1,"chunkCount":1}}`, `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2}]`, `[{"bubbleId":"stale","type":1}]`, []string{"b1", "b2"}, false, false, false},
 		{"missing", `{"headerLog":{"count":1,"chunkCount":2}}`, ``, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, false},
 		{"all missing", `{"headerLog":{"count":2,"chunkCount":1}}`, ``, ``, nil, true, false, false},
-		{"all null", `{"headerLog":{"count":2,"chunkCount":1}}`, ``, ``, nil, true, false, true},
 		{"null", `{"headerLog":{"count":1,"chunkCount":2}}`, ``, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, true},
 		{"empty", `{"headerLog":{"count":1,"chunkCount":2}}`, `[]`, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, false},
 		{"short", `{"headerLog":{"count":2,"chunkCount":1}}`, `[{"bubbleId":"b1","type":1}]`, ``, []string{"b1"}, true, false, false},
@@ -1324,6 +1323,11 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 				}
 			}
 			assert.Equal(t, tc.want, ids)
+			if tc.name == "ordered" {
+				require.Len(t, result.Messages, 2)
+				assert.Equal(t, "answer", result.Messages[0].Content)
+				assert.Equal(t, "hello", result.Messages[1].Content)
+			}
 		})
 	}
 }

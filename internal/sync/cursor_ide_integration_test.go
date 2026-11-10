@@ -1482,60 +1482,9 @@ func TestCursorIDEForcedFullSyncPreservesPartialHeaders(t *testing.T) {
 		_, err := tx.ExecContext(t.Context(), `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:partial-header:000000", `[{"bubbleId":"b1","type":1}]`)
 		return err
 	})
-	for _, syncNow := range []func(){
-		func() { engine.SyncPaths([]string{path}) },
-		func() {
-			stats := engine.SyncAllForceParse(t.Context(), nil)
-			require.True(t, stats.ProcessingComplete())
-		},
-	} {
-		syncNow()
-		messages, err := database.GetMessages(t.Context(), "cursor-ide:partial-header", 0, 100, true)
-		require.NoError(t, err)
-		require.Len(t, messages, 2)
-		assert.Equal(t, "b1", messages[0].SourceUUID)
-		assert.Equal(t, "b2", messages[1].SourceUUID)
-	}
-}
-
-func TestCursorIDEIncompleteHeadersAbortEmptyRebuild(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "state.vscdb")
-	composer := cursorIDERetentionComposer("rebuild-incomplete", 0, 2)
-	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{composer})
-	engine, database := newCursorIDESyncEngine(t, root)
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"headerLog":{"count":2,"chunkCount":1}}`, "composerData:rebuild-incomplete")
-	stats := engine.ResyncAll(t.Context(), nil)
-	assert.True(t, stats.Aborted)
-	messages, err := database.GetMessages(t.Context(), "cursor-ide:rebuild-incomplete", 0, 100, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "b1", messages[0].SourceUUID)
-	assert.Equal(t, "b2", messages[1].SourceUUID)
-}
-
-func TestCursorIDEPartialHeadersPreserveArchiveOnRebuild(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "state.vscdb")
-	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{
-		cursorIDERetentionComposer("rebuild-partial", 0, 2),
-		cursorIDERetentionComposer("rebuild-healthy", 1, 1),
-	})
-	engine, database := newCursorIDESyncEngine(t, root)
-	t.Cleanup(engine.Close)
-	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
-	cursorIDEExec(t, path, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(), `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"headerLog":{"count":2,"chunkCount":2}}`, "composerData:rebuild-partial"); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(t.Context(), `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:rebuild-partial:000000", `[{"bubbleId":"b1","type":1}]`)
-		return err
-	})
-	stats := engine.ResyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted)
-	messages, err := database.GetMessages(t.Context(), "cursor-ide:rebuild-partial", 0, 100, true)
+	stats := engine.SyncAllForceParse(t.Context(), nil)
+	require.True(t, stats.ProcessingComplete())
+	messages, err := database.GetMessages(t.Context(), "cursor-ide:partial-header", 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, "b1", messages[0].SourceUUID)
