@@ -177,7 +177,7 @@ func TestMusePersonalStrictClaimingAndCancellation(t *testing.T) {
 	}
 	writeSourceFile(t, filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(path))), "workspace", "agents", "agent-66666666-7777-4888-8999-000000000000", "sessions", musePersonalTestID+".jsonl"), musePersonalTestHeader)
 	sources, err := p.Discover(t.Context())
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "unsupported Muse Personal transcript version 2")
 	require.Len(t, sources, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -482,4 +482,17 @@ func TestMusePersonalOpaqueIndexEditKeepsProjection(t *testing.T) {
 	raw, err := os.ReadFile(plan.Entries[1].LocalPath)
 	require.NoError(t, err)
 	assert.Equal(t, `{"version":1,"opaque":"after and longer"}`, string(raw))
+}
+
+func TestMusePersonalDuplicateIdentityIsIncomplete(t *testing.T) {
+	p, path := musePersonalTestProvider(t, "")
+	root := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+	duplicate := filepath.Join(root, "agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "sessions", musePersonalTestID+".jsonl")
+	writeSourceFile(t, duplicate, strings.ReplaceAll(musePersonalTestHeader, "66666666-7777-4888-8999-000000000000", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"))
+	sources, err := p.Discover(t.Context())
+	require.ErrorContains(t, err, "duplicate session identity")
+	require.Len(t, sources, 1)
+	discovery, err := DiscoverRawCaptureSources(t.Context(), p)
+	assert.ErrorContains(t, err, "duplicate session identity")
+	assert.False(t, discovery.Complete)
 }

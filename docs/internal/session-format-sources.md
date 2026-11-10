@@ -6200,7 +6200,9 @@ schemas keep their existing ordering behavior.
   name. Titles, parent links and chat/subagent classification remain unknown.
 - **Agentsview:** `internal/parser/muse_personal.go` and
   `internal/parser/muse_personal_provider.go` require UUID layout and matching
-  version-1 header identity. Sessions use `muse-personal:<session_id>`.
+  version-1 header identity. Recognized future transcript versions and duplicate
+  session identities leave discovery incomplete so they cannot authorize raw
+  custody tombstones. Sessions use `muse-personal:<session_id>`.
   Items are sorted by sequence before pairing; ties keep physical order.
   Only byte-identical same-sequence records are deduplicated. A checkpoint is
   anchored after the highest preceding physical item sequence; it does not
@@ -6208,9 +6210,10 @@ schemas keep their existing ordering behavior.
   unique preceding unmatched call ID; sequential reuse works, ambiguity leaves
   outputs unpaired. Source/sequence occurrence provenance distinguishes retained
   rows. Unknown variants retain a bounded sanitized type marker even when their
-  body fields have unfamiliar JSON shapes; their bodies stay raw-only. Null or
-  invalid record timestamps count as malformed. File parts retain inert recorded
-  references. Thinking signatures,
+  body fields have unfamiliar JSON shapes; their bodies stay raw-only. Unknown
+  records accept the RFC3339 and integer epoch-second timestamp shapes already
+  used by known records. Null or invalid record timestamps count as malformed.
+  File parts retain inert recorded references. Thinking signatures,
   output metadata, checkpoint details and context snapshots stay in raw custody.
   An unterminated final line defers publication. Raw capture includes the original
   transcript and regular index, even when the index version cannot enrich the

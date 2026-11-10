@@ -3,6 +3,7 @@ package rawwatch
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,7 +15,7 @@ import (
 )
 
 func TestMusePersonalAuditPreservesTemporarilyUnavailableTranscript(t *testing.T) {
-	for _, state := range []string{"unfinished header", "unreadable"} {
+	for _, state := range []string{"unfinished header", "future version", "unreadable"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			const id = "11111111-2222-4333-8444-555555555555"
@@ -45,6 +46,8 @@ func TestMusePersonalAuditPreservesTemporarilyUnavailableTranscript(t *testing.T
 					require.NoError(t, f.Close())
 					t.Skip("platform permits reading despite denied file permissions")
 				}
+			} else if state == "future version" {
+				require.NoError(t, os.WriteFile(path, []byte(strings.Replace(original, `"version":1`, `"version":2`, 1)), 0o600))
 			} else {
 				require.NoError(t, os.WriteFile(path, []byte(`{"type":"session_header"`), 0o600))
 			}

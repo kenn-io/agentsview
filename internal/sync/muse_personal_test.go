@@ -361,3 +361,28 @@ func TestMusePersonalIndexRefreshesOnlyChangedSession(t *testing.T) {
 		})
 	}
 }
+
+func TestMusePersonalPollingWithUnusableIndex(t *testing.T) {
+	body := musePersonalSyncItem(0, `{"type":"message","role":"user","text":"first"}`)
+	root, path := musePersonalSyncFile(t, body)
+	require.NoError(t, os.Mkdir(filepath.Join(filepath.Dir(path), "sessions.json"), 0o700))
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	id := "muse-personal:" + musePersonalSyncID
+	before := engine.SourceMtime(t.Context(), id)
+	require.NotZero(t, before, "unusable optional metadata must not hide the transcript")
+	body += musePersonalSyncItem(1, `{"type":"message","role":"assistant","text":"reply"}`)
+	require.NoError(t, os.WriteFile(path, []byte(musePersonalSyncHeader+body), 0o600))
+	later := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(path, later, later))
+	after := engine.SourceMtime(t.Context(), id)
+	assert.NotZero(t, after)
+	assert.NotEqual(t, before, after, "polling must notice the appended reply")
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "reply", messages[1].Content)
+}

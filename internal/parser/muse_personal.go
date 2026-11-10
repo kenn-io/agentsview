@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,22 +37,10 @@ type musePersonalHeader struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+var musePersonalUUIDPattern = regexp.MustCompile("^" + codexUUIDPattern + "$")
+
 func musePersonalUUID(id string) bool {
-	if len(id) != 36 {
-		return false
-	}
-	for i, c := range id {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if c != '-' {
-				return false
-			}
-			continue
-		}
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return false
-		}
-	}
-	return true
+	return musePersonalUUIDPattern.MatchString(id)
 }
 
 func musePersonalReadHeader(r io.Reader, path string) (musePersonalHeader, error) {
@@ -69,8 +58,11 @@ func musePersonalReadHeader(r io.Reader, path string) (musePersonalHeader, error
 	if err := json.Unmarshal(line, &h); err != nil {
 		return h, fmt.Errorf("%w: %w", errMusePersonalInvalidHeader, err)
 	}
-	if h.Type != "session_header" || h.Version != 1 || !musePersonalUUID(h.SessionID) || !musePersonalUUID(h.AgentID) || h.CreatedAt.IsZero() || strings.TrimSuffix(filepath.Base(path), ".jsonl") != h.SessionID {
+	if h.Type != "session_header" || h.Version < 1 || !musePersonalUUID(h.SessionID) || !musePersonalUUID(h.AgentID) || h.CreatedAt.IsZero() || strings.TrimSuffix(filepath.Base(path), ".jsonl") != h.SessionID {
 		return h, errMusePersonalInvalidHeader
+	}
+	if h.Version != 1 {
+		return h, fmt.Errorf("unsupported Muse Personal transcript version %d", h.Version)
 	}
 	return h, nil
 }
@@ -257,8 +249,12 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 			identity = "checkpoint:" + strconv.FormatInt(rec.CheckpointSeq, 10)
 		} else {
 			if json.Unmarshal(rec.CreatedAt, &ts) != nil {
-				sess.MalformedLines++
-				continue
+				var epoch int64
+				if rec.Type == "item" || json.Unmarshal(rec.CreatedAt, &epoch) != nil {
+					sess.MalformedLines++
+					continue
+				}
+				ts = time.Unix(epoch, 0).UTC()
 			}
 			if rec.Type == "item" {
 				if rec.Seq == nil || *rec.Seq < 0 {
