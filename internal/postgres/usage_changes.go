@@ -11,7 +11,7 @@ import (
 )
 
 // Statement triggers mark each changed session pending with revision 0 in one
-// set-based write. The empty session ID marks pricing and identity changes.
+// set-based write. The empty session ID marks pricing, account, and identity changes.
 const markUsageChangeFunctionBodyPG = `
 BEGIN
     PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
