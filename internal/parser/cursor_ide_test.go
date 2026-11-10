@@ -1296,8 +1296,8 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 			for i, chunk := range []string{tc.first, tc.second} {
 				if chunk != "" {
 					index := i
-					if tc.name == "large chunk count" {
-						index += 999999
+					if tc.name == "large chunk count" && i == 1 {
+						index = 999999
 					} else if tc.name == "missing middle" && i == 1 {
 						index = 2
 					}

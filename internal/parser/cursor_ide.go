@@ -515,13 +515,12 @@ func cursorIDECwd(doc cursorIDEComposerDoc) string {
 // loadCursorIDEHeaderChunks reads the declared chunk keys in numeric order.
 func loadCursorIDEHeaderChunks(ctx context.Context, q cursorIDEQuerier, composerID string, count, chunkCount int) ([]cursorIDEComposerHeader, bool, error) {
 	prefix := cursorIDEHeaderKeyPrefix + composerID + ":"
-	end := cursorIDEHeaderKeyPrefix + composerID + ";"
-	// Six-digit indexes sort numerically. Larger indexes need the whole
-	// composer's range and a numeric bound because their widths differ.
-	if chunkCount <= 999999 {
-		end = fmt.Sprintf("%s%06d", prefix, chunkCount)
+	end := fmt.Sprintf("%s%06d", prefix, chunkCount)
+	if chunkCount > 999999 {
+		// Include the highest six-digit index; longer keys are filtered below.
+		end = prefix + "999999;"
 	}
-	rows, err := q.QueryContext(ctx, `SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY length(key), key`, prefix, end)
+	rows, err := q.QueryContext(ctx, `SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key`, prefix, end)
 	if err != nil {
 		return nil, false, fmt.Errorf("loading cursor IDE headers for %s: %w", composerID, err)
 	}
@@ -537,7 +536,7 @@ func loadCursorIDEHeaderChunks(ctx context.Context, q cursorIDEQuerier, composer
 		}
 		suffix := strings.TrimPrefix(key, prefix)
 		index, err := strconv.Atoi(suffix)
-		if err != nil || index < 0 || index >= chunkCount || fmt.Sprintf("%06d", index) != suffix {
+		if err != nil || len(suffix) != 6 || index < 0 || index >= chunkCount || fmt.Sprintf("%06d", index) != suffix {
 			continue
 		}
 		var part []cursorIDEComposerHeader
