@@ -153,7 +153,7 @@ func runSkillsInstall(
 	if local {
 		cfg, err := config.LoadReadOnlyFor(config.ScopeVector)
 		if err == nil && !cfg.Vector.Enabled && !cfg.ArchiveContent.UsageOnly() {
-			fmt.Fprintln(out, "Search by meaning: Settings → Embeddings → Turn on or run agentsview index embeddings build")
+			fmt.Fprintln(out, "Search by meaning:", semanticSearchSetupHint)
 		}
 	}
 	return nil

@@ -633,15 +633,19 @@ func TestSkillsInstall_ProjectFlagOutsideRepoFallsBackToCWD(t *testing.T) {
 }
 
 func TestSkillsInstall_SemanticSearchHint(t *testing.T) {
-	const hint = "Settings → Embeddings → Turn on or run agentsview index embeddings build"
+	const hint = "run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on"
 	tests := []struct {
-		name       string
-		config     string
-		args       []string
-		wantHint   bool
-		seedRemote bool
+		name             string
+		config           string
+		args             []string
+		wantHint         bool
+		seedRemote       bool
+		defaultHarnesses bool
+		refused          bool
 	}{
 		{name: "off", wantHint: true},
+		{name: "both harnesses", defaultHarnesses: true, wantHint: true},
+		{name: "refused", refused: true},
 		{name: "on", config: "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"},
 		{name: "invalid", config: "[vector\n"},
 		{name: "usage only", config: "archive_content = 'usage'\n"},
@@ -658,13 +662,24 @@ func TestSkillsInstall_SemanticSearchHint(t *testing.T) {
 			if tt.config != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(data, "config.toml"), []byte(tt.config), 0o600))
 			}
+			if tt.refused {
+				writeSkillFile(t, claudeSkillPath(home), foreignClaudeContent)
+			}
 			if tt.seedRemote {
 				out, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude", "--server", "https://example.com")
 				require.NoError(t, err, "output: %s", out)
 			}
-			args := append([]string{"skills", "install", "--harness", "claude"}, tt.args...)
+			args := []string{"skills", "install"}
+			if !tt.defaultHarnesses {
+				args = append(args, "--harness", "claude")
+			}
+			args = append(args, tt.args...)
 			out, err := executeCommand(newRootCommand(), args...)
-			require.NoError(t, err, "output: %s", out)
+			if tt.refused {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err, "output: %s", out)
+			}
 			if tt.wantHint {
 				assert.Equal(t, 1, strings.Count(out, hint))
 				assert.NoFileExists(t, filepath.Join(data, "config.toml"))

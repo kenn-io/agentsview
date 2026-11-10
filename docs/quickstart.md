@@ -224,11 +224,6 @@ CLI users can start the web UI explicitly:
 agentsview serve
 ```
 
-To search by meaning, choose **Settings → Embeddings → Turn on** or run
-`agentsview index embeddings build` and approve the download. Embeddings run
-locally; agents use keyword search until indexing is ready. See
-[Semantic Search](/docs/semantic-search/) for details.
-
 Bare `agentsview serve` runs in the foreground until you press `Ctrl+C`. If a
 compatible server is already running, it reports that server's URL and exits
 with an error (status 1).
@@ -240,6 +235,11 @@ This will:
    [supported agents](/docs/configuration/#session-discovery)
 1. Start watching session directories for changes
 1. Launch the web UI at `http://127.0.0.1:8080`
+
+To search by meaning, choose **Settings → Embeddings → Turn on** or run
+`agentsview index embeddings build` and approve the download. Embeddings run
+locally by default; agents use keyword search until indexing is ready. See
+[Semantic Search](/docs/semantic-search/#enabling-vector) to configure other providers.
 
 Open `http://127.0.0.1:8080` in your browser. Pass `--no-browser` to disable
 automatic browser launch. Alternatively, start the same server in the background
