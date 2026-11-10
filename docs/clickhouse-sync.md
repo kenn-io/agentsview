@@ -704,8 +704,10 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   or starts the `prepare_usage` view's refresh, only when the table is empty,
   prices changed, or the rows reads compute themselves reach one-fiftieth of the
   stored rows. Other pushes write nothing to the table. Where the view exists,
-  its 15-minute schedule still refreshes the table. Rows of deleted sessions
-  stay in the table until the next rebuild; reads skip them.
+  it also refreshes the table once a day, at midnight in the ClickHouse
+  server's time zone, for a push that ended with errors or whose refresh
+  request failed. Rows of deleted sessions stay in the table until the next
+  rebuild; reads skip them.
 - **Lock of a stopped push.** A lock expires an hour after its push last renewed
   it, so a push stopped mid-rebuild makes later pushes skip their rebuilds for
   up to an hour. If the skip message names a held lock and you know no push is

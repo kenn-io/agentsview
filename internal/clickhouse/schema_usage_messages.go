@@ -222,9 +222,15 @@ const chPreparedUsageKeyColumn = "ts_key"
 
 const chPreparedUsageSortingKey = chPreparedUsageKeyColumn + ", session_id"
 
-// chPreparedUsageRefresh is the scheduled rebuild. A push also starts a
-// refresh once enough has changed; see preparedUsageRebuildDue.
-const chPreparedUsageRefresh = "EVERY 15 MINUTE"
+// chPreparedUsageRefresh is the view's schedule. A push starts a refresh
+// whenever one is due; see preparedUsageRebuildDue. Every refresh rewrites
+// the whole table, so the schedule only backs up pushes that leave a due
+// refresh unstarted: a push that ends with session errors skips its check,
+// and a refresh request can fail. The next push that writes checks again, so
+// the schedule matters only when no push writes for a day. A 15-minute
+// schedule rewrote about 1.5 million rows 96 times a day on a production
+// mirror where nothing required it.
+const chPreparedUsageRefresh = "EVERY 1 DAY"
 
 // chPreparedUsageBehindShare decides when a push rebuilds prepared_usage or
 // starts the view's refresh. Reads stay exact while the table is behind:
@@ -902,7 +908,7 @@ func refreshPreparedUsage(ctx context.Context, conn *sql.DB, wrote bool) error {
 	}
 	log.Printf("clickhouse push: starting prepared usage refresh: %s", reason)
 	if _, err := conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage"); err != nil {
-		return fmt.Errorf("starting prepared usage refresh (the next scheduled refresh retries): %w", err)
+		return fmt.Errorf("starting prepared usage refresh (the next push that writes retries): %w", err)
 	}
 	return nil
 }
@@ -1260,7 +1266,7 @@ func chPreparedUsageBehindSQL() string {
 // that changed those inputs checks after its own writes, so this skips about
 // a second of reads on pushes with nothing to send. When such a push errors
 // before its check, or a rebuild leaves the next push to rebuild, reads stay
-// exact but slower until a push writes again or the view's scheduled refresh
+// exact but slower until a push writes again or the view's daily refresh
 // runs.
 func preparedUsageRebuildDue(ctx context.Context, conn *sql.DB, wrote bool) (due bool, reason string, err error) {
 	var stored, live usageStamp
