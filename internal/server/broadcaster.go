@@ -26,8 +26,12 @@ type Event struct {
 // carrying the most recent scope. This keeps first-write latency
 // low while capping refetch work during sustained sync bursts.
 type Broadcaster struct {
-	mu          gosync.Mutex
-	subs        map[chan Event]struct{}
+	mu   gosync.Mutex
+	subs map[chan Event]struct{}
+	// wakes receive every Emit at once, outside the rate limit. A change
+	// stream reads everything after its cursor on each wake, so it needs
+	// no scope and no coalescing to stay correct.
+	wakes       map[chan struct{}]struct{}
 	minInterval time.Duration
 	lastEmit    time.Time
 	pending     *Event
@@ -52,6 +56,7 @@ type Broadcaster struct {
 func NewBroadcaster(minInterval time.Duration) *Broadcaster {
 	return &Broadcaster{
 		subs:        make(map[chan Event]struct{}),
+		wakes:       make(map[chan struct{}]struct{}),
 		minInterval: minInterval,
 	}
 }
@@ -67,6 +72,13 @@ func NewBroadcaster(minInterval time.Duration) *Broadcaster {
 func (b *Broadcaster) Emit(scope string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	for ch := range b.wakes {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 
 	now := time.Now()
 	if b.minInterval == 0 || b.lastEmit.IsZero() ||
@@ -156,4 +168,28 @@ func (b *Broadcaster) Subscribe() (<-chan Event, func()) {
 		})
 	}
 	return ch, unsub
+}
+
+// SubscribeWakes returns a channel that receives a signal after every Emit,
+// without the coalescing that Subscribe applies. One pending signal is kept
+// while the reader is busy, so a burst of emits costs at most one extra read.
+// Calling the returned function closes the channel and removes the
+// subscription; it is safe to call more than once.
+func (b *Broadcaster) SubscribeWakes() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	b.mu.Lock()
+	b.wakes[ch] = struct{}{}
+	b.mu.Unlock()
+
+	var once gosync.Once
+	return ch, func() {
+		once.Do(func() {
+			b.mu.Lock()
+			if _, ok := b.wakes[ch]; ok {
+				delete(b.wakes, ch)
+				close(ch)
+			}
+			b.mu.Unlock()
+		})
+	}
 }

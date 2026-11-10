@@ -80,7 +80,7 @@ func (s *Server) humaChangeStream(
 			return
 		}
 		streamCtx := hctx.Context()
-		sub, unsub := s.broadcaster.Subscribe()
+		sub, unsub := s.broadcaster.SubscribeWakes()
 		defer unsub()
 		head, err := local.ReadChangeStreamHead(streamCtx)
 		if err != nil {
@@ -95,12 +95,15 @@ func (s *Server) humaChangeStream(
 		}) {
 			return
 		}
+		heartbeat := time.NewTicker(sessionwatch.PollInterval * sessionwatch.HeartbeatTicks)
+		defer heartbeat.Stop()
+		if !s.initializeChangeStreamMessages(streamCtx, local, stream, heartbeat.C) {
+			return
+		}
 		follower := changeStreamFollower{db: local, stream: stream, sent: in.After, cursor: in.After}
 		if !follower.catchUp(streamCtx) {
 			return
 		}
-		heartbeat := time.NewTicker(sessionwatch.PollInterval * sessionwatch.HeartbeatTicks)
-		defer heartbeat.Stop()
 		for {
 			select {
 			case <-streamCtx.Done():
@@ -109,7 +112,6 @@ func (s *Server) humaChangeStream(
 				if !ok {
 					return
 				}
-				drainChangeSignals(sub)
 				if !follower.catchUp(streamCtx) {
 					return
 				}
@@ -127,17 +129,51 @@ func (s *Server) humaChangeStream(
 	}}, nil
 }
 
-// drainChangeSignals discards queued wake-ups. The next read covers every
-// change they announced.
-func drainChangeSignals(sub <-chan Event) {
+// initializeChangeStreamMessages builds the conversation index when the
+// archive has never had one, so a subscriber receives message changes without
+// a separate initialization step. The daemon owns the writer, so it runs the
+// same one-time build as the conversation export. Heartbeats continue while it
+// runs. It returns false when the stream must end.
+func (s *Server) initializeChangeStreamMessages(
+	ctx context.Context, local *db.DB, stream *SSEStream, heartbeat <-chan time.Time,
+) bool {
+	if local.ReadOnly() {
+		// A read-only daemon cannot build the index; it streams sessions only.
+		return true
+	}
+	active, err := local.ConversationExportActive(ctx)
+	if err != nil {
+		sendChangeStreamError(stream, err)
+		return false
+	}
+	if active {
+		return true
+	}
+	// The build serves every subscriber and later exports, so a subscriber
+	// that disconnects must not cancel it; the server's lifetime bounds it.
+	buildCtx := context.Background()
+	if s.baseCtx != nil {
+		buildCtx = s.baseCtx
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := local.EnsureConversationExportInitialized(buildCtx)
+		done <- err
+	}()
 	for {
 		select {
-		case _, ok := <-sub:
-			if !ok {
-				return
+		case <-ctx.Done():
+			return false
+		case err := <-done:
+			if err != nil {
+				sendChangeStreamError(stream, err)
+				return false
 			}
-		default:
-			return
+			return true
+		case <-heartbeat:
+			if !stream.Send("heartbeat", time.Now().Format(time.RFC3339)) {
+				return false
+			}
 		}
 	}
 }

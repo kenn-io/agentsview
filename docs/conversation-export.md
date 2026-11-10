@@ -71,11 +71,22 @@ GET /api/v1/changes/stream?after=CURSOR
 Omit `after` on the first connection. Afterwards, pass the `to` value of the
 last `changes` event you finished processing. Treat cursors as opaque. The
 stream uses the same authentication as `/api/v1/events`, including the `?token=`
-fallback for browser `EventSource` clients. It reads the archive and never
-writes it, so message records appear only after the conversation change index
-exists. The first `export conversations changes` call builds it, as does
-`POST /api/v1/export/conversations/initialize`. Until then the stream carries
-session records only. A server without a local SQLite archive answers HTTP 501.
+fallback for browser `EventSource` clients. A server without a local SQLite
+archive answers HTTP 501.
+
+The stream reads the archive and never writes your sessions or messages. On an
+archive that has never had a conversation export, the daemon first builds the
+conversation change index, the same one-time step that
+`export conversations changes` runs. The stream sends `ready`, then heartbeats
+while the index builds, then the replay. The build runs in one archive write
+transaction, so sync waits for it; it finishes even if the subscriber
+disconnects. A read-only daemon cannot build the index and streams session
+records only.
+
+A `changes` event follows each sync pass that wrote archive data, without the
+`events_coalesce_interval` delay that `/api/v1/events` applies.
+Watcher-triggered syncs start at most once per `sync_interval` (default `"5s"`),
+so that setting bounds how soon a change reaches the stream.
 
 The stream sends these events. Each `data` line is one JSON object:
 

@@ -111,6 +111,14 @@ func conversationExportActiveTx(tx transactionQueries) (bool, error) {
 	return active, err
 }
 
+// ConversationExportActive reports whether the archive maintains its
+// conversation index, without taking the writer.
+func (db *DB) ConversationExportActive(ctx context.Context) (bool, error) {
+	var active bool
+	err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&active)
+	return active, err
+}
+
 // EnsureConversationExportInitialized builds the message projection from the
 // stored archive the first time an export needs it, and reports whether this
 // call did so. Later writes maintain the projection in their own transactions.

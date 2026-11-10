@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 type changeStreamUsageWire struct {
@@ -545,5 +546,56 @@ func TestChangeStreamReportsTrashedSessionsAsDeleted(t *testing.T) {
 		assert.Empty(t, message.Model)
 		assert.Nil(t, message.Project)
 		assert.Nil(t, message.Usage)
+	}
+}
+
+func TestChangeStreamInitializesAColdArchive(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	seedChangeStreamSession(t, te, "cold")
+	active, err := te.db.ConversationExportActive(t.Context())
+	require.NoError(t, err)
+	require.False(t, active, "the archive starts without a conversation index")
+
+	stream := openChangeStream(t, te, "")
+	replay := stream.changes(t, 1)[0]
+	assert.True(t, replay.Reset)
+	require.Len(t, replay.Messages, 2, "the stream builds the index and replays messages")
+	assert.Equal(t, []string{"user", "assistant"}, []string{replay.Messages[0].Role, replay.Messages[1].Role})
+	assert.Equal(t, int64(6975), replay.Messages[1].Usage.CostMicrodollars)
+
+	seedChangeStreamSession(t, te, "warm")
+	te.broadcaster.Emit("messages")
+	live := stream.changes(t, 2)[1]
+	assert.Equal(t, replay.To, live.From)
+	require.Len(t, live.Messages, 2, "later writes keep the index current")
+	assert.Equal(t, "warm", live.Messages[0].SessionID)
+}
+
+func TestChangeStreamWakesWithoutEventCoalescing(t *testing.T) {
+	// The data_changed events coalesce emits within an hour; the change
+	// stream must not wait for that window.
+	coalesced := server.NewBroadcaster(time.Hour)
+	te := setupWithServerOpts(t, []server.Option{server.WithBroadcaster(coalesced)})
+	seedSessionUsagePricing(t, te.db)
+	seedChangeStreamSession(t, te, "first")
+	stream := openChangeStream(t, te, "")
+	replay := stream.changes(t, 1)[0]
+	events, unsubscribe := coalesced.Subscribe()
+	defer unsubscribe()
+	coalesced.Emit("sessions")
+	<-events // The leading edge goes out at once; later emits wait an hour.
+
+	seedChangeStreamSession(t, te, "second")
+	coalesced.Emit("sessions")
+
+	update := stream.changes(t, 2)[1]
+	assert.Equal(t, replay.To, update.From)
+	require.Len(t, update.Messages, 2)
+	assert.Equal(t, "second", update.Messages[0].SessionID)
+	select {
+	case <-events:
+		assert.Fail(t, "the coalesced data_changed signal must still wait for its window")
+	default:
 	}
 }
