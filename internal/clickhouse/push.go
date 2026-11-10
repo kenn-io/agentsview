@@ -372,8 +372,8 @@ func (s *Sync) pushWithOptions(
 		// Reads prepare the rows of the sessions pushed since the last
 		// refresh themselves, so refresh prepared usage now once that
 		// work grows past its limit instead of waiting for the schedule.
-		// Where the view refreshes it, the scheduled refresh still covers
-		// a failed trigger; elsewhere the next push retries.
+		// A failed trigger is retried by the next push that writes, and
+		// where the view refreshes it, by the view's daily refresh.
 		if err := refreshPreparedUsage(ctx, conn, s.usageWritten); err != nil {
 			log.Printf("clickhouse push: prepared usage is behind; usage reads stay correct but slower: %v", err)
 		}
