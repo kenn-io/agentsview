@@ -77,11 +77,11 @@
         <div class="shortcut-group-label" id="{uid}-group-{g}">{group.label}</div>
         {#each group.items as shortcut}
           <div class="shortcut-row">
-            <!-- kit-ui-check-ignore: reference list enumerates compound alternatives ("j / ↓") and must stay visible on touch, where KbdBadge hides itself -->
             <span class="shortcut-keys">
               {#each shortcut.keys as combo, alt}
                 {#if alt > 0}<span class="shortcut-or" aria-hidden="true">/</span>{/if}
                 <span class="shortcut-combo">
+                  <!-- kit-ui-check-ignore: reference list enumerates compound alternatives ("j / ↓") and must stay visible on touch, where KbdBadge hides itself -->
                   {#each combo as key}<kbd class="shortcut-key">{key}</kbd>{/each}
                 </span>
               {/each}
@@ -125,14 +125,14 @@
   .shortcut-keys {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-3);
     justify-self: start;
     white-space: nowrap;
   }
 
   .shortcut-combo {
     display: inline-flex;
-    gap: 3px;
+    gap: var(--space-1);
   }
 
   .shortcut-or {

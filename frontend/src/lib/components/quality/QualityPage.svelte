@@ -1254,7 +1254,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-3);
     border-radius: 999px;
     padding: 2px 8px 2px 7px;
     font-size: 11px;

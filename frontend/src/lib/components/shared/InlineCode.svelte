@@ -11,6 +11,7 @@
 <code class="inline-code">{@render children()}</code>
 
 <style>
+  /* kit-ui-check-ignore: an inline <code> chip inside running text; kit-ui Card is a block <div> */
   .inline-code {
     font-family: var(--font-mono, monospace);
     font-size: 0.95em;

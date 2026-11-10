@@ -432,7 +432,7 @@
   .settings-page :global(.kit-settings__panel .kit-segmented__btn:disabled),
   .settings-page :global(.kit-settings__panel .kit-toggle--disabled),
   .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
-    opacity: 1;
+    opacity: 1; /* kit-ui-check-ignore: deliberate local rule; disabled controls here use the disabled ink and edge instead of fading with opacity */
     color: var(--disabled-ink);
     cursor: not-allowed;
   }

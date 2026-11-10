@@ -743,7 +743,7 @@
      use app.css's disabled ink and edge, as in Settings, instead of fading
      the whole button with opacity. */
   .rules-view :global(.kit-button:disabled:not(.kit-button--solid.kit-button--info)) {
-    opacity: 1;
+    opacity: 1; /* kit-ui-check-ignore: deliberate local rule; disabled controls here use the disabled ink and edge instead of fading with opacity */
     background: transparent;
     border-color: var(--disabled-edge);
     box-shadow: none;

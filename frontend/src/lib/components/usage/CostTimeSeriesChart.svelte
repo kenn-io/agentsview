@@ -913,7 +913,7 @@
   .legend-item {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-3);
     font-size: 12px;
     color: var(--text-secondary);
   }

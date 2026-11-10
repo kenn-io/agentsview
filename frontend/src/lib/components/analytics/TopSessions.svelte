@@ -216,7 +216,7 @@
   .status-count-pill {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-3);
     padding: 2px 8px 2px 6px;
     font-size: 11px;
     font-weight: 500;

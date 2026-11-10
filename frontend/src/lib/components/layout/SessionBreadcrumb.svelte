@@ -1696,7 +1696,7 @@
   .breadcrumb-meta {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     margin-left: auto;
     min-width: 0;
     flex-shrink: 1;
@@ -2366,6 +2366,7 @@
      first card's left edge and the stats end at its right edge. The bottom
      rule still spans the pane. A pane narrower than the column keeps the
      usual 14px inset. */
+  /* kit-ui-check-ignore: content breakpoint where the title, transcript controls, and actions stop fitting one row; the script's wideQuery uses the same width */
   @media (min-width: 1100px) {
     .session-breadcrumb {
       padding-inline: max(14px, calc((100% - var(--reading-column)) / 2));
@@ -2375,6 +2376,7 @@
   /* Below 1100px the title, transcript controls, and actions do not fit on
      one row. The title and actions keep the first row, and the transcript
      controls start the second, ahead of the metadata. */
+  /* kit-ui-check-ignore: content breakpoint where the title, transcript controls, and actions stop fitting one row; the script's wideQuery uses the same width */
   @media (min-width: 641px) and (max-width: 1099px) {
     .session-breadcrumb > .open-group {
       margin-left: auto;

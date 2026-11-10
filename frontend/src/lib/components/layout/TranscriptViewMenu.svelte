@@ -354,7 +354,7 @@
     display: flex;
     flex: 1;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     min-width: 0;
   }
 

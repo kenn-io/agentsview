@@ -306,7 +306,7 @@
   }
 
   /* The page gap already separates the header from the content. */
-  .data-page :global(.library-page-header) {
+  .data-page :global(.library-header) {
     margin-bottom: 4px;
   }
 

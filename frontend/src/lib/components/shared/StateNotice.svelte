@@ -40,6 +40,7 @@
 </div>
 
 <style>
+  /* kit-ui-check-ignore: the notice carries role="status|note|alert", which kit-ui Card cannot, and light theme replaces this chrome below */
   .state-notice {
     display: flex;
     align-items: flex-start;

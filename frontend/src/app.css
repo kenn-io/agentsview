@@ -206,8 +206,7 @@
   --user-bg: color-mix(in srgb, var(--accent-blue) 7%, var(--bg-primary));
   --assistant-bg: color-mix(in srgb, var(--text-primary) 2%, var(--bg-primary));
   /* Dark tool groups sit a step above the page, so thinking needs a larger
-     violet share than light to read as the same faint band (main used
-     #1a1530). */
+     violet share than light to read as the same faint band. */
   --thinking-bg: color-mix(in srgb, var(--accent-purple) 12%, var(--bg-primary));
   --tool-bg: color-mix(in srgb, var(--text-primary) 3.5%, var(--bg-primary));
   --code-bg: #0d0d14; /* kit-ui-check-ignore: app token definition */

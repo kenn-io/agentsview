@@ -383,7 +383,7 @@
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
   .tool-duration.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }
-  .tool-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 2px 14px; border-top: 1px solid color-mix(in srgb, var(--border-muted) 55%, transparent); }
+  .tool-meta { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); padding: 2px 14px; border-top: 1px solid color-mix(in srgb, var(--border-muted) 55%, transparent); }
   .meta-tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 1px 0; }
   .meta-label { color: var(--text-secondary); font-weight: 500; }
   .show-more-btn {
@@ -482,6 +482,12 @@
   :global(:root.dark) .diff-del {
     background: color-mix(in srgb, var(--accent-red, #f85149) 8%, transparent);
     box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-red, #f85149) 75%, transparent);
+  }
+  /* The add/remove edge is a straight bar. */
+  .diff-add, .diff-del,
+  :global(:root.dark) .diff-add, :global(:root.dark) .diff-del {
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
   }
   .diff-ctx { color: var(--text-muted); }
 </style>

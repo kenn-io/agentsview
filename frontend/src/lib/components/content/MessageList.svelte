@@ -1202,6 +1202,8 @@
   :global(:root:not([data-message-role-patterns])) .layout-stream :global(.message) {
     border-left-width: 2px;
     border-left-style: solid;
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
   }
 
   /* Light takes the Default user card tint, so the prompt reads the same

@@ -590,7 +590,7 @@
   .palette-item {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
+    gap: var(--space-4);
     width: 100%;
     padding: 7px 14px;
     text-align: left;
@@ -601,7 +601,7 @@
 
 :global(:root.dark) .item-snippet :global(mark) {
     background: color-mix(in srgb, var(--accent-amber) 35%, transparent);
-    color: #fff;
+    color: var(--text-primary);
   }
 
   :global(:root.dark) .palette-item.selected {
@@ -615,6 +615,9 @@
   .palette-item.selected {
     background: color-mix(in srgb, var(--accent-blue) var(--selected-result-tint, 9%), var(--bg-surface));
     box-shadow: inset 3px 0 0 var(--accent-blue);
+    /* Square the stripe's edge so the bar stays straight. */
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
   }
 
   /* The agent is named in its color, as in the sidebar, instead of an
