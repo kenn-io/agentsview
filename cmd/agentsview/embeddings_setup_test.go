@@ -616,7 +616,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 						fmt.Fprintf(w, `{"setup":{"busy":true,"downloaded_bytes":%d,"total_bytes":%d}}`, tc.missing, tc.missing)
 						return
 					}
-					io.WriteString(w, `{"setup":{},"last_result":{}}`)
+					io.WriteString(w, `{"setup":{"enabled":true,"error":"inspection failed"},"last_result":{"Fill":{"Documents":3,"Chunks":4}}}`)
 				},
 				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
 					posts++
@@ -651,6 +651,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			assert.Contains(t, out.String(), "Embedded 3 documents (4 chunks)")
 			assert.Equal(t, 1, posts)
 			assert.Equal(t, tc.missing, approved)
 			if tc.enabled {
@@ -681,21 +682,11 @@ func TestCLIEmbeddingsBuildStartsBeforeStatus(t *testing.T) {
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 			assert.EqualValues(t, 1, builds.Load(), "build must start before status is requested")
 			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `{"setup":{"error":"inspection failed"},"last_result":{}}`)
+			io.WriteString(w, `{"setup":{"enabled":true,"error":"inspection failed"},"last_result":{}}`)
 		},
 	})
 	var out strings.Builder
 	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader(""), EmbeddingsBuildOptions{}))
-}
-
-func TestCLIEmbeddingsSetupCompletedWithInspectionError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"setup":{"error":"inspection failed"},"last_result":{}}`)
-	}))
-	t.Cleanup(server.Close)
-	var out strings.Builder
-	require.NoError(t, pollDaemonBuildStatus(t.Context(), &out, embeddingsDaemonClient{baseURL: server.URL}, true))
 }
 
 func TestCLIEmbeddingsSetupRequiresWritableDaemon(t *testing.T) {
