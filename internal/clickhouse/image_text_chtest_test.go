@@ -259,9 +259,19 @@ func TestClickHouseImageTextPendingSessionVersion(t *testing.T) {
 	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
 	require.NoError(t, local.SaveImageText(ctx, db.RetainedToolResultImages(image)[0].SHA256, ocr.Identity{Fingerprint: "processor", Provider: "test", Model: "model", Revision: "r1"}, "invoice", false))
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error {
-		syncer.hooks = nil
-		return errors.New("interrupted before session rows")
+	syncer.hooks = &pushHooks{beforeSessionRows: func(batch []db.Session) error {
+		for _, session := range batch {
+			if session.ID == imageSessionID {
+				var images, sessions uint64
+				require.NoError(t, syncer.conn.QueryRowContext(ctx, `SELECT count() FROM image_text WHERE session_id=?`, imageSessionID).Scan(&images))
+				require.NoError(t, syncer.conn.QueryRowContext(ctx, `SELECT count() FROM sessions FINAL WHERE id=?`, imageSessionID).Scan(&sessions))
+				require.EqualValues(t, 1, images)
+				require.Zero(t, sessions)
+				syncer.hooks = nil
+				return errors.New("interrupted before session rows")
+			}
+		}
+		return nil
 	}}
 	push := func() {
 		t.Helper()

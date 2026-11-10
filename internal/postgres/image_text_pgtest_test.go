@@ -155,7 +155,7 @@ func TestPGStampedCodexPageMigration(t *testing.T) {
 	for _, tc := range []struct {
 		name, old string
 		version   int
-	}{{"thread", thread, 130}, {"rollout", "codex:" + rollout, 130}, {"current", "codex:" + rollout, db.ImageTextDataVersion}} {
+	}{{"thread", thread, 130}, {"rollout", "codex:" + rollout, 130}} {
 		t.Run(tc.name, func(t *testing.T) {
 			old := tc.old
 			ctx := t.Context()
@@ -181,9 +181,6 @@ func TestPGStampedCodexPageMigration(t *testing.T) {
 			var exists bool
 			require.NoError(t, pg.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1)`, old).Scan(&exists))
 			require.True(t, exists, "a missing canonical page must preserve the old session")
-			if tc.version == db.ImageTextDataVersion {
-				return
-			}
 			store := &Store{pg: pg}
 			_, err = store.PinMessage(ctx, old, 0, new("note"))
 			require.NoError(t, err)

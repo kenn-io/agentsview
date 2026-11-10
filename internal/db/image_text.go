@@ -59,16 +59,7 @@ func (db *DB) PendingImageText(ctx context.Context, processor string, now time.T
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var hash string
-		if err := rows.Scan(&hash); err != nil {
-			return nil, err
-		}
-		out = append(out, hash)
-	}
-	return out, rows.Err()
+	return scanStrings(rows)
 }
 
 // ImageTextSources pages retained copies so a widely shared image stays bounded.

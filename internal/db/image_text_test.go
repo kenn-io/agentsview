@@ -419,6 +419,10 @@ func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 		require.Len(t, page.Results, 1, query)
 		require.Equal(t, "image", page.Results[0].SessionID)
 	}
+	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND rendered:invoice`})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "image", page.Results[0].SessionID)
 	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND content:invoice`})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)

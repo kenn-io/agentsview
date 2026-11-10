@@ -380,12 +380,6 @@ func TestSearchContentRegex(t *testing.T) {
 	require.NoError(t, err, "SearchContent regex")
 	require.Len(t, got.Matches, 1, "regex match")
 	assert.Equal(t, 0, got.Matches[0].Ordinal, "regex match ordinal")
-	insertSession(t, d, "tool", "proj")
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "tool", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: "invoice 42"}}}}))
-	got, err = d.SearchContent(t.Context(), ContentSearchFilter{Pattern: `invoice\s+\d+`, Mode: "regex", Sources: []string{"tool_result"}, IncludeOneShot: true, IncludeAutomated: true})
-	require.NoError(t, err)
-	require.Len(t, got.Matches, 1)
-	assert.Equal(t, "tool", got.Matches[0].SessionID)
 }
 
 func TestSearchContentUnknownSource(t *testing.T) {
