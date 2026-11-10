@@ -2,7 +2,6 @@ package db
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -12,27 +11,36 @@ import (
 func TestImageTextSearchFirstPageWithManyMessages(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	content := testInlineImageContent()
 	for i := range 50 {
 		id := fmt.Sprintf("message-%02d", i)
 		insertSession(t, d, id, "demo")
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", Content: "needle " + strings.Repeat("filler ", i+1)}}))
+		message := Message{SessionID: id, Role: "assistant", Content: "needle"}
+		if i == 49 {
+			message.ToolCalls = []ToolCall{{ToolName: "Read", ResultContent: content}}
+		}
+		require.NoError(t, d.InsertMessages(ctx, []Message{message}))
 	}
-	insertSession(t, d, "image", "demo")
-	content := testInlineImageContent()
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	insertSession(t, d, "both", "demo")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "both", Role: "assistant", Content: "needle " + strings.Repeat("filler ", 100), ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	insertSession(t, d, "zz-image", "demo")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "zz-image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "needle needle needle", false))
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "needle", false))
 	page, err := d.Search(ctx, SearchFilter{Query: "needle", Limit: 30})
 	require.NoError(t, err)
 	require.Len(t, page.Results, 30)
 	var found bool
+	var imageRank, messageRank float64
 	for _, result := range page.Results {
-		found = found || result.SessionID == "image"
+		if result.SessionID == "zz-image" {
+			found = true
+			imageRank = result.Rank
+		} else {
+			messageRank = result.Rank
+		}
 	}
 	require.True(t, found, "image text should reach the first page")
+	require.Equal(t, messageRank, imageRank, "the matches should exercise equal relevance")
 	seen := make(map[string]bool)
 	var previousRank float64
 	first := true
@@ -51,7 +59,7 @@ func TestImageTextSearchFirstPageWithManyMessages(t *testing.T) {
 		page, err = d.Search(ctx, SearchFilter{Query: "needle", Limit: 30, Cursor: page.NextCursor})
 		require.NoError(t, err)
 	}
-	require.Len(t, seen, 52)
+	require.Len(t, seen, 51)
 }
 
 func TestImageTextSearchPaginationByRelevance(t *testing.T) {
