@@ -190,8 +190,12 @@ type changeStreamMessageRow struct {
 // whose own usage changed without a conversation revision. An empty cursor, one from another
 // database generation, or one this archive did not issue restarts from the
 // beginning. Every session a change touches is reported with its current
-// state, so a message change also refreshes its session's totals.
-func (db *DB) ReadChangeStream(ctx context.Context, cursor string) (ChangeStreamBatch, error) {
+// state, so a message change also refreshes its session's totals. A non-nil
+// cache carries session usage from one read to the next; pass the same cache
+// for every read of one stream.
+func (db *DB) ReadChangeStream(
+	ctx context.Context, cursor string, cache *ChangeStreamUsageCache,
+) (ChangeStreamBatch, error) {
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return ChangeStreamBatch{}, err
@@ -267,7 +271,7 @@ func (db *DB) ReadChangeStream(ctx context.Context, cursor string) (ChangeStream
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	sessions, tallies, err := db.readChangeStreamSessionsTx(ctx, tx, heads.archiveID, ids)
+	sessions, usage, err := db.readChangeStreamSessionsTx(ctx, tx, heads, ids, cache)
 	if err != nil {
 		return ChangeStreamBatch{}, err
 	}
@@ -282,7 +286,9 @@ func (db *DB) ReadChangeStream(ctx context.Context, cursor string) (ChangeStream
 			message.Model = ""
 		} else {
 			message.Project = sessions[i].Project
-			message.Usage = tallies[changeStreamMessageKey{message.SessionID, row.ordinal}].usage()
+			if session := usage[message.SessionID]; session != nil {
+				message.Usage = session.messages[row.ordinal].usage()
+			}
 		}
 		batch.Messages = append(batch.Messages, message)
 	}
@@ -406,11 +412,6 @@ func readChangeStreamUsageTx(
 	return last, more, errors.Join(rows.Err(), rows.Close())
 }
 
-type changeStreamMessageKey struct {
-	sessionID string
-	ordinal   int64
-}
-
 type changeStreamTally struct {
 	total     ChangeStreamUsage
 	cost      money.Money
@@ -428,25 +429,57 @@ func (t *changeStreamTally) usage() *ChangeStreamUsage {
 }
 
 type changeStreamCreditCost struct {
-	key        changeStreamMessageKey
+	ordinal    int64
 	attributed bool
 	cost       money.Money
+}
+
+// ChangeStreamUsageCache keeps the session usage one change stream read
+// computed, so the next read of the same stream can reuse it. A replay sends a
+// long session over many pages, and each page would otherwise reload and
+// reprice every usage row of that session. The cache holds only the sessions
+// of the latest read, which is enough for a session that spans consecutive
+// pages. The zero value is ready to use. A cache serves one stream and is not
+// safe for concurrent use.
+type ChangeStreamUsageCache struct {
+	databaseID   string
+	usage        int64
+	messageUsage int64
+	sessions     map[string]*changeStreamSessionUsage
+}
+
+// changeStreamSessionUsage is one session's totals and the usage of each of
+// its messages, by ordinal.
+type changeStreamSessionUsage struct {
+	models   []string
+	total    ChangeStreamUsage
+	messages map[int64]*changeStreamTally
+}
+
+// reusable reports whether the cached usage still matches the archive. Every
+// write that can change a session's computed usage advances the usage change
+// revision: usage rows, pricing, and session columns, including the transcript
+// revision that each message write advances. Claude snapshot peers can move
+// usage between sessions, so any change anywhere discards the whole cache.
+func (c *ChangeStreamUsageCache) reusable(heads changeStreamRevisions) bool {
+	return c != nil && c.sessions != nil && c.databaseID == heads.databaseID &&
+		c.usage == heads.usage && c.messageUsage == heads.messageUsage
 }
 
 // readChangeStreamSessionsTx reads the current state of each session and the
 // usage of each of its messages, with session export's usage rules.
 func (db *DB) readChangeStreamSessionsTx(
-	ctx context.Context, tx *sql.Tx, archiveID string, ids []string,
-) ([]ChangeStreamSession, map[changeStreamMessageKey]*changeStreamTally, error) {
+	ctx context.Context, tx *sql.Tx, heads changeStreamRevisions, ids []string, cache *ChangeStreamUsageCache,
+) ([]ChangeStreamSession, map[string]*changeStreamSessionUsage, error) {
 	sessions := make([]ChangeStreamSession, len(ids))
 	index := make(map[string]int, len(ids))
 	for i, id := range ids {
 		sessions[i] = ChangeStreamSession{SessionID: id, Deleted: true, Models: []string{}}
 		index[id] = i
 	}
-	tallies := map[changeStreamMessageKey]*changeStreamTally{}
+	usage := map[string]*changeStreamSessionUsage{}
 	if len(ids) == 0 {
-		return sessions, tallies, nil
+		return sessions, usage, nil
 	}
 	observations := map[string]export.ProjectIdentityObservation{}
 	var live []string
@@ -462,7 +495,7 @@ func (db *DB) readChangeStreamSessionsTx(
 		}
 	}
 	if len(live) == 0 {
-		return sessions, tallies, nil
+		return sessions, usage, nil
 	}
 
 	snapshots, err := db.listSessionProjectIdentitySnapshotsFrom(ctx, tx, live)
@@ -477,7 +510,7 @@ func (db *DB) readChangeStreamSessionsTx(
 	if err != nil {
 		return nil, nil, err
 	}
-	scope := export.IdentityScope{ArchiveID: archiveID, ArchiveSalt: salt}
+	scope := export.IdentityScope{ArchiveID: heads.archiveID, ArchiveSalt: salt}
 	for _, id := range live {
 		obs, ok := snapshots[id]
 		if !ok {
@@ -486,21 +519,64 @@ func (db *DB) readChangeStreamSessionsTx(
 		sessions[index[id]].Project = new(export.ResolveProjectReferenceFromObservation(obs, scope))
 	}
 
+	var misses []string
+	if cache.reusable(heads) {
+		for _, id := range live {
+			if cached, ok := cache.sessions[id]; ok {
+				usage[id] = cached
+			} else {
+				misses = append(misses, id)
+			}
+		}
+	} else {
+		misses = live
+	}
+	if err := db.computeChangeStreamUsageTx(ctx, tx, misses, usage); err != nil {
+		return nil, nil, err
+	}
+	for _, id := range live {
+		computed, ok := usage[id]
+		if !ok {
+			return nil, nil, fmt.Errorf("change stream usage missing for session %s", id)
+		}
+		session := &sessions[index[id]]
+		session.Models = computed.models
+		total := computed.total
+		session.Usage = &total
+	}
+	if cache != nil {
+		*cache = ChangeStreamUsageCache{
+			databaseID: heads.databaseID, usage: heads.usage, messageUsage: heads.messageUsage, sessions: usage,
+		}
+	}
+	return sessions, usage, nil
+}
+
+// computeChangeStreamUsageTx computes the usage of each live session in ids
+// and stores it in usage.
+func (db *DB) computeChangeStreamUsageTx(
+	ctx context.Context, tx *sql.Tx, ids []string, usage map[string]*changeStreamSessionUsage,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
 	pricing, err := db.loadPricingMapFrom(ctx, tx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading pricing: %w", err)
+		return fmt.Errorf("loading pricing: %w", err)
 	}
 	resolver := export.NewPricingResolver(pricing)
-	for start := 0; start < len(live); start += MaxSessionLimit {
-		chunk := live[start:min(start+MaxSessionLimit, len(live))]
+	for start := 0; start < len(ids); start += MaxSessionLimit {
+		chunk := ids[start:min(start+MaxSessionLimit, len(ids))]
 		accum := make(map[string]*sessionExportUsageAccum, len(chunk))
 		for _, id := range chunk {
 			accum[id] = newSessionExportUsageAccum()
+			usage[id] = &changeStreamSessionUsage{messages: map[int64]*changeStreamTally{}}
 		}
 		contributions := map[string][]changeStreamCreditCost{}
 		err := forEachSessionUsageCredit(ctx, tx, chunk, resolver, func(credit sessionUsageCredit) error {
 			a, ok := accum[credit.owner]
-			if !ok {
+			session, found := usage[credit.owner]
+			if !ok || !found {
 				return nil
 			}
 			if err := a.add(credit); err != nil {
@@ -511,16 +587,17 @@ func (db *DB) readChangeStreamSessionsTx(
 			}
 			// A row credited to another session's totals has no message there.
 			attributed := credit.row.messageOrdinal.Valid && credit.row.sessionID == credit.owner
-			key := changeStreamMessageKey{credit.owner, credit.row.messageOrdinal.Int64}
+			ordinal := credit.row.messageOrdinal.Int64
 			contributions[credit.owner] = append(contributions[credit.owner],
-				changeStreamCreditCost{key: key, attributed: attributed, cost: credit.cost})
+				changeStreamCreditCost{ordinal: ordinal, attributed: attributed, cost: credit.cost})
 			if !attributed {
 				return nil
 			}
-			tally := tallies[key]
+			tallies := session.messages
+			tally := tallies[ordinal]
 			if tally == nil {
 				tally = &changeStreamTally{allPriced: true}
-				tallies[key] = tally
+				tallies[ordinal] = tally
 			}
 			tally.total.InputTokens += credit.inputTokens
 			tally.total.OutputTokens += credit.outputTokens
@@ -535,32 +612,32 @@ func (db *DB) readChangeStreamSessionsTx(
 			return err
 		})
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 		for _, id := range chunk {
 			a, ok := accum[id]
-			if !ok {
+			session, found := usage[id]
+			if !ok || !found {
 				continue
 			}
 			if a.authoritativeCost != nil {
-				if err := allocateChangeStreamReportedCost(ctx, *a.authoritativeCost, contributions[id], tallies); err != nil {
-					return nil, nil, err
+				if err := allocateChangeStreamReportedCost(ctx, *a.authoritativeCost, contributions[id], session.messages); err != nil {
+					return err
 				}
 			}
-			usage := a.modelUsage()
-			session := &sessions[index[id]]
-			session.Models = usage.Models
-			session.Usage = &ChangeStreamUsage{
-				InputTokens:         usage.InputTokens,
-				OutputTokens:        usage.OutputTokens,
-				CacheCreationTokens: usage.CacheCreationInputTokens,
-				CacheReadTokens:     usage.CacheReadInputTokens,
-				CostMicrodollars:    usage.Cost.Microdollars,
-				Priced:              usage.HasCost,
+			totals := a.modelUsage()
+			session.models = totals.Models
+			session.total = ChangeStreamUsage{
+				InputTokens:         totals.InputTokens,
+				OutputTokens:        totals.OutputTokens,
+				CacheCreationTokens: totals.CacheCreationInputTokens,
+				CacheReadTokens:     totals.CacheReadInputTokens,
+				CostMicrodollars:    totals.Cost.Microdollars,
+				Priced:              totals.HasCost,
 			}
 		}
 	}
-	return sessions, tallies, nil
+	return nil
 }
 
 // readChangeStreamSessionRowsTx reads the sessions in ids that exist and are
@@ -600,7 +677,7 @@ func readChangeStreamSessionRowsTx(
 // usage rows by their computed cost, as the session usage breakdown does.
 func allocateChangeStreamReportedCost(
 	ctx context.Context, total money.Money, credits []changeStreamCreditCost,
-	tallies map[changeStreamMessageKey]*changeStreamTally,
+	tallies map[int64]*changeStreamTally,
 ) error {
 	weights := make([]money.Money, len(credits))
 	for i, credit := range credits {
@@ -611,12 +688,12 @@ func allocateChangeStreamReportedCost(
 		return err
 	}
 	for _, credit := range credits {
-		if tally := tallies[credit.key]; credit.attributed && tally != nil {
+		if tally := tallies[credit.ordinal]; credit.attributed && tally != nil {
 			tally.cost, tally.allPriced = money.Money{}, true
 		}
 	}
 	for i, credit := range credits {
-		tally, ok := tallies[credit.key]
+		tally, ok := tallies[credit.ordinal]
 		if !credit.attributed || !ok {
 			continue
 		}

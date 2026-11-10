@@ -223,13 +223,14 @@ type changeStreamFollower struct {
 	// read through, which moves past ranges that held no changes.
 	sent   string
 	cursor string
+	usage  db.ChangeStreamUsageCache
 }
 
 // catchUp sends every pending change, one bounded event per page. It returns
 // false when the stream must end.
 func (f *changeStreamFollower) catchUp(ctx context.Context) bool {
 	for {
-		batch, err := f.db.ReadChangeStream(ctx, f.cursor)
+		batch, err := f.db.ReadChangeStream(ctx, f.cursor, &f.usage)
 		if err != nil {
 			if ctx.Err() == nil {
 				sendChangeStreamError(f.stream, err)

@@ -46,7 +46,7 @@ func TestConversationUsageRevisionsSurviveUpgrade(t *testing.T) {
 
 	msgs[1].TokenUsage = []byte(`{"input_tokens":20,"output_tokens":5}`)
 	require.NoError(t, upgraded.ReplaceSessionMessages(t.Context(), "chat", msgs))
-	batch, err := upgraded.ReadChangeStream(t.Context(), head.Head)
+	batch, err := upgraded.ReadChangeStream(t.Context(), head.Head, nil)
 	require.NoError(t, err)
 	require.False(t, batch.Reset)
 	require.Len(t, batch.Messages, 1)
@@ -87,7 +87,7 @@ func TestCopySessionMetadataKeepsConversationUsageRevision(t *testing.T) {
 	require.NoError(t, fresh.CopySessionMetadataFrom(t.Context(), oldPath))
 	head, err := fresh.ReadChangeStreamHead(t.Context())
 	require.NoError(t, err)
-	batch, err := fresh.ReadChangeStream(t.Context(), head.Head)
+	batch, err := fresh.ReadChangeStream(t.Context(), head.Head, nil)
 	require.NoError(t, err)
 	assert.False(t, batch.Reset)
 	assert.Empty(t, batch.Messages, "nothing changed after the head")
@@ -128,7 +128,7 @@ func TestChangeStreamSendsEditedMessageOnceBehindUsageBacklog(t *testing.T) {
 	var edited []ChangeStreamMessage
 	cursor := head.Head
 	for {
-		batch, err := d.ReadChangeStream(t.Context(), cursor)
+		batch, err := d.ReadChangeStream(t.Context(), cursor, nil)
 		require.NoError(t, err)
 		require.False(t, batch.Reset)
 		for _, message := range batch.Messages {
@@ -175,7 +175,7 @@ func TestChangeStreamReplaysSessionsThatPredateUsageJournal(t *testing.T) {
 	var got []string
 	cursor := ""
 	for {
-		batch, err := upgraded.ReadChangeStream(t.Context(), cursor)
+		batch, err := upgraded.ReadChangeStream(t.Context(), cursor, nil)
 		require.NoError(t, err)
 		for _, session := range batch.Sessions {
 			assert.False(t, session.Deleted, session.SessionID)
