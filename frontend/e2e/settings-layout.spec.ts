@@ -121,11 +121,22 @@ test.describe("Settings layout", () => {
       await nav.locator("button", { hasText: name }).click();
       await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
     }
+    // Columns are measured from the open panel's left edge. In WebKit the
+    // centered panel moves 3px between panels that scroll and panels that
+    // do not, because WebKit reserves no scrollbar-gutter space for the
+    // app's ::-webkit-scrollbar width (see scrollbar-layout.spec.ts). This
+    // test checks where controls sit inside a panel.
+    const panelLeft = () => panel.evaluate((element) => element.getBoundingClientRect().left);
     const leftOf = (selector: string) =>
       panel
         .locator(selector)
         .evaluateAll((elements) =>
-          elements.map((element) => Math.round(element.getBoundingClientRect().left)),
+          elements.map((element) =>
+            Math.round(
+              element.getBoundingClientRect().left -
+                element.closest(".settings-panel")!.getBoundingClientRect().left,
+            ),
+          ),
         );
     // Row controls only: the per-role color pickers are a dense sub-list.
     const rowControlHeights = () =>
@@ -162,8 +173,9 @@ test.describe("Settings layout", () => {
         }),
       )),
     );
-    expect(switches[0]! - widestNameRight).toBeGreaterThanOrEqual(11);
-    expect(switches[0]! - widestNameRight).toBeLessThanOrEqual(13);
+    const nameEdge = widestNameRight - (await panelLeft());
+    expect(switches[0]! - nameEdge).toBeGreaterThanOrEqual(11);
+    expect(switches[0]! - nameEdge).toBeLessThanOrEqual(13);
     expect(switches[0]!).toBeLessThan(column!);
     const nameOnSwitchLine = await panel.locator(".provider-row").evaluateAll((rows) =>
       rows.map((row) => {
@@ -219,9 +231,10 @@ test.describe("Settings layout", () => {
       await openPanel(name, heading);
       const row = panel.locator(".setting-row").first();
       const geometry = await row.evaluate((element, selector) => {
+        const edge = element.closest(".settings-panel")!.getBoundingClientRect().left;
         const label = element.querySelector(".setting-label")!.getBoundingClientRect();
         const target = element.querySelector(selector)!.getBoundingClientRect();
-        return { labelRight: label.right, controlLeft: target.left };
+        return { labelRight: label.right - edge, controlLeft: target.left - edge };
       }, control);
       expect(geometry.controlLeft - geometry.labelRight, name).toBeGreaterThanOrEqual(15);
       expect(geometry.controlLeft - geometry.labelRight, name).toBeLessThanOrEqual(17);
