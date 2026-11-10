@@ -3,6 +3,7 @@ package db
 import (
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,4 +83,43 @@ func TestChangeStreamUsageCacheRecomputesAfterWrite(t *testing.T) {
 	require.Len(t, second.Messages, 1)
 	require.NotNil(t, second.Messages[0].Usage)
 	assert.Equal(t, 30, second.Messages[0].Usage.InputTokens)
+}
+
+// A change stream read waits in the bulk-read lane, so streams cannot take the
+// reader connection kept free for the session list and sidebar.
+func TestChangeStreamReadWaitsForBulkReadPermit(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
+	releases := make([]func(), 0, bulkReadSlots)
+	for range bulkReadSlots {
+		release, err := d.acquireBulkRead(t.Context())
+		require.NoError(t, err)
+		releases = append(releases, release)
+	}
+	t.Cleanup(func() {
+		for _, release := range releases {
+			release()
+		}
+	})
+
+	type result struct {
+		batch ChangeStreamBatch
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		batch, err := d.ReadChangeStream(t.Context(), "", nil)
+		done <- result{batch, err}
+	}()
+	select {
+	case <-done:
+		require.Fail(t, "the read ran while every bulk-read permit was held")
+	case <-time.After(time.Second):
+	}
+	releases[0]()
+	releases = releases[1:]
+	got := <-done
+	require.NoError(t, got.err)
+	require.Len(t, got.batch.Sessions, 1)
+	assert.Equal(t, "chat", got.batch.Sessions[0].SessionID)
 }

@@ -10,8 +10,8 @@ to handle a data-version change.
 
 Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`.
 
-Dashboard analytics, report, and search scans, and other multi-second scans over
-message or usage rows, take the lane; the list and sidebar reads every page
+Dashboard analytics, report, and search scans, change stream reads, and other
+multi-second scans over message or usage rows, take the lane; the list and sidebar reads every page
 loads (session list, stats, project list) and reads scoped to one session stay
 outside. The lane uses `acquireBulkRead`, using at most `readerMaxOpenConns - 1`
 reader connections so quick reads always get one. Each holder uses one reader

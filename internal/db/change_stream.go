@@ -196,6 +196,13 @@ type changeStreamMessageRow struct {
 func (db *DB) ReadChangeStream(
 	ctx context.Context, cursor string, cache *ChangeStreamUsageCache,
 ) (ChangeStreamBatch, error) {
+	// A replay page loads and prices usage for up to a page of sessions, so it
+	// waits in the bulk-read lane and leaves a reader free for quick reads.
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return ChangeStreamBatch{}, err
+	}
+	defer release()
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return ChangeStreamBatch{}, err
