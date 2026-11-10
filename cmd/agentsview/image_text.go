@@ -13,7 +13,7 @@ import (
 )
 
 func setupImageText(cfg config.Config, database *db.DB) (*imagetext.Manager, error) {
-	if !cfg.ImageText.Enabled || cfg.ArchiveContent.UsageOnly() {
+	if !cfg.ImageText.Enabled || cfg.ArchiveContent.OmitsToolContent() || database.ArchiveContent().OmitsToolContent() {
 		return nil, nil
 	}
 	policy, err := cfg.ImageText.Policy()

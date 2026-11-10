@@ -79,8 +79,15 @@ func (db *DB) ImageTextSources(ctx context.Context, hash string, offset, limit i
 	return out, rows.Err()
 }
 
+func (db *DB) requireImageTextStorage() error {
+	if db.ArchiveContent().OmitsToolContent() {
+		return fmt.Errorf("%w: image text requires tool result content", ErrArchiveContentExcluded)
+	}
+	return nil
+}
+
 func (db *DB) SaveImageText(ctx context.Context, hash string, identity ocr.Identity, text string, failure bool) error {
-	if err := db.requireDerivedTextStorage("image text"); err != nil {
+	if err := db.requireImageTextStorage(); err != nil {
 		return err
 	}
 	db.mu.Lock()
@@ -115,7 +122,7 @@ func (db *DB) SaveImageText(ctx context.Context, hash string, identity ocr.Ident
 // SaveImageTextTerminal records that verified bytes cannot be read by this
 // processor, so the result holds for every copy of the image.
 func (db *DB) SaveImageTextTerminal(ctx context.Context, hash string, identity ocr.Identity) error {
-	if err := db.requireDerivedTextStorage("image text"); err != nil {
+	if err := db.requireImageTextStorage(); err != nil {
 		return err
 	}
 	db.mu.Lock()
@@ -127,7 +134,7 @@ func (db *DB) SaveImageTextTerminal(ctx context.Context, hash string, identity o
 }
 
 func (db *DB) CopyImageTextFrom(ctx context.Context, sourcePath string) error {
-	if err := db.requireDerivedTextStorage("image text"); err != nil {
+	if err := db.requireImageTextStorage(); err != nil {
 		return err
 	}
 	db.mu.Lock()

@@ -27,6 +27,9 @@ var passBudget = 2 * time.Minute
 const pageSize = 20
 
 func (m *Manager) Run(ctx context.Context) error {
+	if m.DB.ArchiveContent().OmitsToolContent() {
+		return nil
+	}
 	deadline := time.Now().Add(passBudget)
 	identity := m.Client.Identity()
 	if m.Processor != "" {
