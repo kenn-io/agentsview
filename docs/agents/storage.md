@@ -876,25 +876,33 @@ because a cached fingerprint merely looks newer.
 
 ### Activity report index
 
-SQLite keeps paired candidates in memory per session and range start, with
-separate limits of 200,000 candidates and 4,096 entries. A full cache measured
-64.3 MiB of resident Go heap on Windows amd64, using the post-GC
-`runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
-with 36-byte session IDs, 24-byte models, and append-grown slices. Each entry
-also keeps the window's counted user and assistant messages. A report counts
-messages from those entries and from its own pairing scan of the other sessions,
-so it never reads messages a second time. The scan's counted messages live only
-for that build, outside the budgets. Every counted message except a session's
-last starts a candidate, so the candidate budget bounds them too. They add about
-57 bytes each: on Linux amd64 a full cache grew from 48.3 MiB to 59.3 MiB. Empty
-sessions use only the entry budget. A week report then a month report keep
-separate entries for their range starts. Entries run to
-`max(EffectiveEnd, RangeEnd)` and remain valid while the transcript revision and
-session creation time match. Reader swaps clear the entries and reject stores
-from earlier generations. Reports exceeding the entry limit reuse retained hits
-and store up to the cap. Reports exceeding the candidate budget skip storing new
-entries. Warm reads still load session revisions and merge the per-session
-candidates in SQLite's microsecond order.
+SQLite keeps each session's activity runs in memory per session and range
+start, within a 128 MiB budget that also counts each entry's overhead. A run is
+a stretch of touching pieces of one session with one model, each already capped
+at the idle gap and trimmed against the session's earlier activity, as
+`activity.SessionRunsBuilder` derives them from the pairing scan's candidates.
+A report sweeps the runs through `activity.BuildRunArtifactsWithSurvivorUsage`,
+so a refresh pairs only the sessions whose entries miss and sweeps far fewer
+intervals than candidates. On a scratch archive of 100,000 sessions and 2.6
+million candidates over seven months, the kept runs took 73 MiB, and a refresh
+with ten changed sessions spent 163 ms pairing instead of 106 s and 168 ms
+sweeping instead of 949 ms. The first report after a start still pairs every
+session.
+
+Each entry also keeps the window's counted user and assistant messages. A
+message stored at a whole microsecond with an offset from -13:59 to +14:00 keeps
+only its time, because the message counter's padded stored-string bounds pick
+the same messages as the range does; any other message keeps its stored
+timestamp. A report counts messages from those entries, so it never reads
+messages a second time. A week report then a month report keep separate entries
+for their range starts. Entries run to `max(EffectiveEnd, RangeEnd)` and remain
+valid while the transcript revision and session creation time match. The
+candidate stream leaves out candidates that start at or after the effective end
+floored to microseconds, so runs keep one bit per piece that says whether an
+earlier piece trimmed it, and clipping keeps a trimmed piece that starts in that
+microsecond. Reader swaps clear the entries and reject stores from earlier
+generations. A report whose new entries alone exceed the budget stores none of
+them. Warm reads still load session revisions.
 
 Activity session selection checks terminal tool-execution events even when a
 session's `ended_at` predates the report. Keep the partial
@@ -931,15 +939,34 @@ or an in-window Claude peer changes; a changed project identity map also
 invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
-PostgreSQL keeps ongoing Activity reports' ordered transcript metadata and raw
-usage inputs in memory with a 128 MiB estimated-size budget. The usage change
-journal invalidates changed sessions and their matching snapshot peers. Each
-visit selects sessions, pairs messages against the current clock, selects usage
-snapshots, and prices the surviving rows again. Message counts reuse the pairing
-read; tool events are read fresh. Journal replacement and unavailable or
-regressed revisions rebuild the inputs. Large change sets use a full read, and
-inputs above the budget aren't retained. Hosted stores and transaction views use
-their existing reads.
+PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
+inputs in memory with a 128 MiB estimated-size budget. Each session keeps its
+runs and the ascending times of its counted user and assistant messages,
+derived from one pairing over all time: the candidates a report range leaves out
+are ones the aggregator rejects for that range anyway, so one entry serves every
+effective end of the slot. The usage change journal invalidates changed sessions
+and their matching snapshot peers. Tool events are not journaled; a tool event
+change reaches PostgreSQL through a push that also changes the session's
+`transcript_revision`, which the journal records. Each visit selects sessions,
+pairs only sessions without an entry, sweeps the runs, selects usage snapshots,
+and prices the surviving rows again. On a scratch database of 100,000 sessions
+and 2.6 million candidates over seven months, the kept activity took 71 MiB,
+and a refresh with ten changed sessions spent 90 ms pairing instead of 3.2 s
+and 209 ms sweeping instead of 1.0 s. Journal replacement, a changed gap cap,
+and unavailable or regressed revisions rebuild the inputs. Large change sets
+use a full read, and inputs above the budget aren't retained. Hosted stores and
+transaction views use their existing reads.
+
+DuckDB keeps each session's runs and counted message times in memory per
+session and gap cap, within a 128 MiB budget, at the session's
+`agentsview_push_fingerprint`. A push changes that fingerprint whenever a
+session's messages or tool events change, so entries survive mirror
+replacements and a refresh pairs only changed sessions. A session without a
+fingerprint is paired on every report. Like PostgreSQL, DuckDB pairs over all
+time and clips runs at the effective end cast to its microsecond `TIMESTAMP`. On
+the same scratch data, the kept runs took 74 MiB, and a refresh with ten changed
+sessions spent 328 ms pairing instead of 3.4 s, 224 ms sweeping instead of
+1.1 s, and 42 ms counting messages instead of 593 ms.
 
 ### PostgreSQL push preparation indexes
 
