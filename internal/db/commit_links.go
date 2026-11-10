@@ -176,23 +176,51 @@ func commitArgv(input string) (string, bool, bool) {
 		return "", false, false
 	}
 	args := payload.Command
-	if len(args) > 0 && path.Base(args[0]) == "env" {
-		for i := 1; i < len(args); i++ {
+	basename := func(name string) string { return path.Base(strings.ReplaceAll(name, `\`, "/")) }
+	if len(args) > 0 && basename(args[0]) == "env" {
+		i := 1
+		for i < len(args) {
 			arg := args[i]
-			if arg == "-C" || arg == "--chdir" || strings.HasPrefix(arg, "--chdir=") {
+			if strings.HasPrefix(arg, "-C") || arg == "--chdir" || strings.HasPrefix(arg, "--chdir=") {
 				return "", true, false
 			}
-			if arg == "--" || (!strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=")) {
+			if arg == "--" {
+				i++
 				break
 			}
-			if arg == "-u" || arg == "--unset" || arg == "-S" || arg == "--split-string" {
+			if strings.Contains(arg, "=") && !strings.HasPrefix(arg, "-") {
 				i++
+				continue
 			}
+			if arg == "-i" || arg == "--ignore-environment" {
+				i++
+				continue
+			}
+			if arg == "-u" || arg == "--unset" {
+				i += 2
+				continue
+			}
+			if !strings.HasPrefix(arg, "-") {
+				break
+			}
+			return "", true, false
 		}
+		if i > len(args) {
+			return "", true, false
+		}
+		args = args[i:]
 	}
-	if len(args) >= 3 && (path.Base(args[0]) == "sh" || path.Base(args[0]) == "bash" || path.Base(args[0]) == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+	if len(args) == 0 {
+		return "", true, false
+	}
+	program := basename(args[0])
+	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
 		return args[2], true, false
 	}
+	if program != "git" && !strings.EqualFold(program, "git.exe") {
+		return "", true, false
+	}
+	args[0] = "git"
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "~") {
 			args[i] = shellquote.POSIXLiteral(arg)
@@ -635,7 +663,7 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 		if err := writeUserVersion(ctx, tx, 170); err != nil {
 			return err
 		}
-	} else if !archiveOnly && len(ScopedDataVersionProviders(version, dataVersion)) > 0 {
+	} else if !archiveOnly && ScopedDataVersionProviders(version, dataVersion) != nil {
 		if err := advanceDataVersion(ctx, tx, dataVersion); err != nil {
 			return err
 		}

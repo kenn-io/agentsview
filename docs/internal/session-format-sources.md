@@ -737,8 +737,7 @@ fixtures retain this field; missing identities remain source-local.
   argument array, including `bash -lc` scripts. Commit links read these arrays
   as shell words; leading `env` directory changes are left unlinked because
   the recorded session directory would otherwise identify the wrong repository.
-  Data version 170 reparses Codex-format sources in place and preserves their
-  identities.
+  Data version 170 guards the repaired links without reparsing source files.
 
 - **Code-mode wait output (checked 2026-11-03):** A local rollout records `wait`
   arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
@@ -1531,9 +1530,9 @@ fixtures retain this field; missing identities remain source-local.
   case checks that a new native commit execution owns its repository and
   prompt after a batch poll.
   An archived `shell` call records `command` as an array. Scripts passed to
-  `sh`, `bash`, or `zsh` with `-c` or `-lc` are read as-is; other arrays are
-  quoted word by word. Arrays with leading `env` directory-changing options,
-  including `env -C`, are not classified.
+  `sh`, `bash`, or `zsh` with `-c` or `-lc` are read as-is; direct Git
+  arguments are quoted word by word. Leading `env` assignments are supported.
+  Directory-changing `env` options and unrelated executables are not classified.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)

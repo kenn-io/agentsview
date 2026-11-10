@@ -12,7 +12,8 @@ import (
 
 // dataVersionScopes maps a parser data version to the providers whose stored
 // output it changes. A declared version reparses those providers' sources in
-// place; an undeclared version requires a full rebuild.
+// place; an empty declaration needs no reparse, and an undeclared version
+// requires a full rebuild.
 //
 // Declare a version only when the reparse preserves source and session
 // identities, and prove that with a regression test. List every provider
@@ -55,7 +56,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	167: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate},
 	168: {parser.AgentAntigravity, parser.AgentAntigravityCLI},
 	169: {parser.AgentDeepSeekHarness},
-	170: parser.CodexFormatAgents(),
+	170: {},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released
@@ -69,15 +70,16 @@ const scopedUpgradePendingKey = "scoped_upgrade_pending"
 
 // ScopedDataVersionProviders returns the providers to reparse when an
 // archive moves from one parser version to another. It returns nil when any
-// version in the range requires a full rebuild.
+// version in the range requires a full rebuild. A non-nil empty slice means
+// the range changes no parser output.
 func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 	if from <= 0 || from >= to {
 		return nil
 	}
-	var affected []parser.AgentType
+	affected := make([]parser.AgentType, 0)
 	for version := from + 1; version <= to; version++ {
-		providers := dataVersionScopes[version]
-		if len(providers) == 0 {
+		providers, declared := dataVersionScopes[version]
+		if !declared {
 			return nil
 		}
 		affected = append(affected, providers...)
@@ -91,8 +93,8 @@ func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 // invalidate unaffected agents.
 func AgentDataVersion(agent parser.AgentType) int {
 	for version := dataVersion; version > 0; version-- {
-		providers := dataVersionScopes[version]
-		if len(providers) == 0 {
+		providers, declared := dataVersionScopes[version]
+		if !declared {
 			return version
 		}
 		for _, provider := range providers {
@@ -108,7 +110,7 @@ func AgentDataVersion(agent parser.AgentType) int {
 // full rebuild.
 func fullRebuildDataVersion() int {
 	for version := dataVersion; version > 0; version-- {
-		if len(dataVersionScopes[version]) == 0 {
+		if _, declared := dataVersionScopes[version]; !declared {
 			return version
 		}
 	}
@@ -119,9 +121,6 @@ func fullRebuildDataVersion() int {
 // apply safely.
 func validateDataVersionScopes(scopes map[int][]parser.AgentType) error {
 	for version, providers := range scopes {
-		if len(providers) == 0 {
-			return fmt.Errorf("data version %d: declaration lists no providers", version)
-		}
 		for _, provider := range providers {
 			if _, ok := parser.AgentByType(provider); !ok {
 				return fmt.Errorf(
@@ -158,23 +157,27 @@ func advanceDataVersion(ctx context.Context, tx *sql.Tx, target int) error {
 		return fmt.Errorf("reading data version: %w", err)
 	}
 	providers := ScopedDataVersionProviders(current, target)
-	if len(providers) > 0 {
+	if providers != nil {
 		var agents []parser.AgentType
 		for _, provider := range providers {
 			agents = append(agents, parser.ProviderStoredAgents(provider)...)
 		}
-		if err := invalidateAgentParseCaches(ctx, tx, agents); err != nil {
-			return err
+		if len(agents) > 0 {
+			if err := invalidateAgentParseCaches(ctx, tx, agents); err != nil {
+				return err
+			}
 		}
 		if err := promoteUnaffectedSessions(ctx, tx, current, target, agents); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO stats(key, value) VALUES (?, ?)
+		if len(agents) > 0 {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO stats(key, value) VALUES (?, ?)
 			 ON CONFLICT(key) DO UPDATE SET value = max(value, excluded.value)`,
-			scopedUpgradePendingKey, target,
-		); err != nil {
-			return fmt.Errorf("recording pending scoped upgrade: %w", err)
+				scopedUpgradePendingKey, target,
+			); err != nil {
+				return fmt.Errorf("recording pending scoped upgrade: %w", err)
+			}
 		}
 	}
 	return writeUserVersion(ctx, tx, max(current, target))

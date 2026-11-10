@@ -34,6 +34,49 @@ func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 	assert.Nil(t, ScopedDataVersionProviders(133, 134))
 }
 
+func TestVersionOnlyUpgradeScope(t *testing.T) {
+	assert.NotNil(t, ScopedDataVersionProviders(169, 170))
+	assert.Empty(t, ScopedDataVersionProviders(169, 170))
+	assert.Equal(t, []parser.AgentType{parser.AgentDeepSeekHarness}, ScopedDataVersionProviders(168, 170))
+	assert.Equal(t, 164, AgentDataVersion(parser.AgentCodex))
+	assert.NoError(t, validateDataVersionScopes(map[int][]parser.AgentType{170: {}}))
+}
+
+func TestVersionOnlyUpgradePreservesParserState(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"current", "retry"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "codex" })
+	}
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), "current", 169))
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), "retry", 168))
+	require.NoError(t, d.ReplaceSkippedFiles(t.Context(), map[string]int64{"source?agent=codex": 1}))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		return writeUserVersion(t.Context(), tx, 169)
+	}))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		return advanceDataVersion(t.Context(), tx, 170)
+	}))
+	assert.Equal(t, 170, d.GetSessionDataVersion(t.Context(), "current"))
+	assert.Equal(t, 168, d.GetSessionDataVersion(t.Context(), "retry"))
+	skips, err := d.LoadSkippedFiles(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int64{"source?agent=codex": 1}, skips)
+	var pending int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
+	assert.Zero(t, pending)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO stats(key,value) VALUES (?,168)`, scopedUpgradePendingKey); err != nil {
+			return err
+		}
+		return writeUserVersion(t.Context(), tx, 169)
+	}))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		return advanceDataVersion(t.Context(), tx, 170)
+	}))
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT value FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
+	assert.Equal(t, 168, pending)
+}
+
 func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 	// The version before preserving classification, even after later upgrades.
 	const completedVersion = 145
@@ -76,11 +119,6 @@ func TestValidateDataVersionScopes(t *testing.T) {
 				dataVersion + 1: {parser.AgentHermes},
 			},
 			wantErr: "declare only versions",
-		},
-		{
-			name:    "empty declaration",
-			scopes:  map[int][]parser.AgentType{dataVersion: {}},
-			wantErr: "lists no providers",
 		},
 		{
 			name:    "stored alias",

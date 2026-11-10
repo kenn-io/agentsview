@@ -36,7 +36,8 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
 		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},
 		{"env assignment", `{"command":["env","GIT_AUTHOR_DATE=now","git","commit"]}`, "/work"},
-		{"wrapper", `{"command":["timeout","30","git","-C","/work/other repo","commit"]}`, "/work/other repo"},
+		{"env shell", `{"command":["env","NAME=value","bash","-lc","cd /repo && git commit"]}`, "/repo"},
+		{"windows git executable", `{"command":["C:\\Program Files\\Git\\bin\\git.exe","-C","/repo","commit"]}`, "/repo"},
 		{"trailing apostrophe", `{"command":["git","-C","/work/a'","commit"]}`, "/work/a'"},
 		{"literal tilde", `{"command":["git","-C","~/repo","commit"]}`, "/work/~/repo"},
 		{"exec path and decoy", `{"command":["git","--exec-path=/bin","-c","name=-C decoy","-C","child","commit"]}`, "/work/child"},
@@ -68,6 +69,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 func TestCommitLinksArgvEnvChangeDirectory(t *testing.T) {
 	for _, input := range []string{
 		`{"command":["env","-C","/repo","git","commit"]}`,
+		`{"command":["env","-C/repo","git","commit"]}`,
 		`{"command":["/usr/bin/env","-C","/repo","git","commit"]}`,
 		`{"command":["env","--chdir","/repo","git","commit"]}`,
 		`{"command":["env","--chdir=/repo","git","commit"]}`,
@@ -86,6 +88,8 @@ func TestCommitLinksArgvEnvChangeDirectory(t *testing.T) {
 func TestCommitLinksArgvNonCommitOutput(t *testing.T) {
 	for _, tt := range []struct{ input, output string }{
 		{`{"command":["printf","git commit"]}`, "git commit"},
+		{`{"command":["printf","%s %s\n[main abc1234] Fix parser\n","git","commit"]}`, "git commit\n[main abc1234] Fix parser\n"},
+		{`{"command":["timeout","30","git","commit"]}`, "[main abc1234] Fix parser"},
 		{`{"command":["git","status"]}`, "On branch main\nnothing to commit, working tree clean"},
 	} {
 		t.Run(tt.input, func(t *testing.T) {
@@ -570,6 +574,9 @@ func TestCommitLinksBackfill(t *testing.T) {
 		var version int
 		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
 		assert.Equal(t, 170, version)
+		var pending int
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
+		assert.Zero(t, pending)
 		got, err := d.SessionCommitLinks(t.Context(), "repaired")
 		require.NoError(t, err)
 		require.Len(t, got.Commits, 1)
@@ -625,6 +632,9 @@ func TestCommitLinksBackfillAdvancesOlderScopedVersion(t *testing.T) {
 	var version int
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
 	assert.Equal(t, 170, version)
+	var pending int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT value FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
+	assert.Equal(t, 170, pending)
 	got, err := d.SessionCommitLinks(t.Context(), "s1")
 	require.NoError(t, err)
 	require.Len(t, got.Commits, 1)
