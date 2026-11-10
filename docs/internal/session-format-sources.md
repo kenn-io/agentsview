@@ -1522,7 +1522,8 @@ fixtures retain this field; missing identities remain source-local.
   case checks that a new native commit execution owns its repository and
   prompt after a batch poll.
   An archived `shell` call also records `command` as an array. Shell
-  arrays using `-c` or `-lc` contain the script as an element.
+  arrays using `-c` or `-lc` contain the script as an element. Git and shell
+  executable paths, Windows executable names, and `env` prefixes are supported.
   `TestCommitLinksArgvCommands` covers extraction and repository paths;
   `TestCommitLinksBackfill` covers archive repair.
 

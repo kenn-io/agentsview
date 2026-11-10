@@ -17,7 +17,6 @@ import (
 
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/shellquote"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
@@ -32,6 +31,7 @@ const (
 var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
+	commitEnvNameRE           = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(detached HEAD|[^\s\[\]~^:?*\\]+) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
@@ -155,6 +155,13 @@ func commitRepository(input, cwd string) string {
 	if dir != "" {
 		cwd = resolve(cwd, dir, false)
 	}
+	_, dirs, direct, _ := commitArgv(input)
+	if direct {
+		for _, dir := range dirs {
+			cwd = resolve(cwd, dir, false)
+		}
+		return cwd
+	}
 	command := commitCommandText(input)
 	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
 		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
@@ -169,30 +176,81 @@ func commitRepository(input, cwd string) string {
 	return cwd
 }
 
-func commitCommandText(input string) string {
-	if jsontext.Value(input).IsValid() {
-		var payload struct {
-			Command []string `json:"command"`
-		}
-		if json.Unmarshal([]byte(input), &payload) == nil && payload.Command != nil {
-			args := payload.Command
-			if len(args) >= 3 && (args[0] == "sh" || args[0] == "bash" || args[0] == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
-				return args[2]
-			}
-			for i, arg := range args {
-				switch {
-				case strings.HasPrefix(arg, "~"):
-					args[i] = shellquote.POSIXLiteral(arg)
-				default:
-					args[i] = shellquote.POSIX(arg)
+// commitArgv reads recorded arguments without reinterpreting their boundaries.
+func commitArgv(input string) (command string, dirs []string, direct, present bool) {
+	var payload struct {
+		Command []string `json:"command"`
+	}
+	if !jsontext.Value(input).IsValid() || json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
+		return "", nil, false, false
+	}
+	args := payload.Command
+	name := func(executable string) string {
+		return strings.TrimSuffix(strings.ToLower(path.Base(strings.ReplaceAll(executable, `\`, "/"))), ".exe")
+	}
+	if len(args) > 0 && name(args[0]) == "env" {
+		args = args[1:]
+		options := true
+		for len(args) > 0 {
+			switch {
+			case options && args[0] == "--":
+				args = args[1:]
+				options = false
+			case options && (args[0] == "-i" || args[0] == "--ignore-environment"):
+				args = args[1:]
+			case options && args[0] == "-u" && len(args) >= 2:
+				args = args[2:]
+			default:
+				key, _, found := strings.Cut(args[0], "=")
+				if !found || !commitEnvNameRE.MatchString(key) {
+					goto executable
 				}
+				args = args[1:]
+				options = false
 			}
-			command := strings.Join(args, " ")
-			if match := commitInvocationRE.FindStringIndex(command); match == nil || match[0] != 0 {
-				return ""
-			}
-			return command
 		}
+	}
+executable:
+	if len(args) == 0 {
+		return "", nil, false, true
+	}
+	executable := name(args[0])
+	if len(args) >= 3 && (executable == "sh" || executable == "bash" || executable == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+		return args[2], nil, false, true
+	}
+	if executable != "git" {
+		return "", nil, false, true
+	}
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if arg == "commit" {
+			return "git commit", dirs, true, true
+		}
+		switch arg {
+		case "-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env":
+			i++
+			if i >= len(args) {
+				return "", nil, false, true
+			}
+			if arg == "-C" {
+				dirs = append(dirs, args[i])
+			}
+		case "-p", "-P", "--no-pager", "--paginate", "--bare", "--no-replace-objects", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-lazy-fetch", "--no-advice":
+		default:
+			option, _, hasValue := strings.Cut(arg, "=")
+			if !hasValue || (option != "--git-dir" && option != "--work-tree" && option != "--namespace" && option != "--config-env") {
+				return "", nil, false, true
+			}
+		}
+	}
+	return "", nil, false, true
+}
+
+func commitCommandText(input string) string {
+	if command, _, _, present := commitArgv(input); present {
+		return command
+	}
+	if jsontext.Value(input).IsValid() {
 		return signals.CommandText(input)
 	}
 	// A batch's output and process IDs do not identify which new call owns them.
