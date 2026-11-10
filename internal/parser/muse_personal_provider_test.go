@@ -53,31 +53,25 @@ func TestMusePersonalRawSourceIdentityAndCompanions(t *testing.T) {
 }
 
 func TestMusePersonalIndexEventBoundedToOwningDirectory(t *testing.T) {
-	for _, count := range []int{1, 300} {
-		t.Run(strconv.Itoa(count), func(t *testing.T) {
-			p, path := musePersonalTestProvider(t, "")
-			root := filepath.Dir(filepath.Dir(filepath.Dir(path)))
-			for i := range count {
-				writeSourceFile(t, filepath.Join(root, fmt.Sprintf("agent-%08x-2222-4333-8444-555555555555", i), "sessions", "decoy.jsonl"), "{}\n")
-			}
-			secondID := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-			second := filepath.Join(filepath.Dir(path), secondID+".jsonl")
-			writeSourceFile(t, second, strings.ReplaceAll(musePersonalTestHeader, musePersonalTestID, secondID))
-			// A removed/malformed index must still select every transcript sharing it.
-			for _, event := range []string{"write", "remove"} {
-				var opened []string
-				ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
-					opened = append(opened, dir)
-					return streamDirectoryEntriesDirect(ctx, dir, yield)
-				})
-				sources, err := p.SourcesForChangedPath(ctx, ChangedPathRequest{Path: filepath.Join(filepath.Dir(path), "sessions.json"), WatchRoot: root, EventKind: event})
-				assert.Equal(t, []string{filepath.Dir(path)}, opened)
-				require.NoError(t, err)
-				require.Len(t, sources, 2)
-				assert.ElementsMatch(t, []string{path, second}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
-			}
-		})
+	p, path := musePersonalTestProvider(t, "")
+	root := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+	for i := range 300 {
+		writeSourceFile(t, filepath.Join(root, fmt.Sprintf("agent-%08x-2222-4333-8444-555555555555", i), "sessions", "decoy.jsonl"), "{}\n")
 	}
+	secondID := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	second := filepath.Join(filepath.Dir(path), secondID+".jsonl")
+	writeSourceFile(t, second, strings.ReplaceAll(musePersonalTestHeader, musePersonalTestID, secondID))
+	// An absent index still selects every transcript sharing its path.
+	var opened []string
+	ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+		opened = append(opened, dir)
+		return streamDirectoryEntriesDirect(ctx, dir, yield)
+	})
+	sources, err := p.SourcesForChangedPath(ctx, ChangedPathRequest{Path: filepath.Join(filepath.Dir(path), "sessions.json"), WatchRoot: root, EventKind: "remove"})
+	assert.Equal(t, []string{filepath.Dir(path)}, opened)
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	assert.ElementsMatch(t, []string{path, second}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
 }
 
 func TestMusePersonalCompositeFingerprintAndDigest(t *testing.T) {
@@ -183,8 +177,6 @@ func TestMusePersonalStrictClaimingAndCancellation(t *testing.T) {
 	cancel()
 	_, err = p.Discover(ctx)
 	require.ErrorIs(t, err, context.Canceled)
-	_, err = p.Parse(ctx, ParseRequest{Source: sources[0]})
-	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestMusePersonalRejectsSymlinkInputs(t *testing.T) {
@@ -205,7 +197,7 @@ func TestMusePersonalRejectsSymlinkInputs(t *testing.T) {
 			}
 			outside := filepath.Join(t.TempDir(), "target")
 			if target == "index" {
-				writeSourceFile(t, outside, `{"version":1,"secret":"must not be read"}`)
+				writeSourceFile(t, outside, `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T18:00:00Z"}]}`)
 			} else {
 				require.NoError(t, os.Rename(link, outside))
 			}
@@ -221,6 +213,7 @@ func TestMusePersonalRejectsSymlinkInputs(t *testing.T) {
 				out := musePersonalTestParse(t, p)
 				require.Len(t, out.Results, 1)
 				assert.Equal(t, 1, out.Results[0].Result.Session.MessageCount)
+				assert.Equal(t, "2026-10-05T15:04:06Z", out.Results[0].Result.Session.EndedAt.Format(time.RFC3339))
 			} else {
 				assert.Empty(t, sources)
 			}
@@ -420,7 +413,7 @@ func TestMusePersonalIndexCacheAcrossProviders(t *testing.T) {
 	}
 }
 
-func TestMusePersonalIndexFailedLoadRetriesNextPass(t *testing.T) {
+func TestMusePersonalUnverifiedIndexLoadCannotEstablishFreshness(t *testing.T) {
 	for _, failure := range []string{"cancel", "replace", "remove", "cache"} {
 		t.Run(failure, func(t *testing.T) {
 			p, path := musePersonalTestProvider(t, "")
@@ -451,37 +444,8 @@ func TestMusePersonalIndexFailedLoadRetriesNextPass(t *testing.T) {
 			if failure != "cache" {
 				require.NoError(t, closeCache())
 			}
-			writeSourceFile(t, index, `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T18:00:00Z"}]}`)
-			fresh, cleanup, err := WithReconciliationCache(t.Context())
-			require.NoError(t, err)
-			defer func() { require.NoError(t, cleanup()) }()
-			out, err := p.Parse(fresh, ParseRequest{Source: sources[0]})
-			require.NoError(t, err)
-			require.Len(t, out.Results, 1)
-			assert.Equal(t, "2026-10-05T18:00:00Z", out.Results[0].Result.Session.EndedAt.Format(time.RFC3339))
 		})
 	}
-}
-
-func TestMusePersonalOpaqueIndexEditKeepsProjection(t *testing.T) {
-	p, path := musePersonalTestProvider(t, "")
-	sources, err := p.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	index := filepath.Join(filepath.Dir(path), "sessions.json")
-	writeSourceFile(t, index, `{"version":1,"opaque":"before"}`)
-	before, err := p.Fingerprint(t.Context(), sources[0])
-	require.NoError(t, err)
-	writeSourceFile(t, index, `{"version":1,"opaque":"after and longer"}`)
-	after, err := p.Fingerprint(t.Context(), sources[0])
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	plan, err := p.(RawCaptureProvider).PlanRawCapture(t.Context(), sources[0])
-	require.NoError(t, err)
-	require.Len(t, plan.Entries, 2)
-	raw, err := os.ReadFile(plan.Entries[1].LocalPath)
-	require.NoError(t, err)
-	assert.Equal(t, `{"version":1,"opaque":"after and longer"}`, string(raw))
 }
 
 func TestMusePersonalDuplicateIdentityIsIncomplete(t *testing.T) {

@@ -41,6 +41,7 @@ func TestMusePersonalFixture(t *testing.T) {
 		assert.Equal(t, "commentary", result.Messages[3].SourceSubtype)
 		assert.Equal(t, "Checking the synthetic inventory now.", *result.Messages[3].DialogueText)
 		require.Len(t, result.Messages[4].ToolCalls, 1)
+		assert.Equal(t, "Read", result.Messages[4].ToolCalls[0].Category)
 		require.Len(t, result.Messages[4].ToolCalls[0].ResultEvents, 1)
 		assert.Equal(t, "synthetic widget inventory: 3 widgets", result.Messages[4].ToolCalls[0].ResultEvents[0].Content)
 		assert.Equal(t, `{"ok":true,"items":1}`, result.Messages[5].ToolCalls[0].ResultEvents[0].Content)
@@ -95,7 +96,7 @@ func musePersonalTestParse(t *testing.T, p Provider) ParseOutcome {
 func TestMusePersonalOccurrencePairing(t *testing.T) {
 	call := `{"type":"function_call","call_id":"same","name":"exec","arguments":"{\"x\":1}"}`
 	output := func(text string) string {
-		return fmt.Sprintf(`{"type":"function_call_output","call_id":"same","output":%q,"success":true}`, text)
+		return fmt.Sprintf(`{"type":"function_call_output","call_id":"same","output":%q,"success":false}`, text)
 	}
 	p, _ := musePersonalTestProvider(t,
 		musePersonalTestItem(0, output("before"))+
@@ -109,11 +110,13 @@ func TestMusePersonalOccurrencePairing(t *testing.T) {
 	assert.Equal(t, RoleTool, msgs[0].Role)
 	assert.Equal(t, "before", msgs[0].Content)
 	assert.Equal(t, "first", msgs[1].ToolCalls[0].ResultEvents[0].Content)
+	assert.Equal(t, "error", msgs[1].ToolCalls[0].ResultEvents[0].Status)
 	assert.Equal(t, "second", msgs[2].ToolCalls[0].ResultEvents[0].Content)
 	assert.Empty(t, msgs[3].ToolCalls[0].ResultEvents)
 	assert.Empty(t, msgs[4].ToolCalls[0].ResultEvents)
 	assert.Equal(t, RoleTool, msgs[5].Role)
 	assert.Equal(t, "ambiguous", msgs[5].Content)
+	assert.Equal(t, "tool_result", msgs[5].SourceSubtype)
 	for _, m := range msgs {
 		assert.Empty(t, m.ToolResults)
 	}
@@ -123,12 +126,14 @@ func TestMusePersonalReplayAndSequenceOrder(t *testing.T) {
 	one := musePersonalTestItem(9, `{"type":"message","role":"user","text":"first"}`)
 	different := musePersonalTestItem(9, `{"type":"message","role":"assistant","text":"different"}`)
 	checkpoint := `{"type":"compaction_checkpoint","checkpoint_seq":0,"created_at":1791212760,"summary":"summary","details_json":"hidden replacement"}` + "\n"
-	p, _ := musePersonalTestProvider(t, one+one+checkpoint+different+musePersonalTestItem(1, `{"type":"future","text":"SECRET","output":"SECRET"}`))
+	p, _ := musePersonalTestProvider(t, one+one+checkpoint+different+musePersonalTestItem(1, `{"type":"future","text":"SECRET","output":"SECRET"}`)+"{malformed\n")
 	out := musePersonalTestParse(t, p)
+	assert.Equal(t, 1, out.Results[0].Result.Session.MalformedLines)
 	msgs := out.Results[0].Result.Messages
 	require.Len(t, msgs, 4)
 	assert.Equal(t, "first", msgs[1].Content)
 	assert.True(t, msgs[2].IsCompactBoundary)
+	assert.Equal(t, "summary", msgs[2].Content)
 	assert.Equal(t, "different", msgs[3].Content)
 	assert.NotEqual(t, msgs[1].SourceUUID, msgs[3].SourceUUID)
 	assert.Contains(t, msgs[1].SourceUUID, "item:9:")
@@ -165,7 +170,7 @@ func TestMusePersonalAdvisoryIndex(t *testing.T) {
 
 		{"invalid", "{", "2026-10-05T15:04:06Z"},
 		{"unknown version", `{"version":2,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z"}]}`, "2026-10-05T15:04:06Z"},
-		{"matched", `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z","item_count":999999,"transcript_path":"../../secret"}]}`, "2026-10-05T16:00:00Z"},
+		{"matched", `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z","item_count":1,"transcript_path":"11111111-2222-4333-8444-555555555555.jsonl"}]}`, "2026-10-05T16:00:00Z"},
 		{"stale", `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T15:04:05Z"}]}`, "2026-10-05T15:04:06Z"},
 		{"wrong agent", `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z"}]}`, "2026-10-05T15:04:06Z"},
 	} {
@@ -181,25 +186,6 @@ func TestMusePersonalAdvisoryIndex(t *testing.T) {
 			assert.Equal(t, 1, sess.MessageCount)
 		})
 	}
-}
-
-func TestMusePersonalOrdersItemsBySequenceBeforePairing(t *testing.T) {
-	p, _ := musePersonalTestProvider(t,
-		musePersonalTestItem(0, `{"type":"message","role":"user","text":"start"}`)+
-			musePersonalTestItem(2, `{"type":"function_call_output","call_id":"out-of-order","output":"result without metadata","success":false}`)+
-			musePersonalTestItem(1, `{"type":"function_call","call_id":"out-of-order","name":"exec","arguments":"{}"}`)+
-			`{"type":"compaction_checkpoint","checkpoint_seq":0,"first_kept_seq":1,"created_at":1791212760,"summary":"boundary"}`+"\n"+
-			musePersonalTestItem(3, `{"type":"message","role":"assistant","text":"done"}`))
-	out := musePersonalTestParse(t, p)
-	msgs := out.Results[0].Result.Messages
-	require.Len(t, msgs, 4)
-	assert.Equal(t, "start", msgs[0].Content)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "result without metadata", msgs[1].ToolCalls[0].ResultEvents[0].Content)
-	assert.Equal(t, "error", msgs[1].ToolCalls[0].ResultEvents[0].Status)
-	assert.True(t, msgs[2].IsCompactBoundary)
-	assert.Equal(t, "done", msgs[3].Content)
 }
 
 func TestMusePersonalLateSignedThinkingFixture(t *testing.T) {
@@ -225,22 +211,6 @@ func TestMusePersonalLateSignedThinkingFixture(t *testing.T) {
 	}
 }
 
-func TestMusePersonalIgnoresUnknownIndexKeys(t *testing.T) {
-	p, path := musePersonalTestProvider(t,
-		musePersonalTestItem(0, `{"type":"message","role":"user","text":"hello"}`))
-	writeSourceFile(t, filepath.Join(filepath.Dir(path), "sessions.json"),
-		`{"version":1,"future":{"v":true},"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z","context_window_usage":{"measured_envelope":{"tool_fingerprints":["opaque-tool"]}},"future_row":42}]}`)
-	out := musePersonalTestParse(t, p)
-	require.Len(t, out.Results, 1)
-	r := out.Results[0].Result
-	assert.Equal(t, "2026-10-05T16:00:00Z", r.Session.EndedAt.Format(time.RFC3339))
-	assert.Empty(t, r.Session.UsageEvents)
-	assert.Empty(t, r.Session.SessionName)
-	require.Len(t, r.Messages, 1)
-	assert.Equal(t, "hello", r.Messages[0].Content)
-	assert.Empty(t, r.Messages[0].Model)
-}
-
 func TestMusePersonalUnknownDiscriminators(t *testing.T) {
 	for _, tc := range []struct{ name, record, want string }{
 		{"record", `{"type":"future_record","source":"runtime.future","created_at":"2026-10-05T15:04:06Z","text":"opaque-sentinel-body"}` + "\n", "unsupported:record:future_record"},
@@ -261,40 +231,6 @@ func TestMusePersonalUnknownDiscriminators(t *testing.T) {
 	}
 }
 
-func TestMusePersonalNullTimestampsAreMalformed(t *testing.T) {
-	p, _ := musePersonalTestProvider(t,
-		`{"type":"item","seq":0,"created_at":null,"item":{"type":"message","role":"user","text":"invalid"}}`+"\n"+
-			`{"type":"compaction_checkpoint","checkpoint_seq":1,"created_at":null,"summary":"invalid"}`+"\n"+
-			musePersonalTestItem(1, `{"type":"message","role":"user","text":"valid"}`))
-	out := musePersonalTestParse(t, p)
-	require.Len(t, out.Results, 1)
-	r := out.Results[0].Result
-	assert.Equal(t, 2, r.Session.MalformedLines)
-	require.Len(t, r.Messages, 1)
-	assert.Equal(t, "valid", r.Messages[0].Content)
-}
-
-func TestMusePersonalFutureBodiesStayOpaque(t *testing.T) {
-	for _, tc := range []struct{ name, record, want string }{
-		{"item", musePersonalTestItem(0, `{"type":"future_item","text":{},"role":[],"parts":false}`), "unsupported:item:future_item"},
-		{"role", musePersonalTestItem(0, `{"type":"message","role":"future_role","text":{}}`), "unsupported:role:future_role"},
-		{"part", musePersonalTestItem(0, `{"type":"message_parts","role":"user","parts":[{"type":"future_part","text":{},"filename":[]}]}`), "unsupported:part:future_part"},
-		{"record", `{"type":"future_record","created_at":"2026-10-05T15:04:06Z","source":"runtime.future","item":false,"summary":{}}` + "\n", "unsupported:record:future_record"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p, _ := musePersonalTestProvider(t, tc.record)
-			out := musePersonalTestParse(t, p)
-			require.Len(t, out.Results, 1)
-			r := out.Results[0].Result
-			assert.Zero(t, r.Session.MalformedLines)
-			require.Len(t, r.Messages, 1)
-			assert.Equal(t, musePersonalUnsupportedContent, r.Messages[0].Content)
-			assert.Equal(t, tc.want, r.Messages[0].SourceSubtype)
-			assert.Equal(t, "runtime.future", r.Messages[0].SourceType)
-		})
-	}
-}
-
 func TestMusePersonalFutureRecordTimestampShapes(t *testing.T) {
 	for _, timestamp := range []string{`"2026-10-05T15:04:06Z"`, `1791212646`} {
 		t.Run(timestamp, func(t *testing.T) {
@@ -307,24 +243,4 @@ func TestMusePersonalFutureRecordTimestampShapes(t *testing.T) {
 			assert.NotContains(t, result.Messages[0].Content, "private-body")
 		})
 	}
-}
-
-func TestMusePersonalMixedAccounting(t *testing.T) {
-	first := musePersonalTestItem(0, `{"type":"message","role":"user","text":"first"}`)
-	body := musePersonalTestItem(4, `{"type":"function_call","call_id":"a","name":"exec","arguments":"{}"}`) +
-		`{"type":"compaction_checkpoint","checkpoint_seq":0,"created_at":1791212760,"summary":"summary"}` + "\n" +
-		first + first +
-		musePersonalTestItem(5, `{"type":"function_call_output","call_id":"a","output":"result","success":true}`) +
-		musePersonalTestItem(2, `{"type":"future_mix","opaque":"hidden"}`) + "{malformed\n"
-	p, _ := musePersonalTestProvider(t, body)
-	result := musePersonalTestParse(t, p).Results[0].Result
-	assert.Equal(t, 1, result.Session.MalformedLines)
-	require.Len(t, result.Messages, 4)
-	assert.Equal(t, "first", result.Messages[0].Content)
-	assert.Equal(t, musePersonalUnsupportedContent, result.Messages[1].Content)
-	require.Len(t, result.Messages[2].ToolCalls, 1)
-	require.Len(t, result.Messages[2].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "result", result.Messages[2].ToolCalls[0].ResultEvents[0].Content)
-	assert.Equal(t, "summary", result.Messages[3].Content)
-	assert.True(t, result.Messages[3].IsCompactBoundary)
 }

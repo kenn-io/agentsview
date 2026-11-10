@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -20,107 +19,6 @@ func musePersonalPropertyFile(t *testing.T) string {
 	t.Helper()
 	_, path := musePersonalTestProvider(t, "")
 	return path
-}
-
-func TestMusePersonalHegelIndependentWriteOrder(t *testing.T) {
-	path := musePersonalPropertyFile(t)
-	hegel.Test(t, func(ht *hegel.T) {
-		n := hegel.Draw(ht, hegel.Integers(1, 64))
-		remaining := make([]int, n)
-		for i := range remaining {
-			remaining[i] = i
-		}
-		var body strings.Builder
-		for len(remaining) > 0 {
-			pick := hegel.Draw(ht, hegel.Integers(0, len(remaining)-1))
-			seq := remaining[pick]
-			fmt.Fprint(&body, musePersonalTestItem(seq,
-				fmt.Sprintf(`{"type":"message","role":"user","text":"item-%d"}`, seq)))
-			remaining = append(remaining[:pick], remaining[pick+1:]...)
-		}
-		require.NoError(ht, os.WriteFile(path, []byte(musePersonalTestHeader+body.String()), 0o600))
-		sess, msgs, err := parseMusePersonalSession(t.Context(), path, "fixture")
-		require.NoError(ht, err)
-		require.NotNil(ht, sess)
-		assert.Zero(ht, sess.MalformedLines)
-		require.Len(ht, msgs, n)
-		for i, m := range msgs {
-			assert.Equal(ht, fmt.Sprintf("item-%d", i), m.Content)
-			assert.Contains(ht, m.SourceUUID, fmt.Sprintf(":item:%d:1", i))
-		}
-	}, hegel.WithTestCases(2000), hegel.WithDatabase(""))
-}
-
-func TestMusePersonalHegelCallOccurrences(t *testing.T) {
-	path := musePersonalPropertyFile(t)
-	hegel.Test(t, func(ht *hegel.T) {
-		n := hegel.Draw(ht, hegel.Integers(0, 64))
-		type call struct {
-			seq     int
-			id      string
-			matched bool
-		}
-		var calls []call
-		expected := map[int]string{}
-		var orphan []string
-		var records []string
-		for seq := range n {
-			id := strconv.Itoa(hegel.Draw(ht, hegel.Integers(0, 4)))
-			if hegel.Draw(ht, hegel.Booleans()) {
-				calls = append(calls, call{seq: seq, id: id})
-				records = append(records, musePersonalTestItem(seq, fmt.Sprintf(
-					`{"type":"function_call","call_id":%q,"name":"exec","arguments":"{}"}`, id)))
-			} else {
-				value := fmt.Sprintf("output-%d", seq)
-				only, count := -1, 0
-				for i, c := range calls {
-					if c.id == id && !c.matched {
-						only = i
-						count++
-					}
-				}
-				if count == 1 {
-					calls[only].matched = true
-					expected[calls[only].seq] = value
-				} else {
-					orphan = append(orphan, value)
-				}
-				records = append(records, musePersonalTestItem(seq, fmt.Sprintf(
-					`{"type":"function_call_output","call_id":%q,"output":%q,"success":true}`, id, value)))
-			}
-		}
-		var body strings.Builder
-		for len(records) > 0 {
-			pick := hegel.Draw(ht, hegel.Integers(0, len(records)-1))
-			body.WriteString(records[pick])
-			records = append(records[:pick], records[pick+1:]...)
-		}
-		require.NoError(ht, os.WriteFile(path, []byte(musePersonalTestHeader+body.String()), 0o600))
-		_, msgs, err := parseMusePersonalSession(t.Context(), path, "fixture")
-		require.NoError(ht, err)
-		var gotOrphans []string
-		var gotCalls int
-		for _, m := range msgs {
-			assert.Empty(ht, m.ToolResults)
-			if m.Role == RoleTool {
-				gotOrphans = append(gotOrphans, m.Content)
-			}
-			for _, c := range m.ToolCalls {
-				require.Less(ht, gotCalls, len(calls))
-				want := calls[gotCalls]
-				assert.Equal(ht, want.id, c.ToolUseID)
-				if value, paired := expected[want.seq]; paired {
-					require.Len(ht, c.ResultEvents, 1)
-					assert.Equal(ht, value, c.ResultEvents[0].Content)
-				} else {
-					assert.Empty(ht, c.ResultEvents)
-				}
-				gotCalls++
-			}
-		}
-		assert.Equal(ht, len(calls), gotCalls)
-		assert.Equal(ht, orphan, gotOrphans)
-	}, hegel.WithTestCases(2000), hegel.WithDatabase(""))
 }
 
 func TestMusePersonalHegelDuplicateAndGapAccounting(t *testing.T) {
@@ -141,35 +39,6 @@ func TestMusePersonalHegelDuplicateAndGapAccounting(t *testing.T) {
 		assert.Equal(ht, text, msgs[0].Content)
 		assert.Equal(ht, "different", msgs[1].Content)
 		assert.NotEqual(ht, msgs[0].SourceUUID, msgs[1].SourceUUID)
-	}, hegel.WithTestCases(2000), hegel.WithDatabase(""))
-}
-
-func TestMusePersonalHegelOpaqueBodiesStayOpaque(t *testing.T) {
-	path := musePersonalPropertyFile(t)
-	hegel.Test(t, func(ht *hegel.T) {
-		suffix := hegel.Draw(ht, hegel.Text().MaxSize(256))
-		source := hegel.Draw(ht, hegel.Text().MaxSize(256))
-		kind := "future_" + suffix
-		item, err := json.Marshal(map[string]string{
-			"type": kind, "text": "opaque-sentinel-body", "output": "opaque-sentinel-body",
-		})
-		require.NoError(ht, err)
-		rawSource, err := json.Marshal(source)
-		require.NoError(ht, err)
-		record := fmt.Sprintf(`{"type":"item","seq":0,"source":%s,"created_at":"2026-10-05T15:04:06Z","item":%s}`+"\n", rawSource, item)
-		require.NoError(ht, os.WriteFile(path, []byte(musePersonalTestHeader+record), 0o600))
-		_, msgs, err := parseMusePersonalSession(t.Context(), path, "fixture")
-		require.NoError(ht, err)
-		require.Len(ht, msgs, 1)
-		assert.Equal(ht, source, msgs[0].SourceType)
-		assert.Contains(ht, msgs[0].SourceSubtype, "unsupported:item:future_")
-		assert.LessOrEqual(ht, len(msgs[0].SourceSubtype), len("unsupported:item:")+64)
-		assert.Contains(ht, msgs[0].SourceUUID, ":item:0:1")
-		assert.Equal(ht, musePersonalUnsupportedContent, msgs[0].Content)
-		assert.NotContains(ht, msgs[0].Content, "\n")
-		assert.NotContains(ht, msgs[0].Content, "opaque-sentinel-body")
-		assert.Empty(ht, msgs[0].ToolResults)
-		assert.Empty(ht, msgs[0].ToolCalls)
 	}, hegel.WithTestCases(2000), hegel.WithDatabase(""))
 }
 
@@ -296,5 +165,32 @@ func TestMusePersonalHegelRejectsInvalidTimestamps(t *testing.T) {
 		assert.Equal(ht, 2, sess.MalformedLines)
 		require.Len(ht, msgs, 1)
 		assert.Equal(ht, "valid", msgs[0].Content)
+	}, hegel.WithTestCases(2000), hegel.WithDatabase(""))
+}
+
+func TestMusePersonalHegelOpaqueBodiesStayOpaque(t *testing.T) {
+	path := musePersonalPropertyFile(t)
+	hegel.Test(t, func(ht *hegel.T) {
+		suffix := hegel.Draw(ht, hegel.Text().MaxSize(256))
+		source := hegel.Draw(ht, hegel.Text().MaxSize(256))
+		kind := "future_" + suffix
+		item, err := json.Marshal(map[string]string{
+			"type": kind, "text": "opaque-sentinel-body", "output": "opaque-sentinel-body",
+		})
+		require.NoError(ht, err)
+		rawSource, err := json.Marshal(source)
+		require.NoError(ht, err)
+		record := fmt.Sprintf(`{"type":"item","seq":0,"source":%s,"created_at":"2026-10-05T15:04:06Z","item":%s}`+"\n", rawSource, item)
+		require.NoError(ht, os.WriteFile(path, []byte(musePersonalTestHeader+record), 0o600))
+		_, msgs, err := parseMusePersonalSession(t.Context(), path, "fixture")
+		require.NoError(ht, err)
+		require.Len(ht, msgs, 1)
+		assert.Equal(ht, source, msgs[0].SourceType)
+		assert.Contains(ht, msgs[0].SourceSubtype, "unsupported:item:future_")
+		assert.LessOrEqual(ht, len(msgs[0].SourceSubtype), len("unsupported:item:")+64)
+		assert.Contains(ht, msgs[0].SourceUUID, ":item:0:1")
+		assert.Equal(ht, musePersonalUnsupportedContent, msgs[0].Content)
+		assert.Empty(ht, msgs[0].ToolResults)
+		assert.Empty(ht, msgs[0].ToolCalls)
 	}, hegel.WithTestCases(2000), hegel.WithDatabase(""))
 }

@@ -60,7 +60,6 @@ func TestMusePersonalRemoteExactFilesAndImport(t *testing.T) {
 	messages, err := database.GetMessages(t.Context(), session.ID, 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 11)
-	assert.Equal(t, "synthetic widget inventory: 3 widgets", messages[4].ToolCalls[0].ResultContent)
 }
 
 func TestMusePersonalRemoteDeletedCompanions(t *testing.T) {

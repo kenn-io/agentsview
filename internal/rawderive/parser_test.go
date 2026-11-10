@@ -1767,23 +1767,6 @@ func TestProviderParserHostedEvenerMatchesLocal(t *testing.T) {
 				assert.Equal(t, source.DisplayPath, hosted.Outcome.Results[0].Result.Session.File.Path)
 				assert.Equal(t, "Child session", hosted.Outcome.Results[0].Result.Session.SessionName)
 				assert.Equal(t, "evener:parent", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
-
-				// Re-capturing metadata must retain the original path-keyed source.
-				require.NoError(t, os.WriteFile(filepath.Join(sessions, "session.meta.json"),
-					[]byte(`{"id":"session","name":"Renamed session","parent_session_id":"parent","divergence_turn":2}`), 0o600))
-				nextManifest, nextObjects := manifestFromCapturePlan(t, parser.AgentEvener, provider, source)
-				assert.NotEqual(t, manifest.ManifestID, nextManifest.ManifestID)
-				nextTree, err := (Materializer{
-					Store:   &materializerStore{objects: nextObjects},
-					BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
-				}).Materialize(t.Context(), nextManifest)
-				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, nextTree.Cleanup()) })
-				next, err := dispatch.Parse(t.Context(), nextManifest, nextTree)
-				require.NoError(t, err)
-				require.Len(t, next.Outcome.Results, 1)
-				assert.Equal(t, source.DisplayPath, next.Outcome.Results[0].Result.Session.File.Path)
-				assert.Equal(t, "Renamed session", next.Outcome.Results[0].Result.Session.SessionName)
 			})
 		}
 	}

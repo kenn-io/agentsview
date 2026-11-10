@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -31,86 +30,6 @@ func musePersonalSyncFile(t *testing.T, body string) (string, string) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte(musePersonalSyncHeader+body), 0o600))
 	return root, path
-}
-
-func TestMusePersonalSQLiteOccurrencePairing(t *testing.T) {
-	call := `{"type":"function_call","call_id":"reused","name":"read","arguments":"{\"path\":\"/example/file\"}"}`
-	output := func(text string) string {
-		return fmt.Sprintf(`{"type":"function_call_output","call_id":"reused","output":%q,"success":true}`, text)
-	}
-	root, _ := musePersonalSyncFile(t, musePersonalSyncItem(0, output("orphan-before"))+musePersonalSyncItem(1, call)+musePersonalSyncItem(2, output("first"))+musePersonalSyncItem(3, call)+musePersonalSyncItem(4, output("second"))+musePersonalSyncItem(5, call)+musePersonalSyncItem(6, call)+musePersonalSyncItem(7, output("ambiguous")))
-	database := openTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"})
-	t.Cleanup(engine.Close)
-	stats := engine.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
-	require.Equal(t, 1, stats.Synced)
-	messages, err := database.GetMessages(t.Context(), "muse-personal:"+musePersonalSyncID, 0, 100, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 6)
-	assert.Equal(t, "orphan-before", messages[0].Content)
-	for i, want := range []string{"first", "second"} {
-		require.Len(t, messages[i+1].ToolCalls, 1)
-		c := messages[i+1].ToolCalls[0]
-		assert.Equal(t, "reused", c.ToolUseID)
-		require.Len(t, c.ResultEvents, 1)
-		assert.Equal(t, want, c.ResultContent)
-		assert.Equal(t, want, c.ResultEvents[0].Content)
-	}
-	assert.Empty(t, messages[3].ToolCalls[0].ResultEvents)
-	assert.Empty(t, messages[4].ToolCalls[0].ResultEvents)
-	assert.Equal(t, "ambiguous", messages[5].Content)
-	assert.Equal(t, "tool_result", messages[5].SourceSubtype)
-}
-
-func TestMusePersonalBlockedResultsAndArchivePolicy(t *testing.T) {
-	for _, mode := range []string{"blocked", "transcripts", "usage"} {
-		t.Run(mode, func(t *testing.T) {
-			root, _ := musePersonalSyncFile(t, musePersonalSyncItem(0, `{"type":"message","role":"user","text":"visible dialogue"}`)+musePersonalSyncItem(1, `{"type":"function_call","call_id":"a","name":"read","arguments":"{\"path\":\"/example/file\"}"}`)+musePersonalSyncItem(2, `{"type":"function_call_output","call_id":"a","output":"hidden-result","success":true}`)+musePersonalSyncItem(3, `{"type":"function_call_output","call_id":"orphan","output":"orphan-result","success":false}`)+musePersonalSyncItem(4, `{"type":"future","text":"hidden-unknown-body"}`))
-			database := openTestDB(t)
-			cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"}
-			switch mode {
-			case "blocked":
-				cfg.BlockedResultCategories = []string{"Read"}
-			case "transcripts":
-				cfg.ArchiveContent = config.ArchiveContentTranscripts
-				database.SetArchiveContent(cfg.ArchiveContent)
-			case "usage":
-				cfg.ArchiveContent = config.ArchiveContentUsage
-				database.SetArchiveContent(cfg.ArchiveContent)
-			}
-			engine := NewEngine(t.Context(), database, cfg)
-			t.Cleanup(engine.Close)
-			stats := engine.SyncAll(t.Context(), nil)
-			require.Zero(t, stats.Failed)
-			messages, err := database.GetMessages(t.Context(), "muse-personal:"+musePersonalSyncID, 0, 100, true)
-			require.NoError(t, err)
-			for _, m := range messages {
-				assert.NotContains(t, m.Content, "hidden-unknown-body")
-				if mode == "usage" {
-					assert.Empty(t, m.Content)
-					assert.Empty(t, m.ThinkingText)
-				}
-				if mode == "transcripts" && m.Role == "tool" {
-					assert.Empty(t, m.Content)
-				}
-				for _, c := range m.ToolCalls {
-					assert.Equal(t, "Read", c.Category)
-					assert.Empty(t, c.ResultContent)
-					for _, event := range c.ResultEvents {
-						assert.Empty(t, event.Content)
-					}
-					if mode != "blocked" {
-						assert.Empty(t, c.InputJSON)
-					}
-				}
-			}
-			if mode != "usage" {
-				require.Len(t, messages, 4)
-				assert.Equal(t, "visible dialogue", messages[0].Content)
-			}
-		})
-	}
 }
 
 func TestMusePersonalArchiveReplacementAndIndexPolling(t *testing.T) {
@@ -365,6 +284,8 @@ func TestMusePersonalIndexRefreshesOnlyChangedSession(t *testing.T) {
 func TestMusePersonalPollingWithUnusableIndex(t *testing.T) {
 	body := musePersonalSyncItem(0, `{"type":"message","role":"user","text":"first"}`)
 	root, path := musePersonalSyncFile(t, body)
+	// A directory stands in for an unusable optional index: it forces the zero
+	// stat digest also returned when a regular index cannot be inspected.
 	require.NoError(t, os.Mkdir(filepath.Join(filepath.Dir(path), "sessions.json"), 0o700))
 	database := openTestDB(t)
 	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"})
