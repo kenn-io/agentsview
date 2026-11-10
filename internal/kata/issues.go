@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
@@ -18,6 +19,7 @@ type Issue struct {
 	UID, ShortID, QualifiedID, Title, Status, ClosedReason, WebURL string
 	Labels                                                         []string
 	Metadata                                                       map[string]any
+	ClosedAt                                                       *time.Time
 	Priority                                                       *int
 }
 
@@ -167,7 +169,7 @@ func (c *Client) issueFromShow(s kg.ShowIssueResponseBody) (Issue, error) {
 	}
 	return Issue{
 		UID: o.UID, ShortID: o.ShortID, QualifiedID: qualifiedID, Title: o.Title, Status: o.Status,
-		ClosedReason: deref(o.ClosedReason), WebURL: deref(s.WebURL), Labels: labels, Metadata: o.Metadata, Priority: intPtr(o.Priority),
+		ClosedAt: o.ClosedAt, ClosedReason: deref(o.ClosedReason), WebURL: deref(s.WebURL), Labels: labels, Metadata: o.Metadata, Priority: intPtr(o.Priority),
 	}, nil
 }
 

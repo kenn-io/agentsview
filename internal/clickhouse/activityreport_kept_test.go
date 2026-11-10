@@ -2,13 +2,17 @@ package clickhouse
 
 import (
 	"database/sql"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
+	"unsafe"
+	"weak"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,11 +85,11 @@ func keptTestRows(k *activityUsageKept) []clickActivityReportUsageRow {
 	return got
 }
 
-// A push's changed sessions merged into kept rows must give the rows a
-// fresh read of the whole range gives, in the same order, without the
-// replaced sessions' old rows: otherwise a report after a push counts old
-// usage or drops new usage.
-func TestMergedActivityUsageMatchesFreshRead(t *testing.T) {
+// A push's changed sessions patched into a kept range must leave each
+// session with the rows a fresh read of the whole range gives it, in the
+// same order, and drop the sessions that are gone: otherwise a report after
+// a push counts old usage or drops new usage.
+func TestPatchedActivityUsageMatchesFreshRead(t *testing.T) {
 	unchanged := []clickSessionUsageOrderedRow{
 		keptTestRow("session-a", "message", "2026-09-01T10:00:00Z", 1, "", "", 1),
 		keptTestRow("session-a", "message", "2026-09-01T10:00:02.5Z", 2, "", "", 2),
@@ -102,20 +106,61 @@ func TestMergedActivityUsageMatchesFreshRead(t *testing.T) {
 		keptTestRow("session-b", "message", "2026-09-01T10:00:04Z", 3, "", "", 9),
 		keptTestRow("session-new", "message", "2026-09-01T09:59:59Z", 1, "", "", 10),
 	}
-	prev := keepTestUsage(before)
-	replaced := map[string]bool{"session-b": true, "session-gone": true, "session-new": true}
-	merged := mergeActivityUsage(prev, replaced, keepTestUsage(pushed))
+	var r activityUsageRange
+	r.reset(nil, keepTestUsage(before))
+	r.patch(nil, []string{"session-b", "session-gone", "session-new"}, keepTestUsage(pushed))
 
-	after := slices.Concat(unchanged, pushed)
-	want := keepTestUsage(after)
-	require.Equal(t, keptTestRows(want), keptTestRows(merged))
-	require.Equal(t, want.count, merged.count)
+	sessionRows := func(r *activityUsageRange) map[string][]int {
+		out := map[string][]int{}
+		for _, session := range r.sessions {
+			if session.rows == nil {
+				continue
+			}
+			for row := range session.rows.all() {
+				out[session.id] = append(out[session.id], row.outputTok)
+			}
+		}
+		return out
+	}
+	want := map[string][]int{
+		"session-a": {1, 2}, "session-b": {7, 8, 9}, "session-c": {3, 4}, "session-new": {10},
+	}
+	require.Equal(t, want, sessionRows(&r))
+	require.Equal(t, 8, r.rows)
 
-	// A second merge starts from the first one's dictionary.
-	again := []clickSessionUsageOrderedRow{keptTestRow("session-a", "message", "2026-09-01T10:00:05Z", 3, "", "", 11)}
-	merged = mergeActivityUsage(merged, map[string]bool{}, keepTestUsage(again))
-	after = slices.Concat(after, again)
-	require.Equal(t, keptTestRows(keepTestUsage(after)), keptTestRows(merged))
+	var fresh activityUsageRange
+	fresh.reset(nil, keepTestUsage(slices.Concat(unchanged, pushed)))
+	require.Equal(t, sessionRows(&fresh), sessionRows(&r))
+}
+
+// A push that replaces a session must let its previous rows be freed while
+// the sessions it left unchanged stay kept. The range's byte estimate counts
+// only the rows it holds, so replaced rows that stayed alive beside the kept
+// ones would let the range outgrow its memo's byte cap uncounted.
+func TestPatchedActivityUsageFreesReplacedRows(t *testing.T) {
+	var before []clickSessionUsageOrderedRow
+	for _, session := range []string{"session-a", "session-b", "session-c"} {
+		for i := range 10 {
+			before = append(before, keptTestRow(session, "message",
+				time.Date(2026, 9, 1, 10, 0, i, 0, time.UTC).Format(time.RFC3339), int64(i+1), "msg", "req", i))
+		}
+	}
+	var r activityUsageRange
+	r.reset(nil, keepTestUsage(before))
+	data, arena := func() (weak.Pointer[byte], weak.Pointer[byte]) {
+		replaced := r.sessions[r.number["session-b"]].rows
+		return weak.Make(unsafe.SliceData(replaced.data)), weak.Make(unsafe.StringData(replaced.arena))
+	}()
+	r.patch(nil, []string{"session-b"}, keepTestUsage([]clickSessionUsageOrderedRow{
+		keptTestRow("session-b", "message", "2026-09-01T10:00:20Z", 1, "msg", "req", 20),
+	}))
+
+	runtime.GC()
+	assert.Nil(t, data.Value(), "the replaced session's data is still alive")
+	assert.Nil(t, arena.Value(), "the replaced session's arena is still alive")
+	for _, session := range []string{"session-a", "session-c"} {
+		assert.Len(t, keptTestRows(r.sessions[r.number[session]].rows), 10, session)
+	}
 }
 
 // Selecting candidates from a range's kept rows must return what the

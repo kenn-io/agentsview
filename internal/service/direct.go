@@ -1266,7 +1266,7 @@ func (b *directBackend) SearchContent(
 		}
 		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
 		if reason == "not set up" {
-			note += " To enable search by meaning, set `enabled = true` in the `[vector]` section of `~/.agentsview/config.toml`, restart the daemon, then run `agentsview index embeddings build`. If `[vector]` is already enabled, run the build now."
+			note += " To enable search by meaning, run `agentsview index embeddings build` or turn it on in Settings → Embeddings → Turn on."
 		}
 		page, err = b.db.SearchContent(ctx, filter)
 	}

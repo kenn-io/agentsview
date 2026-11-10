@@ -703,12 +703,19 @@ func (r *PricingResolver) RecordResolvedComputedRequest(
 	lookup PricingLookup,
 	inputTokens, cacheWriteTokens, cacheReadTokens int,
 ) {
-	band, ok := lookup.Rates.pricingBandForTokens(inputTokens, cacheWriteTokens, cacheReadTokens)
 	var threshold *int
-	if ok {
-		threshold = &band.AboveInputTokens
+	if band, ok := lookup.Rates.RequestBand(inputTokens, cacheWriteTokens, cacheReadTokens); ok {
+		threshold = &band
 	}
 	r.accumulateResolved(reportedModel, pricedModel, lookup, false, true, 1, 0, threshold)
+}
+
+// RequestBand returns the input threshold of the band that prices a request
+// with these input-side tokens, or false when the base rates price it.
+// RecordResolvedCounts takes it to record many such requests at once.
+func (r ModelRates) RequestBand(inputTokens, cacheWriteTokens, cacheReadTokens int) (int, bool) {
+	band, ok := r.pricingBandForTokens(inputTokens, cacheWriteTokens, cacheReadTokens)
+	return band.AboveInputTokens, ok
 }
 
 func (r *PricingResolver) RecordComputedAggregate(model string, lookup PricingLookup) {

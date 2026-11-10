@@ -52,8 +52,7 @@
   // db.ErrSemanticUnavailable's base message; search failures wrapping a
   // more specific cause differ from it.
   const GENERIC_SEARCH_UNAVAILABLE =
-    "semantic search not available: enable [vector] in config.toml and run " +
-    "'agentsview index embeddings build'";
+    "semantic search not available: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on";
 
   const specificSearchDetail = $derived(
     searchDetail !== null && searchDetail !== GENERIC_SEARCH_UNAVAILABLE

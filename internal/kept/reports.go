@@ -1,7 +1,6 @@
 package kept
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -25,7 +24,7 @@ type Report struct {
 	Done      activity.Progress
 }
 
-type activityReportDisk struct{ dir, build string }
+type activityReportDisk struct{ dir, build, suffix string }
 
 // Reports keeps ended ranges in memory and requested days on disk.
 // Each memo holds up to 128 MiB; disk-backed reports also have an eight-entry cap.
@@ -86,7 +85,7 @@ func (s *Reports) Path(selection string) string { return s.disk.path(selection) 
 func (s *Reports) Sweep(now time.Time) (int, error) { return s.disk.sweep(now) }
 
 // StartSweep owns the sweep until Close, independently of the startup context.
-func (s *Reports) StartSweep(ctx context.Context) {
+func (s *Reports) StartSweep(ctx context.Context, others ...func(time.Time)) {
 	if s.disk.dir == "" || s.cancel != nil {
 		return
 	}
@@ -98,7 +97,11 @@ func (s *Reports) StartSweep(ctx context.Context) {
 		ticker := time.NewTicker(activityReportSweepInterval)
 		defer ticker.Stop()
 		for {
-			removed, err := s.Sweep(time.Now())
+			now := time.Now()
+			for _, sweep := range others {
+				sweep(now)
+			}
+			removed, err := s.Sweep(now)
 			if err != nil {
 				log.Printf("%s: sweeping kept activity reports: %v", s.subdir, err)
 			}
@@ -152,7 +155,14 @@ func (s *Reports) OpenDisk(subdir, id string) error {
 
 func (d activityReportDisk) path(selection string) string {
 	name := sha256.Sum256([]byte(selection))
-	return filepath.Join(d.dir, hex.EncodeToString(name[:16])+".json")
+	return filepath.Join(d.dir, hex.EncodeToString(name[:16])+d.fileSuffix())
+}
+
+func (d activityReportDisk) fileSuffix() string {
+	if d.suffix == "" {
+		return ".json"
+	}
+	return d.suffix
 }
 
 func (d activityReportDisk) header(key string) []byte {
@@ -166,7 +176,7 @@ func (s *Reports) loadActivityReport(selection, key string) (Report, bool) {
 	if d.dir == "" {
 		return Report{}, false
 	}
-	data, err := os.ReadFile(d.path(selection))
+	data, ok, err := d.load(selection, key, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return Report{}, false
 	}
@@ -174,12 +184,11 @@ func (s *Reports) loadActivityReport(selection, key string) (Report, bool) {
 		log.Printf("%s: reading a kept activity report: %v", s.subdir, err)
 		return Report{}, false
 	}
-	header := d.header(key)
-	if !bytes.HasPrefix(data, header) {
+	if !ok {
 		return Report{}, false
 	}
 	var file Report
-	if err := json.Unmarshal(data[len(header):], &file); err != nil {
+	if err := json.Unmarshal(data, &file); err != nil {
 		log.Printf("%s: decoding a kept activity report: %v", s.subdir, err)
 		return Report{}, false
 	}
@@ -195,7 +204,7 @@ func (s *Reports) saveActivityReport(selection, key string, entry Report) {
 	}
 	body, err := json.Marshal(entry)
 	if err == nil {
-		err = writeFileAtomic(d.path(selection), append(d.header(key), body...))
+		err = d.save(selection, key, body, 0)
 	}
 	if err != nil {
 		log.Printf("%s: keeping an activity report on disk: %v", s.subdir, err)
@@ -209,12 +218,7 @@ func (s *Reports) touchActivityReport(selection, key string, entry Report) {
 	if d.dir == "" {
 		return
 	}
-	now := time.Now()
-	err := os.Chtimes(d.path(selection), now, now)
-	if errors.Is(err, os.ErrNotExist) {
-		s.saveActivityReport(selection, key, entry)
-		return
-	}
+	_, err := d.keep(selection, key, 0, func() ([]byte, error) { return json.Marshal(entry) })
 	if err != nil {
 		log.Printf("%s: recording an activity report open: %v", s.subdir, err)
 	}
@@ -249,7 +253,7 @@ func (d activityReportDisk) sweep(now time.Time) (int, error) {
 			continue
 		case strings.HasPrefix(name, activityReportTempPrefix):
 			maxAge = activityReportTempAge
-		case strings.HasSuffix(name, ".json"):
+		case strings.HasSuffix(name, d.fileSuffix()):
 			maxAge = activityReportUnopened
 		default:
 			continue

@@ -638,6 +638,50 @@ func (o *PostAPIV1EmbeddingsGenerationsIDRetireRequestOptions) GetHeader() (map[
 	return nil, nil
 }
 
+// PostAPIV1EmbeddingsSetupRequestOptions is the options needed to make a request to PostAPIV1EmbeddingsSetup.
+type PostAPIV1EmbeddingsSetupRequestOptions struct {
+	Body *PostAPIV1EmbeddingsSetupBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PostAPIV1EmbeddingsSetupRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PostAPIV1EmbeddingsSetupRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *PostAPIV1EmbeddingsSetupRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PostAPIV1EmbeddingsSetupRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PostAPIV1EmbeddingsSetupRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // GetAPIV1EmbeddingsStatusRequestOptions is the options needed to make a request to GetAPIV1EmbeddingsStatus.
 type GetAPIV1EmbeddingsStatusRequestOptions struct {
 	Query *GetAPIV1EmbeddingsStatusQuery
@@ -5728,6 +5772,7 @@ type ClientInterface interface {
 	GetAPIV1EmbeddingsGenerationsWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsGenerationsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsGenerationsResp, error)
 	PostAPIV1EmbeddingsGenerationsIDActivateWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDActivateRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDActivateResp, error)
 	PostAPIV1EmbeddingsGenerationsIDRetireWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDRetireRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDRetireResp, error)
+	PostAPIV1EmbeddingsSetupWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsSetupRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsSetupResp, error)
 	GetAPIV1EmbeddingsStatusWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsStatusResp, error)
 	PostAPIV1ExportConversationsInitializeWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ExportConversationsInitializeResp, error)
 	GetAPIV1FrictionDigestsWithResponse(ctx context.Context, options *GetAPIV1FrictionDigestsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionDigestsResp, error)
@@ -8760,6 +8805,230 @@ func (c *Client) PostAPIV1EmbeddingsGenerationsIDRetireWithResponse(ctx context.
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "PostAPIV1EmbeddingsGenerationsIDRetireErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PostAPIV1EmbeddingsSetup Set up search by meaning
+func (c *Client) PostAPIV1EmbeddingsSetupWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsSetupRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsSetupResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/embeddings/setup",
+		Method:      "POST",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/embeddings/setup")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PostAPIV1EmbeddingsSetupResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 202:
+		out.JSON202 = new(PostAPIV1EmbeddingsSetupResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON202); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PostAPIV1EmbeddingsSetupErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PostAPIV1EmbeddingsSetupErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1EmbeddingsSetupErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -22473,6 +22742,8 @@ type PostAPIV1EmbeddingsGenerationsIDActivateBody = EmbeddingsGenerationActionRe
 
 type PostAPIV1EmbeddingsGenerationsIDRetireBody = EmbeddingsGenerationActionRequest
 
+type PostAPIV1EmbeddingsSetupBody = EmbeddingsSetupInputBody
+
 type PostAPIV1FrictionPatternsFingerprintIssueBody = FrictionFileInputBody
 
 type PutAPIV1FrictionPatternsFingerprintIssueBody = FrictionLinkInputBody
@@ -24310,6 +24581,30 @@ type PostAPIV1EmbeddingsGenerationsIDRetireErrorResponseJSON503 = APIErrorRespon
 
 type PostAPIV1EmbeddingsGenerationsIDRetireErrorResponseJSON504 = APIErrorResponse
 
+type PostAPIV1EmbeddingsSetupResponse = EmbeddingsBuildResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponse = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON403 = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON404 = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON409 = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON422 = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON500 = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON501 = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON502 = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON503 = APIErrorResponse
+
+type PostAPIV1EmbeddingsSetupErrorResponseJSON504 = APIErrorResponse
+
 type GetAPIV1EmbeddingsStatusResponse = vector.BuildStatus
 
 type GetAPIV1EmbeddingsStatusErrorResponse = APIErrorResponse
@@ -26009,6 +26304,24 @@ type PostAPIV1EmbeddingsGenerationsIDRetireResp struct {
 	JSON502      *PostAPIV1EmbeddingsGenerationsIDRetireErrorResponseJSON502
 	JSON503      *PostAPIV1EmbeddingsGenerationsIDRetireErrorResponseJSON503
 	JSON504      *PostAPIV1EmbeddingsGenerationsIDRetireErrorResponseJSON504
+}
+
+type PostAPIV1EmbeddingsSetupResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON202      *PostAPIV1EmbeddingsSetupResponse
+	JSON400      *PostAPIV1EmbeddingsSetupErrorResponse
+	JSON401      *PostAPIV1EmbeddingsSetupErrorResponseJSON
+	JSON403      *PostAPIV1EmbeddingsSetupErrorResponseJSON403
+	JSON404      *PostAPIV1EmbeddingsSetupErrorResponseJSON404
+	JSON409      *PostAPIV1EmbeddingsSetupErrorResponseJSON409
+	JSON422      *PostAPIV1EmbeddingsSetupErrorResponseJSON422
+	JSON500      *PostAPIV1EmbeddingsSetupErrorResponseJSON500
+	JSON501      *PostAPIV1EmbeddingsSetupErrorResponseJSON501
+	JSON502      *PostAPIV1EmbeddingsSetupErrorResponseJSON502
+	JSON503      *PostAPIV1EmbeddingsSetupErrorResponseJSON503
+	JSON504      *PostAPIV1EmbeddingsSetupErrorResponseJSON504
 }
 
 type GetAPIV1EmbeddingsStatusResp struct {
@@ -28775,6 +29088,15 @@ func (e EmbeddingsGenerationsResponse) Validate() error {
 		return nil
 	}
 	return errors
+}
+
+type EmbeddingsSetupInputBody struct {
+	// ApprovedBytes Download size the user saw; a larger download is declined
+	ApprovedBytes *int64 `json:"approved_bytes,omitempty" validate:"omitempty,gte=0"`
+}
+
+func (e EmbeddingsSetupInputBody) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(e))
 }
 
 type ExportAppliedPricingBand struct {

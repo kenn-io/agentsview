@@ -42,6 +42,11 @@ binary has updated the schema.
 
 Commit lookups return the copied links and prompts.
 The first push after upgrading is a full push to copy existing commit links.
+Upgrade serving binaries before or with publishers; older readers cannot see the new table.
+A serving role that cannot create tables needs an upgraded push before commit
+lookups work. Each archive's rebuild removes only the deleted-session links that
+archive pushed. Links with no recorded archive, from older pushes, stay and can
+reappear after an archive discards its matching copy.
 A deleted session remains visible as a missing record. Project filters use the
 project saved with its links in SQLite, including after a rebuild or a deletion
 before the first push.
@@ -552,6 +557,12 @@ sets it, otherwise the user cache directory under
 only makes the next open of those days slower. A new binary rebuilds them on its
 own. If the directory cannot be created, serve logs a warning and keeps reports
 in memory only.
+
+Usage also keeps fully prepared selections under `agentsview/clickhouse-usage`
+in the same cache directory. Each selection can use up to 128 MiB, with a
+256 MiB limit per mirror. The next read rebuilds a selection after a push,
+pricing change, new binary, or deletion of the cache directory. If the cache is
+unavailable, Usage reads the mirror instead.
 
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.

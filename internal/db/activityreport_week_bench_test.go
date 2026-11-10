@@ -14,8 +14,7 @@ import (
 // pairing memo and no kept report, as the first Activity open after a start
 // does. Each response
 // is stored as two rows that share its message and request IDs, as Claude
-// transcripts store multi-part responses. The week exceeds the pairing memo's
-// budgets, so it measures a build the memo cannot hold.
+// transcripts store multi-part responses.
 func BenchmarkSQLiteActivityReportBusyWeekFirstOpen(b *testing.B) {
 	d := testDB(b)
 	const sessionCount = 6_000

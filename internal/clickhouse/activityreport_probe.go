@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -21,15 +22,25 @@ type activityProbeCache struct {
 	mu          sync.Mutex
 	fingerprint string
 	probe       activity.SourceProbe
+	// messageIDs and usageEventIDs keep the highest ids per part; see
+	// maxFinalID.
+	messageIDs, usageEventIDs finalIDs
+}
+
+// activityProbeTables are the tables whose parts the cached probe names.
+var activityProbeTables = []string{
+	"sessions", "messages", "usage_events",
+	"model_pricing", "genai_pricing", "sync_metadata", "usage_session_snapshots", "prepared_usage",
 }
 
 func (s *Store) ActivityReportSourceProbe(
 	ctx context.Context,
 ) (activity.SourceProbe, error) {
-	fingerprint, err := s.tablePartsFingerprint(ctx, []string{
-		"sessions", "messages", "usage_events",
-		"model_pricing", "genai_pricing", "sync_metadata", "usage_session_snapshots", "prepared_usage",
-	})
+	ctx, err := s.withPartsSnapshot(ctx)
+	if err != nil {
+		return activity.SourceProbe{}, err
+	}
+	fingerprint, err := s.tablePartsFingerprint(ctx, activityProbeTables)
 	if err != nil {
 		return activity.SourceProbe{}, err
 	}
@@ -52,14 +63,14 @@ func (s *Store) ActivityReportSourceProbe(
 	return probe, nil
 }
 
+// readActivitySourceProbe reads the probe. The parts snapshot in ctx names
+// the message and usage event parts whose highest ids it starts from.
 func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourceProbe, error) {
 	var probe activity.SourceProbe
 	err := s.queryRowContext(ctx, `SELECT
 		(SELECT toInt64(count()) FROM sessions),
 		ifNull(toString((SELECT max(local_modified_at) FROM sessions)), ''),
 		ifNull((SELECT max(data_version) FROM sessions), 0),
-		ifNull((SELECT max(id) FROM messages), 0),
-		ifNull((SELECT max(id) FROM usage_events), 0),
 		greatest(
 			ifNull((SELECT max(updated_at) FROM model_pricing), ''),
 			ifNull((SELECT max(updated_at) FROM genai_pricing), '')
@@ -71,11 +82,17 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 		), 0)`,
 		identityRevisionKeyBase).Scan(
 		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,
-		&probe.MaxMessageID, &probe.MaxUsageID, &probe.MaxPricingUpdated,
-		&probe.ProjectIdentityGeneration,
+		&probe.MaxPricingUpdated, &probe.ProjectIdentityGeneration,
 	)
 	if err != nil {
 		return activity.SourceProbe{}, fmt.Errorf("probing clickhouse activity report source: %w", err)
+	}
+	snapshot, _ := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
+	if probe.MaxMessageID, err = s.maxFinalID(ctx, "messages", snapshot["messages"], &s.probeCache.messageIDs); err != nil {
+		return activity.SourceProbe{}, err
+	}
+	if probe.MaxUsageID, err = s.maxFinalID(ctx, "usage_events", snapshot["usage_events"], &s.probeCache.usageEventIDs); err != nil {
+		return activity.SourceProbe{}, err
 	}
 	ready, err := s.preparedUsageReady(ctx)
 	if err != nil {
@@ -92,6 +109,151 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 		}
 	}
 	return probe, nil
+}
+
+// topIDsPerPart is how many of each part's highest ids finalIDs keeps.
+const topIDsPerPart = 16
+
+// finalIDs keeps the highest ids of each part of a table whose rows are
+// keyed by session, with their sessions. Rows of a part change only through
+// a lightweight delete, which hides them without renaming the part; any
+// other write makes a new part. So every row of a part with an id above the
+// lowest kept one is kept, as long as the part keeps all its ids or the
+// part's top list is full.
+type finalIDs struct {
+	mu    sync.Mutex
+	parts map[string][]sessionIDRow
+}
+
+type sessionIDRow struct {
+	id      int64
+	session string
+}
+
+// maxFinalID returns the highest id of the rows FINAL returns from table,
+// as max(id) under FINAL does, without reading every id. The rows above
+// the highest part threshold are among the kept ones, so a FINAL read of
+// their sessions finds the answer when one of them survives FINAL. When
+// every such row was replaced or deleted, it reads the whole table.
+func (s *Store) maxFinalID(ctx context.Context, table string, tp tableParts, ids *finalIDs) (int64, error) {
+	ids.mu.Lock()
+	defer ids.mu.Unlock()
+	if ids.parts == nil {
+		ids.parts = map[string][]sessionIDRow{}
+	}
+	current := map[string]bool{}
+	var missing []string
+	for _, p := range tp.parts {
+		if p.isPatch() {
+			continue
+		}
+		current[p.name] = true
+		if _, ok := ids.parts[p.name]; !ok {
+			missing = append(missing, p.name)
+		}
+	}
+	maps.DeleteFunc(ids.parts, func(name string, _ []sessionIDRow) bool { return !current[name] })
+	if len(missing) > 0 {
+		rows, err := s.queryContext(ctx, `SELECT _part, id, session_id FROM `+table+` WHERE `+
+			partsClause(missing)+fmt.Sprintf(` ORDER BY id DESC LIMIT %d BY _part SETTINGS final=0`, topIDsPerPart))
+		if err != nil {
+			return 0, fmt.Errorf("reading %s top ids: %w", table, err)
+		}
+		defer rows.Close()
+		// A part's top ids are kept only once the whole read succeeds: a
+		// partial list would pass for a part with fewer ids.
+		read := map[string][]sessionIDRow{}
+		for rows.Next() {
+			var part string
+			var r sessionIDRow
+			if err := rows.Scan(&part, &r.id, &r.session); err != nil {
+				return 0, fmt.Errorf("scanning %s top id: %w", table, err)
+			}
+			read[part] = append(read[part], r)
+		}
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("iterating %s top ids: %w", table, err)
+		}
+		merged, err := s.keepEmptyTopIDParts(ctx, table, missing, read)
+		if err != nil {
+			return 0, err
+		}
+		maps.Copy(ids.parts, read)
+		if merged {
+			// A part merged away before its ids were read, so the kept ids
+			// may miss the highest one.
+			return s.readMaxFinalID(ctx, table)
+		}
+	}
+	threshold := int64(math.MinInt64)
+	for _, top := range ids.parts {
+		if len(top) == topIDsPerPart {
+			threshold = max(threshold, top[len(top)-1].id)
+		}
+	}
+	sessions := map[string]bool{}
+	for _, top := range ids.parts {
+		for _, r := range top {
+			if r.id >= threshold {
+				sessions[r.session] = true
+			}
+		}
+	}
+	if len(sessions) == 0 {
+		return 0, nil
+	}
+	var found int64
+	err := s.queryRowContext(chdriver.Context(ctx, chdriver.WithParameters(chdriver.Parameters{
+		"top_sessions": chStringArrayLiteral(slices.Sorted(maps.Keys(sessions))),
+	})), `SELECT max(id) FROM `+table+` WHERE has({top_sessions:Array(String)}, session_id)`).Scan(&found)
+	if err != nil {
+		return 0, fmt.Errorf("reading %s highest id: %w", table, err)
+	}
+	if found >= threshold {
+		return found, nil
+	}
+	return s.readMaxFinalID(ctx, table)
+}
+
+// keepEmptyTopIDParts records an empty id list in read for each requested
+// part that returned no rows and is still active: every row it holds is
+// deleted. It reports true when such a part is no longer active, which
+// means a merge folded its rows into a part the snapshot did not name.
+func (s *Store) keepEmptyTopIDParts(
+	ctx context.Context, table string, requested []string, read map[string][]sessionIDRow,
+) (bool, error) {
+	if !slices.ContainsFunc(requested, func(name string) bool { _, ok := read[name]; return !ok }) {
+		return false, nil
+	}
+	fresh, err := s.readPartsSnapshot(ctx)
+	if err != nil {
+		return false, err
+	}
+	active := map[string]bool{}
+	for _, p := range fresh[table].parts {
+		active[p.name] = true
+	}
+	merged := false
+	for _, name := range requested {
+		if _, ok := read[name]; ok {
+			continue
+		}
+		if active[name] {
+			read[name] = []sessionIDRow{}
+		} else {
+			merged = true
+		}
+	}
+	return merged, nil
+}
+
+// readMaxFinalID reads max(id) under FINAL over the whole table.
+func (s *Store) readMaxFinalID(ctx context.Context, table string) (int64, error) {
+	var found int64
+	if err := s.queryRowContext(ctx, `SELECT ifNull(max(id), 0) FROM `+table).Scan(&found); err != nil {
+		return 0, fmt.Errorf("reading %s highest id: %w", table, err)
+	}
+	return found, nil
 }
 
 // preparedUsageState reports whether prepared_usage can answer reads in
@@ -144,6 +306,20 @@ func (st preparedUsageState) replaced() []string {
 }
 
 func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, error) {
+	return s.readPreparedUsageState(ctx, true)
+}
+
+// preparedUsageReady reports whether prepared usage answers reads. It
+// prepares no delta rows: the read that follows prepares them.
+func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
+	state, err := s.readPreparedUsageState(ctx, false)
+	return state.ready, err
+}
+
+// readPreparedUsageState reads the state. Without withDelta it leaves the
+// delta rows and the pricing digest out, so the state only says whether
+// prepared usage is ready.
+func (s *Store) readPreparedUsageState(ctx context.Context, withDelta bool) (preparedUsageState, error) {
 	var filled uint64
 	var comment string
 	err := s.queryRowContext(ctx, `SELECT
@@ -172,38 +348,15 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	if err != nil {
 		return preparedUsageState{}, fmt.Errorf("reading prepared usage stamp: %w", err)
 	}
-	fingerprint, stable, err := s.usageRowsVersion(ctx, []string{"sessions", "usage_session_snapshots", chUsagePriceTable}, stored.pricingDigest)
+	stamp := fmt.Sprintf("%s|%d|%d|%s|%d", comment, stored.snapshotCount, stored.snapshotHash,
+		stored.pricingDigest, stored.priceCount)
+	live, key, err := s.usageCoverage(ctx, stamp, stored.pricingDigest)
 	if err != nil {
 		return preparedUsageState{}, err
 	}
-	stamp := fmt.Sprintf("%s|%d|%d|%s|%d", comment, stored.snapshotCount, stored.snapshotHash,
-		stored.pricingDigest, stored.priceCount)
-	// Coverage and the sessions pushed since the refresh depend on the
-	// tables named in the fingerprint and on the prepared rows, so they only
-	// change when those rows or the stamp do.
-	live, cached := s.cachedUsageCoverage(fingerprint, stamp)
-	if !cached {
-		// One caller fills the cache; the requests of a page load that
-		// arrive together wait for it instead of each reading coverage.
-		s.coverageCache.fill.Lock()
-		defer s.coverageCache.fill.Unlock()
-		live, cached = s.cachedUsageCoverage(fingerprint, stamp)
-	}
-	if !cached {
-		live, err = s.readUsageCoverage(ctx, stamp, stored.pricingDigest)
-		if err != nil {
+	if withDelta && len(live.changed) > 0 {
+		if live, err = s.usageCoverageDelta(ctx, key, live); err != nil {
 			return preparedUsageState{}, err
-		}
-		if len(live.changed) > 0 {
-			live.deltaRows, live.deltaDigest, err = s.prepareUsageDelta(ctx, live.changedKeys)
-			if err != nil {
-				return preparedUsageState{}, err
-			}
-		}
-		if stable {
-			s.coverageCache.mu.Lock()
-			s.coverageCache.fingerprint, s.coverageCache.stamp, s.coverageCache.live = fingerprint, stamp, live
-			s.coverageCache.mu.Unlock()
 		}
 	}
 	switch {
@@ -229,11 +382,115 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	}
 	// The stored records and the delta's must be under the same digest for
 	// a read to take either in place of the join.
-	if state.ready && stored.pricingDigest != "" && live.priceCount >= stored.priceCount &&
+	if withDelta && state.ready && stored.pricingDigest != "" && live.priceCount >= stored.priceCount &&
 		(len(live.changed) == 0 || live.deltaDigest == stored.pricingDigest) {
 		state.pricingDigest = stored.pricingDigest
 	}
 	return state, nil
+}
+
+// chUsageCoverageTables are the tables whose rows usage coverage reads.
+var chUsageCoverageTables = []string{"sessions", usageSessionSnapshotTable, chUsagePriceTable}
+
+// finalRowsAttempts is how often a coverage check rereads the parts that
+// moved while it read before it reads the rows once without keeping them.
+const finalRowsAttempts = 3
+
+// usageCoverage relates the live sessions and snapshots to the prepared
+// rows, from the rows the trackers keep, and counts the price records still
+// under pricingDigest. It returns the key of the coverage cache entry, empty
+// when the parts kept moving and nothing was kept.
+func (s *Store) usageCoverage(ctx context.Context, stamp, pricingDigest string) (usageCoverage, string, error) {
+	covered, err := s.preparedCoveredSnapshots(ctx, stamp)
+	if err != nil {
+		return usageCoverage{}, "", err
+	}
+	for range finalRowsAttempts {
+		snapshot, err := s.readPartsSnapshot(ctx)
+		if err != nil {
+			return usageCoverage{}, "", err
+		}
+		live, key, ok := s.trackedUsageCoverage(ctx, snapshot, covered, stamp, pricingDigest)
+		if ok {
+			return live, key, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return usageCoverage{}, "", err
+		}
+	}
+	live, err := s.readUsageCoverageOnce(ctx, covered, pricingDigest)
+	return live, "", err
+}
+
+// trackedUsageCoverage brings the trackers to snapshot and relates their
+// rows to the covered snapshots, reusing the cached coverage while the rows
+// and the stamp are unchanged. It reports false when the trackers could
+// not read the snapshot.
+func (s *Store) trackedUsageCoverage(
+	ctx context.Context, snapshot partsSnapshot, covered map[usageSnapshotKey]bool, stamp, pricingDigest string,
+) (usageCoverage, string, bool) {
+	s.usageVersions.Lock()
+	defer s.usageVersions.Unlock()
+	identities, ok := s.usageIdentitiesLocked(ctx, snapshot, chUsageCoverageTables, pricingDigest)
+	if !ok {
+		return usageCoverage{}, "", false
+	}
+	key := tableValuesFingerprint(chUsageCoverageTables, func(table string) string { return identities[table] }) +
+		"|" + stamp
+	s.coverageCache.mu.Lock()
+	defer s.coverageCache.mu.Unlock()
+	if s.coverageCache.key != key {
+		live := coverageFromRows(s.usageVersions.sessions.rows, s.usageVersions.snapshots.rows, covered)
+		live.priceCount = s.priceRowsTracker(pricingDigest).count
+		s.coverageCache.key, s.coverageCache.live = key, live
+	}
+	return s.coverageCache.live, key, true
+}
+
+// readUsageCoverageOnce reads the coverage from the live tables without
+// keeping their rows, for a check whose parts kept moving.
+func (s *Store) readUsageCoverageOnce(
+	ctx context.Context, covered map[usageSnapshotKey]bool, pricingDigest string,
+) (usageCoverage, error) {
+	var read [3]*finalRowsChange
+	for i, spec := range []finalTable{sessionsFinalTable, snapshotsFinalTable, pricesFinalTable} {
+		change, err := s.readFinalRows(ctx, &finalRows{spec: spec, digest: pricingDigest}, nil, false)
+		if err != nil {
+			return usageCoverage{}, err
+		}
+		read[i] = change
+	}
+	live := coverageFromRows(read[0].rows, read[1].rows, covered)
+	live.priceCount = read[2].count
+	return live, nil
+}
+
+// usageCoverageDelta fills the delta rows of the coverage's changed
+// sessions and keeps them with the cache entry key names. One caller fills
+// an entry; the requests of a page load that arrive together wait for it.
+func (s *Store) usageCoverageDelta(ctx context.Context, key string, live usageCoverage) (usageCoverage, error) {
+	s.coverageCache.fill.Lock()
+	defer s.coverageCache.fill.Unlock()
+	s.coverageCache.mu.Lock()
+	if key != "" && s.coverageCache.key == key && s.coverageCache.live.deltaRead {
+		live = s.coverageCache.live
+		s.coverageCache.mu.Unlock()
+		return live, nil
+	}
+	s.coverageCache.mu.Unlock()
+	rows, digest, err := s.prepareUsageDelta(ctx, live.changedKeys)
+	if err != nil {
+		return usageCoverage{}, err
+	}
+	live.deltaRows, live.deltaDigest, live.deltaRead = rows, digest, true
+	if key != "" {
+		s.coverageCache.mu.Lock()
+		if s.coverageCache.key == key {
+			s.coverageCache.live = live
+		}
+		s.coverageCache.mu.Unlock()
+	}
+	return live, nil
 }
 
 // chStringArrayLiteral renders values as a ClickHouse Array(String)
@@ -257,30 +514,6 @@ func chStringLiteral(v string) string {
 }
 
 var chStringEscaper = strings.NewReplacer(`\`, `\\`, `'`, `\'`)
-
-// readUsageCoverage relates the live sessions and snapshots to the prepared
-// rows. The comparisons run in Go over the identities ClickHouse returns:
-// as anti-joins under FINAL they took most of a post-push request. The
-// snapshots the prepared rows cover change only with the stamp, so they are
-// read once per refresh; the price record count is read alongside.
-func (s *Store) readUsageCoverage(ctx context.Context, stamp, pricingDigest string) (usageCoverage, error) {
-	var live usageCoverage
-	var priceCount uint64
-	priceDone := make(chan error, 1)
-	go func() {
-		priceDone <- s.queryRowContext(ctx, `SELECT count() FROM usage_event_prices WHERE pricing_digest = ?`,
-			pricingDigest).Scan(&priceCount)
-	}()
-	covered, err := s.preparedCoveredSnapshots(ctx, stamp)
-	if err == nil {
-		err = s.compareUsageCoverage(ctx, covered, &live)
-	}
-	if priceErr := <-priceDone; err == nil && priceErr != nil {
-		err = fmt.Errorf("counting usage price records: %w", priceErr)
-	}
-	live.priceCount = priceCount
-	return live, err
-}
 
 // usageSnapshotKey names one session snapshot.
 type usageSnapshotKey struct {
@@ -321,65 +554,40 @@ func (s *Store) preparedCoveredSnapshots(ctx context.Context, stamp string) (map
 	return covered, nil
 }
 
-// compareUsageCoverage fills the number of sessions without a current
-// snapshot, the snapshots the prepared rows do not cover, and the covered
-// snapshots that no longer exist. A snapshot from which the refresh keeps no
-// row, such as one of a trashed session or one whose messages report no
-// tokens, is covered whether or not the refresh saw it. The stored
-// chSnapshotPreparesUsage flag says which snapshots those are without reading
-// their usage arrays.
-func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnapshotKey]bool, live *usageCoverage) error {
-	rows, err := s.queryContext(ctx, `SELECT 0, id, push_version, machine, false FROM sessions
-		UNION ALL
-		SELECT 1, id, push_version, toString(revision), `+chSnapshotPreparesUsage+` FROM usage_session_snapshots`)
-	if err != nil {
-		return fmt.Errorf("reading usage coverage: %w", err)
-	}
-	defer rows.Close()
-	sessions := map[string]uint64{}
-	machines := map[string]string{}
-	snapshots := map[string]uint64{}
-	current := map[usageSnapshotKey]bool{}
-	live.revisions = map[string]string{}
-	for rows.Next() {
-		var table uint8
-		var id, revision string
-		var version uint64
-		var preparesUsage bool
-		if err := rows.Scan(&table, &id, &version, &revision, &preparesUsage); err != nil {
-			return fmt.Errorf("scanning usage coverage: %w", err)
-		}
-		if table == 0 {
-			// The fourth column is the session's machine here and the
-			// snapshot's revision below.
-			sessions[id] = version
-			machines[id] = revision
-			continue
-		}
-		snapshots[id] = version
-		live.revisions[id] = revision
-		key := usageSnapshotKey{id: id, revision: revision}
+// coverageFromRows relates the sessions and their snapshots, as the
+// trackers keep them, to the snapshots the prepared rows cover: the number
+// of sessions without a current snapshot, the snapshots the prepared rows do
+// not cover, and the covered snapshots that no longer exist. A session's
+// fields are its push version and machine; a snapshot's are its push
+// version, revision, and chSnapshotPreparesUsage. A snapshot from which the
+// refresh keeps no row, such as one of a trashed session or one whose
+// messages report no tokens, is covered whether or not the refresh saw it.
+// The stored chSnapshotPreparesUsage flag says which snapshots those are
+// without reading their usage arrays.
+func coverageFromRows(sessions, snapshots map[string]finalFields, covered map[usageSnapshotKey]bool) usageCoverage {
+	var live usageCoverage
+	live.revisions = make(map[string]string, len(snapshots))
+	current := make(map[usageSnapshotKey]bool, len(snapshots))
+	for id, snapshot := range snapshots {
+		live.revisions[id] = snapshot.text
+		key := usageSnapshotKey{id: id, revision: snapshot.text}
 		current[key] = true
-		if preparesUsage && !covered[key] {
-			live.changed = append(live.changed, id)
+		if snapshot.flag && !covered[key] {
 			live.changedKeys = append(live.changedKeys, key)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating usage coverage: %w", err)
-	}
 	live.hosts = map[string]hostCoverage{}
-	for id, version := range sessions {
-		host := live.hosts[machines[id]]
+	for id, session := range sessions {
+		host := live.hosts[session.text]
 		host.sessions++
 		if snapshot, ok := snapshots[id]; !ok {
 			host.noSnapshot++
 			live.missing++
-		} else if snapshot < version {
+		} else if snapshot.pushVersion < session.pushVersion {
 			host.olderSnapshot++
 			live.missing++
 		}
-		live.hosts[machines[id]] = host
+		live.hosts[session.text] = host
 	}
 	anyReady := false
 	for _, host := range live.hosts {
@@ -390,44 +598,29 @@ func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnaps
 	}
 	if live.missing > 0 && anyReady {
 		raw := map[string]bool{}
-		for id, version := range sessions {
-			if live.hosts[machines[id]].stale() {
+		for id, session := range sessions {
+			if live.hosts[session.text].stale() {
 				raw[id] = true
 				live.raw = append(live.raw, id)
-				live.revisions[id] = fmt.Sprintf("raw:%d", version)
+				live.revisions[id] = fmt.Sprintf("raw:%d", session.pushVersion)
 			}
 		}
 		slices.Sort(live.raw)
 		// The raw hosts' sessions take no prepared rows, so none are
 		// prepared for them at read time either.
-		kept := live.changedKeys[:0]
-		for _, key := range live.changedKeys {
-			if !raw[key.id] {
-				kept = append(kept, key)
-			}
-		}
-		live.changedKeys = kept
-		live.changed = slices.DeleteFunc(live.changed, func(id string) bool { return raw[id] })
+		live.changedKeys = slices.DeleteFunc(live.changedKeys, func(key usageSnapshotKey) bool { return raw[key.id] })
+	}
+	slices.SortFunc(live.changedKeys, func(a, b usageSnapshotKey) int { return strings.Compare(a.id, b.id) })
+	for _, key := range live.changedKeys {
+		live.changed = append(live.changed, key.id)
 	}
 	for key := range covered {
 		if !current[key] {
 			live.stale = append(live.stale, key.id)
 		}
 	}
-	slices.Sort(live.changed)
 	slices.Sort(live.stale)
-	return nil
-}
-
-func (s *Store) cachedUsageCoverage(fingerprint, stamp string) (usageCoverage, bool) {
-	s.coverageCache.mu.Lock()
-	defer s.coverageCache.mu.Unlock()
-	return s.coverageCache.live, s.coverageCache.fingerprint == fingerprint && s.coverageCache.stamp == stamp
-}
-
-func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
-	state, err := s.preparedUsageState(ctx)
-	return state.ready, err
+	return live
 }
 
 // prepareUsageDelta prepares the rows of the changed snapshots as a refresh
@@ -588,18 +781,19 @@ func chUsageDeltaPriceInput(row []any) chUsagePriceInput {
 	}
 }
 
-// usageCoverageCache memoizes the coverage of the prepared rows per parts
+// usageCoverageCache memoizes the coverage of the prepared rows per rows
 // of the sessions, snapshot, and price record tables and per stamp.
 type usageCoverageCache struct {
-	mu          sync.Mutex
-	fingerprint string
-	stamp       string
-	live        usageCoverage
+	mu sync.Mutex
+	// key names the tracked rows and the stamp the coverage was derived
+	// from.
+	key  string
+	live usageCoverage
 	// covered is the set of snapshots the prepared rows under coveredStamp
 	// were derived from.
 	coveredStamp string
 	covered      map[usageSnapshotKey]bool
-	// fill serializes the readers that found the cache stale.
+	// fill serializes the readers that fill the delta rows.
 	fill sync.Mutex
 }
 
@@ -631,6 +825,8 @@ type usageCoverage struct {
 	changedKeys []usageSnapshotKey
 	deltaRows   [][]any
 	deltaDigest string
+	// deltaRead says whether deltaRows were prepared.
+	deltaRead bool
 	// revisions maps each session to its current snapshot revision.
 	revisions map[string]string
 	// hosts counts each machine's sessions and those without a current

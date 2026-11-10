@@ -37,7 +37,7 @@ const (
 	curationFingerprintKeyBase  = "agentsview_curation_fingerprint"
 	cursorUsageMaxIDKeyBase     = "agentsview_cursor_usage_max_id"
 	usageSnapshotReadyKeyBase   = "agentsview_usage_snapshot_ready"
-	commitLinksReadyKeyBase     = "agentsview_commit_links_ready"
+	commitLinksReadyKeyBase     = "agentsview_commit_links_ready_v2"
 	messageDialogueReadyKeyBase = "agentsview_message_dialogue_ready"
 	storedCountRepairKeyBase    = "agentsview_stored_message_count_repair"
 	databaseIDKeyBase           = "agentsview_source_database_id"
@@ -576,6 +576,16 @@ var mirrorTables = []tableSpec{
 			col("revision", tString), col("text", tString),
 		},
 		orderBy: []string{"session_id", "source_kind", "message_ordinal", "call_index", "event_index", "image_index", "processor"},
+	},
+	{
+		name: "retained_commit_links",
+		columns: []columnSpec{
+			col("source_archive_id", tString), col("session_id", tString), col("sha", tString),
+			col("branch", tString), col("subject", tString), col("repository", tString),
+			col("message_ordinal", tInt), col("call_index", tInt), col("tool_use_id", tString),
+			col("committed_at", tString),
+		},
+		orderBy: []string{"source_archive_id", "sha", "session_id"},
 	},
 	{
 		name: "secret_findings",

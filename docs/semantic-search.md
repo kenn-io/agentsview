@@ -25,15 +25,7 @@ concurrency, and the search path — see
 
 Semantic search is disabled by default. Open **Settings → Embeddings** and choose **Turn on**, or choose it from the search palette. AgentsView asks for the required download through that button, shows download and indexing progress, and starts semantic search without a restart. Full-text search remains available during indexing.
 
-For CLI setup, add a `[vector]` section to
-`~/.agentsview/config.toml`:
-
-```toml
-[vector]
-enabled = true
-```
-
-Restart the daemon, then run `agentsview index embeddings build`. AgentsView
+For CLI setup, run `agentsview index embeddings build`. AgentsView
 uses a running Ollama server with Nomic or Kit's shared local server. If the
 local server needs files, the CLI asks before downloading them. Search and
 automatic builds reuse installed files; they direct you to the CLI when a
@@ -529,7 +521,7 @@ ranked below top-level human-driven work. The
 
 ```bash
 agentsview index embeddings build            # incremental: refresh + fill whatever's missing
-agentsview index embeddings build --yes      # skip the full-rebuild prompt; local downloads still ask
+agentsview index embeddings build --yes      # skip the full-rebuild prompt; setup and downloads still ask
 agentsview index embeddings build --full-rebuild --yes  # re-embeds every document
 agentsview index embeddings build --backstop # force a full mirror reconciliation scan
 agentsview index embeddings build --repair-invalid # regenerate only documents with invalid stored vectors
@@ -642,7 +634,7 @@ elapsed time, estimated completion, and the generations already stored in
 When a writable local daemon is running, `build`/`activate`/`retire` proxy to it
 over HTTP so the daemon remains the sole writer of `vectors.db`; without a
 daemon, the CLI takes a dedicated `vectors.write.lock` in the data directory and
-runs the build in-process. If [`run_after_sync`](#enabling-vector) is enabled,
+runs an enabled build in-process. Initial setup requires the daemon. If [`run_after_sync`](#enabling-vector) is enabled,
 the daemon also embeds sync deltas automatically on a debounce, so a manual
 `build` is mainly for the initial index or a `--full-rebuild`.
 
@@ -939,9 +931,9 @@ below.
 
 | Situation                                                                                                                       | Message                                                                                                                                                               |
 | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[vector]` not enabled                                                                                                          | `vector search is not enabled: set [vector] enabled = true in config.toml` (from `agentsview index embeddings ...`)                                                   |
+| `[vector]` not enabled                                                                                                          | `vector search is not enabled: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on` (from `agentsview index embeddings ...`)                                                   |
 | DuckDB backend | `semantic search not available: semantic search is not supported by the DuckDB backend` |
-| No `VectorSearcher` wired (index never built, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'`                                                        |
+| No `VectorSearcher` wired (index never built, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on`                                                        |
 | Only a building generation exists                                                                                               | same message, plus `: index is building: N% complete`                                                                                                                 |
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                                                  | same message, plus `` : vector index was built by an incompatible version: run `agentsview index embeddings build` ``                                                 |

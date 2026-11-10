@@ -48,6 +48,12 @@ dashboard as well.
 
 Commit lookups return the copied links and prompts.
 The first push after upgrading is a full push to copy existing commit links.
+Upgrade serving binaries before or with publishers; older readers cannot see the new table.
+A serving role that cannot create tables needs an upgraded push, or
+`hosted-provision` for a hosted schema, before commit lookups work. Each
+archive's rebuild removes only the deleted-session links that archive pushed.
+Links with no recorded archive, from older pushes or permanent deletion in the
+replica, stay and can reappear after an archive discards its matching copy.
 A deleted session remains visible as a missing record. Project filters use the
 project saved with its links in SQLite, including after a rebuild or a deletion
 before the first push.

@@ -51,9 +51,11 @@ type Store struct {
 	// afterUsageSlices, when set, runs once a sliced range read has read
 	// every slice. Tests use it to change the rows mid-read.
 	afterUsageSlices func()
-	cursorMu         sync.RWMutex
-	cursorSecret     []byte
-	customPricing    map[string]config.CustomModelRate
+	// beforeUsageExtent lets tests change source rows after the request snapshot.
+	beforeUsageExtent func()
+	cursorMu          sync.RWMutex
+	cursorSecret      []byte
+	customPricing     map[string]config.CustomModelRate
 
 	// vectorMu guards the searcher and reason installed by the serve gate.
 	vectorMu                  sync.RWMutex
@@ -68,16 +70,29 @@ type Store struct {
 	pricing pricingCache
 	// coverageCache memoizes complete usage snapshot coverage per rows.
 	coverageCache usageCoverageCache
-	// usageVersions keeps one parts digest and row identity per usage table.
+	// usageVersions keeps one parts digest and row identity per small usage
+	// table, and the trackers of the sessions, snapshot, and price record
+	// rows; see finalRows.
 	usageVersions struct {
 		sync.Mutex
-		tables map[string]usageTableVersion
+		tables              map[string]usageTableVersion
+		sessions, snapshots *finalRows
+		prices              map[string]*finalRows
+		priceOrder          []string
 	}
 	// deltaCache keeps the prepared rows of changed snapshots.
 	deltaCache usageDeltaCache
 	// The usage row memos keep recent range reads per rows and filter.
-	dailyUsageRows       kept.Memo[chDailyUsageGroupRow]
-	sessionAggregateRows kept.Memo[chUsageAggregateRow]
+	dailyUsageRows kept.Memo[chDailyUsageGroupRow]
+	usageDisk      kept.Disk
+	usageExtent    struct {
+		sync.Mutex
+		version string
+		latest  time.Time
+		unknown bool
+		valid   bool
+	}
+	sessionAggregateRows kept.Memo[CHUsageAggregateRow]
 	usageSessionRows     kept.Memo[chUsageSessionRow]
 	// topSessionTotals keeps each session's totals per top-sessions read.
 	topSessionTotals kept.Memo[db.TopSessionEntry]
@@ -91,9 +106,9 @@ type Store struct {
 	activityInputQueries atomic.Int64
 	// activityUsageRows keeps activity usage reads per source, set, and range.
 	activityUsageRows kept.Memo[*activityUsageKept]
-	// activityUsageRanges keeps every session's prepared usage rows per
-	// range in progress; see activityUsageRange.
-	activityUsageRanges kept.Memo[activityUsageRange]
+	// activityUsageRanges keeps every session's prepared usage rows and
+	// their survivors per range in progress; see activityUsageRange.
+	activityUsageRanges kept.Memo[*activityUsageRange]
 	// readinessLog holds the last prepared usage readiness logged.
 	readinessLog struct {
 		sync.Mutex
@@ -157,6 +172,7 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 func NewStoreFromDB(conn *sql.DB, bulk chdriver.Conn) *Store {
 	s := &Store{conn: conn, pages: conn, bulk: bulk, usageSliceRows: activityUsageSliceRows}
 	s.usageVersions.tables = map[string]usageTableVersion{}
+	s.usageVersions.prices = map[string]*finalRows{}
 	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
 	s.sessionAggregateRows.Size = aggregateRowBytes
 	s.usageSessionRows.Size = usageSessionRowBytes

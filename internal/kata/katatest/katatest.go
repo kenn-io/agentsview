@@ -44,6 +44,7 @@ type Project struct {
 
 type Issue struct {
 	UID, ShortID, Title, Body, Status, ClosedReason string
+	ClosedAt                                        *time.Time
 	Priority                                        *int64
 	Labels                                          []string
 	Metadata                                        map[string]any
@@ -197,6 +198,15 @@ func (s *Server) Issue(uid string) (Issue, bool) {
 		}
 	}
 	return Issue{}, false
+}
+
+// CloseIssue closes an existing issue at the given time.
+func (s *Server) CloseIssue(uid string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if is := s.findLocked(0, uid); is != nil {
+		is.Status, is.ClosedReason, is.ClosedAt = "closed", "done", &at
+	}
 }
 
 func cloneIssue(is Issue) Issue {
@@ -367,7 +377,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			changed := is.Status != "open"
-			is.Status, is.ClosedReason = "open", ""
+			is.Status, is.ClosedReason, is.ClosedAt = "open", "", nil
 			writeJSON(w, 200, map[string]any{"changed": changed, "event": nil, "issue": s.issueJSONLocked(is)})
 		case "comments":
 			var req kg.CommentRequestBody
@@ -558,6 +568,9 @@ func (s *Server) issueJSONLocked(is *Issue) map[string]any {
 		"id": 1, "uid": is.UID, "project_id": is.ProjectID, "short_id": is.ShortID, "title": is.Title,
 		"body": is.Body, "status": is.Status, "author": "agentsview", "metadata": is.Metadata,
 		"revision": 1, "created_at": fixedTime, "updated_at": fixedTime,
+	}
+	if is.ClosedAt != nil {
+		m["closed_at"] = is.ClosedAt
 	}
 	if is.ClosedReason != "" {
 		m["closed_reason"] = is.ClosedReason

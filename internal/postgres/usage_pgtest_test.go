@@ -21,7 +21,7 @@ import (
 )
 
 func prepareUsageSchema(
-	t *testing.T, schema string,
+	t testing.TB, schema string,
 ) (string, *Store) {
 	t.Helper()
 

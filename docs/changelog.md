@@ -9,8 +9,14 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- With automatic filing on, reopen linked Kata issues when a digest finding
+  shows the pattern returned after the issue was closed as done.
+
 **Bug fixes**
 
+- Commit lookups keep live prompts and other archives' deleted-session links.
 - Antigravity app and IDE sessions now show their project and working directory
   instead of all landing in one unlabeled project. AgentsView reads each
   conversation's workspace folder from Antigravity's
