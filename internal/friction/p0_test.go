@@ -75,6 +75,7 @@ func TestDetectP0Alerts(t *testing.T) {
 // Four diagnostic subjects never raise P0; the same tool names on session
 // subjects do. This checks subject kind rather than a private tool-name list.
 func TestWorkerDiagnosticsDoNotRaiseP0(t *testing.T) {
+	assert.False(t, Fileable(KindDiagnostic))
 	for _, tool := range []string{"status_check", "review_check", "fallback_check", "hook_check", "shell"} {
 		t.Run(tool, func(t *testing.T) {
 			diagnostics := []Signal{

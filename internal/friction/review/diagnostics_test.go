@@ -26,6 +26,8 @@ func TestDiagnosticsCatchUpRebuildsOldDay(t *testing.T) {
 	require.NoError(t, err)
 	digest := stored(t, d, "2026-08-30")
 	require.NotNil(t, digest)
+	assert.Equal(t, 0, digest.SessionsScanned)
+	assert.Zero(t, rowCount(t, d, "friction_patterns"))
 	_, err = d.AppendDiagnostic(t.Context(), db.DiagnosticEvent{ID: uuid.NewV7().String(), Source: "worker", Message: "launch failed", OccurredAt: when})
 	require.NoError(t, err)
 	_, err = r.CatchUp(t.Context())
