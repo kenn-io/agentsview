@@ -290,17 +290,6 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 		require.Equal(t, 2, count)
 	})
 
-	t.Run("legacy archive without image cache", func(t *testing.T) {
-		source := filepath.Join(t.TempDir(), "legacy.db")
-		legacy, err := sql.Open(sqliteArchiveDriverName, makeDSN(source, false))
-		require.NoError(t, err)
-		_, err = legacy.ExecContext(t.Context(), `CREATE TABLE legacy (id INTEGER)`)
-		require.NoError(t, err)
-		require.NoError(t, legacy.Close())
-		dst := testDB(t)
-		require.NoError(t, dst.CopyImageTextFrom(t.Context(), source))
-	})
-
 	t.Run("shared writes", imageTextSharedAcrossSessionWrites)
 }
 

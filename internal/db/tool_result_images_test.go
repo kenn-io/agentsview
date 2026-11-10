@@ -18,17 +18,28 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 )
 
-func TestReadRetainedImageInlineLimit(t *testing.T) {
-	body := bytes.Repeat([]byte("x"), 1024*1024)
-	uri := "data:image/png;base64," + base64.StdEncoding.EncodeToString(body)
-	raw, err := json.Marshal(uri)
-	require.NoError(t, err)
-	content := fmt.Sprintf(`[{"type":"input_image","image_url":%s}]`, raw)
-	_, err = ReadRetainedImage(content, 0, "", 32)
-	require.ErrorContains(t, err, "exceeds 32 bytes")
-	got, err := ReadRetainedImage(content, 0, "", int64(len(body)))
-	require.NoError(t, err)
-	require.Equal(t, body, got)
+func TestReadRetainedImageLimit(t *testing.T) {
+	t.Run("inline", func(t *testing.T) {
+		body := bytes.Repeat([]byte("x"), 1024*1024)
+		uri := "data:image/png;base64," + base64.StdEncoding.EncodeToString(body)
+		raw, err := json.Marshal(uri)
+		require.NoError(t, err)
+		content := fmt.Sprintf(`[{"type":"input_image","image_url":%s}]`, raw)
+		_, err = ReadRetainedImage(content, 0, "", 32)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		got, err := ReadRetainedImage(content, 0, "", int64(len(body)))
+		require.NoError(t, err)
+		require.Equal(t, body, got)
+	})
+	t.Run("asset", func(t *testing.T) {
+		body := bytes.Repeat([]byte("x"), 1024*1024)
+		dir := t.TempDir()
+		name := strings.Repeat("a", 64) + ".png"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), body, 0o600))
+		asset := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":"asset://%s","media_type":"image/png","byte_size":%d}]`, name, len(body))
+		_, err := ReadRetainedImage(asset, 0, dir, 32)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+	})
 }
 
 func TestReadRetainedImageSkipsInvalidBlocks(t *testing.T) {
@@ -36,16 +47,6 @@ func TestReadRetainedImageSkipsInvalidBlocks(t *testing.T) {
 	body, err := ReadRetainedImage(content, 0, "", 32)
 	require.NoError(t, err)
 	require.Equal(t, []byte{1, 2, 3}, body)
-}
-
-func TestReadRetainedImageAssetLimit(t *testing.T) {
-	body := bytes.Repeat([]byte("x"), 1024*1024)
-	dir := t.TempDir()
-	name := strings.Repeat("a", 64) + ".png"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), body, 0o600))
-	asset := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":"asset://%s","media_type":"image/png","byte_size":%d}]`, name, len(body))
-	_, err := ReadRetainedImage(asset, 0, dir, 32)
-	require.ErrorContains(t, err, "exceeds 32 bytes")
 }
 
 func testInlineImageContent() string {

@@ -1467,7 +1467,7 @@ func TestHTTPUnchangedMirrorImportsIntoNewDatabaseGeneration(t *testing.T) {
 	assert.Equal(t, "generation refresh", messages[0].Content)
 }
 
-func TestHTTPCompatibilityVersionDoesNotForceImport(t *testing.T) {
+func TestHTTPCompatibilityVersionDoesNotForceFullImport(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	remote.writeSession(t, "session.jsonl", time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC), "unchanged")
 	database, hs := newMirrorSync(t, remote, t.TempDir())

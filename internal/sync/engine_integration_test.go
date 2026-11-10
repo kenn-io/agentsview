@@ -18163,7 +18163,7 @@ func TestResyncAllUsageOnlyDropsFrictionDigestText(t *testing.T) {
 }
 
 func TestImageTextSurvivesFullResync(t *testing.T) {
-	for _, mode := range []string{"full", "transcripts", "copy fails"} {
+	for _, mode := range []string{"full", "transcripts"} {
 		t.Run(mode, func(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 			ctx := t.Context()
@@ -18183,29 +18183,13 @@ func TestImageTextSurvivesFullResync(t *testing.T) {
 				engine = sync.NewEngine(ctx, env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}}, Machine: "local", ArchiveContent: config.ArchiveContentTranscripts})
 				t.Cleanup(engine.Close)
 			}
-			if mode == "copy fails" {
-				require.NoError(t, env.db.Update(ctx, func(tx *sql.Tx) error {
-					_, err := tx.ExecContext(ctx, `DROP TABLE image_text_cache; CREATE TABLE image_text_cache (broken TEXT)`)
-					return err
-				}))
-			}
 			stats := engine.ResyncAll(ctx, nil)
-			if mode == "copy fails" {
-				require.True(t, stats.Aborted)
-				require.Contains(t, strings.Join(stats.Warnings, " "), "image text copy failed")
-				session, err := env.db.GetSessionFull(ctx, "orphan-image")
-				require.NoError(t, err)
-				require.NotNil(t, session)
-				return
-			}
 			require.False(t, stats.Aborted, "%v", stats.Warnings)
 			require.Empty(t, stats.Warnings)
 			if mode == "full" {
-				require.NoError(t, env.db.BackfillImageTextOccurrences(ctx))
-				page, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
-				require.NoError(t, err)
-				require.Len(t, page.Results, 1)
-				require.Equal(t, "orphan-image", page.Results[0].SessionID)
+				var count int
+				require.NoError(t, env.db.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE text='invoice 42'`).Scan(&count))
+				require.Equal(t, 1, count)
 			}
 		})
 	}

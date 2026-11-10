@@ -160,13 +160,6 @@ func (db *DB) CopyImageTextFrom(ctx context.Context, sourcePath string) error {
 		return err
 	}
 	defer func() { _, _ = execWithoutCancel(ctx, conn, `DETACH DATABASE old_db`) }()
-	var hasCache bool
-	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='image_text_cache')`).Scan(&hasCache); err != nil {
-		return err
-	}
-	if !hasCache {
-		return nil
-	}
 	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO image_text_cache(id,image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at) SELECT (SELECT COALESCE(MIN(id),0) FROM main.image_text_cache)-ROW_NUMBER() OVER (),image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at FROM old_db.image_text_cache c`); err != nil {
 		return fmt.Errorf("copy image text: %w", err)
 	}

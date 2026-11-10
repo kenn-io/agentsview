@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -25,17 +26,34 @@ func TestImageTextRespectsArchiveContent(t *testing.T) {
 	require.NoError(t, err)
 	first := d
 	t.Cleanup(func() { require.NoError(t, first.Close()) })
+	seedCache := func() {
+		t.Helper()
+		require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text) VALUES(-1,'hash','processor','provider','model','revision','invoice')`)
+			return err
+		}))
+	}
+	assertCacheCleared := func() {
+		t.Helper()
+		var count int
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+		require.Zero(t, count)
+	}
+	seedCache()
 	cfg := config.Config{ArchiveContent: config.ArchiveContentTranscripts, ImageText: config.ImageTextConfig{Enabled: true}}
 	manager, err := setupImageText(t.Context(), cfg, d)
 	require.NoError(t, err)
 	require.Nil(t, manager)
+	assertCacheCleared()
 	require.Contains(t, logs.String(), "image_text: disabled because archive_content omits tool results")
 	logs.Reset()
 	cfg.ArchiveContent = config.ArchiveContentFull
 	d.SetArchiveContent(config.ArchiveContentTranscripts)
+	seedCache()
 	manager, err = setupImageText(t.Context(), cfg, d)
 	require.NoError(t, err)
 	require.Nil(t, manager)
+	assertCacheCleared()
 	require.Contains(t, logs.String(), "image_text: disabled because archive_content omits tool results")
 	logs.Reset()
 	d, err = db.Open(ctx, filepath.Join(t.TempDir(), "full.db"))

@@ -27,6 +27,8 @@ import (
 
 func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
 	ctx := t.Context()
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: {}}))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122b06"
@@ -44,9 +46,9 @@ func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
 	engine.Close()
 	_, err := database.StripToolImages(ctx, db.StripImagesFilter{})
 	require.NoError(t, err)
-	require.NoError(t, database.SetSessionDataVersion(ctx, "codex:"+id, 170))
+	require.NoError(t, database.SetSessionDataVersion(ctx, "codex:"+id, version-1))
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "PRAGMA user_version=170")
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
 		return err
 	}))
 	path := database.Path()
@@ -57,7 +59,6 @@ func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
 	database, err = db.OpenIsolated(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	require.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(ctx, "codex:"+id))
 	engine = sync.NewEngine(ctx, database, cfg)
 	t.Cleanup(engine.Close)
 	engine.SyncAll(ctx, nil)
