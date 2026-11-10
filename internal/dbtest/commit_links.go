@@ -1,11 +1,13 @@
 package dbtest
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 )
@@ -13,16 +15,11 @@ import (
 func SeedCommitLinks(t *testing.T, d *db.DB) {
 	t.Helper()
 	for i, id := range []string{"commit-live", "commit-trash", "commit-delete", "commit-clash"} {
-		SeedSession(t, d, id, "commit-project")
 		sha := "abc1234567890123456789012345678901234567"
 		if i == 3 {
 			sha = "abc1234ff7890123456789012345678901234567"
 		}
-		result := "[main " + sha + "] Save the change"
-		require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []db.Message{
-			{SessionID: id, Ordinal: 0, Role: "user", Content: "Record the parser fix"},
-			{SessionID: id, Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: `{"command":"git commit -m change"}`, ResultContent: result, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: result}}}}},
-		}))
+		seedCommitTranscript(t, d, id, sha)
 	}
 	SeedSession(t, d, "commit-trailer", "commit-project")
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "commit-trailer", []db.Message{{SessionID: "commit-trailer", Ordinal: 0, Role: "user", Content: "Save the editor change", Timestamp: "2026-01-01T00:00:00Z"}}))
@@ -144,4 +141,62 @@ func AssertRetainedCommitLink(t *testing.T, reader db.CommitLinkReader, want boo
 	assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
 	assert.True(t, links.Commits[0].Missing)
 	assert.Nil(t, links.Commits[0].Turn)
+}
+
+func seedCommitTranscript(t *testing.T, d *db.DB, id, sha string) {
+	t.Helper()
+	SeedSession(t, d, id, "commit-project")
+	result := "[main " + sha + "] Save the change"
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []db.Message{
+		{SessionID: id, Ordinal: 0, Role: "user", Content: "Record the parser fix"},
+		{SessionID: id, Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: `{"command":"git commit -m change"}`, ResultContent: result, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: result}}}}},
+	}))
+}
+
+// SeedRetainedCommitLink creates transcript evidence for a deleted session.
+func SeedRetainedCommitLink(t *testing.T, d *db.DB, id, sha string) {
+	t.Helper()
+	seedCommitTranscript(t, d, id, sha)
+	require.NoError(t, d.DeleteSession(t.Context(), id))
+}
+
+func RebuildCommitArchive(t *testing.T, source *db.DB, policy config.ArchiveContent) *db.DB {
+	t.Helper()
+	rebuilt := OpenTestDB(t)
+	rebuilt.SetArchiveContent(policy)
+	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), source.Path()))
+	require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), source.Path()))
+	require.NoError(t, rebuilt.CopyExcludedSessionsFrom(t.Context(), source.Path()))
+	require.NoError(t, rebuilt.CopyCommitTrailersFrom(t.Context(), source.Path()))
+	_, err := rebuilt.CopyTrashedDataFrom(t.Context(), source.Path())
+	require.NoError(t, err)
+	_, err = rebuilt.CopyOrphanedDataFrom(t.Context(), source.Path())
+	require.NoError(t, err)
+	require.NoError(t, rebuilt.CopySessionMetadataFrom(t.Context(), source.Path()))
+	return rebuilt
+}
+
+func AssertSharedCommitLinks(t *testing.T, reader db.CommitLinkReader, shared int, distinct ...string) {
+	t.Helper()
+	links, err := reader.SessionCommitLinks(t.Context(), "shared")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, shared)
+	matches, err := reader.CommitSessionLinks(t.Context(), []string{strings.Repeat("a", 40), strings.Repeat("c", 40), strings.Repeat("d", 40)})
+	require.NoError(t, err)
+	require.Len(t, matches.Commits[0].Links, shared)
+	links, err = reader.SessionCommitLinks(t.Context(), "distinct")
+	require.NoError(t, err)
+	var shas []string
+	for _, link := range links.Commits {
+		shas = append(shas, link.SHA)
+	}
+	assert.ElementsMatch(t, distinct, shas)
+	for _, match := range matches.Commits[1:] {
+		if slices.Contains(distinct, match.SHA) {
+			require.Len(t, match.Links, 1)
+			assert.Equal(t, "distinct", match.Links[0].SessionID)
+		} else {
+			assert.Empty(t, match.Links)
+		}
+	}
 }

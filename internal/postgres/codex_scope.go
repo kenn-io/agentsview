@@ -28,11 +28,12 @@ func deletePGScopedExcludedSessionRows(ctx context.Context, pg pgSessionExecer, 
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := pg.ExecContext(ctx, `DELETE FROM sessions candidate USING excluded_sessions scope
+	_, err := pg.ExecContext(ctx, `WITH deleted AS (DELETE FROM sessions candidate USING excluded_sessions scope
 		WHERE candidate.id = ANY($1) AND candidate.provenance_kind = 'legacy'
 			AND scope.include_codex_pages AND left(right(candidate.id, 37), 1) = '_'
 			AND scope.id = left(candidate.id, -37)
 			AND (scope.agent IS NULL OR scope.agent = candidate.agent)
-			AND `+pgCodexScopeOwnerMatchSQL, ids)
+			AND `+pgCodexScopeOwnerMatchSQL+` RETURNING candidate.id)
+		DELETE FROM commit_links WHERE NOT retained AND session_id IN (SELECT id FROM deleted)`, ids)
 	return err
 }
