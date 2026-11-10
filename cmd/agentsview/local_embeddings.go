@@ -50,15 +50,37 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	return localEmbeddingEndpoint(ctx, opts)
 }
 
-func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig, name string, in *bufio.Scanner, out io.Writer) error {
-	_, server, err := c.Server(name)
+// prepareLocalEmbeddings asks before downloading the local model. When the
+// daemon reports setup it can finish, it skips the download so the build's
+// setup fallback asks once and the daemon downloads the model itself.
+func prepareLocalEmbeddings(ctx context.Context, cfg config.Config, name string, in *bufio.Scanner, out io.Writer) error {
+	_, server, err := cfg.Vector.Embeddings.Server(name)
 	if err != nil {
 		return err
 	}
-	_, err = resolveLocalEmbeddings(ctx, server, func(_ context.Context, size int64) (bool, error) {
-		return confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", downloadMegabytes(size))), nil
+	setupPending := false
+	_, err = resolveLocalEmbeddings(ctx, server, func(ctx context.Context, size int64) (bool, error) {
+		setupPending = daemonSetupPending(ctx, cfg)
+		return !setupPending && confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", downloadMegabytes(size))), nil
 	}, nil)
+	if setupPending {
+		return nil
+	}
 	return err
+}
+
+// daemonSetupPending reports whether the local daemon asks to turn search on.
+// An unavailable daemon or status counts as no pending setup.
+func daemonSetupPending(ctx context.Context, cfg config.Config) bool {
+	if !IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+		return false
+	}
+	client, err := resolveEmbeddingsDaemonClient(cfg)
+	if err != nil {
+		return false
+	}
+	status, err := client.status(ctx)
+	return err == nil && status.Setup != nil && status.Setup.Action == "turn-on"
 }
 
 func downloadMegabytes(size int64) int64 { return (size + 999999) / 1000000 }

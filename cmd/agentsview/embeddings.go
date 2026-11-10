@@ -486,7 +486,7 @@ func runEmbeddingsBuild(
 			return nil
 		}
 	}
-	if err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out); err != nil {
+	if err := prepareLocalEmbeddings(ctx, cfg, opts.Using, confirmation, out); err != nil {
 		return err
 	}
 
