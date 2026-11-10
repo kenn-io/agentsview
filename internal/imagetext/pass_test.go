@@ -259,7 +259,7 @@ func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
 			require.NoError(t, err)
 			path := filepath.Join(assetDir, strings.TrimPrefix(ref, "asset://"))
 			if corrupt {
-				require.NoError(t, os.WriteFile(path, []byte("corrupt"), 0600))
+				require.NoError(t, os.WriteFile(path, []byte("corrupt"), 0o600))
 			} else {
 				require.NoError(t, os.Remove(path))
 			}

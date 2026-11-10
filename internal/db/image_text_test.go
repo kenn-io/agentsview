@@ -320,7 +320,6 @@ func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 	page, err = d.Search(ctx, SearchFilter{Query: `"absent" OR content:invoice`})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
-
 }
 
 func TestImageTextSearchContent(t *testing.T) {
