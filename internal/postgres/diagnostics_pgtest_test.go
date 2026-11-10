@@ -144,13 +144,39 @@ func TestDiagnosticPushConflictingArchives(t *testing.T) {
 			err = syncer.syncDiagnosticEvents(t.Context(), false, tc.name)
 			if tc.conflict {
 				require.ErrorIs(t, err, db.ErrDiagnosticConflict)
-				var marker bool
-				require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sync_metadata WHERE key=$1)`, "diagnostic_marker:"+tc.name+":").Scan(&marker))
-				assert.False(t, marker)
+				assert.Contains(t, err.Error(), event.ID)
 			} else {
 				require.NoError(t, err)
 			}
 		})
 	}
 	assert.Equal(t, 1, pgTableCount(t, t.Context(), pg, "diagnostic_events"))
+
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "other.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = local.Close() })
+	other := event
+	other.Message = "different"
+	_, err = local.AppendDiagnostic(t.Context(), other)
+	require.NoError(t, err)
+	next := db.DiagnosticEvent{ID: uuid.NewV7().String(), Source: "worker", Message: "later failure", OccurredAt: event.OccurredAt}
+	_, err = local.AppendDiagnostic(t.Context(), next)
+	require.NoError(t, err)
+	syncer := &Sync{pg: pg, local: local, machine: "machine-b", schema: schema, schemaDone: true, targetFingerprint: "target-b"}
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.ErrorIs(t, err, db.ErrDiagnosticConflict)
+	assert.Contains(t, err.Error(), event.ID)
+	var message string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT message FROM diagnostic_events WHERE id=$1`, event.ID).Scan(&message))
+	assert.Equal(t, event.Message, message)
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT message FROM diagnostic_events WHERE id=$1`, next.ID).Scan(&message))
+	assert.Equal(t, next.Message, message)
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM diagnostic_events WHERE id=$1`, event.ID)
+	require.NoError(t, err)
+	_, err = syncer.Push(t.Context(), true, nil)
+	require.NoError(t, err)
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT message FROM diagnostic_events WHERE id=$1`, event.ID).Scan(&message))
+	assert.Equal(t, other.Message, message)
 }

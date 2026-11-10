@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -67,7 +69,9 @@ func (s *Store) FrictionPendingDiagnosticDates(ctx context.Context, last string,
 }
 
 // syncDiagnosticEvents publishes a bounded page before advancing its target watermark.
-func (s *Sync) syncDiagnosticEvents(ctx context.Context, full bool, markerID string) error {
+func (s *Sync) syncDiagnosticEvents(ctx context.Context, full bool, markerID string) (retErr error) {
+	var conflicts error
+	defer func() { retErr = errors.Join(conflicts, retErr) }()
 	key := "diagnostic_push:" + s.targetFingerprint + ":" + markerID + ":" + s.databaseGeneration
 	marker := "diagnostic_marker:" + markerID + ":" + s.databaseGeneration
 	state := handoffSyncState{s.local}
@@ -102,8 +106,13 @@ func (s *Sync) syncDiagnosticEvents(ctx context.Context, full bool, markerID str
 		if err != nil {
 			return err
 		}
+		var pageConflicts error
 		for _, event := range events {
 			if err = insertDiagnosticEvent(ctx, tx, event); err != nil {
+				if errors.Is(err, db.ErrDiagnosticConflict) {
+					pageConflicts = errors.Join(pageConflicts, fmt.Errorf("%s: %w", event.ID, err))
+					continue
+				}
 				_ = tx.Rollback()
 				return err
 			}
@@ -115,6 +124,7 @@ func (s *Sync) syncDiagnosticEvents(ctx context.Context, full bool, markerID str
 		if err = tx.Commit(); err != nil {
 			return err
 		}
+		conflicts = errors.Join(conflicts, pageConflicts)
 		watermark = events[len(events)-1].RowID
 		if err = state.SetSyncState(ctx, key, strconv.FormatInt(watermark, 10)); err != nil {
 			return err

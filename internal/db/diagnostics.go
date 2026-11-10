@@ -38,8 +38,8 @@ func ValidateDiagnostic(e DiagnosticEvent, now time.Time) error {
 	if strings.TrimSpace(e.Message) == "" || strings.ContainsRune(e.Message, 0) || utf8.RuneCountInString(e.Message) > 500 || !utf8.ValidString(e.Message) {
 		return fmt.Errorf("%w: message must contain 1–500 characters without NUL", ErrInvalidDiagnostic)
 	}
-	if !e.OccurredAt.IsZero() && (e.OccurredAt.UTC().Year() < 0 || e.OccurredAt.UTC().Year() > 9999 || e.OccurredAt.After(now.Add(5*time.Minute))) {
-		return fmt.Errorf("%w: occurred_at must be a valid UTC time no more than five minutes in the future", ErrInvalidDiagnostic)
+	if !e.OccurredAt.IsZero() && (e.OccurredAt.Before(time.Unix(0, 0)) || e.OccurredAt.After(now.Add(5*time.Minute))) {
+		return fmt.Errorf("%w: occurred_at must be on or after 1970-01-01T00:00:00Z and no more than five minutes in the future", ErrInvalidDiagnostic)
 	}
 	return nil
 }

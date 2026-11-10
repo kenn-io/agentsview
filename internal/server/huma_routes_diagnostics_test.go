@@ -34,7 +34,13 @@ func TestDiagnosticAppendRoute(t *testing.T) {
 	assertStatus(t, post(conflict, "127.0.0.1:1234"), http.StatusConflict)
 	zeroTime := fmt.Sprintf(`{"id":%q,"source":"worker","message":"failure","occurred_at":"0001-01-01T00:00:00Z"}`, uuid.NewV7().String())
 	assertStatus(t, post(zeroTime, "127.0.0.1:1234"), http.StatusUnprocessableEntity)
+	for _, timestamp := range []string{"0000-01-01T00:00:00Z", "1969-12-31T23:59:59Z"} {
+		invalid := fmt.Sprintf(`{"id":%q,"source":"worker","message":"failure","occurred_at":%q}`, uuid.NewV7().String(), timestamp)
+		assertStatus(t, post(invalid, "127.0.0.1:1234"), http.StatusUnprocessableEntity)
+	}
+	epoch := fmt.Sprintf(`{"id":%q,"source":"worker","message":"failure","occurred_at":"1970-01-01T00:00:00Z"}`, uuid.NewV7().String())
+	assertStatus(t, post(epoch, "127.0.0.1:1234"), http.StatusOK)
 	events, err := te.db.DiagnosticEventsAfter(t.Context(), 0, 10)
 	require.NoError(t, err)
-	assert.Len(t, events, 1)
+	assert.Len(t, events, 2)
 }

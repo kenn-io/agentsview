@@ -103,8 +103,8 @@ func (s *Sync) PushWithOptions(
 	run := s.fullRun
 	s.fullRun = nil
 	switch {
-	case err == nil:
-		err = s.replaceRetainedCommitLinks(ctx)
+	case err == nil || errors.Is(err, db.ErrDiagnosticConflict):
+		err = errors.Join(err, s.replaceRetainedCommitLinks(ctx))
 	case run != nil:
 		// Keep what the run committed since its last checkpoint. The push
 		// may have failed because ctx ended, so save without it, but within
@@ -518,8 +518,12 @@ func (s *Sync) pushWithOptions(
 		func() error { return s.syncCursorUsageEvents(ctx) }); err != nil {
 		return result, err
 	}
-	if err := s.syncDiagnosticEvents(ctx, full, markerID); err != nil {
-		log.Printf("pgsync: diagnostic events: %v", err)
+	diagnosticErr := s.syncDiagnosticEvents(ctx, full, markerID)
+	if diagnosticErr != nil {
+		log.Printf("pgsync: diagnostic events: %v", diagnosticErr)
+		if !errors.Is(diagnosticErr, db.ErrDiagnosticConflict) {
+			diagnosticErr = nil
+		}
 	}
 	// Candidate selection shares ListSessionsForMirrorWindow with the
 	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and
@@ -722,7 +726,7 @@ func (s *Sync) pushWithOptions(
 			return result, err
 		}
 		result.Duration = time.Since(start)
-		return result, nil
+		return result, diagnosticErr
 	}
 
 	pushed := make([]db.Session, 0, len(sessions))
@@ -871,7 +875,7 @@ func (s *Sync) pushWithOptions(
 		return result, err
 	}
 	result.Duration = time.Since(start)
-	return result, nil
+	return result, diagnosticErr
 }
 
 // runVectorPushPhase runs the vector push phase and wraps its error. With no
