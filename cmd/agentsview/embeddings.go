@@ -1073,6 +1073,10 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	} else {
 		fmt.Fprintln(out, "Search by meaning is off.")
 	}
+	if setup.Error != "" {
+		fmt.Fprintf(out, "Error: %s\n", setup.Error)
+		question = "Retry search setup?"
+	}
 	approved := int64(0)
 	if setup.Provider == "built-in" && setup.MissingBytes > 0 {
 		approved = setup.MissingBytes

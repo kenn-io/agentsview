@@ -295,7 +295,9 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	assert.Empty(t, out.String())
 	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
 	assert.Contains(t, out.String(), "Search setup is incomplete.")
-	assert.Contains(t, out.String(), "Finish search setup?")
+	assert.Contains(t, out.String(), "Another process may be using search. Close it and retry.")
+	assert.Contains(t, out.String(), "Retry search setup?")
+	assert.Less(t, strings.Index(out.String(), "Another process may be using search"), strings.Index(out.String(), "Retry search setup?"))
 	assert.NotContains(t, out.String(), "Search by meaning is off.")
 	setup, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
@@ -626,4 +628,143 @@ func TestCLIEmbeddingsSetupRequiresWritableDaemon(t *testing.T) {
 	require.ErrorContains(t, err, "agentsview index embeddings build")
 	require.ErrorContains(t, err, "Settings → Embeddings → Turn on")
 	assert.NotContains(t, out.String(), "[y/N]")
+}
+
+func TestCLIEmbeddingsSetupInspectionError(t *testing.T) {
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+	})
+	for _, input := range []string{"no\n", "yes\n"} {
+		t.Run(strings.TrimSpace(input), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			var inspections, posts atomic.Int32
+			var attempted, downloaded atomic.Bool
+			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+				if inspections.Add(1) == 1 {
+					return embedlocal.Status{}, errors.New("cannot inspect model directory")
+				}
+				return embedlocal.Status{DownloadBytes: 100}, nil
+			}
+			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+				attempted.Store(true)
+				allowed, err := opts.Confirm(ctx, 100)
+				if allowed {
+					downloaded.Store(true)
+				}
+				if err != nil {
+					return embedlocal.Installation{}, err
+				}
+				return embedlocal.Installation{}, errors.New("download declined")
+			}
+			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, owner.Close()) })
+			ln, port := listenLoopback(t)
+			cfg.Host, cfg.Port = "127.0.0.1", port
+			handler := server.New(cfg, database, nil, owner.ServerOptions()...).Handler()
+			startTestServer(t, ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost && r.URL.Path == "/api/v1/embeddings/setup" {
+					posts.Add(1)
+				}
+				handler.ServeHTTP(w, r)
+			}))
+			writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
+			var out strings.Builder
+			err = runEmbeddingsBuild(t.Context(), &out, strings.NewReader(input), EmbeddingsBuildOptions{})
+			require.Error(t, err)
+			cause, prompt := strings.Index(out.String(), "cannot inspect model directory"), strings.Index(out.String(), "Retry search setup?")
+			assert.GreaterOrEqual(t, cause, 0)
+			assert.Greater(t, prompt, cause)
+			assert.NotContains(t, out.String(), " MB")
+			if input == "no\n" {
+				assert.Zero(t, posts.Load())
+				assert.False(t, attempted.Load())
+			} else {
+				assert.EqualValues(t, 1, posts.Load())
+				assert.True(t, attempted.Load())
+			}
+			assert.False(t, downloaded.Load())
+		})
+	}
+}
+
+func TestCLIEmbeddingsFreshSetupAndHybridSearch(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+	encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Input []string `json:"input"`
+		}
+		require.NoError(t, json.UnmarshalRead(r.Body, &request))
+		writeEmbeddingsResponse(t, w, len(request.Input), 768)
+	}))
+	t.Cleanup(encoder.Close)
+	oldInspect, oldEndpoint, oldInstall, oldBattery := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings, onBattery
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings, onBattery = oldInspect, oldEndpoint, oldInstall, oldBattery
+	})
+	onBattery = func() bool { return false }
+	var installed atomic.Bool
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		if installed.Load() {
+			return embedlocal.Status{}, nil
+		}
+		return embedlocal.Status{DownloadBytes: 100}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		if !installed.Load() {
+			return "", embedlocal.ErrNotFound
+		}
+		return encoder.URL + "/v1", nil
+	}
+	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		allowed, err := opts.Confirm(ctx, 100)
+		if err != nil {
+			return embedlocal.Installation{}, err
+		}
+		if !allowed {
+			return embedlocal.Installation{}, errors.New("download declined")
+		}
+		opts.Progress(100, 100)
+		installed.Store(true)
+		return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
+	}
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, owner.Close()) })
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
+	cmd := newRootCommand()
+	cmd.SetIn(strings.NewReader("yes\n"))
+	out, err := executeCommand(cmd, "index", "embeddings", "build")
+	require.NoError(t, err, out)
+	assert.Equal(t, 1, strings.Count(out, "[y/N]"))
+	assert.Contains(t, out, "1 MB")
+	cfg, err = config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.True(t, cfg.Vector.Enabled)
+	out, err = executeCommand(newRootCommand(), "session", "search", "pooling", "--hybrid", "--include-one-shot", "--json")
+	require.NoError(t, err, out)
+	var result struct {
+		EffectiveMode string `json:"effective_mode"`
+		Matches       []struct {
+			SessionID string `json:"session_id"`
+		} `json:"matches"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.NotEqual(t, "hybrid_keyword", result.EffectiveMode)
+	require.NotEmpty(t, result.Matches)
+	assert.Equal(t, "session-one", result.Matches[0].SessionID)
 }
