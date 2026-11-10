@@ -87,7 +87,7 @@ func ParseGeminiAppsWebConversation(data []byte) (ParseResult, error) {
 	for _, page := range conv.Turns {
 		var pageTurns []jsontext.Value
 		if err := json.Unmarshal(page, &pageTurns); err != nil {
-			return ParseResult{}, fmt.Errorf("%w: turn page is not an array", ErrGeminiAppsWebFormat)
+			return ParseResult{}, ErrGeminiAppsWebFormat
 		}
 		turns = append(turns, pageTurns...)
 	}
@@ -97,7 +97,7 @@ func ParseGeminiAppsWebConversation(data []byte) (ParseResult, error) {
 	for _, raw := range slices.Backward(turns) {
 		var turn []jsontext.Value
 		if err := json.Unmarshal(raw, &turn); err != nil || len(turn) <= geminiTurnReply {
-			return ParseResult{}, fmt.Errorf("%w: turn is not an array", ErrGeminiAppsWebFormat)
+			return ParseResult{}, ErrGeminiAppsWebFormat
 		}
 		timestamp := geminiTurnTime(turn)
 		// Source IDs name the turn and the shown draft, so switching to

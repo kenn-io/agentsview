@@ -79,7 +79,7 @@ func geminiRPCPayload(body []byte, rpc string) (jsontext.Value, error) {
 			}
 			if json.Unmarshal(fields[2], &payload) != nil || payload == "" {
 				// A null payload is Gemini refusing the call.
-				return nil, fmt.Errorf("the %s request was rejected by Gemini", rpc)
+				return nil, errors.New("Gemini rejected the request")
 			}
 			value := jsontext.Value(payload)
 			if !value.IsValid() {
@@ -219,7 +219,7 @@ func SyncGemini(ctx context.Context, store BrowserSyncStore, fetch func(context.
 			break
 		}
 		if next == cursor {
-			return stats, errors.New("the Gemini chat list repeated its page cursor")
+			return stats, errors.New("Gemini repeated a chat list page")
 		}
 		cursor = next
 	}
@@ -259,7 +259,7 @@ func fetchGeminiConversation(ctx context.Context, fetch func(context.Context, st
 			break
 		}
 		if next == cursor {
-			return nil, fmt.Errorf("the Gemini conversation %s repeated its page cursor", chat.id)
+			return nil, fmt.Errorf("Gemini repeated a conversation page (%s)", chat.id)
 		}
 		cursor = next
 	}

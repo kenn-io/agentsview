@@ -135,7 +135,7 @@ func SyncGrok(ctx context.Context, store BrowserSyncStore, fetch func(context.Co
 			break
 		}
 		if next == token {
-			return stats, errors.New("the Grok chat list repeated its page token")
+			return stats, errors.New("Grok repeated a chat list page")
 		}
 		if !parser.ValidGrokWebID(next) {
 			return stats, errGrokFormat

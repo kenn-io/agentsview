@@ -105,7 +105,7 @@ func TestGeminiRPCPayload(t *testing.T) {
 		{name: "captured empty list", body: geminiFixture(t, "list-pinned.txt"), rpc: geminiListRPC, want: `[]`},
 		{name: "captured detail", body: geminiFixture(t, "detail-full.txt"), rpc: geminiDetailRPC, want: `[[[["c_`},
 		{name: "other RPC", body: geminiFixture(t, "list1.txt"), rpc: geminiDetailRPC, wantErr: errGeminiFormat.Error()},
-		{name: "refused call", body: []byte(")]}'\n\n40\n" + `[["wrb.fr","MaZiqc",null,null,null,[3],"generic"]]`), rpc: geminiListRPC, wantErr: "the MaZiqc request was rejected by Gemini"},
+		{name: "refused call", body: []byte(")]}'\n\n40\n" + `[["wrb.fr","MaZiqc",null,null,null,[3],"generic"]]`), rpc: geminiListRPC, wantErr: "Gemini rejected the request"},
 		{name: "HTML page", body: []byte("<html>Sign in</html>"), rpc: geminiListRPC, wantErr: errGeminiFormat.Error()},
 		{name: "invalid payload", body: []byte(")]}'\n" + `[["wrb.fr","MaZiqc","[1,",null]]`), rpc: geminiListRPC, wantErr: errGeminiFormat.Error()},
 	}
@@ -298,7 +298,7 @@ func TestSyncGeminiStops(t *testing.T) {
 				t.Helper()
 				return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{}})
 			},
-		}, wantText: "repeated its page cursor"},
+		}, wantText: "Gemini repeated a chat list page"},
 		{name: "unrecognized turns", pages: map[string]func(*testing.T) []byte{
 			detail: func(t *testing.T) []byte {
 				t.Helper()
@@ -526,4 +526,14 @@ func TestSyncGeminiSameTextDraftSwitchKeepsPins(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFetchGeminiConversationStopsOnRepeatedPage(t *testing.T) {
+	fake := &geminiFake{t: t, pages: map[string][]byte{}}
+	turns := []any{geminiSyncTurn("1", "Question", "Answer", 1_790_000_000)}
+	page := geminiRPCBody(t, geminiDetailRPC, []any{turns, "same", nil, []any{}})
+	fake.pages[geminiRequest(geminiDetailRequest, geminiTestChat, "")] = page
+	fake.pages[geminiRequest(geminiDetailRequest, geminiTestChat, "same")] = page
+	_, err := fetchGeminiConversation(t.Context(), fake.fetch, geminiChat{id: geminiTestChat})
+	require.EqualError(t, err, "Gemini repeated a conversation page ("+geminiTestChat+")")
 }

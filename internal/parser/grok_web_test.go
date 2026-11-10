@@ -154,6 +154,8 @@ func TestParseGrokWebConversationEdges(t *testing.T) {
 			result, err := ParseGrokWebConversation(tc.data(t))
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
+				// Format errors name no internal arrays or fields.
+				assert.EqualError(t, err, tc.wantErr.Error())
 				return
 			}
 			require.NoError(t, err)

@@ -540,10 +540,10 @@ func newImportCommand() *cobra.Command {
 	var replace []string
 	var syncBrowser bool
 	cmd := &cobra.Command{
-		Use:   "import --type <type> <path> | import --type <type> --sync (claude-ai, chatgpt, gemini-apps; --sync also grok-web)",
+		Use:   "import --type <type> <path> | import --type <type> --sync",
 		Short: "Import conversations",
 		Long: "Import an exported conversation file into the local archive using an explicit --type. " +
-			"Claude.ai and ChatGPT can instead use --type <type> --sync with the configured Chrome integration.",
+			"Claude.ai, ChatGPT, Gemini Apps, and Grok can instead use --type <type> --sync with the configured Chrome integration.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args: func(cmd *cobra.Command, args []string) error {

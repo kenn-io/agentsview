@@ -1374,3 +1374,8 @@ func TestSyncChatGPTCommittedContentCountsOnProgressCancellation(t *testing.T) {
 	assert.Equal(t, 1, stats.Imported)
 	assert.Equal(t, 1, details)
 }
+
+func TestParseChatGPTSyncConversationRejectsAnotherChat(t *testing.T) {
+	_, err := parseChatGPTSyncConversation([]byte(chatGPTSyncDetail(1, false, "Question")), "chatgpt:00000009-0000-4000-8000-000000000000")
+	require.EqualError(t, err, "ChatGPT returned a different chat")
+}

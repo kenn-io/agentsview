@@ -263,7 +263,7 @@ func TestSyncGrokStops(t *testing.T) {
 		{name: "list without conversations", pages: map[string][]byte{list: []byte(`{"error":"x"}`)}, wantErr: errGrokFormat},
 		{name: "repeated page token", pages: map[string][]byte{
 			list: page(token), grokRequest(grokListPageRequest, "", token): page(token),
-		}, wantText: "repeated its page token"},
+		}, wantText: "Grok repeated a chat list page"},
 		{name: "unrecognized page token", pages: map[string][]byte{list: page("a&b")}, wantErr: errGrokFormat},
 		{name: "HTML responses", pages: map[string][]byte{detail: []byte("<html></html>")}, wantErr: errGrokFormat},
 	}

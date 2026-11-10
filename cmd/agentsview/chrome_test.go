@@ -449,3 +449,9 @@ func TestChromeImportArguments(t *testing.T) {
 		})
 	}
 }
+
+func TestImportCommandUsageLeavesProvidersToTypeHelp(t *testing.T) {
+	cmd := newImportCommand()
+	assert.Equal(t, "import --type <type> <path> | import --type <type> --sync", cmd.Use)
+	assert.Equal(t, "Import type: claude-ai, chatgpt, gemini-apps, grok-web (--sync only)", cmd.Flag("type").Usage)
+}

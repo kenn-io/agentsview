@@ -68,11 +68,11 @@ func decodeGrokWebConversation(data []byte) (GrokWebConversation, grokWebRespons
 	}
 	var body grokWebResponses
 	if err := json.Unmarshal(conv.Responses, &body); err != nil || body.Responses == nil {
-		return conv, body, fmt.Errorf("%w: no responses array", ErrGrokWebFormat)
+		return conv, body, ErrGrokWebFormat
 	}
 	for _, r := range *body.Responses {
 		if r.ResponseID == "" || r.Sender == "" {
-			return conv, body, fmt.Errorf("%w: response without an ID or sender", ErrGrokWebFormat)
+			return conv, body, ErrGrokWebFormat
 		}
 	}
 	return conv, body, nil
