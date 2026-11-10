@@ -555,14 +555,14 @@ func parseCursorIDEComposer(
 		return nil, fmt.Errorf(
 			"decoding cursor IDE composer %s: %w", composerID, err)
 	}
-	truncated := false
+	headerIncomplete := false
 	if len(doc.Headers) == 0 && doc.HeaderLog.Count > 0 {
 		for i := 0; i < doc.HeaderLog.ChunkCount; i++ {
 			key := fmt.Sprintf("%s%s:%06d", cursorIDEHeaderKeyPrefix, composerID, i)
 			var rawChunk []byte
 			err := tx.QueryRowContext(ctx, `SELECT value FROM cursorDiskKV WHERE key = ?`, key).Scan(&rawChunk)
 			if errors.Is(err, sql.ErrNoRows) || (err == nil && len(rawChunk) == 0) {
-				truncated = true
+				headerIncomplete = true
 				continue
 			}
 			if err != nil {
@@ -573,18 +573,20 @@ func parseCursorIDEComposer(
 				return nil, fmt.Errorf("decoding cursor IDE headers %s: %w", key, err)
 			}
 			if len(headers) == 0 {
-				truncated = true
+				headerIncomplete = true
 			}
 			doc.Headers = append(doc.Headers, headers...)
 		}
 		if len(doc.Headers) < doc.HeaderLog.Count {
-			truncated = true
+			headerIncomplete = true
 		}
 	}
-	if len(doc.Headers) == 0 {
+	// An incomplete header log still identifies the source to reconciliation.
+	if len(doc.Headers) == 0 && !headerIncomplete {
 		return nil, nil
 	}
 
+	truncated := headerIncomplete
 	var messages []ParsedMessage
 	for _, header := range doc.Headers {
 		if err := ctx.Err(); err != nil {
@@ -630,7 +632,7 @@ func parseCursorIDEComposer(
 		msg.SourceUUID = header.BubbleID
 		messages = append(messages, msg)
 	}
-	if len(messages) == 0 {
+	if len(messages) == 0 && !headerIncomplete {
 		return nil, nil
 	}
 

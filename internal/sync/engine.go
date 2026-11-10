@@ -13748,8 +13748,20 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 	file parser.DiscoveredFile,
 	results []parser.ParseResult,
 ) (kept []parser.ParseResult, verifyFailed bool) {
-	if file.Agent != parser.AgentCursorIDE || len(results) == 0 ||
-		e.forceParseRequested(file) {
+	if file.Agent != parser.AgentCursorIDE || len(results) == 0 || e.forceParse {
+		return results, false
+	}
+	// Incomplete header logs with no turns identify the source but cannot
+	// replace an archive or create an empty session, even in forced sync.
+	kept = results[:0]
+	for _, r := range results {
+		if r.Session.IsTruncated && len(r.Messages) == 0 {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	results = kept
+	if len(results) == 0 || e.forceParseRequested(file) {
 		return results, false
 	}
 	type messageSourceUUIDReader interface {

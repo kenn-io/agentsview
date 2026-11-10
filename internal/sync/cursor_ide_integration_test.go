@@ -1413,3 +1413,90 @@ func TestCursorIDEInlineToChunkedMigration(t *testing.T) {
 	assert.Equal(t, composer.bubbles[1].text, messages[1].Content)
 	assert.Equal(t, "third turn", messages[2].Content)
 }
+
+func TestCursorIDEIncompleteHeadersPreserveArchive(t *testing.T) {
+	for _, null := range []bool{false, true} {
+		t.Run(fmt.Sprintf("null=%t", null), func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "state.vscdb")
+			composer := cursorIDERetentionComposer("archived", 0, 2)
+			createCursorIDEStateDB(t, path, []cursorIDESyncComposer{composer})
+			engine, database := newCursorIDESyncEngine(t, root)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			const id = "cursor-ide:archived"
+			rootDoc := `{"_v":18,"headerLog":{"count":2,"chunkCount":1}}`
+			cursorIDEExec(t, path, func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, rootDoc, "composerData:archived"); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(t.Context(), `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerData:new-chat", rootDoc); err != nil {
+					return err
+				}
+				if null {
+					_, err := tx.ExecContext(t.Context(), `INSERT INTO cursorDiskKV (key, value) VALUES (?, NULL), (?, NULL)`, "composerConvHeaders:archived:000000", "composerConvHeaders:new-chat:000000")
+					return err
+				}
+				return nil
+			})
+			for _, syncNow := range []func(){
+				func() { engine.SyncPaths([]string{path}) },
+				func() {
+					stats := engine.SyncAllForceParse(t.Context(), nil)
+					require.True(t, stats.ProcessingComplete())
+				},
+			} {
+				syncNow()
+				sess, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, sess)
+				assert.Nil(t, sess.SourceMissingAt)
+				messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
+				require.NoError(t, err)
+				require.Len(t, messages, 2)
+				assert.Equal(t, composer.bubbles[0].text, messages[0].Content)
+				assert.Equal(t, composer.bubbles[1].text, messages[1].Content)
+				newSession, err := database.GetSessionFull(t.Context(), "cursor-ide:new-chat")
+				require.NoError(t, err)
+				assert.Nil(t, newSession)
+			}
+
+			diff := sync.NewDiffEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursorIDE: {root}}, Machine: "local"})
+			defer diff.Close()
+			report, err := diff.ParseDiff(t.Context(), sync.ParseDiffOptions{Agents: []parser.AgentType{parser.AgentCursorIDE}})
+			require.NoError(t, err)
+			entry := findSessionDiff(report, id)
+			require.NotNil(t, entry)
+			assert.Equal(t, sync.DiffChanged, entry.Class)
+			assert.Equal(t, 1, report.FieldCounts[sync.FieldMessageCount])
+			archived, err := database.GetMessages(t.Context(), id, 0, 100, true)
+			require.NoError(t, err)
+			require.Len(t, archived, 2)
+			assert.Equal(t, composer.bubbles[0].text, archived[0].Content)
+			assert.Equal(t, composer.bubbles[1].text, archived[1].Content)
+
+			execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "bubbleId:archived:b3", `{"type":1,"text":"returned turn"}`)
+			execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:archived:000000", `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":1}]`)
+			execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "bubbleId:new-chat:n1", `{"type":1,"text":"new turn"}`)
+			execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:new-chat:000000", `[{"bubbleId":"n1","type":1},{"bubbleId":"n2","type":2}]`)
+			execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "bubbleId:new-chat:n2", `{"type":2,"text":"new reply"}`)
+			require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
+			sess, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.Nil(t, sess.SourceMissingAt)
+			messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
+			require.NoError(t, err)
+			require.Len(t, messages, 3)
+			assert.Equal(t, "b1", messages[0].SourceUUID)
+			assert.Equal(t, "b2", messages[1].SourceUUID)
+			assert.Equal(t, "b3", messages[2].SourceUUID)
+			assert.Equal(t, "returned turn", messages[2].Content)
+			newMessages, err := database.GetMessages(t.Context(), "cursor-ide:new-chat", 0, 100, true)
+			require.NoError(t, err)
+			require.Len(t, newMessages, 2)
+			assert.Equal(t, "n1", newMessages[0].SourceUUID)
+			assert.Equal(t, "n2", newMessages[1].SourceUUID)
+		})
+	}
+}

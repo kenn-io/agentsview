@@ -1323,3 +1323,28 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 		})
 	}
 }
+
+func TestCursorIDEIncompleteHeaderChunksKeepIdentity(t *testing.T) {
+	for _, null := range []bool{false, true} {
+		t.Run(fmt.Sprintf("null=%t", null), func(t *testing.T) {
+			const id = "incomplete-headers"
+			path := createCursorIDEDB(t, []cursorIDETestComposer{{id: id}})
+			execCursorIDEDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"headerLog":{"count":2,"chunkCount":1}}`, "composerData:"+id)
+			if null {
+				execCursorIDEDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, NULL)`, "composerConvHeaders:"+id+":000000")
+			}
+			conn, err := openCursorIDEDB(path)
+			require.NoError(t, err)
+			defer conn.Close()
+			info, err := os.Stat(path)
+			require.NoError(t, err)
+			result, err := parseCursorIDEComposer(t.Context(), conn, path, id, "test", info)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, "cursor-ide:"+id, result.Session.ID)
+			assert.Equal(t, VirtualSourcePath(path, id), result.Session.File.Path)
+			assert.True(t, result.Session.IsTruncated)
+			assert.Empty(t, result.Messages)
+		})
+	}
+}
