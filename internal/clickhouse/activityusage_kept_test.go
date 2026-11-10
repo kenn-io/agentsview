@@ -63,7 +63,10 @@ func (g *usageTestRange) sessionRows(id string) []clickSessionUsageOrderedRow {
 		switch k := g.rng.IntN(10); {
 		case k < 5:
 			row.claudeMessageID = fmt.Sprintf("msg-%d", g.rng.IntN(30))
-			row.claudeRequestID = fmt.Sprintf("req-%d", g.rng.IntN(2))
+			// Claude Agent SDK transcripts omit requestId.
+			if request := g.rng.IntN(3); request < 2 {
+				row.claudeRequestID = fmt.Sprintf("req-%d", request)
+			}
 		case k == 5:
 			row.sourceUUID = fmt.Sprintf("uuid-%d", g.rng.IntN(8))
 		case k == 6:

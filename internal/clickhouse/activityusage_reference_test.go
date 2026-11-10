@@ -30,7 +30,7 @@ func activityUsageSelection(k *activityUsageKept, candidates []string) (iter.Seq
 		return k.all(), k.count
 	}
 	peerKey := func(r *keptUsageRow) (claudeUsageKey, bool) {
-		return claudeUsageKey{r.claudeMessageID, r.claudeRequestID}, r.claudeMessageID != "" && r.claudeRequestID != ""
+		return claudeUsageKey{r.claudeMessageID, r.claudeRequestID}, r.claudeMessageID != ""
 	}
 	// The other sessions' message rows are grouped by key first; a
 	// candidate row carrying the key then selects the whole group.
