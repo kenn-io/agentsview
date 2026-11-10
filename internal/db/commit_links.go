@@ -184,7 +184,7 @@ func commitArgv(input string) (string, bool) {
 	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
 		return args[2], true
 	}
-	if program != "git" {
+	if program != "git" && !strings.EqualFold(program, "git.exe") {
 		return "", true
 	}
 	args[0] = "git"
@@ -629,7 +629,7 @@ func markCommitLinksBackfilled(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {
 		return err
 	}
-	if version, archiveOnly, err := readUserVersion(ctx, tx); err != nil || !archiveOnly || version < codexThreadIdentityDataVersion || version >= 170 {
+	if version, _, err := readUserVersion(ctx, tx); err != nil || version < codexThreadIdentityDataVersion || version >= 170 {
 		return err
 	}
 	return advanceDataVersion(ctx, tx, 170)

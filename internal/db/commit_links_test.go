@@ -31,6 +31,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		name, input, repository string
 	}{
 		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
+		{"Windows git executable", `{"command":["C:\\Program Files\\Git\\bin\\git.exe","-C","/repo","commit"]}`, "/repo"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
 		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},
 		{"trailing apostrophe", `{"command":["git","-C","/work/a'","commit"]}`, "/work/a'"},
@@ -548,16 +549,20 @@ func TestCommitLinksBackfill(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "s1", "project-a")
 		insertMessages(t, d, commitMessages("s1", `{"command":["bash","-lc","git commit"]}`, "[main abc1234] Fix")...)
-		_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2';
+		_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2'; PRAGMA user_version=169;
 		CREATE TRIGGER fail_commit_link BEFORE INSERT ON commit_links BEGIN SELECT RAISE(ABORT, 'failure'); END`)
 		require.NoError(t, err)
 		require.Error(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
-		var marker int
+		var marker, version int
 		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, commitLinksBackfillKey).Scan(&marker))
 		assert.Zero(t, marker)
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+		assert.Equal(t, 169, version)
 		_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_commit_link`)
 		require.NoError(t, err)
 		require.NoError(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+		assert.Equal(t, 170, version)
 		got, err := d.SessionCommitLinks(t.Context(), "s1")
 		require.NoError(t, err)
 		require.Len(t, got.Commits, 1)
