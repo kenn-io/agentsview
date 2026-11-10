@@ -40,6 +40,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"env attached directory", `{"command":["env","-C/repo","git","commit"]}`, "/repo"},
 		{"env long directory", `{"command":["/usr/bin/env","--chdir","/repo","git","commit"]}`, "/repo"},
 		{"env equals directory", `{"command":["env","--chdir=/repo","git","commit"]}`, "/repo"},
+		{"env equals option-like directory", `{"command":["env","--chdir=-Cfoo","git","commit"]}`, "/work/-Cfoo"},
 		{"shell cd apostrophe", `{"command":["bash","-lc","cd '/work/a'\\''b' && git commit -m fix"]}`, "/work/a'b"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
 		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},

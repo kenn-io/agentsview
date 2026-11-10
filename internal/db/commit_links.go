@@ -232,7 +232,7 @@ func commitEnvArgs(args []string) ([]string, string, bool) {
 			dir = args[i+1]
 			i += 2
 		case strings.HasPrefix(arg, "-C") || strings.HasPrefix(arg, "--chdir="):
-			dir = strings.TrimPrefix(strings.TrimPrefix(arg, "--chdir="), "-C")
+			dir = strings.TrimPrefix(strings.TrimPrefix(arg, "-C"), "--chdir=")
 			i++
 		case arg == "--":
 			return args[i+1:], dir, true
