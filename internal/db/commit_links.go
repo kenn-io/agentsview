@@ -173,6 +173,9 @@ func commitCommandText(input string) string {
 			args := payload.Command
 			if len(args) > 0 && commitExecutableName(args[0]) == "env" {
 				args = args[1:]
+				if len(args) > 0 && (args[0] == "-i" || args[0] == "--ignore-environment") {
+					args = args[1:]
+				}
 				for len(args) > 0 {
 					name, _, ok := strings.Cut(args[0], "=")
 					if !ok || !commitEnvNameRE.MatchString(name) {
@@ -193,7 +196,13 @@ func commitCommandText(input string) string {
 			}
 			args[0] = "git"
 			for i, arg := range args {
-				args[i] = shellquote.POSIX(arg)
+				name, value, hasValue := strings.Cut(arg, "=")
+				switch {
+				case hasValue && (name == "--git-dir" || name == "--work-tree" || name == "--namespace" || name == "--config-env"):
+					args[i] = shellquote.POSIX(name+"=") + shellquote.POSIX(value)
+				default:
+					args[i] = shellquote.POSIX(arg)
+				}
 			}
 			command := strings.Join(args, " ")
 			if match := commitInvocationRE.FindStringIndex(command); match == nil || match[0] != 0 {

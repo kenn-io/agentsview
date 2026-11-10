@@ -41,6 +41,11 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"Windows bash", `{"command":["C:\\Program Files\\Git\\bin\\Bash.EXE","-lc","git commit -m fix"],"workdir":"D:\\work\\repo"}`, `D:\work\repo`},
 		{"Windows env", `{"command":["C:\\bin\\ENV.ExE","X=1","C:\\bin\\Git.EXE","commit"]}`, "/work"},
 		{"absolute git", `{"command":["/usr/bin/git","commit"]}`, "/work"},
+		{"env clean", `{"command":["env","-i","PATH=/usr/bin","git","commit","-m","fix"]}`, "/work"},
+		{"env clean long", `{"command":["env","--ignore-environment","git","commit"]}`, "/work"},
+		{"equals work tree", `{"command":["git","--work-tree=/path with spaces","commit"]}`, "/work"},
+		{"equals apostrophe", `{"command":["git","--git-dir=/path with o'b","commit"]}`, "/work"},
+		{"config equals", `{"command":["git","-c","user.name=A B","commit"]}`, "/work"},
 		{"env", `{"command":["env","X=1","git","commit"]}`, "/work"},
 		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
 		{"literal apostrophe", `{"command":"git -C '/work/a'\\''b' commit"}`, "/work/a'b"},
@@ -62,9 +67,13 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 			assert.Equal(t, tt.repository, got.Commits[0].Repository)
 			require.NotNil(t, got.Commits[0].Turn)
 			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
+			reverse, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
+			require.NoError(t, err)
+			require.Len(t, reverse.Commits[0].Links, 1)
+			assert.Equal(t, "s1", reverse.Commits[0].Links[0].SessionID)
 		})
 	}
-	for _, input := range []string{`{"command":[]}`, `{"command":[1]}`, `{"command":["printf","git","commit"]}`, `{"command":["C:\\bin\\printf.exe","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
+	for _, input := range []string{`{"command":[]}`, `{"command":[1]}`, `{"command":["printf","git","commit"]}`, `{"command":["C:\\bin\\printf.exe","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","printf","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
 		d := testDB(t)
 		insertSession(t, d, "s1", "project-a")
 		insertMessages(t, d, commitMessages("s1", input, "[main abc1234] Fix parser")...)
@@ -516,15 +525,20 @@ func TestCommitLinksBackfill(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "archive.db")
 	d, err := Open(t.Context(), archive)
 	require.NoError(t, err)
-	for _, id := range []string{"repaired", "unchanged"} {
+	for _, id := range []string{"repaired", "env", "equals", "unchanged"} {
 		insertSession(t, d, id, "project-a", func(s *Session) { s.Cwd = "/work" })
 		input := `{"command":"git commit -m fix"}`
-		if id == "repaired" {
+		switch id {
+		case "repaired":
 			input = `{"command":["bash","-lc","git commit -m fix"]}`
+		case "env":
+			input = `{"command":["env","-i","PATH=/usr/bin","git","commit","-m","fix"]}`
+		case "equals":
+			input = `{"command":["git","--work-tree=/path with spaces","commit"]}`
 		}
 		insertMessages(t, d, commitMessages(id, input, "[main abc1234] Fix parser")...)
 	}
-	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id='repaired'`)
+	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id IN ('repaired','env','equals')`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM stats WHERE key=?`, commitLinksBackfillKey)
 	require.NoError(t, err)
@@ -533,33 +547,36 @@ func TestCommitLinksBackfill(t *testing.T) {
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET local_modified_at='2000-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
-	var firstModified string
+	firstModified := map[string]string{}
 	for i := 0; i < 2; i++ {
 		d, err = Open(t.Context(), archive)
 		require.NoError(t, err)
-		got, err := d.SessionCommitLinks(t.Context(), "repaired")
-		require.NoError(t, err)
-		require.Len(t, got.Commits, 1)
-		assert.Equal(t, "abc1234", got.Commits[0].SHA)
-		assert.Equal(t, "/work", got.Commits[0].Repository)
-		require.NotNil(t, got.Commits[0].Turn)
-		assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
+		for _, id := range []string{"repaired", "env", "equals"} {
+			got, err := d.SessionCommitLinks(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			assert.Equal(t, "/work", got.Commits[0].Repository)
+			require.NotNil(t, got.Commits[0].Turn)
+			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
+			var repaired string
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id=?`, id).Scan(&repaired))
+			assert.Greater(t, repaired, "2000-01-01T00:00:00.000Z")
+			if i == 0 {
+				firstModified[id] = repaired
+			} else {
+				assert.Equal(t, firstModified[id], repaired)
+			}
+			var selected int
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM sessions WHERE id=? AND sync_marker > '2025-01-01T00:00:00.000Z'`, id).Scan(&selected))
+			assert.Equal(t, 1, selected)
+		}
 		reverse, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
 		require.NoError(t, err)
-		require.Len(t, reverse.Commits[0].Links, 2)
-		var repaired, unchanged string
-		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='repaired'`).Scan(&repaired))
+		require.Len(t, reverse.Commits[0].Links, 4)
+		var unchanged string
 		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='unchanged'`).Scan(&unchanged))
-		assert.Greater(t, repaired, "2000-01-01T00:00:00.000Z")
 		assert.Equal(t, "2000-01-01T00:00:00.000Z", unchanged)
-		if i == 0 {
-			firstModified = repaired
-		} else {
-			assert.Equal(t, firstModified, repaired)
-		}
-		var selected int
-		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM sessions WHERE id='repaired' AND sync_marker > '2025-01-01T00:00:00.000Z'`).Scan(&selected))
-		assert.Equal(t, 1, selected)
 		require.NoError(t, d.Close())
 	}
 }
