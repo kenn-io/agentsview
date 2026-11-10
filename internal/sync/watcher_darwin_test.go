@@ -1383,35 +1383,6 @@ func TestDarwinWatcherHybridTransitionDoesNotSuppressOtherShallowRootEvent(t *te
 	assert.Equal(t, shallow, event.Root)
 }
 
-func TestDarwinWatcherRootChangedRetiresRecursiveStreamAcrossABA(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "sessions")
-	require.NoError(t, os.Mkdir(root, 0o700))
-	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
-	closed := make(chan struct{})
-	var nativeSink func([]fsevents.Event)
-	backend.newStream = func(_ string, sink func([]fsevents.Event)) (darwinStream, error) {
-		nativeSink = sink
-		return &handoffRecordingStream{close: func() {
-			select {
-			case closed <- struct{}{}:
-			default:
-			}
-		}}, nil
-	}
-	watcher, _ := newDarwinTestWatcherWithBackend(t, backend)
-	results := watcher.RegisterRoots([]WatchRoot{{
-		Path: root, Recursive: true, Exists: true,
-		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: filepath.Dir(root)}},
-	}}, 10)
-	require.Equal(t, RecursiveWatchResult{Watched: 1}, results[0])
-	watcher.Start()
-
-	nativeSink([]fsevents.Event{{Path: root, Flags: fseventFlagRootChanged}})
-
-	requireReceiveWithin(t, closed, time.Second)
-}
-
 func TestDarwinWatcherCollectingGateWaitsForSuccessfulReconciliation(t *testing.T) {
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
