@@ -162,6 +162,7 @@ func TestFileLinksTheIssueAnEarlierCreateMade(t *testing.T) {
 }
 
 func TestFileRefusals(t *testing.T) {
+	assert.False(t, friction.Fileable(friction.KindDiagnostic))
 	tests := []struct {
 		name        string
 		project     string

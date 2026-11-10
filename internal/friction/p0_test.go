@@ -72,18 +72,15 @@ func TestDetectP0Alerts(t *testing.T) {
 	}
 }
 
-// Four diagnostic subjects never raise P0; the same tool names on session
-// subjects do. This checks subject kind rather than a private tool-name list.
+// Diagnostic events never raise P0; errors from distinct sessions do.
 func TestWorkerDiagnosticsDoNotRaiseP0(t *testing.T) {
-	assert.False(t, Fileable(KindDiagnostic))
 	for _, tool := range []string{"status_check", "review_check", "fallback_check", "hook_check", "shell"} {
 		t.Run(tool, func(t *testing.T) {
 			diagnostics := []Signal{
-				p0Error("diag-a", tool), p0Error("diag-b", tool),
-				p0Error("diag-c", tool), p0Error("diag-d", tool),
-			}
-			for i := range diagnostics {
-				diagnostics[i].SubjectKind = SubjectDiagnostic
+				{Kind: KindDiagnostic, SubjectID: "diagnostic:00000000-0000-4000-8000-000000000001", SubjectKind: SubjectDiagnostic, Label: tool, Text: "launch failed"},
+				{Kind: KindDiagnostic, SubjectID: "diagnostic:00000000-0000-4000-8000-000000000002", SubjectKind: SubjectDiagnostic, Label: tool, Text: "launch failed"},
+				{Kind: KindDiagnostic, SubjectID: "diagnostic:00000000-0000-4000-8000-000000000003", SubjectKind: SubjectDiagnostic, Label: tool, Text: "launch failed"},
+				{Kind: KindDiagnostic, SubjectID: "diagnostic:00000000-0000-4000-8000-000000000004", SubjectKind: SubjectDiagnostic, Label: tool, Text: "launch failed"},
 			}
 			assert.Equal(t, map[string][]string{}, DetectP0Alerts(diagnostics, p0FixtureSubAgent))
 
