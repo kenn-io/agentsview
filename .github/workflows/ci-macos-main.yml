@@ -127,11 +127,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - set: watcher
+          - set: alone
             shard: 1
-          - set: watcher
+          - set: alone
             shard: 2
-          - set: full
+          - set: leaks
             shard: 1
     steps:
       - uses: actions/checkout@v7.0.1
@@ -157,11 +157,18 @@ jobs:
         timeout-minutes: 36
         run: |
           mkdir -p gotestsum
-          if [ "${{ matrix.set }}" = watcher ]; then
-            pattern=$(GOFLAGS="$GOFLAGS -tags=fts5" scripts/macos-watcher-tests.sh ./internal/sync)
-            go test -json -tags fts5 -run "$pattern" -count=40 -timeout=30m ./internal/sync > gotestsum/repro.json
+          if [ "${{ matrix.set }}" = alone ]; then
+            go test -json -tags fts5 -run '^TestFSNotifyBackendRemoveRecursiveRootRemovesDescendantWatches$' -count=3000 -timeout=30m ./internal/sync > gotestsum/repro.json
           else
-            go test -json -tags fts5 -count=4 -timeout=30m ./internal/sync > gotestsum/repro.json
+            : > gotestsum/repro.json
+            go test -c -tags fts5 -o "$RUNNER_TEMP/sync.test" ./internal/sync
+            pattern=$(GOFLAGS="$GOFLAGS -tags=fts5" scripts/macos-watcher-tests.sh ./internal/sync)
+            names=${pattern#^(}; names=${names%)\$}
+            cd internal/sync
+            for name in $(echo "$names" | tr '|' ' '); do
+              count=$("$RUNNER_TEMP/sync.test" -test.run "^($name|TestZZZLeakScratch)\$" -test.v -test.timeout=2m 2>&1 | sed -n 's/.*LEAKED_READERS //p')
+              [ "$count" = 0 ] || echo "leak: $name $count"
+            done
           fi
         env:
           CGO_ENABLED: "1"
