@@ -992,6 +992,96 @@ func TestUsageRollupPublishesOnlyCurrentFactRevisions(t *testing.T) {
 	}
 }
 
+func TestUsageRollupSeparatesDeferredAndBackgroundFlights(t *testing.T) {
+	for _, deferredFirst := range []bool{true, false} {
+		name := "background first"
+		if deferredFirst {
+			name = "deferred first"
+		}
+		t.Run(name, func(t *testing.T) {
+			database := testDB(t)
+			seedUsageSnapshotSession(t, database, "rollup-flight", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+			databaseID, err := database.GetDatabaseID(t.Context())
+			require.NoError(t, err)
+			source := &rollupRaceSource{rollupAccountSource: rollupAccountSource{
+				database: database, databaseID: databaseID, revision: 10,
+				accounts: []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, DedupKey: "shared"}},
+			}}
+			reader, err := NewUsageCacheReader(t.TempDir(), source)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			snapshot, fills, cache := prepareUsageRollupTest(t, reader.engine)
+			started := make(chan int, 2)
+			release := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+			unblock := [2]func(){sync.OnceFunc(func() { close(release[0]) }), sync.OnceFunc(func() { close(release[1]) })}
+			t.Cleanup(func() { unblock[0](); unblock[1]() })
+			var flight atomic.Int32
+			cache.rollup.observer.beforeEnsure = func() {
+				i := int(flight.Add(1)) - 1
+				started <- i
+				<-release[i]
+			}
+			var accountBuilt atomic.Bool
+			cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+				if slices.ContainsFunc(builds, func(build usageRollupBuild) bool { return build.SessionID == usageRollupCursorSessionID }) {
+					accountBuilt.Store(true)
+				}
+			}
+			start := func(deferred bool) <-chan error {
+				done := make(chan error, 1)
+				go func() {
+					ctx := t.Context()
+					if deferred {
+						ctx = withUsageWorkDeferred(ctx)
+					}
+					_, _, err := cache.rollup.Ensure(ctx, snapshot, fills, export.NewPricingResolver(snapshot.PricingRows))
+					done <- err
+				}()
+				return done
+			}
+			waitStarted := func(want int) {
+				select {
+				case got := <-started:
+					require.Equal(t, want, got)
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "separate rollup flight did not start")
+				}
+			}
+			first := start(deferredFirst)
+			waitStarted(0)
+			second := start(!deferredFirst)
+			waitStarted(1)
+			deferredDone, backgroundDone := first, second
+			deferredIndex, backgroundIndex := 0, 1
+			if !deferredFirst {
+				deferredDone, backgroundDone = second, first
+				deferredIndex, backgroundIndex = 1, 0
+			}
+			unblock[deferredIndex]()
+			select {
+			case err := <-deferredDone:
+				require.ErrorIs(t, err, ErrUsageCacheWarming)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "deferred flight did not finish")
+			}
+			require.False(t, accountBuilt.Load(), "the deferred flight must not build account totals")
+			var accounts int
+			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
+			require.Zero(t, accounts)
+			unblock[backgroundIndex]()
+			select {
+			case err := <-backgroundDone:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "background flight did not finish")
+			}
+			require.True(t, accountBuilt.Load())
+			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
+			require.Equal(t, 1, accounts)
+		})
+	}
+}
+
 func TestUsageRollupDefersAccountRebuildAfterConcurrentFill(t *testing.T) {
 	database := testDB(t)
 	seedUsageSnapshotSession(t, database, "rollup-race", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
