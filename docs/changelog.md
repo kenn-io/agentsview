@@ -9,6 +9,11 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- With automatic filing on, reopen linked Kata issues when a digest finding
+  shows the pattern returned after the issue was closed as done.
+
 **Bug fixes**
 
 - Antigravity app and IDE sessions now show their project and working directory

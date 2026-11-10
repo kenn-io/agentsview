@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -349,7 +350,8 @@ func TestCreateIssueRejectsMalformedIssueUIDBeforeReread(t *testing.T) {
 
 func TestGetIssueRefForms(t *testing.T) {
 	s := katatest.New(t)
-	is := s.AddIssue(katatest.Issue{Title: "t", Status: "closed", ClosedReason: "done", Labels: []string{"friction"}})
+	closed := time.Date(2026, 9, 15, 12, 0, 0, 123, time.UTC)
+	is := s.AddIssue(katatest.Issue{Title: "t", Status: "closed", ClosedReason: "done", ClosedAt: &closed, Labels: []string{"friction"}})
 	c := readyClient(t, s)
 	tests := []struct {
 		name     string
@@ -367,6 +369,8 @@ func TestGetIssueRefForms(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, is.UID, got.UID)
 			assert.Equal(t, "done", got.ClosedReason)
+			require.NotNil(t, got.ClosedAt)
+			assert.True(t, closed.Equal(*got.ClosedAt))
 			assert.Equal(t, []string{"friction"}, got.Labels)
 			reqs := s.Requests()
 			require.Len(t, reqs, 1)

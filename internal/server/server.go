@@ -232,6 +232,8 @@ type Server struct {
 	artifactExchangeRunner ArtifactExchangeRunner
 	rawSyncTenant          string
 	frictionRunner         *review.Runner
+	// The friction job runs its automatic filing passes sequentially.
+	frictionEvaluatedOccurrences map[string]time.Time
 	// kata is the optional Kata spoke connection; never nil after New.
 	kata              *kata.Conn
 	frictionExclusive func(func() error) error
