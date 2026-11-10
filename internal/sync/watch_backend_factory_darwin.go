@@ -160,7 +160,7 @@ const (
 	darwinFallbackStreamStart
 	darwinFallbackNativeDrop
 	darwinFallbackLifecycle
-	darwinFallbackKqueueStart
+	darwinFallbackShallowStart
 )
 
 type darwinReconcileRequest struct {
@@ -183,10 +183,10 @@ func (s *darwinLogicalRoot) isOpen(generation uint64) bool {
 }
 
 type darwinWatchBackend struct {
-	kqueue   *fsnotifyBackend
-	queue    *fsevents.Queue
-	latency  time.Duration
-	excludes []string
+	shallowWatcher *darwinShallowWatcher
+	queue          *fsevents.Queue
+	latency        time.Duration
+	excludes       []string
 
 	events        chan backendEvent
 	errors        chan error
@@ -217,7 +217,7 @@ type darwinWatchBackend struct {
 	addAncestor            func(string) error
 	removeAncestor         func(string) error
 	vnode                  *vnodeObserver
-	startKqueue            func() error
+	startShallow           func() error
 	transitions            sync.WaitGroup
 	workerStarted          bool
 	forwardStarted         bool
@@ -250,7 +250,7 @@ type darwinWatchBackend struct {
 }
 
 // The created-subtree contract enables bounded discovery for directory-create
-// events forwarded by the kqueue fallback. Native FSEvents deliveries bypass
+// events forwarded from shallow roots. Recursive FSEvents deliveries bypass
 // Watcher.loop through the direct sink, so this method never puts filesystem
 // work on the FSEvents callback queue.
 func (b *darwinWatchBackend) includeCreatedSubtreePath(
@@ -273,31 +273,32 @@ func newDarwinWatchBackend(
 	excludes []string,
 	latency time.Duration,
 ) (*darwinWatchBackend, error) {
-	kqueue, err := newFSNotifyBackend(excludes)
-	if err != nil {
-		return nil, err
-	}
 	queue, err := fsevents.NewQueue()
 	if err != nil {
-		kqueue.Stop()
 		return nil, err
 	}
+	shallowWatcher := newDarwinShallowWatcher(
+		normalizeExcludePatterns(excludes),
+		func(root string, sink func([]fsevents.Event)) (darwinStream, error) {
+			return fsevents.NewStream(queue, root, latency, sink)
+		},
+	)
 	backend := &darwinWatchBackend{
-		kqueue:        kqueue,
-		queue:         queue,
-		latency:       latency,
-		excludes:      normalizeExcludePatterns(excludes),
-		events:        make(chan backendEvent),
-		errors:        make(chan error),
-		stop:          make(chan struct{}),
-		done:          make(chan struct{}),
-		lifecycleWake: make(chan struct{}, 1),
-		lifecycleDone: make(chan struct{}),
-		streams:       make(map[string]darwinStream),
-		logical:       make(map[string]*darwinLogicalRoot),
-		shallow:       make(map[string]int),
-		retryInitial:  darwinRetryInitial,
-		retryMax:      darwinRetryMax,
+		shallowWatcher: shallowWatcher,
+		queue:          queue,
+		latency:        latency,
+		excludes:       normalizeExcludePatterns(excludes),
+		events:         make(chan backendEvent),
+		errors:         make(chan error),
+		stop:           make(chan struct{}),
+		done:           make(chan struct{}),
+		lifecycleWake:  make(chan struct{}, 1),
+		lifecycleDone:  make(chan struct{}),
+		streams:        make(map[string]darwinStream),
+		logical:        make(map[string]*darwinLogicalRoot),
+		shallow:        make(map[string]int),
+		retryInitial:   darwinRetryInitial,
+		retryMax:       darwinRetryMax,
 	}
 	backend.newStream = func(root string, sink func([]fsevents.Event)) (darwinStream, error) {
 		return fsevents.NewStream(backend.queue, root, backend.latency, sink)
@@ -305,12 +306,12 @@ func newDarwinWatchBackend(
 	backend.lstat = os.Lstat
 	backend.stat = os.Stat
 	backend.pathIsDirectory = pathIsDirectory
-	backend.addShallow = backend.kqueue.AddShallow
-	backend.removeShallow = backend.kqueue.Remove
+	backend.addShallow = shallowWatcher.AddShallow
+	backend.removeShallow = shallowWatcher.Remove
 	backend.ancestors = make(map[string]int)
 	backend.addAncestor = backend.observeAncestor
 	backend.removeAncestor = backend.unobserveAncestor
-	backend.startKqueue = backend.kqueue.Start
+	backend.startShallow = shallowWatcher.Start
 	backend.fallbackEvents = make(map[backendEvent]struct{})
 	backend.nativeOpen.Store(true)
 	backend.roots.Store(&darwinRootSnapshot{})
@@ -536,10 +537,10 @@ func (b *darwinWatchBackend) Start() error {
 	b.lifecycle = darwinBackendRunning
 	b.workerStarted = true
 	go b.lifecycleLoop()
-	kqueueErr := b.startKqueue()
-	if kqueueErr == nil {
+	shallowErr := b.startShallow()
+	if shallowErr == nil {
 		b.forwardStarted = true
-		go b.forwardKqueue()
+		go b.forwardShallow()
 	} else {
 		if b.fallbackPrepared {
 			for _, state := range b.logical {
@@ -549,7 +550,7 @@ func (b *darwinWatchBackend) Start() error {
 			}
 		}
 		previous := darwinFallbackReason(b.fallbackReason.Swap(
-			uint32(darwinFallbackKqueueStart),
+			uint32(darwinFallbackShallowStart),
 		))
 		if previous == darwinFallbackReasonNone {
 			b.fallbackActivations.Inc()
@@ -588,7 +589,7 @@ func (b *darwinWatchBackend) Stop() {
 		for _, stream := range streams {
 			_ = stream.Close()
 		}
-		b.kqueue.Stop()
+		b.shallowWatcher.Stop()
 		if b.vnode != nil {
 			_ = b.vnode.Close()
 		}
@@ -603,7 +604,7 @@ func (b *darwinWatchBackend) Stop() {
 	<-b.done
 }
 
-func (b *darwinWatchBackend) Name() string { return "fsevents+kqueue" }
+func (b *darwinWatchBackend) Name() string { return "fsevents" }
 
 func (b *darwinWatchBackend) consumeFSEvents(
 	registration darwinWatchRoot,
@@ -730,7 +731,7 @@ func translateFSEvent(root string, event fsevents.Event) (backendEvent, bool) {
 	}, true
 }
 
-func (b *darwinWatchBackend) forwardKqueue() {
+func (b *darwinWatchBackend) forwardShallow() {
 	// The lifecycle goroutine also produces on b.errors, so the shared output
 	// channels must not close until it has exited. Start always launches the
 	// lifecycle goroutine before this one, and Stop closes b.stop, so the join
@@ -739,34 +740,22 @@ func (b *darwinWatchBackend) forwardKqueue() {
 		<-b.lifecycleDone
 		b.finish()
 	}()
-	events := b.kqueue.Events()
-	errorsCh := b.kqueue.Errors()
-	for events != nil || errorsCh != nil {
+	events := b.shallowWatcher.Events()
+	for {
 		select {
 		case <-b.stop:
 			return
 		case event, ok := <-events:
 			if !ok {
-				events = nil
-				continue
+				return
 			}
-			event, dispatch := b.handleKqueueEvent(event)
+			event, dispatch := b.handleShallowEvent(event)
 			if dispatch {
 				select {
 				case b.events <- event:
 				case <-b.stop:
 					return
 				}
-			}
-		case err, ok := <-errorsCh:
-			if !ok {
-				errorsCh = nil
-				continue
-			}
-			select {
-			case b.errors <- err:
-			case <-b.stop:
-				return
 			}
 		}
 	}
@@ -1203,9 +1192,10 @@ func (b *darwinWatchBackend) beginFallbackReconciliation() {
 }
 
 func (b *darwinWatchBackend) openFallbackDispatch() {
-	// Kqueue startup can fail after an earlier stream failure selected fallback.
-	// Refresh the reason so that unrecoverable kqueue failure dominates the
-	// retry policy even if the lifecycle worker observed the earlier reason.
+	// Shallow startup can fail after an earlier stream failure selected
+	// fallback. Refresh the reason so that unrecoverable shallow failure
+	// dominates the retry policy even if the lifecycle worker observed the
+	// earlier reason.
 	reason := darwinFallbackReason(b.fallbackReason.Load())
 	b.fallbackEventsMu.Lock()
 	sink := b.sink
@@ -1231,7 +1221,7 @@ func (b *darwinWatchBackend) openFallbackDispatch() {
 	b.rootTransitions.Inc()
 
 	b.mu.Lock()
-	if reason == darwinFallbackKqueueStart {
+	if reason == darwinFallbackShallowStart {
 		b.fallbackRetryAt = time.Time{}
 		b.fallbackRetryDelay = 0
 	} else {
@@ -1326,7 +1316,7 @@ func (b *darwinWatchBackend) beginNativeRecovery(now time.Time) error {
 		b.mu.Unlock()
 		return nil
 	}
-	if darwinFallbackReason(b.fallbackReason.Load()) == darwinFallbackKqueueStart {
+	if darwinFallbackReason(b.fallbackReason.Load()) == darwinFallbackShallowStart {
 		b.fallbackRetryAt = time.Time{}
 		b.fallbackRetryDelay = 0
 		b.mu.Unlock()
@@ -1629,8 +1619,8 @@ func fallbackReasonLabel(reason darwinFallbackReason) string {
 		return "native-drop"
 	case darwinFallbackLifecycle:
 		return "lifecycle"
-	case darwinFallbackKqueueStart:
-		return "kqueue-start"
+	case darwinFallbackShallowStart:
+		return "shallow-start"
 	default:
 		return "unknown"
 	}
@@ -1691,10 +1681,10 @@ func (b *darwinWatchBackend) resetRetryLocked(state *darwinLogicalRoot) {
 	state.retryDelay = 0
 }
 
-// handleKqueueEvent advances pending roots before the native event can reach
+// handleShallowEvent advances pending roots before the native event can reach
 // the watcher. The resulting scope reconciliation is authoritative, so the
 // component-creation event itself does not need a second dispatch.
-func (b *darwinWatchBackend) handleKqueueEvent(
+func (b *darwinWatchBackend) handleShallowEvent(
 	event backendEvent,
 ) (backendEvent, bool) {
 	snapshot := b.roots.Load()
@@ -1703,10 +1693,10 @@ func (b *darwinWatchBackend) handleKqueueEvent(
 		event.Root = owner.logicalPath
 	}
 	// A lost-events full sync carries no path, so it never matches a root.
-	// It stands in for kqueue events that were dropped and must reach the
-	// consumer regardless of root ownership. The dropped events can include
-	// a shallow root's own removal, which normally signals loss here, so
-	// every active kqueue-backed root is marked lost and revalidated by
+	// It stands in for shallow-root events that were dropped and must reach
+	// the consumer regardless of root ownership. The dropped events can
+	// include a shallow root's own removal, which normally signals loss here,
+	// so every active shallow root is marked lost and revalidated by
 	// lifecycle recovery. The marking runs before fallback collection:
 	// buffered events replay without passing through here again, so
 	// deferring it would lose the signal.
@@ -2017,7 +2007,7 @@ func (s *darwinRootSnapshot) mostSpecificRoot(path string) (darwinWatchRoot, boo
 }
 
 // mostSpecificRecursiveRoot selects ownership among native recursive streams.
-// Shallow kqueue registrations can be nested within a recursive root, but they
+// Shallow registrations can be nested within a recursive root, but they
 // cover only their direct directory and must not shadow descendant FSEvents.
 func (s *darwinRootSnapshot) mostSpecificRecursiveRoot(path string) (darwinWatchRoot, bool) {
 	if s == nil {
