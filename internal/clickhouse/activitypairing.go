@@ -179,11 +179,11 @@ func (s *Store) activityReportDerived(
 // terminal tool event of the candidate sessions.
 func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSessionSet) (map[string]activitySessionInputs, error) {
 	s.activityInputQueries.Add(1)
-	ctes := "WITH candidate_sessions AS (" + candidates.body + ") "
 	const settings = " SETTINGS optimize_move_to_prewhere_if_final=1"
-	rows, err := s.queryContext(ctx, ctes+`SELECT session_id,ordinal,timestamp,role,model,
+	sessionIn, args := candidates.in("session_id")
+	rows, err := s.queryContext(ctx, `SELECT session_id,ordinal,timestamp,role,model,
 		toBool(is_system = false AND source_subtype <> 'tool_result') FROM messages
-		WHERE session_id IN (SELECT id FROM candidate_sessions) ORDER BY session_id,ordinal`+settings, candidates.args...)
+		WHERE `+sessionIn+` ORDER BY session_id,ordinal`+settings, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying pairing messages: %w", err)
 	}
@@ -213,9 +213,10 @@ func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSess
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	rows, err = s.queryContext(ctx, ctes+`SELECT session_id,tool_call_message_ordinal,call_index,event_index,timestamp FROM tool_result_events
-		WHERE session_id IN (SELECT id FROM candidate_sessions) AND source='tool_execution' AND status IN ('completed','errored')
-		AND timestamp IS NOT NULL ORDER BY session_id,timestamp,call_index,event_index`+settings, slices.Clone(candidates.args)...)
+	sessionIn, args = candidates.in("session_id")
+	rows, err = s.queryContext(ctx, `SELECT session_id,tool_call_message_ordinal,call_index,event_index,timestamp FROM tool_result_events
+		WHERE `+sessionIn+` AND source='tool_execution' AND status IN ('completed','errored')
+		AND timestamp IS NOT NULL ORDER BY session_id,timestamp,call_index,event_index`+settings, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying pairing tool events: %w", err)
 	}
