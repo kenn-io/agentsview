@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/daemon"
@@ -71,6 +73,7 @@ func defaultDaemonLaunchWaitDeps() daemonLaunchWaitDeps {
 }
 
 type daemonCommandDeps struct {
+	persistRuntime             func(context.Context, config.Config, *DaemonRuntime) error
 	resolveDataDir             func() (string, error)
 	mkdirAll                   func(string, os.FileMode) error
 	loadConfig                 func() (config.Config, error)
@@ -94,6 +97,7 @@ type daemonCommandDeps struct {
 
 func defaultDaemonCommandDeps() daemonCommandDeps {
 	return daemonCommandDeps{
+		persistRuntime:     persistDaemonRuntime,
 		resolveDataDir:     config.ResolveDataDir,
 		mkdirAll:           os.MkdirAll,
 		loadConfig:         config.LoadMinimal,
@@ -165,7 +169,8 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 		&cobra.Command{
 			Use: "start", Short: "Start the background server",
 			Long: "Start the writable server in the background using saved configuration, without opening a browser. " +
-				"A compatible running daemon is reused. " +
+				"It stays running until stopped. " +
+				"Keeps a running daemon in place unless an upgrade is needed. " +
 				"This is also the explicit startup step when automatic startup is disabled.",
 			Example:      "  agentsview daemon start",
 			SilenceUsage: true, Args: cobra.NoArgs,
@@ -248,7 +253,18 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 		return fmt.Errorf("daemon start: acquiring launch lock: %w", err)
 	}
 	if !ok {
-		return reportDaemonLaunchContention(w, dataDir, deps.waitContendedLaunch(dataDir), deps.now())
+		observation := deps.waitContendedLaunch(dataDir)
+		if observation.Err != nil || observation.LockHeld || len(observation.UnconfirmedRecords) > 0 || len(observation.Records) != 1 {
+			return reportDaemonLaunchContention(w, dataDir, observation, deps.now())
+		}
+		launchLock, ok, err = deps.acquireLaunchLockWithError(dataDir)
+		if err != nil {
+			return fmt.Errorf("daemon start: reacquiring launch lock: %w", err)
+		}
+		if !ok {
+			observation.LockHeld = true
+			return reportDaemonLaunchContention(w, dataDir, observation, deps.now())
+		}
 	}
 	defer func() { _ = launchLock.Unlock() }()
 
@@ -259,18 +275,30 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon start: %w", err)
 	}
-	if rt := writableRuntimeFallbackForCommand(cfg, deps); rt != nil {
-		writeDaemonStartResult(w, backgroundLaunchResult{Runtime: rt}, false)
+	incumbent := deps.writableRuntime(cfg.DataDir, cfg.AuthToken)
+	if incumbent != nil && (incumbent.RuntimeFallback || !shouldReplaceDaemonRuntime(incumbent, version)) {
+		if !incumbent.RuntimeFallback {
+			if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
+				return fmt.Errorf("daemon start: %w", err)
+			}
+		}
+		if !incumbent.Persistent {
+			if err := deps.persistRuntime(ctx, cfg, incumbent); err != nil {
+				return err
+			}
+		}
+		writeDaemonStartResult(w, backgroundLaunchResult{Runtime: incumbent}, false)
 		return nil
 	}
 	if deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
+
 	progress := &daemonLaunchProgressWriter{w: w}
 	result, err := deps.startBackground(ctx,
 		cfg, []string{"serve"}, serveReplacementOptions{},
 		backgroundLaunchPolicy{
-			ConfigOnly: true, Operation: "daemon start",
+			ConfigOnly: true, Persistent: true, Operation: "daemon start",
 			Attached: true,
 			OnLaunch: progress.launch, OnProgress: progress.progress,
 		},
@@ -480,6 +508,7 @@ func startupStateStopRecord(st *startupState) (daemon.RuntimeRecord, bool) {
 		StartedAt: st.StartedAt,
 		Metadata: map[string]string{
 			runtimeCreateTime: st.CreateTime,
+			runtimePersistent: strconv.FormatBool(st.Persistent),
 		},
 	}
 	if st.CaddyPID > 0 {
@@ -728,17 +757,17 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 }
 
 func runDaemonRestart(ctx context.Context, w io.Writer, deps daemonCommandDeps) error {
-	return runDaemonRestartWithPolicy(ctx, w, deps, false)
+	return runDaemonRestartWithPolicy(ctx, w, deps, backgroundLaunchPolicy{})
 }
 
 func runDaemonRestartAttached(
 	ctx context.Context, w io.Writer, deps daemonCommandDeps,
 ) error {
-	return runDaemonRestartWithPolicy(ctx, w, deps, true)
+	return runDaemonRestartWithPolicy(ctx, w, deps, backgroundLaunchPolicy{Persistent: true, Attached: true})
 }
 
 func runDaemonRestartWithPolicy(
-	ctx context.Context, w io.Writer, deps daemonCommandDeps, attached bool,
+	ctx context.Context, w io.Writer, deps daemonCommandDeps, policy backgroundLaunchPolicy,
 ) error {
 	dataDir, err := prepareDaemonMutation(deps)
 	if err != nil {
@@ -791,6 +820,9 @@ func runDaemonRestartWithPolicy(
 		}
 		records = []daemon.RuntimeRecord{*startupRecord}
 	}
+	for _, rec := range records {
+		policy.Persistent = policy.Persistent || daemonRuntimeFromRecord(rec).Persistent
+	}
 	wasRunning := len(records) > 0
 	if wasRunning {
 		if err := stopWritableDaemonRecordsSafely(w, cfg, records, daemonStopOperations{
@@ -801,12 +833,10 @@ func runDaemonRestartWithPolicy(
 			return fmt.Errorf("daemon restart: %w", err)
 		}
 	}
-	policy := backgroundLaunchPolicy{
-		ConfigOnly: true, Operation: "daemon restart",
-	}
-	if attached {
+	policy.ConfigOnly = true
+	policy.Operation = "daemon restart"
+	if policy.Attached {
 		progress := &daemonLaunchProgressWriter{w: w}
-		policy.Attached = true
 		policy.OnLaunch = progress.launch
 		policy.OnProgress = progress.progress
 	}
@@ -815,7 +845,7 @@ func runDaemonRestartWithPolicy(
 		policy,
 	)
 	if err != nil {
-		if attached && result.Started &&
+		if policy.Attached && result.Started &&
 			(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			return daemonWaitCanceledError("daemon restart", result)
 		}
@@ -830,7 +860,7 @@ func runDaemonRestartWithPolicy(
 		}
 		return errors.New("daemon restart: startup did not publish a writable runtime; inspect serve.log before retrying")
 	}
-	if attached {
+	if policy.Attached {
 		// The attached launch callback already printed the log path alongside
 		// the child identity; keep the completion output to its existing result.
 		result.LogPath = ""
@@ -892,4 +922,20 @@ func daemonStatusRecords(
 		alive = append(alive, rec)
 	}
 	return alive, nil
+}
+
+func persistDaemonRuntime(ctx context.Context, cfg config.Config, rt *DaemonRuntime) error {
+	tr := transportFromRuntime(rt)
+	client, err := apiclient.NewHTTPClient(tr.URL, cfg.AuthToken, &http.Client{Timeout: 10 * time.Second})
+	if err != nil {
+		return err
+	}
+	resp, err := client.PostAPIV1DaemonPersistWithResponse(ctx)
+	if resp != nil && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("daemon start: persistence request failed (HTTP %d %s; daemon %s, CLI %s): %s; run agentsview daemon restart to reload saved configuration", resp.StatusCode, http.StatusText(resp.StatusCode), rt.Record.Version, version, strings.TrimSpace(string(resp.Body)))
+	}
+	if err != nil {
+		return fmt.Errorf("daemon start: confirming persistence: %w", err)
+	}
+	return nil
 }

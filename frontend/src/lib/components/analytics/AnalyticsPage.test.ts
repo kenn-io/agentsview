@@ -316,6 +316,15 @@ describe("AnalyticsPage outcome window", () => {
     },
   );
 
+  it("passes the current outcome window to Retry", async () => {
+    const load = await start();
+    const retry = vi.spyOn(outcomeTotals, "retry").mockResolvedValue();
+    outcomeTotals.error = "Outcome request timed out";
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>(".outcome-container .error button")!.click();
+    expect(retry).toHaveBeenCalledExactlyOnceWith(load.mock.calls[0]![0]);
+  });
+
   it("uses local days for the range and follows selected days and activity ranges", async () => {
     vi.stubEnv("TZ", "America/New_York");
     const load = await start();

@@ -19,13 +19,21 @@ import (
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
+var claudeHookSubtypeSQL = "('" + strings.Join(parser.ClaudeHookSubtypes(), "', '") + "')"
+
+// ExcludeClaudeHooksSQL excludes imported hooks while retaining other system rows.
+// subtypeColumn is a trusted SQL column reference, optionally qualified.
+func ExcludeClaudeHooksSQL(subtypeColumn string) string {
+	return subtypeColumn + " NOT IN " + claudeHookSubtypeSQL
+}
+
 const (
 	selectMessageCols = `id, session_id, ordinal, role, content,
-		thinking_text, dialogue_text, ` + selectMessageMetadataCols
+		thinking_text, dialogue_text, dialogue_is_content, ` + selectMessageMetadataCols
 
 	// Bounded transcript loaders don't need the search projection.
 	selectTranscriptMessageCols = `id, session_id, ordinal, role, content,
-		thinking_text, NULL AS dialogue_text, ` + selectMessageMetadataCols
+		thinking_text, NULL AS dialogue_text, 0 AS dialogue_is_content, ` + selectMessageMetadataCols
 
 	selectMessageMetadataCols = `COALESCE(timestamp, '') AS timestamp,
 		has_thinking, has_tool_use, content_length,
@@ -37,7 +45,7 @@ const (
 		source_parent_uuid, is_sidechain, is_compact_boundary`
 
 	insertMessageCols = `session_id, ordinal, role, content,
-		thinking_text, dialogue_text,
+		thinking_text, dialogue_text, dialogue_is_content,
 		timestamp, has_thinking, has_tool_use, content_length,
 		is_system,
 		model, reasoning_effort, token_usage, context_tokens, output_tokens, provider_id,
@@ -58,7 +66,7 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 34  // 29 params per row
+	messageInsertRowsPerStmt         = 33  // 30 params per row
 	toolCallInsertRowsPerStmt        = 66  // 15 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 142 // 7 params per row
@@ -733,7 +741,7 @@ func (db *DB) getMessagesLinear(
 // sqliteRevisionCol selects the session transcript revision as a window
 // statement's first column; it binds the session ID once more, ahead of
 // the statement's other arguments.
-const sqliteRevisionCol = `(SELECT COALESCE(transcript_revision,'') FROM sessions WHERE id = ?)`
+const sqliteRevisionCol = `(SELECT transcript_revision FROM sessions WHERE id = ?)`
 
 // getMessagesAroundAnchor implements MessageWindow's Around mode: the
 // before, anchor, and after rows merged into one ascending slice. The
@@ -1311,7 +1319,7 @@ func insertMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*29)
+		args := make([]any, 0, len(batch)*30)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
@@ -1321,7 +1329,7 @@ func insertMessagesTx(
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 29),
+			multiRowPlaceholders(len(batch), 30),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal
@@ -2313,18 +2321,14 @@ func bumpTranscriptRevision(
 	// derived results never saw. Incremental sync recomputes later; the
 	// atomic replace path re-stamps inside this transaction.
 	query := `UPDATE sessions
-		 SET transcript_revision = CAST(
-			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
-		 ),
+		 SET transcript_revision = CAST(transcript_revision AS INTEGER) + 1,
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		     secrets_rules_version = '',
 		     friction_rules_version = ''
 		 WHERE id = ?`
 	if !touchModified {
 		query = `UPDATE sessions
-		 SET transcript_revision = CAST(
-			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
-		 ),
+		 SET transcript_revision = CAST(transcript_revision AS INTEGER) + 1,
 		     secrets_rules_version = '',
 		     friction_rules_version = ''
 		 WHERE id = ?`
@@ -2718,7 +2722,7 @@ func sessionAutomationStateTx(
 				FROM messages m
 				WHERE m.session_id = s.id
 				  AND m.role = 'user'
-				  AND COALESCE(m.source_subtype, '') <> 'tool_result'
+				  AND m.source_subtype <> 'tool_result'
 				  AND m.is_system = 0
 				  AND TRIM(m.content) <> ''
 				ORDER BY m.ordinal
@@ -2844,7 +2848,7 @@ func MatchLegacyVSCodeReplyAnchors(old, incoming []LegacyVSCodeReplyAnchor) map[
 
 func loadLegacyVSCodeReplyAnchorsTx(tx transactionQueries, schema, sessionID string) ([]LegacyVSCodeReplyAnchor, error) {
 	rows, err := tx.Query(fmt.Sprintf(`
-  SELECT a.ordinal, u.content, a.timestamp, COALESCE(a.source_uuid, ''), s.agent
+  SELECT a.ordinal, u.content, a.timestamp, a.source_uuid, s.agent
   FROM %[1]s.messages a
   JOIN %[1]s.messages u ON u.session_id = a.session_id AND u.ordinal = a.ordinal - 1
   JOIN %[1]s.sessions s ON s.id = a.session_id
@@ -3383,9 +3387,10 @@ func scanMessages(rows MessageRows) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var tokenUsage string
+		var dialogueIsContent bool
 		err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &m.ThinkingText, &m.DialogueText, &m.Timestamp,
+			&m.Content, &m.ThinkingText, &m.DialogueText, &dialogueIsContent, &m.Timestamp,
 			&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 			&m.IsSystem,
 			&m.Model, &m.ReasoningEffort, &tokenUsage,
@@ -3399,6 +3404,7 @@ func scanMessages(rows MessageRows) ([]Message, error) {
 		if err != nil {
 			return nil, fmt.Errorf("scanning message: %w", err)
 		}
+		restoreDialogue(&m, dialogueIsContent)
 		m.TokenUsage = DecodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)
 	}
@@ -3783,7 +3789,7 @@ func soleToolResultEventTx(ctx context.Context,
 			SELECT 1 FROM tool_result_events
 			WHERE session_id = ? AND tool_call_message_ordinal = ?
 			  AND call_index = ?
-			  AND COALESCE(content, '') <> ''
+			  AND content <> ''
 			LIMIT 2
 		)`,
 		sessionID, messageOrdinal, callIndex,
@@ -3799,7 +3805,7 @@ func soleToolResultEventTx(ctx context.Context,
 	if err := tx.QueryRowContext(ctx,
 		`SELECT content FROM tool_result_events
 		 WHERE session_id = ? AND tool_call_message_ordinal = ?
-		   AND call_index = ? AND COALESCE(content, '') <> ''`,
+		   AND call_index = ? AND content <> ''`,
 		sessionID, messageOrdinal, callIndex,
 	).Scan(&content); err != nil {
 		return nil, fmt.Errorf(
@@ -4263,9 +4269,10 @@ func (db *DB) GetMessageByOrdinal(ctx context.Context,
 
 	var m Message
 	var tokenUsage string
+	var dialogueIsContent bool
 	err := row.Scan(
 		&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-		&m.Content, &m.ThinkingText, &m.DialogueText, &m.Timestamp,
+		&m.Content, &m.ThinkingText, &m.DialogueText, &dialogueIsContent, &m.Timestamp,
 		&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 		&m.IsSystem,
 		&m.Model, &m.ReasoningEffort, &tokenUsage,
@@ -4282,6 +4289,7 @@ func (db *DB) GetMessageByOrdinal(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	restoreDialogue(&m, dialogueIsContent)
 	m.TokenUsage = DecodeStoredTokenUsage(tokenUsage)
 	return &m, nil
 }

@@ -3,6 +3,7 @@
 package clickhouse
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -197,6 +198,15 @@ func newTestSync(t *testing.T, local *db.DB, target Target, opts storage.PusherO
 	require.NoError(t, s.EnsureSchema(ctx))
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// newTestStore wraps conn with a native connection to target's database.
+func newTestStore(tb testing.TB, conn *sql.DB, target Target) *Store {
+	tb.Helper()
+	bulk, err := openBulk(tb.Context(), target)
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, bulk.Close()) })
+	return NewStoreFromDB(conn, bulk)
 }
 
 // appendMessage adds one assistant message to a session locally and bumps

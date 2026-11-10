@@ -452,6 +452,49 @@ func TestAnalyzeHeuristics_RunawayToolLoop(t *testing.T) {
 		got = AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
 		assert.Equal(t, 1, got.RunawayToolLoopCount)
 	})
+
+	t.Run("failing calls without retained input are not an exact run", func(t *testing.T) {
+		// Five failing Bash calls whose inputs the archive dropped, then
+		// varied work. Only a shared name links the five calls.
+		calls := make([]ToolCallRow, 0, 12)
+		for i := range 5 {
+			calls = append(calls, ToolCallRow{
+				Category: "Bash", ToolName: "Bash",
+				MessageOrdinal: i, EventStatus: "errored",
+			})
+		}
+		for i, name := range []string{"Read", "Grep", "Edit", "Glob", "Read", "Grep", "Edit"} {
+			calls = append(calls, ToolCallRow{
+				Category: name, ToolName: name,
+				MessageOrdinal: 5 + i, EventStatus: "completed",
+			})
+		}
+		got := AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
+		assert.Equal(t, 0, got.RunawayToolLoopCount)
+	})
+
+	t.Run("shell calls without retained input share no command class", func(t *testing.T) {
+		calls := make([]ToolCallRow, 12)
+		for i := range calls {
+			calls[i] = ToolCallRow{
+				Category: "Bash", ToolName: "Bash",
+				MessageOrdinal: i, EventStatus: "completed",
+			}
+		}
+		for _, i := range []int{2, 5, 9} {
+			calls[i].EventStatus = "errored"
+		}
+		got := AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
+		assert.Equal(t, 0, got.RunawayToolLoopCount,
+			"three failures need a provably dominant command")
+
+		for _, i := range []int{0, 7, 11} {
+			calls[i].EventStatus = "errored"
+		}
+		got = AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
+		assert.Equal(t, 1, got.RunawayToolLoopCount,
+			"six failures in a window stay a runaway loop")
+	})
 }
 
 func TestNormalizePromptRemovesCodeFences(t *testing.T) {
@@ -475,28 +518,39 @@ func TestCountFrustrationMarkers(t *testing.T) {
 	assert.Equal(t, 2, CountFrustrationMarkers(msgs))
 }
 
-// The prefilter must never reject a prompt the regular expression flags,
-// including prompts whose letters only match under Unicode case folding.
-func TestFrustrationPrefilterAcceptsEveryRegexMatch(t *testing.T) {
+// Starting the regular expression where frustrationPhraseStart says must
+// find a match exactly when reading the whole prompt does, including
+// prompts whose letters only match under Unicode case folding and literals
+// whose word boundary depends on the rune before them.
+func TestFrustrationPhraseStartKeepsEveryRegexMatch(t *testing.T) {
 	prompts := []string{
 		"WHY WON'T THIS WORK???!!!",
 		"this is broken after the retry",
 		"Come On, it still fails",
 		"doe\u017f not work",       // long s folds to s
 		"you bro\u212ae the build", // Kelvin sign folds to k
+		"wtf\u017f now",            // long s after a literal is no word character
 		"the SAME ERROR shows up",
 		"doesn\u2019t work", // curly apostrophe: regex requires ASCII
 		"Please run the focused test again.",
+		"awtf then wtf",
+		"wtfs and nothing else",
+		"\u00e9wtf is it",
+		"\u4e2dwtf is it",
 		strings.Repeat("a", 5000) + " wtf " + strings.Repeat("b", 5000),
 	}
+	matches := 0
 	for _, prompt := range prompts {
-		normalized := normalizePrompt(prompt)
-		if frustrationPhraseRe.MatchString(normalized) {
-			assert.True(t, mayContainFrustrationPhrase(normalized), prompt)
+		normalized := []byte(normalizePrompt(prompt))
+		want := frustrationPhraseRe.Match(normalized)
+		start := frustrationPhraseStart(normalized)
+		assert.Equal(t, want, start >= 0 && frustrationPhraseRe.Match(normalized[start:]), "%q", prompt)
+		if want {
+			matches++
 		}
 	}
-	assert.True(t, frustrationPhraseRe.MatchString(normalizePrompt("doe\u017f not work")))
-	assert.False(t, mayContainFrustrationPhrase(normalizePrompt("Please run the focused test again.")))
+	assert.Equal(t, 11, matches)
+	assert.Equal(t, -1, frustrationPhraseStart([]byte(normalizePrompt("Please run the focused test again."))))
 }
 
 // After lowercasing, long s is the only non-ASCII rune whose simple fold

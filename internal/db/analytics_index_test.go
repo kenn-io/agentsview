@@ -112,9 +112,7 @@ func TestAnalyticsMetadataIndexLifecycle(t *testing.T) {
 			filter.IncludeSubagents = true
 			where, args := sqliteAnalyticsWhereSQL(filter,
 				"COALESCE(NULLIF(started_at, ''), created_at)", "s.id", true)
-			modelsPlan := queryPlanOf(t, d, `SELECT DISTINCT m.model
-				FROM sessions s JOIN messages m ON m.session_id = s.id
-				WHERE `+where+` AND COALESCE(m.model, '') <> '' ORDER BY m.model`, args...)
+			modelsPlan := queryPlanOf(t, d, analyticsModelsQuery(where), args...)
 			assert.Contains(t, modelsPlan, "USING COVERING INDEX idx_messages_analytics_metadata")
 			toolsPlan := queryPlanOf(t, d, analyticsToolsQuery("(?)", "", "", true), "a")
 			assert.Contains(t, toolsPlan, "USING COVERING INDEX idx_messages_analytics_metadata")

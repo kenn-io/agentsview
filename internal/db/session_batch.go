@@ -490,6 +490,9 @@ func (db *DB) writeOneSessionBatchTx(
 	}
 	sessionExists := !upsertResult.inserted
 	replacementTranscriptChanged := false
+	// A transcript whose rows only gain source IDs changes in place, so the
+	// rows keep their pins and notes; the revision still advances.
+	sourceIDsOnly := false
 	var stored []Message
 	if replaceMessages && sessionExists {
 		stored, err = sessionMessagesTx(
@@ -509,6 +512,8 @@ func (db *DB) writeOneSessionBatchTx(
 		replacementTranscriptChanged = !transcriptMessagesEqual(
 			stored, write.Messages,
 		)
+		sourceIDsOnly = replacementTranscriptChanged &&
+			transcriptMessagesGainSourceIDs(stored, write.Messages)
 	}
 
 	if err := writeSessionBatchMetadataTx(ctx, tx, queries, write, upsertResult); err != nil {
@@ -522,7 +527,7 @@ func (db *DB) writeOneSessionBatchTx(
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
 		}
-		if replacementTranscriptChanged {
+		if replacementTranscriptChanged && !sourceIDsOnly {
 			pins, err = savePinsTx(queries, write.Session.ID, msgs)
 			if err != nil {
 				return 0, err
@@ -534,6 +539,15 @@ func (db *DB) writeOneSessionBatchTx(
 				return 0, err
 			}
 		} else {
+			// The rows keep their pins, but a caller that copies the old
+			// transcript still needs them for the copy.
+			if sourceIDsOnly && pinSnapshot != nil {
+				snapshot, err := savePinsTx(queries, write.Session.ID, msgs)
+				if err != nil {
+					return 0, err
+				}
+				*pinSnapshot = snapshot
+			}
 			// Keep IDs held by open clients. Parser metadata can still change
 			// without changing the transcript, so refresh those rows in place.
 			byOrdinal := make(map[int]Message, len(stored))
@@ -551,6 +565,16 @@ func (db *DB) writeOneSessionBatchTx(
 				return 0, err
 			}
 			msgs = nil
+			// A caller that replaces the session while keeping a trashed
+			// copy still needs the pins as they are now. Snapshot only: the
+			// rows survive, so nothing is deleted or restored here.
+			if pinSnapshot != nil {
+				snapshot, err := savePinsTx(queries, write.Session.ID, write.Messages)
+				if err != nil {
+					return 0, err
+				}
+				*pinSnapshot = snapshot
+			}
 		}
 	} else {
 		maxOrd, err := maxOrdinalTx(queries, write.Session.ID)
@@ -808,13 +832,18 @@ func completeStoredMessagesTx(
 			continue
 		}
 		var id int64
-		var stored, model, sourceUUID, sourceParentUUID string
+		var stored, thinking, model, sourceUUID, sourceParentUUID string
+		var dialogue *string
+		var dialogueIsContent bool
 		var contentLength int
 		err := tx.QueryRow(
-			`SELECT id, content, content_length, model, source_uuid, source_parent_uuid FROM messages
+			`SELECT id, content, content_length, thinking_text, model, source_uuid, source_parent_uuid,
+			        dialogue_text, dialogue_is_content
+			 FROM messages
 			 WHERE session_id = ? AND ordinal = ?`,
 			sessionID, m.Ordinal,
-		).Scan(&id, &stored, &contentLength, &model, &sourceUUID, &sourceParentUUID)
+		).Scan(&id, &stored, &contentLength, &thinking, &model, &sourceUUID, &sourceParentUUID,
+			&dialogue, &dialogueIsContent)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -832,11 +861,14 @@ func completeStoredMessagesTx(
 		}
 		if extended {
 			stored, contentLength = m.Content, m.ContentLength
+			dialogue, dialogueIsContent = StoredDialogue(m.Content, thinking, m.DialogueText)
 		}
 		if _, err := tx.Exec(
-			`UPDATE messages SET content = ?, content_length = ?, model = ?, source_uuid = ?, source_parent_uuid = ?, dialogue_text = CASE WHEN ? THEN ? ELSE dialogue_text END
+			`UPDATE messages SET content = ?, content_length = ?, model = ?, source_uuid = ?, source_parent_uuid = ?,
+			        dialogue_text = ?, dialogue_is_content = ?
 			 WHERE id = ?`,
-			stored, contentLength, cmp.Or(model, m.Model), filledUUID, filledParentUUID, extended, m.DialogueText, id,
+			stored, contentLength, cmp.Or(model, m.Model), filledUUID, filledParentUUID,
+			dialogue, dialogueIsContent, id,
 		); err != nil {
 			return 0, fmt.Errorf(
 				"completing message for %s ordinal %d: %w",

@@ -6,7 +6,7 @@ import (
 )
 
 // ErrSemanticUnavailable is returned by SearchContent for modes "semantic"
-// and "hybrid" when no VectorSearcher has been wired in (SetVectorSearcher
+// and normal "hybrid" requests when no VectorSearcher is wired (SetVectorSearcher
 // was never called, or the concrete backend doesn't support semantic search
 // at all). Backends with more specific context wrap this classification with
 // SemanticUnavailableError.

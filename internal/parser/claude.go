@@ -64,18 +64,30 @@ type dagEntry struct {
 	timestamp  time.Time
 }
 
-// claudeQueuedCommand is a user message Claude Code persisted as
-// type=attachment with attachment.type=queued_command — i.e. a
-// prompt the user typed while a tool call was still running.
-// Claude Code also uses this shape for task notifications and for
-// messages another session sent, which queuedCommandMessage
-// classifies as system rows. These records have no uuid/parentUuid, so we collect them out
-// of band and splice them into the message stream by timestamp
-// after DAG processing completes.
-type claudeQueuedCommand struct {
+// claudeAttachment carries one Claude Code attachment that the parser
+// splices into the message stream by timestamp. Two payloads share the
+// carrier: a queued_command prompt, which the user typed while a tool
+// call was still running, and a hook_success payload, which a hook
+// wrote after it ran. Claude Code also uses the queued_command shape
+// for task notifications and for messages another session sent, which
+// queuedCommandMessage classifies as system rows.
+//
+// These records have no uuid/parentUuid in the common case, so we
+// collect them out of band and splice them into the message stream by
+// timestamp after DAG processing completes.
+type claudeAttachment struct {
 	prompt       string
 	promptSource string
 	timestamp    time.Time
+	// hook holds the decoded hook_success payload. It is nil for every
+	// other attachment kind.
+	hook *claudeHookSuccess
+	// sourceUUID, sourceParentUUID and isSidechain carry the record's
+	// own top-level identity when the transcript provides one. They are
+	// never synthesized.
+	sourceUUID       string
+	sourceParentUUID string
+	isSidechain      bool
 }
 
 // claudeParseWithExclusions parses a Claude Code JSONL session file
@@ -128,9 +140,10 @@ func claudeParseFile(
 	defer f.Close()
 
 	// First pass: collect all valid lines with metadata.
+	attachmentParents := make(map[string]string)
 	var (
 		entries          = make([]dagEntry, 0)
-		queuedCommands   []claudeQueuedCommand
+		attachments      []claudeAttachment
 		hasAnyUUID       bool
 		allHaveUUID      bool
 		parentSessionID  string
@@ -287,13 +300,21 @@ func claudeParseFile(
 			continue
 		}
 
-		// Collect queued_command attachments — user messages
-		// the user typed mid-tool-call. Other attachment types
-		// (e.g. task_reminder) are intentionally dropped.
+		// Collect deferred attachments — a queued_command prompt the
+		// user typed mid-tool-call, and a hook_success payload a hook
+		// wrote. Other attachment types (e.g. task_reminder) are
+		// intentionally dropped.
 		if entryType == "attachment" {
+			if uuid := gjson.GetBytes(lineBytes, "uuid").Str; uuid != "" {
+				attachmentParents[strings.Clone(uuid)] = strings.Clone(gjson.GetBytes(lineBytes, "parentUuid").Str)
+			}
 			if qc, ok := extractQueuedCommand(string(lineBytes)); ok {
 				qc.prompt = strings.Clone(qc.prompt)
-				queuedCommands = append(queuedCommands, qc)
+				attachments = append(attachments, qc)
+			} else if hook, ok := extractClaudeHookAttachment(
+				string(lineBytes), false,
+			); ok {
+				attachments = append(attachments, hook)
 			}
 			continue
 		}
@@ -322,6 +343,14 @@ func claudeParseFile(
 		// Handle system records. /rename local commands update the
 		// display name; last rename wins (empty arg clears it).
 		if entryType == "system" {
+			if gjson.GetBytes(lineBytes, "subtype").Str == "stop_hook_summary" {
+				if uuid := gjson.GetBytes(lineBytes, "uuid").Str; uuid != "" {
+					attachmentParents[strings.Clone(uuid)] = strings.Clone(gjson.GetBytes(lineBytes, "parentUuid").Str)
+				}
+				if hook, ok := extractClaudeHookAttachment(string(lineBytes), true); ok {
+					attachments = append(attachments, hook)
+				}
+			}
 			if name, ok := extractRenameName(
 				gjson.GetBytes(lineBytes, "content").Str,
 			); ok {
@@ -471,14 +500,16 @@ func claudeParseFile(
 
 	var (
 		results  []ParseResult
+		owners   map[string]int
 		parseErr error
 	)
 	// If all user/assistant entries have uuids, use DAG-aware processing.
 	if hasAnyUUID && allHaveUUID {
-		results, parseErr = parseDAG(
+		results, owners, parseErr = parseDAG(
 			ctx, entries, sessionID, project, machine,
 			parentSessionID, fileInfo, subagentMap,
 			globalStart, globalEnd, meta,
+			slices.ContainsFunc(attachments, func(a claudeAttachment) bool { return a.hook != nil }),
 		)
 	} else {
 		// Fall back to linear processing.
@@ -492,16 +523,40 @@ func claudeParseFile(
 		return nil, nil, parseErr
 	}
 
-	// Splice queued_command attachments into the main session
-	// by timestamp. Attachments have no uuid/parentUuid and so
-	// can't participate in DAG fork detection; they belong to
-	// the original conversation timeline (results[0]).
-	if len(queuedCommands) > 0 && len(results) > 0 {
-		results[0], err = applyQueuedCommandsContext(
-			ctx, results[0], queuedCommands,
-		)
-		if err != nil {
-			return nil, nil, err
+	// Hooks follow their native parent into a branch. Queued commands keep
+	// their original timeline routing, as do unresolved hook parents.
+	if len(attachments) > 0 && len(results) > 0 {
+		byResult := make([][]claudeAttachment, len(results))
+		for _, a := range attachments {
+			owner := 0
+			if a.hook != nil && owners != nil {
+				parent := a.sourceParentUUID
+				for range len(attachmentParents) + 1 {
+					if i, ok := owners[parent]; ok {
+						owner = i
+						break
+					}
+					var ok bool
+					parent, ok = attachmentParents[parent]
+					if !ok {
+						break
+					}
+				}
+			}
+			if owner < 0 {
+				continue
+			}
+			byResult[owner] = append(byResult[owner], a)
+		}
+		for i, pending := range byResult {
+			if len(pending) == 0 {
+				continue
+			}
+			var err error
+			results[i], err = applyQueuedCommandsContext(ctx, results[i], pending)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 
@@ -822,6 +877,8 @@ type claudeIncrementalScan struct {
 	// continuation, so such appends stay incremental. nil keeps the
 	// conservative fallback.
 	storedTailClaudeMessageID *string
+	// storedTailTimestamp bounds appends that can keep stored ordinals.
+	storedTailTimestamp time.Time
 	// storedSessionName is the session_name already persisted for this
 	// session ("" when the row carries none), or nil when the call site
 	// cannot supply it. An appended ai-title can only change the stored
@@ -842,10 +899,10 @@ func claudeParseSessionFrom(
 	startOrdinal := scan.startOrdinal
 	stored := scan.stored
 	var (
-		entries        []dagEntry
-		queuedCommands []claudeQueuedCommand
-		subagentMap    = make(map[string]string)
-		lineIndex      = startOrdinal
+		entries     []dagEntry
+		attachments []claudeAttachment
+		subagentMap = make(map[string]string)
+		lineIndex   = startOrdinal
 		// Track latest timestamp from all lines, including
 		// non-message events (progress, queue-operation) so
 		// callers can update ended_at even when no new
@@ -889,6 +946,11 @@ func claudeParseSessionFrom(
 				return
 			}
 			if entryType == "system" {
+				if gjson.Get(line, "subtype").Str == "stop_hook_summary" {
+					if hook, ok := extractClaudeHookAttachment(line, true); ok {
+						attachments = append(attachments, hook)
+					}
+				}
 				if _, ok := extractRenameName(
 					gjson.Get(line, "content").Str,
 				); ok {
@@ -909,7 +971,9 @@ func claudeParseSessionFrom(
 			}
 			if entryType == "attachment" {
 				if qc, ok := extractQueuedCommand(line); ok {
-					queuedCommands = append(queuedCommands, qc)
+					attachments = append(attachments, qc)
+				} else if hook, ok := extractClaudeHookAttachment(line, false); ok {
+					attachments = append(attachments, hook)
 				}
 				return
 			}
@@ -1012,7 +1076,6 @@ func claudeParseSessionFrom(
 	if sawNewPRLink {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
-
 	// Queue/progress events can repair subagent linkage on an already-stored
 	// tool call. Carry those mappings through the existing atomic incremental
 	// link writer instead of re-parsing the whole transcript. Map-derived
@@ -1027,7 +1090,7 @@ func claudeParseSessionFrom(
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
-	if len(entries) == 0 && len(queuedCommands) == 0 {
+	if len(entries) == 0 && len(attachments) == 0 {
 		return nil, links, latestTS, consumed, nil
 	}
 
@@ -1079,25 +1142,34 @@ func claudeParseSessionFrom(
 	); err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
-	if len(queuedCommands) > 0 {
+	if len(attachments) > 0 {
+		for _, a := range attachments {
+			if !a.timestamp.IsZero() && a.timestamp.Before(scan.storedTailTimestamp) {
+				return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+			}
+		}
 		// The engine's cross-sync split detection compares only the
 		// FIRST returned message's ClaudeMessageID against the stored
-		// tail. A queued command sorting ahead of an assistant head
-		// would mask a same-message.id continuation and let the stored
-		// partial response be appended a second time instead of
-		// replaced — fall back to a full parse instead.
+		// tail. A deferred attachment — a queued command or a hook
+		// payload — sorting ahead of an assistant head would mask a
+		// same-message.id continuation and let the stored partial
+		// response be appended a second time instead of replaced — fall
+		// back to a full parse instead.
 		if claudeQueuedCommandMasksSplitDetection(
-			msgs, queuedCommands, scan.storedTailClaudeMessageID,
+			msgs, attachments, scan.storedTailClaudeMessageID,
 		) {
 			return nil, nil, time.Time{}, 0,
 				ErrClaudeIncrementalNeedsFullParse
 		}
-		msgs = mergeQueuedCommands(
-			msgs, queuedCommands, startOrdinal, queuedCommandMessage,
+		msgs, err = mergeQueuedCommandsContext(
+			ctx, msgs, attachments, startOrdinal, claudeAttachmentMessage,
 		)
-		for _, qc := range queuedCommands {
-			if qc.timestamp.After(endedAt) {
-				endedAt = qc.timestamp
+		if err != nil {
+			return nil, nil, time.Time{}, 0, err
+		}
+		for _, a := range attachments {
+			if a.timestamp.After(endedAt) {
+				endedAt = a.timestamp
 			}
 		}
 	}
@@ -1617,7 +1689,8 @@ func parseDAG(
 	subagentMap map[string]string,
 	globalStart, globalEnd time.Time,
 	meta claudeSessionMeta,
-) ([]ParseResult, error) {
+	collectHookOwners bool,
+) ([]ParseResult, map[string]int, error) {
 	// Build parent -> children ordered by line position and
 	// collect the set of all uuids for connectivity checks.
 	children := make(map[string][]int, len(entries))
@@ -1625,7 +1698,7 @@ func parseDAG(
 	var roots []int
 	for i, e := range entries {
 		if err := contextErrEvery(ctx, i); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if e.uuid != "" {
 			uuidSet[e.uuid] = struct{}{}
@@ -1641,23 +1714,25 @@ func parseDAG(
 	// references resolve to an existing entry's uuid. If not,
 	// fall back to linear parsing to avoid dropping messages.
 	if len(roots) != 1 {
-		return parseLinear(
+		results, err := parseLinear(
 			ctx, entries, sessionID, project, machine,
 			parentSessionID, fileInfo, subagentMap,
 			globalStart, globalEnd, meta,
 		)
+		return results, nil, err
 	}
 	for i, e := range entries {
 		if err := contextErrEvery(ctx, i); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if e.parentUuid != "" {
 			if _, ok := uuidSet[e.parentUuid]; !ok {
-				return parseLinear(
+				results, err := parseLinear(
 					ctx, entries, sessionID, project, machine,
 					parentSessionID, fileInfo, subagentMap,
 					globalStart, globalEnd, meta,
 				)
+				return results, nil, err
 			}
 		}
 	}
@@ -1741,25 +1816,37 @@ func parseDAG(
 
 	mainPath, err := walkBranch(roots[0], sessionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	branches = append(
 		branches,
 		branch{indices: mainPath, parentID: parentSessionID},
 	)
 	branches = append(branches, forkBranches...)
+	var owners map[string]int
+	if collectHookOwners {
+		owners = make(map[string]int, len(entries))
+		for _, entry := range entries {
+			owners[entry.uuid] = -1 // Known entries on discarded retry branches have no owner.
+		}
+		for i, b := range branches {
+			for _, idx := range b.indices {
+				owners[entries[idx].uuid] = i
+			}
+		}
+	}
 
 	// Build results for each branch.
 	var results []ParseResult
 
 	for i, b := range branches {
 		if err := contextErrEvery(ctx, i); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		branchEntries := make([]dagEntry, len(b.indices))
 		for j, idx := range b.indices {
 			if err := contextErrEvery(ctx, j); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			branchEntries[j] = entries[idx]
 		}
@@ -1768,7 +1855,7 @@ func parseDAG(
 			ctx, branchEntries,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		// Main session uses global bounds to capture timestamps
 		// from non-message events (e.g. queue-operation).
@@ -1779,12 +1866,12 @@ func parseDAG(
 		if err := annotateSubagentSessionsContext(
 			ctx, messages, subagentMap,
 		); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		firstMsg, userCount, err := firstMessageAndUserCountContext(ctx, messages)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		sid := sessionID
@@ -1819,7 +1906,7 @@ func parseDAG(
 		if err := accumulateMessageTokenUsageContext(
 			ctx, &sess, messages,
 		); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		results = append(results, ParseResult{
@@ -1828,7 +1915,7 @@ func parseDAG(
 		})
 	}
 
-	return results, nil
+	return results, owners, nil
 }
 
 func collectToolResultAgentID(line string, subagentMap map[string]string) {
@@ -1890,33 +1977,32 @@ func extractToolResultAgentIDLink(line string) (ClaudeSubagentLink, bool) {
 // types (e.g. task_reminder) return ok=false. Whitespace-only or
 // empty prompts also return false to match the parser's general
 // "skip empty user content" behavior.
-func extractQueuedCommand(line string) (claudeQueuedCommand, bool) {
+func extractQueuedCommand(line string) (claudeAttachment, bool) {
 	if gjson.Get(line, "attachment.type").Str != "queued_command" {
-		return claudeQueuedCommand{}, false
+		return claudeAttachment{}, false
 	}
 	prompt := gjson.Get(line, "attachment.prompt").Str
 	var skip bool
 	prompt, skip = preprocessClaudeUserText(prompt)
 	if skip || strings.TrimSpace(prompt) == "" {
-		return claudeQueuedCommand{}, false
+		return claudeAttachment{}, false
 	}
-	return claudeQueuedCommand{
+	return claudeAttachment{
 		prompt:       prompt,
 		promptSource: gjson.Get(line, "promptSource").Str,
 		timestamp:    extractTimestamp(line),
 	}, true
 }
 
-// applyQueuedCommands splices queued_command attachments into a
-// ParseResult by timestamp, renumbers ordinals, and refreshes
-// derived session counts. Token aggregates are unchanged because
-// queued_command entries have no usage data. Callers must ensure
-// queued is non-empty.
+// applyQueuedCommands splices deferred attachments into a ParseResult
+// by timestamp, renumbers ordinals, and refreshes derived session
+// counts. Token aggregates are unchanged because attachments carry no
+// usage data. Callers must ensure the attachment list is non-empty.
 func applyQueuedCommandsContext(
-	ctx context.Context, r ParseResult, queued []claudeQueuedCommand,
+	ctx context.Context, r ParseResult, attachments []claudeAttachment,
 ) (ParseResult, error) {
 	merged, err := mergeQueuedCommandsContext(
-		ctx, r.Messages, queued, 0, queuedCommandMessage,
+		ctx, r.Messages, attachments, 0, claudeAttachmentMessage,
 	)
 	if err != nil {
 		return ParseResult{}, err
@@ -1928,74 +2014,45 @@ func applyQueuedCommandsContext(
 	r.Session.FirstMessage = firstMsg
 	r.Session.UserMessageCount = userCount
 	r.Session.MessageCount = len(merged)
-	for i, qc := range queued {
+	for i, a := range attachments {
 		if err := contextErrEvery(ctx, i); err != nil {
 			return ParseResult{}, err
 		}
-		if qc.timestamp.After(r.Session.EndedAt) {
-			r.Session.EndedAt = qc.timestamp
+		if a.timestamp.After(r.Session.EndedAt) {
+			r.Session.EndedAt = a.timestamp
 		}
-		if !qc.timestamp.IsZero() &&
+		if !a.timestamp.IsZero() &&
 			(r.Session.StartedAt.IsZero() ||
-				qc.timestamp.Before(r.Session.StartedAt)) {
-			r.Session.StartedAt = qc.timestamp
+				a.timestamp.Before(r.Session.StartedAt)) {
+			r.Session.StartedAt = a.timestamp
 		}
 	}
 	r.Messages = merged
 	return r, ctx.Err()
 }
 
-// mergeQueuedCommands merges queued_command entries into messages
-// in timestamp order and renumbers ordinals starting at the given
-// offset. Both inputs are assumed to already be in chronological
-// order. Equal timestamps preserve the original message before the
-// queued command (queued commands always follow the entry that
-// triggered the tool call).
-func mergeQueuedCommands(
-	messages []ParsedMessage,
-	queued []claudeQueuedCommand,
-	startOrdinal int,
-	buildMessage func(claudeQueuedCommand) ParsedMessage,
-) []ParsedMessage {
-	out := make([]ParsedMessage, 0, len(messages)+len(queued))
-	i, j := 0, 0
-	for i < len(messages) && j < len(queued) {
-		if queuedBefore(queued[j], messages[i]) {
-			out = append(out, buildMessage(queued[j]))
-			j++
-		} else {
-			out = append(out, messages[i])
-			i++
-		}
-	}
-	for ; i < len(messages); i++ {
-		out = append(out, messages[i])
-	}
-	for ; j < len(queued); j++ {
-		out = append(out, buildMessage(queued[j]))
-	}
-	for k := range out {
-		out[k].Ordinal = startOrdinal + k
-	}
-	return out
-}
-
+// mergeQueuedCommandsContext merges deferred attachments into messages in
+// timestamp order and renumbers ordinals starting at the given
+// offset. Messages must already be in chronological order.
+// Equal timestamps preserve the original message before the
+// attachment (attachments always follow the entry that produced them).
 func mergeQueuedCommandsContext(
 	ctx context.Context,
 	messages []ParsedMessage,
-	queued []claudeQueuedCommand,
+	attachments []claudeAttachment,
 	startOrdinal int,
-	buildMessage func(claudeQueuedCommand) ParsedMessage,
+	buildMessage func(claudeAttachment) ParsedMessage,
 ) ([]ParsedMessage, error) {
-	out := make([]ParsedMessage, 0, len(messages)+len(queued))
+	sortClaudeAttachments(attachments)
+	out := make([]ParsedMessage, 0, len(messages)+len(attachments))
 	i, j, steps := 0, 0, 0
-	for i < len(messages) && j < len(queued) {
+	for i < len(messages) && j < len(attachments) {
 		if err := contextErrEvery(ctx, steps); err != nil {
 			return nil, err
 		}
 		steps++
-		if queuedBefore(queued[j], messages[i]) {
-			out = append(out, buildMessage(queued[j]))
+		if queuedBefore(attachments[j], messages[i]) {
+			out = append(out, buildMessage(attachments[j]))
 			j++
 		} else {
 			out = append(out, messages[i])
@@ -2009,12 +2066,12 @@ func mergeQueuedCommandsContext(
 		steps++
 		out = append(out, messages[i])
 	}
-	for ; j < len(queued); j++ {
+	for ; j < len(attachments); j++ {
 		if err := contextErrEvery(ctx, steps); err != nil {
 			return nil, err
 		}
 		steps++
-		out = append(out, buildMessage(queued[j]))
+		out = append(out, buildMessage(attachments[j]))
 	}
 	for k := range out {
 		if err := contextErrEvery(ctx, k); err != nil {
@@ -2025,25 +2082,43 @@ func mergeQueuedCommandsContext(
 	return out, ctx.Err()
 }
 
+// sortClaudeAttachments orders each owner's attachments before merging.
+// Equal timestamps keep source order; undated rows go last.
+func sortClaudeAttachments(attachments []claudeAttachment) {
+	slices.SortStableFunc(attachments, func(a, b claudeAttachment) int {
+		if a.timestamp.IsZero() {
+			if b.timestamp.IsZero() {
+				return 0
+			}
+			return 1
+		}
+		if b.timestamp.IsZero() {
+			return -1
+		}
+		return a.timestamp.Compare(b.timestamp)
+	})
+}
+
 // claudeQueuedCommandMasksSplitDetection reports whether merging
-// queued commands would sort one ahead of a leading assistant message
-// that carries a provider message id. The engine's cross-sync split
-// detection (LastClaudeMessageID) inspects only the first appended
-// message, so a displaced assistant head would hide a same-message.id
-// continuation of the stored tail and duplicate the partial response.
-// Real CLI transcripts write queued_command attachments mid-stream,
-// between chunks of one response, so this masking is reachable
+// deferred attachments would sort one ahead of a leading assistant
+// message that carries a provider message id. The engine's cross-sync
+// split detection (LastClaudeMessageID) inspects only the first
+// appended message, so a displaced assistant head would hide a
+// same-message.id continuation of the stored tail and duplicate the
+// partial response. Real CLI transcripts write queued_command
+// attachments mid-stream, between chunks of one response, and a hook
+// payload can land in the same window, so this masking is reachable
 // whenever the sync boundary falls inside such a run.
 //
 // Masking only matters when the head actually continues the stored
 // tail's message id: a fresh id is a new response, appending is correct
-// regardless of the queued command's sort position, and forcing a full
-// parse would make every routine queued-command turn scale with
+// regardless of the attachment's sort position, and forcing a full
+// parse would make every routine attachment turn scale with
 // transcript size. When the stored tail id is unavailable (nil) the
 // check stays conservative and treats any displaced head as masked.
 func claudeQueuedCommandMasksSplitDetection(
 	msgs []ParsedMessage,
-	queued []claudeQueuedCommand,
+	attachments []claudeAttachment,
 	storedTailID *string,
 ) bool {
 	if len(msgs) == 0 {
@@ -2056,20 +2131,21 @@ func claudeQueuedCommandMasksSplitDetection(
 	if storedTailID != nil && head.ClaudeMessageID != *storedTailID {
 		return false
 	}
-	for _, qc := range queued {
-		if queuedBefore(qc, head) {
+	for _, a := range attachments {
+		if queuedBefore(a, head) {
 			return true
 		}
 	}
 	return false
 }
 
-// queuedBefore reports whether a queued_command should sort before
-// a regular message. Zero timestamps on either side are treated
+// queuedBefore reports whether a deferred attachment should sort
+// before a regular message. Zero timestamps on either side are treated
 // conservatively: a zero-timestamp message keeps its original
-// position relative to queued items.
+// position relative to attachments, and an attachment without a
+// timestamp sorts after the messages it cannot be placed against.
 func queuedBefore(
-	q claudeQueuedCommand, m ParsedMessage,
+	q claudeAttachment, m ParsedMessage,
 ) bool {
 	if q.timestamp.IsZero() {
 		return false
@@ -2080,10 +2156,23 @@ func queuedBefore(
 	return q.timestamp.Before(m.Timestamp)
 }
 
+// claudeAttachmentMessage builds a ParsedMessage from a collected
+// deferred attachment. A queued_command attachment keeps its existing
+// user-prompt row; a hook_success attachment becomes a system row
+// that shows what the hook reported.
+func claudeAttachmentMessage(
+	a claudeAttachment,
+) ParsedMessage {
+	if a.hook != nil {
+		return claudeHookSuccessMessage(a)
+	}
+	return queuedCommandMessage(a)
+}
+
 // queuedCommandMessage builds a ParsedMessage from a collected
 // queued_command attachment.
 func queuedCommandMessage(
-	q claudeQueuedCommand,
+	q claudeAttachment,
 ) ParsedMessage {
 	q.prompt = stripLeadingClaudeSystemReminderContent(q.prompt)
 	if subtype := classifyClaudeSystemMessage(q.prompt); subtype != "" {

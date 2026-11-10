@@ -323,9 +323,10 @@ func (b *directBackend) List(
 	}
 	hideStaleSecretCounts(page.Sessions, filter.SecretsRulesVersions)
 	return &SessionList{
-		Sessions:   page.Sessions,
-		NextCursor: page.NextCursor,
-		Total:      page.Total,
+		ExclusionCounts: page.ExclusionCounts,
+		Sessions:        page.Sessions,
+		NextCursor:      page.NextCursor,
+		Total:           page.Total,
 	}, nil
 }
 
@@ -334,6 +335,7 @@ func (b *directBackend) List(
 // transports produce identical SessionFilter values.
 func listFilterToDB(f ListFilter) db.SessionFilter {
 	filter := db.SessionFilter{
+		ExclusionCounts:      f.ExclusionCounts,
 		IDs:                  f.IDs,
 		Project:              f.Project,
 		ExcludeProject:       f.ExcludeProject,
@@ -1052,6 +1054,7 @@ func (b *directBackend) UsagePairwiseComparison(
 		return nil, err
 	}
 	useDefault := req.LeftDimension == "" && req.LeftValue == "" && req.RightDimension == "" && req.RightValue == ""
+	var sides *db.UsagePairwiseSides
 	if req.FallbackToDefault && !useDefault {
 		if err := validatePairwiseDimension(req.LeftDimension, req.LeftValue, "left"); err != nil {
 			return nil, err
@@ -1069,12 +1072,13 @@ func (b *directBackend) UsagePairwiseComparison(
 			right = b.modelGroups.Expand(right)
 		}
 		rankingFilter := base
-		rankingFilter.Breakdowns = true
+		rankingFilter.Breakdowns, rankingFilter.PairwiseSides = true, true
 		rankingFilter.SkipSessionCounts = true
 		rankingResult, err := b.db.GetDailyUsage(ctx, rankingFilter)
 		if err != nil {
 			return nil, err
 		}
+		sides = rankingResult.Pairwise
 		rankingPlanUsage, err := b.db.GetPlanUsageSessionCounts(ctx, rankingFilter)
 		if err != nil {
 			return nil, err
@@ -1127,18 +1131,28 @@ func (b *directBackend) UsagePairwiseComparison(
 
 	var leftResult db.DailyUsageResult
 	var rightResult db.DailyUsageResult
+	readSide := func(ctx context.Context, dimension string, filter db.UsageFilter) (db.DailyUsageResult, error) {
+		values := splitCSVTokens(filter.Model)
+		if dimension == "project" {
+			values = filter.ProjectFilterLabels()
+		}
+		if result, ok := sides.Side(dimension, values); ok {
+			return result, nil
+		}
+		return b.db.GetDailyUsage(ctx, filter)
+	}
 	group, groupCtx := errgroup.WithContext(ctx)
 	if !leftEmpty {
 		group.Go(func() error {
 			var readErr error
-			leftResult, readErr = b.db.GetDailyUsage(groupCtx, leftFilter)
+			leftResult, readErr = readSide(groupCtx, req.LeftDimension, leftFilter)
 			return readErr
 		})
 	}
 	if !rightEmpty {
 		group.Go(func() error {
 			var readErr error
-			rightResult, readErr = b.db.GetDailyUsage(groupCtx, rightFilter)
+			rightResult, readErr = readSide(groupCtx, req.RightDimension, rightFilter)
 			return readErr
 		})
 	}
@@ -1244,6 +1258,18 @@ func (b *directBackend) SearchContent(
 	} else {
 		page, err = b.db.SearchContent(ctx, filter)
 	}
+	var effectiveMode, note string
+	if err != nil && req.Mode == "hybrid" && req.KeywordFallback && errors.Is(err, db.ErrSemanticUnavailable) {
+		reason := "not set up"
+		if unavailable, ok := errors.AsType[*db.SemanticUnavailableError](err); ok {
+			reason = unavailable.Reason
+		}
+		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
+		if reason == "not set up" {
+			note += " To enable search by meaning, set `enabled = true` in the `[vector]` section of `~/.agentsview/config.toml`, restart the daemon, then run `agentsview index embeddings build`. If `[vector]` is already enabled, run the build now."
+		}
+		page, err = b.db.SearchContent(ctx, filter)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1278,6 +1304,8 @@ func (b *directBackend) SearchContent(
 		NextCursor:          page.NextCursor,
 		RevisionBound:       revisionBound,
 		Coverage:            coverage,
+		EffectiveMode:       effectiveMode,
+		Note:                note,
 		CandidateTruncated:  candidateTruncated,
 	}, nil
 }
@@ -1595,12 +1623,16 @@ func (b *directBackend) Stats(
 		IncludeProjects:        f.IncludeProjects,
 		ExcludeProjects:        f.ExcludeProjects,
 		Timezone:               f.Timezone,
+		OutcomesOnly:           f.OutcomesOnly,
 		IncludeGitOutcomes:     f.IncludeGitOutcomes,
 		IncludeGitHubOutcomes:  f.IncludeGitHubOutcomes,
 		GHToken:                f.GHToken,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if f.OutcomesOnly {
+		return stats, nil
 	}
 	archiveOnly, err := b.local.IsArchiveOnly(ctx)
 	if err != nil {

@@ -1,6 +1,7 @@
 package ingest_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -235,4 +236,43 @@ func TestFinalizeProjectsStoredContentBeforeSecretFindings(t *testing.T) {
 	assert.Empty(t, projected.Messages[0].ToolCalls[0].InputJSON)
 	assert.Empty(t, projected.Findings,
 		"findings must describe only content retained by storage policy")
+}
+
+func TestFinalizeTranscriptsDoesNotCountDistinctCallsAsRetries(t *testing.T) {
+	commands := []string{"ls -la", "cat README.md", "go test ./..."}
+	parsed := parser.ParseResult{
+		Session: parser.ParsedSession{ID: "session-1", Agent: parser.AgentClaude},
+	}
+	for i, command := range commands {
+		parsed.Messages = append(parsed.Messages, parser.ParsedMessage{
+			Ordinal: i, Role: parser.RoleAssistant,
+			Timestamp: time.Date(2026, 11, 5, 10, 0, i, 0, time.UTC),
+			ToolCalls: []parser.ParsedToolCall{{
+				ToolUseID: fmt.Sprintf("call-%d", i),
+				ToolName:  "Bash", Category: "Bash",
+				InputJSON: fmt.Sprintf(`{"command":%q}`, command),
+			}},
+		})
+	}
+
+	finalize := func(policy config.ArchiveContent) db.SessionSignalUpdate {
+		t.Helper()
+		candidate, err := ingest.PrepareCandidate(
+			t.Context(), parsed, ingest.ContentOptions{},
+		)
+		require.NoError(t, err)
+		prepared, err := ingest.Finalize(t.Context(), candidate,
+			ingest.ContentOptions{ArchiveContent: policy})
+		require.NoError(t, err)
+		return prepared.Signals
+	}
+	full := finalize(config.ArchiveContentFull)
+	transcripts := finalize(config.ArchiveContentTranscripts)
+
+	assert.Zero(t, full.ToolRetryCount)
+	assert.Zero(t, transcripts.ToolRetryCount,
+		"calls sharing only a tool name are not retries")
+	require.NotNil(t, full.HealthScore)
+	require.NotNil(t, transcripts.HealthScore)
+	assert.Equal(t, *full.HealthScore, *transcripts.HealthScore)
 }

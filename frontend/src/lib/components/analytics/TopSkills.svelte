@@ -1,10 +1,20 @@
 <script lang="ts">
   import { Chip } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import type { DbSkillAgentBreakdown as SkillAgentBreakdown, DbSkillProjectBreakdown as SkillProjectBreakdown, DbSkillUsage as SkillUsage } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
   const skills = $derived(analytics.skills?.by_skill ?? []);
+
+  // Totals don't depend on the trend's grouping, so a failed request for
+  // a different grouping leaves them valid; Skill Trend reports that error.
+  const error = $derived(
+    analytics.skills !== null &&
+      analytics.requestedSkillsGranularity !== analytics.skillsGranularity
+      ? null
+      : analytics.errors.skills,
+  );
 
   const maxCount = $derived(
     skills.length > 0
@@ -93,17 +103,13 @@
     {/if}
   </div>
 
-  {#if analytics.errors.skills}
-    <div class="error">
-      {analytics.errors.skills}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchSkills()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if skills.length > 0}
+  <PanelStatus
+    hasData={analytics.skills !== null}
+    pending={analytics.querying.skills}
+    {error}
+    onRetry={() => analytics.fetchSkills()}
+  />
+  {#if skills.length > 0}
     <div class="skill-list">
       {#each skills.slice(0, 8) as skill}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -166,7 +172,7 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.skills}
     <div class="empty">{m.analytics_top_skills_empty()}</div>
   {/if}
 </div>
@@ -323,23 +329,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

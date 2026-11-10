@@ -12,6 +12,9 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { computeMainModel } from "../../utils/model.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
+  import { isHookSuccessMessage } from "../../utils/messages.js";
+  import SystemBoundaryCard from "../system/SystemBoundaryCard.svelte";
   import { fileReferences } from "../../stores/file-references.svelte.js";
   import MessageContent from "./MessageContent.svelte";
   import {
@@ -175,11 +178,21 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
         <div class="subagent-status subagent-error" {@attach errorTelemetry("session")}>{error}</div>
       {:else if messages && messages.length > 0}
         {#each messages as message}
-          <MessageContent
-            {message}
-            session={tokenSourceSession}
-            isSubagentContext={true}
-          />
+          {#if isHookSuccessMessage(message)}
+            {#if ui.isBlockVisible("hook")}
+              <SystemBoundaryCard
+                subtype={message.source_subtype!}
+                content={message.content}
+                timestamp={message.timestamp}
+              />
+            {/if}
+          {:else}
+            <MessageContent
+              {message}
+              session={tokenSourceSession}
+              isSubagentContext={true}
+            />
+          {/if}
         {/each}
       {:else if messages}
         <div class="subagent-status">{m.subagent_inline_no_messages()}</div>

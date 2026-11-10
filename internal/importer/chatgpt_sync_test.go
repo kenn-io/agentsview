@@ -263,6 +263,40 @@ func TestSyncChatGPTUsageArchiveShorterBranchRefreshesMetadata(t *testing.T) {
 	assert.Equal(t, 2, details)
 }
 
+// Appending a reply under usage-only storage keeps the retained rows in place,
+// so an assistant-message pin survives and no Trash copy is made.
+func TestSyncChatGPTUsageArchiveAppendKeepsAssistantPin(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	details := 0
+	_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", chatGPTSyncDetail(1, false, "Question"), &details), nil)
+	require.NoError(t, err)
+	id := "chatgpt:" + chatGPTSyncID
+	before, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, before, 1, "usage-only storage keeps only the assistant row")
+	preventChatGPTMessageIDReuse(t, d)
+	_, err = d.PinMessage(t.Context(), id, before[0].ID, nil)
+	require.NoError(t, err)
+
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", chatGPTSyncDetail(2, true, "Question"), &details), nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Updated: 1}, stats)
+	assert.Empty(t, replacedCopies(t, d, id), "appending makes no copy")
+	session, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 4, session.MessageCount)
+	after, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, after, 2)
+	assert.Equal(t, before[0].ID, after[0].ID, "the retained assistant row stays in place")
+	pins, err := d.ListPinnedMessages(t.Context(), id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, before[0].ID, pins[0].MessageID)
+}
+
 func TestSyncChatGPTArchiveUpdatesAppendedTurns(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
@@ -600,6 +634,7 @@ func TestSyncChatGPTEmptyConversationFreshness(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			details := 0
+			filled := false
 			const laterID = "00000003-0000-4000-8000-000000000000"
 			fetch := func(_ context.Context, path string) (ClaudeAIResponse, error) {
 				switch path {
@@ -609,6 +644,9 @@ func TestSyncChatGPTEmptyConversationFreshness(t *testing.T) {
 					return ClaudeAIResponse{Status: 200, Body: []byte(`{"items":[{"id":"` + chatGPTSyncID + `","update_time":1},{"id":"` + laterID + `","update_time":1}],"total":2}`)}, nil
 				case chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0, false):
 					details++
+					if filled {
+						return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTSyncDetail(1, false, "Question"))}, nil
+					}
 					return ClaudeAIResponse{Status: 200, Body: []byte(`{"id":"` + chatGPTSyncID + `","update_time":1,` + tc.fields + `}`)}, nil
 				case chatGPTRequest(chatGPTDetailRequest, laterID, 0, false):
 					details++
@@ -631,10 +669,21 @@ func TestSyncChatGPTEmptyConversationFreshness(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, 2, stats.Skipped)
 			assert.Zero(t, stats.Errors)
-			assert.Equal(t, 2, details, "the second sync makes no detail requests")
+			assert.Equal(t, 3, details,
+				"an empty detail stays retryable instead of pinning the chat as imported")
 			session, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
 			require.NoError(t, err)
 			assert.Nil(t, session, "empty chats stay out of the archive")
+
+			// The chat gains content later. The retry must import it instead of
+			// treating the empty snapshot as the chat's final state.
+			filled = true
+			stats, err = SyncChatGPT(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Imported)
+			session, err = d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+			require.NoError(t, err)
+			require.NotNil(t, session, "a chat that gains content must import")
 		})
 	}
 }
@@ -889,10 +938,14 @@ func TestSyncChatGPTZipImageReconciliation(t *testing.T) {
 						conversation := conversations[0]
 						unchangedDetail, err := json.Marshal(conversation)
 						require.NoError(t, err)
-						details := 0
-						_, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", string(unchangedDetail), &details), nil)
-						require.NoError(t, err)
-						assert.Empty(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID))
+						// An unchanged sync fills source identities, so the combined
+						// case skips it to extend legacy rows on its first sync.
+						if !tc.extend || !tc.legacy {
+							details := 0
+							_, err = SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", string(unchangedDetail), &details), nil)
+							require.NoError(t, err)
+							assert.Empty(t, replacedCopies(t, d, "chatgpt:"+chatGPTSyncID))
+						}
 						if tc.extend {
 							mapping := conversation["mapping"].(map[string]any)
 							message := mapping["n1"].(map[string]any)["message"].(map[string]any)

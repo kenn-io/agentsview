@@ -41,6 +41,7 @@ func vectorDSN(path string, readOnly bool) string {
 		params.Set("mode", "ro")
 		params.Set("_busy_timeout", "5000")
 	} else {
+		params.Set("_stmt_cache_size", "64")
 		params.Set("_journal_mode", "WAL")
 		params.Set("_busy_timeout", "5000")
 		params.Set("_synchronous", "NORMAL")

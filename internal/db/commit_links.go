@@ -394,7 +394,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	var cwd string
 	load := func(filter string, args ...any) error {
 		rows, err := tx.Query(`SELECT m.ordinal, COALESCE(t.call_index,0), COALESCE(t.tool_use_id,''),
- COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, COALESCE(s.cwd,''), t.tool_name
+ COALESCE(m.timestamp,''), t.input_json, `+ToolCallResultContentSQL("t", "m.ordinal")+`, s.cwd, t.tool_name
  FROM tool_calls t JOIN messages m ON m.id=t.message_id JOIN sessions s ON s.id=t.session_id
  WHERE t.session_id=? AND (t.category='Bash' OR t.tool_name='wait') AND t.input_json IS NOT NULL AND (`+filter+`)
  ORDER BY m.ordinal,t.call_index`, append([]any{sessionID}, args...)...)
@@ -559,7 +559,7 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 
 // The time fallback adapts Pando's turnThatWrote; see
 // docs/internal/pando-adaptation.md for attribution and changes.
-const commitUserPrompt = `m.role='user' AND m.is_system=0 AND COALESCE(m.source_subtype,'')<>'tool_result' AND TRIM(m.content)<>''`
+const commitUserPrompt = `m.role='user' AND m.is_system=0 AND m.source_subtype<>'tool_result' AND TRIM(m.content)<>''`
 
 var commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value AS session_id FROM json_each(?)),
  resolved_trailers AS (

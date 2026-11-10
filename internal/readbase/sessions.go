@@ -73,7 +73,14 @@ func (s Sessions) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sess
 		}
 		total = cur.Total
 	}
-	if total <= 0 {
+	var exclusions *db.SessionExclusionCounts
+	if f.WantsExclusionCounts() {
+		var err error
+		total, exclusions, err = db.CountSessionExclusions(ctx, s.backend, f, dialect)
+		if err != nil {
+			return db.SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
+		}
+	} else if total <= 0 {
 		if err := s.backend.QueryRowContext(ctx,
 			CountSessionsSQL(dialect.SignedAggregate("COUNT(*)"), where), args...,
 		).Scan(&total); err != nil {
@@ -105,7 +112,10 @@ func (s Sessions) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sess
 	if err != nil {
 		return db.SessionPage{}, err
 	}
-	return db.BuildSessionPage(sessions, total, f, rs, s.backend.EncodeCursor), nil
+	exclusions.LoadChildren(ctx, s.backend, f, dialect, total)
+	page := db.BuildSessionPage(sessions, total, f, rs, s.backend.EncodeCursor)
+	page.ExclusionCounts = exclusions
+	return page, nil
 }
 
 func (s Sessions) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {

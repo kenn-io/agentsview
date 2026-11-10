@@ -3,8 +3,8 @@ title: Quick Start
 description: Get AgentsView running in under a minute
 ---
 
-CLI examples follow `main`. For older releases, use the legacy spellings in
-the [command migration](commands.md#command-migration).
+CLI examples use the commands from 0.47.0 and later. For older releases, use
+the legacy names in the [command migration](commands.md#command-migration).
 
 ## Install
 
@@ -214,9 +214,9 @@ container 40 seconds to finish its final push.
 
 The desktop app handles startup automatically: it attaches to an existing local
 daemon or starts one in the background, then opens the discovered URL. The
-daemon is shared with CLI commands and may outlive the desktop window, but it
-self-exits after an idle period when no client request or daemon-owned job is
-active.
+daemon is shared with CLI commands and may outlive the desktop window.
+Automatically started daemons self-exit after an idle period when no client
+request or daemon-owned job is active.
 
 CLI users can start the web UI explicitly:
 

@@ -26,10 +26,11 @@ describe("HourOfWeekHeatmap", () => {
 
   function mountWithData() {
     analytics.hourOfWeek = {
-      cells: [
-        { day_of_week: 6, hour: 0, messages: 9 },
-        { day_of_week: 0, hour: 1, messages: 3 },
-      ],
+      cells: Array.from({ length: 168 }, (_, index) => ({
+        day_of_week: Math.floor(index / 24),
+        hour: index % 24,
+        messages: index === 144 ? 9 : index === 1 ? 3 : 0,
+      })),
     };
     // @ts-ignore
     analytics.errors = {
@@ -55,9 +56,14 @@ describe("HourOfWeekHeatmap", () => {
     ];
   }
 
-  it("renders Sunday first while preserving Monday-zero filter values", async () => {
+  it("renders Sunday first, preserves filter values, and retains the chart beside failures", async () => {
     const component = mountWithData();
     await tick();
+    expect(document.querySelector(".loading")).toBeNull();
+    analytics.errors.hourOfWeek = "request failed";
+    await tick();
+    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.querySelector(".how-chart")).not.toBeNull();
 
     const dayLabels = Array.from(document.querySelectorAll(".day-label")).map((el) =>
       el.textContent?.trim(),
@@ -75,6 +81,10 @@ describe("HourOfWeekHeatmap", () => {
     for (const spy of fetchSpies) {
       expect(spy).toHaveBeenCalledOnce();
     }
+
+    analytics.hourOfWeek = null;
+    await tick();
+    expect(document.querySelector(".how-chart")).toBeNull();
 
     unmount(component);
   });

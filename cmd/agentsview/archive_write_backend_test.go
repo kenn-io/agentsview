@@ -1428,7 +1428,7 @@ func TestPushWatchRelevancePreservesAuthoritativeBatches(t *testing.T) {
 func TestResolveArchiveWriteBackendCopiesNoSyncRuntime(t *testing.T) {
 	dataDir := t.TempDir()
 	host, port := testPingServer(t)
-	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dataDir, host, port, "test", "", false, false, true, nil,
 	)
 	require.NoError(t, err)

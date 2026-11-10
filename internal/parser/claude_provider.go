@@ -425,6 +425,7 @@ func (p *claudeProvider) ParseIncremental(
 			},
 			storedLinearParse:         req.StoredClaudeLinearParse,
 			storedTailClaudeMessageID: req.StoredLastClaudeMessageID,
+			storedTailTimestamp:       req.StoredTailTimestamp,
 			storedSessionName:         req.StoredSessionName,
 			storedPRLinks:             req.StoredPRLinks,
 		},

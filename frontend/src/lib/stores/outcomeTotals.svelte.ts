@@ -56,6 +56,16 @@ export class OutcomeTotalsStore {
     await this.read(window, true);
   }
 
+  /** Reads the window again as last asked, keeping the failure shown until it settles. */
+  async retry(window: OutcomeWindow): Promise<void> {
+    const failure = this.error;
+    const reading = this.read(window, this.includePullRequests);
+    // read clears the error before its first await; restore it so the retry
+    // button stays on the page, busy, until the new result replaces it.
+    this.error = failure;
+    await reading;
+  }
+
   reset(): void {
     this.latest.cancel();
     this.stats = null;
@@ -81,6 +91,7 @@ export class OutcomeTotalsStore {
           exclude_project: window.excludeProject,
           include_one_shot: window.includeOneShot,
           include_automated: window.includeAutomated,
+          outcomes_only: true,
           include_git_outcomes: true,
           include_github_outcomes: withPullRequests,
         },

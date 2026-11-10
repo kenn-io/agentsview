@@ -248,8 +248,12 @@ func sqliteSnapshotTargets(targets TargetSet) map[string]struct{} {
 			out[filepath.Clean(path)] = struct{}{}
 		}
 	}
-	for _, root := range targets.Dirs[parser.AgentAntigravity] {
-		out[filepath.Join(root, parser.AntigravitySummariesDBName)] = struct{}{}
+	// Both Antigravity providers read each conversation's workspace and
+	// parent from the summary store, so its WAL must not vanish mid-transfer.
+	for _, agent := range []parser.AgentType{parser.AgentAntigravity, parser.AgentAntigravityCLI} {
+		for _, root := range targets.Dirs[agent] {
+			out[filepath.Join(root, parser.AntigravitySummariesDBName)] = struct{}{}
+		}
 	}
 	return out
 }

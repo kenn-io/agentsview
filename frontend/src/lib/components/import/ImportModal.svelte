@@ -162,7 +162,7 @@
     error = null;
     untrack(() => {
       if (fileInput) fileInput.value = "";
-      claudeAISync.dismiss();
+      if (!claudeAISync.running) claudeAISync.dismiss();
       signInError = null;
       chromeStatus = null;
       chromeRefused = false;
@@ -410,7 +410,7 @@
               <Button size="sm" label={m.import_claude_stop()} tone="neutral" surface="outline" onclick={() => claudeAISync.stop()} />
             {:else}
               {#if activeHost || chromeState === "signed-out"}
-                <Button size="sm" label={m.import_claude_connect()} ariaLabel={activeHost ? undefined : provider === "chatgpt" ? m.import_chatgpt_signed_out() : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
+                <Button size="sm" label={m.import_claude_connect()} ariaLabel={activeHost || provider === "chatgpt" ? undefined : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
               {/if}
               <Button size="sm" label={m.import_claude_sync()} tone={chromeState === "signed-out" ? "neutral" : "info"} surface={chromeState === "signed-out" ? "outline" : "soft"} disabled={syncDisabled} onclick={sync} />
             {/if}

@@ -10,4 +10,5 @@ func TestLexicalScope(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedLexicalScope(t, d)
 	dbtest.AssertLexicalScope(t, d)
+	dbtest.AssertHybridKeywordOnlyScope(t, d)
 }

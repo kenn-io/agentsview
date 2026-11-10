@@ -9,6 +9,7 @@
     type TimeInterval,
   } from "d3-time";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import {
     addDays,
     endOfMonth,
@@ -524,17 +525,13 @@
     </div>
   </div>
 
-  {#if analytics.errors.activity}
-    <div class="error">
-      {analytics.errors.activity}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchActivity()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if chart.bars.length > 0}
+  <PanelStatus
+    hasData={analytics.activity !== null}
+    pending={analytics.querying.activity}
+    error={analytics.errors.activity}
+    onRetry={() => analytics.fetchActivity()}
+  />
+  {#if chart.bars.length > 0}
     <div class="chart-area" bind:clientWidth={chartAreaWidth}>
       <BarChart
         data={chart.bars}
@@ -647,7 +644,7 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.activity}
     <div class="empty">{m.analytics_activity_empty()}</div>
   {/if}
 </div>
@@ -855,23 +852,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

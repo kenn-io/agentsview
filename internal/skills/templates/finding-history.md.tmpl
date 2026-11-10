@@ -66,12 +66,14 @@ is true.
 
 ## Failures and fallbacks
 
-If semantic search failed, identify and disclose the failure before using a
-lexical fallback. For an unavailable semantic index or transient embedding
-failure, retry once when appropriate, then use `mode: substring` with several
-short queries and synonyms. Preserve the inclusion and current-session flags,
-but omit `scope` because substring mode does not accept it. Describe the
-fallback in the answer.
+Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
+results once and use the matches without retry. For thin or empty results,
+try short `mode: substring` queries with key terms or synonyms. Preserve
+`scope`, inclusion, and current-session flags.
+
+Disclose explicit semantic errors. Use a lexical fallback only for an
+unavailable index or transient embedding error; retry transient errors once
+when appropriate.
 
 Do not fall back on authentication or wrong-target errors. In particular, do
 not silently search a local archive when the intended remote archive rejected

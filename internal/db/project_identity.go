@@ -423,12 +423,19 @@ func (db *DB) GetDatabaseID(ctx context.Context) (string, error) {
 }
 
 func (db *DB) databaseIDAndUsagePricingRevision(ctx context.Context) (string, int64, error) {
+	return databaseIDAndUsagePricingRevisionFrom(ctx, db.getReader())
+}
+
+func databaseIDAndUsagePricingRevisionFrom(ctx context.Context, conn interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+},
+) (string, int64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	var id string
 	var pricingRevision int64
-	err := db.getReader().QueryRowContext(ctx, `SELECT
+	err := conn.QueryRowContext(ctx, `SELECT
 		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), ''),
 		COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key = ?), 0)`,
 		archiveMetadataDatabaseIDKey, archiveMetadataUsagePricingRevisionKey,

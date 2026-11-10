@@ -42,7 +42,7 @@ func TestEndedActivityReportSurvivesUnrelatedPushes(t *testing.T) {
 	filter := db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true}
 	requireFresh := func(got activity.Report) {
 		t.Helper()
-		fresh, err := NewStoreFromDB(store.DB()).GetActivityReport(ctx, filter, q)
+		fresh, err := NewStoreFromDB(store.DB(), store.bulk).GetActivityReport(ctx, filter, q)
 		require.NoError(t, err)
 		require.Equal(t, fresh, got)
 	}
@@ -87,7 +87,7 @@ func TestEndedActivityReportIsKeptOnDiskAcrossRestarts(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	withDisk := func() *Store {
 		t.Helper()
-		s := NewStoreFromDB(store.DB())
+		s := NewStoreFromDB(store.DB(), store.bulk)
 		require.NoError(t, s.openActivityReportDisk(Target{URL: "clickhouse://mirror:9000/", Database: "agentsview"}))
 		return s
 	}
@@ -107,7 +107,7 @@ func TestEndedActivityReportIsKeptOnDiskAcrossRestarts(t *testing.T) {
 	}
 	requireFresh := func(got activity.CandidateArtifacts) {
 		t.Helper()
-		fresh, err := NewStoreFromDB(store.DB()).BuildActivityReportArtifacts(ctx, filter, q, nil)
+		fresh, err := NewStoreFromDB(store.DB(), store.bulk).BuildActivityReportArtifacts(ctx, filter, q, nil)
 		require.NoError(t, err)
 		require.Equal(t, digest(fresh), digest(got))
 	}
@@ -164,7 +164,7 @@ func TestKeptActivityReportsExpireUnlessOpened(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	_, err := store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
 	require.NoError(t, err)
-	s := NewStoreFromDB(store.DB())
+	s := NewStoreFromDB(store.DB(), store.bulk)
 	require.NoError(t, s.openActivityReportDisk(Target{URL: "clickhouse://mirror:9000/", Database: "agentsview"}))
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	filter := db.AnalyticsFilter{Timezone: "UTC"}

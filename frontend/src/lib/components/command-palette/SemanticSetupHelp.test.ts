@@ -23,6 +23,7 @@ vi.mock("../../api/generated/index.js", async (importOriginal) => {
     EmbeddingsService: {
       getApiV1EmbeddingsStatus: vi.fn(),
       postApiV1EmbeddingsBuild: vi.fn(),
+      postApiV1EmbeddingsSetup: vi.fn(),
     },
   };
 });
@@ -37,11 +38,22 @@ import SemanticSetupHelp, { __resetResolvedBuildIds } from "./SemanticSetupHelp.
 const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsBuild: ReturnType<typeof vi.fn>;
+  postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
 };
 
 function idleStatus(overrides: Partial<VectorBuildStatus> = {}): VectorBuildStatus {
   return {
     running: false,
+    setup: {
+      enabled: true,
+      action: "",
+      provider: "built-in",
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    },
     done: 0,
     total: 0,
     eta_milliseconds: 0,
@@ -56,6 +68,16 @@ function runningStatus(
 ): VectorBuildStatus {
   return {
     running: true,
+    setup: {
+      enabled: true,
+      action: "",
+      provider: "built-in",
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    },
     phase: "embedding",
     done,
     total,
@@ -89,6 +111,7 @@ describe("SemanticSetupHelp", () => {
     __resetResolvedBuildIds();
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.postApiV1EmbeddingsBuild.mockReset();
+    embeddingsService.postApiV1EmbeddingsSetup.mockReset();
     mockCopyToClipboard.mockReset();
     mockCopyToClipboard.mockResolvedValue(true);
   });
@@ -170,6 +193,31 @@ describe("SemanticSetupHelp", () => {
     unmount(component);
   });
 
+  it("refreshes setup after turning on the built-in server", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "built-in",
+      missing_bytes: 295000000,
+      busy: false,
+      installing: false,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup }));
+    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+    const { component } = mountHelp();
+    await settle();
+    expect(text()).toContain("Downloads 295 MB");
+    [...document.body.querySelectorAll("button")]
+      .find((b) => b.textContent?.trim() === "Turn on")!
+      .click();
+    await settle();
+    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledTimes(1);
+    expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+    unmount(component);
+  });
+
   it("shows a specific unavailable reason verbatim instead of the walkthrough", async () => {
     const reason =
       "vector serving is disabled for this daemon run: another process held " +
@@ -239,10 +287,8 @@ describe("SemanticSetupHelp", () => {
     build!.click();
     await settle();
     expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
-    expect(text()).toContain("Building embeddings index...");
 
     await settle(2000);
-    expect(text()).toContain("50%");
 
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_result: undefined }),
@@ -349,7 +395,6 @@ describe("SemanticSetupHelp", () => {
     );
     build!.click();
     await settle();
-    expect(text()).toContain("Building embeddings index...");
 
     await settle(2000);
     expect(onResolved).toHaveBeenCalledOnce();
@@ -358,13 +403,14 @@ describe("SemanticSetupHelp", () => {
   });
 
   it("jumps straight to progress when a build is already running at mount", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(runningStatus(250, 1000));
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(250, 1000));
 
     const { component } = mountHelp();
     await settle();
 
-    expect(text()).toContain("Building embeddings index...");
-    expect(text()).toContain("25%");
+    expect(document.body.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe(
+      "250",
+    );
 
     unmount(component);
   });
@@ -376,7 +422,6 @@ describe("SemanticSetupHelp", () => {
 
     const { component, onResolved } = mountHelp();
     await settle();
-    expect(text()).toContain("Scanning the archive...");
 
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_error: "embeddings endpoint refused the connection" }),
@@ -497,7 +542,6 @@ describe("SemanticSetupHelp", () => {
     // Retry starts a build even though the daemon still reports the old
     // last_error; re-probing alone could never clear it.
     expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
-    expect(text()).toContain("Building embeddings index...");
 
     // The new build finishes cleanly (a later build_id, no last_error), which
     // resolves despite the stale last_error that first put us in "failed".

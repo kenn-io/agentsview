@@ -225,6 +225,94 @@ func TestDeepSeekHarnessSyncRetainsMixedEncodingSessionAndSwitchesAfterDeletion(
 	assert.Equal(t, plainPath, database.GetSessionFilePath(t.Context(), sessionID))
 }
 
+// A live session gains zstd frames while Harness runs. Each rescan must keep
+// the native message ids, the stored rows, and their pins, and the final
+// reply must take over the partial row instead of duplicating it.
+func TestDeepSeekHarnessSyncKeepsNativeMessageIDsAcrossAppends(t *testing.T) {
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentDeepSeekHarness: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	const sessionID = "deepseek-harness:live"
+
+	path := harnessSyncWriteLog(t, root, "live", map[string]any{"version": 4, "isSeeded": false}, []any{
+		harnessSyncEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
+		harnessSyncEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
+		harnessSyncEvent(2, "user/message", harnessSyncUserWithID("u-1", "first question"), "append"),
+		harnessSyncEvent(3, "request/header", harnessSyncRequest(), nil),
+	})
+	engine.SyncPaths([]string{path})
+	initial, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, initial, 1)
+	assert.Equal(t, "u-1", initial[0].SourceUUID)
+	_, err = database.PinMessage(t.Context(), sessionID, initial[0].ID, nil)
+	require.NoError(t, err)
+
+	harnessSyncAppendFrame(t, path, []any{
+		harnessSyncEvent(4, "assistant/message", harnessSyncAssistantWithID(
+			"a-1", 1, 1, "first answer", 2,
+		), "append"),
+		harnessSyncEvent(5, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
+		harnessSyncEvent(6, "turn/end", map[string]any{
+			"turn": 1, "reason": map[string]any{"kind": "completed"},
+		}, nil),
+		harnessSyncEvent(7, "turn/start", map[string]any{"turn": 2}, nil),
+		harnessSyncEvent(8, "step/start", map[string]any{"turn": 2, "step": 1}, nil),
+		harnessSyncEvent(9, "user/message", harnessSyncUserWithID("u-2", "second question"), "append"),
+		harnessSyncEvent(10, "request/header", harnessSyncRequest(), nil),
+		harnessSyncEvent(11, "assistant/chunk", map[string]any{
+			"turn": 2, "step": 1,
+			"chunk": map[string]any{"type": "block-start", "index": 0, "blockType": "text"},
+		}, nil),
+		harnessSyncEvent(12, "assistant/chunk", map[string]any{
+			"turn": 2, "step": 1,
+			"chunk": map[string]any{"type": "text-delta", "index": 0, "text": "draft"},
+		}, nil),
+	})
+	engine.SyncPaths([]string{path})
+	streaming, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"u-1", "a-1", "u-2", ""}, harnessSyncSourceIDs(streaming),
+		"a reply still streaming has no native id yet")
+	assert.Equal(t, initial[0].ID, streaming[0].ID)
+
+	harnessSyncAppendFrame(t, path, []any{
+		harnessSyncEvent(13, "assistant/message", harnessSyncAssistantWithID(
+			"a-2", 2, 1, "second answer", 3,
+		), "append"),
+		harnessSyncEvent(14, "step/end", map[string]any{"turn": 2, "step": 1}, nil),
+		harnessSyncEvent(15, "turn/end", map[string]any{
+			"turn": 2, "reason": map[string]any{"kind": "completed"},
+		}, nil),
+	})
+	engine.SyncPaths([]string{path})
+	engine.SyncPaths([]string{path})
+	final, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"u-1", "a-1", "u-2", "a-2"}, harnessSyncSourceIDs(final))
+	assert.Equal(t, "second answer", final[3].Content)
+	for index := range 3 {
+		assert.Equal(t, streaming[index].ID, final[index].ID,
+			"rescanning appended frames must keep earlier rows")
+	}
+	pins, err := database.ListPinnedMessages(t.Context(), sessionID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, final[0].ID, pins[0].MessageID)
+}
+
+func harnessSyncSourceIDs(messages []db.Message) []string {
+	ids := make([]string, 0, len(messages))
+	for _, message := range messages {
+		ids = append(ids, message.SourceUUID)
+	}
+	return ids
+}
+
 func harnessSyncWriteLog(
 	t *testing.T, root, id string, headerExtra map[string]any, events []any,
 ) string {
@@ -332,8 +420,12 @@ func harnessSyncEvent(seq int, eventType string, data, surface any) map[string]a
 }
 
 func harnessSyncUser(text string) map[string]any {
+	return harnessSyncUserWithID("user", text)
+}
+
+func harnessSyncUserWithID(id, text string) map[string]any {
 	return map[string]any{
-		"id": "user", "role": "user", "source": map[string]any{"kind": "user"},
+		"id": id, "role": "user", "source": map[string]any{"kind": "user"},
 		"content": []any{map[string]any{"type": "text", "text": text}},
 	}
 }
@@ -348,10 +440,16 @@ func harnessSyncRequest() map[string]any {
 }
 
 func harnessSyncAssistant(turn, step int, text string, output int) map[string]any {
+	return harnessSyncAssistantWithID("assistant", turn, step, text, output)
+}
+
+func harnessSyncAssistantWithID(
+	id string, turn, step int, text string, output int,
+) map[string]any {
 	return map[string]any{
 		"turn": turn, "step": step,
 		"message": map[string]any{
-			"id": "assistant", "role": "assistant",
+			"id": id, "role": "assistant",
 			"source": map[string]any{
 				"kind": "model", "provider": "deepseek", "model": "deepseek-chat",
 			},

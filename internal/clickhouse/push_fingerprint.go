@@ -148,4 +148,18 @@ var derivedSessionColumns = map[string]string{
 	"agentsview_push_fingerprint": "the fingerprint itself",
 	"source_archive_id":           "push bookkeeping",
 	"stored_message_count":        "derived from the messages the fingerprint hashes",
+	// The full push that publishes a new dashboardFactsVersion rewrites
+	// these; otherwise they change only with the messages.
+	"dashboard_facts_version":       "push bookkeeping",
+	"fact_user_messages":            "derived from the messages the fingerprint hashes",
+	"fact_assistant_messages":       "derived from the messages the fingerprint hashes",
+	"fact_thinking_messages":        "derived from the messages the fingerprint hashes",
+	"fact_tool_use_messages":        "derived from the messages the fingerprint hashes",
+	"fact_tool_calls":               "derived from the messages the fingerprint hashes",
+	"fact_frustration_markers":      "derived from the messages the fingerprint hashes",
+	"fact_velocity_messages":        "derived from the messages the fingerprint hashes",
+	"fact_velocity_turn_cycles":     "derived from the messages the fingerprint hashes",
+	"fact_velocity_first_response":  "derived from the messages the fingerprint hashes",
+	"fact_velocity_active_seconds":  "derived from the messages the fingerprint hashes",
+	"fact_velocity_assistant_chars": "derived from the messages the fingerprint hashes",
 }

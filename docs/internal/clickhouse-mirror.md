@@ -65,7 +65,18 @@ repairs on the next push.
 **Driver `github.com/ClickHouse/clickhouse-go/v2` through `database/sql`.**
 Stores stay in the same `Query`/`Scan` shape as DuckDB and PostgreSQL. Every
 connection sets `final=1` so `ReplacingMergeTree` collapses duplicates without
-`FINAL` in SQL.
+`FINAL` in SQL. Activity usage rows are the exception: serve reads them on a
+second pool that uses the driver's native API with the same settings. A
+full-history report reads about 1.5 million rows, and `database/sql` boxes each
+of their 32 million values and round-trips integers through text; on one
+production mirror that left ClickHouse waiting 3.8 of 4.2 seconds for serve to
+take the rows. The native read packs each row into the kept form as it arrives
+and sorts small keys, so no slice of wide rows is held or sorted. One goroutine
+still cannot take rows as fast as ClickHouse produces them, so a range read of
+more than 300,000 stored rows is cut at timestamp quantiles into up to eight
+slices that are read, sorted, and packed at once and then joined as bytes. On
+1.5 million rows a cold range read takes about 1.1 seconds, against 3.5 seconds
+for one read and 6 to 10 seconds through `database/sql`.
 
 **Vectors are pushed and searched, keyed by fingerprint and archive.**
 `clickhouse push` runs the vector phase after the session phase when the local
@@ -88,11 +99,23 @@ covers documents and chunks whose key the batch did not rewrite. A rewritten key
 keeps its older row until `ReplacingMergeTree` collapses it, which every
 `final=1` read already does. Deleting those rows too would write a patch row for
 each one, and every later read of the table pays to apply patch rows until
-merges fold them in. Evictions run in batches of 500 sessions as well. The
-vector tables are not sorted by session, so each statement reads the whole
-session column; the statement count grows with the number of batches, not
-sessions. A crash before the state rows land leaves every session in the batch
-stale, so the next push repeats them.
+merges fold them in. The batch sends its rewritten keys as query parameters.
+Over HTTP each parameter is a URL field, which the server limits to 128 KiB after
+URL encoding, so a batch whose keys pass 96 KiB splits them into sorted key
+ranges and runs one pair of deletes per range. One long session can need several
+ranges. Evictions run in batches of 500 sessions as well, so the
+statement count grows with the number of batches, not sessions. A crash before
+the state rows land leaves every session in the batch stale, so the next push
+repeats them.
+
+The vector tables are not sorted by session, but every `doc_key` starts with one
+of four prefixes that name its session (`vector.DocKeySessionPrefixes`). In a
+batch of up to 100 sessions, the flush and eviction statements add those
+prefixes to their `session_id` filter, so the primary key skips other sessions'
+rows. Each row a statement reads pays to evaluate the prefix terms, and in a
+larger batch the sessions are scattered across most of the table. A larger
+batch therefore reads the whole table without them. This depends on the push
+writing only keys that `vector.DocKey` builds.
 
 **Tables are `ReplacingMergeTree(push_version)`.** `push_version` is the push
 start time in Unix nanoseconds. Same-key rows from a retry collapse on merge and
@@ -106,10 +129,24 @@ transactions. Per batch of changed sessions (100 by default, set by the target's
 1. Insert dependent rows (messages, tool calls, result events, usage, findings,
    pins).
 1. `DELETE ... WHERE session_id IN (...) AND push_version < v` per dependent
-   table and for `usage_messages`. Its materialized view never sees deletes,
-   so a shorter republished session would otherwise leave obsolete usage rows
-   in the mirror.
+   table and for `usage_messages`, limited to rows whose sort key has no row
+   at `v` or later. Its materialized view never sees deletes, so a shorter
+   republished session would otherwise leave obsolete usage rows in the
+   mirror. Tool result events and tool calls go before messages, so a failure
+   between deletes never leaves calls whose copied message fields name a
+   deleted message.
 1. Insert session rows with fingerprint and `source_archive_id`.
+
+The delete removes only keys the session no longer has, such as messages cut
+from a shorter session or a tool call dropped from a kept message. A key the
+push rewrote keeps its older row until `ReplacingMergeTree` collapses it, which
+every `final=1` read already does, as the vector push does for rewritten
+documents. On a server that runs deletes as patch parts
+(`lightweight_delete_mode = lightweight_update`), deleting those rows too
+wrote one patch row per row of every re-pushed session, and every later read of
+the table paid to apply them until a merge or `APPLY PATCHES` folded them in.
+Re-pushed sessions usually keep all their keys, so most of these deletes now
+match no rows and write nothing.
 
 A crash before step 3 leaves the fingerprint stale, so the next push re-selects
 the session. A crash between 1 and 2 leaves extra old rows that step 2 removes
@@ -314,15 +351,28 @@ in one transaction and writes them to `usage_session_snapshots` as one versioned
 snapshot. A retry of a failed batch reuses the payload it already loaded, so one
 push version never mixes two archive states.
 
+**Views keep the query in the code.** `CREATE MATERIALIZED VIEW IF NOT EXISTS`
+leaves an existing view alone, so a mirror created by an older release would
+keep that release's query. Each view therefore carries a comment with a hash of
+its query. Every schema step compares the live comment with the code's and, when
+they differ, runs `ALTER TABLE ... MODIFY QUERY` and then updates the comment.
+`MODIFY QUERY` replaces the query in place without stopping inserts, so no
+insert runs without the view and no derived rows go missing. It keeps the view's
+source table, columns, and clauses (`TO`, `REFRESH`); a change to those needs a
+new view. `usage_messages_mv`, `terminal_event_snapshots_mv`, and
+`prepare_usage` use this check. For `prepare_usage` it also catches a change to
+the refresh settings, which the `prepared_usage` table comment does not cover.
+
 **Refreshed table.** The refreshable materialized view `prepare_usage` turns the
-snapshots into `prepared_usage` every 15 minutes, and every push starts a
-refresh. Rows are sorted by their stored UTC time, so a day read touches only
-that day's granules. Each row stores its price model, price key, and a copy of
-its price record, stamped with the pricing digest it was priced under. The table
-comment names the query that built it; a table built by another query is dropped
-and rebuilt on the next schema step, and a rebuild that stopped halfway finishes
-on the next start. The schema step adds a missing projection only with the
-refresh stopped, and always starts it again.
+snapshots into `prepared_usage` every 15 minutes, and a push starts a refresh
+once one is due; see "When a push rebuilds" below. Rows are sorted by their
+stored UTC time, so a day read touches only that day's granules. Each row stores
+its price model, price key, and a copy of its price record, stamped with the
+pricing digest it was priced under. The table comment names the query that built
+it; a table built by another query is dropped and rebuilt on the next schema
+step, and a rebuild that stopped halfway finishes on the next start. The schema
+step adds a missing projection only with the refresh stopped, and always starts
+it again.
 
 **Refresh without a table exchange.** Every refresh of the view ends with
 `EXCHANGE TABLES`, which ClickHouse runs as a `renameat2` call with the
@@ -353,17 +403,17 @@ only while a lock exists and the newest one is not retired. A database that can
 swap tables has no lock. A push there that finds the view missing, as while a
 schema step recreates it, never rebuilds.
 
-Each push in rebuild mode rebuilds the table itself before it returns. It runs
-the view's query into a new `prepared_usage_build_<n>` table and moves that
-table's parts into `prepared_usage` with `REPLACE PARTITION`, which replaces all
-the parts at once. Readers see the previous rows or the new ones, never a mix,
-and read them as they read rows the view prepared. A push skips its rebuild when
-the stored stamp equals the current one, both before and after it takes the
-lock. After publishing, the holder rebuilds once more if the snapshots changed
-meanwhile. If they changed again, it logs that and leaves the rest to the next
-push. Without the view, nothing refreshes on a schedule, and a failed rebuild
-waits for the next push. Because `prepared_usage` is then not a refreshable
-view's target, native backups include its rows without
+Each push in rebuild mode rebuilds the table itself before it returns, once a
+rebuild is due. It runs the view's query into a new `prepared_usage_build_<n>`
+table and moves that table's parts into `prepared_usage` with `REPLACE
+PARTITION`, which replaces all the parts at once. Readers see the previous rows
+or the new ones, never a mix, and read them as they read rows the view prepared.
+A push checks that a rebuild is due both before and after it takes the lock.
+After publishing, the holder rebuilds once more if the snapshots that changed
+meanwhile make one due. If they make one due again, it logs that and leaves the
+rest to the next push. Without the view, nothing refreshes on a schedule, and a
+failed rebuild waits for the next push. Because `prepared_usage` is then not a
+refreshable view's target, native backups include its rows without
 `backup_data_from_refreshable_materialized_view_targets`.
 
 Rebuilds take turns, as the view's refreshes do. A read checks freshness and
@@ -425,10 +475,159 @@ A lock can outlive its holder:
 session has a current snapshot. Sessions pushed since the last refresh form a
 delta: their rows are prepared and priced in Go once per snapshot, sent to the
 read as an external table, and replace that session's stored rows. A refresh
-empties the delta. Before the first refresh, or while a session lacks a current
-snapshot, reads use raw rows. When the stored price copies no longer match the
-price records, for example after the records were cleared, reads keep the
-prepared rows and price them through the per-request join.
+empties the delta. A snapshot from which the refresh keeps no row, such as a
+trashed session's or one whose messages name a model but report no tokens, has
+nothing to prepare and never joins the delta. Each snapshot stores that answer
+in its `prepares_usage` column, so the check reads no usage arrays. Before the
+first refresh, or while a session lacks a current snapshot, reads use raw rows.
+When the stored price copies no longer match the price records, for example
+after the records were cleared, reads keep the prepared rows and price them
+through the per-request join.
+
+**When a push rebuilds.** Because reads stay exact while the table is behind, a
+rebuild only changes what reads cost, and it rewrites the whole table. On a
+mirror whose data directory is on NFS, rebuilding on every push wrote the whole
+table hundreds of times a day. A push therefore rebuilds, or starts the view's
+refresh, only when one of these holds:
+
+- The table is empty.
+- The pricing digest changed, or the price record count fell below the stored
+  one, so the stored price copies no longer serve reads.
+- The rows reads prepare themselves reach one `chPreparedUsageBehindShare`
+  (one-fiftieth) of the stored rows.
+
+The push counts those rows over the snapshots that no stored row was derived
+from, with the delta query's message and event eligibility, so a snapshot that
+prepares no rows counts nothing. The count reads only the usage array fields
+that eligibility checks, and a test holds it equal to the rows the delta query
+returns. A rebuild then rewrites at most fifty times the rows that
+changed, and reads prepare at most a fiftieth of what they read. On a
+300,000-row test table, a 5,000-row delta added about 0.13 seconds to the first
+read after a push. Deleted sessions' rows stay until the next
+rebuild, and reads skip them. The view's 15-minute schedule is unchanged.
+
+## Dashboard facts
+
+The Analytics panels used to rebuild per-session numbers from `messages` and
+`tool_calls` on every load. On a mirror of about 107,000 sessions, 2.5 million
+messages, and 1.7 million tool calls, that meant FINAL scans of both tables for
+Activity, a transfer of every message's role, time, and length for Velocity, a
+join of every tool call to its message for Tools and Skills, and, after each
+serve restart, a 22 s scan of every user prompt's text for Signals.
+
+Push already holds each session's messages and tool calls, so it computes these
+numbers once and stores them on the session row (`dashboard_facts.go`):
+
+| Column | Counts | Replaces the scan in |
+| --- | --- | --- |
+| `fact_user_messages` | user rows that are not system rows or tool results | Activity, Session Shape autonomy |
+| `fact_assistant_messages`, `fact_thinking_messages` | assistant rows, rows with thinking | Activity |
+| `fact_tool_use_messages` | assistant rows with tool use | Session Shape autonomy |
+| `fact_tool_calls` | tool calls | Activity, Velocity |
+| `fact_frustration_markers` | prompts `signals.IsFrustrationMarker` flags | Signals |
+| `fact_velocity_*` | the session's `db.SessionVelocity` over messages without Claude hooks | Velocity |
+
+`stored_message_count` already gives the message total. Each tool call row also
+carries its message's `message_timestamp` and `message_model`, so Tools and
+Skills group calls without joining `messages`.
+
+**Reads fall back per row.** A sessions row whose `dashboard_facts_version` is
+not `dashboardFactsVersion`, or a tool call row whose `message_facts` is false,
+came from an older writer. Reads split each panel into a part that reads facts
+and a part that scans messages for exactly those sessions or calls, then
+combine them. The scan part prunes by session ID, so it reads nothing once
+every row carries facts. Results never depend on the backfill finishing.
+
+**Facts match the scan they replace.** Each fact uses the scan's predicate and
+the same Go function the scan feeds (`IsFrustrationMarker`,
+`db.ComputeSessionVelocity`). Velocity facts use timestamps truncated to
+microseconds, as `DateTime64(6)` stores them, so turn cycles match a scan of the
+stored rows exactly. `TestDashboardFactsMatchMessageScans` compares every
+affected panel with facts, with some sessions scanned, and with all scanned.
+While a push is between its inserts and its session row, the facts describe the
+published session version and a scan would read the newer messages; both
+settle when the session row lands.
+
+**Backfill is one full push.** A push that finds rows of its archive below the
+current facts version, or without `stored_message_count`, runs one full push
+(`publishing stored session counts`) and repeats it until one finishes without
+errors. Bump `dashboardFactsVersion` when a fact's definition changes.
+
+**FINAL stays on.** The panels that used facts now read `sessions` with FINAL
+instead of `messages` and `tool_calls`, which removes most of FINAL's cost
+from them.
+
+**The Signals scan judges most prompts in ClickHouse.** For sessions without a
+current `fact_frustration_markers`, Signals runs one query
+(`chFrustrationPromptsSQL`) with the session IDs as an external table. A prompt
+made only of ASCII and a fixed set of symbols (dashes, quotes, arrows, check
+marks, box drawing, emoji, private use) is judged in SQL and comes back only
+when it is a marker, without its text. Over such text ClickHouse's RE2 and Go's
+`regexp` see the same letters, spaces, and word boundaries, so the SQL follows
+`IsFrustrationMarker` step by step with the same pattern and thresholds, which
+`internal/signals` exports. Any other prompt, including invalid UTF-8, comes
+back with its text and Go judges it. The set is `signals.PlainPromptSymbols`,
+which DuckDB shares (see `internal/duckdb/README.md`), and a unit test checks
+every symbol in it against Go's Unicode tables. ClickHouse tests compare the counts with
+`IsFrustrationMarker` on edge cases and on a random corpus, and require that
+only prompts outside the set come back with text.
+
+The query reads without FINAL, because FINAL would merge the text of every
+message in the sessions, assistant replies included. A subquery with
+`final = 1` finds the newest version of each prompt from key and filter
+columns, and the outer read takes text for those versions only. On the
+production mirror, for the 6,811 sessions of one Signals load, the old chunked
+scan ran 8 queries that read 10.6 GiB, sent 1.13 GiB to Go, and peaked at
+1.21 GiB of memory per query. The new query reads 3.3 GiB, sends 1.6 MiB, and
+peaks near 290 MiB, with the same per-session counts.
+
+**Rejected alternatives.**
+
+- Partitioning the large tables and setting
+  `do_not_merge_across_partitions_select_final`. ClickHouse cannot add a
+  partition key in place, so every large table would be copied, and every
+  version of a row must stay in one partition.
+- Storing the frustration count in SQLite as quality signal version 8. That
+  recomputes every session's signals and republishes every replica, for one
+  count only ClickHouse needs to precompute.
+- Porting all of `IsFrustrationMarker` to ClickHouse SQL. Unicode letters,
+  spaces, and case folding differ between Go and ClickHouse, so only prompts in
+  the shared alphabet above are judged in SQL.
+- Filtering prompts in SQL with a looser test that keeps every possible
+  marker, such as matching the phrase words alone. Long pasted prompts contain
+  those words, so on the production mirror such a filter dropped almost none of
+  the 4.25 GiB of prompt text.
+
+SQLite keeps its scan in Go, which skips system rows in SQL. DuckDB and
+PostgreSQL judge plain prompts in SQL as well; see
+[PostgreSQL frustration marker reads](../agents/storage.md#postgresql-frustration-marker-reads).
+
+**Go judges each prompt in a few passes.** SQLite sends every prompt of a
+session its memo misses to `IsFrustrationMarker`, and PostgreSQL, DuckDB, and
+ClickHouse send the prompts they cannot judge in SQL. The memo lives in memory,
+so the first Signals load after a restart judges every prompt in range. The
+function strips code fences once. One pass then builds the normalized prompt and
+counts the capitalized words, and another finds the first phrase literal. The
+regular expression starts one byte before that literal, because no match can
+begin earlier. Tests compare the function with its original step-by-step form on
+edge cases, a random corpus, and a fuzz target.
+
+On a scratch SQLite archive of 7,000 sessions with 140,000 prompts (594 MiB of
+prompt text), the first Signals load after a restart fell from 9.2 s to 2.2 s
+with the file in the page cache, and from 10.4 s to 3.3-3.6 s with it evicted.
+Allocation fell from 12.4 GiB to 3.2 GiB, and the count stayed the same. SQLite
+returns the prompt text in 0.42 s; the judge took 8.3 s before and 2.0 s after.
+A load the memo answers takes 15 ms either way.
+
+Rejected for SQLite:
+
+- Storing a marker flag per message, or a count per session, when messages are
+  written. The first load would then read stored numbers. But every path that
+  writes or replaces messages would have to keep them current, and existing
+  archives would need a backfill that judges every prompt once anyway. With the
+  faster judge, the cost it removes is about 2 s once per restart.
+- Judging prompts in SQL. SQLite has no `REGEXP`, and a function registered from
+  Go would run the same Go check behind SQL.
 
 ## Kept reads
 
@@ -449,6 +648,10 @@ filtered by `active`, `stale`, or `unclean` termination compare session times
 with the current time, so their rows are never kept. Kept reads include usage
 rows, analytics session listings, Activity pairing inputs per session version,
 candidate listings, project label maps, and the whole report of an ended range.
+
+Ungrouped Top sessions are the exception. Each request reloads display metadata
+for its ranked winners. Grouped Top sessions keep member metadata with their
+totals.
 
 Nothing rebuilds kept reads in the background. The first request after a push
 that changes a read's rows pays for that read.

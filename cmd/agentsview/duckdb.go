@@ -33,12 +33,8 @@ type DuckDBPushConfig struct {
 	Watch           bool
 	Debounce        time.Duration
 	Interval        time.Duration
-	// Automatic is set by the watch loops' automatic pushes: an
-	// incremental push blocked by read-only serve handles defers instead
-	// of rebuilding the whole archive on every changed batch, and
-	// archive-scale diagnostics are skipped (see
-	// storage.MirrorPushOptions.Automatic). Explicit `duckdb push` runs leave
-	// it false and do neither.
+	// Automatic marks watch-loop pushes, which skip archive-scale diagnostics
+	// and defer on rebuild-lock contention.
 	Automatic bool
 }
 

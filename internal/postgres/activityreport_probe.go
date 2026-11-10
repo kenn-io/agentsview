@@ -20,8 +20,8 @@ func (s *Store) ActivityReportSourceProbe(
 		session_probe.message_count,
 		COALESCE((SELECT MAX(id) FROM usage_events), 0),
 		GREATEST(
-			COALESCE((SELECT MAX(updated_at)::text FROM model_pricing), ''),
-			COALESCE((SELECT MAX(updated_at)::text FROM genai_pricing), '')
+			COALESCE((SELECT MAX(updated_at) FROM model_pricing), ''),
+			COALESCE((SELECT MAX(updated_at) FROM genai_pricing), '')
 		),
 		COALESCE((SELECT value::bigint FROM sync_metadata WHERE key = $1), 0)
 	FROM (

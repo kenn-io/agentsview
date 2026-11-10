@@ -21,7 +21,7 @@ describe("ActivityTimeline", () => {
     }
   });
 
-  it("fits the densest supported daily range to the available width", async () => {
+  it("fits the densest daily range and distinguishes empty results from missing data", async () => {
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
       get: () => 800,
@@ -49,6 +49,7 @@ describe("ActivityTimeline", () => {
     const component = mount(ActivityTimeline, { target: document.body });
     await tick();
 
+    expect(document.querySelector(".loading")).toBeNull();
     const chart = document.querySelector<SVGSVGElement>("svg");
     expect(chart).not.toBeNull();
     expect(Number(chart!.getAttribute("width"))).toBe(800);
@@ -57,6 +58,17 @@ describe("ActivityTimeline", () => {
     expect(document.querySelectorAll<SVGRectElement>("rect.bar-other")).toHaveLength(120);
     const bars = document.querySelectorAll<SVGRectElement>("rect.bar");
     expect(Number(bars[0]!.getAttribute("width"))).toBeGreaterThan(0);
+
+    analytics.activity = { granularity: "day", series: [] };
+    await tick();
+    expect(document.body.textContent).toContain("No activity data");
+    analytics.errors.activity = "request failed";
+    await tick();
+    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.body.textContent).toContain("No activity data");
+    analytics.activity = null;
+    await tick();
+    expect(document.body.textContent).not.toContain("No activity data");
 
     unmount(component);
   });

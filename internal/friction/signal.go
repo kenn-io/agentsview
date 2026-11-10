@@ -4,6 +4,7 @@
 package friction
 
 import (
+	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/signals"
@@ -11,7 +12,7 @@ import (
 
 // RulesVersion identifies the detector rule set. Bump it whenever a
 // detector's output can change for the same input.
-const RulesVersion = "friction-v1"
+const RulesVersion = "friction-v2"
 
 // SkippedRulesVersion marks a session over the review budget: current, so
 // backfill leaves it alone, but never reviewed.
@@ -31,6 +32,14 @@ const (
 	KindFrustration  Kind = "frustration"
 	KindInterruption Kind = "interruption"
 )
+
+// FileableKinds can be filed to an issue tracker. Frustration quotes the
+// user's own words and an interruption carries no text, so neither leaves
+// the archive.
+var FileableKinds = []Kind{KindCorrection, KindError, KindWorkaround, KindDeferral, KindPattern}
+
+// Fileable reports whether signals of kind k may be filed.
+func Fileable(k Kind) bool { return slices.Contains(FileableKinds, k) }
 
 // Subject kinds. Detectors emit session subjects; producer-written ledger
 // events use diagnostic subjects and never raise P0.

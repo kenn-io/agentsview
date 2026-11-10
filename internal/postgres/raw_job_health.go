@@ -100,7 +100,7 @@ WITH snapshot AS MATERIALIZED (
 ), failed AS (
 	SELECT
 		job.last_error_class AS error_class,
-		count(*)::bigint AS job_count,
+		count(*) AS job_count,
 		max(job.updated_at) AS latest_failure_at
 	FROM current_jobs AS job
 	WHERE job.state = 'failed'
@@ -172,7 +172,7 @@ WITH snapshot AS MATERIALIZED (
 	)
 SELECT
 	snapshot.observed_at,
-	(SELECT count(*)::bigint FROM orphaned),
+	(SELECT count(*) FROM orphaned),
 	COALESCE((
 		SELECT jsonb_agg(jsonb_build_object(
 			'manifest_id', manifest_id,
@@ -187,7 +187,7 @@ SELECT
 			provider, configured_root_id, source_key_sha256)::text
 		FROM orphaned_capped
 	), '[]'),
-	(SELECT count(*)::bigint FROM expired),
+	(SELECT count(*) FROM expired),
 	COALESCE((
 		SELECT jsonb_agg(jsonb_build_object(
 			'job_id', job_id,
@@ -212,7 +212,7 @@ SELECT
 		) ORDER BY job_count DESC, error_class)::text
 		FROM failed_capped
 	), '[]'),
-	(SELECT count(*)::bigint FROM retrying),
+	(SELECT count(*) FROM retrying),
 	COALESCE((
 		SELECT jsonb_agg(jsonb_build_object(
 			'job_id', job_id,
@@ -229,7 +229,7 @@ SELECT
 		) ORDER BY attempt_count DESC, job_id)::text
 		FROM retrying_capped
 	), '[]'),
-	(SELECT count(*)::bigint FROM stale),
+	(SELECT count(*) FROM stale),
 	COALESCE((
 		SELECT jsonb_agg(jsonb_build_object(
 			'device_id', device_id,

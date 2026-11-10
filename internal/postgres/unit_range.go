@@ -282,7 +282,7 @@ func (s *Store) lookupAnchorMetaChunkPG(
 	query := "WITH refs(session_id, ordinal) AS (VALUES " +
 		strings.Join(values, ", ") + ") " +
 		"SELECT r.session_id, r.ordinal, " +
-		"COALESCE(s.relationship_type,''), COALESCE(s.parent_session_id,''), s.machine, COALESCE(s.display_name, s.session_name), " +
+		"s.relationship_type, COALESCE(s.parent_session_id,''), s.machine, COALESCE(s.display_name, s.session_name), " +
 		"m.role, m.is_sidechain, " +
 		"CASE WHEN m.is_system = FALSE AND " +
 		db.PostgresSystemPrefixSQL("m.content", "m.role") +

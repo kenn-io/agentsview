@@ -329,8 +329,14 @@ func TestListSessionsExcludesRelationshipTypes(t *testing.T) {
 		s.RelationshipType = "fork"
 	})
 
+	insertSession(t, d, "continuation", "proj", func(s *Session) {
+		s.MessageCount = 5
+		s.ParentSessionID = new("normal")
+		s.RelationshipType = "continuation"
+	})
+
 	f := SessionFilter{}
-	requireSessions(t, d, f, []string{"normal"})
+	requireSessions(t, d, f, []string{"normal", "continuation"})
 }
 
 func TestIncludeChildrenBypassesFilters(t *testing.T) {

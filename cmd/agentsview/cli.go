@@ -149,7 +149,9 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newAgentsCommand())
 	root.AddCommand(newOpenAPICommand())
 	root.AddCommand(newRemoteSyncCommand())
+	root.AddCommand(newGitHookCommand())
 	groupCommands(root)
+	root.AddCommand(newCLISearchCommand(root))
 
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
@@ -541,7 +543,7 @@ func newImportCommand() *cobra.Command {
 		Use:   "import --type <type> <path> | import --type <type> --sync (claude-ai, chatgpt, gemini-apps; --sync also grok-web)",
 		Short: "Import conversations",
 		Long: "Import an exported conversation file into the local archive using an explicit --type. " +
-			"Browser conversations can instead use --type <type> --sync with the configured Chrome integration.",
+			"Claude.ai and ChatGPT can instead use --type <type> --sync with the configured Chrome integration.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -933,6 +935,7 @@ func printVersion(w io.Writer) {
 }
 
 func writeRootHelp(w io.Writer, root *cobra.Command) {
+	fmt.Fprintln(w, `Agents: find the right command with: agentsview cli search "<what you want to do>"`)
 	fmt.Fprintf(w, "agentsview %s - local web viewer for AI agent sessions\n\n", version)
 	fmt.Fprintln(w, "Syncs session data from supported AI coding agents into SQLite,")
 	fmt.Fprintln(w, "serves analytics, and exposes a session browser via local web UI.")
@@ -1027,7 +1030,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  destination = \"user@devbox.example.com\" # optional; defaults to host")
 	fmt.Fprintln(w, "  Each host must be unique.")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "  Top-level daemon_idle_timeout = \"0s\" keeps serve --background nodes alive.")
+	fmt.Fprintln(w, "  Top-level daemon_idle_timeout applies to automatically started and serve --background daemons;")
+	fmt.Fprintln(w, "  \"0s\" keeps them alive. daemon start and daemon restart stay running until stopped.")
 	fmt.Fprintln(w, "  Top-level sync_idle_after = \"10m\" pauses local collection while idle; \"0\" disables the pause.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Data stored in ~/.agentsview/ by default.")

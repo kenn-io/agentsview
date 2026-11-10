@@ -363,6 +363,7 @@ func (b *httpBackend) List(
 // server-side parser in internal/server/sessions.go.
 func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, error) {
 	q := &apiclient.GetAPIV1SessionsQuery{}
+	q.ExclusionCounts = f.ExclusionCounts
 	if f.IDs != nil {
 		ids, err := encodeSessionIDs(f.IDs)
 		if err != nil {
@@ -731,6 +732,7 @@ func (b *httpBackend) Stats(
 	q.IncludeAutomated = new(includeAutomated)
 	q.IncludeProject = append(q.IncludeProject, f.IncludeProjects...)
 	q.ExcludeProject = append(q.ExcludeProject, f.ExcludeProjects...)
+	q.OutcomesOnly = new(f.OutcomesOnly)
 	q.IncludeGitOutcomes = new(f.IncludeGitOutcomes)
 	q.IncludeGithubOutcomes = new(f.IncludeGitHubOutcomes)
 
@@ -822,6 +824,9 @@ func (b *httpBackend) SearchContent(
 	ctx context.Context, req service.ContentSearchRequest,
 ) (*service.ContentSearchResult, error) {
 	q := &apiclient.GetAPIV1SearchContentQuery{}
+	if req.KeywordFallback {
+		q.AllowKeywordFallback = new(true)
+	}
 	if req.Pattern != "" {
 		q.Pattern = new(req.Pattern)
 	}

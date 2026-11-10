@@ -79,7 +79,7 @@ func BenchmarkColdUsageVersionWithRetiredPrices(b *testing.B) {
 	_, err = store.DB().ExecContext(ctx, "OPTIMIZE TABLE usage_event_prices FINAL")
 	require.NoError(b, err)
 	for b.Loop() {
-		_, ok, err := NewStoreFromDB(store.DB()).usageRowsVersion(ctx, chUsageReadTables, current)
+		_, ok, err := NewStoreFromDB(store.DB(), store.bulk).usageRowsVersion(ctx, chUsageReadTables, current)
 		require.NoError(b, err)
 		require.True(b, ok)
 	}

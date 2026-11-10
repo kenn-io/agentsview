@@ -24,8 +24,8 @@ import (
 )
 
 func TestAllSessionExportKeepsTerminationCutoffAcrossPages(t *testing.T) {
-	d := testSessionExportDB(t)
 	synctest.Test(t, func(t *testing.T) {
+		d := testSessionExportDB(t)
 		// Keep the older activity timestamps within the valid 2000..2100 range.
 		time.Sleep(time.Hour)
 		for _, id := range []string{"active-a", "active-b"} {

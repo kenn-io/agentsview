@@ -674,6 +674,7 @@ func writeGeneratedAssets(t *testing.T, dir, content string) {
 	t.Helper()
 	files := []string{
 		"screenshots/about-dialog.png",
+		"screenshots/friction-log.png",
 		"screenshots/import-claude-sync.png",
 		"screenshots/session-label-filters.png",
 		"screenshots/tool-rate-evidence.png",

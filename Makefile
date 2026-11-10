@@ -28,6 +28,12 @@ GOLANGCI_LINT_VERSION ?= v2.14.0
 GOLANGCI_LINT_CACHE ?= $(CURDIR)/.golangci-cache
 export GOLANGCI_LINT_CACHE
 CUSTOM_GCL := ./custom-gcl
+# Kit checkers are `tool` directives in tools/go.mod, verified by tools/go.sum.
+# `go run module/pkg@version` would also fetch and verify the newest kit
+# go.mod to look for a deprecation notice, so it fails while a fresh kit
+# release is missing from the checksum database. `go tool` builds only the
+# pinned graph.
+KIT_TOOL := go tool -modfile=tools/go.mod
 GOEXE := $(shell go env GOEXE)
 PRICING_SNAPSHOT_FILE := internal/pricing/snapshot/litellm_snapshot.json.gz
 
@@ -560,12 +566,16 @@ lint-golangci-ci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	fi
 	$(CUSTOM_GCL) run ./...
 
-.PHONY: lint-config-check lint-sql
+.PHONY: lint-config-check lint-sql lint-huma
 lint-sql:
-	go run go.kenn.io/kit/cmd/kennlint@v0.34.1 sql internal/db/schema.sql
+	$(KIT_TOOL) kennlint sql internal/db/schema.sql
 
 lint-config-check:
-	go run go.kenn.io/kit/cmd/kennlint@v0.47.2 config -check
+	$(KIT_TOOL) kennlint config -check
+
+# Check the Huma API contract without rewriting files.
+lint-huma: pricing-snapshot ensure-embed-dir
+	$(KIT_TOOL) huma-check -fix=false ./...
 
 # Build a custom golangci-lint binary with the kit and NilAway module plugins.
 # Strip every repo-local Git env var (GIT_DIR, GIT_INDEX_FILE,
@@ -821,4 +831,4 @@ actions-lock-check: gh-actions-lock-install
 
 .PHONY: lint-workflow-retries
 lint-workflow-retries:
-	GOOS= GOARCH= go run go.kenn.io/kit/cmd/kennlint@v0.47.3 workflow-retries
+	GOOS= GOARCH= $(KIT_TOOL) kennlint workflow-retries

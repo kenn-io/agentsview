@@ -90,6 +90,7 @@ func TestRenderRecallWorkflowContract(t *testing.T) {
 	skill := rendered[0].Content
 
 	assert.Contains(t, skill, "Search before guessing")
+	assert.Contains(t, skill, "For `effective_mode: hybrid_keyword`, disclose keyword-only")
 	assert.Contains(t, skill, "inspect the current code first")
 	assert.Contains(t, skill, "already answered in this conversation")
 	assert.Contains(t, skill, "search_content")
@@ -100,7 +101,6 @@ func TestRenderRecallWorkflowContract(t *testing.T) {
 	assert.Contains(t, skill, "include_automated: true")
 	assert.Contains(t, skill, "current_session_id")
 	assert.Contains(t, skill, "Do not invent a project filter")
-	assert.Contains(t, skill, "omit `scope`")
 	assert.Contains(t, skill, "top 2-5")
 	assert.Contains(t, skill, "next_from")
 	assert.Contains(t, skill, "subordinate")
@@ -109,7 +109,6 @@ func TestRenderRecallWorkflowContract(t *testing.T) {
 	assert.Contains(t, skill, "without that header")
 	assert.Contains(t, skill, "not registered in this session")
 	assert.NotContains(t, skill, ".claude/agents")
-	assert.Contains(t, skill, "semantic search failed")
 	assert.Contains(t, skill, "Do not fall back on authentication or wrong-target errors")
 	assert.NotContains(t, skill, "Copyright (c) 2025 Jesse Vincent")
 	assert.NotContains(t, skill, "mcp__plugin_episodic-memory")
@@ -144,6 +143,7 @@ func TestRenderClaudeSearchAgentContract(t *testing.T) {
 	require.NoError(t, err)
 	agent := artifactByBase(t, rendered, "agentsview-search-conversations.md").Content
 
+	assert.Contains(t, agent, "For `effective_mode: hybrid_keyword`, disclose keyword-only")
 	assert.Contains(t, agent, "name: agentsview-search-conversations")
 	assert.Contains(t, agent, "model: haiku")
 	// The subagent reads untrusted archived transcripts. Claude Code treats
@@ -171,7 +171,6 @@ func TestRenderClaudeSearchAgentContract(t *testing.T) {
 	assert.Contains(t, agent, "include_automated: true")
 	assert.Contains(t, agent, "current_session_id")
 	assert.Contains(t, agent, "Do not invent a project filter")
-	assert.Contains(t, agent, "omit `scope`")
 	assert.NotContains(t, agent, "% match")
 	assert.NotContains(t, agent, "Copyright (c) 2025 Jesse Vincent")
 }

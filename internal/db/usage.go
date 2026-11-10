@@ -99,6 +99,7 @@ type UsageFilter struct {
 	ActiveSince        string // RFC3339 session recency cutoff
 	Termination        string // "", "clean", "unclean", "active", or "stale"
 	Breakdowns         bool   // populate Project/AgentBreakdowns per day
+	PairwiseSides      bool   // request ranking-derived comparison metadata
 	SkipSessionCounts  bool   // skip distinct session counts when callers do not need them
 	TopSessionsByGroup bool   // merge runs by project and group before ranking
 	// TopSessionsSort ranks GetTopSessionsByCost results: ""/"cost"
@@ -334,7 +335,7 @@ SELECT
 	s.agent,
 	s.machine,
 	s.user_message_count,
-	COALESCE(s.is_automated, 0) AS is_automated,
+	s.is_automated,
 	COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) AS session_activity_at,
 	COALESCE(s.termination_status, '') AS termination_status,
 	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
@@ -373,7 +374,7 @@ SELECT
 	s.agent,
 	s.machine,
 	s.user_message_count,
-	COALESCE(s.is_automated, 0) AS is_automated,
+	s.is_automated,
 	COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) AS session_activity_at,
 	COALESCE(s.termination_status, '') AS termination_status,
 	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
@@ -1773,12 +1774,96 @@ type UsageTotals struct {
 
 // DailyUsageResult wraps the daily entries and totals.
 type DailyUsageResult struct {
+	Pairwise      *UsagePairwiseSides               `json:"-"`
 	SchemaVersion int                               `json:"schema_version,omitempty"`
 	Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
 	Projects      map[string]export.ProjectMapEntry `json:"projects"`
 	Daily         []DailyUsageEntry                 `json:"daily"`
 	Totals        UsageTotals                       `json:"totals"`
 	SessionCounts UsageSessionCounts                `json:"sessionCounts,omitempty"`
+}
+
+// UsagePairwiseValue contains a ranking value's totals and distinct sessions.
+// Inexact means filtering can select a duplicate omitted by the ranking.
+type UsagePairwiseValue struct {
+	Totals   UsageTotals
+	Sessions []string
+	Inexact  bool
+}
+
+// UsagePairwiseValues accumulates ranking totals and ordered session memberships.
+type UsagePairwiseValues map[string]UsagePairwiseValue
+
+// AddTotals marks overflowing sums inexact so callers use a filtered read.
+func (values UsagePairwiseValues) AddTotals(name string, totals UsageTotals) {
+	value := values[name]
+	value.Totals.InputTokens += totals.InputTokens
+	value.Totals.OutputTokens += totals.OutputTokens
+	value.Totals.CacheCreationTokens += totals.CacheCreationTokens
+	value.Totals.CacheReadTokens += totals.CacheReadTokens
+	var err error
+	value.Totals.TotalCost, err = money.Add(value.Totals.TotalCost, totals.TotalCost)
+	value.Inexact = value.Inexact || err != nil
+	values[name] = value
+}
+
+// AddSession requires session IDs in sorted order, so adjacent repeats suffice.
+func (values UsagePairwiseValues) AddSession(name, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	value := values[name]
+	if n := len(value.Sessions); n == 0 || value.Sessions[n-1] != sessionID {
+		value.Sessions = append(value.Sessions, sessionID)
+		values[name] = value
+	}
+}
+
+// MarkInexact requires a filtered read for this value.
+func (values UsagePairwiseValues) MarkInexact(name string) {
+	value := values[name]
+	value.Inexact = true
+	values[name] = value
+}
+
+// UsagePairwiseSides is immutable once attached to a daily usage result.
+type UsagePairwiseSides struct {
+	Models, Projects UsagePairwiseValues
+}
+
+// Side combines raw ranking values, including session unions for model groups.
+// A filtered read must supply values whose totals cannot be derived exactly.
+func (s *UsagePairwiseSides) Side(dimension string, values []string) (DailyUsageResult, bool) {
+	if s == nil {
+		return DailyUsageResult{}, false
+	}
+	entries := s.Models
+	if dimension == "project" {
+		entries = s.Projects
+	}
+	var result DailyUsageResult
+	sessions := make(map[string]struct{})
+	for _, value := range values {
+		entry := entries[value]
+		if entry.Inexact {
+			return DailyUsageResult{}, false
+		}
+		t := &result.Totals
+		t.InputTokens += entry.Totals.InputTokens
+		t.OutputTokens += entry.Totals.OutputTokens
+		t.CacheCreationTokens += entry.Totals.CacheCreationTokens
+		t.CacheReadTokens += entry.Totals.CacheReadTokens
+		var err error
+		t.TotalCost, err = money.Add(t.TotalCost, entry.Totals.TotalCost)
+		if err != nil {
+			return DailyUsageResult{}, false
+		}
+		for _, id := range entry.Sessions {
+			sessions[id] = struct{}{}
+		}
+	}
+	result.SessionCounts.Total = len(sessions)
+	return result, true
 }
 
 // Clone copies the slices and maps that usage response builders mutate.
@@ -3193,17 +3278,11 @@ func (db *DB) getSessionUsageLegacy(
 		return nil, nil
 	}
 
-	pricing, err := db.loadPricingMap(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("loading pricing: %w", err)
-	}
-	rateResolver := export.NewPricingResolver(pricing)
-
 	query := usageRowSelect() + ` AND u.session_id = ?
 		ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC,
 		u.usage_source ASC,
-		COALESCE(u.usage_dedup_key, '') ASC`
+		u.usage_dedup_key ASC`
 	rows, err := db.getReader().QueryContext(ctx, query, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("querying session usage: %w", err)
@@ -3233,6 +3312,15 @@ func (db *DB) getSessionUsageLegacy(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session usage rows: %w", err)
+	}
+	// A session without usage rows has nothing to price.
+	var rateResolver *export.PricingResolver
+	if len(usageRows) > 0 {
+		pricing, err := db.loadPricingMap(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("loading pricing: %w", err)
+		}
+		rateResolver = export.NewPricingResolver(pricing)
 	}
 	snapshotRows := make([]activity.UsageRow, len(usageRows))
 	for i, r := range usageRows {

@@ -28,7 +28,7 @@ var (
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
-// implementation for Codex and its TraeX fork. Both reuse the same
+// implementation for Codex and its forks. All of them reuse the same
 // discovery, source-lookup, fingerprinting, and parsing code; they differ
 // only in the agent label and ID prefix applied via relabel. TraeX parses
 // through the Codex rollout reader and then relabels the result onto its
@@ -55,6 +55,11 @@ func codexProviderSpecForAgent(agent AgentType) codexProviderSpec {
 		return codexProviderSpec{
 			agent:   AgentAugureCode,
 			relabel: relabelCodexResultAsAugureCode,
+		}
+	case AgentInterpreter:
+		return codexProviderSpec{
+			agent:   AgentInterpreter,
+			relabel: relabelCodexResultAsOpenInterpreter,
 		}
 	default:
 		return codexProviderSpec{agent: AgentCodex}
@@ -99,6 +104,35 @@ func newAugureCodeProviderFactory(def AgentDef) ProviderFactory {
 		cursorCache:     newProductionCodexCursorCache(),
 		parentTurnCache: newCodexProductionParentTurnCache(),
 	}
+}
+
+// newOpenInterpreterProviderFactory serves Open Interpreter's rollout archive
+// with the Codex provider, relabeling every parsed session onto the
+// open-interpreter: ID prefix.
+func newOpenInterpreterProviderFactory(def AgentDef) ProviderFactory {
+	return &codexProviderFactory{
+		def:             cloneAgentDef(def),
+		spec:            codexProviderSpecForAgent(AgentInterpreter),
+		cursorCache:     newProductionCodexCursorCache(),
+		parentTurnCache: newCodexProductionParentTurnCache(),
+	}
+}
+
+// codexFormatAgents lists the agents whose sessions are Codex rollout JSONL
+// served by the shared Codex provider: Codex itself and the forks that
+// relabel its results onto their own ID prefix.
+var codexFormatAgents = []AgentType{
+	AgentCodex, AgentTraeX, AgentAugureCode, AgentInterpreter,
+}
+
+// CodexFormatAgents returns the agents whose sessions are Codex rollout
+// JSONL, Codex first.
+func CodexFormatAgents() []AgentType { return slices.Clone(codexFormatAgents) }
+
+// IsCodexFormatAgent reports whether an agent's sessions are Codex rollout
+// JSONL served by the shared Codex provider.
+func IsCodexFormatAgent(agent AgentType) bool {
+	return slices.Contains(codexFormatAgents, agent)
 }
 
 func (f *codexProviderFactory) Definition() AgentDef {
