@@ -169,6 +169,9 @@ func commitArgv(input string) (string, bool) {
 		return "", false
 	}
 	args := payload.Command
+	if len(args) > 0 && path.Base(args[0]) == "env" {
+		return "", true
+	}
 	if len(args) >= 3 && (args[0] == "sh" || args[0] == "bash" || args[0] == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
 		return args[2], true
 	}

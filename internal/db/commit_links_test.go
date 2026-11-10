@@ -59,6 +59,22 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 	}
 }
 
+func TestCommitLinksArgvEnvChangeDirectory(t *testing.T) {
+	for _, input := range []string{
+		`{"command":["env","-C","/repo","git","commit"]}`,
+		`{"command":["/usr/bin/env","-C","/repo","git","commit"]}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+			insertMessages(t, d, commitMessages("s1", input, "[main abc1234] Fix parser")...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			assert.Empty(t, got.Commits)
+		})
+	}
+}
+
 func TestCommitLinksNonCommitCandidatesSkipResultReadsAndDelete(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "candidate", "project-a")
