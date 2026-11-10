@@ -308,18 +308,24 @@ func TestChangeStreamResumesAfterCursorWithoutRepeats(t *testing.T) {
 	assert.Equal(t, changes.To, sessionOnly.From)
 	assert.Empty(t, sessionOnly.Messages)
 	seedChangeStreamSession(t, te, "stream-c")
+	var userID, replyID string
+	require.NoError(t, te.db.Reader().QueryRowContext(t.Context(),
+		`SELECT message_id FROM conversation_messages WHERE session_id = ? AND source_id = ?`, "stream-c", "stream-c-user").Scan(&userID))
+	require.NoError(t, te.db.Reader().QueryRowContext(t.Context(),
+		`SELECT message_id FROM conversation_messages WHERE session_id = ? AND source_id = ?`, "stream-c", "stream-c-reply").Scan(&replyID))
+	require.NotEqual(t, userID, replyID)
 	te.broadcaster.Emit("messages")
 	live := caughtUp.changesWithMessages(t, 2)
 	for i := 1; i < len(live); i++ {
 		assert.Equal(t, live[i-1].To, live[i].From)
 	}
-	var sessions []string
+	assert.ElementsMatch(t, []string{"stream-c/" + userID, "stream-c/" + replyID}, messageIDs(live))
+	roles := map[string]string{userID: "user", replyID: "assistant"}
 	for _, event := range live {
 		for _, message := range event.Messages {
-			sessions = append(sessions, message.SessionID)
+			assert.Equal(t, roles[message.MessageID], message.Role)
 		}
 	}
-	assert.Equal(t, []string{"stream-c", "stream-c"}, sessions)
 }
 
 func TestChangeStreamResetsForeignAndInvalidCursors(t *testing.T) {
