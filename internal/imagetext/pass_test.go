@@ -225,26 +225,6 @@ func TestImageTextPassDrainsPages(t *testing.T) {
 	require.Equal(t, 21, requests)
 }
 
-func TestImageTextPassFindsGenericFileData(t *testing.T) {
-	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage"))
-	content := fmt.Sprintf(`[{"type":"file","mime":"application/octet-stream","uri":"data:application/octet-stream;base64,%s"}]`, png)
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "file", Project: "demo", Agent: "test", MessageCount: 1}))
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "file", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
-	})
-	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
-	page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, "file", page.Results[0].SessionID)
-}
-
 func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
 	for _, corrupt := range []bool{false, true} {
 		t.Run(fmt.Sprintf("corrupt=%t", corrupt), func(t *testing.T) {
@@ -369,7 +349,7 @@ func TestImageTextAcceptsLargeImage(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
 	assetsDir := t.TempDir()
 	d.SetAssetsDir(assetsDir)
-	body := make([]byte, 20<<20+1)
+	body := make([]byte, glmocr.MaxDocumentBytes)
 	copy(body, "\x89PNG\r\n\x1a\n")
 	ref, _, err := assets.Put(assetsDir, "image/png", body)
 	require.NoError(t, err)

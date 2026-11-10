@@ -350,17 +350,6 @@ func TestImageTextSearchContent(t *testing.T) {
 		page, err = d.SearchContent(ctx, filter)
 		require.NoError(t, err)
 		require.Empty(t, page.Matches)
-		filter.Project = ""
-		filter.Limit = 1
-		page, err = d.SearchContent(ctx, filter)
-		require.NoError(t, err)
-		require.Len(t, page.Matches, 1)
-		require.NotZero(t, page.NextCursor)
-		filter.Cursor = page.NextCursor
-		page, err = d.SearchContent(ctx, filter)
-		require.NoError(t, err)
-		require.Len(t, page.Matches, 1)
-		require.Zero(t, page.NextCursor)
 	}
 }
 

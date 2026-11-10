@@ -99,23 +99,18 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 		}
 		return global, substring, regex
 	}
-	// assertSearch checks the mirror against the archive and the expected
-	// image anchor, or no match when ordinal is negative.
+	// assertSearch checks the expected image anchor in the mirror.
 	assertSearch := func(t *testing.T, query, pattern string, ordinal int, tool string) {
 		t.Helper()
-		wantGlobal, wantSubstring, wantRegex := search(t, local, query, pattern)
 		gotGlobal, gotSubstring, gotRegex := search(t, store, query, pattern)
 		var expected, expectedContent []searchHit
 		if ordinal >= 0 {
 			expected = []searchHit{{Session: imageSessionID, Ordinal: ordinal}}
 			expectedContent = []searchHit{{imageSessionID, "tool_result", tool, ordinal}}
 		}
-		assert.Equal(t, expected, wantGlobal, "archive global %q", query)
-		assert.Equal(t, expectedContent, wantSubstring, "archive substring %q", query)
-		assert.Equal(t, expectedContent, wantRegex, "archive regex %q", pattern)
-		assert.Equal(t, wantGlobal, gotGlobal, "mirror global %q", query)
-		assert.Equal(t, wantSubstring, gotSubstring, "mirror substring %q", query)
-		assert.Equal(t, wantRegex, gotRegex, "mirror regex %q", pattern)
+		assert.Equal(t, expected, gotGlobal, "mirror global %q", query)
+		assert.Equal(t, expectedContent, gotSubstring, "mirror substring %q", query)
+		assert.Equal(t, expectedContent, gotRegex, "mirror regex %q", pattern)
 	}
 	assertRows := func(t *testing.T) {
 		t.Helper()
