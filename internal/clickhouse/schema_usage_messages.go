@@ -1186,20 +1186,35 @@ func releaseRebuildLock(ctx context.Context, conn *sql.DB, generation uint64) er
 //
 // The count applies the message and event conditions of
 // chUsageStoredMessageEligibility and chUsageEventEligibility to the array
-// subcolumns they read, in one scan. Counting the rows of
-// chPreparedUsageKeyedSQL would read every field of usage_facts through two
-// ARRAY JOIN scans, about four times the bytes. The normalized selection has
-// no join, dedup, or other filter, so these filters alone decide which rows
-// exist.
+// subcolumns they read. Counting the rows of chPreparedUsageKeyedSQL would
+// read every field of usage_facts through two ARRAY JOIN scans, about four
+// times the bytes. The normalized selection has no join, dedup, or other
+// filter, so these filters alone decide which rows exist.
+//
+// FINAL keeps the snapshot table from moving filters into PREWHERE, so a
+// coverage filter on the FINAL scan reads the usage arrays of every stored
+// snapshot. The subquery therefore finds the uncovered snapshots without
+// FINAL, from the id, revision, and chSnapshotPreparesUsage columns: FINAL
+// keeps the row with the highest revision of each id, so a snapshot is
+// uncovered exactly when its id's highest revision is. A snapshot whose
+// chSnapshotPreparesUsage is false adds no row to the count, so the subquery
+// skips it; of two rows with the same highest revision it keeps the id when
+// either prepares usage, because FINAL keeps the later one. The outer scan
+// applies FINAL by primary key to those few ids and counts the row FINAL
+// keeps.
 func chPreparedUsageBehindSQL() string {
 	return `SELECT sum(
 		arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,
 			s.usage_facts.usage_present, s.usage_facts.model)
 		+ arrayCount(model -> ` + chUsageEventUsable("model") + `, s.usage_events.model))
 	FROM usage_session_snapshots s
-	WHERE s.deleted_at IS NULL AND (s.id, s.revision) NOT IN (
-		SELECT session_id, snapshot_revision FROM prepared_usage
-		GROUP BY session_id, snapshot_revision SETTINGS final=0)`
+	WHERE s.deleted_at IS NULL AND (s.id, s.revision) IN (
+		SELECT id, max(revision) FROM usage_session_snapshots GROUP BY id
+		HAVING max((revision, ` + chSnapshotPreparesUsage + `)).2
+			AND (id, max(revision)) NOT IN (
+				SELECT session_id, snapshot_revision FROM prepared_usage
+				GROUP BY session_id, snapshot_revision SETTINGS final=0)
+		SETTINGS final=0)`
 }
 
 // preparedUsageRebuildDue reports whether a push should rebuild prepared_usage

@@ -1348,3 +1348,60 @@ func TestPreparedUsageBehindCountMatchesDeltaRows(t *testing.T) {
 	require.EqualValues(t, 3, delta)
 	require.Equal(t, delta, behind)
 }
+
+// The rows-behind count reads the snapshot FINAL keeps for each session:
+// the one with the highest revision, and of rows with equal revisions the
+// later insert. Rows of older revisions and earlier inserts count for
+// nothing, as do trashed and covered snapshots.
+func TestPreparedUsageBehindCountReadsFinalSnapshot(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	const id = "ch-behind-final"
+	_, _, store := newPreparedUsageStore(t)
+	behind := func() uint64 {
+		t.Helper()
+		var n uint64
+		require.NoError(t, store.DB().QueryRowContext(ctx, chPreparedUsageBehindSQL()).Scan(&n))
+		return n
+	}
+	// usable messages count; the user message and the synthetic one never do.
+	insert := func(pushVersion uint64, trashed bool, usable int) {
+		t.Helper()
+		messages := []string{
+			`(0, 'user', NULL, '', '', '', '', '', '')`,
+			`(1, 'assistant', NULL, '<synthetic>', '', '{"input_tokens":1}', '', '', '')`,
+		}
+		for i := range usable {
+			messages = append(messages, fmt.Sprintf(
+				`(%d, 'assistant', NULL, 'claude-test', '', '{"input_tokens":1}', '', '', '')`, i+2))
+		}
+		deletedAt := "NULL"
+		if trashed {
+			deletedAt = "now64(6)"
+		}
+		execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots
+			(id, push_version, deleted_at, usage_messages) VALUES ('%s', %d, %s, [%s])`,
+			id, pushVersion, deletedAt, strings.Join(messages, ",")))
+	}
+	execPreparedUsage(t, store, "SYSTEM STOP MERGES usage_session_snapshots")
+	require.Zero(t, behind())
+
+	insert(10, false, 2)
+	require.EqualValues(t, 2, behind())
+	insert(10, false, 0)
+	require.Zero(t, behind(), "the later insert of an equal revision replaces the earlier one")
+	insert(10, false, 3)
+	require.EqualValues(t, 3, behind(), "the later insert of an equal revision replaces the earlier one")
+	insert(9, false, 5)
+	require.EqualValues(t, 3, behind(), "an older revision stays replaced")
+	insert(11, true, 4)
+	require.Zero(t, behind(), "a trashed snapshot prepares nothing")
+
+	insert(12, false, 6)
+	require.EqualValues(t, 6, behind())
+	execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO prepared_usage (session_id, snapshot_revision)
+		VALUES ('%s', toUInt128(12) * 2 + 1)`, id))
+	require.Zero(t, behind(), "prepared rows cover the snapshot")
+	insert(13, false, 1)
+	require.EqualValues(t, 1, behind(), "a newer snapshot is not covered by the rows of an older one")
+}
