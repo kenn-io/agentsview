@@ -48,6 +48,7 @@ func (s *Sync) PushWithOptions(
 	ctx context.Context, opts storage.PushOptions, onProgress func(storage.PushProgress),
 ) (storage.PushResult, error) {
 	s.fullRunRecorded = false
+	s.usageWritten = false
 	result, err := s.pushWithOptions(ctx, opts, onProgress)
 	if err != nil && opts.Full && !s.fullRunRecorded {
 		// The push failed before it recorded the requested full push, so
@@ -373,7 +374,7 @@ func (s *Sync) pushWithOptions(
 		// work grows past its limit instead of waiting for the schedule.
 		// Where the view refreshes it, the scheduled refresh still covers
 		// a failed trigger; elsewhere the next push retries.
-		if err := refreshPreparedUsage(ctx, conn); err != nil {
+		if err := refreshPreparedUsage(ctx, conn, s.usageWritten); err != nil {
 			log.Printf("clickhouse push: prepared usage is behind; usage reads stay correct but slower: %v", err)
 		}
 	}
@@ -573,6 +574,7 @@ var derivedSessionTables = []string{"usage_messages", "terminal_event_snapshots"
 
 // deleteMirrorSessions removes every row for the given sessions.
 func (s *Sync) deleteMirrorSessions(ctx context.Context, ids []string) error {
+	s.usageWritten = s.usageWritten || len(ids) > 0
 	for batch := range idBatches(ids) {
 		placeholders, args := inArgs(batch)
 		for _, table := range slices.Concat(dependentTables, derivedSessionTables, []string{"starred_sessions"}) {
