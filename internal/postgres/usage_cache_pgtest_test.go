@@ -3,10 +3,13 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -193,6 +196,34 @@ func TestPGUsageCachePairwiseComparisonMatchesDirect(t *testing.T) {
 	require.Equal(t, want, got)
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
 	require.NoError(t, completeUsageParity(t.Context(), direct, store.usageCache, filter))
+}
+
+func TestPGUsageCacheLogsFallbackErrors(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	failure := errors.New("usage extraction failure one")
+	probe.before = func(context.Context, []string) error { return failure }
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	for range 2 {
+		_, err := store.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+	}
+	_, err := store.GetTopSessionsByCost(t.Context(), filter, 20)
+	require.NoError(t, err)
+	_, err = store.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	_, err = store.GetUsageMatchingSessionCount(t.Context(), filter)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, strings.Count(output.String(), "usage extraction failure one"), 2)
+	failure = errors.New("usage extraction failure two")
+	filter.To = "2026-01-02"
+	_, err = store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(output.String(), "usage extraction failure two"))
 }
 
 func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
@@ -710,6 +741,10 @@ func TestPGUsageCacheAccountTotalsMatchDirect(t *testing.T) {
 
 func TestPGUsageCacheDefersLargePreparation(t *testing.T) {
 	local, syncer, store, _ := keptUsageFixture(t)
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(
 		id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key
@@ -762,4 +797,5 @@ func TestPGUsageCacheDefersLargePreparation(t *testing.T) {
 	_, err = store.pg.ExecContext(ctx, `UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`)
 	require.NoError(t, err)
 	requireDeferred("price change")
+	assert.NotContains(t, output.String(), "postgres usage cache: falling back to direct read")
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -246,6 +247,7 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 			for rows.Next() {
 				var rankingOutput int64
 				var activityEligible bool
+				// Keep this conversion aligned with readDailyUsage's scanner.
 				row, err := scanPGDailyUsageRowWithMachine(rows, true, &rankingOutput, &activityEligible)
 				if err != nil {
 					_ = rows.Close()
@@ -348,5 +350,12 @@ func (source *pgUsageCacheSource) UsageSessionNames(ctx context.Context, ids []s
 }
 
 func directUsageRequired(ctx context.Context, err error) bool {
-	return err != nil && ctx.Err() == nil
+	return err != nil && ctx.Err() == nil && logUsageFallback(err)
+}
+
+func logUsageFallback(err error) bool {
+	if !errors.Is(err, db.ErrUsageCacheWarming) {
+		log.Printf("postgres usage cache: falling back to direct read: %v", err)
+	}
+	return true
 }
