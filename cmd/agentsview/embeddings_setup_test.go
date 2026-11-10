@@ -768,3 +768,82 @@ func TestCLIEmbeddingsFreshSetupAndHybridSearch(t *testing.T) {
 	require.NotEmpty(t, result.Matches)
 	assert.Equal(t, "session-one", result.Matches[0].SessionID)
 }
+
+func TestCLIEmbeddingsConcurrentSetupFailure(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	oldInterval := embeddingsPollInterval
+	embeddingsPollInterval = time.Millisecond
+	t.Cleanup(func() { embeddingsPollInterval = oldInterval })
+
+	var posts atomic.Int32
+	var failed atomic.Bool
+	started, observed, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var observeOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case failed.Load():
+				io.WriteString(w, `{"setup":{"action":"turn-on","error":"first setup failed"}}`)
+			case posts.Load() > 0:
+				io.WriteString(w, `{"setup":{"action":"turn-on","provider":"ollama","busy":true}}`)
+				observeOnce.Do(func() { close(observed) })
+			default:
+				io.WriteString(w, `{"setup":{"action":"turn-on","provider":"ollama"}}`)
+			}
+		},
+		"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
+			if posts.Add(1) > 1 {
+				w.WriteHeader(http.StatusConflict)
+				io.WriteString(w, `{"error":"setup already running"}`)
+				return
+			}
+			close(started)
+			select {
+			case <-release:
+				failed.Store(true)
+			case <-r.Context().Done():
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			io.WriteString(w, `{"started":true}`)
+		},
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	first := make(chan error, 1)
+	go func() {
+		first <- runEmbeddingsBuild(ctx, io.Discard, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("first setup did not start")
+	}
+	type outcome struct {
+		output string
+		err    error
+	}
+	second := make(chan outcome, 1)
+	go func() {
+		var out strings.Builder
+		err := runEmbeddingsBuild(ctx, &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+		second <- outcome{out.String(), err}
+	}()
+	select {
+	case <-observed:
+	case <-ctx.Done():
+		t.Fatal("second command did not observe setup")
+	}
+	unblock()
+	firstErr := <-first
+	result := <-second
+	require.ErrorContains(t, firstErr, "first setup failed")
+	assert.ErrorContains(t, result.err, "first setup failed")
+	assert.NotContains(t, result.output, "[y/N]")
+	assert.EqualValues(t, 1, posts.Load())
+}

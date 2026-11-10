@@ -1062,10 +1062,14 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	if err != nil {
 		return err
 	}
-	if status.Setup == nil || status.Setup.Action != "turn-on" {
+	setup := status.Setup
+	if setup == nil || setup.Action != "turn-on" {
 		return errors.New("search setup is unavailable")
 	}
-	setup := status.Setup
+	if setup.Busy {
+		fmt.Fprintln(out, "Search setup is already running.")
+		return pollDaemonBuildStatus(ctx, out, client, true)
+	}
 	action, question := "Turning it on", "Turn on search by meaning?"
 	if cfg.Vector.Enabled || setup.Enabled {
 		fmt.Fprintln(out, "Search setup is incomplete.")
@@ -1082,10 +1086,7 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 		approved = setup.MissingBytes
 		fmt.Fprintf(out, "%s downloads %d MB once, shared by all Kenn apps.\n", action, (approved+999999)/1000000)
 	} else {
-		provider := setup.Provider
-		if provider == "ollama" {
-			provider = "Ollama"
-		}
+		provider := strings.Replace(setup.Provider, "ollama", "Ollama", 1)
 		fmt.Fprintf(out, "%s uses %s with %s.\n", action, provider, cfg.Vector.Embeddings.Model)
 	}
 	if !confirmScanned(in, out, question) {
