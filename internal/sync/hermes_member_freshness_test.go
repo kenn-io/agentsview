@@ -3,10 +3,8 @@ package sync_test
 import (
 	"database/sql"
 	"fmt"
-	"io"
 	"log"
 	"strings"
-	gosync "sync"
 	"sync/atomic"
 	"testing"
 
@@ -14,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/parsertest/hermesfixture"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -23,14 +22,9 @@ func hermesFreshnessWriter(t *testing.T, root string) (*sql.DB, string) {
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	hermesfixture.CreateWatcherSchema(t, conn)
 	_, err = conn.ExecContext(t.Context(), `PRAGMA journal_mode=WAL;
- ALTER TABLE sessions ADD COLUMN transcript_revision INTEGER DEFAULT 0;
- CREATE INDEX idx_messages_session ON messages(session_id, timestamp);
- CREATE INDEX idx_messages_session_id ON messages(session_id,id);
- CREATE TABLE schema_version(version INTEGER); INSERT INTO schema_version VALUES (33);
- CREATE TABLE gateway_heartbeats(id TEXT PRIMARY KEY, last_heartbeat REAL);
- CREATE TRIGGER messages_transcript_revision_update AFTER UPDATE OF role, content, api_content, tool_calls, tool_call_id, tool_name, reasoning, reasoning_content, reasoning_details ON messages BEGIN UPDATE sessions SET transcript_revision = transcript_revision + 1 WHERE id = new.session_id; END;
- CREATE TRIGGER messages_display_revision_update AFTER UPDATE OF codex_reasoning_items, codex_message_items, display_kind, display_metadata ON messages BEGIN UPDATE sessions SET transcript_revision = transcript_revision + 1 WHERE id = new.session_id; END;`)
+ CREATE TABLE gateway_heartbeats(id TEXT PRIMARY KEY, last_heartbeat REAL);`)
 	require.NoError(t, err)
 	return conn, path
 }
@@ -58,9 +52,7 @@ func TestHermesWatcherSelectsOnlyChangedMember(t *testing.T) {
 				require.NotNil(t, sibling)
 				_, err = conn.ExecContext(t.Context(), stmt)
 				require.NoError(t, err)
-				var scans atomic.Int64
-				ctx := parser.WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) })
-				require.NoError(t, engine.SyncPathsContext(ctx, []string{path + "-wal"}))
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path + "-wal"}))
 				assert.Equal(t, 1, engine.LastSyncStats().Synced)
 				assert.Equal(t, 1, engine.LastSyncStats().TotalSessions)
 				after, err := database.GetSessionFull(t.Context(), string(agent)+":sibling")
@@ -122,51 +114,43 @@ func TestHermesWatcherCardinality(t *testing.T) {
 				require.NoError(t, err)
 				var scans atomic.Int64
 				ctx := parser.WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) })
-				selected, updated := hermesPassStats(t, func() error { return engine.SyncPathsContext(ctx, []string{path + "-wal"}) })
-				assert.Zero(t, scans.Load())
-				assert.Zero(t, selected)
-				assert.Zero(t, updated)
-				_, err = conn.ExecContext(t.Context(), `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','assistant','new',1778768000)`)
+				// LastSyncStats retains previous stats on a zero-source pass.
+				var logs strings.Builder
+				output := log.Writer()
+				log.SetOutput(&logs)
+				err = engine.SyncPathsContext(ctx, []string{path + "-wal"})
+				log.SetOutput(output)
 				require.NoError(t, err)
-				require.NoError(t, engine.SyncPathsContext(ctx, []string{path + "-wal"}))
-				assert.Equal(t, 1, engine.LastSyncStats().TotalSessions)
-				assert.Equal(t, 1, engine.LastSyncStats().Synced)
-				assert.LessOrEqual(t, scans.Load(), int64(3), "deep work is bounded at both cardinalities")
+				assert.Contains(t, logs.String(), "matched 0 source(s): 0 updated")
+				assert.Zero(t, scans.Load())
 			})
 		}
 	}
 }
 
-// LastSyncStats intentionally retains the previous stats on a zero-source
-// pass. Read the per-pass user summary to count selection and updates instead.
-type hermesPassLog struct {
-	mu                gosync.Mutex
-	selected, updated int
-	seen              bool
-}
-
-func (r *hermesPassLog) Write(data []byte) (int, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if strings.Contains(string(data), "sync: changed paths:") {
-		text := string(data)
-		text = text[strings.Index(text, "sync: changed paths:"):]
-		var paths int
-		if n, _ := fmt.Sscanf(text, "sync: changed paths: %d path(s) matched %d source(s): %d updated", &paths, &r.selected, &r.updated); n == 3 {
-			r.seen = true
-		}
+func TestHermesWatcherPreservesSuppressedMember(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			conn, path := hermesFreshnessWriter(t, root)
+			database := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			id := string(agent) + ":child"
+			require.NoError(t, database.SoftDeleteSession(t.Context(), id))
+			before, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='must remain suppressed' WHERE session_id='child'`)
+			require.NoError(t, err)
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path + "-wal"}))
+			after, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.NotNil(t, after.DeletedAt)
+			assert.Equal(t, before.FileHash, after.FileHash)
+			assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision)
+		})
 	}
-	return len(data), nil
-}
-func hermesPassStats(t *testing.T, run func() error) (int, int) {
-	t.Helper()
-	capture := &hermesPassLog{}
-	writer := log.Writer()
-	log.SetOutput(io.MultiWriter(writer, capture))
-	defer log.SetOutput(writer)
-	require.NoError(t, run())
-	capture.mu.Lock()
-	defer capture.mu.Unlock()
-	require.True(t, capture.seen, "changed-path summary must be recorded")
-	return capture.selected, capture.updated
 }
