@@ -10,6 +10,17 @@ import (
 	"go.kenn.io/docbank/document/ocr"
 )
 
+// ImageTextDataVersion is the first version that maintains image text.
+const ImageTextDataVersion = 171
+
+// MirrorDataVersion marks mirror rows carrying image text for older binaries.
+func MirrorDataVersion(version int, hasImageText bool) int {
+	if hasImageText {
+		return max(version, ImageTextDataVersion)
+	}
+	return version
+}
+
 type ImageTextOccurrence struct {
 	CallID, EventID int64
 	Index           int

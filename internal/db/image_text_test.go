@@ -635,3 +635,15 @@ func TestImageTextIncrementalRefreshKeepsUntouchedImages(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{hash, RetainedToolResultImages(`[{"type":"input_image","image_url":"data:image/png;base64,BAUG"}]`)[0].SHA256}, pending)
 }
+
+func TestMirrorImageTextDataVersion(t *testing.T) {
+	for _, tc := range []struct {
+		version int
+		hasText bool
+		want    int
+	}{{169, false, 169}, {169, true, 171}, {171, true, 171}, {172, true, 172}} {
+		require.Equal(t, tc.want, MirrorDataVersion(tc.version, tc.hasText))
+	}
+	require.Contains(t, dataVersionScopes, ImageTextDataVersion)
+	require.Empty(t, dataVersionScopes[ImageTextDataVersion])
+}

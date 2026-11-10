@@ -804,6 +804,7 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 	if !db.ProjectMatchesPushScope(snapshot.Session.Project, s.projects, s.excludeProjects) {
 		return sessionPayload{}, fmt.Errorf("session %s moved outside the push scope before its snapshot was loaded", sess.ID)
 	}
+	snapshot.Session.DataVersion = db.MirrorDataVersion(snapshot.Session.DataVersion, len(snapshot.ImageText) > 0)
 	fingerprint, err := s.snapshotFingerprint(snapshot)
 	if err != nil {
 		return sessionPayload{}, err
@@ -819,7 +820,8 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 // pushSessionBatch writes one batch in the order the consistency design
 // requires: dependents, version-bounded delete of older dependents, then
 // session rows carrying the fingerprint. Returns the message count per
-// session.
+// session. An interrupted push can leave image rows before the version marker;
+// the archive version blocks older binaries and the next push repairs the mirror.
 func (s *Sync) pushSessionBatch(
 	ctx context.Context, batch []db.Session, fingerprints map[string]string,
 	version uint64, loaded map[string]sessionPayload,

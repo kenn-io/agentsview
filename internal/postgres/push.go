@@ -1421,8 +1421,17 @@ func (s *Sync) pushBatchAttempt(
 				return batchResult{}, nil
 			}
 		}
+		imageRows, err := s.local.SessionImageTextRows(ctx, sess.ID)
+		if err != nil {
+			log.Printf("pgsync: reading local image text %s: %v", sess.ID, err)
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
+		}
+		mirrored := sess
+		mirrored.DataVersion = db.MirrorDataVersion(sess.DataVersion, len(imageRows) > 0)
 		if err := s.pushSession(
-			ctx, tx, sess, markerID, legacyMarkerMachines,
+			ctx, tx, mirrored, markerID, legacyMarkerMachines,
 		); err != nil {
 			if errors.Is(err, errSessionOwnershipConflict) {
 				skippedConflicts++
@@ -1471,7 +1480,7 @@ func (s *Sync) pushBatchAttempt(
 			*pushed = (*pushed)[:len(*pushed)-n]
 			return batchResult{}, nil
 		}
-		imageTextChanged, err := s.pushImageText(ctx, tx, sess.ID)
+		imageTextChanged, err := s.pushImageText(ctx, tx, sess.ID, imageRows)
 		if err != nil {
 			log.Printf("pgsync: image text %s: %v", sess.ID, err)
 			_ = tx.Rollback()
@@ -4247,14 +4256,23 @@ func bulkInsertSecretFindings(ctx context.Context, tx *sql.Tx, sessionID string,
 	return nil
 }
 
+func (s *Sync) pushSessionWithImageText(ctx context.Context, tx *sql.Tx, sess db.Session, markerID string, legacy []string) error {
+	rows, err := s.local.SessionImageTextRows(ctx, sess.ID)
+	if err != nil {
+		return fmt.Errorf("reading local image text: %w", err)
+	}
+	sess.DataVersion = db.MirrorDataVersion(sess.DataVersion, len(rows) > 0)
+	if err := s.pushSession(ctx, tx, sess, markerID, legacy); err != nil {
+		return err
+	}
+	_, err = s.pushImageText(ctx, tx, sess.ID, rows)
+	return err
+}
+
 // pushImageText replaces a session's image text when the archive's rows
 // differ from the published ones and reports whether it changed them. OCR can
 // finish without any other session change, so the caller advances updated_at.
-func (s *Sync) pushImageText(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
-	local, err := s.local.SessionImageTextRows(ctx, id)
-	if err != nil {
-		return false, fmt.Errorf("reading local image text: %w", err)
-	}
+func (s *Sync) pushImageText(ctx context.Context, tx *sql.Tx, id string, local []db.ImageTextRow) (bool, error) {
 	rows := make([]db.ImageTextRow, len(local))
 	for i, r := range local {
 		rows[i] = db.ImageTextRow{

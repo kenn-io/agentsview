@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 
@@ -247,4 +248,48 @@ func TestClickHouseImageTextContentPageOrder(t *testing.T) {
 	require.Equal(t, imageSessionID, search.Results[0].SessionID)
 	require.Equal(t, 1, search.Results[0].Ordinal)
 	require.Contains(t, search.Results[0].Snippet, "invoice")
+}
+
+func TestClickHouseImageTextPendingSessionVersion(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	image := inlineImage("pending")
+	writeImageSession(t, local, image, "no image", "2026-01-12T00:00:00.000Z")
+	require.NoError(t, local.SetSessionDataVersion(ctx, imageSessionID, 169))
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
+	require.NoError(t, local.SaveImageText(ctx, db.RetainedToolResultImages(image)[0].SHA256, ocr.Identity{Fingerprint: "processor", Provider: "test", Model: "model", Revision: "r1"}, "invoice", false))
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error {
+		syncer.hooks = nil
+		return errors.New("interrupted before session rows")
+	}}
+	push := func() {
+		t.Helper()
+		result, err := syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+		require.Zero(t, result.Errors)
+	}
+	version := func() int {
+		t.Helper()
+		var v int
+		require.NoError(t, syncer.conn.QueryRowContext(ctx, `SELECT data_version FROM sessions FINAL WHERE id=?`, imageSessionID).Scan(&v))
+		return v
+	}
+	push()
+	require.Equal(t, 171, version())
+	require.Equal(t, 169, local.GetSessionDataVersion(ctx, imageSessionID))
+	var maxVersion int
+	require.NoError(t, syncer.conn.QueryRowContext(ctx, `SELECT max(data_version) FROM sessions`).Scan(&maxVersion))
+	require.GreaterOrEqual(t, maxVersion, 171)
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	require.Zero(t, result.SessionsPushed)
+	require.Equal(t, 171, version())
+	require.NoError(t, local.ClearImageText(ctx))
+	push()
+	require.Equal(t, 169, version())
+	var count uint64
+	require.NoError(t, syncer.conn.QueryRowContext(ctx, `SELECT count() FROM image_text WHERE session_id=?`, imageSessionID).Scan(&count))
+	require.Zero(t, count)
 }
