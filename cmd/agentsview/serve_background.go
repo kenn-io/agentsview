@@ -31,6 +31,7 @@ var errServeStartupInProgress = errors.New(
 var (
 	waitForDaemonStartupForEnsure        = WaitForDaemonStartupContext
 	startServeBackgroundProcessForEnsure = startServeBackgroundProcess
+	startServeBackgroundForRun           = startServeBackground
 	startServeBackgroundProcessForRun    = startServeBackgroundProcess
 	backgroundServeProbeHook             func()
 )
@@ -177,8 +178,12 @@ func runServeBackgroundCommand(
 func runServeBackground(ctx context.Context,
 	cfg config.Config, args []string, opts serveReplacementOptions,
 ) {
-	result, err := startServeBackground(ctx,
-		cfg, args, opts, backgroundLaunchPolicy{Persistent: os.Getenv(updateRestartPersistentEnvVar) == "true"},
+	progress := &daemonLaunchProgressWriter{w: os.Stdout}
+	result, err := startServeBackgroundForRun(ctx,
+		cfg, args, opts, backgroundLaunchPolicy{
+			Persistent: os.Getenv(updateRestartPersistentEnvVar) == "true",
+			OnProgress: progress.progress,
+		},
 	)
 	if err != nil {
 		fatal("%v", err)
