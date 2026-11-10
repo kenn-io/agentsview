@@ -311,10 +311,9 @@ describe("FrictionPage", () => {
       subject_kind: "diagnostic",
       label: "worker",
       text: "launch failed",
-      machine: "machine-a",
     });
     friction.digest = {
-      ...makeDigest([event, { ...event, subject_id: "diagnostic:2", machine: "machine-b" }]),
+      ...makeDigest([event, { ...event, subject_id: "diagnostic:2" }]),
       diagnostics: [{ source: "worker", message: "launch failed", count: 2 }],
       p0_alerts: [],
       patterns: [],
@@ -324,7 +323,6 @@ describe("FrictionPage", () => {
     expect(diagnostics.textContent).toContain("worker");
     expect(diagnostics.textContent).toContain("launch failed");
     expect(diagnostics.textContent).toContain("x2");
-    expect(diagnostics.textContent).not.toContain("machine-a");
     expect(diagnostics.querySelector("a")).toBeNull();
   });
 

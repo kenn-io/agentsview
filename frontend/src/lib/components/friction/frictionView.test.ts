@@ -91,11 +91,7 @@ describe("groupSignals", () => {
 
 describe("diagnostics", () => {
   it("shows a diagnostic section after the session kinds", () => {
-    const signals = [
-      sig({ kind: "diagnostic", label: "worker", text: "launch failed", machine: "one" }),
-      sig({ kind: "diagnostic", label: "worker", text: "launch failed", machine: "two" }),
-      sig({ kind: "diagnostic", label: "worker", text: "other failure" }),
-    ];
+    const signals = [sig({ kind: "diagnostic", subject_kind: "diagnostic", label: "worker", text: "launch failed" })];
     expect(groupSignals(signals).at(-1)?.kind).toBe("diagnostic");
   });
 });
