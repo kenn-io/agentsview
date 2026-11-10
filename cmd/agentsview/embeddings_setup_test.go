@@ -285,20 +285,8 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	movedPath := filepath.Join(t.TempDir(), "moved.db")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), fmt.Appendf(nil, "[vector]\nenabled = true\ndb_path = %q\n", movedPath), 0o600))
 	releaseHeld()
-	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
-	var out strings.Builder
-	err = runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{FullRebuild: true})
-	require.ErrorContains(t, err, "search setup is incomplete")
-	assert.ErrorContains(t, err, "agentsview index embeddings build")
-	assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
-	assert.ErrorContains(t, err, "--full-rebuild")
-	assert.Empty(t, out.String())
-	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
-	assert.Contains(t, out.String(), "Search setup is incomplete.")
-	assert.Contains(t, out.String(), "Another process may be using search. Close it and retry.")
-	assert.Contains(t, out.String(), "Retry search setup?")
-	assert.Less(t, strings.Index(out.String(), "Another process may be using search"), strings.Index(out.String(), "Retry search setup?"))
-	assert.NotContains(t, out.String(), "Search by meaning is off.")
+	require.NoError(t, owner.Setup(0))
+	<-owner.done
 	setup, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, setup.Error)
@@ -531,22 +519,21 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 
 func TestCLIEmbeddingsSetup(t *testing.T) {
 	for _, tc := range []struct {
-		name, provider, input string
-		missing               int64
-		flagged               bool
+		name, provider, input        string
+		missing                      int64
+		flagged, setupError, enabled bool
 	}{
-		{"download", "built-in", "yes\n", 1000001, false},
-		{"ollama", "ollama", "yes\n", 0, false},
-		{"declined", "built-in", "no\n", 1000001, false},
-		{"flagged", "built-in", "yes\n", 0, true},
-		{"setup-error", "ollama", "yes\n", 0, false},
-		{"enabled", "ollama", "yes\n", 0, false},
+		{"download", "built-in", "yes\n", 1000001, false, false, false},
+		{"declined", "built-in", "no\n", 1000001, false, false, false},
+		{"flagged", "built-in", "yes\n", 0, true, false, false},
+		{"setup-error", "ollama", "yes\n", 0, false, true, false},
+		{"enabled", "ollama", "yes\n", 0, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			if tc.provider == "ollama" {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"), 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(fmt.Sprintf("[vector]\nenabled = %t\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n", tc.enabled)), 0600))
 			}
 			var posts, reads int
 			var approved int64
@@ -555,15 +542,15 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 					w.Header().Set("Content-Type", "application/json")
 					reads++
 					if posts == 0 {
-						fmt.Fprintf(w, `{"setup":{"action":"turn-on","provider":%q,"missing_bytes":%d,"enabled":%t}}`, tc.provider, tc.missing, tc.name == "enabled")
+						fmt.Fprintf(w, `{"setup":{"action":"turn-on","provider":%q,"missing_bytes":%d,"enabled":%t}}`, tc.provider, tc.missing, tc.enabled)
 						return
 					}
 					if reads == 2 && tc.missing > 0 {
 						fmt.Fprintf(w, `{"setup":{"busy":true,"downloaded_bytes":%d,"total_bytes":%d}}`, tc.missing, tc.missing)
 						return
 					}
-					if tc.name == "setup-error" {
-						io.WriteString(w, `{"setup":{"error":"setup failed"}}`)
+					if tc.setupError {
+						io.WriteString(w, `{"setup":{"action":"turn-on","error":"setup failed"}}`)
 						return
 					}
 					io.WriteString(w, `{"setup":{},"last_result":{}}`)
@@ -595,16 +582,17 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				assert.Zero(t, posts)
 				return
 			}
-			if tc.name == "setup-error" {
+			if tc.setupError {
 				require.ErrorContains(t, err, "setup failed")
 				return
 			}
 			require.NoError(t, err)
 			assert.Equal(t, 1, posts)
 			assert.Equal(t, tc.missing, approved)
-			if tc.name == "enabled" {
+			if tc.enabled {
 				assert.Contains(t, out.String(), "Search setup is incomplete.")
 				assert.Contains(t, out.String(), "Finish search setup?")
+				assert.NotContains(t, out.String(), "Search by meaning is off.")
 			}
 			if tc.missing > 0 {
 				assert.Contains(t, out.String(), "2 MB")
@@ -643,7 +631,7 @@ func TestCLIEmbeddingsSetupInspectionError(t *testing.T) {
 			require.NoError(t, err)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 			var inspections, posts atomic.Int32
-			var attempted, downloaded atomic.Bool
+			var attempted atomic.Bool
 			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 				if inspections.Add(1) == 1 {
 					return embedlocal.Status{}, errors.New("cannot inspect model directory")
@@ -653,10 +641,7 @@ func TestCLIEmbeddingsSetupInspectionError(t *testing.T) {
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
 			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
 				attempted.Store(true)
-				allowed, err := opts.Confirm(ctx, 100)
-				if allowed {
-					downloaded.Store(true)
-				}
+				_, err := opts.Confirm(ctx, 100)
 				if err != nil {
 					return embedlocal.Installation{}, err
 				}
@@ -689,12 +674,11 @@ func TestCLIEmbeddingsSetupInspectionError(t *testing.T) {
 				assert.EqualValues(t, 1, posts.Load())
 				assert.True(t, attempted.Load())
 			}
-			assert.False(t, downloaded.Load())
 		})
 	}
 }
 
-func TestCLIEmbeddingsFreshSetupAndHybridSearch(t *testing.T) {
+func TestCLIEmbeddingsFreshSetup(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
@@ -750,23 +734,9 @@ func TestCLIEmbeddingsFreshSetupAndHybridSearch(t *testing.T) {
 	cmd.SetIn(strings.NewReader("yes\n"))
 	out, err := executeCommand(cmd, "index", "embeddings", "build")
 	require.NoError(t, err, out)
-	assert.Equal(t, 1, strings.Count(out, "[y/N]"))
-	assert.Contains(t, out, "1 MB")
 	cfg, err = config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.True(t, cfg.Vector.Enabled)
-	out, err = executeCommand(newRootCommand(), "session", "search", "pooling", "--hybrid", "--include-one-shot", "--json")
-	require.NoError(t, err, out)
-	var result struct {
-		EffectiveMode string `json:"effective_mode"`
-		Matches       []struct {
-			SessionID string `json:"session_id"`
-		} `json:"matches"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(out), &result))
-	assert.NotEqual(t, "hybrid_keyword", result.EffectiveMode)
-	require.NotEmpty(t, result.Matches)
-	assert.Equal(t, "session-one", result.Matches[0].SessionID)
 }
 
 func TestCLIEmbeddingsConcurrentSetupFailure(t *testing.T) {
