@@ -910,6 +910,10 @@ func TestDarwinWatcherPendingRootRetriesWithoutNativeShallowDelivery(t *testing.
 	backend.retryInitial = 10 * time.Millisecond
 	backend.retryMax = 20 * time.Millisecond
 	backend.startShallow = func() error { return nil }
+	// Without a parent-folder observer, only the lifecycle retry can notice
+	// the root appearing.
+	backend.addAncestor = func(string) error { return nil }
+	backend.removeAncestor = func(string) error { return nil }
 
 	missingChecked := make(chan struct{})
 	var missingCheckedOnce sync.Once
@@ -2045,12 +2049,15 @@ func TestDarwinWatcherStartupStreamStartFailureFallsBack(t *testing.T) {
 
 func TestDarwinWatcherStartupFallbackShallowFailurePollsEveryScope(t *testing.T) {
 	root := t.TempDir()
+	shallow := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
 	backend.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
 		return nil, errors.New("stream create unavailable")
 	}
-	backend.startShallow = func() error { return errors.New("shallow FSEvents unavailable") }
+	backend.shallowWatcher.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
+		return &failingStartStream{err: errors.New("shallow FSEvents unavailable")}, nil
+	}
 	coverage := make(chan []string, 1)
 	watcher, err := newWatcherWithBackendOptions(
 		0, 0, func(context.Context, WatchBatch) error { return nil }, backend,
@@ -2065,11 +2072,15 @@ func TestDarwinWatcherStartupFallbackShallowFailurePollsEveryScope(t *testing.T)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{SyncDir: root}},
+	}, {
+		Path: shallow, Exists: true,
+		Scopes: []WatchScope{{SyncDir: shallow}},
 	}}, 10)
-	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
+	require.Equal(t, []RecursiveWatchResult{{Watched: 1}, {Watched: 1}}, results)
 
 	watcher.Start()
-	assert.Equal(t, []string{root}, requireReceiveWithin(t, coverage, time.Second))
+	assert.ElementsMatch(t, []string{root, shallow},
+		requireReceiveWithin(t, coverage, time.Second))
 	require.Eventually(t, func() bool {
 		return backend.fallbackPhaseValue() == darwinFallbackOpen
 	}, time.Second, time.Millisecond)
@@ -2077,6 +2088,12 @@ func TestDarwinWatcherStartupFallbackShallowFailurePollsEveryScope(t *testing.T)
 	assert.False(t, retry,
 		"an unrecoverable shallow start failure must not wake the lifecycle loop forever")
 }
+
+// failingStartStream is a stream whose Start always fails.
+type failingStartStream struct{ err error }
+
+func (s *failingStartStream) Start() error { return s.err }
+func (s *failingStartStream) Close() error { return nil }
 
 func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *testing.T) {
 	for _, reconcileErr := range []error{
