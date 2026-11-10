@@ -17,9 +17,11 @@
     subjectId?: string;
     // Interruptions and diagnostics render grouped rows with this count.
     count?: number;
+    // A diagnostics heading already gives the total when only one group exists.
+    showCount?: boolean;
   }
 
-  let { finding, subjectId = "", count = 1 }: Props = $props();
+  let { finding, subjectId = "", count = 1, showCount = true }: Props = $props();
 
   const PATTERN_NAMES: Record<string, () => string> = {
     retry_loop: m.friction_pattern_retry_loop,
@@ -57,7 +59,9 @@
   {:else if finding.kind === "diagnostic"}
     <code class="source">{finding.label}</code>
     <span class="text">{finding.text}</span>
-    <span class="count">{m.friction_diagnostic_count({ count })}</span>
+    {#if showCount}
+      <span class="count">{m.friction_diagnostic_count({ count })}</span>
+    {/if}
   {:else if finding.kind === "interruption"}
     <span class="text">{m.friction_interruption_count({ count })}</span>
   {:else}

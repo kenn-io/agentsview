@@ -153,10 +153,10 @@ func TestFrictionDigestRoutes(t *testing.T) {
 	})
 	t.Run("grouped_diagnostics", func(t *testing.T) {
 		date := "2026-09-13"
-		snap := review.Snapshot{DigestSnapshot: friction.DigestSnapshot{Date: date, Signals: []friction.Signal{
+		snap := review.Snapshot{Date: date, Signals: []friction.Signal{
 			{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:1", SubjectKind: friction.SubjectDiagnostic, Label: "worker", Text: "launch failed"},
 			{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:2", SubjectKind: friction.SubjectDiagnostic, Label: "worker", Text: "launch failed"},
-		}}}
+		}}
 		raw, err := review.EncodeSnapshot(snap)
 		require.NoError(t, err)
 		require.NoError(t, te.db.SaveFrictionDigest(t.Context(), db.FrictionDigest{

@@ -59,6 +59,7 @@
           <FrictionFinding
             finding={{ kind: "diagnostic", label: group.source, text: group.message, tool_name: "", evidence: "" }}
             count={group.count}
+            showCount={diagnostics.length > 1}
           />
         </li>
       {/each}

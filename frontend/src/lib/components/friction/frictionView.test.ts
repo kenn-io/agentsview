@@ -81,7 +81,14 @@ describe("groupSignals", () => {
     expect(sections[4]!.signals.map((s) => s.subject_id)).toEqual(["p1"]);
     expect(sections[5]!.signals.map((s) => s.subject_id)).toEqual(["f1"]);
     expect(sections[6]!.signals.map((s) => s.subject_id)).toEqual(["i1"]);
-    const diagnostics = groupSignals([sig({ kind: "diagnostic", subject_kind: "diagnostic", label: "worker", text: "launch failed" })]);
+    const diagnostics = groupSignals([
+      sig({
+        kind: "diagnostic",
+        subject_kind: "diagnostic",
+        label: "worker",
+        text: "launch failed",
+      }),
+    ]);
     expect(diagnostics.at(-1)?.kind).toBe("diagnostic");
   });
 

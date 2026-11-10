@@ -12,8 +12,10 @@ import (
 	"go.kenn.io/agentsview/internal/friction"
 )
 
-var ErrDiagnosticConflict = errors.New("diagnostic ID already has a different payload")
-var ErrInvalidDiagnostic = errors.New("invalid diagnostic")
+var (
+	ErrDiagnosticConflict = errors.New("diagnostic ID already has a different payload")
+	ErrInvalidDiagnostic  = errors.New("invalid diagnostic")
+)
 
 func diagnosticTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000000000Z") }
 

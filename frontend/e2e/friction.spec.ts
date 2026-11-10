@@ -172,6 +172,36 @@ test.describe("Friction Log", () => {
     await mockFriction(page);
   });
 
+  test("does not repeat the total for a single diagnostic group", async ({ page }) => {
+    const diagnostic = signal({
+      kind: "diagnostic",
+      detector: "diagnostic",
+      subject_id: "diagnostic:worker",
+      subject_kind: "diagnostic",
+      label: "worker",
+      text: "launch failed",
+    });
+    await page.route(`**/api/v1/friction/digests/${DATE}`, (route) =>
+      route.fulfill({
+        json: {
+          ...LATEST_DIGEST,
+          signals: [diagnostic, { ...diagnostic, subject_id: "diagnostic:worker:2" }],
+          diagnostics: [{ source: "worker", message: "launch failed", count: 2 }],
+        },
+      }),
+    );
+    await page.goto(`/friction?date=${DATE}`);
+
+    const section = page.locator("#friction-section-diagnostic");
+    await expect(section).toContainText("worker");
+    await expect(section).toContainText("launch failed");
+    const total = section.locator("h2 .count");
+    await expect(total).toBeVisible();
+    await expect(total).toHaveText("2");
+    expect((await total.boundingBox())?.width).toBeGreaterThan(0);
+    await expect(section.locator("li .count")).toHaveCount(0);
+  });
+
   test("opens the latest digest and follows a finding to its message", async ({ page }) => {
     // Keep this link test focused on the target session. Hydrating every
     // unrelated fixture row can trigger the session sidebar's known Svelte
