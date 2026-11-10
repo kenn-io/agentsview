@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"go.kenn.io/kit/embedconfig"
 )
 
 type IntegrationsConfig struct {
@@ -15,6 +17,8 @@ type DocbankIntegration struct {
 	URL       string `json:"url,omitempty" toml:"url"`
 	WebURL    string `json:"web_url,omitempty" toml:"web_url"`
 	APIKeyEnv string `json:"api_key_env,omitempty" toml:"api_key_env"`
+	// AllowHTTP permits plaintext HTTP on a trusted private network.
+	AllowHTTP bool `json:"allow_http,omitempty" toml:"allow_http"`
 }
 
 func (c DocbankIntegration) Configured() bool {
@@ -40,8 +44,10 @@ func (c DocbankIntegration) Validate() error {
 		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return errors.New("[integrations.docbank] invalid URL")
 		}
-		if err := ValidateExtractTransport(u, false); err != nil {
-			return errors.New("[integrations.docbank] url must be https, or http to a loopback host")
+		// Apply kit's host policy without changing existing base paths or URL spelling.
+		origin := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+		if _, err := embedconfig.CanonicalEndpoint(origin, c.AllowHTTP); err != nil {
+			return errors.New("[integrations.docbank] url must be https, or http to a loopback host; allow_http = true also permits trusted private addresses and DNS names")
 		}
 	}
 	return nil
