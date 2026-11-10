@@ -154,8 +154,6 @@ func (s *Store) maxFinalID(ctx context.Context, table string, tp tableParts, ids
 	}
 	maps.DeleteFunc(ids.parts, func(name string, _ []sessionIDRow) bool { return !current[name] })
 	if len(missing) > 0 {
-		// A part with no rows returned is empty or merged away since the
-		// snapshot; it is read again while the snapshot names it.
 		rows, err := s.queryContext(ctx, `SELECT _part, id, session_id FROM `+table+` WHERE `+
 			partsClause(missing)+fmt.Sprintf(` ORDER BY id DESC LIMIT %d BY _part SETTINGS final=0`, topIDsPerPart))
 		if err != nil {
@@ -176,7 +174,16 @@ func (s *Store) maxFinalID(ctx context.Context, table string, tp tableParts, ids
 		if err := rows.Err(); err != nil {
 			return 0, fmt.Errorf("iterating %s top ids: %w", table, err)
 		}
+		merged, err := s.keepEmptyTopIDParts(ctx, table, missing, read)
+		if err != nil {
+			return 0, err
+		}
 		maps.Copy(ids.parts, read)
+		if merged {
+			// A part merged away before its ids were read, so the kept ids
+			// may miss the highest one.
+			return s.readMaxFinalID(ctx, table)
+		}
 	}
 	threshold := int64(math.MinInt64)
 	for _, top := range ids.parts {
@@ -205,6 +212,44 @@ func (s *Store) maxFinalID(ctx context.Context, table string, tp tableParts, ids
 	if found >= threshold {
 		return found, nil
 	}
+	return s.readMaxFinalID(ctx, table)
+}
+
+// keepEmptyTopIDParts records an empty id list in read for each requested
+// part that returned no rows and is still active: every row it holds is
+// deleted. It reports true when such a part is no longer active, which
+// means a merge folded its rows into a part the snapshot did not name.
+func (s *Store) keepEmptyTopIDParts(
+	ctx context.Context, table string, requested []string, read map[string][]sessionIDRow,
+) (bool, error) {
+	if !slices.ContainsFunc(requested, func(name string) bool { _, ok := read[name]; return !ok }) {
+		return false, nil
+	}
+	fresh, err := s.readPartsSnapshot(ctx)
+	if err != nil {
+		return false, err
+	}
+	active := map[string]bool{}
+	for _, p := range fresh[table].parts {
+		active[p.name] = true
+	}
+	merged := false
+	for _, name := range requested {
+		if _, ok := read[name]; ok {
+			continue
+		}
+		if active[name] {
+			read[name] = []sessionIDRow{}
+		} else {
+			merged = true
+		}
+	}
+	return merged, nil
+}
+
+// readMaxFinalID reads max(id) under FINAL over the whole table.
+func (s *Store) readMaxFinalID(ctx context.Context, table string) (int64, error) {
+	var found int64
 	if err := s.queryRowContext(ctx, `SELECT ifNull(max(id), 0) FROM `+table).Scan(&found); err != nil {
 		return 0, fmt.Errorf("reading %s highest id: %w", table, err)
 	}

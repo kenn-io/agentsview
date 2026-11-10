@@ -283,3 +283,25 @@ func TestActivitySourceProbeMaxIDWithReplacedTopRows(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 5000, got.MaxMessageID)
 }
+
+// A merge between the parts snapshot and the read of each part's top ids
+// leaves the snapshot naming parts that no longer exist. The highest id
+// must still come back, not the zero the missing parts would give.
+func TestActivitySourceProbeMaxIDAfterMergeDuringRead(t *testing.T) {
+	t.Parallel()
+	store := newFinalRowsStore(t)
+	ctx := t.Context()
+	execPreparedUsage(t, store,
+		"SYSTEM STOP MERGES messages",
+		`INSERT INTO messages (id, session_id, ordinal, push_version) SELECT 1 + number, 'a', number, 1 FROM numbers(3)`,
+		`INSERT INTO messages (id, session_id, ordinal, push_version) VALUES (700, 'b', 0, 1)`,
+	)
+	snapshot, err := store.readPartsSnapshot(ctx)
+	require.NoError(t, err)
+	require.Len(t, snapshot["messages"].parts, 2)
+	execPreparedUsage(t, store, "SYSTEM START MERGES messages", "OPTIMIZE TABLE messages FINAL")
+
+	got, err := store.maxFinalID(ctx, "messages", snapshot["messages"], &finalIDs{})
+	require.NoError(t, err)
+	require.EqualValues(t, 700, got)
+}
