@@ -442,14 +442,21 @@ test.describe("Recent Edits feed", () => {
       return el.scrollTop;
     });
     expect(anchor).toBeGreaterThan(600);
-    const firstInView = () =>
+    // The table renders rows for a new scroll position on its next frame,
+    // so wait for a rendered row below the sticky header before reading.
+    const rowInView = () =>
       page.locator(".re-file-row").evaluateAll((rows) => {
-        const row = rows.find((r) => r.getBoundingClientRect().top >= 120)!;
+        const row = rows.find((r) => r.getBoundingClientRect().top >= 120);
+        if (!row) return null;
         return {
           path: row.querySelector(".re-path")!.getAttribute("title"),
           top: Math.round(row.getBoundingClientRect().top),
         };
       });
+    const firstInView = async () => {
+      await expect.poll(rowInView).not.toBeNull();
+      return (await rowInView())!;
+    };
     const before = await firstInView();
     const fileWidth = () =>
       page
