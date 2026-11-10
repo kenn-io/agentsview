@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"path/filepath"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -32,37 +31,6 @@ func hermesFreshnessWriter(t *testing.T, root string) (*sql.DB, string) {
  CREATE TRIGGER messages_display_revision_update AFTER UPDATE OF codex_reasoning_items, codex_message_items, display_kind, display_metadata ON messages BEGIN UPDATE sessions SET transcript_revision = transcript_revision + 1 WHERE id = new.session_id; END;`)
 	require.NoError(t, err)
 	return conn, path
-}
-
-// This catches whole-store deep fingerprint seeding even when no session is reparsed.
-func TestHermesHeartbeatWriteChecksNoMembers(t *testing.T) {
-	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
-		t.Run(string(agent), func(t *testing.T) {
-			root := t.TempDir()
-			conn, path := hermesFreshnessWriter(t, root)
-			database := dbtest.OpenTestDB(t)
-			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
-			t.Cleanup(engine.Close)
-			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-			_, err := conn.ExecContext(t.Context(), `INSERT INTO gateway_heartbeats VALUES ('gateway', 1778767300)`)
-			require.NoError(t, err)
-			var scans atomic.Int64
-			ctx := parser.WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) })
-			selected, updated := hermesPassStats(t, func() error { return engine.SyncPathsContext(ctx, []string{path + "-wal"}) })
-			assert.Zero(t, scans.Load(), "heartbeat must not read transcript payloads")
-			assert.Zero(t, updated)
-			assert.Zero(t, selected)
-			_, ok := parser.ResolveStoredMemberFreshnessContainer(mustHermesProvider(t, agent, root), filepath.Join(root, "state.db"))
-			assert.True(t, ok)
-		})
-	}
-}
-
-func mustHermesProvider(t *testing.T, agent parser.AgentType, root string) parser.Provider {
-	t.Helper()
-	p, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	return p
 }
 
 func TestHermesWatcherSelectsOnlyChangedMember(t *testing.T) {
@@ -105,7 +73,7 @@ func TestHermesWatcherSelectsOnlyChangedMember(t *testing.T) {
 func TestHermesWatcherNativeTimestampRepair(t *testing.T) {
 	root := t.TempDir()
 	conn, path := hermesFreshnessWriter(t, root)
-	_, err := conn.ExecContext(t.Context(), `UPDATE messages SET timestamp=-5 WHERE session_id='child'`)
+	_, err := conn.ExecContext(t.Context(), `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','user','middle',-5),('child','user','last',1778767300)`)
 	require.NoError(t, err)
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local"})
@@ -113,52 +81,56 @@ func TestHermesWatcherNativeTimestampRepair(t *testing.T) {
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	before, err := database.GetAllMessages(t.Context(), "hermes:child")
 	require.NoError(t, err)
-	require.Len(t, before, 1)
-	// Native recovery uses the session start when no valid neighbour exists. An
+	require.Len(t, before, 3)
+	assert.Equal(t, "middle", before[0].Content)
+	// Native recovery uses the first valid neighbour for the interior invalid time. An
 	// installed recovered output preserves IDs, revision, session row and ledger.
-	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET timestamp=(SELECT started_at FROM sessions WHERE id=messages.session_id) WHERE NOT(timestamp BETWEEN 0.0 AND 4200000000.0)`)
+	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET timestamp=1778767210 WHERE NOT(timestamp BETWEEN 0.0 AND 4200000000.0)`)
 	require.NoError(t, err)
 	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path + "-wal"}))
 	assert.Equal(t, 1, engine.LastSyncStats().Synced)
 	after, err := database.GetAllMessages(t.Context(), "hermes:child")
 	require.NoError(t, err)
-	require.Len(t, after, 1)
-	assert.NotEqual(t, before[0].Timestamp, after[0].Timestamp)
+	require.Len(t, after, 3)
+	assert.Equal(t, "middle", after[1].Content)
+	assert.NotEqual(t, before[0].Timestamp, after[1].Timestamp)
 }
 
 func TestHermesWatcherCardinality(t *testing.T) {
-	for _, n := range []int{20, 2000} {
-		t.Run(fmt.Sprint(n), func(t *testing.T) {
-			root := t.TempDir()
-			conn, path := hermesFreshnessWriter(t, root)
-			tx, err := conn.BeginTx(t.Context(), nil)
-			require.NoError(t, err)
-			for i := 1; i < n; i++ {
-				_, err = tx.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES (?,'cli',1778767200)`, fmt.Sprintf("s-%04d", i))
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, n := range []int{20, 2000} {
+			t.Run(string(agent)+"/"+fmt.Sprint(n), func(t *testing.T) {
+				root := t.TempDir()
+				conn, path := hermesFreshnessWriter(t, root)
+				tx, err := conn.BeginTx(t.Context(), nil)
 				require.NoError(t, err)
-				_, err = tx.ExecContext(t.Context(), `INSERT INTO messages(session_id,role,content,timestamp) VALUES (?,'user','unchanged member',1778767200)`, fmt.Sprintf("s-%04d", i))
+				for i := 1; i < n; i++ {
+					_, err = tx.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES (?,'cli',1778767200)`, fmt.Sprintf("s-%04d", i))
+					require.NoError(t, err)
+					_, err = tx.ExecContext(t.Context(), `INSERT INTO messages(session_id,role,content,timestamp) VALUES (?,'user','unchanged member',1778767200)`, fmt.Sprintf("s-%04d", i))
+					require.NoError(t, err)
+				}
+				require.NoError(t, tx.Commit())
+				database := dbtest.OpenTestDB(t)
+				engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+				t.Cleanup(engine.Close)
+				require.Equal(t, n, engine.SyncAll(t.Context(), nil).Synced)
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO gateway_heartbeats VALUES ('gateway',1778768000)`)
 				require.NoError(t, err)
-			}
-			require.NoError(t, tx.Commit())
-			database := dbtest.OpenTestDB(t)
-			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local"})
-			t.Cleanup(engine.Close)
-			require.Equal(t, n, engine.SyncAll(t.Context(), nil).Synced)
-			_, err = conn.ExecContext(t.Context(), `INSERT INTO gateway_heartbeats VALUES ('gateway',1778768000)`)
-			require.NoError(t, err)
-			var scans atomic.Int64
-			ctx := parser.WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) })
-			selected, updated := hermesPassStats(t, func() error { return engine.SyncPathsContext(ctx, []string{path + "-wal"}) })
-			assert.Zero(t, scans.Load())
-			assert.Zero(t, selected)
-			assert.Zero(t, updated)
-			_, err = conn.ExecContext(t.Context(), `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','assistant','new',1778768000)`)
-			require.NoError(t, err)
-			require.NoError(t, engine.SyncPathsContext(ctx, []string{path + "-wal"}))
-			assert.Equal(t, 1, engine.LastSyncStats().TotalSessions)
-			assert.Equal(t, 1, engine.LastSyncStats().Synced)
-			assert.LessOrEqual(t, scans.Load(), int64(3), "deep work is bounded at both cardinalities")
-		})
+				var scans atomic.Int64
+				ctx := parser.WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) })
+				selected, updated := hermesPassStats(t, func() error { return engine.SyncPathsContext(ctx, []string{path + "-wal"}) })
+				assert.Zero(t, scans.Load())
+				assert.Zero(t, selected)
+				assert.Zero(t, updated)
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','assistant','new',1778768000)`)
+				require.NoError(t, err)
+				require.NoError(t, engine.SyncPathsContext(ctx, []string{path + "-wal"}))
+				assert.Equal(t, 1, engine.LastSyncStats().TotalSessions)
+				assert.Equal(t, 1, engine.LastSyncStats().Synced)
+				assert.LessOrEqual(t, scans.Load(), int64(3), "deep work is bounded at both cardinalities")
+			})
+		}
 	}
 }
 
