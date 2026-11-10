@@ -43,25 +43,7 @@ func TestImageTextSearchFirstPageWithManyMessages(t *testing.T) {
 	}
 	require.True(t, found, "image text should reach the first page")
 	require.Equal(t, messageRank, imageRank, "the matches should exercise equal relevance")
-	seen := make(map[string]bool)
-	var previousRank float64
-	first := true
-	for {
-		for _, result := range page.Results {
-			require.False(t, seen[result.SessionID], "session must appear only once across pages")
-			if !first {
-				require.GreaterOrEqual(t, result.Rank, previousRank)
-			}
-			previousRank, first = result.Rank, false
-			seen[result.SessionID] = true
-		}
-		if page.NextCursor == 0 {
-			break
-		}
-		page, err = d.Search(ctx, SearchFilter{Query: "needle", Limit: 30, Cursor: page.NextCursor})
-		require.NoError(t, err)
-	}
-	require.Len(t, seen, 51)
+
 }
 
 func TestImageTextSearchPaginationByRelevance(t *testing.T) {

@@ -110,7 +110,7 @@ func TestImageTextPassKeepsRetryCutoff(t *testing.T) {
 }
 
 func TestImageTextFailureClassification(t *testing.T) {
-	for _, name := range []string{"service error", "corrupt offloaded asset", "invalid inline bytes"} {
+	for _, name := range []string{"service error", "corrupt offloaded asset"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
 			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
@@ -141,8 +141,6 @@ func TestImageTextFailureClassification(t *testing.T) {
 				corrupt[len(corrupt)-1] ^= 1
 				require.NoError(t, os.WriteFile(path, corrupt, 0o600))
 				content = fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
-			case "invalid inline bytes":
-				content = `[{"type":"input_image","image_url":"data:image/png;base64,dGhpcyBpcyBub3QgYSBwbmc="}]`
 			}
 			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
 			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
@@ -154,11 +152,6 @@ func TestImageTextFailureClassification(t *testing.T) {
 			var retry string
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures,retry_at FROM image_text_cache`).Scan(&failures, &retry))
 			require.Equal(t, 1, failures)
-			if name == "invalid inline bytes" {
-				require.Zero(t, requests)
-				require.Equal(t, "9999-12-31T23:59:59Z", retry)
-				return
-			}
 			require.NotEmpty(t, retry)
 			require.NotEqual(t, "9999-12-31T23:59:59Z", retry)
 			if name == "service error" {

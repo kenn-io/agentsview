@@ -28,7 +28,7 @@ func TestPGImageTextPushAndSearch(t *testing.T) {
 	}
 	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID: "shot", Project: "proj", Machine: "workstation", Agent: "claude",
-		MessageCount: 2, UserMessageCount: 5, CreatedAt: "2026-01-01T00:00:00Z",
+		MessageCount: 2, UserMessageCount: 1, CreatedAt: "2026-01-01T00:00:00Z",
 	}))
 	require.NoError(t, local.InsertMessages(ctx, messages(image)))
 	hash := db.RetainedToolResultImages(image)[0].SHA256
@@ -59,7 +59,7 @@ func TestPGImageTextPushAndSearch(t *testing.T) {
 		}
 		for mode, pattern := range map[string]string{"substring": "invoice 4827", "regex": `invoice\s+48\d\d`} {
 			page, err := store.SearchContent(ctx, db.ContentSearchFilter{
-				Pattern: pattern, Mode: mode, Sources: []string{"tool_result"}, Limit: 10,
+				Pattern: pattern, Mode: mode, Sources: []string{"tool_result"}, Limit: 10, IncludeOneShot: true,
 			})
 			require.NoError(t, err)
 			for _, m := range page.Matches {
