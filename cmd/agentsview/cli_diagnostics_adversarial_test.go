@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -115,10 +116,15 @@ func TestCLIRecoveryGroupedCommandAdvice(t *testing.T) {
 	sessionSearch, _, err := root.Find([]string{"session", "search"})
 	require.NoError(t, err)
 
-	semantic := &cliDiagnosticError{}
-	applyCLIRecovery(sessionSearch, db.ErrSemanticUnavailable, semantic)
+	cause := fmt.Errorf("%w: index missing", db.ErrSemanticUnavailable)
+	semantic := &cliDiagnosticError{err: cause}
+	applyCLIRecovery(sessionSearch, cause, semantic)
 	assert.Equal(t, "unavailable", semantic.kind)
 	assert.Contains(t, semantic.hint, "agentsview index embeddings build")
+	var output bytes.Buffer
+	writeCLIDiagnostic(&output, semantic)
+	assert.Equal(t, 1, strings.Count(output.String(), "index embeddings build"))
+	assert.Contains(t, output.String(), "index missing")
 	assert.Contains(t, semantic.hint, "agentsview session search --help")
 	assert.Contains(t, semantic.hint, "--fts or --regex")
 

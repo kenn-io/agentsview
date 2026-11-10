@@ -531,7 +531,7 @@ agentsview index embeddings build --using build-box    # encode against a named 
 
 `--using <name>` selects which `[vector.embeddings.servers.<name>]` entry the
 build encodes against; without it the build uses `default_server`. A mistyped
-name fails before the build starts.
+name fails immediately, before anything starts.
 
 `--include-automated` overrides `[vector].include_automated` for this one build;
 it does not change the config file. Bare `--include-automated` embeds automated

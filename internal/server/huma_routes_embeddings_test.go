@@ -138,8 +138,7 @@ func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
 
 func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	fake := &fakeEmbeddingsManager{}
-	var started bool
-	s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{messages: fake, buildStarted: &started}))
+	s := newEmbeddingsTestServer(t, fake)
 
 	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
 		vector.BuildRequest{FullRebuild: true})
@@ -150,7 +149,6 @@ func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.True(t, body.Started)
-	assert.True(t, started)
 
 	require.Len(t, fake.startBuildCalls, 1)
 	assert.True(t, fake.startBuildCalls[0].FullRebuild)
@@ -448,8 +446,6 @@ type fakeEmbeddingsRuntime struct {
 	messages, recall EmbeddingsManager
 	includeAutomated bool
 	busy             bool
-	setupBuild       **vector.BuildRequest
-	buildStarted     *bool
 }
 
 func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
@@ -462,25 +458,11 @@ func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
 		return nil
 	}
 }
-
 func (r fakeEmbeddingsRuntime) IncludeAutomated() bool { return r.includeAutomated }
-
-func (r fakeEmbeddingsRuntime) BuildStarted() {
-	if r.buildStarted != nil {
-		*r.buildStarted = true
-	}
-}
-
 func (r fakeEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
 	return EmbeddingsSetupStatus{Enabled: true, Busy: r.busy}, nil
 }
-
-func (r fakeEmbeddingsRuntime) Setup(_ int64, build *vector.BuildRequest) error {
-	if r.setupBuild != nil {
-		*r.setupBuild = build
-	}
-	return nil
-}
+func (fakeEmbeddingsRuntime) Setup(int64) error { return nil }
 
 func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
 	manager := &fakeEmbeddingsManager{status: vector.BuildStatus{
@@ -497,25 +479,4 @@ func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
 	assert.True(t, status.LastResult.Activated)
 	require.NotNil(t, status.Setup)
 	assert.True(t, status.Setup.Busy)
-}
-
-func TestEmbeddingsSetupForwardsOptionalBuild(t *testing.T) {
-	for _, withBuild := range []bool{false, true} {
-		t.Run(fmt.Sprintf("build=%t", withBuild), func(t *testing.T) {
-			build := &vector.BuildRequest{Using: "sentinel"}
-			s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{setupBuild: &build}))
-			body := map[string]any{}
-			if withBuild {
-				body["build"] = map[string]any{"using": "local"}
-			}
-			w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/setup", body)
-			assertRecorderStatus(t, w, http.StatusAccepted)
-			if withBuild {
-				require.NotNil(t, build)
-				assert.Equal(t, "local", build.Using)
-			} else {
-				assert.Nil(t, build)
-			}
-		})
-	}
 }

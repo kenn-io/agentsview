@@ -320,6 +320,7 @@ func applyCLIRecovery(cmd *cobra.Command, err error, d *cliDiagnosticError) {
 	}
 	if errors.Is(err, db.ErrSemanticUnavailable) {
 		d.kind, d.code = "unavailable", cliUnavailableExitCode
+		d.display = strings.Replace(err.Error(), db.ErrSemanticUnavailable.Error(), "semantic search not available", 1)
 		d.hint = "run `agentsview index embeddings build` on the archive host or turn it on in Settings → Embeddings → Turn on; " + commandHelpHint(cmd)
 		if cmd != nil && cmd.CommandPath() == "agentsview session search" {
 			d.hint += "; use --fts or --regex while semantic search is unavailable"

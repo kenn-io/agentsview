@@ -133,14 +133,6 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 	return v.cfg.Vector.IncludeAutomated
 }
 
-func (v *liveVectorServing) BuildStarted() {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if !v.setup.Busy {
-		v.setup.Error = ""
-	}
-}
-
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
 	v.mu.Lock()
 	status, cfg, missingManager := v.setup, v.cfg, v.serving.manager == nil
@@ -158,7 +150,11 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 			return status, setupRequestError(err)
 		}
 	}
-	return embeddingsSetupStatus(ctx, status, cfg)
+	status, err := embeddingsSetupStatus(ctx, status, cfg)
+	if status.Action == "" {
+		status.Error = ""
+	}
+	return status, err
 }
 
 func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupStatus, cfg config.Config) (server.EmbeddingsSetupStatus, error) {
@@ -204,7 +200,7 @@ func setupRequestError(err error) error {
 	return err
 }
 
-func (v *liveVectorServing) Setup(approvedBytes int64, build *vector.BuildRequest) error {
+func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
 		return err
@@ -221,19 +217,9 @@ func (v *liveVectorServing) Setup(approvedBytes int64, build *vector.BuildReques
 			return setupRequestError(err)
 		}
 	}
-	name, store := "", ""
-	if build != nil {
-		name, store = build.Using, build.Store
-		if err := vector.ValidateBuildRequest(*build); err != nil {
-			return err
-		}
-		if _, err := vectorStoreSpec(build.Store); err != nil {
-			return fmt.Errorf("%w: %w", vector.ErrInvalidBuildRequest, err)
-		}
-	}
-	_, deployment, err := embeddings.Server(name)
+	_, deployment, err := embeddings.Server("")
 	if err != nil {
-		return fmt.Errorf("%w: %w", vector.ErrInvalidBuildRequest, err)
+		return setupRequestError(err)
 	}
 	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
@@ -246,7 +232,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64, build *vector.BuildReques
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes, build)
+		err := v.activate(deployment, approvedBytes)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -254,16 +240,17 @@ func (v *liveVectorServing) Setup(approvedBytes int64, build *vector.BuildReques
 		} else {
 			v.setup.Action = ""
 		}
+		manager := v.serving.manager
 		close(v.done)
 		v.mu.Unlock()
-		if manager := v.Manager(store); err == nil && manager != nil {
+		if err == nil && manager != nil {
 			manager.Wait()
 		}
 	}()
 	return nil
 }
 
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, build *vector.BuildRequest) error {
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
 	cfg := v.cfg
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
@@ -307,15 +294,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		v.startSchedulers()
 		v.mu.Unlock()
 	}
-	req := vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated}
-	if build != nil {
-		req = *build
-	}
-	manager := v.Manager(req.Store)
-	if manager == nil {
-		return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.
-	}
-	err = manager.StartBuild(req)
+	err = v.serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 	if errors.Is(err, vector.ErrBuildRunning) {
 		return nil
 	}

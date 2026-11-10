@@ -14,10 +14,9 @@ import (
 type EmbeddingsRuntime interface {
 	Manager(store string) EmbeddingsManager
 	IncludeAutomated() bool
-	BuildStarted()
 	SetupStatus(context.Context) (EmbeddingsSetupStatus, error)
 	// Setup approves at most approvedBytes of download, the size the user saw.
-	Setup(approvedBytes int64, build *vector.BuildRequest) error
+	Setup(approvedBytes int64) error
 }
 
 type EmbeddingsSetupStatus = vector.SetupStatus
@@ -28,8 +27,7 @@ func WithEmbeddingsRuntime(runtime EmbeddingsRuntime) Option {
 
 type embeddingsSetupInput struct {
 	Body struct {
-		ApprovedBytes int64                   `json:"approved_bytes,omitempty" minimum:"0" doc:"Download size the user saw; a larger download is declined"`
-		Build         *embeddingsBuildRequest `json:"build,omitempty"`
+		ApprovedBytes int64 `json:"approved_bytes,omitempty" minimum:"0" doc:"Download size the user saw; a larger download is declined"`
 	}
 }
 
@@ -37,12 +35,7 @@ func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput
 	if s.embeddingsRuntime == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	var build *vector.BuildRequest
-	if in.Body.Build != nil {
-		req := in.Body.Build.resolve(s.embeddingsRuntime.IncludeAutomated())
-		build = &req
-	}
-	if err := s.embeddingsRuntime.Setup(in.Body.ApprovedBytes, build); err != nil {
+	if err := s.embeddingsRuntime.Setup(in.Body.ApprovedBytes); err != nil {
 		if errors.Is(err, vector.ErrBuildRunning) {
 			return nil, embeddingsActionError(err)
 		}
@@ -116,20 +109,6 @@ type embeddingsBuildRequest struct {
 	Using            string `json:"using,omitempty"`
 }
 
-func (r embeddingsBuildRequest) resolve(includeAutomated bool) vector.BuildRequest {
-	if r.IncludeAutomated != nil {
-		includeAutomated = *r.IncludeAutomated
-	}
-	spec := vector.MessageIndexSpec()
-	if r.Store == vector.RecallIndexSpec().Name {
-		spec = vector.RecallIndexSpec()
-	}
-	return vector.BuildRequest{
-		Store: r.Store, FullRebuild: r.FullRebuild, Backstop: r.Backstop,
-		RepairInvalid: r.RepairInvalid, IncludeAutomated: spec.NormalizeIncludeAutomated(includeAutomated), Using: r.Using,
-	}
-}
-
 type embeddingsBuildInput struct {
 	Body embeddingsBuildRequest
 }
@@ -175,7 +154,22 @@ func (s *Server) humaEmbeddingsBuild(
 	if manager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	req := in.Body.resolve(s.embeddingsRuntime.IncludeAutomated())
+	includeAutomated := s.embeddingsRuntime.IncludeAutomated()
+	if in.Body.IncludeAutomated != nil {
+		includeAutomated = *in.Body.IncludeAutomated
+	}
+	spec := vector.MessageIndexSpec()
+	if in.Body.Store == vector.RecallIndexSpec().Name {
+		spec = vector.RecallIndexSpec()
+	}
+	includeAutomated = spec.NormalizeIncludeAutomated(includeAutomated)
+	req := vector.BuildRequest{
+		FullRebuild:      in.Body.FullRebuild,
+		Backstop:         in.Body.Backstop,
+		RepairInvalid:    in.Body.RepairInvalid,
+		IncludeAutomated: includeAutomated,
+		Using:            in.Body.Using,
+	}
 	release, ok := s.idle.BeginWork()
 	if !ok {
 		return nil, apiError(http.StatusServiceUnavailable, "server is shutting down")
@@ -191,7 +185,6 @@ func (s *Server) humaEmbeddingsBuild(
 		}
 		return nil, internalError("start embeddings build", err)
 	}
-	s.embeddingsRuntime.BuildStarted()
 	go func() {
 		manager.Wait()
 		release()

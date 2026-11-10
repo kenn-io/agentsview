@@ -14,7 +14,6 @@ import (
 	kitvec "go.kenn.io/kit/vector"
 
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/vector"
 )
 
 var (
@@ -51,21 +50,15 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	return localEmbeddingEndpoint(ctx, opts)
 }
 
-func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig, name string, in *bufio.Scanner, out io.Writer, setup bool, progress func(int64, int64)) (bool, error) {
+func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig, name string, in *bufio.Scanner, out io.Writer) error {
 	_, server, err := c.Server(name)
 	if err != nil {
-		return false, err
+		return err
 	}
-	asked := false
 	_, err = resolveLocalEmbeddings(ctx, server, func(_ context.Context, size int64) (bool, error) {
-		asked = true
-		message := fmt.Sprintf("Download approximately %d MB for local semantic search?", (size+999999)/1000000)
-		if setup {
-			message = fmt.Sprintf("Turn on search by meaning? Downloads approximately %d MB once, shared by Kenn apps.", (size+999999)/1000000)
-		}
-		return confirmScanned(in, out, message), nil
-	}, progress)
-	return asked, err
+		return confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", (size+999999)/1000000)), nil
+	}, nil)
+	return err
 }
 
 func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server config.VectorEmbeddingsServerConfig, role embedconfig.Role, retryRateLimits bool) kitvec.EncodeFunc {
@@ -105,32 +98,4 @@ func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server confi
 		}
 		return vectors, err
 	}
-}
-
-func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner, cfg config.Config, client embeddingsDaemonClient, req vector.BuildRequest) error {
-	selected := cfg
-	if req.Using != "" {
-		selected.Vector.Embeddings.DefaultServer = req.Using
-	}
-	status, err := embeddingsSetupStatus(ctx, vector.SetupStatus{Action: "turn-on"}, selected)
-	if err != nil {
-		return err
-	}
-	var progress buildProgressPrinter
-	asked, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, req.Using, in, out, true, func(done, total int64) {
-		progress.printDownload(out, done, total)
-	})
-	if err != nil {
-		return err
-	}
-	if !asked {
-		message := fmt.Sprintf("Turn on search by meaning using %s (%s)?", status.Provider, cfg.Vector.Embeddings.Model)
-		if !confirmScanned(in, out, message) {
-			return errors.New("search setup declined")
-		}
-	}
-	if err := client.startSetup(ctx, req); err != nil {
-		return err
-	}
-	return pollDaemonBuildStatus(ctx, out, client)
 }

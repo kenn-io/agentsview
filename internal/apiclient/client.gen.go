@@ -29092,28 +29092,11 @@ func (e EmbeddingsGenerationsResponse) Validate() error {
 
 type EmbeddingsSetupInputBody struct {
 	// ApprovedBytes Download size the user saw; a larger download is declined
-	ApprovedBytes *int64                  `json:"approved_bytes,omitempty" validate:"omitempty,gte=0"`
-	Build         *EmbeddingsBuildRequest `json:"build,omitempty"`
+	ApprovedBytes *int64 `json:"approved_bytes,omitempty" validate:"omitempty,gte=0"`
 }
 
 func (e EmbeddingsSetupInputBody) Validate() error {
-	var errors runtime.ValidationErrors
-	if e.ApprovedBytes != nil {
-		if err := typesValidator.Var(e.ApprovedBytes, "omitempty,gte=0"); err != nil {
-			errors = errors.Append("ApprovedBytes", err)
-		}
-	}
-	if e.Build != nil {
-		if v, ok := any(e.Build).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Build", err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
+	return runtime.ConvertValidatorError(typesValidator.Struct(e))
 }
 
 type ExportAppliedPricingBand struct {

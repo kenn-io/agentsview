@@ -413,13 +413,25 @@ func runEmbeddingsBuild(
 	if cfg.ArchiveContent.UsageOnly() {
 		return requireVectorEnabled(cfg)
 	}
-	spec, err := vectorStoreSpec(opts.Store)
-	if err != nil {
-		return err
-	}
-	setup := !cfg.Vector.Enabled
-	var client embeddingsDaemonClient
-	if setup {
+	if !cfg.Vector.Enabled {
+		flag := ""
+		switch {
+		case opts.FullRebuild:
+			flag = "full-rebuild"
+		case opts.Backstop:
+			flag = "backstop"
+		case opts.RepairInvalid:
+			flag = "repair-invalid"
+		case opts.Using != "":
+			flag = "using"
+		case strings.TrimSpace(opts.Store) != "" && strings.TrimSpace(opts.Store) != "messages":
+			flag = "store"
+		case opts.IncludeAutomatedSet:
+			flag = "include-automated"
+		}
+		if flag != "" {
+			return fmt.Errorf("search by meaning is off: turn it on with 'agentsview index embeddings build' (no build flags) or Settings → Embeddings → Turn on, then rerun with --%s", flag)
+		}
 		tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 0)
 		if err != nil {
 			return err
@@ -427,25 +439,25 @@ func runEmbeddingsBuild(
 		if tr.Mode != transportHTTP || tr.ReadOnly {
 			return errors.New("search setup requires a writable daemon; start it with `agentsview daemon start` and retry `agentsview index embeddings build`, or use Settings → Embeddings → Turn on")
 		}
-		client = embeddingsDaemonClient{baseURL: tr.URL, token: cfg.AuthToken, store: daemonEmbeddingStore(spec.Name)}
 		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
 		if err != nil {
 			return err
 		}
+		client := embeddingsDaemonClient{baseURL: tr.URL, token: cfg.AuthToken, store: daemonEmbeddingStore("messages")}
+		return setupEmbeddingsBuild(ctx, out, bufio.NewScanner(in), cfg, client)
 	}
+	spec, err := vectorStoreSpec(opts.Store)
+	if err != nil {
+		return err
+	}
+
 	includeAutomated := cfg.Vector.IncludeAutomated
 	if opts.IncludeAutomatedSet {
 		includeAutomated = opts.IncludeAutomated
 	}
 	includeAutomated = spec.NormalizeIncludeAutomated(includeAutomated)
-	req := vector.BuildRequest{
-		Store: spec.Name, FullRebuild: opts.FullRebuild, Backstop: opts.Backstop,
-		RepairInvalid: opts.RepairInvalid, IncludeAutomated: includeAutomated, Using: opts.Using,
-	}
+
 	confirmation := bufio.NewScanner(in)
-	if setup {
-		return setupEmbeddingsBuild(ctx, out, confirmation, cfg, client, req)
-	}
 	if opts.FullRebuild && !opts.Yes {
 		proceed, err := confirmFullRebuild(
 			ctx, confirmation, out, cfg, includeAutomated, spec.Name,
@@ -458,8 +470,17 @@ func runEmbeddingsBuild(
 			return nil
 		}
 	}
-	if _, err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out, false, nil); err != nil {
+	if err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out); err != nil {
 		return err
+	}
+
+	req := vector.BuildRequest{
+		Store:            strings.TrimSpace(opts.Store),
+		FullRebuild:      opts.FullRebuild,
+		Backstop:         opts.Backstop,
+		RepairInvalid:    opts.RepairInvalid,
+		IncludeAutomated: includeAutomated,
+		Using:            opts.Using,
 	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
 		return runEmbeddingsBuildDaemon(ctx, out, cfg, req)
@@ -710,6 +731,9 @@ func pollDaemonBuildStatus(
 		}
 		if status.Setup != nil && status.Setup.Error != "" {
 			return errors.New(status.Setup.Error)
+		}
+		if status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
+			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)
 		}
 		if status.Setup == nil || !status.Setup.Busy {
 			if !status.Running {
@@ -1017,21 +1041,42 @@ type daemonAPIError struct {
 
 func (e *daemonAPIError) Error() string { return e.message }
 
-func embeddingsBuildBody(req vector.BuildRequest) *apiclient.EmbeddingsBuildRequest {
-	return &apiclient.EmbeddingsBuildRequest{
-		Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop),
-		RepairInvalid: new(req.RepairInvalid), IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
+func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner, cfg config.Config, client embeddingsDaemonClient) error {
+	status, err := client.status(ctx)
+	if err != nil {
+		return err
 	}
+	if status.Setup == nil || status.Setup.Action != "turn-on" {
+		return errors.New("search setup is unavailable")
+	}
+	setup := status.Setup
+	fmt.Fprintln(out, "Search by meaning is off.")
+	approved := int64(0)
+	if setup.Provider == "built-in" && setup.MissingBytes > 0 {
+		approved = setup.MissingBytes
+		fmt.Fprintf(out, "Turning it on downloads %d MB once, shared by all Kenn apps.\n", (approved+999999)/1000000)
+	} else {
+		provider := setup.Provider
+		if provider == "ollama" {
+			provider = "Ollama"
+		}
+		fmt.Fprintf(out, "Turning it on uses %s with %s.\n", provider, cfg.Vector.Embeddings.Model)
+	}
+	if !confirmScanned(in, out, "Turn on search by meaning?") {
+		return errors.New("search setup declined")
+	}
+	if err := client.startSetup(ctx, approved); err != nil {
+		return err
+	}
+	return pollDaemonBuildStatus(ctx, out, client)
 }
 
-func (c embeddingsDaemonClient) startSetup(ctx context.Context, req vector.BuildRequest) error {
+func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64) error {
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return err
 	}
-	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{
-		Build: embeddingsBuildBody(req),
-	}})
+	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{ApprovedBytes: &approved}})
 	if response == nil {
 		return err
 	}
@@ -1043,7 +1088,11 @@ func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.Build
 	if err != nil {
 		return err
 	}
-	response, err := api.PostAPIV1EmbeddingsBuildWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsBuildRequestOptions{Body: embeddingsBuildBody(req)})
+	response, err := api.PostAPIV1EmbeddingsBuildWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsBuildRequestOptions{Body: &apiclient.EmbeddingsBuildRequest{
+		Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop), RepairInvalid: new(req.RepairInvalid),
+		// Always send the resolved scope, including an explicit false override.
+		IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
+	}})
 	if response == nil {
 		return err
 	}

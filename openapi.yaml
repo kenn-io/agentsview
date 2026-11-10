@@ -4944,8 +4944,6 @@ components:
           format: int64
           minimum: 0
           type: integer
-        build:
-          $ref: "#/components/schemas/EmbeddingsBuildRequest"
       type: object
     EmptyTrashResponse:
       additionalProperties: false
