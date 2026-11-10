@@ -6,10 +6,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -151,8 +149,8 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 				assert.Equal(t, tc.ids[step], ids, query)
 				if tc.table == "cursor_usage_events" {
 					var accountRevision int64
-					require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT revision FROM usage_session_changes WHERE session_id=`+usageAccountChangeKeyPG).Scan(&accountRevision))
-					assert.Equal(t, through, accountRevision, "account writes must advance the dedicated marker")
+					require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT revision FROM usage_session_changes WHERE session_id=''`).Scan(&accountRevision))
+					assert.Equal(t, through, accountRevision, "account writes must advance the global marker")
 				}
 				if tc.table == "usage_events" && step == 0 {
 					// Released publishers replace usage without touching sessions.
@@ -412,82 +410,4 @@ func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, through)
 	assert.Empty(t, ids)
-}
-
-func TestUsageChangeJournalUpgradesAccountGeneration(t *testing.T) {
-	_, syncer, store, _ := keptUsageFixture(t)
-	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',10,100,'account')`)
-	require.NoError(t, err)
-	attachUsageCacheProbe(t, store, t.TempDir())
-	filter := db.UsageFilter{Timezone: "UTC"}
-	requireCachedUsageMatchesDirect(t, store, filter)
-	var oid uint32
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid`).Scan(&oid))
-	quoted, err := quoteIdentifier(syncer.schema)
-	require.NoError(t, err)
-	// Released version 1 used the global marker for account changes.
-	_, err = store.pg.ExecContext(ctx, markUsageChangeFunctionPG("cursor_usage_events", "''", quoted))
-	require.NoError(t, err)
-	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM usage_session_changes WHERE session_id<>'' AND session_id NOT IN (SELECT id FROM sessions)`)
-	require.NoError(t, err)
-	// A writer has already fired the old trigger when setup begins. The
-	// migration must wait for its commit before seeding the account marker.
-	raceCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	writer, err := syncer.pg.BeginTx(raceCtx, nil)
-	require.NoError(t, err)
-	defer writer.Rollback()
-	_, err = writer.ExecContext(raceCtx, `UPDATE cursor_usage_events SET output_tokens=20,charged_microdollars=200 WHERE id=1`)
-	require.NoError(t, err)
-	upgrade, err := syncer.pg.BeginTx(raceCtx, nil)
-	require.NoError(t, err)
-	defer upgrade.Rollback()
-	var pid int
-	require.NoError(t, upgrade.QueryRowContext(raceCtx, `SELECT pg_backend_pid()`).Scan(&pid))
-	done := make(chan error, 1)
-	finished := make(chan struct{})
-	go func() {
-		defer close(finished)
-		err := installUsageChangeJournalPG(raceCtx, upgrade)
-		if err == nil {
-			err = upgrade.Commit()
-		}
-		done <- err
-	}()
-	defer func() { _ = writer.Rollback(); cancel(); <-finished }()
-	require.Eventually(t, func() bool {
-		var blocked bool
-		err := store.pg.QueryRowContext(raceCtx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND relation='cursor_usage_events'::regclass AND NOT granted)`, pid).Scan(&blocked)
-		return err == nil && blocked
-	}, 3*time.Second, 10*time.Millisecond, "migration must wait for the old account writer")
-	var revision int64
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
-	require.NoError(t, writer.Commit())
-	require.NoError(t, <-done)
-	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
-	var version string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version))
-	require.Equal(t, strconv.Itoa(usageChangeJournalVersionPG), version, "existing version-1 journals must migrate forward")
-	var upgradedOID uint32
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid`).Scan(&upgradedOID))
-	require.Equal(t, oid, upgradedOID, "upgrading must preserve the source incarnation")
-	through, ids, err := store.LoadUsageChanges(ctx, revision)
-	require.NoError(t, err)
-	require.Equal(t, revision+1, through, "only the old writer may advance the commit clock")
-	require.Empty(t, ids)
-	got, err := store.usageCache.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, 1270, got.Totals.OutputTokens)
-	for _, mutation := range []string{
-		`UPDATE cursor_usage_events SET output_tokens=30,charged_microdollars=300 WHERE id=1`,
-		`DELETE FROM cursor_usage_events WHERE id=1`,
-	} {
-		_, err := store.pg.ExecContext(ctx, mutation)
-		require.NoError(t, err)
-		var accountRevision int64
-		require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT revision FROM usage_session_changes WHERE session_id=`+usageAccountChangeKeyPG).Scan(&accountRevision))
-		require.Greater(t, accountRevision, through, "upgraded writers must advance the dedicated account marker")
-		through = accountRevision
-	}
 }

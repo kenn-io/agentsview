@@ -129,7 +129,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		if err != nil {
 			return usagePreparedWindow{}, false, err
 		}
-		if changes.Global || (cursor && changes.Accounts) ||
+		if changes.Global ||
 			changes.Sessions+len(lost) > usageDeferredRefreshLimit {
 			return usagePreparedWindow{}, false, ErrUsageCacheWarming
 		}

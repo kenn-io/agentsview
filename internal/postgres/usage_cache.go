@@ -57,11 +57,10 @@ type pgUsageCacheSource struct {
 func (source *pgUsageCacheSource) SummarizeUsageChanges(ctx context.Context, afterRevision int64) (db.UsageChangeSummary, error) {
 	var summary db.UsageChangeSummary
 	err := source.pg.QueryRowContext(ctx, `SELECT
- COUNT(*) FILTER (WHERE session_id NOT IN ('', `+usageAccountChangeKeyPG+`)),
- COALESCE(bool_or(session_id = ''), false),
- COALESCE(bool_or(session_id = `+usageAccountChangeKeyPG+`), false)
+ COUNT(*) FILTER (WHERE session_id <> ''),
+ COALESCE(bool_or(session_id = ''), false)
  FROM usage_session_changes WHERE revision > $1`, afterRevision).Scan(
-		&summary.Sessions, &summary.Global, &summary.Accounts)
+		&summary.Sessions, &summary.Global)
 	return summary, err
 }
 
@@ -85,7 +84,7 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 	if snapshot.ChangeRevision == 0 {
 		return snapshot, errors.New("PostgreSQL usage journal unavailable")
 	}
-	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=`+usageAccountChangeKeyPG+`), 1)`).Scan(&snapshot.CursorHighWater)
+	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=''), 1)`).Scan(&snapshot.CursorHighWater)
 	if err != nil {
 		return snapshot, err
 	}

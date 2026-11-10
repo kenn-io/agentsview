@@ -189,29 +189,24 @@ func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
 	probe.takeExtracted()
 	var accountReads atomic.Int64
 	probe.beforeAccounts = func(context.Context) error { accountReads.Add(1); return nil }
-	for _, tc := range []struct {
-		mutation string
-		metadata bool
-	}{
-		{`UPDATE cursor_usage_events SET charged_microdollars=500,input_tokens=80 WHERE id=100`, false},
-		{`DELETE FROM cursor_usage_events WHERE id=100; INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,is_headless,dedup_key) VALUES(150,'cursor','2026-01-01','paid-a',40,50,300,false,'three')`, false},
-		{`UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`, true},
-		{`DELETE FROM model_pricing WHERE model_pattern='paid-a'`, true},
-		{`INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('account-journal','project-a','test-machine',now())`, true},
+	for _, mutation := range []string{
+		`UPDATE cursor_usage_events SET charged_microdollars=500,input_tokens=80 WHERE id=100`,
+		`DELETE FROM cursor_usage_events WHERE id=100; INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,is_headless,dedup_key) VALUES(150,'cursor','2026-01-01','paid-a',40,50,300,false,'three')`,
+		`UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`,
+		`DELETE FROM model_pricing WHERE model_pattern='paid-a'`,
+		`INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('account-journal','project-a','test-machine',now())`,
 	} {
 		before, err := probe.pgUsageCacheSource.CaptureUsage(ctx, db.UsageSourceRequest{})
 		require.NoError(t, err)
 		accountReads.Store(0)
-		_, err = store.pg.ExecContext(ctx, tc.mutation)
+		_, err = store.pg.ExecContext(ctx, mutation)
 		require.NoError(t, err)
 		requireCachedUsageMatchesDirect(t, store, filter)
 		require.Empty(t, probe.takeExtracted(), "account or metadata changes must reuse session facts")
-		if tc.metadata {
-			after, err := probe.pgUsageCacheSource.CaptureUsage(ctx, db.UsageSourceRequest{})
-			require.NoError(t, err)
-			assert.Equal(t, before.CursorHighWater, after.CursorHighWater, "metadata changes must preserve the account generation")
-			assert.Zero(t, accountReads.Load(), "metadata changes must not copy the account history")
-		}
+		after, err := probe.pgUsageCacheSource.CaptureUsage(ctx, db.UsageSourceRequest{})
+		require.NoError(t, err)
+		assert.Greater(t, after.CursorHighWater, before.CursorHighWater)
+		assert.Equal(t, int64(1), accountReads.Load())
 	}
 	store.SetCustomPricing(map[string]config.CustomModelRate{"paid-a": {OutputMicrodollarsPerMTok: 23000000}})
 	requireCachedUsageMatchesDirect(t, store, filter)

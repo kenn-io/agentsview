@@ -167,6 +167,45 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 	return local, syncer, store, counter
 }
 
+func TestReviewExistingJournalKeepsRepeatUsage(t *testing.T) {
+	_, syncer, owner, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
+	reader, err := NewStore(ctx, roleURL, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	counter := &usageReadCounter{storeExecutor: reader.pg, queries: map[string]int{}}
+	reader.pg = counter
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	first, err := reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	queries := maps.Clone(counter.queries)
+	second, err := reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Equal(t, queries, counter.queries, "an unchanged repeat read should reuse the existing Usage memo")
+
+	directory := t.TempDir()
+	probe := attachUsageCacheProbe(t, reader, directory)
+	requireCachedUsageMatchesDirect(t, reader, filter)
+	require.NoError(t, reader.usageCache.Close())
+	probe = attachUsageCacheProbe(t, reader, directory)
+	requireCachedUsageMatchesDirect(t, reader, filter)
+	require.Empty(t, probe.takeExtracted(), "a read-only restart must reuse persisted facts")
+	reader.usageCache.DeferWork()
+	_, err = owner.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',10,100,'read-only-account')`)
+	require.NoError(t, err)
+	_, err = reader.usageCache.GetDailyUsage(ctx, filter)
+	require.ErrorIs(t, err, db.ErrUsageCacheWarming)
+	want, err := (&Store{pg: reader.pg}).GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err := reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NoError(t, reader.usageCache.WaitWarm(ctx))
+	requireCachedUsageMatchesDirect(t, reader, filter)
+}
+
 func TestUsageKeptPushBetweenReads(t *testing.T) {
 	local, syncer, store, counter := keptUsageFixture(t)
 	ctx := t.Context()

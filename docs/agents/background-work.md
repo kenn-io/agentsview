@@ -127,7 +127,7 @@ Codex data-loss bug or a merge blocker.
   remaining `fill facts -> build rollups -> read` cold cost.
 - Native PostgreSQL serving runs no coverage pass. A Usage read returns the
   direct PostgreSQL result when its timezone has no current journal claim, its
-  catalog or account generation changed, or it would refresh more than 64
+  pricing, account usage, or project identity changed, or it would refresh more than 64
   changed sessions. That read queues its timezone for one background worker,
   which reads all history in the timezone. The worker's read fills facts,
   rebuilds rollups, and claims coverage, so later reads in any window refresh
