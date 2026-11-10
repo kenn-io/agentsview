@@ -569,6 +569,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
 			if tc.stale {
 				require.ErrorContains(t, err, "search by meaning is off")
+				require.ErrorContains(t, err, "agentsview daemon restart")
 				assert.Zero(t, buildPosts)
 				return
 			}

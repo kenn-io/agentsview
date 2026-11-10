@@ -1119,7 +1119,7 @@ func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, clie
 			return true, fmt.Errorf("loading config: %w", err)
 		}
 		if !cfg.Vector.Enabled {
-			return true, errors.New("search by meaning is off in the config; retry setup")
+			return true, errors.New("search by meaning is off in the config; run `agentsview daemon restart` before retrying setup")
 		}
 		fmt.Fprintln(out, "Search by meaning is on.")
 		return true, buildViaDaemon(ctx, out, client, vector.BuildRequest{IncludeAutomated: vector.MessageIndexSpec().NormalizeIncludeAutomated(cfg.Vector.IncludeAutomated)})
