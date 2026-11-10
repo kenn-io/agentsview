@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -48,6 +49,8 @@ func TestPGRetainedCommitLinksSharedPublishers(t *testing.T) {
 	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	dbtest.SeedRetainedCommitLink(t, a, "shared", sha)
 	dbtest.SeedRetainedCommitLink(t, b, "shared", sha)
+	dbtest.SeedRetainedCommitLink(t, a, "distinct", "cccccccccccccccccccccccccccccccccccccccc")
+	dbtest.SeedRetainedCommitLink(t, b, "distinct", "dddddddddddddddddddddddddddddddddddddddd")
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	syncer.local = b
@@ -65,6 +68,27 @@ func TestPGRetainedCommitLinksSharedPublishers(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, matches.Commits[0].Links, n)
 	}
+	checkDistinct := func(want []string) {
+		t.Helper()
+		links, err := store.SessionCommitLinks(t.Context(), "distinct")
+		require.NoError(t, err)
+		var shas []string
+		for _, link := range links.Commits {
+			shas = append(shas, link.SHA)
+		}
+		require.ElementsMatch(t, want, shas)
+		matches, err := store.CommitSessionLinks(t.Context(), []string{"cccccccccccccccccccccccccccccccccccccccc", "dddddddddddddddddddddddddddddddddddddddd"})
+		require.NoError(t, err)
+		for i, sha := range []string{"cccccccccccccccccccccccccccccccccccccccc", "dddddddddddddddddddddddddddddddddddddddd"} {
+			if slices.Contains(want, sha) {
+				require.Len(t, matches.Commits[i].Links, 1)
+				require.Equal(t, "distinct", matches.Commits[i].Links[0].SessionID)
+			} else {
+				require.Empty(t, matches.Commits[i].Links)
+			}
+		}
+	}
+	checkDistinct([]string{"cccccccccccccccccccccccccccccccccccccccc", "dddddddddddddddddddddddddddddddddddddddd"})
 	check(1)
 	_, err = pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) SELECT session_id,sha,branch,'orphan',repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,false FROM retained_commit_links WHERE source_archive_id=$1`, syncer.archiveID)
 	require.NoError(t, err)
@@ -84,8 +108,10 @@ func TestPGRetainedCommitLinksSharedPublishers(t *testing.T) {
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	check(1)
+	checkDistinct([]string{"dddddddddddddddddddddddddddddddddddddddd"})
 	syncer.local = dbtest.RebuildCommitArchive(t, b, config.ArchiveContentUsage)
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	check(0)
+	checkDistinct(nil)
 }

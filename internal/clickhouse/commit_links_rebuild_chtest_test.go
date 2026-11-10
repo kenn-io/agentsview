@@ -4,6 +4,7 @@ package clickhouse
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,8 @@ func TestClickHouseRetainedCommitLinksSharedPublishers(t *testing.T) {
 	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	dbtest.SeedRetainedCommitLink(t, a, "shared", sha)
 	dbtest.SeedRetainedCommitLink(t, b, "shared", sha)
+	dbtest.SeedRetainedCommitLink(t, a, "distinct", "cccccccccccccccccccccccccccccccccccccccc")
+	dbtest.SeedRetainedCommitLink(t, b, "distinct", "dddddddddddddddddddddddddddddddddddddddd")
 	sa := newTestSync(t, a, target, storage.PusherOptions{})
 	sb := newTestSync(t, b, target, storage.PusherOptions{})
 	_, err = sa.Push(t.Context(), true, nil)
@@ -90,13 +93,46 @@ func TestClickHouseRetainedCommitLinksSharedPublishers(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, matches.Commits[0].Links, n)
 	}
+	checkDistinct := func(want []string) {
+		t.Helper()
+		links, err := store.SessionCommitLinks(t.Context(), "distinct")
+		require.NoError(t, err)
+		var shas []string
+		for _, link := range links.Commits {
+			shas = append(shas, link.SHA)
+		}
+		require.ElementsMatch(t, want, shas)
+		matches, err := store.CommitSessionLinks(t.Context(), []string{"cccccccccccccccccccccccccccccccccccccccc", "dddddddddddddddddddddddddddddddddddddddd"})
+		require.NoError(t, err)
+		for i, sha := range []string{"cccccccccccccccccccccccccccccccccccccccc", "dddddddddddddddddddddddddddddddddddddddd"} {
+			if slices.Contains(want, sha) {
+				require.Len(t, matches.Commits[i].Links, 1)
+				require.Equal(t, "distinct", matches.Commits[i].Links[0].SessionID)
+			} else {
+				require.Empty(t, matches.Commits[i].Links)
+			}
+		}
+	}
+	checkDistinct([]string{"cccccccccccccccccccccccccccccccccccccccc", "dddddddddddddddddddddddddddddddddddddddd"})
+	check(1)
+	resident := dbtest.OpenTestDB(t)
+	dbtest.SeedPricingMeta(t, resident)
+	dbtest.SeedSession(t, resident, "shared", "commit-project")
+	live := newTestSync(t, resident, target, storage.PusherOptions{})
+	_, err = live.Push(t.Context(), true, nil)
+	require.NoError(t, err)
+	check(0)
+	_, err = live.conn.ExecContext(t.Context(), `DELETE FROM sessions WHERE id='shared' SETTINGS mutations_sync=2`)
+	require.NoError(t, err)
 	check(1)
 	sa = newTestSync(t, dbtest.RebuildCommitArchive(t, a, config.ArchiveContentUsage), target, storage.PusherOptions{})
 	_, err = sa.Push(t.Context(), true, nil)
 	require.NoError(t, err)
 	check(1)
+	checkDistinct([]string{"dddddddddddddddddddddddddddddddddddddddd"})
 	sb = newTestSync(t, dbtest.RebuildCommitArchive(t, b, config.ArchiveContentUsage), target, storage.PusherOptions{})
 	_, err = sb.Push(t.Context(), true, nil)
 	require.NoError(t, err)
 	check(0)
+	checkDistinct(nil)
 }
