@@ -163,8 +163,7 @@ CREATE TABLE IF NOT EXISTS retained_commit_links (
     source_archive_id TEXT NOT NULL, session_id TEXT NOT NULL, sha TEXT NOT NULL,
     branch TEXT NOT NULL, subject TEXT NOT NULL, repository TEXT NOT NULL,
     message_ordinal INTEGER NOT NULL, call_index INTEGER NOT NULL, tool_use_id TEXT NOT NULL,
-    committed_at TEXT NOT NULL, turn_ordinal INTEGER, turn_text TEXT NOT NULL,
-    project TEXT NOT NULL, PRIMARY KEY(source_archive_id,session_id,sha)
+    committed_at TEXT NOT NULL, PRIMARY KEY(source_archive_id,session_id,sha)
 );
 CREATE INDEX IF NOT EXISTS idx_retained_commit_links_session_sha ON retained_commit_links(session_id,sha);
 CREATE INDEX IF NOT EXISTS idx_retained_commit_links_sha ON retained_commit_links(sha);

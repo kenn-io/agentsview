@@ -123,7 +123,7 @@ func (s *Sync) replaceRetainedCommitLinks(ctx context.Context) error {
 	}
 	for _, r := range rows {
 		l := newPublishedCommitLink(r, true)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO retained_commit_links (source_archive_id,session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, s.archiveID, l.sessionID, l.sha, l.branch, l.subject, l.repository, l.messageOrdinal, l.callIndex, l.toolUseID, l.committedAt, l.turnOrdinal, l.turnText, l.project); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO retained_commit_links (source_archive_id,session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, s.archiveID, l.sessionID, l.sha, l.branch, l.subject, l.repository, l.messageOrdinal, l.callIndex, l.toolUseID, l.committedAt); err != nil {
 			return err
 		}
 	}

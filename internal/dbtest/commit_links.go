@@ -15,16 +15,11 @@ import (
 func SeedCommitLinks(t *testing.T, d *db.DB) {
 	t.Helper()
 	for i, id := range []string{"commit-live", "commit-trash", "commit-delete", "commit-clash"} {
-		SeedSession(t, d, id, "commit-project")
 		sha := "abc1234567890123456789012345678901234567"
 		if i == 3 {
 			sha = "abc1234ff7890123456789012345678901234567"
 		}
-		result := "[main " + sha + "] Save the change"
-		require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []db.Message{
-			{SessionID: id, Ordinal: 0, Role: "user", Content: "Record the parser fix"},
-			{SessionID: id, Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call", InputJSON: `{"command":"git commit -m change"}`, ResultContent: result, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: result}}}}},
-		}))
+		seedCommitTranscript(t, d, id, sha, true)
 	}
 	SeedSession(t, d, "commit-trailer", "commit-project")
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "commit-trailer", []db.Message{{SessionID: "commit-trailer", Ordinal: 0, Role: "user", Content: "Save the editor change", Timestamp: "2026-01-01T00:00:00Z"}}))
@@ -148,15 +143,26 @@ func AssertRetainedCommitLink(t *testing.T, reader db.CommitLinkReader, want boo
 	assert.Nil(t, links.Commits[0].Turn)
 }
 
-// SeedRetainedCommitLink creates transcript evidence for a deleted session.
-func SeedRetainedCommitLink(t *testing.T, d *db.DB, id, sha string) {
+func seedCommitTranscript(t *testing.T, d *db.DB, id, sha string, prompt bool) {
 	t.Helper()
 	SeedSession(t, d, id, "commit-project")
 	result := "[main " + sha + "] Save the change"
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []db.Message{{
-		SessionID: id, Ordinal: 0, Role: "assistant", HasToolUse: true,
-		ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "call", InputJSON: `{"command":"git commit -m change"}`, ResultContent: result, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: result}}}},
-	}}))
+	callID := "call"
+	var messages []db.Message
+	if prompt {
+		callID = "commit-call"
+		messages = append(messages, db.Message{SessionID: id, Ordinal: 0, Role: "user", Content: "Record the parser fix"})
+	}
+	messages = append(messages, db.Message{SessionID: id, Ordinal: len(messages), Role: "assistant", HasToolUse: true,
+		ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: callID, InputJSON: `{"command":"git commit -m change"}`, ResultContent: result, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: result}}}},
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, messages))
+}
+
+// SeedRetainedCommitLink creates transcript evidence for a deleted session.
+func SeedRetainedCommitLink(t *testing.T, d *db.DB, id, sha string) {
+	t.Helper()
+	seedCommitTranscript(t, d, id, sha, false)
 	require.NoError(t, d.DeleteSession(t.Context(), id))
 }
 

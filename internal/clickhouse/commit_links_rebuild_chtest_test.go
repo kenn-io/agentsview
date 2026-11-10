@@ -47,9 +47,9 @@ func TestClickHouseRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
 				live := newTestSync(t, resident, target, storage.PusherOptions{})
 				_, err = live.Push(t.Context(), true, nil)
 				require.NoError(t, err)
-				_, err = sa.conn.ExecContext(t.Context(), `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained,push_version) SELECT session_id,sha,branch,'legacy',repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,true,0 FROM retained_commit_links WHERE source_archive_id=? AND session_id='shared'`, sa.archiveID)
+				_, err = sa.conn.ExecContext(t.Context(), `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained,push_version) SELECT session_id,sha,branch,'legacy',repository,message_ordinal,call_index,tool_use_id,committed_at,NULL,'','',true,0 FROM retained_commit_links WHERE source_archive_id=? AND session_id='shared'`, sa.archiveID)
 				require.NoError(t, err)
-				_, err = sa.conn.ExecContext(t.Context(), `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained,push_version) SELECT 'unknown','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,true,0 FROM retained_commit_links WHERE source_archive_id=? AND session_id='shared'`, sa.archiveID)
+				_, err = sa.conn.ExecContext(t.Context(), `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained,push_version) SELECT 'unknown','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,NULL,'','',true,0 FROM retained_commit_links WHERE source_archive_id=? AND session_id='shared'`, sa.archiveID)
 				require.NoError(t, err)
 				for range 2 {
 					_, err = sa.Push(t.Context(), true, nil)

@@ -16,7 +16,8 @@ type CommitLinkQuerier interface {
 func readCommitLinks(ctx context.Context, q CommitLinkQuerier, retained bool, where string, args ...any) ([]db.CommitLink, error) {
 	source := `SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained, '' AS source_archive_id, CASE WHEN retained THEN 2 ELSE 0 END AS priority FROM commit_links`
 	if retained {
-		source += ` UNION ALL SELECT *, 1 AS priority FROM (SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,TRUE AS retained,source_archive_id FROM retained_commit_links) owned`
+		// NULLIF supplies a typed null for both PostgreSQL and ClickHouse.
+		source += ` UNION ALL SELECT *, 1 AS priority FROM (SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,NULLIF(0,0) AS turn_ordinal,'' AS turn_text,'' AS project,TRUE AS retained,source_archive_id FROM retained_commit_links) owned`
 	}
 	rows, err := q.QueryContext(ctx, `SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,missing,turn_ordinal,turn_text FROM (
  SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,

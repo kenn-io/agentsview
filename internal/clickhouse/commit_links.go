@@ -23,8 +23,12 @@ func (s *Store) CommitSessionLinks(ctx context.Context, shas []string) (*db.Comm
 	return out, err
 }
 
+func commitLinkBaseRow(r db.CommitLinkRow) []any {
+	return []any{r.SessionID, r.SHA, r.Branch, r.Subject, r.Repository, r.MessageOrdinal, r.CallIndex, r.ToolUseID, r.CommittedAt}
+}
+
 func commitLinkRow(r db.CommitLinkRow, retained bool, version uint64) []any {
-	return []any{r.SessionID, r.SHA, r.Branch, r.Subject, r.Repository, r.MessageOrdinal, r.CallIndex, r.ToolUseID, r.CommittedAt, nullIntPtr(r.TurnOrdinal), r.TurnText, r.Project, retained, version}
+	return append(commitLinkBaseRow(r), nullIntPtr(r.TurnOrdinal), r.TurnText, r.Project, retained, version)
 }
 
 func (s *Sync) replaceRetainedCommitLinks(ctx context.Context, version uint64) error {
@@ -34,8 +38,7 @@ func (s *Sync) replaceRetainedCommitLinks(ctx context.Context, version uint64) e
 	}
 	var block [][]any
 	for _, r := range rows {
-		link := commitLinkRow(r, true, version)
-		block = append(block, append(append([]any{s.archiveID}, link[:len(link)-2]...), version))
+		block = append(block, append(append([]any{s.archiveID}, commitLinkBaseRow(r)...), version))
 	}
 	if err := insertRows(ctx, s.conn, "retained_commit_links", block); err != nil {
 		return err
