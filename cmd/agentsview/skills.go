@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	gitrepo "go.kenn.io/kit/git/repo"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/skills"
 )
 
@@ -96,13 +97,16 @@ func runSkillsInstall(
 	remote skillRemoteSource,
 ) error {
 	var refused []string
+	var local bool
 	for _, h := range harnesses {
 		skillPath := filepath.Join(skills.TargetDir(h, base), skillFileName)
 		installedSkill, err := readSkillFile(skillPath)
 		if err != nil {
 			return err
 		}
-		pkg, err := skills.RenderPackage(h, version, remote.resolve(installedSkill))
+		target := remote.resolve(installedSkill)
+		local = local || target.Server == ""
+		pkg, err := skills.RenderPackage(h, version, target)
 		if err != nil {
 			return err
 		}
@@ -145,6 +149,12 @@ func runSkillsInstall(
 			"skills install: %d target(s) refused; rerun with --force to overwrite",
 			len(refused),
 		)
+	}
+	if local {
+		cfg, err := config.LoadReadOnlyFor(config.ScopeVector)
+		if err == nil && !cfg.Vector.Enabled && !cfg.ArchiveContent.UsageOnly() {
+			fmt.Fprintln(out, "Search by meaning: Settings → Embeddings → Turn on or run agentsview index embeddings build")
+		}
 	}
 	return nil
 }

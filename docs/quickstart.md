@@ -224,6 +224,11 @@ CLI users can start the web UI explicitly:
 agentsview serve
 ```
 
+To search by meaning, choose **Settings → Embeddings → Turn on** or run
+`agentsview index embeddings build` and approve the download. Embeddings run
+locally; agents use keyword search until indexing is ready. See
+[Semantic Search](/docs/semantic-search/) for details.
+
 Bare `agentsview serve` runs in the foreground until you press `Ctrl+C`. If a
 compatible server is already running, it reports that server's URL and exits
 with an error (status 1).
@@ -393,8 +398,3 @@ Once running, the web UI provides:
 Use the [Usage Guide](/docs/usage/) for navigation and resume controls. To
 correct project assignments, see the [Data page](/docs/data/) and its opt-in
 project workspace.
-
-Beyond full-text search, opt-in semantic search lets
-`agentsview session search --semantic` (or `--hybrid`) match session content by
-meaning, backed by a local or hosted embeddings endpoint. See
-[Semantic Search](/docs/semantic-search/) for setup.

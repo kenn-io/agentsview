@@ -65,6 +65,7 @@ agentsview daemon start    # alternatively, start the same server in the backgro
 agentsview daemon status   # show daemon status
 agentsview daemon restart  # restart from current configuration
 agentsview daemon stop     # stop the server, web UI, and sync
+agentsview index embeddings build  # turn on search by meaning
 agentsview session list    # read from the daemon if warm, otherwise SQLite
 agentsview report usage daily     # print daily cost summary
 ```
@@ -344,10 +345,10 @@ agentsview report stats --include-git-outcomes
   filters in the command palette and optional CJK character and phrase search
   for Chinese, Japanese, and Korean text in SQLite, including Chinese word
   segmentation through `simple`/cppjieba
-- **Semantic search** (opt-in) -- index session content with any
-  OpenAI-compatible embeddings endpoint and search by meaning with
-  `agentsview session search --semantic` or `--hybrid`; every content-search
-  match cites the conversation unit it came from
+- **Semantic search** (opt-in) -- search by meaning using local embeddings.
+  Choose Settings → Embeddings → Turn on or run `agentsview index embeddings build`
+  to set it up. Agents use keyword search until indexing is ready; content-search
+  matches cite the conversation unit they came from
   ([docs](https://agentsview.io/semantic-search/))
 - **Token usage and cost dashboard** -- per-session and per-model cost
   breakdowns, total and uncached input counts, and daily spend charts with
