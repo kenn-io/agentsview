@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"path/filepath"
@@ -479,5 +480,45 @@ func TestImageTextContentPageOrder(t *testing.T) {
 			require.Contains(t, page.Matches[0].Snippet, "zebra")
 			require.Zero(t, page.NextCursor)
 		})
+	}
+}
+
+func TestImageTextSessionDeletionPrunesOnlyOwnedHashes(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	shared := testInlineImageContent()
+	exclusive := `[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+	for _, id := range []string{"one", "two"} {
+		insertSession(t, d, id, "demo")
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: shared}}}}))
+	}
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: exclusive}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	sharedHash := RetainedToolResultImages(shared)[0].SHA256
+	exclusiveHash := RetainedToolResultImages(exclusive)[0].SHA256
+	for _, hash := range []string{sharedHash, exclusiveHash} {
+		require.NoError(t, d.SaveImageText(ctx, hash, identity, "needle", false))
+	}
+	// An unrelated cache row lets this test detect a sweep of the entire cache.
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision) VALUES('unrelated','p','p','m','r')`)
+		return err
+	}))
+	for _, step := range []struct {
+		id                string
+		shared, exclusive int
+	}{{"one", 1, 0}, {"two", 0, 0}} {
+		require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, step.id)
+			return err
+		}))
+		var sharedCount, exclusiveCount, unrelatedCount int
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, sharedHash).Scan(&sharedCount))
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, exclusiveHash).Scan(&exclusiveCount))
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash='unrelated'`).Scan(&unrelatedCount))
+		require.Equal(t, step.shared, sharedCount)
+		require.Equal(t, step.exclusive, exclusiveCount)
+		require.Equal(t, 1, unrelatedCount)
 	}
 }

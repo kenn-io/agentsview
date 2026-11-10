@@ -54,6 +54,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	166: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate},
 	167: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate},
 	168: {parser.AgentAntigravity, parser.AgentAntigravityCLI},
+	169: {parser.AgentDeepSeekHarness},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released
@@ -73,6 +74,13 @@ func InstallDataVersionScopesForTest(scopes map[int][]parser.AgentType) func() {
 	return func() { dataVersionScopes = previous }
 }
 
+// Version 170 protects the image projection from older writers without
+// changing parser output. Tests can override the current parser scope.
+func imageTextProjectionVersion(version int) bool {
+	_, scoped := dataVersionScopes[version]
+	return version == imageTextProjectionDataVersion && !scoped
+}
+
 // ScopedDataVersionProviders returns the providers to reparse when an
 // archive moves from one parser version to another. It returns nil when any
 // version in the range requires a full rebuild.
@@ -82,6 +90,9 @@ func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 	}
 	var affected []parser.AgentType
 	for version := from + 1; version <= to; version++ {
+		if imageTextProjectionVersion(version) {
+			continue
+		}
 		providers := dataVersionScopes[version]
 		if len(providers) == 0 {
 			return nil
@@ -97,6 +108,9 @@ func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 // invalidate unaffected agents.
 func AgentDataVersion(agent parser.AgentType) int {
 	for version := dataVersion; version > 0; version-- {
+		if imageTextProjectionVersion(version) {
+			continue
+		}
 		providers := dataVersionScopes[version]
 		if len(providers) == 0 {
 			return version
@@ -114,6 +128,9 @@ func AgentDataVersion(agent parser.AgentType) int {
 // full rebuild.
 func fullRebuildDataVersion() int {
 	for version := dataVersion; version > 0; version-- {
+		if imageTextProjectionVersion(version) {
+			continue
+		}
 		if len(dataVersionScopes[version]) == 0 {
 			return version
 		}

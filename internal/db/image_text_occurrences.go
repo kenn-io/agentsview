@@ -2,7 +2,10 @@ package db
 
 import (
 	"container/list"
+	"context"
 	"crypto/sha256"
+	"database/sql"
+	"fmt"
 	"sync"
 )
 
@@ -81,6 +84,49 @@ func (m *imageTextMemo) images(content string) []RetainedImage {
 	m.imageCount += len(images)
 	m.bytes += bytes
 	return images
+}
+
+// backfillImageTextOccurrencesTx projects retained rows without reparsing sources.
+func backfillImageTextOccurrencesTx(ctx context.Context, tx *sql.Tx) error {
+	batch := &imageTextBatchTx{transactionQueries: tx, oldHashes: make(map[string]bool)}
+	last := ""
+	for {
+		rows, err := tx.QueryContext(ctx, `SELECT session_id FROM (
+			SELECT session_id FROM tool_calls WHERE result_content LIKE '%image%' AND session_id>?
+			UNION SELECT session_id FROM tool_result_events WHERE content LIKE '%image%' AND session_id>?
+		) ORDER BY session_id LIMIT 100`, last, last)
+		if err != nil {
+			return fmt.Errorf("finding retained images: %w", err)
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		err = rows.Err()
+		if closeErr := rows.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := refreshImageTextOccurrencesTx(batch, id); err != nil {
+				return fmt.Errorf("projecting retained images: %w", err)
+			}
+		}
+		if len(ids) < 100 {
+			return batch.pruneImageText()
+		}
+		last = ids[len(ids)-1]
+	}
 }
 
 // refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
