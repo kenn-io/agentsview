@@ -63,7 +63,9 @@ const (
 	// Version 20 rebuilds account billing rollups without request pricing bands.
 	// Version 21 stores group keys and labels separately from version 20 writers.
 	// Version 22 separates snapshot ranking from billed output.
-	usageCacheFormatVersion             = 22
+	// Version 23 stores priced totals for external account rows that cannot
+	// deduplicate against other usage.
+	usageCacheFormatVersion             = 23
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -382,7 +384,38 @@ CREATE TABLE usage_rollup_exceptions (
 CREATE INDEX usage_rollup_exceptions_window
     ON usage_rollup_exceptions (
         local_date, rollup_install_id, group_kind, group_key
-    );`
+    );
+CREATE TABLE usage_rollup_account_totals (
+    rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
+        ON DELETE CASCADE,
+    local_date TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    is_headless INTEGER NOT NULL,
+    reported_model TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    priced_model TEXT NOT NULL,
+    matched_pattern TEXT NOT NULL,
+    rate_ok INTEGER NOT NULL,
+    rate_hash TEXT NOT NULL,
+    band_threshold INTEGER NOT NULL,
+    pricing_key TEXT NOT NULL,
+    pricing_timestamp TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    reasoning_tokens INTEGER NOT NULL,
+    cache_creation_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    estimated_cost_microdollars INTEGER NOT NULL,
+    savings_microdollars INTEGER NOT NULL,
+    computed_request_count INTEGER NOT NULL,
+    computed_aggregate_count INTEGER NOT NULL,
+    reported_count INTEGER NOT NULL,
+    base_request_count INTEGER NOT NULL,
+    PRIMARY KEY (
+        rollup_install_id, local_date, agent, is_headless, reported_model,
+        provider_id, rate_hash, band_threshold
+    )
+) WITHOUT ROWID;`
 
 type usageCache struct {
 	db         *sql.DB
@@ -963,6 +996,15 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        request_scoped, is_headless, claude_message_id, claude_request_id,
 		        source_uuid, usage_dedup_key
 		 FROM usage_rollup_exceptions LIMIT 0`,
+		`SELECT rollup_install_id, local_date, agent, is_headless,
+		        reported_model, provider_id, priced_model, matched_pattern,
+		        rate_ok, rate_hash, band_threshold, pricing_key,
+		        pricing_timestamp, input_tokens, output_tokens,
+		        reasoning_tokens, cache_creation_tokens, cache_read_tokens,
+		        estimated_cost_microdollars, savings_microdollars,
+		        computed_request_count, computed_aggregate_count,
+		        reported_count, base_request_count
+		 FROM usage_rollup_account_totals LIMIT 0`,
 	}
 	for _, query := range queries {
 		if _, err := database.ExecContext(ctx, query); err != nil {

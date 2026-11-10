@@ -103,8 +103,12 @@ func (cache *usageCache) usageRollupQuery(
 	if err != nil {
 		return usageFactsResult{}, err
 	}
+	accounts, err := readUsageAccountTotals(ctx, conn, timezoneID, snapshot, filter)
+	if err != nil {
+		return usageFactsResult{}, err
+	}
 	exceptionGroups, err := aggregateUsageRollupExceptions(
-		exceptions, snapshot, filter, resolver)
+		exceptions, accounts, snapshot, filter, resolver)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
@@ -456,11 +460,76 @@ func (cache *usageCache) usageRollupActivityQuery(
 	return result, nil
 }
 
+// readUsageAccountTotals reads the priced account rows that pass the
+// filter's account rules. A snapshot without account rows reads none.
+func readUsageAccountTotals(
+	ctx context.Context, conn *sql.Conn, timezoneID int64,
+	snapshot usageQuerySnapshot, filter UsageFilter,
+) ([]usageAccountTotal, error) {
+	if snapshot.CursorHighWater == 0 || !usageCursorIncluded(filter) {
+		return nil, nil
+	}
+	from, to := usageRollupDateBounds(snapshot)
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	where := `i.timezone_id=` + b.Add(timezoneID) +
+		` AND i.session_id=` + b.Add(usageRollupCursorSessionID)
+	if from != "" {
+		where += ` AND t.local_date>=` + b.Add(from)
+	}
+	if to != "" {
+		where += ` AND t.local_date<=` + b.Add(to)
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT t.local_date, t.agent,
+		t.is_headless, t.reported_model, t.provider_id, t.priced_model,
+		t.matched_pattern, t.rate_ok, t.rate_hash, t.band_threshold,
+		t.pricing_key, t.pricing_timestamp, t.input_tokens, t.output_tokens,
+		t.reasoning_tokens, t.cache_creation_tokens, t.cache_read_tokens,
+		t.estimated_cost_microdollars, t.savings_microdollars,
+		t.computed_request_count, t.computed_aggregate_count,
+		t.reported_count, t.base_request_count
+		FROM usage_rollup_account_totals t
+		JOIN usage_rollup_installs i ON i.id = t.rollup_install_id
+		WHERE `+where, b.Args()...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	agents, excludedAgents := CSVFilterValues(filter.Agent), CSVFilterValues(filter.ExcludeAgent)
+	var result []usageAccountTotal
+	for rows.Next() {
+		var row usageAccountTotal
+		var headless, rateOK, band int
+		if err := rows.Scan(&row.LocalDate, &row.Agent, &headless,
+			&row.ReportedModel, &row.ProviderID, &row.PricedModel,
+			&row.MatchedPattern, &rateOK, &row.RateHash, &band,
+			&row.PricingKey, &row.PricingTimestamp, &row.InputTokens,
+			&row.OutputTokens, &row.ReasoningTokens, &row.CacheCreationTokens,
+			&row.CacheReadTokens, &row.CostMicrodollars, &row.SavingsMicrodollars,
+			&row.ComputedRequestCount, &row.ComputedAggregateCount,
+			&row.ReportedCount, &row.BaseRequestCount); err != nil {
+			return nil, err
+		}
+		row.IsHeadless, row.RateOK = headless != 0, rateOK != 0
+		if band >= 0 {
+			row.BandThreshold = &band
+		}
+		if (len(agents) > 0 && !slices.Contains(agents, row.Agent)) ||
+			slices.Contains(excludedAgents, row.Agent) ||
+			!usageCursorAutomatedScopePasses(filter, row.IsHeadless) ||
+			!usageRollupModelPasses(filter, row.ReportedModel) {
+			continue
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
 func aggregateUsageRollupExceptions(
-	facts []usageRollupFact, snapshot usageQuerySnapshot, filter UsageFilter,
+	facts []usageRollupFact, accounts []usageAccountTotal,
+	snapshot usageQuerySnapshot, filter UsageFilter,
 	resolver *export.PricingResolver,
 ) ([]usageFactsGroup, error) {
-	if len(facts) == 0 {
+	if len(facts) == 0 && len(accounts) == 0 {
 		return nil, nil
 	}
 	sessions := usageRollupSessionMap(snapshot)
@@ -475,6 +544,9 @@ func aggregateUsageRollupExceptions(
 		band                                                               int
 	}
 	groups := make(map[key]*usageFactsGroup)
+	// pricingKeys holds the dedup key of the fact that set each group's
+	// PricingTimestamp, so stored account totals can pick the same fact.
+	pricingKeys := make(map[key]string)
 	type authoritativeCandidate struct {
 		fact  usageRollupFact
 		cost  int64
@@ -520,8 +592,10 @@ func aggregateUsageRollupExceptions(
 				DiscardedSnapshotOutputTokens: discarded,
 			}
 			groups[itemKey] = group
+			pricingKeys[itemKey] = usageRollupGeneralKey(fact)
 		} else if group.PricingTimestamp == "" {
 			group.PricingTimestamp = fact.Fact.RawTimestamp
+			pricingKeys[itemKey] = usageRollupGeneralKey(fact)
 		}
 		if err := addUsageFactToGroup(group, fact, priced); err != nil {
 			return nil, err
@@ -533,6 +607,39 @@ func aggregateUsageRollupExceptions(
 					fact: fact, cost: priced.AuthoritativeCost.Microdollars, group: group,
 				}
 			}
+		}
+	}
+	// Survivors iterate general keys in order, so the first fact that set a
+	// group's timestamp has its lowest key. A stored total takes over when
+	// its own lowest key sorts first.
+	for i := range accounts {
+		row := &accounts[i]
+		band := -1
+		if row.BandThreshold != nil {
+			band = *row.BandThreshold
+		}
+		itemKey := key{
+			"", row.Agent, row.LocalDate, row.ReportedModel, row.ProviderID,
+			row.PricedModel, row.MatchedPattern, row.RateHash, row.RateOK, band,
+		}
+		group := groups[itemKey]
+		if group == nil {
+			group = &usageFactsGroup{
+				Date: row.LocalDate, Agent: row.Agent,
+				ProviderID: row.ProviderID, Model: row.ReportedModel,
+				PricedModel: row.PricedModel, MatchedPattern: row.MatchedPattern,
+				RateOK: row.RateOK, BandThreshold: row.BandThreshold,
+				DiscardedSnapshotOutputTokens: discarded,
+			}
+			groups[itemKey] = group
+		}
+		if row.PricingTimestamp != "" && (group.PricingTimestamp == "" ||
+			row.PricingKey < pricingKeys[itemKey]) {
+			group.PricingTimestamp = row.PricingTimestamp
+			pricingKeys[itemKey] = row.PricingKey
+		}
+		if err := addUsageContributionToGroup(group, row.usageDailyContribution); err != nil {
+			return nil, err
 		}
 	}
 	for _, group := range groups {
@@ -734,6 +841,12 @@ func addUsageFactToGroup(
 	if err := addUsageFactToDailyContribution(&row, fact, priced); err != nil {
 		return err
 	}
+	return addUsageContributionToGroup(group, row)
+}
+
+func addUsageContributionToGroup(
+	group *usageFactsGroup, row usageDailyContribution,
+) error {
 	fields := []struct {
 		target *int64
 		value  int64

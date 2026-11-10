@@ -111,7 +111,14 @@ journaled sessions and resolves the group from the latest exception rows of all
 members.
 
 Cursor usage uses the same exception representation under a synthetic source
-install keyed by the Cursor high-water mark. Matching-session activity has
+install keyed by the Cursor high-water mark. An external source replaces its
+whole account generation, so that build also prices every account row whose
+dedup key appears once and in no cached session. It stores their sums in
+`usage_rollup_account_totals`, keyed by day, agent, headless state, model, and
+rate. Requests filter those rows by agent, automated scope, and model, and keep
+only colliding rows as exceptions. A fill that gives a session one of those
+keys deletes the account install, and the install transaction rejects a build
+whose collisions grew while it ran. Matching-session activity has
 compact `(session_id, day, model)` rows for relaxed counts. An eligible fact
 with neither its own timestamp nor a session start is retained with an empty
 day: unbounded matching counts include it, while bounded reads exclude it.

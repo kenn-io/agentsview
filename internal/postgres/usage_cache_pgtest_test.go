@@ -637,3 +637,47 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestPGUsageCacheAccountTotalsMatchDirect(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session-a", Project: "project-a", Machine: "test-machine", Agent: "copilot", StartedAt: new("2026-01-01T09:00:00Z")}))
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "session-a", []db.UsageEvent{{SessionID: "session-a", Source: "provider", Model: "model-a", OutputTokens: 30, OccurredAt: "2026-01-01T09:00:00Z", DedupKey: "event"}}))
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "model-a", OutputPerMTok: money.MustParseDollars("10")}, {ModelPattern: "model-b", OutputPerMTok: money.MustParseDollars("5")}}))
+	require.NoError(t, local.InsertCursorUsageEvents(ctx, []db.CursorUsageEvent{
+		{OccurredAt: "2026-01-01T08:00:00Z", Model: "model-a", OutputTokens: 10, Charged: money.Money{Microdollars: 100}, DedupKey: "session-a:provider:event"},
+		{OccurredAt: "2026-01-01T10:00:00Z", Model: "model-a", OutputTokens: 20, Charged: money.Money{Microdollars: 200}, DedupKey: "human-a"},
+		{OccurredAt: "2026-01-01T10:00:00Z", Model: "model-a", OutputTokens: 25, Charged: money.Money{Microdollars: 250}, DedupKey: "same-time"},
+		{OccurredAt: "2026-01-02T10:00:00Z", Model: "model-b", OutputTokens: 40, Charged: money.Money{Microdollars: 400}, IsHeadless: true, DedupKey: "session-b:provider:event"},
+		{Agent: "other-account", OccurredAt: "2026-01-02T11:00:00Z", Model: "model-b", OutputTokens: 50, Charged: money.Money{Microdollars: 500}, DedupKey: "other-b"},
+		{OccurredAt: "2026-01-03T11:00:00Z", Model: "unpriced", OutputTokens: 60, Charged: money.Money{Microdollars: 600}, DedupKey: "later"},
+	}))
+	pushed, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	attachUsageCacheProbe(t, store, t.TempDir())
+	filters := []db.UsageFilter{
+		{Timezone: "UTC"},
+		{Timezone: "America/New_York"},
+		{From: "2026-01-02", To: "2026-01-02", Timezone: "UTC"},
+		{Agent: "cursor", Timezone: "UTC"},
+		{ExcludeAgent: "cursor", Timezone: "UTC"},
+		{AutomatedScope: "human", Timezone: "UTC"},
+		{AutomatedScope: "automated", Timezone: "UTC"},
+		{Model: "model-b", Timezone: "UTC"},
+		{ExcludeModel: "model-a", Timezone: "UTC"},
+	}
+	for _, filter := range filters {
+		requireCachedUsageMatchesDirect(t, store, filter)
+	}
+	// A session that later reports an account key moves that account row
+	// back to request-time deduplication. The account rows stay unchanged.
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session-b", Project: "project-a", Machine: "test-machine", Agent: "copilot", StartedAt: new("2026-01-02T09:00:00Z")}))
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "session-b", []db.UsageEvent{{SessionID: "session-b", Source: "provider", Model: "model-b", OutputTokens: 70, OccurredAt: "2026-01-02T09:00:00Z", DedupKey: "event"}}))
+	pushed, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	for _, filter := range filters {
+		requireCachedUsageMatchesDirect(t, store, filter)
+	}
+}

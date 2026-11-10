@@ -689,6 +689,17 @@ func readUsageRollupInstalls(
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, nil, err
 	}
+	if cursor, ok := installs[usageRollupCursorSessionID]; ok && snapshot.exactAccountRevision {
+		// A full account generation prices its totals at build time, so a
+		// changed lookup rebuilds it like a session.
+		expected, err := pricing.forEncoded(pricingInputs[usageRollupCursorSessionID])
+		if err != nil {
+			return nil, nil, err
+		}
+		if cursor.PricingHash != expected {
+			delete(installs, usageRollupCursorSessionID)
+		}
+	}
 	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))
 	for _, session := range snapshot.Sessions {
 		sessions[session.ID] = session
@@ -810,6 +821,9 @@ func installUsageRollupBuilds(
 			if err := verifyUsageAccountRevision(ctx, conn, build.FactRevision); err != nil {
 				return err
 			}
+			if err := verifyUsageAccountCollisions(ctx, conn, build.AccountCollisions); err != nil {
+				return err
+			}
 		}
 		var installID int64
 		var installedFactRevision int64
@@ -827,19 +841,22 @@ func installUsageRollupBuilds(
 			SET change_revision=MIN(change_revision, ?) WHERE id=?`, build.ChangeRevision, timezoneID); err != nil {
 			return err
 		}
-		if build.SessionID == usageRollupCursorSessionID &&
-			installedFactRevision != build.CursorAfter {
+		// A full account generation replaces its rows, as a session does.
+		appendOnly := build.SessionID == usageRollupCursorSessionID &&
+			!build.ExactAccountRevision
+		if appendOnly && installedFactRevision != build.CursorAfter {
 			return fmt.Errorf(
 				"%w: Cursor usage base changed during rollup build",
 				errUsageCacheSourceChanged)
 		}
 		if err == nil {
-			if build.SessionID != usageRollupCursorSessionID {
+			if !appendOnly {
 				if _, err := stmts.ExecContext(ctx, `DELETE FROM usage_daily_rollups WHERE rollup_install_id = ?`, installID); err != nil {
 					return err
 				}
 				for _, table := range []string{
 					"usage_activity_rollups", "usage_rollup_exceptions",
+					"usage_rollup_account_totals",
 				} {
 					if _, err := stmts.ExecContext(ctx, `DELETE FROM `+table+
 						` WHERE rollup_install_id = ?`, installID); err != nil {
@@ -923,6 +940,26 @@ func installUsageRollupRows(
 		}
 		dates[row.LocalDate] = true
 	}
+	for _, row := range build.AccountTotals {
+		band := -1
+		if row.BandThreshold != nil {
+			band = *row.BandThreshold
+		}
+		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_account_totals VALUES(
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			installID, row.LocalDate, row.Agent, boolInt(row.IsHeadless),
+			row.ReportedModel, row.ProviderID, row.PricedModel, row.MatchedPattern,
+			boolInt(row.RateOK), row.RateHash, band, row.PricingKey,
+			row.PricingTimestamp, row.InputTokens, row.OutputTokens,
+			row.ReasoningTokens, row.CacheCreationTokens, row.CacheReadTokens,
+			row.CostMicrodollars, row.SavingsMicrodollars,
+			row.ComputedRequestCount, row.ComputedAggregateCount,
+			row.ReportedCount, row.BaseRequestCount)
+		if err != nil {
+			return err
+		}
+		dates[row.LocalDate] = true
+	}
 	for _, row := range build.Activity {
 		if _, err := conn.ExecContext(ctx, `INSERT INTO usage_activity_rollups VALUES(?, ?, ?, ?)`,
 			installID, row.LocalDate, row.Model, row.UserMessageCount); err != nil {
@@ -950,6 +987,25 @@ func installUsageRollupRows(
 			return err
 		}
 		dates[fact.LocalDate] = true
+	}
+	return nil
+}
+
+// verifyUsageAccountCollisions rejects an account build when a key it
+// priced into totals now collides, because a fill installed a session that
+// reports the same key after the build read the collisions.
+func verifyUsageAccountCollisions(
+	ctx context.Context, conn *sql.Conn, built map[string]bool,
+) error {
+	current, err := loadCursorUsageCollisions(ctx, conn)
+	if err != nil {
+		return err
+	}
+	for key := range current {
+		if !built[key] {
+			return fmt.Errorf("%w: account usage key gained a duplicate during rollup build",
+				errUsageCacheSourceChanged)
+		}
 	}
 	return nil
 }

@@ -102,11 +102,16 @@ type usageRollupBuild struct {
 	FactRevision               int64
 	CursorAfter                int64 // Installed Cursor fact revision, or zero for a full build.
 	ExactAccountRevision       bool
-	ChangeRevision             int64
-	SourcePricing              string
-	Daily                      []usageDailyContribution
-	Activity                   []usageActivityContribution
-	Exceptions                 []usageExceptionRow
+	// AccountTotals hold priced account rows of a full external generation.
+	// AccountCollisions are the keys kept as exceptions; an install aborts
+	// when another key collides before it commits.
+	AccountTotals     []usageAccountTotal
+	AccountCollisions map[string]bool
+	ChangeRevision    int64
+	SourcePricing     string
+	Daily             []usageDailyContribution
+	Activity          []usageActivityContribution
+	Exceptions        []usageExceptionRow
 }
 
 func priceUsageFact(
@@ -465,6 +470,20 @@ func loadCursorUsageRollupBuild(
 		ExactAccountRevision: snapshot.exactAccountRevision,
 		CursorAfter:          after,
 	}
+	// A full external generation prices every row that no other usage row can
+	// replace, as it streams in, so the build holds only the colliding rows
+	// and the daily totals. Requests then read a few rows per day instead of
+	// resolving every account row. Rows sharing a key keep the exception tier,
+	// where request-time deduplication picks the survivor. Collisions load
+	// first because the connection serves one statement at a time.
+	var accounts *usageAccountTotalsBuilder
+	if snapshot.exactAccountRevision {
+		collisions, err := loadCursorUsageCollisions(ctx, conn)
+		if err != nil {
+			return build, err
+		}
+		accounts = newUsageAccountTotalsBuilder(collisions, pricing.resolver)
+	}
 	rows, err := conn.QueryContext(ctx, `SELECT source_id, agent, timestamp_ms,
 		raw_timestamp, model, input_tokens, output_tokens,
 		cache_creation_tokens, cache_read_tokens, charged_microdollars,
@@ -501,23 +520,156 @@ func loadCursorUsageRollupBuild(
 		}
 		fact.DedupTimestamp = fact.Fact.RawTimestamp
 		fact.LocalDate = usageRollupLocalDate(fact, snapshot.location)
-		facts = append(facts, fact)
-	}
-	if err := rows.Err(); err != nil {
-		return build, err
-	}
-	// Cursor rows stay on the exception tier: their keys may collide with
-	// session usage keys and their filters depend on per-row headless state,
-	// so pricing remains deferred to the request-time group resolution.
-	// Rows append by source_id, so existing exception rows remain valid.
-	for _, fact := range facts {
 		if usageRollupGeneralKey(fact) == "" {
 			return build, fmt.Errorf(
 				"Cursor usage fact %d has no dedup identity", fact.FactIndex)
 		}
+		if accounts == nil {
+			facts = append(facts, fact)
+		} else if err := accounts.add(fact); err != nil {
+			return build, err
+		}
 	}
-	build.Exceptions = usageRollupExceptionRows(facts)
+	if err := rows.Err(); err != nil {
+		return build, err
+	}
+	if accounts == nil {
+		// Incremental builds append rows by source_id, so existing exception
+		// rows remain valid. Request-time grouping prices them.
+		build.Exceptions = usageRollupExceptionRows(facts)
+		return build, nil
+	}
+	build.PricingInputs, build.PricingHash, err = pricing.forInputs(accounts.pricingInputs())
+	if err != nil {
+		return build, err
+	}
+	build.AccountTotals, build.AccountCollisions = accounts.result(), accounts.collisions
+	build.Exceptions = usageRollupExceptionRows(accounts.exceptions)
 	return build, nil
+}
+
+// usageAccountCollisionSQL finds account keys that request-time
+// deduplication can resolve against another row: a duplicate account key, or
+// a key a cached session also reports. The empty-key predicate lets SQLite
+// probe the partial usage key index instead of scanning every fact per row.
+const usageAccountCollisionSQL = `SELECT dedup_key FROM cursor_usage_facts
+	GROUP BY dedup_key HAVING COUNT(*) > 1
+	UNION
+	SELECT c.dedup_key FROM cursor_usage_facts c
+	WHERE EXISTS (SELECT 1 FROM usage_facts f
+		WHERE f.usage_dedup_key = c.dedup_key AND f.usage_dedup_key != '')`
+
+func loadCursorUsageCollisions(
+	ctx context.Context, runner usageCacheStatementRunner,
+) (map[string]bool, error) {
+	collisions := make(map[string]bool)
+	err := scanUsageIdentityColumn(ctx, runner, usageAccountCollisionSQL,
+		func(key string) { collisions[key] = true })
+	if err != nil {
+		return nil, fmt.Errorf("loading colliding account usage keys: %w", err)
+	}
+	return collisions, nil
+}
+
+type usageAccountTotal struct {
+	usageDailyContribution
+	Agent      string
+	IsHeadless bool
+	// PricingKey is the dedup key of the fact that set PricingTimestamp.
+	// Request-time grouping takes the timestamp of the lowest key, so a
+	// group that also holds exception rows can pick the same one.
+	PricingKey string
+}
+
+type usageAccountTotalKey struct {
+	date, agent, model, providerID, rateHash string
+	headless                                 bool
+	band                                     int
+}
+
+// usageAccountTotalsBuilder prices account rows one at a time and sums the
+// rows no other usage can replace.
+type usageAccountTotalsBuilder struct {
+	collisions map[string]bool
+	resolver   *export.PricingResolver
+	totals     map[usageAccountTotalKey]*usageAccountTotal
+	inputs     map[usagePricingInput]bool
+	exceptions []usageRollupFact
+}
+
+func newUsageAccountTotalsBuilder(
+	collisions map[string]bool, resolver *export.PricingResolver,
+) *usageAccountTotalsBuilder {
+	return &usageAccountTotalsBuilder{
+		collisions: collisions, resolver: resolver,
+		totals: make(map[usageAccountTotalKey]*usageAccountTotal),
+		inputs: make(map[usagePricingInput]bool),
+	}
+}
+
+func (b *usageAccountTotalsBuilder) add(fact usageRollupFact) error {
+	if b.collisions[fact.Fact.UsageDedupKey] {
+		b.exceptions = append(b.exceptions, fact)
+		return nil
+	}
+	priced, err := priceUsageFact(usagePriceInput{
+		Fact: fact.Fact, Timestamp: fact.Fact.RawTimestamp,
+		ReportedModel: fact.Model, ProviderID: fact.Fact.ProviderID,
+	}, b.resolver)
+	if err != nil {
+		return err
+	}
+	if priced.AuthoritativeCost != nil {
+		// Authoritative cost picks one row per owner at request time.
+		b.exceptions = append(b.exceptions, fact)
+		return nil
+	}
+	b.inputs[usagePricingInput{
+		ProviderID: fact.Fact.ProviderID, ReportedModel: priced.model,
+		CanonicalModel: priced.canonical,
+	}] = true
+	band := -1
+	if priced.BandThreshold != nil {
+		band = *priced.BandThreshold
+	}
+	rateHash := priced.rateHash()
+	key := usageAccountTotalKey{
+		date: fact.LocalDate, agent: fact.Agent, model: fact.Model,
+		providerID: fact.Fact.ProviderID, rateHash: rateHash,
+		headless: fact.IsHeadless, band: band,
+	}
+	total := b.totals[key]
+	if total == nil {
+		total = &usageAccountTotal{
+			usageDailyContribution: usageDailyContribution{
+				LocalDate: fact.LocalDate, ReportedModel: fact.Model,
+				ProviderID:  fact.Fact.ProviderID,
+				PricedModel: priced.PricedModel, MatchedPattern: priced.MatchedPattern,
+				RateOK: priced.RateOK, RateHash: rateHash,
+				BandThreshold: priced.BandThreshold,
+			},
+			Agent: fact.Agent, IsHeadless: fact.IsHeadless,
+		}
+		b.totals[key] = total
+	}
+	dedupKey := usageRollupGeneralKey(fact)
+	if fact.Fact.RawTimestamp != "" &&
+		(total.PricingTimestamp == "" || dedupKey < total.PricingKey) {
+		total.PricingTimestamp, total.PricingKey = fact.Fact.RawTimestamp, dedupKey
+	}
+	return addUsageFactToDailyContribution(&total.usageDailyContribution, fact, priced)
+}
+
+func (b *usageAccountTotalsBuilder) pricingInputs() []usagePricingInput {
+	return slices.Collect(maps.Keys(b.inputs))
+}
+
+func (b *usageAccountTotalsBuilder) result() []usageAccountTotal {
+	result := make([]usageAccountTotal, 0, len(b.totals))
+	for _, total := range b.totals {
+		result = append(result, *total)
+	}
+	return result
 }
 
 func buildUsageRollupSessions(

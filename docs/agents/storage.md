@@ -738,7 +738,7 @@ A first bounded visit fills candidate sessions for its date window. Widening the
 window adds missing sessions. Only a complete, verified all-history read can
 establish global journal coverage; later covered reads replay changed sessions
 and missing installs. The first build and repricing can take longer than warm
-reads. Format 22 rebuilds each SQLite usage cache once after upgrading; the
+reads. Format 23 rebuilds each SQLite usage cache once after upgrading; the
 31,000-session fixture previously took about 19 seconds and 92 MB.
 Both implementations are co-maintained under the same
 behavior contract: daily usage, top sessions, billed session counts, relaxed
