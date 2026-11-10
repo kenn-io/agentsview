@@ -2853,6 +2853,13 @@ schemas keep their existing ordering behavior.
   update (3.16.29) has shrunk or wiped some users' `cursorDiskKV` rows, so the
   parser tolerates a `fullConversationHeadersOnly` entry whose `bubbleId` row
   is missing rather than failing the whole session.
+- **Chunked headers:** [Issue #2863](https://github.com/kenn-io/agentsview/issues/2863)
+  reports a `_v: 18` composer with an empty inline header list and a
+  `headerLog` containing `count` and `chunkCount`. Its ordered headers live in
+  `composerConvHeaders:<composerId>:<six-digit index>` rows. The synthetic
+  parser and sync tests reproduce this reported shape. Agentsview reads only
+  the declared chunks and marks missing, empty, or short sets truncated.
+  Malformed chunk JSON fails the chat.
 - **Tool results:**
   [Issue #1798](https://github.com/kenn-io/agentsview/issues/1798) supplies
   one redacted `todo_write` bubble with an object-valued
@@ -2902,15 +2909,15 @@ schemas keep their existing ordering behavior.
   SQLite transaction-state hash over just the database and WAL headers, so a
   rewrite that leaves size and mtime unchanged still misses the skip cache; a
   member-level fingerprint digests every parse input of that one composer (the
-  raw `composerData` document plus its bubble rows' keys and values), so an
-  equal-length bubble rewrite, a header reorder, or a rename that leaves
-  `lastUpdatedAt` untouched still reads as changed. A chat deleted inside
+  raw `composerData` document plus its bubble and header rows' keys and
+  values), so an equal-length bubble rewrite, a header reorder, or a rename that
+  leaves `lastUpdatedAt` untouched still reads as changed. A chat deleted inside
   Cursor IDE is retired through stored-source-hint tombstones on `state.vscdb`
   change events and through complete-container ownership reconciliation. A
   `state.vscdb` watcher event hashes each composer's `composerData` document
   and parses only composers whose hash differs from the archived one; chats
   trashed or permanently deleted in agentsview are skipped. Edits confined to
-  bubble rows, composers whose value became NULL or headerless, and a
+  bubble or header rows, composers whose value became NULL or headerless, and a
   replacement database whose composer documents are byte-identical wait for
   the 15-minute scheduled reconciliation, which reparses the whole database
   whenever its container fingerprint moved. A malformed `composerData` value
