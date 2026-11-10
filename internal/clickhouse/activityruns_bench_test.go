@@ -107,15 +107,20 @@ func BenchmarkActivityReportRefresh(b *testing.B) {
 	})
 
 	derived := make(map[string]activitySessionDerived, len(ids))
+	deriver := newActivityDeriver(q.GapCapSeconds)
+	for _, id := range ids {
+		derived[id] = deriver.derive(id, inputs[id])
+	}
 	b.Run("after/derive-all", func(b *testing.B) {
+		all := make(map[string]activitySessionDerived, len(ids))
 		for b.Loop() {
 			deriver := newActivityDeriver(q.GapCapSeconds)
 			for _, id := range ids {
-				derived[id] = deriver.derive(id, inputs[id])
+				all[id] = deriver.derive(id, inputs[id])
 			}
 		}
 		var bytes int64
-		for id, d := range derived {
+		for id, d := range all {
 			bytes += d.bytes(id)
 		}
 		b.ReportMetric(float64(bytes)/(1<<20), "memo-MiB")

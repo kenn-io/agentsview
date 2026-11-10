@@ -450,15 +450,16 @@ func (d *activityDeriver) derive(id string, entry activitySessionInputs) activit
 	slices.SortFunc(d.terminal, compareClickOrderedCandidates)
 	// activity.MergeCandidateSlice emits a message pair before a tool
 	// interval with the same start and ordinal.
-	transcript, terminal := d.transcript, d.terminal
-	for len(transcript) > 0 || len(terminal) > 0 {
-		if len(terminal) > 0 && (len(transcript) == 0 || activity.CandidateLess(terminal[0].IntervalCandidate, transcript[0])) {
+	terminal := d.terminal
+	for _, c := range d.transcript {
+		for len(terminal) > 0 && activity.CandidateLess(terminal[0].IntervalCandidate, c) {
 			d.runs.Add(terminal[0].IntervalCandidate)
 			terminal = terminal[1:]
-			continue
 		}
-		d.runs.Add(transcript[0])
-		transcript = transcript[1:]
+		d.runs.Add(c)
+	}
+	for _, c := range terminal {
+		d.runs.Add(c.IntervalCandidate)
 	}
 	derived := activitySessionDerived{gapCap: d.gapCap, runs: d.runs.Finish()}
 	for _, m := range entry.messages {
