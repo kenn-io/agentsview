@@ -1745,7 +1745,7 @@
   "insights_page_template_instruction_opportunities": "Opportunités d'instruction",
   "insights_page_template_friction_review": "Revue des frictions",
   "friction_review_summary_title": "Résumé rédigé par un modèle",
-  "friction_review_summary_notice": "Rédigé par un modèle à partir du résumé et des titres de motifs de ce rapport. Il ne modifie ni les constats, ni les rapports, ni les tickets.",
+  "friction_review_summary_notice": "Rédigé par un modèle à partir du résumé, des titres de motifs et des sources et messages de diagnostic regroupés de ce rapport. Il ne modifie ni les constats, ni les rapports, ni les tickets.",
   "friction_review_summary_empty": "Aucun résumé pour ce rapport pour l'instant.",
   "friction_review_summary_generate": "Générer le résumé",
   "friction_review_summary_regenerate": "Régénérer",

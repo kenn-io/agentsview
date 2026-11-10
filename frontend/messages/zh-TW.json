@@ -1666,7 +1666,7 @@
   "insights_page_template_instruction_opportunities": "指令最佳化機會",
   "insights_page_template_friction_review": "摩擦檢討",
   "friction_review_summary_title": "模型撰寫的摘要",
-  "friction_review_summary_notice": "由模型根據此日報的摘要與模式標題撰寫。不會修改發現項目、日報或議題。",
+  "friction_review_summary_notice": "由模型根據此日報的摘要、模式標題，以及分組後的診斷來源與訊息撰寫。不會修改發現項目、日報或議題。",
   "friction_review_summary_empty": "此日報尚無摘要。",
   "friction_review_summary_generate": "產生摘要",
   "friction_review_summary_regenerate": "重新產生",

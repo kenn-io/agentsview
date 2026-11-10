@@ -1746,7 +1746,7 @@
   "insights_page_template_instruction_opportunities": "Instruction Opportunities",
   "insights_page_template_friction_review": "Friction Review",
   "friction_review_summary_title": "Model-written summary",
-  "friction_review_summary_notice": "Written by a model from this digest's summary and pattern titles. It does not change findings, digests, or issues.",
+  "friction_review_summary_notice": "Written by a model from this digest's summary, pattern titles, and grouped diagnostic sources and messages. It does not change findings, digests, or issues.",
   "friction_review_summary_empty": "No summary for this digest yet.",
   "friction_review_summary_generate": "Generate summary",
   "friction_review_summary_regenerate": "Regenerate",

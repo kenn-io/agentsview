@@ -1666,7 +1666,7 @@
   "insights_page_template_instruction_opportunities": "指令优化机会",
   "insights_page_template_friction_review": "摩擦复盘",
   "friction_review_summary_title": "模型撰写的摘要",
-  "friction_review_summary_notice": "由模型根据此日报的摘要和模式标题撰写。不会修改发现项、日报或问题。",
+  "friction_review_summary_notice": "由模型根据此日报的摘要、模式标题以及分组后的诊断来源和消息撰写。不会修改发现项、日报或问题。",
   "friction_review_summary_empty": "此日报尚无摘要。",
   "friction_review_summary_generate": "生成摘要",
   "friction_review_summary_regenerate": "重新生成",

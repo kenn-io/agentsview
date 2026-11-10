@@ -1748,7 +1748,7 @@
   "insights_page_template_instruction_opportunities": "Təlimat imkanları",
   "insights_page_template_friction_review": "Sürtünmə icmalı",
   "friction_review_summary_title": "Model tərəfindən yazılmış xülasə",
-  "friction_review_summary_notice": "Bu hesabatın xülasəsi və nümunə başlıqlarından model tərəfindən yazılıb. Tapıntıları, hesabatları və tapşırıqları dəyişmir.",
+  "friction_review_summary_notice": "Bu hesabatın xülasəsi, nümunə başlıqları və qruplaşdırılmış diaqnostika mənbələri və mesajlarından model tərəfindən yazılıb. Tapıntıları, hesabatları və tapşırıqları dəyişmir.",
   "friction_review_summary_empty": "Bu hesabat üçün hələ xülasə yoxdur.",
   "friction_review_summary_generate": "Xülasə yarat",
   "friction_review_summary_regenerate": "Yenidən yarat",
