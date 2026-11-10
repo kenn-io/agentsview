@@ -467,6 +467,17 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+type limitedImageWriter struct {
+	buf   *bytes.Buffer
+	limit int64
+}
+
+func (w *limitedImageWriter) Write(p []byte) (int, error) {
+	n := min(int64(len(p)), max(0, w.limit-int64(w.buf.Len())))
+	_, _ = w.buf.Write(p[:n])
+	return len(p), nil
+}
+
 func projectToolResultImages(
 	messages []Message, policy config.ToolResultImages, assetsDir string,
 ) ([]Message, ToolImageStats) {
@@ -726,7 +737,7 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 			body := io.Discard
 			if count == index {
 				buf.Reset()
-				body = &buf
+				body = &limitedImageWriter{buf: &buf, limit: limit + 1}
 			}
 			_, recognized := retainedImageBlock(block, count, body)
 			if recognized {

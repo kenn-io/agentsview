@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -46,6 +47,30 @@ func TestReadRetainedImageLimit(t *testing.T) {
 func TestReadRetainedImageSkipsInvalidBlocks(t *testing.T) {
 	content := `[{"type":"text","text":"hello"},{"type":"input_image","image_url":"data:image/png;base64,%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
 	body, err := ReadRetainedImage(content, 0, "", 32)
+	require.NoError(t, err)
+	require.Equal(t, []byte{1, 2, 3}, body)
+}
+
+func TestReadRetainedImageLimitsOversizedInlineBuffer(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 8<<20))
+	content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"},{"type":"input_image","image_url":"data:image/png;base64,%%%%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`, encoded)
+	allocated := func(index int) (uint64, []byte, error) {
+		t.Helper()
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		body, err := ReadRetainedImage(content, index, "", 32)
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc, body, err
+	}
+	baseline, body, err := allocated(1)
+	require.NoError(t, err)
+	require.Equal(t, []byte{1, 2, 3}, body)
+	oversized, _, err := allocated(0)
+	require.ErrorContains(t, err, "exceeds 32 bytes")
+	require.LessOrEqual(t, oversized, baseline+(1<<20), "the oversized body must not be buffered")
+	invalid := `[{"type":"input_image","image_url":"data:image/png;base64,` + encoded[:len(encoded)-4] + `%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+	body, err = ReadRetainedImage(invalid, 0, "", 32)
 	require.NoError(t, err)
 	require.Equal(t, []byte{1, 2, 3}, body)
 }
