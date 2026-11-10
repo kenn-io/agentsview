@@ -1921,13 +1921,13 @@
     margin-top: 4px;
     /* Same fill, edge, radius and shadow as the View and More actions
        popovers. */
-    background: var(--popover-bg);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-lg);
+    background: var(--bg-popover);
+    border: 1px solid var(--border-popover);
+    border-radius: var(--radius-md);
     padding: 4px;
     min-width: 200px;
     z-index: var(--z-popover);
-    box-shadow: var(--overlay-shadow);
+    box-shadow: var(--shadow-lg);
   }
 
   .open-menu-item {

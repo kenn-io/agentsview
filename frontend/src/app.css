@@ -49,11 +49,6 @@
      mustard gold (oklch 0.64 0.13 96), apart from orange in hue and
      lightness, so neighbouring tiles and areas stay distinct. */
   --usage-series-amber: #a48b08; /* kit-ui-check-ignore: app token definition */
-  /* Deliberate override: kit-ui's light --text-muted (#878ea0) is about
-     3.3:1 on white, too faint for the metadata agentsview leans on. This
-     value is 6.1:1 on the surface, 5.6:1 on the page background, and 5.2:1
-     on inset fills, while staying a step lighter than --text-secondary. */
-  --text-muted: #5c6274; /* kit-ui-check-ignore: app token override, upstream later */
   /* Extra identity accents beyond kit-ui's core set */
   --accent-rose: #e11d48; /* kit-ui-check-ignore: app token definition */
   --accent-coral: #f34e3f; /* kit-ui-check-ignore: app token definition */
@@ -296,44 +291,6 @@
   --role-code-frame-style: dashed;
 }
 
-/* One selected-state vocabulary for segmented choices across the app:
- * a neutral raised fill with primary ink and a neutral 1px edge in both
- * themes. Accent blue is kept for focus, links, and live state, so a
- * selected option never reads as a focus ring. */
-:root {
-  --selected-bg: var(--bg-surface);
-  --selected-edge: inset 0 0 0 1px var(--border-default);
-  /* Selected rows in lists that already sit on the surface color. */
-  --selected-list-bg: var(--bg-inset);
-}
-
-:root.dark {
-  --selected-bg: var(--bg-surface-hover);
-  --selected-list-bg: var(--bg-surface-hover);
-}
-
-/* The chosen option of a choice group (segmented controls, chart toggles,
- * date presets, the search palette's sort, top-bar tabs) uses one calm
- * idiom everywhere: a raised pill. In light it is the white surface lifted
- * off the grey track by a hairline and a soft shadow; in dark it is a
- * lighter surface with a faint edge. Selected text is primary ink at
- * medium weight, so selection never comes from a heavy border or bold.
- * Accent blue stays reserved for focus and live state. */
-:root {
-  --selected-strong-bg: var(--bg-surface);
-  --selected-strong-edge:
-    0 0 0 1px color-mix(in srgb, var(--text-primary) 9%, transparent),
-    0 1px 2px color-mix(in srgb, var(--text-primary) 14%, transparent);
-  --selected-strong-weight: var(--font-weight-medium, 500);
-}
-
-:root.dark {
-  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 15%, var(--bg-surface));
-  --selected-strong-edge:
-    inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 12%, transparent),
-    0 1px 2px rgba(0, 0, 0, 0.35); /* kit-ui-check-ignore: dark raised pill shadow, upstream later */
-}
-
 /* An unclean ending is a warning, not an error. kit-ui paints it red;
    the warning orange keeps it apart from the amber stale dot and from
    real failures. Used by the sidebar, Top sessions rows, and its pill. */
@@ -363,99 +320,6 @@
 :root .kit-refresh-control .kit-refresh-control__btn svg {
   width: 12px;
   height: 12px;
-}
-
-/* Card edges. In light the surface sits close to the page color, so
- * default cards take the default border instead of kit-ui's muted one to
- * keep a visible but calm edge; dark keeps the muted edge. */
-:root {
-  --card-border: var(--border-default);
-}
-
-:root.dark {
-  --card-border: var(--border-muted);
-}
-
-:root .kit-card.kit-card--default {
-  --kit-card-border: var(--card-border);
-}
-
-/* One overlay chrome for dialogs, the search palette, and popovers
- * (project picker, date picker, menus): the same 1px default border,
- * large radius, and lifted shadow. The light backdrop dims the page a
- * little more than kit-ui's default so the dialog separates from it. */
-:root {
-  /* Light popovers (project picker, date picker, search palette) open over
-     white cards, where kit-ui's 10% lift barely shows; a softer, wider
-     shadow lifts them off the content without a hard edge. */
-  --overlay-shadow: 0 12px 32px rgba(16, 24, 40, 0.14), 0 2px 6px rgba(16, 24, 40, 0.08); /* kit-ui-check-ignore: light overlay elevation, upstream later */
-  --overlay-bg: rgba(0, 0, 0, 0.42); /* kit-ui-check-ignore: light backdrop strength; dark keeps kit-ui's value */
-}
-
-/* Dark: a deeper backdrop so page text stops competing with the dialog,
-   and a shadow dark enough to read against the dark page. */
-:root.dark {
-  --overlay-bg: rgba(0, 0, 0, 0.7); /* kit-ui-check-ignore: dark backdrop strength, upstream later */
-  --overlay-shadow: 0 14px 36px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.45); /* kit-ui-check-ignore: dark overlay elevation, upstream later */
-}
-
-html:root .kit-popover-card,
-html:root .kit-modal-panel {
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--overlay-shadow);
-}
-
-/* Dark popovers (pickers, menus) sit clearly above the page: a lighter
-   raised surface and a lighter edge, since a shadow alone barely shows on
-   the near-black page. Inside them the chosen option (the date picker's
-   Relative tab and 30d preset) takes a stronger fill and edge, because the
-   raised surface narrows the gap to the ordinary selected fill. */
-:root {
-  --popover-bg: var(--bg-surface);
-}
-
-:root.dark {
-  --popover-bg: color-mix(in srgb, var(--text-primary) 9%, var(--bg-surface));
-}
-
-html:root.dark .kit-popover-card {
-  background: var(--popover-bg);
-  border-color: color-mix(in srgb, var(--text-primary) 20%, var(--bg-surface));
-  --selected-strong-bg: color-mix(in srgb, var(--text-primary) 24%, var(--bg-surface));
-  --selected-strong-edge:
-    inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 20%, transparent),
-    0 1px 2px rgba(0, 0, 0, 0.4); /* kit-ui-check-ignore: dark raised pill shadow, upstream later */
-}
-
-/* High contrast keeps its strong default edge on the raised surface. */
-html:root.dark.high-contrast .kit-popover-card {
-  border-color: var(--border-default);
-}
-
-/* Outranks kit-ui's scoped active rule (three classes). */
-:root .kit-segmented .kit-segmented__btn:not(.active):not(:disabled) {
-  color: var(--text-secondary);
-}
-
-/* Dark text-secondary sits too close to primary ink, so unselected options
-   read as selected; step them down to muted there. */
-:root.dark .kit-segmented .kit-segmented__btn:not(.active):not(:disabled) {
-  color: var(--text-muted);
-}
-
-:root.dark .kit-segmented .kit-segmented__btn:not(.active):not(:disabled):hover {
-  color: var(--text-primary);
-}
-
-/* The chosen segment stays distinguishable even when the whole control is
-   disabled (read-only settings): the fill, edge, and weight do not fade. */
-:root .kit-segmented .kit-segmented__btn.active {
-  background: var(--selected-strong-bg);
-  box-shadow: var(--selected-strong-edge);
-  color: var(--text-primary);
-  font-weight: var(--selected-strong-weight);
-  opacity: 1;
 }
 
 html,
@@ -511,13 +375,6 @@ body {
 :focus-visible {
   outline: var(--focus-ring);
   outline-offset: 1px;
-}
-
-/* A dialog surface takes focus only so keyboard focus starts inside it; it
-   is not a control. Keep its neutral modal border instead of a focus ring.
-   Controls inside the dialog keep theirs. */
-.kit-modal-panel[tabindex="-1"]:focus-visible {
-  outline: none;
 }
 
 /* Button reset */

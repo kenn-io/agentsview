@@ -561,7 +561,7 @@
        out completely instead of showing its top half. */
     height: 28px;
     margin-inline: -6px;
-    background: linear-gradient(transparent, var(--popover-bg, var(--bg-surface)));
+    background: linear-gradient(transparent, var(--bg-popover));
     pointer-events: none;
   }
 
