@@ -115,7 +115,7 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.RepairInvalid, "repair-invalid", false,
 		"Regenerate only documents with malformed, non-finite, or zero-norm stored vectors")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false,
-		"Skip the full-rebuild confirmation prompt; local downloads still ask")
+		"Skip the full-rebuild confirmation prompt; setup and downloads still ask")
 	cmd.Flags().StringVar(&opts.Using, "using", "",
 		"Named embeddings server from [vector.embeddings.servers] to run this "+
 			"build against (default: the config's default_server)")
@@ -240,7 +240,7 @@ func requireVectorEnabled(cfg config.Config) error {
 	}
 	if !cfg.Vector.Enabled {
 		return errors.New(
-			"vector search is not enabled: set [vector] enabled = true in config.toml",
+			"vector search is not enabled: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on",
 		)
 	}
 	return nil
@@ -401,10 +401,8 @@ func vectorDocumentEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSe
 	return set, nil
 }
 
-// runEmbeddingsBuild loads config, gates on [vector] enabled, confirms a
-// requested full rebuild (unless --yes), and then dispatches to the daemon
-// or direct build path depending on whether a writable local daemon owns
-// the archive.
+// runEmbeddingsBuild enables search when needed and runs a build through
+// the writable local daemon or directly against the archive.
 func runEmbeddingsBuild(
 	ctx context.Context, out io.Writer, in io.Reader, opts EmbeddingsBuildOptions,
 ) error {
@@ -412,8 +410,49 @@ func runEmbeddingsBuild(
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	if err := requireVectorEnabled(cfg); err != nil {
-		return err
+	if cfg.ArchiveContent.UsageOnly() {
+		return requireVectorEnabled(cfg)
+	}
+	needsSetup := !cfg.Vector.Enabled
+	flag := ""
+	switch {
+	case opts.FullRebuild:
+		flag = "full-rebuild"
+	case opts.Backstop:
+		flag = "backstop"
+	case opts.RepairInvalid:
+		flag = "repair-invalid"
+	case opts.Using != "":
+		flag = "using"
+	case strings.TrimSpace(opts.Store) != "" && strings.TrimSpace(opts.Store) != "messages":
+		flag = "store"
+	case opts.IncludeAutomatedSet:
+		flag = "include-automated"
+	}
+	if !needsSetup && flag != "" {
+		_, needsSetup = daemonSetupClient(ctx, cfg)
+	}
+	if needsSetup {
+		if flag != "" {
+			problem, action := "search by meaning is off", "turn it on"
+			if cfg.Vector.Enabled {
+				problem, action = "search setup is incomplete", "finish setup"
+			}
+			return fmt.Errorf("%s: %s with 'agentsview index embeddings build' (no build flags) or Settings → Embeddings → Turn on, then rerun with --%s", problem, action, flag)
+		}
+		tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 0)
+		if err != nil {
+			return err
+		}
+		if tr.Mode != transportHTTP || tr.ReadOnly {
+			return errors.New("search setup requires a writable daemon; start it with `agentsview daemon start` and retry `agentsview index embeddings build`, or use Settings → Embeddings → Turn on")
+		}
+		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
+		if err != nil {
+			return err
+		}
+		client := embeddingsDaemonClient{baseURL: tr.URL, token: cfg.AuthToken, store: daemonEmbeddingStore("messages")}
+		return setupEmbeddingsBuild(ctx, out, bufio.NewScanner(in), cfg, client)
 	}
 	spec, err := vectorStoreSpec(opts.Store)
 	if err != nil {
@@ -439,8 +478,7 @@ func runEmbeddingsBuild(
 			return nil
 		}
 	}
-
-	if err := prepareLocalEmbeddings(ctx, cfg.Vector.Embeddings, opts.Using, confirmation, out); err != nil {
+	if err := prepareLocalEmbeddings(ctx, cfg, opts.Using, confirmation, out); err != nil {
 		return err
 	}
 
@@ -453,7 +491,13 @@ func runEmbeddingsBuild(
 		Using:            opts.Using,
 	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		return runEmbeddingsBuildDaemon(ctx, out, cfg, req)
+		err := runEmbeddingsBuildDaemon(ctx, out, cfg, req)
+		if apiErr, ok := errors.AsType[*daemonAPIError](err); ok && apiErr.status == http.StatusNotImplemented && flag == "" {
+			if client, pending := daemonSetupClient(ctx, cfg); pending {
+				return setupEmbeddingsBuild(ctx, out, confirmation, cfg, client)
+			}
+		}
+		return err
 	}
 	return runEmbeddingsBuildDirect(ctx, out, cfg, req)
 }
@@ -684,14 +728,14 @@ func buildViaDaemon(
 			return err
 		}
 	}
-	return pollDaemonBuildStatus(ctx, out, client)
+	return pollDaemonBuildStatus(ctx, out, client, false)
 }
 
 // pollDaemonBuildStatus polls the daemon's build status at
 // embeddingsPollInterval, printing a progress line on every poll while the
 // build is running, until it reports Running == false.
 func pollDaemonBuildStatus(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient,
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
 ) error {
 	var progress buildProgressPrinter
 	for {
@@ -699,10 +743,18 @@ func pollDaemonBuildStatus(
 		if err != nil {
 			return err
 		}
-		if !status.Running {
-			return finalizeBuildStatus(out, status)
+		if setup && status.Setup != nil && status.Setup.Action != "" && status.Setup.Error != "" {
+			return errors.New(status.Setup.Error)
 		}
-		progress.print(out, status.Phase, status.Done, status.Total)
+		if setup && status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
+			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)
+		}
+		if !setup || status.Setup == nil || !status.Setup.Busy {
+			if !status.Running {
+				return finalizeBuildStatus(out, status)
+			}
+			progress.print(out, status.Phase, status.Done, status.Total)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -743,6 +795,15 @@ func (p *buildProgressPrinter) print(w io.Writer, phase string, done, total int6
 	p.printed = true
 	p.lastPhase, p.lastDone, p.lastTotal = phase, done, total
 	printBuildProgress(w, phase, done, total)
+}
+
+func (p *buildProgressPrinter) printDownload(w io.Writer, done, total int64) {
+	percent := done * 100 / max(total, 1)
+	if p.printed && p.lastPhase == "download" && p.lastDone == percent && p.lastTotal == total {
+		return
+	}
+	p.printed, p.lastPhase, p.lastDone, p.lastTotal = true, "download", percent, total
+	fmt.Fprintf(w, "Download: %d%% of %d MB\n", percent, downloadMegabytes(total))
 }
 
 // printBuildProgress writes one progress line for either build path. Before
@@ -993,6 +1054,84 @@ type daemonAPIError struct {
 }
 
 func (e *daemonAPIError) Error() string { return e.message }
+
+func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner, cfg config.Config, client embeddingsDaemonClient) error {
+	status, err := client.status(ctx)
+	if err != nil {
+		return err
+	}
+	setup := status.Setup
+	if handled, err := joinActiveSetup(ctx, out, cfg, client, status); handled {
+		return err
+	}
+	if setup == nil || setup.Action != "turn-on" {
+		return errors.New("search setup is unavailable")
+	}
+	action, question := "Turning it on", "Turn on search by meaning?"
+	if cfg.Vector.Enabled || setup.Enabled {
+		fmt.Fprintln(out, "Search setup is incomplete.")
+		action, question = "Finishing setup", "Finish search setup?"
+	} else {
+		fmt.Fprintln(out, "Search by meaning is off.")
+	}
+	if setup.Error != "" {
+		fmt.Fprintf(out, "Error: %s\n", setup.Error)
+		question = "Retry search setup?"
+	}
+	approved := int64(0)
+	if setup.Provider == "built-in" && setup.MissingBytes > 0 {
+		approved = setup.MissingBytes
+		fmt.Fprintf(out, "%s downloads %d MB once, shared by all Kenn apps.\n", action, downloadMegabytes(approved))
+	} else {
+		provider := strings.Replace(setup.Provider, "ollama", "Ollama", 1)
+		fmt.Fprintf(out, "%s uses %s with %s.\n", action, provider, cfg.Vector.Embeddings.Model)
+	}
+	if !confirmScanned(in, out, question) {
+		return errors.New("search setup declined")
+	}
+	if err := client.startSetup(ctx, approved); err != nil {
+		if status, statusErr := client.status(ctx); statusErr == nil {
+			if handled, joinErr := joinActiveSetup(ctx, out, cfg, client, status); handled {
+				return joinErr
+			}
+		}
+		return err
+	}
+	return pollDaemonBuildStatus(ctx, out, client, true)
+}
+
+func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, client embeddingsDaemonClient, status vector.BuildStatus) (bool, error) {
+	setup := status.Setup
+	if setup != nil && setup.Busy {
+		fmt.Fprintln(out, "Search setup is already running.")
+		return true, pollDaemonBuildStatus(ctx, out, client, true)
+	}
+	if setup != nil && setup.Enabled && setup.Action == "" {
+		var err error
+		cfg, err = loadDaemonClientConfig(config.ScopeVector)
+		if err != nil {
+			return true, fmt.Errorf("loading config: %w", err)
+		}
+		if !cfg.Vector.Enabled {
+			return true, errors.New("search by meaning is off in the config; run `agentsview daemon restart` before retrying setup")
+		}
+		fmt.Fprintln(out, "Search by meaning is on.")
+		return true, buildViaDaemon(ctx, out, client, vector.BuildRequest{IncludeAutomated: vector.MessageIndexSpec().NormalizeIncludeAutomated(cfg.Vector.IncludeAutomated)})
+	}
+	return false, nil
+}
+
+func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64) error {
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return err
+	}
+	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{ApprovedBytes: &approved}})
+	if response == nil {
+		return err
+	}
+	return embeddingResponseError(response.StatusCode, response.Body, err)
+}
 
 func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) error {
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
