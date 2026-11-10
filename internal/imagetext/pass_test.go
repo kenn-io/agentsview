@@ -146,7 +146,9 @@ func testImageTextTimeout(t *testing.T) {
 		manager := Manager{DB: d, Client: client}
 		require.Error(t, manager.Run(ctx))
 		var failures int
-		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures FROM image_text_cache`).Scan(&failures))
+		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, slow)
+		hash := db.RetainedToolResultImages(content)[0].SHA256
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures FROM image_text_cache WHERE image_hash=?`, hash).Scan(&failures))
 		require.Equal(t, 1, failures)
 		require.NoError(t, manager.Run(ctx))
 		page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})

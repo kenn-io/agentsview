@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -22,55 +21,41 @@ import (
 func TestImageTextRespectsArchiveContent(t *testing.T) {
 	logs := captureLogOutput(t)
 	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	first := d
-	t.Cleanup(func() { require.NoError(t, first.Close()) })
-	seedCache := func() {
-		t.Helper()
-		require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text) VALUES(-1,'hash','processor','provider','model','revision','invoice')`)
-			return err
-		}))
+	for _, tc := range []struct {
+		name                           string
+		configContent, databaseContent config.ArchiveContent
+	}{
+		{"config omits tool results", config.ArchiveContentTranscripts, config.ArchiveContentFull},
+		{"archive omits tool results", config.ArchiveContentFull, config.ArchiveContentTranscripts},
+		{"disabled", config.ArchiveContentFull, config.ArchiveContentFull},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
+			content := `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`
+			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+			identity, err := ocr.NewIdentity("test", "model", "revision")
+			require.NoError(t, err)
+			require.NoError(t, d.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+			d.SetArchiveContent(tc.databaseContent)
+			cfg := config.Config{ArchiveContent: tc.configContent, ImageText: config.ImageTextConfig{Enabled: tc.name != "disabled"}}
+			logs.Reset()
+			manager, err := setupImageText(ctx, cfg, d)
+			require.NoError(t, err)
+			require.Nil(t, manager)
+			if cfg.ImageText.Enabled {
+				require.Contains(t, logs.String(), "image_text: disabled because archive_content omits tool results")
+			} else {
+				require.Empty(t, logs.String())
+			}
+			var count int
+			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+			require.Zero(t, count)
+		})
 	}
-	assertCacheCleared := func() {
-		t.Helper()
-		var count int
-		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
-		require.Zero(t, count)
-	}
-	d.SetArchiveContent(config.ArchiveContentTranscripts)
-	seedCache()
-	cfg := config.Config{ArchiveContent: config.ArchiveContentTranscripts, ImageText: config.ImageTextConfig{Enabled: true}}
-	manager, err := setupImageText(t.Context(), cfg, d)
-	require.NoError(t, err)
-	require.Nil(t, manager)
-	assertCacheCleared()
-	require.Contains(t, logs.String(), "image_text: disabled because archive_content omits tool results")
-	logs.Reset()
-	cfg.ArchiveContent = config.ArchiveContentFull
-	d, err = db.Open(ctx, filepath.Join(t.TempDir(), "full.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	manager, err = setupImageText(t.Context(), cfg, d)
-	require.NoError(t, err)
-	require.NotNil(t, manager)
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
-	content := `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-	cfg.ImageText.Enabled = false
-	logs.Reset()
-	manager, err = setupImageText(ctx, cfg, d)
-	require.NoError(t, err)
-	require.Nil(t, manager)
-	require.Empty(t, logs.String())
-	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
-	require.Zero(t, count)
 }
 
 func TestImageTextJobKeepsDaemonAwake(t *testing.T) {

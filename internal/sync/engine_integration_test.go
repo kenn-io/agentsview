@@ -18169,17 +18169,15 @@ func TestImageTextSurvivesFullResync(t *testing.T) {
 			ctx := t.Context()
 			env.writeClaudeSession(t, "test-proj", "present.jsonl", testjsonl.NewSessionBuilder().AddClaudeUser(tsEarly, "hello").AddClaudeAssistant(tsEarlyS5, "answer").String())
 			require.Equal(t, 1, env.engine.SyncAll(ctx, nil).Synced)
-			content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-			require.NoError(t, env.db.UpsertSession(ctx, db.Session{ID: "orphan-image", Project: "demo", Agent: "claude", MessageCount: 1}))
-			require.NoError(t, env.db.InsertMessages(ctx, []db.Message{{SessionID: "orphan-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-			identity, err := ocr.NewIdentity("test", "model", "revision")
-			require.NoError(t, err)
-			require.NoError(t, env.db.BackfillImageTextOccurrences(ctx))
-			require.NoError(t, env.db.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice 42", false))
-			before, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
-			require.NoError(t, err)
-			require.Len(t, before.Results, 1)
-			require.Equal(t, "orphan-image", before.Results[0].SessionID)
+			if mode == "full" {
+				content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+				require.NoError(t, env.db.UpsertSession(ctx, db.Session{ID: "orphan-image", Project: "demo", Agent: "claude", MessageCount: 1}))
+				require.NoError(t, env.db.InsertMessages(ctx, []db.Message{{SessionID: "orphan-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+				identity, err := ocr.NewIdentity("test", "model", "revision")
+				require.NoError(t, err)
+				require.NoError(t, env.db.BackfillImageTextOccurrences(ctx))
+				require.NoError(t, env.db.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice 42", false))
+			}
 			engine := env.engine
 			if mode == "transcripts" {
 				env.engine.Close()

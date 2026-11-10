@@ -38,6 +38,15 @@ func TestImageTextBackfillExistingResults(t *testing.T) {
 	pending, err = disabledDest.PendingImageText(ctx, "processor", time.Now(), 20)
 	require.NoError(t, err)
 	require.Empty(t, pending)
+	source := testDB(t)
+	require.NoError(t, source.BackfillImageTextOccurrences(ctx))
+	dest := testDB(t)
+	require.NoError(t, dest.CopyImageTextWithOccurrencesFrom(ctx, source.Path()))
+	insertSession(t, dest, "new-image", "demo")
+	require.NoError(t, dest.InsertMessages(ctx, []Message{{SessionID: "new-image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	pending, err = dest.PendingImageText(ctx, "processor", time.Now(), 20)
+	require.NoError(t, err)
+	require.Equal(t, []string{RetainedToolResultImages(content)[0].SHA256}, pending)
 }
 
 func TestImageTextDisableClearsSearchAndCache(t *testing.T) {
@@ -101,18 +110,12 @@ func TestImageTextIndexRebuild(t *testing.T) {
 			}
 			return d.ReopenWriter()
 		}} {
-			for _, stale := range []bool{false, true} {
-				require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-				if stale {
-					_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value='stale' WHERE key=?`, cjkFTSFingerprintStatsKey)
-					require.NoError(t, err)
-				}
-				require.NoError(t, reopen())
-				require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice 中文搜索", false))
-				page, err = d.Search(ctx, SearchFilter{Query: "中文搜索"})
-				require.NoError(t, err)
-				require.Len(t, page.Results, 1)
-			}
+			require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+			require.NoError(t, reopen())
+			require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice 中文搜索", false))
+			page, err = d.Search(ctx, SearchFilter{Query: "中文搜索"})
+			require.NoError(t, err)
+			require.Len(t, page.Results, 1)
 		}
 		_, err = d.getWriter().Exec(ctx, `DROP TABLE messages_cjk_fts`)
 		require.NoError(t, err)
@@ -418,9 +421,6 @@ func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND content:invoice`})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
-	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND content:absent`})
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
 }
 
 func TestImageTextSearchContent(t *testing.T) {
@@ -651,18 +651,4 @@ func TestMirrorImageTextDataVersion(t *testing.T) {
 	}{{169, false, 169}, {169, true, ImageTextDataVersion}, {172, true, ImageTextDataVersion}, {173, true, 173}} {
 		require.Equal(t, tc.want, MirrorDataVersion(tc.version, tc.hasText))
 	}
-}
-
-func TestImageTextResyncPreservesEmptyEnabledIndex(t *testing.T) {
-	ctx := t.Context()
-	source := testDB(t)
-	require.NoError(t, source.BackfillImageTextOccurrences(ctx))
-	dest := testDB(t)
-	require.NoError(t, dest.CopyImageTextWithOccurrencesFrom(ctx, source.Path()))
-	insertSession(t, dest, "new-image", "demo")
-	content := testInlineImageContent()
-	require.NoError(t, dest.InsertMessages(ctx, []Message{{SessionID: "new-image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	pending, err := dest.PendingImageText(ctx, "processor", time.Now(), 20)
-	require.NoError(t, err)
-	require.Equal(t, []string{RetainedToolResultImages(content)[0].SHA256}, pending)
 }

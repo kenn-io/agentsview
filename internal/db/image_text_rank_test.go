@@ -9,44 +9,6 @@ import (
 	"go.kenn.io/docbank/document/ocr"
 )
 
-func TestImageTextRanksWithMessages(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	for i := range 200 {
-		id := fmt.Sprintf("message-%03d", i)
-		insertSession(t, d, id, "demo")
-		var messages []Message
-		for j := range 10 {
-			body := strings.Repeat("ordinary background words ", 30)
-			if j == 0 {
-				body += " invoice"
-			}
-			messages = append(messages, Message{SessionID: id, Ordinal: j, Role: "assistant", Content: body})
-		}
-		require.NoError(t, d.InsertMessages(ctx, messages))
-	}
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	for i, payload := range []string{"AQID", "BAUG", "BwgJ"} {
-		id := fmt.Sprintf("image-%d", i)
-		insertSession(t, d, id, "demo")
-		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, payload)
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", Content: "image", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-		text := "invoice"
-		if i == 2 {
-			text = "other"
-		}
-		require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, text, false))
-	}
-	page, err := d.Search(ctx, SearchFilter{Query: "invoice", Limit: 10})
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(page.Results[0].SessionID, "image-"), "a short image match should outrank a long message")
-	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND rendered:invoice`, Limit: 10})
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(page.Results[0].SessionID, "image-"), "rendered search should include image text")
-}
-
 func TestImageTextSearchPaginationByRelevance(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
@@ -105,12 +67,22 @@ func TestImageTextCanOutrankMessageInSameSession(t *testing.T) {
 		{SessionID: "both", Ordinal: 0, Role: "assistant", Content: strings.Repeat("background ", 200) + "invoice"},
 		{SessionID: "both", Ordinal: 1, Role: "assistant", Content: "screenshot", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: image}}},
 	}))
+	insertSession(t, d, "weaker", "demo")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "weaker", Role: "assistant", Content: strings.Repeat("background ", 100) + "invoice"}}))
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
 	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(image)[0].SHA256, identity, "invoice invoice invoice", false))
 	control, err := d.Search(ctx, SearchFilter{Query: "invoice", Project: "control", Limit: 1})
 	require.NoError(t, err)
 	require.Len(t, control.Results, 1)
+	filtered, err := d.Search(ctx, SearchFilter{Query: `"invoice" AND rendered:invoice`, Project: "control", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, filtered.Results, 1)
+	require.Equal(t, "image-only", filtered.Results[0].SessionID)
+	firstPage, err := d.Search(ctx, SearchFilter{Query: "invoice", Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, firstPage.Results, 2)
+	require.ElementsMatch(t, []string{"both", "image-only"}, []string{firstPage.Results[0].SessionID, firstPage.Results[1].SessionID})
 	for _, project := range []string{"", "demo"} {
 		t.Run("project="+project, func(t *testing.T) {
 			page, err := d.Search(ctx, SearchFilter{Query: "invoice", Project: project, Limit: 10})

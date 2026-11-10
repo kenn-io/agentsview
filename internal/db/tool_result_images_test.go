@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -34,10 +35,10 @@ func TestReadRetainedImageLimit(t *testing.T) {
 	t.Run("asset", func(t *testing.T) {
 		body := bytes.Repeat([]byte("x"), 1024*1024)
 		dir := t.TempDir()
-		name := strings.Repeat("a", 64) + ".png"
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), body, 0o600))
-		asset := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":"asset://%s","media_type":"image/png","byte_size":%d}]`, name, len(body))
-		_, err := ReadRetainedImage(asset, 0, dir, 32)
+		ref, _, err := assets.Put(dir, "image/png", body)
+		require.NoError(t, err)
+		asset := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(body))
+		_, err = ReadRetainedImage(asset, 0, dir, 32)
 		require.ErrorContains(t, err, "exceeds 32 bytes")
 	})
 }
