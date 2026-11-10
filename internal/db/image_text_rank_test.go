@@ -45,12 +45,7 @@ func TestImageTextRanksWithMessages(t *testing.T) {
 	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND rendered:invoice`, Limit: 10})
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(page.Results[0].SessionID, "image-"), "rendered search should include image text")
-	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND content:invoice`, Limit: 10})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Results)
-	for _, r := range page.Results {
-		require.False(t, strings.HasPrefix(r.SessionID, "image-"), "content search should not match image text")
-	}
+
 }
 
 func TestImageTextSearchPaginationByRelevance(t *testing.T) {

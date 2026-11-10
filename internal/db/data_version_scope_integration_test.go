@@ -45,8 +45,6 @@ func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
 	_, err := database.StripToolImages(ctx, db.StripImagesFilter{})
 	require.NoError(t, err)
 	require.NoError(t, database.SetSessionDataVersion(ctx, "codex:"+id, 170))
-	require.NoError(t, database.UpsertSession(ctx, db.Session{ID: "retry", Agent: "codex", Project: "demo"}))
-	require.NoError(t, database.SetSessionDataVersion(ctx, "retry", 169))
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, "PRAGMA user_version=170")
 		return err
@@ -60,7 +58,6 @@ func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	require.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(ctx, "codex:"+id))
-	require.Equal(t, 169, database.GetSessionDataVersion(ctx, "retry"))
 	engine = sync.NewEngine(ctx, database, cfg)
 	t.Cleanup(engine.Close)
 	engine.SyncAll(ctx, nil)

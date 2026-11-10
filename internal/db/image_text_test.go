@@ -288,16 +288,18 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 		require.NoError(t, dst.BackfillImageTextOccurrences(ctx))
 		require.NoError(t, dst.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
 		require.Equal(t, 2, count)
-		t.Run("legacy archive without image cache", func(t *testing.T) {
-			source := filepath.Join(t.TempDir(), "legacy.db")
-			legacy, err := sql.Open(sqliteArchiveDriverName, makeDSN(source, false))
-			require.NoError(t, err)
-			_, err = legacy.ExecContext(t.Context(), `CREATE TABLE legacy (id INTEGER)`)
-			require.NoError(t, err)
-			require.NoError(t, legacy.Close())
-			dst := testDB(t)
-			require.NoError(t, dst.CopyImageTextFrom(t.Context(), source))
-		})
+
+	})
+
+	t.Run("legacy archive without image cache", func(t *testing.T) {
+		source := filepath.Join(t.TempDir(), "legacy.db")
+		legacy, err := sql.Open(sqliteArchiveDriverName, makeDSN(source, false))
+		require.NoError(t, err)
+		_, err = legacy.ExecContext(t.Context(), `CREATE TABLE legacy (id INTEGER)`)
+		require.NoError(t, err)
+		require.NoError(t, legacy.Close())
+		dst := testDB(t)
+		require.NoError(t, dst.CopyImageTextFrom(t.Context(), source))
 	})
 
 	t.Run("shared writes", imageTextSharedAcrossSessionWrites)
@@ -419,6 +421,9 @@ func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 		require.Len(t, page.Results, 1, query)
 		require.Equal(t, "image", page.Results[0].SessionID)
 	}
+	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND content:invoice`})
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
 	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND content:absent`})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)

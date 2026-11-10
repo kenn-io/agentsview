@@ -90,7 +90,7 @@ func TestImageTextJobKeepsDaemonAwake(t *testing.T) {
 	manager, err := setupImageText(t.Context(), config.Config{ImageText: config.ImageTextConfig{Enabled: true, Endpoint: srv.URL + "/glmocr/parse"}}, d)
 	require.NoError(t, err)
 	idled := make(chan struct{})
-	tracker := server.NewIdleTracker(time.Second, func() { close(idled) })
+	tracker := server.NewIdleTracker(200*time.Millisecond, func() { close(idled) })
 	finished := make(chan error, 1)
 	go func() { finished <- imageTextJob(manager, tracker).Run(ctx) }()
 	<-started
@@ -99,7 +99,7 @@ func TestImageTextJobKeepsDaemonAwake(t *testing.T) {
 	select {
 	case <-idled:
 		require.FailNow(t, "daemon idled during OCR")
-	case <-time.After(2 * time.Second):
+	case <-time.After(400 * time.Millisecond):
 	}
 	close(release)
 	require.NoError(t, <-finished)

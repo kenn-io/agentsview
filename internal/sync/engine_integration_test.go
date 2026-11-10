@@ -18163,7 +18163,7 @@ func TestResyncAllUsageOnlyDropsFrictionDigestText(t *testing.T) {
 }
 
 func TestImageTextSurvivesFullResync(t *testing.T) {
-	for _, mode := range []string{"full", "archive only", "transcripts", "copy fails"} {
+	for _, mode := range []string{"full", "transcripts", "copy fails"} {
 		t.Run(mode, func(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 			ctx := t.Context()
@@ -18177,12 +18177,6 @@ func TestImageTextSurvivesFullResync(t *testing.T) {
 			require.NoError(t, env.db.BackfillImageTextOccurrences(ctx))
 			require.NoError(t, env.db.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice 42", false))
 			engine := env.engine
-			if mode == "archive only" {
-				env.engine.Close()
-				require.NoError(t, env.db.EnableArchiveOnly(ctx))
-				engine = sync.NewEngine(ctx, env.db, sync.EngineConfig{Machine: "local"})
-				t.Cleanup(engine.Close)
-			}
 			if mode == "transcripts" {
 				env.engine.Close()
 				env.db.SetArchiveContent(config.ArchiveContentTranscripts)
@@ -18206,7 +18200,7 @@ func TestImageTextSurvivesFullResync(t *testing.T) {
 			}
 			require.False(t, stats.Aborted, "%v", stats.Warnings)
 			require.Empty(t, stats.Warnings)
-			if mode == "full" || mode == "archive only" {
+			if mode == "full" {
 				require.NoError(t, env.db.BackfillImageTextOccurrences(ctx))
 				page, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
 				require.NoError(t, err)

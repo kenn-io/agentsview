@@ -184,6 +184,13 @@ func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
 	require.Contains(t, logs.String(), "no readable copy")
 	require.Contains(t, logs.String(), "content hash mismatch")
 	require.Zero(t, requests)
+	var failures int
+	var retryAt string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures, retry_at FROM image_text_cache`).Scan(&failures, &retryAt))
+	require.Equal(t, 1, failures)
+	retry, err := time.Parse(time.RFC3339, retryAt)
+	require.NoError(t, err)
+	require.True(t, retry.After(time.Now()))
 	require.NoError(t, os.WriteFile(path, png, 0o600))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
@@ -249,68 +256,53 @@ func TestImageTextProcessorKey(t *testing.T) {
 	require.NotEqual(t, firstKey, changedKey)
 }
 
-func TestImageTextPassReadsMultipleImagesFromOneResult(t *testing.T) {
-	ctx := t.Context()
-	d := imageTextTestDB(t)
-	blocks := []string{`{"type":"input_image","image_url":"data:image/png;base64,%%%"}`}
-	want := make(map[string]bool)
-	for i := range 40 {
-		image := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d%s", i, strings.Repeat("x", 16384)))
-		want[image] = true
-		blocks = append(blocks, fmt.Sprintf(`{"type":"input_image","image_url":"data:image/png;base64,%s"}`, image))
+func TestImageTextPassReadsImagesFromOneResult(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		count    int
+		repeated bool
+	}{{"multiple", 40, false}, {"repeated", 20, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			d := imageTextTestDB(t)
+			// An invalid image must not hide the readable images after it.
+			blocks := []string{`{"type":"input_image","image_url":"data:image/png;base64,%%%"}`}
+			want := make(map[string]bool)
+			for i := range tc.count {
+				if tc.repeated {
+					i = 0
+				}
+				image := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d%s", i, strings.Repeat("x", 16384)))
+				want[image] = true
+				blocks = append(blocks, fmt.Sprintf(`{"type":"input_image","image_url":"data:image/png;base64,%s"}`, image))
+			}
+			content := "[" + strings.Join(blocks, ",") + "]"
+			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "images", Project: "demo", Agent: "test", MessageCount: 1}))
+			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "images", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+			seen := make(map[string]bool)
+			requests := 0
+			var requestErr error
+			client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				var request struct {
+					Images []string `json:"images"`
+				}
+				requestErr = json.UnmarshalRead(r.Body, &request)
+				if len(request.Images) == 1 {
+					seen[strings.TrimPrefix(request.Images[0], "data:image/png;base64,")] = true
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+			})
+			manager := Manager{DB: d, Client: client}
+			require.NoError(t, manager.Run(ctx))
+			require.NoError(t, requestErr)
+			require.Equal(t, want, seen)
+			require.Equal(t, len(want), requests)
+			require.NoError(t, manager.Run(ctx))
+			require.Equal(t, len(want), requests)
+		})
 	}
-	content := "[" + strings.Join(blocks, ",") + "]"
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "multi", Project: "demo", Agent: "test", MessageCount: 1}))
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "multi", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	seen := make(map[string]bool)
-	requests := 0
-	var requestErr error
-	var lengths []int
-	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		var request struct {
-			Images []string `json:"images"`
-		}
-		requestErr = json.UnmarshalRead(r.Body, &request)
-		lengths = append(lengths, len(request.Images))
-		if len(request.Images) == 1 {
-			seen[strings.TrimPrefix(request.Images[0], "data:image/png;base64,")] = true
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
-	})
-	manager := Manager{DB: d, Client: client}
-	require.NoError(t, manager.Run(ctx))
-	require.NoError(t, requestErr)
-	require.Equal(t, want, seen)
-	require.Equal(t, 40, requests)
-	for _, n := range lengths {
-		require.Equal(t, 1, n)
-	}
-	require.NoError(t, manager.Run(ctx))
-	require.Equal(t, 40, requests)
-}
-
-func TestImageTextPassReadsRepeatedImageFromOneResult(t *testing.T) {
-	ctx := t.Context()
-	d := imageTextTestDB(t)
-	image := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nrepeated" + strings.Repeat("x", 16384)))
-	blocks := []string{fmt.Sprintf(`{"type":"text","text":%q}`, strings.Repeat("y", 64))}
-	for range 20 {
-		blocks = append(blocks, fmt.Sprintf(`{"type":"input_image","image_url":"data:image/png;base64,%s"}`, image))
-	}
-	content := "[" + strings.Join(blocks, ",") + "]"
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "repeat", Project: "demo", Agent: "test", MessageCount: 1}))
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "repeat", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	requests := 0
-	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
-	})
-	manager := Manager{DB: d, Client: client}
-	require.NoError(t, manager.Run(ctx))
-	require.Equal(t, 1, requests)
 }
 
 func TestImageTextFallsBackToReadableCopy(t *testing.T) {

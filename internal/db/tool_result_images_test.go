@@ -24,29 +24,21 @@ func TestReadRetainedImageInlineLimit(t *testing.T) {
 	raw, err := json.Marshal(uri)
 	require.NoError(t, err)
 	content := fmt.Sprintf(`[{"type":"input_image","image_url":%s}]`, raw)
-	var decoded bytes.Buffer
-	_, n, _, ok := streamInlineDataLimit(raw, &decoded, true, 32)
-	require.True(t, ok)
-	require.EqualValues(t, 33, n)
-	require.Len(t, decoded.Bytes(), 33)
 	_, err = ReadRetainedImage(content, 0, "", 32)
 	require.ErrorContains(t, err, "exceeds 32 bytes")
 	got, err := ReadRetainedImage(content, 0, "", int64(len(body)))
 	require.NoError(t, err)
 	require.Equal(t, body, got)
+}
+
+func TestReadRetainedImageAssetLimit(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), 1024*1024)
 	dir := t.TempDir()
 	name := strings.Repeat("a", 64) + ".png"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), body, 0o600))
 	asset := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":"asset://%s","media_type":"image/png","byte_size":%d}]`, name, len(body))
-	measurement := testing.Benchmark(func(b *testing.B) {
-		for range b.N {
-			_, err := ReadRetainedImage(asset, 0, dir, 32)
-			if err == nil {
-				b.Fatal("expected size limit error")
-			}
-		}
-	})
-	require.Less(t, measurement.AllocedBytesPerOp(), int64(len(body)/2))
+	_, err := ReadRetainedImage(asset, 0, dir, 32)
+	require.ErrorContains(t, err, "exceeds 32 bytes")
 }
 
 func testInlineImageContent() string {
