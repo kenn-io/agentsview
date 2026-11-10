@@ -1090,14 +1090,15 @@ func trimBranchSuffix(name, gitBranch string) string {
 		return name
 	}
 
-	for _, sep := range []string{"-", "_"} {
+	// "." covers worktrunk's default sibling layout, "<repo>.<branch>".
+	for _, sep := range []string{"-", "_", "."} {
 		suffix := sep + branchToken
 		if strings.HasSuffix(
 			strings.ToLower(name),
 			strings.ToLower(suffix),
 		) {
 			base := strings.TrimRight(
-				name[:len(name)-len(suffix)], "-_",
+				name[:len(name)-len(suffix)], "-_.",
 			)
 			if base != "" {
 				return base

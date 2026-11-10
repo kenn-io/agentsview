@@ -50,6 +50,11 @@ The latest release is
 
 **Bug fixes**
 
+- Sessions from worktrees named `<repo>.<branch>` next to the main checkout,
+  the default worktrunk layout, now group under the repository's project when
+  the checkout is not on disk, such as on a central collector. Before, each
+  worktree folder became its own project. Existing sessions pick up the new name
+  when they are next re-parsed.
 - OpenCode, Kilo, and MiMo Code costs now include reasoning tokens. Current
   versions of these tools record reasoning separately from output, and
   AgentsView priced only the output, so sessions on reasoning models were
