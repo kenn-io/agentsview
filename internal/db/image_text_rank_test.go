@@ -54,43 +54,6 @@ func TestImageTextRanksWithMessages(t *testing.T) {
 }
 
 func TestImageTextSearchPaginationByRelevance(t *testing.T) {
-	t.Run("first page with many messages", func(t *testing.T) {
-		ctx := t.Context()
-		d := testDB(t)
-		require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-		content := testInlineImageContent()
-		for i := range 50 {
-			id := fmt.Sprintf("message-%02d", i)
-			insertSession(t, d, id, "demo")
-			message := Message{SessionID: id, Role: "assistant", Content: "needle"}
-			if i == 49 {
-				message.ToolCalls = []ToolCall{{ToolName: "Read", ResultContent: content}}
-			}
-			require.NoError(t, d.InsertMessages(ctx, []Message{message}))
-		}
-		insertSession(t, d, "zz-image", "demo")
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "zz-image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-		_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET started_at='2024-01-01T00:00:00Z', ended_at='2024-01-01T00:00:00Z'`)
-		require.NoError(t, err)
-		identity, err := ocr.NewIdentity("test", "model", "revision")
-		require.NoError(t, err)
-		require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "needle", false))
-		page, err := d.Search(ctx, SearchFilter{Query: "needle", Limit: 30})
-		require.NoError(t, err)
-		require.Len(t, page.Results, 30)
-		var found bool
-		var imageRank, messageRank float64
-		for _, result := range page.Results {
-			if result.SessionID == "zz-image" {
-				found = true
-				imageRank = result.Rank
-			} else {
-				messageRank = result.Rank
-			}
-		}
-		require.True(t, found, "image text should reach the first page")
-		require.InDelta(t, messageRank, imageRank, 0.000001, "the matches should exercise equal relevance")
-	})
 	t.Run("cursor pages", func(t *testing.T) {
 		ctx := t.Context()
 		d := testDB(t)

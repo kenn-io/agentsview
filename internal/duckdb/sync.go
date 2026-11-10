@@ -875,8 +875,7 @@ func reportDuckPushProgress(
 	})
 }
 
-// tryPushSessionBatch keeps native appenders and SQL on the transaction's
-// connection.
+// tryPushSessionBatch keeps native appenders and SQL on the transaction's connection.
 func (s *Sync) tryPushSessionBatch(
 	ctx context.Context, sessions []db.Session, fingerprints map[string]string,
 ) ([]int, error) {

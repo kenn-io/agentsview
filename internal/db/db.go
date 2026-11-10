@@ -5426,6 +5426,7 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	if err := ensureCJKFTS(ctx, w, false); err != nil {
 		return fmt.Errorf("initializing CJK FTS: %w", err)
 	}
+
 	var recallFTSCount int
 	if err := w.QueryRowContext(ctx,
 		"SELECT count(*) FROM sqlite_master"+
