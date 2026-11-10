@@ -348,13 +348,13 @@ CREATE TABLE IF NOT EXISTS `+spec.repairQueueTable()+` (
 		readDB, err = sql.Open(vectorDriverName, vectorDSN(path, true))
 		if err != nil {
 			db.Close()
-			return nil, fmt.Errorf("opening vector snapshot pool: %w", err)
+			return nil, err
 		}
 		readStore, err = sqlitevec.New[string, string](ctx, readDB, spec.schema())
 		if err != nil {
 			readDB.Close()
 			db.Close()
-			return nil, fmt.Errorf("opening vector snapshot store: %w", err)
+			return nil, err
 		}
 	}
 	overlap := ChunkOverlap(maxInputChars)
