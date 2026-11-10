@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -232,8 +233,8 @@ func TestImageTextPassReadsMultipleImagesFromOneResult(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
 	blocks := []string{`{"type":"input_image","image_url":"data:image/png;base64,%%%"}`}
 	want := make(map[string]bool)
-	for i := range 3 {
-		image := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d", i))
+	for i := range 40 {
+		image := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d%s", i, strings.Repeat("x", 16384)))
 		want[image] = true
 		blocks = append(blocks, fmt.Sprintf(`{"type":"input_image","image_url":"data:image/png;base64,%s"}`, image))
 	}
@@ -254,11 +255,43 @@ func TestImageTextPassReadsMultipleImagesFromOneResult(t *testing.T) {
 		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
 	})
 	manager := Manager{DB: d, Client: client}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
 	require.NoError(t, manager.Run(ctx))
+	runtime.ReadMemStats(&after)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(200<<20), "processing images in one result should avoid repeatedly decoding siblings")
 	require.Equal(t, want, seen)
-	require.Equal(t, 3, requests)
+	require.Equal(t, 40, requests)
 	require.NoError(t, manager.Run(ctx))
-	require.Equal(t, 3, requests)
+	require.Equal(t, 40, requests)
+}
+
+func TestImageTextPassReadsRepeatedImageFromOneResult(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	image := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nrepeated" + strings.Repeat("x", 16384)))
+	blocks := []string{fmt.Sprintf(`{"type":"text","text":%q}`, strings.Repeat("y", 4<<20))}
+	for range 20 {
+		blocks = append(blocks, fmt.Sprintf(`{"type":"input_image","image_url":"data:image/png;base64,%s"}`, image))
+	}
+	content := "[" + strings.Join(blocks, ",") + "]"
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "repeat", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "repeat", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	requests := 0
+	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	})
+	manager := Manager{DB: d, Client: client}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	require.NoError(t, manager.Run(ctx))
+	runtime.ReadMemStats(&after)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(80<<20), "reading one copy should not load every copy of the result")
+	require.Equal(t, 1, requests)
 }
 
 func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {

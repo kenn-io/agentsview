@@ -68,22 +68,9 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			body, err := reader.Read(item.Content, item.CallID, item.EventID, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
-			if err != nil || len(body) == 0 {
-				body, err = db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
-				if err != nil || len(body) == 0 {
-					continue
-				}
-			}
-			if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != hash {
-				// A source can change without changing its length during a pass.
-				body, err = db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
-				if err != nil {
-					continue
-				}
-				if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != hash {
-					continue
-				}
+			body := m.readSource(reader, item, hash)
+			if body == nil {
+				continue
 			}
 			// Process verifies the type against the bytes before sending a request.
 			// Try image types so a stale label does not hide usable image data.
@@ -119,6 +106,25 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 		}
 	}
 	return m.DB.SaveImageText(ctx, hash, identity, "", true)
+}
+
+// readSource returns the item's image bytes when they match hash. Cached block
+// locations come first; a full scan covers a source that changed in place,
+// which can happen without changing its length.
+func (m *Manager) readSource(reader *db.RetainedImageReader, item db.PendingImageText, hash string) []byte {
+	matches := func(body []byte, err error) bool {
+		sum := sha256.Sum256(body)
+		return err == nil && len(body) > 0 && hex.EncodeToString(sum[:]) == hash
+	}
+	body, err := reader.Read(item.Content, item.CallID, item.EventID, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
+	if matches(body, err) {
+		return body
+	}
+	body, err = db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
+	if matches(body, err) {
+		return body
+	}
+	return nil
 }
 
 // ProcessorKey includes the output policy while excluding the service address.
