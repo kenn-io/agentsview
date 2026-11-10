@@ -95,24 +95,23 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		WITH msg_grouped AS (
 			SELECT m.session_id AS session_id,
 				argMin(
-					tuple(m.ordinal, substringUTF8(m.content, 1, 200), positionCaseInsensitiveUTF8(m.content, ?)),
+					tuple(m.ordinal, substringUTF8(m.content, 1, 200), positionCaseInsensitiveUTF8(m.content, ?),
+						s.project, s.agent, s.machine, COALESCE(s.display_name, s.session_name, s.first_message, ''),
+						COALESCE(s.ended_at, s.started_at, s.created_at)),
 					tuple(positionCaseInsensitiveUTF8(m.content, ?), m.ordinal, m.id)
 				) AS winner
-			FROM messages m
+			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE `+msgTermPredicate+`
 				AND `+embeddableMessagePredicate("m")+`
-				AND m.session_id IN (
-					SELECT s.id FROM sessions s WHERE s.deleted_at IS NULL `+project+`
-				)
+				AND s.deleted_at IS NULL `+project+`
 			GROUP BY m.session_id
 		),
 		msg_matches AS (
-			SELECT g.session_id AS session_id, s.project AS project, s.agent AS agent, s.machine AS machine,
-				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
-				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
+			SELECT g.session_id AS session_id, g.winner.4 AS project, g.winner.5 AS agent, g.winner.6 AS machine,
+				g.winner.7 AS name, g.winner.8 AS session_ended_at,
 				g.winner.1 AS ordinal, g.winner.2 AS snippet,
 				1.0 AS rank, 1 AS match_priority, g.winner.3 AS match_pos
-			FROM msg_grouped g JOIN sessions s ON s.id = g.session_id
+			FROM msg_grouped g
 		),
 		name_candidates AS (
 			SELECT s.id AS id FROM sessions s
