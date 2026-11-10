@@ -159,6 +159,11 @@ func commitRepository(input, cwd string) string {
 	return cwd
 }
 
+func commitExecutableName(executable string) string {
+	name := path.Base(strings.ReplaceAll(executable, `\`, "/"))
+	return strings.TrimSuffix(strings.ToLower(name), ".exe")
+}
+
 func commitCommandText(input string) string {
 	if jsontext.Value(input).IsValid() {
 		var payload struct {
@@ -166,7 +171,7 @@ func commitCommandText(input string) string {
 		}
 		if json.Unmarshal([]byte(input), &payload) == nil && payload.Command != nil {
 			args := payload.Command
-			if len(args) > 0 && path.Base(args[0]) == "env" {
+			if len(args) > 0 && commitExecutableName(args[0]) == "env" {
 				args = args[1:]
 				for len(args) > 0 {
 					name, _, ok := strings.Cut(args[0], "=")
@@ -179,7 +184,7 @@ func commitCommandText(input string) string {
 			if len(args) == 0 {
 				return ""
 			}
-			executable := path.Base(args[0])
+			executable := commitExecutableName(args[0])
 			if len(args) >= 3 && (executable == "sh" || executable == "bash" || executable == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
 				return args[2]
 			}

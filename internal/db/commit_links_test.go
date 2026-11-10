@@ -37,6 +37,9 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"zsh -c", `{"command":["zsh","-c","git commit -m fix"]}`, "/work"},
 		{"zsh -lc", `{"command":["zsh","-lc","git commit -m fix"]}`, "/work"},
 		{"absolute shell", `{"command":["/bin/bash","-lc","cd repo && git commit -m fix"]}`, "/work/repo"},
+		{"Windows git", `{"command":["C:\\Program Files\\Git\\bin\\GIT.ExE","-C","D:\\work\\repo","commit"]}`, `D:\work\repo`},
+		{"Windows bash", `{"command":["C:\\Program Files\\Git\\bin\\Bash.EXE","-lc","git commit -m fix"],"workdir":"D:\\work\\repo"}`, `D:\work\repo`},
+		{"Windows env", `{"command":["C:\\bin\\ENV.ExE","X=1","C:\\bin\\Git.EXE","commit"]}`, "/work"},
 		{"absolute git", `{"command":["/usr/bin/git","commit"]}`, "/work"},
 		{"env", `{"command":["env","X=1","git","commit"]}`, "/work"},
 		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
@@ -61,7 +64,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
 		})
 	}
-	for _, input := range []string{`{"command":[]}`, `{"command":[1]}`, `{"command":["printf","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
+	for _, input := range []string{`{"command":[]}`, `{"command":[1]}`, `{"command":["printf","git","commit"]}`, `{"command":["C:\\bin\\printf.exe","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
 		d := testDB(t)
 		insertSession(t, d, "s1", "project-a")
 		insertMessages(t, d, commitMessages("s1", input, "[main abc1234] Fix parser")...)
