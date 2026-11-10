@@ -320,9 +320,9 @@ test.describe("Friction Log missing states", () => {
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.route("**/api/v1/pins**", (route: Route) => route.fulfill({ json: { pins: [] } }));
     await page.goto("/pinned");
-    const pinned = page.locator(".missing-data");
+    const pinned = page.locator(".kit-empty-state");
     await expect(pinned).toContainText("No pinned messages");
-    const pinnedIcon = (await pinned.locator(".missing-data__icon").boundingBox())!;
+    const pinnedIcon = (await pinned.locator(".kit-empty-state__icon").boundingBox())!;
 
     await page.route("**/api/v1/version", async (route: Route) => {
       const response = await route.fetch();
@@ -335,9 +335,9 @@ test.describe("Friction Log missing states", () => {
       route.fulfill({ json: { digests: [] } }),
     );
     await page.goto("/friction");
-    const off = page.locator(".missing-data");
+    const off = page.locator(".kit-empty-state");
     await expect(off).toContainText("Friction Log is off on this server");
-    const offIcon = (await off.locator(".missing-data__icon").boundingBox())!;
+    const offIcon = (await off.locator(".kit-empty-state__icon").boundingBox())!;
 
     // Same column and nearly the same height: the two pages' headers
     // differ by a few pixels, not by a layout.

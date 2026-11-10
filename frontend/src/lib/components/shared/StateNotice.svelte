@@ -27,7 +27,7 @@
      pages: a muted surface, secondary body text, and an optional neutral
      icon. It sits at the top of the content area, so every page shows its
      note in the same place. A page or panel with nothing to show uses
-     MissingData instead. -->
+     kit-ui EmptyState instead. -->
 <div class="state-notice {className}" {role}>
   {#if icon}
     <span class="state-notice__icon" aria-hidden="true">{@render icon()}</span>

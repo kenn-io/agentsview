@@ -1,8 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { CopyButton } from "@kenn-io/kit-ui";
+  import { CopyButton, EmptyState } from "@kenn-io/kit-ui";
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
-  import MissingData from "../shared/MissingData.svelte";
   import { m } from "../../i18n/index.js";
   import {
     ExternalLinkIcon,
@@ -121,20 +120,21 @@
   {#if pins.loading}
     <div class="loading-state">{m.pinned_loading()}</div>
   {:else if pins.pins.length === 0 && sessions.filters.project}
-    <MissingData
+    <EmptyState
+      align="top"
       title={m.pinned_none_for_project()}
       description={m.pinned_none_for_project_hint()}
     >
       {#snippet icon()}
         <PinIcon size="24" strokeWidth="1.75" />
       {/snippet}
-    </MissingData>
+    </EmptyState>
   {:else if pins.pins.length === 0}
-    <MissingData title={m.pinned_none()} description={m.pinned_none_hint()}>
+    <EmptyState align="top" title={m.pinned_none()} description={m.pinned_none_hint()}>
       {#snippet icon()}
         <PinIcon size="24" strokeWidth="1.75" />
       {/snippet}
-    </MissingData>
+    </EmptyState>
   {:else}
     <div class="pin-list">
       {#each pins.pins as pin (`${pin.session_id}:${pin.message_key ?? pin.id}`)}

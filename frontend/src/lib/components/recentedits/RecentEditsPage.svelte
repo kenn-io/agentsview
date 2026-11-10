@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    EmptyState,
     SearchInput,
     TableHeaderCell,
     VirtualTable,
@@ -17,7 +18,6 @@
   import { formatCount, formatRelativeTime } from "../../utils/format.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
-  import MissingData from "../shared/MissingData.svelte";
   import { LatestRead } from "../../utils/latest-read.js";
   import { loadColumnWidths, saveColumnWidths } from "./columnWidths.js";
 
@@ -277,11 +277,11 @@
   {#if loading && files.length === 0}
     <div class="re-loading">{m.recent_edits_loading()}</div>
   {:else if files.length === 0}
-    <MissingData title={m.recent_edits_empty()}>
+    <EmptyState align="top" title={m.recent_edits_empty()}>
       {#snippet icon()}
         <PencilIcon size="24" strokeWidth="1.75" />
       {/snippet}
-    </MissingData>
+    </EmptyState>
   {:else}
     <div class="re-list">
       {#key tableWidth}

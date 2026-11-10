@@ -1,12 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount, untrack } from "svelte";
-  import { Button, Card, IconButton, Typeahead } from "@kenn-io/kit-ui";
+  import { Button, Card, EmptyState, IconButton, Typeahead } from "@kenn-io/kit-ui";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { ChevronLeftIcon, ChevronRightIcon, CircleCheckIcon, LogsIcon } from "../../icons.js";
   import { friction } from "../../stores/friction.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
-  import MissingData from "../shared/MissingData.svelte";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import FrictionHeadline from "./FrictionHeadline.svelte";
   import FrictionMarkdownPanel from "./FrictionMarkdownPanel.svelte";
@@ -51,7 +50,7 @@
   // list request fails, but that is a fact about the backend, not a fault.
   const frictionUnreadable = $derived(sync.serverVersion?.friction_readable === false);
   // With no digest list (off, unreadable, or none built yet) the page shows
-  // one MissingData state, centered across the page like Pinned's instead
+  // one EmptyState, centered across the page like Pinned's instead
   // of inside the left-aligned digest column.
   const listMissing = $derived(
     friction.errors.dates
@@ -186,7 +185,8 @@
     {/if}
 
     {#if friction.errors.dates && frictionUnreadable}
-      <MissingData
+      <EmptyState
+        align="top"
         role="status"
         title={m.friction_load_error()}
         description={datesErrorSentence}
@@ -194,10 +194,8 @@
         {#snippet icon()}
           <LogsIcon size="24" strokeWidth="1.75" />
         {/snippet}
-        {#snippet action()}
-          <Button size="sm" label={m.friction_retry()} onclick={refresh} />
-        {/snippet}
-      </MissingData>
+        <Button size="sm" label={m.friction_retry()} onclick={refresh} />
+      </EmptyState>
     {:else if friction.errors.dates}
       <Card level="default" padding="none" class="state-panel">
         <div class="state-panel-alert" role="alert">
@@ -208,23 +206,25 @@
       </Card>
     {:else if !friction.loading.dates && friction.dates.length === 0}
       {#if frictionAvailable}
-        <MissingData
+        <EmptyState
+          align="top"
           title={m.friction_empty_title()}
           description={buildAllowed ? m.friction_empty_hint() : m.friction_empty_hint_remote()}
         >
           {#snippet icon()}
             <LogsIcon size="24" strokeWidth="1.75" />
           {/snippet}
-        </MissingData>
+        </EmptyState>
       {:else}
-        <MissingData
+        <EmptyState
+          align="top"
           title={m.friction_disabled_title()}
           description={m.friction_disabled_hint()}
         >
           {#snippet icon()}
             <LogsIcon size="24" strokeWidth="1.75" />
           {/snippet}
-        </MissingData>
+        </EmptyState>
       {/if}
     {:else if friction.errors.digest}
       <Card level="default" padding="none" class="state-panel">
@@ -275,7 +275,8 @@
           {/if}
         {/each}
       {:else}
-        <MissingData
+        <EmptyState
+          align="top"
           title={m.friction_clean_title()}
           description={digest.sessions_scanned > 0
             ? m.friction_clean_hint({ count: digest.sessions_scanned })
@@ -284,7 +285,7 @@
           {#snippet icon()}
             <CircleCheckIcon size="24" strokeWidth="1.75" />
           {/snippet}
-        </MissingData>
+        </EmptyState>
       {/if}
 
       <FrictionMarkdownPanel date={digest.date} />
