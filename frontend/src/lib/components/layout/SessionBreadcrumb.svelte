@@ -961,6 +961,18 @@
 
   const PANE_GAP = 8;
 
+  // The element's effective CSS zoom. WebKit has no currentCSSZoom, so
+  // multiply the computed zoom of the element and its ancestors instead.
+  function cssZoom(element: HTMLElement): number {
+    if (typeof element.currentCSSZoom === "number") return element.currentCSSZoom;
+    let zoom = 1;
+    for (let node: Element | null = element; node; node = node.parentElement) {
+      const value = Number.parseFloat(getComputedStyle(node).zoom);
+      if (Number.isFinite(value) && value > 0) zoom *= value;
+    }
+    return zoom;
+  }
+
   // The transcript pane clips overflow, and side panels can make it
   // narrower than a usage menu. Keep each menu inside the pane: as wide as
   // it fits, right-aligned to its trigger when there is room, otherwise
@@ -977,7 +989,7 @@
       if (getComputedStyle(menu).position !== "absolute") return;
       // Rects are in viewport pixels; interface zoom scales the menu's own
       // CSS lengths, so measure in viewport pixels and convert back.
-      const zoom = menu.currentCSSZoom || 1;
+      const zoom = cssZoom(menu);
       const gap = PANE_GAP * zoom;
       const bounds = pane.getBoundingClientRect();
       const trigger = anchor.getBoundingClientRect();
