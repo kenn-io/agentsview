@@ -4191,28 +4191,38 @@ schemas keep their existing ordering behavior.
   folder keeps its fingerprints (`TestHermesFingerprintsIgnoreTheLocalFolder`).
 - **Watcher change check (2026-11-10):** Reverified the entire producer tree
   at [Hermes `aca4f1df`](https://github.com/NousResearch/hermes-agent/tree/aca4f1df).
-  Stores with `transcript_revision` and complete native message-update triggers
-  use a per-session metadata token to skip unchanged members on database and
-  WAL events. The token includes parsed session fields, model usage ledger rows,
-  message count, highest message ID, and transcript revision. The native
-  `messages_transcript_revision_update` and `messages_display_revision_update`
-  definitions in
+  Stores with a positive integer schema version at most 33, `transcript_revision`,
+  complete native message-update triggers, and both native message indexes use
+  a per-session token to skip unchanged members on database and WAL events.
+  The token includes parsed session fields (including the native live
+  `message_count`), model usage ledger rows, transcript revision, greatest
+  message ID, and first/last indexed timestamps. Three covering seeks per
+  session use `idx_messages_session_id(session_id,id)` and
+  `idx_messages_session(session_id,timestamp)`; message history is not scanned.
+  Native append/replacement moves greatest ID; active-only deletion resets the
+  live count even when newer inactive rows remain. Clear removes all messages.
+  The native `messages_transcript_revision_update` and
+  `messages_display_revision_update` definitions in
   [hermes_state_common.py](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py)
-  cover payload and display rewrites. AgentsView rechecks coverage on every
-  event because an older writer can recreate a shorter trigger. Stores without
-  that coverage retain full content checks.
+  cover payload and display rewrites. Coverage is rechecked on every event:
+  an older writer can recreate shorter triggers. Missing indexes, invalid or
+  future schema versions, and incomplete trigger coverage retain full checks;
+  direct fingerprints remain usable without these indexes.
   [Native recovery](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_cli/session_recovery.py)
-  can repair timestamps without changing revision, count or highest ID. The
-  token also counts `NOT (timestamp BETWEEN 0.0 AND 4200000000.0)`, matching
-  the producer's repair predicate, epoch bounds and SQLite NULL handling.
-  Every native timestamp repair lowers that count. This evidence covers the
-  pinned producer's writes, not arbitrary SQL edits; reverify it when the
-  producer changes. The full-tree check found no production message session-ID
-  reassignment or independent finish-reason-only rewrite. Transcript-file edits
-  use their own `sessions/` watch events. Listing remains proportional to
-  session metadata, ledger rows and the message index; only selected members
-  read transcript payloads. The scoped data-version upgrade rewrites existing
-  Hermes and Augure Desktop hashes once during startup.
+  repairs all out-of-window timestamps in fresh recovery output. Installing that
+  output moves a timestamp endpoint even when revision, live count and greatest
+  ID stay unchanged. This covers native repair, not arbitrary external SQL or
+  manual partial salvage dropping interior rows. No replacement tracker is used.
+  Reverify these couplings when the producer changes: additive changes can occur
+  without a schema-version bump. The pinned tree has no independent message
+  session-ID reassignment or finish-reason-only rewrite. Transcript-file edits
+  use their own `sessions/` events. Listing costs session metadata plus distinct
+  lifetime ledger keys and indexed message seeks, not only changed sessions.
+  Auxiliary same-key ledger UPSERTs can leave session fields/revision unchanged,
+  so the full ledger read remains necessary under the current producer contract.
+  Ledger keys aggregate route/task usage; their lifetime count has no verified
+  constant bound per session. Only selected members read transcript payloads.
+  The scoped upgrade rewrites Hermes and Augure Desktop hashes once at startup.
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.

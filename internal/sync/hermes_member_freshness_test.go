@@ -26,6 +26,8 @@ func hermesFreshnessWriter(t *testing.T, root string) (*sql.DB, string) {
 	_, err = conn.ExecContext(t.Context(), `PRAGMA journal_mode=WAL;
  ALTER TABLE sessions ADD COLUMN transcript_revision INTEGER DEFAULT 0;
  CREATE INDEX idx_messages_session ON messages(session_id, timestamp);
+ CREATE INDEX idx_messages_session_id ON messages(session_id,id);
+ CREATE TABLE schema_version(version INTEGER); INSERT INTO schema_version VALUES (33);
  CREATE TABLE gateway_heartbeats(id TEXT PRIMARY KEY, last_heartbeat REAL);
  CREATE TRIGGER messages_transcript_revision_update AFTER UPDATE OF role, content, api_content, tool_calls, tool_call_id, tool_name, reasoning, reasoning_content, reasoning_details ON messages BEGIN UPDATE sessions SET transcript_revision = transcript_revision + 1 WHERE id = new.session_id; END;
  CREATE TRIGGER messages_display_revision_update AFTER UPDATE OF codex_reasoning_items, codex_message_items, display_kind, display_metadata ON messages BEGIN UPDATE sessions SET transcript_revision = transcript_revision + 1 WHERE id = new.session_id; END;`)
@@ -40,6 +42,7 @@ func TestHermesWatcherSelectsOnlyChangedMember(t *testing.T) {
 			`UPDATE sessions SET title='new title' WHERE id='child'`,
 			`UPDATE messages SET content='rewritten' WHERE session_id='child'`,
 			`UPDATE sessions SET input_tokens=777 WHERE id='child'`,
+			`UPDATE messages SET codex_reasoning_items='[]' WHERE session_id='child'`,
 		} {
 			t.Run(string(agent)+"/"+stmt, func(t *testing.T) {
 				root := t.TempDir()
