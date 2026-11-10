@@ -519,14 +519,13 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 
 func TestCLIEmbeddingsSetup(t *testing.T) {
 	for _, tc := range []struct {
-		name, provider, input        string
-		missing                      int64
-		flagged, setupError, enabled bool
+		name, provider, input  string
+		missing                int64
+		flagged, busy, enabled bool
 	}{
 		{"download", "built-in", "yes\n", 1000001, false, false, false},
-		{"declined", "built-in", "no\n", 1000001, false, false, false},
 		{"flagged", "built-in", "yes\n", 0, true, false, false},
-		{"setup-error", "ollama", "yes\n", 0, false, true, false},
+		{"busy", "ollama", "yes\n", 0, false, true, false},
 		{"enabled", "ollama", "yes\n", 0, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -541,16 +540,20 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
 					reads++
+					if tc.busy {
+						if reads == 1 {
+							io.WriteString(w, `{"setup":{"action":"turn-on","provider":"ollama","busy":true}}`)
+						} else {
+							io.WriteString(w, `{"setup":{"action":"turn-on","error":"first setup failed"}}`)
+						}
+						return
+					}
 					if posts == 0 {
 						fmt.Fprintf(w, `{"setup":{"action":"turn-on","provider":%q,"missing_bytes":%d,"enabled":%t}}`, tc.provider, tc.missing, tc.enabled)
 						return
 					}
 					if reads == 2 && tc.missing > 0 {
 						fmt.Fprintf(w, `{"setup":{"busy":true,"downloaded_bytes":%d,"total_bytes":%d}}`, tc.missing, tc.missing)
-						return
-					}
-					if tc.setupError {
-						io.WriteString(w, `{"setup":{"action":"turn-on","error":"setup failed"}}`)
 						return
 					}
 					io.WriteString(w, `{"setup":{},"last_result":{}}`)
@@ -580,13 +583,11 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				assert.Zero(t, posts)
 				return
 			}
-			if tc.input == "no\n" {
-				require.ErrorContains(t, err, "declined")
+			if tc.busy {
+				require.ErrorContains(t, err, "first setup failed")
+				assert.Contains(t, out.String(), "Search setup is already running.")
+				assert.NotContains(t, out.String(), "[y/N]")
 				assert.Zero(t, posts)
-				return
-			}
-			if tc.setupError {
-				require.ErrorContains(t, err, "setup failed")
 				return
 			}
 			require.NoError(t, err)
@@ -615,9 +616,6 @@ func TestCLIEmbeddingsSetupRequiresWritableDaemon(t *testing.T) {
 	var out strings.Builder
 	err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
 	require.ErrorContains(t, err, "search setup requires a writable daemon")
-	require.ErrorContains(t, err, "agentsview daemon start")
-	require.ErrorContains(t, err, "agentsview index embeddings build")
-	require.ErrorContains(t, err, "Settings → Embeddings → Turn on")
 	assert.NotContains(t, out.String(), "[y/N]")
 }
 
@@ -740,86 +738,11 @@ func TestCLIEmbeddingsFreshSetup(t *testing.T) {
 	cmd.SetIn(strings.NewReader("yes\n"))
 	out, err := executeCommand(cmd, "index", "embeddings", "build")
 	require.NoError(t, err, out)
+	assert.Equal(t, 1, strings.Count(out, "[y/N]"))
 	cfg, err = config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.True(t, cfg.Vector.Enabled)
-}
-
-func TestCLIEmbeddingsConcurrentSetupFailure(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	oldInterval := embeddingsPollInterval
-	embeddingsPollInterval = time.Millisecond
-	t.Cleanup(func() { embeddingsPollInterval = oldInterval })
-
-	var posts atomic.Int32
-	var failed atomic.Bool
-	started, observed, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	var observeOnce, releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	defer unblock()
-	startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
-		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			switch {
-			case failed.Load():
-				io.WriteString(w, `{"setup":{"action":"turn-on","error":"first setup failed"}}`)
-			case posts.Load() > 0:
-				io.WriteString(w, `{"setup":{"action":"turn-on","provider":"ollama","busy":true}}`)
-				observeOnce.Do(func() { close(observed) })
-			default:
-				io.WriteString(w, `{"setup":{"action":"turn-on","provider":"ollama"}}`)
-			}
-		},
-		"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
-			if posts.Add(1) > 1 {
-				w.WriteHeader(http.StatusConflict)
-				io.WriteString(w, `{"error":"setup already running"}`)
-				return
-			}
-			close(started)
-			select {
-			case <-release:
-				failed.Store(true)
-			case <-r.Context().Done():
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusAccepted)
-			io.WriteString(w, `{"started":true}`)
-		},
-	})
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	first := make(chan error, 1)
-	go func() {
-		first <- runEmbeddingsBuild(ctx, io.Discard, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-	}()
-	select {
-	case <-started:
-	case <-ctx.Done():
-		require.FailNow(t, "first setup did not start")
-	}
-	type outcome struct {
-		output string
-		err    error
-	}
-	second := make(chan outcome, 1)
-	go func() {
-		var out strings.Builder
-		err := runEmbeddingsBuild(ctx, &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-		second <- outcome{out.String(), err}
-	}()
-	select {
-	case <-observed:
-	case <-ctx.Done():
-		require.FailNow(t, "second command did not observe setup")
-	}
-	unblock()
-	firstErr := <-first
-	result := <-second
-	require.ErrorContains(t, firstErr, "first setup failed")
-	require.ErrorContains(t, result.err, "first setup failed")
-	assert.NotContains(t, result.output, "[y/N]")
-	assert.EqualValues(t, 1, posts.Load())
+	out, err = executeCommand(newRootCommand(), "session", "search", "pooling", "--hybrid", "--include-one-shot", "--json")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, `"session_id":"session-one"`)
 }

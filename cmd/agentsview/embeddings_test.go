@@ -1561,8 +1561,9 @@ func TestEmbeddingsActivateDispatchesToDaemon(t *testing.T) {
 
 // TestBuildViaDaemonConflictThenPolls drives buildViaDaemon (the daemon
 // build path's core logic) against a fake HTTP server that refuses the
-// first build attempt with 409 and reports build progress. It checks
-// that the CLI prints the notice and the final summary.
+// first build attempt with 409 and reports Running until the second status
+// poll, asserting the CLI prints the "already running" notice and then the
+// same final summary format the direct path uses.
 func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	orig := embeddingsPollInterval
 	embeddingsPollInterval = time.Millisecond
@@ -1581,6 +1582,7 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 		n := statusCalls.Add(1)
 		status := vector.BuildStatus{Running: n < 2}
 		if n >= 2 {
+			status.Setup = &vector.SetupStatus{Action: "turn-on", Error: "setup failed"}
 			status.LastResult = &vector.BuildResult{
 				Activated: true,
 				Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},
