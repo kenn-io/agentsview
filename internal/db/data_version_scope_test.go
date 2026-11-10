@@ -46,7 +46,7 @@ func TestCommitLinkUpgradeScope(t *testing.T) {
 }
 
 func TestImageTextCompatibilityVersion(t *testing.T) {
-	providers := ScopedDataVersionProviders(170, CurrentDataVersion())
+	providers := ScopedDataVersionProviders(170, 171)
 	require.NotNil(t, providers)
 	require.Empty(t, providers)
 	d := testDB(t)
@@ -59,9 +59,9 @@ func TestImageTextCompatibilityVersion(t *testing.T) {
 		if err := writeUserVersion(t.Context(), tx, 170); err != nil {
 			return err
 		}
-		return advanceDataVersion(t.Context(), tx, CurrentDataVersion())
+		return advanceDataVersion(t.Context(), tx, 171)
 	}))
-	assert.Equal(t, CurrentDataVersion(), d.GetSessionDataVersion(t.Context(), "complete"))
+	assert.Equal(t, 171, d.GetSessionDataVersion(t.Context(), "complete"))
 	assert.Equal(t, 169, d.GetSessionDataVersion(t.Context(), "retry"))
 }
 

@@ -9,7 +9,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"log"
 	"mime"
@@ -303,8 +302,7 @@ func streamInlineData(raw jsontext.Value, dst io.Writer, imageOnly bool) (string
 	if !ok || (imageOnly && !strings.HasPrefix(strings.ToLower(mediaType), "image/")) {
 		return "", 0, 0, false
 	}
-	decoded := base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
-	size, err := io.Copy(dst, decoded)
+	size, err := io.Copy(dst, base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload)))
 	return mediaType, size, int64(len(uri)), err == nil
 }
 
@@ -657,8 +655,8 @@ func RetainedToolResultImages(content string) []RetainedImage {
 		if json.Unmarshal(raw, &blocks) != nil {
 			return
 		}
-		for _, block := range blocks {
-			if image, ok := retainedImageBlock(block, len(images), nil); ok {
+		for _, raw := range blocks {
+			if image, ok := retainedImageBlock(raw, len(images), nil); ok {
 				images = append(images, image)
 			}
 		}
@@ -681,39 +679,31 @@ func retainedImageBlock(raw jsontext.Value, index int, body io.Writer) (Retained
 }
 
 func retainedInlineFile(raw jsontext.Value, index int, body io.Writer) (RetainedImage, bool) {
-	uri, imageOnly, ok := retainedInlineURI(raw)
-	if !ok {
-		return RetainedImage{}, false
-	}
-	var hash hash.Hash
-	if body == nil {
-		hash = sha256.New()
-		body = hash
-	}
-	mediaType, size, _, ok := streamInlineData(uri, body, imageOnly)
-	image := RetainedImage{Index: index, MediaType: mediaType, Size: new(size)}
-	if hash != nil {
-		image.SHA256 = hex.EncodeToString(hash.Sum(nil))
-	}
-	return image, ok
-}
-
-func retainedInlineURI(raw jsontext.Value) (jsontext.Value, bool, bool) {
 	var block struct {
 		Type     string         `json:"type"`
 		ImageURL jsontext.Value `json:"image_url"`
 		URI      jsontext.Value `json:"uri"`
 	}
 	if json.Unmarshal(raw, &block, json.MatchCaseInsensitiveNames(true)) != nil {
-		return nil, false, false
+		return RetainedImage{}, false
 	}
 	uri := block.ImageURL
 	if block.Type == "file" {
 		uri = block.URI
 	} else if block.Type != "input_image" {
-		return nil, false, false
+		return RetainedImage{}, false
 	}
-	return uri, block.Type == "input_image", true
+	hash := sha256.New()
+	out := body
+	if out == nil {
+		out = hash
+	}
+	mediaType, size, _, ok := streamInlineData(uri, out, block.Type == "input_image")
+	image := RetainedImage{Index: index, MediaType: mediaType, Size: new(size)}
+	if body == nil {
+		image.SHA256 = hex.EncodeToString(hash.Sum(nil))
+	}
+	return image, ok
 }
 
 // ReadRetainedImage reads the indexed retained image with a bounded byte limit.
@@ -769,8 +759,6 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 		if body, err = io.ReadAll(io.LimitReader(file, limit+1)); err != nil {
 			return nil, err
 		}
-	} else if _, _, ok := retainedInlineURI(found); !ok {
-		return nil, errors.New("invalid inline image")
 	}
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("retained image %d exceeds %d bytes", index, limit)

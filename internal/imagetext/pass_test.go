@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json/v2"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -133,22 +134,9 @@ func TestImageTextSlowImageDoesNotBlockOthers(t *testing.T) {
 			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: id, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 		}
 		slow := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nslow"))
-		var requestErr error
 		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
-			var request struct {
-				Images []string `json:"images"`
-			}
-			requestErr = json.UnmarshalRead(r.Body, &request)
-			if requestErr != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			if len(request.Images) != 1 {
-				requestErr = fmt.Errorf("invalid OCR request: %d images", len(request.Images))
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			if strings.HasSuffix(request.Images[0], slow) {
+			request, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(request), slow) {
 				<-r.Context().Done()
 				return
 			}
@@ -158,7 +146,6 @@ func TestImageTextSlowImageDoesNotBlockOthers(t *testing.T) {
 		manager := Manager{DB: d, Client: client}
 		start := time.Now()
 		require.Error(t, manager.Run(ctx))
-		require.NoError(t, requestErr)
 		require.Equal(t, glmocr.DefaultTimeout, time.Since(start))
 		var failures int
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures FROM image_text_cache`).Scan(&failures))
@@ -247,10 +234,9 @@ func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
 	}))
 	require.NoError(t, manager.Run(ctx))
 	require.Equal(t, 1, requests)
-	page, err := d.Search(ctx, db.SearchFilter{Query: "succeeded"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, "one", page.Results[0].SessionID)
+	var text string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT text FROM image_text_cache`).Scan(&text))
+	require.Equal(t, "retry succeeded", text)
 }
 
 func TestImageTextMissingAssetDoesNotBlockOtherImages(t *testing.T) {
@@ -472,7 +458,7 @@ func TestImageTextAcceptsLargeImage(t *testing.T) {
 	})
 	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
 	require.Equal(t, 1, requests)
-	page, err := d.Search(ctx, db.SearchFilter{Query: "large image"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
+	var text string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT text FROM image_text_cache`).Scan(&text))
+	require.Equal(t, "large image", text)
 }

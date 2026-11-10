@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net/url"
+	"strconv"
 
 	"go.kenn.io/docbank/document"
 	"go.kenn.io/docbank/document/glmocr"
@@ -17,7 +19,20 @@ func (c ImageTextConfig) Policy() (glmocr.Policy, error) {
 	if err != nil {
 		return glmocr.Policy{}, err
 	}
-	return glmocr.NewPolicy(glmocr.PolicyConfig{Endpoint: c.Endpoint, NormalizePolicy: normalize, MaxDocumentBytes: glmocr.MaxDocumentBytes, MaxResponseBytes: glmocr.MaxResponseBytes, MaxUnits: glmocr.MaxUnits})
+	policy, err := glmocr.NewPolicy(glmocr.PolicyConfig{Endpoint: c.Endpoint, NormalizePolicy: normalize, MaxDocumentBytes: glmocr.MaxDocumentBytes, MaxResponseBytes: glmocr.MaxResponseBytes, MaxUnits: glmocr.MaxUnits})
+	if err != nil {
+		return glmocr.Policy{}, err
+	}
+	endpoint, err := url.Parse(policy.Values().Endpoint)
+	if err != nil {
+		return glmocr.Policy{}, err
+	}
+	if port := endpoint.Port(); port != "" {
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return glmocr.Policy{}, fmt.Errorf("invalid endpoint port %q: %w", port, err)
+		}
+	}
+	return policy, nil
 }
 
 func (c ImageTextConfig) Validate() error {
