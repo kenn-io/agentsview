@@ -1331,9 +1331,10 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 			var ids []string
 			for _, message := range result.Messages {
 				ids = append(ids, message.SourceUUID)
-				if message.SourceUUID == "b1" {
+				switch message.SourceUUID {
+				case "b1":
 					assert.Equal(t, RoleUser, message.Role)
-				} else if message.SourceUUID == "b2" {
+				case "b2":
 					assert.Equal(t, RoleAssistant, message.Role)
 				}
 			}
