@@ -6203,6 +6203,7 @@ schemas keep their existing ordering behavior.
   version-1 header identity. Recognized future transcript versions and duplicate
   session identities leave discovery incomplete so they cannot authorize raw
   custody tombstones. Sessions use `muse-personal:<session_id>`.
+  Visible assistant commentary participates in dialogue search and export.
   Items are sorted by sequence before pairing; ties keep physical order.
   Only byte-identical same-sequence records are deduplicated. A checkpoint is
   anchored after the highest preceding physical item sequence; it does not

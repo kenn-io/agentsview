@@ -359,8 +359,7 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 				msg.ThinkingText = item.Thinking
 				msg.HasThinking = true
 			case "commentary_text":
-				msg.Content = item.Text
-				msg.SourceSubtype = "commentary"
+				msg.Content, msg.SourceSubtype, msg.DialogueText = item.Text, "commentary", &item.Text
 			case "function_call":
 				msg.HasToolUse = true
 				msg.ToolCalls = []ParsedToolCall{{ToolUseID: item.CallID, ToolName: item.Name, Category: NormalizeToolCategory(item.Name), InputJSON: item.Arguments}}
