@@ -157,27 +157,27 @@ func advanceDataVersion(ctx context.Context, tx *sql.Tx, target int) error {
 		return fmt.Errorf("reading data version: %w", err)
 	}
 	providers := ScopedDataVersionProviders(current, target)
-	if providers != nil {
+	if len(providers) > 0 {
 		var agents []parser.AgentType
 		for _, provider := range providers {
 			agents = append(agents, parser.ProviderStoredAgents(provider)...)
 		}
-		if len(agents) > 0 {
-			if err := invalidateAgentParseCaches(ctx, tx, agents); err != nil {
-				return err
-			}
+		if err := invalidateAgentParseCaches(ctx, tx, agents); err != nil {
+			return err
 		}
 		if err := promoteUnaffectedSessions(ctx, tx, current, target, agents); err != nil {
 			return err
 		}
-		if len(agents) > 0 {
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO stats(key, value) VALUES (?, ?)
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO stats(key, value) VALUES (?, ?)
 			 ON CONFLICT(key) DO UPDATE SET value = max(value, excluded.value)`,
-				scopedUpgradePendingKey, target,
-			); err != nil {
-				return fmt.Errorf("recording pending scoped upgrade: %w", err)
-			}
+			scopedUpgradePendingKey, target,
+		); err != nil {
+			return fmt.Errorf("recording pending scoped upgrade: %w", err)
+		}
+	} else if providers != nil {
+		if err := promoteUnaffectedSessions(ctx, tx, current, target, nil); err != nil {
+			return err
 		}
 	}
 	return writeUserVersion(ctx, tx, max(current, target))

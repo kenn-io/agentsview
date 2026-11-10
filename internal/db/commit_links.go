@@ -88,7 +88,7 @@ type CommitSessionList struct {
 
 // commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
-	resolve := func(base, dir string, literalTilde bool) string {
+	resolve := func(base, dir string) string {
 		if strings.HasPrefix(dir, "'") {
 			if words, err := shlex.Split(dir); err == nil && len(words) == 1 {
 				dir = words[0]
@@ -96,7 +96,7 @@ func commitRepository(input, cwd string) string {
 		} else if len(dir) >= 2 && strings.HasPrefix(dir, `"`) && strings.HasSuffix(dir, `"`) {
 			dir = dir[1 : len(dir)-1]
 		}
-		if path.IsAbs(dir) || (!literalTilde && strings.HasPrefix(dir, "~")) || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
+		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
 		}
 		if !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
@@ -145,7 +145,7 @@ func commitRepository(input, cwd string) string {
 		}
 	}
 	if dir != "" {
-		cwd = resolve(cwd, dir, false)
+		cwd = resolve(cwd, dir)
 	}
 	shellWord := func(word string) string {
 		if strings.HasPrefix(word, `"`) {
@@ -154,26 +154,25 @@ func commitRepository(input, cwd string) string {
 		return word
 	}
 	command := commitCommandText(input)
-	_, _, argv := commitArgv(input)
 	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
 		for _, match := range commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1) {
-			cwd = resolve(cwd, shellWord(match[1]), false)
+			cwd = resolve(cwd, shellWord(match[1]))
 		}
 	}
 	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
 		if strings.HasPrefix(option, "-C") {
-			cwd = resolve(cwd, shellWord(strings.TrimSpace(option[2:])), argv && strings.HasPrefix(strings.TrimSpace(option[2:]), "'~"))
+			cwd = resolve(cwd, shellWord(strings.TrimSpace(option[2:])))
 		}
 	}
 	return cwd
 }
 
-func commitArgv(input string) (string, bool, bool) {
+func commitArgv(input string) (string, bool) {
 	var payload struct {
 		Command []string `json:"command"`
 	}
 	if json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
-		return "", false, false
+		return "", false
 	}
 	args := payload.Command
 	basename := func(name string) string { return path.Base(strings.ReplaceAll(name, `\`, "/")) }
@@ -184,76 +183,64 @@ func commitArgv(input string) (string, bool, bool) {
 	if len(args) > 0 && basename(args[0]) == "env" {
 		var ok bool
 		if args, dir, ok = commitEnvArgs(args); !ok {
-			return "", true, false
+			return "", true
 		}
 	}
 	if len(args) == 0 {
-		return "", true, false
+		return "", true
+	}
+	// Argv words are never tilde-expanded, so a leading tilde names a relative path.
+	word := func(arg string) string {
+		if strings.HasPrefix(arg, "~") {
+			arg = "./" + arg
+		}
+		return shellquote.POSIX(arg)
 	}
 	program := basename(args[0])
 	prefix := ""
 	if dir != "" {
-		if strings.HasPrefix(dir, "~") {
-			dir = "./" + dir
-		}
-		prefix = "cd " + shellquote.POSIXLiteral(dir) + " && "
+		prefix = "cd " + word(dir) + " && "
 	}
 	if len(args) >= 4 && args[1] == "-l" && args[2] == "-c" {
 		args = append(args[:1], args[2:]...)
 	}
 	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
-		return prefix + args[2], true, false
+		return prefix + args[2], true
 	}
 	if program != "git" && !strings.EqualFold(program, "git.exe") {
-		return "", true, false
+		return "", true
 	}
 	args[0] = "git"
 	for i, arg := range args {
-		if strings.HasPrefix(arg, "~") {
-			args[i] = shellquote.POSIXLiteral(arg)
-		} else {
-			args[i] = shellquote.POSIX(arg)
-		}
+		args[i] = word(arg)
 	}
-	return prefix + strings.Join(args, " "), true, true
+	return prefix + strings.Join(args, " "), true
 }
 
-// commitEnvArgs strips env's options, returning the wrapped argv and any -C directory.
+// commitEnvArgs strips env's assignments and -C directory, returning the wrapped argv and directory.
 func commitEnvArgs(args []string) ([]string, string, bool) {
 	dir := ""
-	i := 1
-	for i < len(args) {
-		arg := args[i]
-		switch {
+	for i := 1; i < len(args); i++ {
+		switch arg := args[i]; {
 		case arg == "-C" || arg == "--chdir":
-			if i+1 >= len(args) {
+			if i+1 == len(args) {
 				return nil, "", false
 			}
-			dir = args[i+1]
-			i += 2
+			i++
+			dir = args[i]
 		case strings.HasPrefix(arg, "-C") || strings.HasPrefix(arg, "--chdir="):
 			dir = arg[strings.IndexAny(arg, "C=")+1:] // the first C or = ends the matched prefix
-			i++
-		case arg == "--":
-			return args[i+1:], dir, true
-		case strings.Contains(arg, "=") && !strings.HasPrefix(arg, "-"), arg == "-i", arg == "--ignore-environment":
-			i++
-		case arg == "-u" || arg == "--unset":
-			i += 2
-		case !strings.HasPrefix(arg, "-"):
-			return args[i:], dir, true
-		default:
+		case strings.HasPrefix(arg, "-"):
 			return nil, "", false
+		case !strings.Contains(arg, "="): // assignments pass through
+			return args[i:], dir, true
 		}
 	}
-	if i > len(args) {
-		return nil, "", false
-	}
-	return args[i:], dir, true
+	return nil, "", false
 }
 
 func commitCommandText(input string) string {
-	if command, present, _ := commitArgv(input); present {
+	if command, present := commitArgv(input); present {
 		return command
 	}
 	if jsontext.Value(input).IsValid() {

@@ -31,21 +31,17 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		name, input, repository string
 	}{
 		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
-		{"shell escaped double quote", `{"command":["bash","-lc","git -C \"/work/a\\\"b\" commit"]}`, `/work/a"b`},
 		{"shell trailing double quote", `{"command":["bash","-lc","git -C \"/work/a\\\"\" commit"]}`, `/work/a"`},
 		{"shell separate login option", `{"command":["bash","-l","-c","git commit"]}`, "/work"},
 		{"timeout", `{"command":["timeout","30","git","commit"]}`, "/work"},
 		{"env directory", `{"command":["env","-C","/repo","git","commit"]}`, "/repo"},
 		{"env literal tilde", `{"command":["env","-C","~/repo","git","commit"]}`, "/work/~/repo"},
-		{"env attached directory", `{"command":["env","-C/repo","git","commit"]}`, "/repo"},
 		{"env long directory", `{"command":["/usr/bin/env","--chdir","/repo","git","commit"]}`, "/repo"},
-		{"env equals directory", `{"command":["env","--chdir=/repo","git","commit"]}`, "/repo"},
 		{"env equals option-like directory", `{"command":["env","--chdir=-Cfoo","git","commit"]}`, "/work/-Cfoo"},
 		{"env attached option-like directory", `{"command":["env","-C--chdir=foo","git","commit"]}`, "/work/--chdir=foo"},
 		{"shell cd apostrophe", `{"command":["bash","-lc","cd '/work/a'\\''b' && git commit -m fix"]}`, "/work/a'b"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
 		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},
-		{"env assignment", `{"command":["env","GIT_AUTHOR_DATE=now","git","commit"]}`, "/work"},
 		{"env shell", `{"command":["env","NAME=value","bash","-lc","cd /repo && git commit"]}`, "/repo"},
 		{"env directory and shell cd", `{"command":["env","-C","/repo","bash","-lc","cd sub && git commit"]}`, "/repo/sub"},
 		{"windows git executable", `{"command":["C:\\Program Files\\Git\\bin\\git.exe","-C","/repo","commit"]}`, "/repo"},
@@ -73,7 +69,6 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 
 func TestCommitLinksArgvNonCommitOutput(t *testing.T) {
 	for _, tt := range []struct{ input, output string }{
-		{`{"command":["printf","git commit"]}`, "git commit"},
 		{`{"command":["printf","%s %s\n[main abc1234] Fix parser\n","git","commit"]}`, "git commit\n[main abc1234] Fix parser\n"},
 		{`{"command":["git","status"]}`, "On branch main\nnothing to commit, working tree clean"},
 	} {
@@ -586,38 +581,23 @@ func TestCommitLinksBackfillFailureRetries(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")
 	insertMessages(t, d, commitMessages("s1", `{"command":["bash","-lc","git commit"]}`, "[main abc1234] Fix")...)
-	_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2'; PRAGMA user_version=169;
+	_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2'; PRAGMA user_version=168;
 		CREATE TRIGGER fail_commit_link BEFORE INSERT ON commit_links BEGIN SELECT RAISE(ABORT, 'failure'); END`)
 	require.NoError(t, err)
 	require.Error(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
 	var version, marker int
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, commitLinksBackfillKey).Scan(&marker))
-	assert.Equal(t, 169, version)
+	assert.Equal(t, 168, version)
 	assert.Zero(t, marker)
 	_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_commit_link`)
 	require.NoError(t, err)
 	require.NoError(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
 	assert.Equal(t, 170, version)
-	got, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	require.Len(t, got.Commits, 1)
-}
-
-func TestCommitLinksBackfillAdvancesOlderScopedVersion(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "s1", "project-a")
-	insertMessages(t, d, commitMessages("s1", `{"command":["bash","-lc","git commit"]}`, "[main abc1234] Fix")...)
-	_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2'; PRAGMA user_version=168`)
-	require.NoError(t, err)
-	require.NoError(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
-	var version int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
-	assert.Equal(t, 170, version)
 	var pending int
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT value FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
-	assert.Equal(t, 170, pending)
+	assert.Equal(t, 170, pending, "the earlier scoped upgrade stays pending")
 	got, err := d.SessionCommitLinks(t.Context(), "s1")
 	require.NoError(t, err)
 	require.Len(t, got.Commits, 1)

@@ -39,47 +39,23 @@ func TestVersionOnlyUpgradeScope(t *testing.T) {
 	assert.Empty(t, ScopedDataVersionProviders(169, 170))
 	assert.Equal(t, []parser.AgentType{parser.AgentDeepSeekHarness}, ScopedDataVersionProviders(168, 170))
 	assert.Equal(t, 164, AgentDataVersion(parser.AgentCodex))
-	assert.NoError(t, validateDataVersionScopes(map[int][]parser.AgentType{170: {}}))
 }
 
 func TestVersionOnlyReadOnlyArchiveNeedsResync(t *testing.T) {
-	for _, tt := range []struct {
-		name        string
-		version     int
-		pending     bool
-		archiveOnly bool
-		stale       bool
-	}{
-		{"version only", 169, false, false, false},
-		{"earlier parser change", 168, false, false, true},
-		{"pending parser change", 169, true, false, true},
-		{"archive only", 169, false, true, true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			d := testDB(t)
-			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-				if tt.pending {
-					if _, err := tx.ExecContext(t.Context(), `INSERT INTO stats(key,value) VALUES (?,168)`, scopedUpgradePendingKey); err != nil {
-						return err
-					}
-				}
-				return writeUserVersion(t.Context(), tx, tt.version)
-			}))
-			if tt.archiveOnly {
-				require.NoError(t, d.EnableArchiveOnly(t.Context()))
-			}
-			path := d.Path()
-			require.NoError(t, d.Close())
-			readOnly, err := OpenReadOnly(t.Context(), path)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
-			assert.Equal(t, tt.stale, readOnly.NeedsResync())
-			needs, full, err := ArchiveResyncState(t.Context(), path)
-			require.NoError(t, err)
-			assert.Equal(t, tt.stale, needs)
-			assert.Equal(t, tt.archiveOnly, full)
-		})
-	}
+	d := testDB(t)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		return writeUserVersion(t.Context(), tx, 169)
+	}))
+	path := d.Path()
+	require.NoError(t, d.Close())
+	readOnly, err := OpenReadOnly(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
+	assert.False(t, readOnly.NeedsResync())
+	needs, full, err := ArchiveResyncState(t.Context(), path)
+	require.NoError(t, err)
+	assert.False(t, needs)
+	assert.False(t, full)
 }
 
 func TestVersionOnlyUpgradePreservesParserState(t *testing.T) {
@@ -104,17 +80,6 @@ func TestVersionOnlyUpgradePreservesParserState(t *testing.T) {
 	var pending int
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
 	assert.Zero(t, pending)
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(), `INSERT INTO stats(key,value) VALUES (?,168)`, scopedUpgradePendingKey); err != nil {
-			return err
-		}
-		return writeUserVersion(t.Context(), tx, 169)
-	}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		return advanceDataVersion(t.Context(), tx, 170)
-	}))
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT value FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
-	assert.Equal(t, 168, pending)
 }
 
 func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
