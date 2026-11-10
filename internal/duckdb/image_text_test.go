@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -170,4 +171,29 @@ func TestDuckDBImageTextContentPageOrder(t *testing.T) {
 	require.Len(t, page.Matches, 1)
 	require.Contains(t, page.Matches[0].Snippet, "zebra")
 	require.Zero(t, page.NextCursor)
+}
+
+func TestDuckDBImageTextLateMatchSnippet(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	const id, ts = "screenshot-late", "2026-01-02T03:04:05.000Z"
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	require.NoError(t, local.UpsertSession(ctx, syncSession(id, "shots", "look", ts, 2)))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{
+		syncMessage(id, 0, "user", "look", ts),
+		syncMessage(id, 1, "assistant", "reading", ts, db.ToolCall{ToolName: "Read", ResultContent: content}),
+	}))
+	identity := ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}
+	require.NoError(t, local.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, strings.Repeat("界", 250)+" invoice example", false))
+	path := filepath.Join(t.TempDir(), "image.duckdb")
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	store := openPushedStore(t, path)
+	defer func() { require.NoError(t, store.Close()) }()
+	page, err := store.Search(ctx, db.SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, id, page.Results[0].SessionID)
+	require.Equal(t, 1, page.Results[0].Ordinal)
+	require.Contains(t, page.Results[0].Snippet, "invoice")
 }

@@ -780,6 +780,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	project += projectSb988.String()
 	args = append(args, dateBuilder.Args()...)
 	// Image text matches every term like messages do and ranks with names.
+	args = append(args, firstTerm)
 	imageTermClauses := make([]string, len(terms))
 	for i, t := range terms {
 		imageTermClauses[i] = "it.text ILIKE ? ESCAPE '\\'"
@@ -833,7 +834,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			SELECT it.session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
-				it.message_ordinal AS ordinal, SUBSTRING(it.text, 1, 200) AS snippet,
+				it.message_ordinal AS ordinal, SUBSTRING(it.text, GREATEST(1, INSTR(LOWER(it.text), LOWER(?)) - 100), 200) AS snippet,
 				1.0 AS rank, 2 AS match_priority, 0 AS match_pos,
 				ROW_NUMBER() OVER (
 					PARTITION BY it.session_id
