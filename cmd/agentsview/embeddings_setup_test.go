@@ -271,6 +271,9 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	assert.False(t, status.Busy)
 	assert.Equal(t, "turn-on", status.Action)
 	assert.Equal(t, "Another process may be using search. Close it and retry.", status.Error)
+	saved, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	require.True(t, saved.Vector.Enabled)
 	export, ok, err := owner.push.BeginExport(t.Context(), nil)
 	require.NoError(t, err)
 	require.True(t, ok, "push must see the generation built by the process holding the write lock")
@@ -282,8 +285,9 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	movedPath := filepath.Join(t.TempDir(), "moved.db")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), fmt.Appendf(nil, "[vector]\nenabled = true\ndb_path = %q\n", movedPath), 0o600))
 	releaseHeld()
-	require.NoError(t, owner.Setup(0))
-	<-owner.done
+	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
+	var out strings.Builder
+	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
 	setup, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, setup.Error)
@@ -524,6 +528,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 		{"ollama", "ollama", "yes\n", 0, false},
 		{"declined", "built-in", "no\n", 1000001, false},
 		{"flagged", "built-in", "yes\n", 0, true},
+		{"setup-error", "ollama", "yes\n", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -543,6 +548,10 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 					}
 					if reads == 2 && tc.missing > 0 {
 						fmt.Fprintf(w, `{"setup":{"busy":true,"downloaded_bytes":%d,"total_bytes":%d}}`, tc.missing, tc.missing)
+						return
+					}
+					if tc.name == "setup-error" {
+						io.WriteString(w, `{"setup":{"error":"setup failed"}}`)
 						return
 					}
 					io.WriteString(w, `{"setup":{},"last_result":{}}`)
@@ -572,6 +581,10 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			if tc.input == "no\n" {
 				require.ErrorContains(t, err, "declined")
 				assert.Zero(t, posts)
+				return
+			}
+			if tc.name == "setup-error" {
+				require.ErrorContains(t, err, "setup failed")
 				return
 			}
 			require.NoError(t, err)

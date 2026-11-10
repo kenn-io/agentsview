@@ -413,7 +413,19 @@ func runEmbeddingsBuild(
 	if cfg.ArchiveContent.UsageOnly() {
 		return requireVectorEnabled(cfg)
 	}
-	if !cfg.Vector.Enabled {
+	needsSetup := !cfg.Vector.Enabled
+	if !needsSetup && IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+		client, err := resolveEmbeddingsDaemonClient(cfg)
+		if err != nil {
+			return err
+		}
+		// An unavailable status must not prevent an ordinary build attempt.
+		status, err := client.status(ctx)
+		if err == nil && status.Setup != nil && status.Setup.Action == "turn-on" {
+			needsSetup = true
+		}
+	}
+	if needsSetup {
 		flag := ""
 		switch {
 		case opts.FullRebuild:
@@ -714,14 +726,14 @@ func buildViaDaemon(
 			return err
 		}
 	}
-	return pollDaemonBuildStatus(ctx, out, client)
+	return pollDaemonBuildStatus(ctx, out, client, false)
 }
 
 // pollDaemonBuildStatus polls the daemon's build status at
 // embeddingsPollInterval, printing a progress line on every poll while the
 // build is running, until it reports Running == false.
 func pollDaemonBuildStatus(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient,
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
 ) error {
 	var progress buildProgressPrinter
 	for {
@@ -729,13 +741,13 @@ func pollDaemonBuildStatus(
 		if err != nil {
 			return err
 		}
-		if status.Setup != nil && status.Setup.Error != "" {
+		if setup && status.Setup != nil && status.Setup.Error != "" {
 			return errors.New(status.Setup.Error)
 		}
-		if status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
+		if setup && status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
 			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)
 		}
-		if status.Setup == nil || !status.Setup.Busy {
+		if !setup || status.Setup == nil || !status.Setup.Busy {
 			if !status.Running {
 				return finalizeBuildStatus(out, status)
 			}
@@ -1068,7 +1080,7 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	if err := client.startSetup(ctx, approved); err != nil {
 		return err
 	}
-	return pollDaemonBuildStatus(ctx, out, client)
+	return pollDaemonBuildStatus(ctx, out, client, true)
 }
 
 func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64) error {
