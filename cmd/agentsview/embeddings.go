@@ -809,7 +809,7 @@ func (p *buildProgressPrinter) printDownload(w io.Writer, done, total int64) {
 		return
 	}
 	p.printed, p.lastPhase, p.lastDone, p.lastTotal = true, "download", percent, total
-	fmt.Fprintf(w, "Download: %d%% of %d MB\n", percent, (total+999999)/1000000)
+	fmt.Fprintf(w, "Download: %d%% of %d MB\n", percent, downloadMegabytes(total))
 }
 
 // printBuildProgress writes one progress line for either build path. Before
@@ -1113,12 +1113,15 @@ func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, clie
 		return true, pollDaemonBuildStatus(ctx, out, client, true)
 	}
 	if setup != nil && setup.Enabled && setup.Action == "" {
-		fmt.Fprintln(out, "Search by meaning is on.")
 		var err error
 		cfg, err = loadDaemonClientConfig(config.ScopeVector)
 		if err != nil {
 			return true, fmt.Errorf("loading config: %w", err)
 		}
+		if !cfg.Vector.Enabled {
+			return true, errors.New("search by meaning is off in the config; retry setup")
+		}
+		fmt.Fprintln(out, "Search by meaning is on.")
 		return true, buildViaDaemon(ctx, out, client, vector.BuildRequest{IncludeAutomated: vector.MessageIndexSpec().NormalizeIncludeAutomated(cfg.Vector.IncludeAutomated)})
 	}
 	return false, nil

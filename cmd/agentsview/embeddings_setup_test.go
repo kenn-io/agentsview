@@ -523,10 +523,12 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		postStatus int
+		stale      bool
 	}{
-		{"finished-before-status", 0},
-		{"setup-conflict", http.StatusConflict},
-		{"finished-during-confirmation", http.StatusBadRequest},
+		{"finished-before-status", 0, false},
+		{"setup-conflict", http.StatusConflict, false},
+		{"finished-during-confirmation", http.StatusBadRequest, false},
+		{"stale-config", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -543,6 +545,12 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 					case tc.postStatus == http.StatusConflict && reads == 2:
 						io.WriteString(w, `{"setup":{"action":"turn-on","busy":true}}`)
 					case tc.postStatus != http.StatusConflict && buildPosts == 0:
+						if !tc.stale {
+							if !assert.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"), 0o600)) {
+								w.WriteHeader(http.StatusInternalServerError)
+								return
+							}
+						}
 						io.WriteString(w, `{"setup":{"enabled":true},"running":true}`)
 					default:
 						io.WriteString(w, `{"setup":{},"last_result":{}}`)
@@ -559,6 +567,11 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			})
 			var out strings.Builder
 			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+			if tc.stale {
+				require.ErrorContains(t, err, "search by meaning is off")
+				assert.Zero(t, buildPosts)
+				return
+			}
 			require.NoError(t, err)
 			if tc.postStatus == 0 {
 				assert.NotContains(t, out.String(), "[y/N]")
