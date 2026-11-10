@@ -540,7 +540,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `INSERT OR REPLACE INTO stats(key,value) VALUES ('commit_links_backfill_v1',1)`)
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec(t.Context(), `PRAGMA user_version=168`)
+	_, err = d.getWriter().Exec(t.Context(), `PRAGMA user_version=169`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET local_modified_at='2000-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)
@@ -551,7 +551,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 		require.NoError(t, err)
 		var version int
 		require.NoError(t, d.getReader().QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version))
-		assert.Equal(t, 169, version)
+		assert.Equal(t, 170, version)
 		got, err := d.SessionCommitLinks(t.Context(), "repaired")
 		require.NoError(t, err)
 		require.Len(t, got.Commits, 1)

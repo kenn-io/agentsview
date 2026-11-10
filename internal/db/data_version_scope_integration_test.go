@@ -395,7 +395,7 @@ func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
 }
 
 func TestCodexArgvUpgradePreservesSessionIdentity(t *testing.T) {
-	assert.ElementsMatch(t, parser.CodexFormatAgents(), db.ScopedDataVersionProviders(168, 169))
+	assert.ElementsMatch(t, parser.CodexFormatAgents(), db.ScopedDataVersionProviders(169, 170))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	id := "cccccccc-cccc-4ccc-8ccc-cccccccccc69"
@@ -407,7 +407,7 @@ func TestCodexArgvUpgradePreservesSessionIdentity(t *testing.T) {
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	engine.Close()
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET data_version=168; PRAGMA user_version=168")
+		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET data_version=169; PRAGMA user_version=169")
 		return err
 	}))
 	archive := database.Path()
@@ -426,7 +426,7 @@ func TestCodexArgvUpgradePreservesSessionIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, source, database.GetSessionFilePath(t.Context(), "codex:"+id))
-	assert.Equal(t, 169, session.DataVersion)
+	assert.Equal(t, 170, session.DataVersion)
 	var count int
 	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
 	assert.Equal(t, 1, count)

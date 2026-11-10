@@ -660,9 +660,12 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // from conversation_summaries.db. Re-parse unchanged antigravity and
 // antigravity-cli sources in place, so remote mirrors that are otherwise
 // unchanged catch up; source and session identities are unchanged.)
-// (169: recover older Codex argv commit links; reparse Codex-format
+// (169: keep DeepSeek Harness native message ids as message source ids.
+// Re-parse DeepSeek Harness sources in place; source and session identities
+// are unchanged.)
+// (170: recover older Codex argv commit links; reparse Codex-format
 // sources in place while preserving source and session identities.)
-const dataVersion = 169
+const dataVersion = 170
 
 const archiveOnlyVersionBase = 1 << 20
 
