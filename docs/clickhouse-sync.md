@@ -42,8 +42,11 @@ binary has updated the schema.
 
 Commit lookups return the copied links and prompts.
 The first push after upgrading is a full push that repairs existing commit links.
+Commit lookups require that push. Upgrade serving replicas too: older readers
+can miss newly retained links for deleted sessions.
 Each archive keeps its own retained copies; a rebuild removes only that archive's
-discarded copies. Older retained links with unknown ownership remain unclaimed.
+discarded copies. Retained links without a recorded owner remain unclaimed.
+An unclaimed link can reappear after an archive discards its matching copy.
 A deleted session remains visible as a missing record. Project filters use the
 project saved with its links in SQLite, including after a rebuild or a deletion
 before the first push.

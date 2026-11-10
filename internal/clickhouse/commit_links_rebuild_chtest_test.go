@@ -3,13 +3,14 @@
 package clickhouse
 
 import (
+	"path/filepath"
+	"testing"
+
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
-	"path/filepath"
-	"testing"
 )
 
 func TestClickHouseRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
@@ -85,5 +86,60 @@ func TestClickHouseRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
 				require.Equal(t, "legacy", links.Commits[0].Subject)
 			})
 		}
+	}
+}
+
+func TestClickHouseRetainedPublicationKeepsLiveCommitLinks(t *testing.T) {
+	for _, withPrompt := range []bool{true, false} {
+		name := "empty"
+		if withPrompt {
+			name = "prompt"
+		}
+		t.Run(name, func(t *testing.T) {
+			retained, target := seedFixture(t)
+			live, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "live.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, live.Close()) })
+			dbtest.SeedPricingMeta(t, live)
+			dbtest.SeedCommitLinks(t, retained)
+			dbtest.SeedCommitLinks(t, live)
+			require.NoError(t, retained.DeleteSession(t.Context(), "commit-live"))
+			if !withPrompt {
+				require.NoError(t, live.ReplaceSessionMessages(t.Context(), "commit-live", nil))
+			}
+			publisher := newTestSync(t, live, target, storage.PusherOptions{})
+			_, err = publisher.Push(t.Context(), true, nil)
+			require.NoError(t, err)
+			retainedPublisher := newTestSync(t, retained, target, storage.PusherOptions{})
+			store, err := NewStore(t.Context(), target)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			for range 2 {
+				_, err = retainedPublisher.Push(t.Context(), true, nil)
+				require.NoError(t, err)
+				links, err := store.SessionCommitLinks(t.Context(), "commit-live")
+				require.NoError(t, err)
+				if withPrompt {
+					require.Len(t, links.Commits, 1)
+					require.False(t, links.Commits[0].Missing)
+					require.NotNil(t, links.Commits[0].Turn)
+					require.Equal(t, "Record the parser fix", links.Commits[0].Turn.Text)
+				} else {
+					require.Empty(t, links.Commits)
+				}
+				matches, err := store.CommitSessionLinks(t.Context(), []string{"abc1234567890123456789012345678901234567"})
+				require.NoError(t, err)
+				found := false
+				for _, link := range matches.Commits[0].Links {
+					if link.SessionID == "commit-live" {
+						found = true
+						require.True(t, withPrompt)
+						require.NotNil(t, link.Turn)
+						require.Equal(t, "Record the parser fix", link.Turn.Text)
+					}
+				}
+				require.Equal(t, withPrompt, found)
+			}
+		})
 	}
 }
