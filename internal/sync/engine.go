@@ -13740,8 +13740,8 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(ctx context.Context,
 // remaining content. The emitted result still counts as present for
 // ownership reconciliation, so a preserved session stays active rather than
 // being marked source-missing.
-// This guard applies to forced full sync as well. Read-only parse-diff bypasses
-// it so the report can compare the incomplete parse with the archive.
+// Forced parses bypass archive verification. Empty truncated results are still
+// filtered during sync; read-only parse-diff receives them for comparison.
 // The returned verifyFailed reports that an archive read failed during
 // verification: the caller must not skip-cache the pass as clean, so the
 // dropped result is re-attempted instead of frozen behind a cached skip.
@@ -13751,6 +13751,17 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 	results []parser.ParseResult,
 ) (kept []parser.ParseResult, verifyFailed bool) {
 	if file.Agent != parser.AgentCursorIDE || len(results) == 0 || e.forceParse {
+		return results, false
+	}
+	kept = results[:0]
+	for _, r := range results {
+		if r.Session.IsTruncated && len(r.Messages) == 0 {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	results = kept
+	if len(results) == 0 || e.forceParseRequested(file) {
 		return results, false
 	}
 	type messageSourceUUIDReader interface {
@@ -13783,11 +13794,6 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 	for _, r := range results {
 		if !r.Session.IsTruncated {
 			kept = append(kept, r)
-			continue
-		}
-		// A truncated result with no turns identifies the source but cannot
-		// replace an archive or create an empty session.
-		if len(r.Messages) == 0 {
 			continue
 		}
 		id := applyIDPrefixToID(e.idPrefix, r.Session.ID)

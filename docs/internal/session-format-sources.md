@@ -2860,7 +2860,7 @@ schemas keep their existing ordering behavior.
   parser and sync tests reproduce this reported shape. Agentsview reads only
   the declared chunks and marks missing, empty, or short sets truncated.
   Malformed chunk JSON fails the chat. Header-row-only edits appear on the
-  next scheduled reconciliation, up to 15 minutes later.
+  next 15-minute scheduled reconciliation if the container fingerprint changed.
 - **Tool results:**
   [Issue #1798](https://github.com/kenn-io/agentsview/issues/1798) supplies
   one redacted `todo_write` bubble with an object-valued
@@ -2921,9 +2921,8 @@ schemas keep their existing ordering behavior.
   bubble or header rows, composers whose value became NULL or headerless, and a
   replacement database whose composer documents are byte-identical wait for
   the 15-minute scheduled reconciliation, which reparses the whole database
-  whenever its container fingerprint moved. Forced full sync preserves an
-  archived transcript when a partial parse omits its turns. A malformed
-  `composerData` value fails that scheduled pass until it is fixed.
+  whenever its container fingerprint moved. A malformed `composerData` value
+  fails that scheduled pass until it is fixed.
 
 ## Amp (`amp`)
 

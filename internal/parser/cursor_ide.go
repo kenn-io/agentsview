@@ -413,8 +413,8 @@ func loadCursorIDEBubble(
 		// A bubbleId row whose value is NULL or empty carries no turn text,
 		// which is the same gap as the missing row above. The caller flags the
 		// transcript truncated, and the engine's truncation guard
-		// (dropShrinkingTruncatedCursorIDEResults) still refuses any result
-		// that would drop an archived message.
+		// (dropShrinkingTruncatedCursorIDEResults) refuses an ordinary sync
+		// result that would drop an archived message.
 		return nil, nil
 	}
 	var bubble cursorIDEBubble
@@ -513,14 +513,17 @@ func cursorIDECwd(doc cursorIDEComposerDoc) string {
 }
 
 // loadCursorIDEHeaderChunks reads the declared chunk keys in numeric order.
-func loadCursorIDEHeaderChunks(ctx context.Context, q cursorIDEQuerier, composerID string, count, chunkCount int) ([]cursorIDEComposerHeader, bool, error) {
+func loadCursorIDEHeaderChunks(
+	ctx context.Context, q cursorIDEQuerier, composerID string, count, chunkCount int,
+) ([]cursorIDEComposerHeader, bool, error) {
 	prefix := cursorIDEHeaderKeyPrefix + composerID + ":"
 	end := fmt.Sprintf("%s%06d", prefix, chunkCount)
 	if chunkCount > 999999 {
 		// Include the highest six-digit index; longer keys are filtered below.
 		end = prefix + "999999;"
 	}
-	rows, err := q.QueryContext(ctx, `SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key`, prefix, end)
+	rows, err := q.QueryContext(ctx,
+		`SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key`, prefix, end)
 	if err != nil {
 		return nil, false, fmt.Errorf("loading cursor IDE headers for %s: %w", composerID, err)
 	}
@@ -602,7 +605,8 @@ func parseCursorIDEComposer(
 	headerIncomplete := false
 	if len(doc.Headers) == 0 && doc.HeaderLog.Count > 0 {
 		var err error
-		doc.Headers, headerIncomplete, err = loadCursorIDEHeaderChunks(ctx, tx, composerID, doc.HeaderLog.Count, doc.HeaderLog.ChunkCount)
+		doc.Headers, headerIncomplete, err = loadCursorIDEHeaderChunks(
+			ctx, tx, composerID, doc.HeaderLog.Count, doc.HeaderLog.ChunkCount)
 		if err != nil {
 			return nil, err
 		}
