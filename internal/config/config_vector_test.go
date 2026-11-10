@@ -614,6 +614,63 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.True(t, cfg.Vector.Embed.Recall)
 	})
 
+	t.Run("built-in servers default to CPU-sized transport", func(t *testing.T) {
+		tests := []struct {
+			name            string
+			embeddings      map[string]any
+			server          string
+			wantBatchSize   int
+			wantConcurrency int
+			wantTimeout     string
+		}{
+			{
+				name:       "automatic discovery",
+				embeddings: map[string]any{"model": "nomic-embed-text", "dimension": 768},
+				server:     "automatic", wantBatchSize: 8, wantConcurrency: 1, wantTimeout: "5m",
+			},
+			{
+				name: "local server",
+				embeddings: map[string]any{
+					"model": "nomic-embed-text", "dimension": 768,
+					"servers": map[string]any{"shared": map[string]any{"local": true}},
+				},
+				server: "shared", wantBatchSize: 8, wantConcurrency: 1, wantTimeout: "5m",
+			},
+			{
+				name: "local server keeps explicit transport",
+				embeddings: map[string]any{
+					"model": "nomic-embed-text", "dimension": 768,
+					"servers": map[string]any{"shared": map[string]any{
+						"local": true, "batch_size": 2, "concurrency": 3, "timeout": "90s",
+					}},
+				},
+				server: "shared", wantBatchSize: 2, wantConcurrency: 3, wantTimeout: "90s",
+			},
+			{
+				name: "endpoint server",
+				embeddings: map[string]any{
+					"model": "nomic-embed-text", "dimension": 768,
+					"servers": map[string]any{"remote": map[string]any{"endpoint": "http://localhost:11434/v1"}},
+				},
+				server: "remote", wantBatchSize: 32, wantConcurrency: 4, wantTimeout: "30s",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+					"enabled": true, "embeddings": tt.embeddings,
+				}})
+				name, server, err := cfg.Vector.Embeddings.Server("")
+				require.NoError(t, err)
+				assert.Equal(t, tt.server, name)
+				assert.Equal(t, tt.wantBatchSize, server.BatchSize)
+				assert.Equal(t, tt.wantConcurrency, server.Concurrency)
+				assert.Equal(t, tt.wantTimeout, server.Timeout)
+				assert.Equal(t, 3, server.MaxRetries)
+			})
+		}
+	})
+
 	t.Run("automatic untagged Nomic preserves its recipe", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
 			"enabled": true, "embeddings": map[string]any{"model": "nomic-embed-text", "dimension": 768},

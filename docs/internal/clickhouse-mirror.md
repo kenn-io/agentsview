@@ -292,6 +292,26 @@ segment tree over message timestamps finds the lowest eligible ordinal even when
 timestamps run backwards, so ordinal and timestamp behavior matches the old SQL,
 including reversed clocks and the tail pairing after the last message.
 
+**Each session keeps its runs.** After pairing a session over all time, serve
+caps each interval at the gap, trims it against the session's earlier activity,
+and joins touching pieces with the same model into runs. It keeps those runs
+and the times of the session's counted user and assistant messages in memory,
+keyed by session, push version, and gap cap, within a 256 MiB budget. A refresh
+reads and pairs only the sessions whose push version changed, clips every kept
+session's runs to the range, and sweeps the runs in start order through
+`activity.BuildRunArtifactsWithSurvivorUsage`. A long range has about twenty
+times fewer runs than interval candidates. A run's pieces do not depend on the
+range: clipping after the trim gives the pieces that clipping each candidate
+first gives, and the candidates a range leaves out of pairing are ones the
+aggregator rejects for that range anyway. Runs keep their piece boundaries, so a
+range end inside a run still finds the start of the last piece left, which
+bucket membership needs. The shared aggregator sums interval durations as
+integers and converts to minutes once, so minutes do not depend on how activity
+was split into intervals, on every backend. Storing runs in ClickHouse at push
+time was rejected: it needs a schema change, upgraded pushers on every machine,
+and a re-push of existing sessions. A server that has just started still reads
+every session once.
+
 **Usage is stored, not parsed.** The insert-maintained `usage_messages` table
 stores token counters that its view computes from `token_usage` at insert time,
 together with the usage-relevant message columns and a time index. The usage
@@ -326,19 +346,25 @@ read-only role cannot run the fill and fails the compatibility check until a
 capable push completes it.
 
 **Freshness is checked from part metadata.** Every report request first asks
-whether the mirror changed. That source probe used to scan `sessions`,
-`messages`, `usage_events`, both pricing tables, and `sync_metadata` for their
-counts and maxima on every request. The store now hashes the active
-`system.parts` rows of those six tables, plus `usage_session_snapshots` and
-`prepared_usage`, which is metadata and reads no data, and reuses the last probe
-result while the hash is unchanged. A merge changes the parts without changing
-the data, so the hash is never the report token: on a hash miss the store
-recomputes the original probe and caches it under the new hash, and only a real
-data change moves the token or resets pagination. The mutex protects only the
-cached pair, never a query, and an error is not cached. This is whole-mirror
-invalidation; any insert, delete, or merge on one of those tables triggers one
-full probe. Reading `system.parts` needs its own grant, described in
-[ClickHouse sync](../clickhouse-sync.md#3-serve-the-dashboard).
+whether the mirror changed. The store hashes the active `system.parts` rows of
+`sessions`, `messages`, `usage_events`, both pricing tables, `sync_metadata`,
+`usage_session_snapshots`, and `prepared_usage`, which is metadata and reads
+no data, and reuses the last probe result while the hash is unchanged. A merge
+changes the parts without changing the data, so the hash is never the report
+token: on a hash miss the store recomputes the original probe and caches it
+under the new hash, and only a real data change moves the token or resets
+pagination. The mutex protects only the cached pair, never a query, and an
+error is not cached.
+
+A hash miss reads what changed, not whole tables. The highest message and usage
+event ids come from the 16 highest ids of each part, which the store keeps per
+part name: a lightweight delete can hide rows of a part but every other write
+makes a new part, so a FINAL read of the sessions above the highest kept
+threshold finds the maximum unless all those rows were replaced, and only then
+does the probe read every id. Usage coverage comes from the row trackers
+described in [Kept reads](#kept-reads). Reading `system.parts` needs its own
+grant, described in [ClickHouse
+sync](../clickhouse-sync.md#3-serve-the-dashboard).
 
 ## Prepared usage
 
@@ -638,15 +664,32 @@ that check whether its inputs changed. Each kept read has one slot per selection
 prepared usage stamp and row identities for fully prepared range reads, the
 candidate sessions and their push versions, or the parts of the tables it
 scanned. Row identity probes run only for tables whose parts changed. The
-price record table keeps the records of every pricing digest, so its probe
-covers only the digest a read joins; hashing the whole table took two minutes
-on a mirror holding 534 digests. A failed probe or parts moving during it
-serves that read uncached. Raw, mixed, and
-single-session Usage reads keep parts versions. A push that changes those
+sessions, snapshot, and price record tables, which hold most of the rows a check
+would hash, are followed by row trackers (`finalRows`) that keep the count and
+hash sum of the rows FINAL returns, and each key's push version, machine,
+revision, and `prepares_usage` flag for usage coverage. A tracker compares the
+active parts with the parts it last read. Block numbers grow with every insert
+and mutation, and a merge keeps the block range of the parts it combines, so a
+new part whose range the vanished parts cover exactly at the same mutation is a
+merge, and costs nothing. Any other new part holds new rows: the tracker reads
+the keys it holds and a FINAL read of those keys for the row each returns now.
+The sessions and snapshot trackers keep each key's row, which is the row FINAL
+returned before. The price tracker keeps no per-key rows, since one digest holds
+millions of records; it reads the keys' rows in the parts it had already seen,
+and keeps the rows of parts up to 8,192 rows, so the earlier row is still at
+hand after a merge folds a small part into a new one. A mutation, a patch part,
+a dropped part, a new part over 8,192 rows, or a price merge of a large part
+with unread rows rereads the whole table. Every read names the parts it was
+planned against, and the parts are read again afterwards; when they moved,
+nothing is kept. The price record table keeps the records of every pricing
+digest, so its tracker covers only the partition of the digest a read joins;
+hashing the whole table took two minutes on a mirror holding 534 digests. A
+failed probe or parts moving during it serves that read uncached. Raw, mixed,
+and single-session Usage reads keep parts versions. A push that changes those
 versions replaces the slot; a push that does not leaves it in place. Usage reads
 filtered by `active`, `stale`, or `unclean` termination compare session times
 with the current time, so their rows are never kept. Kept reads include usage
-rows, analytics session listings, Activity pairing inputs per session version,
+rows, analytics session listings, Activity runs per session version,
 candidate listings, project label maps, and the whole report of an ended range.
 
 **Usage of a range in progress.** An Activity report over a range that has not

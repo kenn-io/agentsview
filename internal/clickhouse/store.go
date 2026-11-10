@@ -70,10 +70,15 @@ type Store struct {
 	pricing pricingCache
 	// coverageCache memoizes complete usage snapshot coverage per rows.
 	coverageCache usageCoverageCache
-	// usageVersions keeps one parts digest and row identity per usage table.
+	// usageVersions keeps one parts digest and row identity per small usage
+	// table, and the trackers of the sessions, snapshot, and price record
+	// rows; see finalRows.
 	usageVersions struct {
 		sync.Mutex
-		tables map[string]usageTableVersion
+		tables              map[string]usageTableVersion
+		sessions, snapshots *finalRows
+		prices              map[string]*finalRows
+		priceOrder          []string
 	}
 	// deltaCache keeps the prepared rows of changed snapshots.
 	deltaCache usageDeltaCache
@@ -167,6 +172,7 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 func NewStoreFromDB(conn *sql.DB, bulk chdriver.Conn) *Store {
 	s := &Store{conn: conn, pages: conn, bulk: bulk, usageSliceRows: activityUsageSliceRows}
 	s.usageVersions.tables = map[string]usageTableVersion{}
+	s.usageVersions.prices = map[string]*finalRows{}
 	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
 	s.sessionAggregateRows.Size = aggregateRowBytes
 	s.usageSessionRows.Size = usageSessionRowBytes

@@ -211,6 +211,33 @@ func TestPrunerEmptyFilterReturnsError(t *testing.T) {
 		"error should mention filter requirement")
 }
 
+func TestPrunerPrunesChainsInOnePass(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	rows := []struct{ id, parent string }{
+		{"parent", ""}, {"child", "parent"}, {"grandchild", "child"},
+	}
+	for _, row := range rows {
+		path := filepath.Join(root, row.id+".jsonl")
+		require.NoError(t, os.WriteFile(path, []byte("transcript"), 0o600))
+		dbtest.SeedSession(t, d, row.id, "test", func(s *db.Session) {
+			s.Agent, s.FilePath, s.EndedAt = "claude", new(path), new("2024-01-01")
+			if row.parent != "" {
+				s.ParentSessionID = new(row.parent)
+			}
+		})
+	}
+	pruner, _ := newTestPruner(t, d, "")
+	filter := db.PruneFilter{Before: "2026-11-02"}
+	require.NoError(t, pruner.Prune(t.Context(), PruneConfig{Filter: filter, Yes: true}))
+	for _, row := range rows {
+		session, err := d.GetSessionFull(t.Context(), row.id)
+		require.NoError(t, err)
+		assert.Nil(t, session, row.id)
+		assert.NoFileExists(t, filepath.Join(root, row.id+".jsonl"))
+	}
+}
+
 func TestConfirm(t *testing.T) {
 	tests := []struct {
 		name  string

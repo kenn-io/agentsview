@@ -34,7 +34,7 @@ func newUsageDedupIdentitySet() usageDedupIdentitySet {
 func (set usageDedupIdentitySet) add(
 	messageID, requestID, sourceUUID, usageKey string,
 ) {
-	if messageID != "" && requestID != "" {
+	if messageID != "" {
 		set.snapshot[[2]string{messageID, requestID}] = true
 	}
 	if sourceUUID != "" {
@@ -291,11 +291,11 @@ const usageRollupCrossSnapshotSQL = `SELECT DISTINCT
 	FROM usage_rollup_build_sessions selected
 	CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
 	CROSS JOIN usage_facts f ON f.cached_session_id = cs.id
-	WHERE f.claude_message_id != '' AND f.claude_request_id != ''
+	WHERE f.claude_message_id != ''
 	  AND EXISTS (SELECT 1 FROM usage_facts other
 		WHERE other.claude_message_id = f.claude_message_id
 		  AND other.claude_request_id = f.claude_request_id
-		  AND other.claude_message_id != '' AND other.claude_request_id != ''
+		  AND other.claude_message_id != ''
 		  AND other.cached_session_id != f.cached_session_id)`
 
 const usageRollupCrossSourceUUIDSQL = `SELECT DISTINCT f.source_uuid
@@ -485,7 +485,7 @@ func invalidateUsageDedupSharers(
 		FROM usage_changed_identities c
 		JOIN usage_facts f ON c.kind = 0
 			AND f.claude_message_id = c.first AND f.claude_request_id = c.second
-			AND f.claude_message_id != '' AND f.claude_request_id != ''
+			AND f.claude_message_id != ''
 		JOIN usage_cached_sessions cs ON cs.id = f.cached_session_id
 		UNION
 		SELECT DISTINCT cs.session_id

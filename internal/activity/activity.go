@@ -374,7 +374,10 @@ type interval struct {
 	sessionID string
 	start     time.Time
 	end       time.Time
-	model     string // model attributed to this interval
+	// tail is the start of the interval's last piece, for an interval that
+	// joins touching pieces; bucket membership depends on it.
+	tail  time.Time
+	model string // model attributed to this interval
 }
 
 // parseTS parses an RFC3339(/Nano) timestamp; ok=false on empty/invalid.
@@ -560,9 +563,10 @@ type usageAgg struct {
 	models       map[string]money.Money // model -> cost (for primary/mixed)
 }
 
+// sessionIntervalAgg sums durations, which add exactly, so a session's
+// minutes do not depend on how its activity was split into intervals.
 type sessionIntervalAgg struct {
-	minutes       float64
-	modelMins     map[string]float64
+	duration      time.Duration
 	modelDuration map[string]time.Duration
 	first, last   time.Time
 	hasIv         bool
@@ -583,6 +587,9 @@ func AddUsageDedupToken(seen map[UsageDedupToken]struct{}, token UsageDedupToken
 	return true
 }
 
+// claudeUsageSnapshotToken identifies one Claude response. The message ID is
+// required; the request ID is empty when the transcript omits requestId, which
+// Claude Agent SDK transcripts do.
 type claudeUsageSnapshotToken struct {
 	messageID string
 	requestID string
@@ -608,11 +615,11 @@ func (row UsageRow) UsageIdentity() UsageIdentity {
 	}
 }
 
-// usageDedupTokenWithoutSourceGate picks the Claude pair, source UUID, or stored usage key,
+// usageDedupTokenWithoutSourceGate picks the Claude response identity, source UUID, or stored usage key,
 // accepting source UUIDs regardless of UsageSource. SessionUsageDedupTokenForRow
 // restricts source UUIDs to message rows.
 func usageDedupTokenWithoutSourceGate(row UsageIdentity) (UsageDedupToken, bool) {
-	if row.ClaudeMessageID != "" && row.ClaudeRequestID != "" {
+	if row.ClaudeMessageID != "" {
 		return UsageDedupToken{
 			Kind: "claude", Value: row.ClaudeMessageID + ":" + row.ClaudeRequestID,
 		}, true
@@ -696,7 +703,7 @@ func claudeSnapshotSelectionContext(
 		if eligible != nil && !eligible[i] {
 			continue
 		}
-		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
+		if u.ClaudeMessageID == "" {
 			mask[i] = true
 			attribution[i] = u.SessionID
 			webSearchRequests[i] = u.WebSearchRequests
@@ -740,7 +747,7 @@ func claudeSnapshotSelectionContext(
 		if eligible != nil && !eligible[i] {
 			continue
 		}
-		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
+		if u.ClaudeMessageID == "" {
 			continue
 		}
 		canonical[i] = groups[rowGroup[i]].best
@@ -1069,7 +1076,7 @@ func buildSessionsTableFromDedupedUsage(
 			Agent: s.Agent, TimingQuality: "untimed", IsAutomated: s.IsAutomated, IsSubagent: s.IsSubagent,
 		}
 		if a := agg[s.SessionID]; a != nil && a.hasIv {
-			mins := a.minutes
+			mins := a.duration.Minutes()
 			row.AgentMinutes = &mins
 			row.TimingQuality = "timed"
 			f := a.first.Format(time.RFC3339)
@@ -1082,8 +1089,8 @@ func buildSessionsTableFromDedupedUsage(
 			if err := addKey(byAgent, s.Agent, mins, money.Money{}, kind); err != nil {
 				return fmt.Errorf("summing activity agent minutes: %w", err)
 			}
-			for m, mm := range a.modelMins {
-				if err := addKey(byModel, m, mm, money.Money{}, kind); err != nil {
+			for m, d := range a.modelDuration {
+				if err := addKey(byModel, m, d.Minutes(), money.Money{}, kind); err != nil {
 					return fmt.Errorf("summing activity model minutes: %w", err)
 				}
 			}

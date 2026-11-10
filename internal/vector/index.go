@@ -194,11 +194,15 @@ var ErrMirrorVersionMismatch = errors.New(
 // plus kit's sqlitevec store, which owns the generation and vec0 tables
 // derived from spec's VectorsPrefix.
 type Index struct {
-	db       *sql.DB
-	store    *sqlitevec.Store[string, string]
-	spec     IndexSpec
-	split    kitvec.SplitOptions
-	readOnly bool
+	db    *sql.DB
+	store *sqlitevec.Store[string, string]
+	// Snapshots use a separate read-only pool: the cgo driver applies
+	// _txlock even when BeginTx requests a read-only transaction.
+	readDB    *sql.DB
+	readStore *sqlitevec.Store[string, string]
+	spec      IndexSpec
+	split     kitvec.SplitOptions
+	readOnly  bool
 
 	// versionMismatch records a read-path Open's version-gate finding: the
 	// mirror was written by a different spec.MirrorSchemaVersion. Write-path
@@ -339,10 +343,26 @@ CREATE TABLE IF NOT EXISTS `+spec.repairQueueTable()+` (
 		}
 	}
 
+	readDB, readStore := db, store
+	if !readOnly {
+		readDB, err = sql.Open(vectorDriverName, vectorDSN(path, true))
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		readStore, err = sqlitevec.New[string, string](ctx, readDB, spec.schema())
+		if err != nil {
+			readDB.Close()
+			db.Close()
+			return nil, err
+		}
+	}
 	overlap := ChunkOverlap(maxInputChars)
 	return &Index{
 		db:              db,
 		store:           store,
+		readDB:          readDB,
+		readStore:       readStore,
 		spec:            spec,
 		split:           kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: overlap},
 		readOnly:        readOnly,
@@ -480,6 +500,9 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 
 // Close closes the underlying vectors.db connection.
 func (ix *Index) Close() error {
+	if ix.readDB != nil && ix.readDB != ix.db {
+		return errors.Join(ix.readDB.Close(), ix.db.Close())
+	}
 	return ix.db.Close()
 }
 
@@ -693,7 +716,7 @@ func (ix *Index) MissingEmbeddedDocs(
 	if ix.versionMismatch {
 		return 0, ErrMirrorVersionMismatch
 	}
-	snap, err := ix.store.Snapshot(ctx, fingerprint)
+	snap, err := ix.readStore.Snapshot(ctx, fingerprint)
 	if err != nil {
 		return 0, err
 	}

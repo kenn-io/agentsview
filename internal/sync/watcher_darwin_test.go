@@ -1398,6 +1398,8 @@ func TestDarwinWatcherCollectingGateWaitsForSuccessfulReconciliation(t *testing.
 	firstEntered := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	releaseSuccess := make(chan struct{})
+	unblockFirst := sync.OnceFunc(func() { close(releaseFirst) })
+	unblockSuccess := sync.OnceFunc(func() { close(releaseSuccess) })
 	successReturned := make(chan struct{})
 	calls := make(chan WatchBatch, 8)
 	var attempts atomic.Int32
@@ -1420,6 +1422,9 @@ func TestDarwinWatcherCollectingGateWaitsForSuccessfulReconciliation(t *testing.
 	)
 	require.NoError(t, err)
 	t.Cleanup(watcher.Stop)
+	// Release a parked callback before Stop waits for it.
+	t.Cleanup(unblockSuccess)
+	t.Cleanup(unblockFirst)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
@@ -1436,13 +1441,13 @@ func TestDarwinWatcherCollectingGateWaitsForSuccessfulReconciliation(t *testing.
 
 	path := filepath.Join(root, "during-collecting.jsonl")
 	nativeSink([]fsevents.Event{{Path: path, Flags: fseventFlagItemModified | fseventFlagItemIsFile}})
-	close(releaseFirst)
+	unblockFirst()
 	_ = requireReceiveWithin(t, calls, time.Second)
 	second := requireReceiveWithin(t, calls, time.Second)
 	assert.Empty(t, second.Paths,
 		"ordinary paths must remain gated while exact reconciliation is retrying")
 	assert.Equal(t, []string{ancestor}, second.ReconcileRoots)
-	close(releaseSuccess)
+	unblockSuccess()
 	requireReceiveWithin(t, successReturned, time.Second)
 }
 
@@ -2240,6 +2245,7 @@ func TestDarwinWatcherRuntimeFallbackWaitsForPollingRegistration(t *testing.T) {
 		return &handoffRecordingStream{close: func() { invalidated <- struct{}{} }}, nil
 	}
 	allowPolling := make(chan struct{})
+	unblockPolling := sync.OnceFunc(func() { close(allowPolling) })
 	coverageCalls := make(chan []string, 2)
 	var attempts atomic.Int32
 	watcher, err := newWatcherWithBackendOptions(
@@ -2256,6 +2262,8 @@ func TestDarwinWatcherRuntimeFallbackWaitsForPollingRegistration(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(watcher.Stop)
+	// Release the parked polling callback before Stop waits for the backend.
+	t.Cleanup(unblockPolling)
 	watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{SyncDir: root}},
@@ -2272,7 +2280,7 @@ func TestDarwinWatcherRuntimeFallbackWaitsForPollingRegistration(t *testing.T) {
 		require.FailNow(t, "FSEvents invalidated before polling owned the uncovered root")
 	default:
 	}
-	close(allowPolling)
+	unblockPolling()
 	requireReceiveWithin(t, invalidated, time.Second)
 	assert.Equal(t, int32(2), attempts.Load())
 }
@@ -2288,6 +2296,7 @@ func TestDarwinWatcherFallbackNativeCallbackDoesNotRunPolling(t *testing.T) {
 	}
 	pollingEntered := make(chan struct{})
 	releasePolling := make(chan struct{})
+	unblockPolling := sync.OnceFunc(func() { close(releasePolling) })
 	watcher, err := newWatcherWithBackendOptions(
 		0, 0, func(context.Context, WatchBatch) error { return nil }, backend,
 		defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
@@ -2299,6 +2308,8 @@ func TestDarwinWatcherFallbackNativeCallbackDoesNotRunPolling(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(watcher.Stop)
+	// Release the parked polling callback before Stop waits for the backend.
+	t.Cleanup(unblockPolling)
 	watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{SyncDir: root}},
@@ -2313,7 +2324,7 @@ func TestDarwinWatcherFallbackNativeCallbackDoesNotRunPolling(t *testing.T) {
 	// Polling stays blocked until the native callback returns.
 	requireReceiveWithin(t, returned, time.Second)
 	requireReceiveWithin(t, pollingEntered, time.Second)
-	close(releasePolling)
+	unblockPolling()
 }
 
 func TestDarwinWatcherKqueueStartFailureFallbackPollsBeforeInvalidation(t *testing.T) {

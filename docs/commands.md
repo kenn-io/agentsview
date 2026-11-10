@@ -971,10 +971,11 @@ agentsview session prune [flags]
 | `--dry-run`       | `false` | Show what would be pruned without deleting          |
 | `--yes`           | `false` | Skip confirmation prompt                            |
 
-Filters combine with AND. With `--agent`, one prune removes matching parents
-and descendants, including matching sessions in trash. A descendant that fails
-any filter keeps all its ancestors. Without `--agent`, prune skips trash and
-parents. The summary shows how many matches are in trash.
+Filters combine with AND. One prune removes matching parents and descendants.
+A descendant that fails any filter keeps all its ancestors. Without `--agent`,
+prune skips trash, so a trashed descendant keeps its ancestors. With `--agent`,
+prune includes matching sessions in trash. The summary shows how many matches
+are in trash.
 
 Prune keeps deleted sessions out of later syncs. To keep new sessions from
 that agent out of the archive, add it to
@@ -2599,7 +2600,8 @@ hash: install updates safe generated files, refuses hand-edited or foreign files
 unless `--force` is passed, continues processing the other artifacts, and exits
 non-zero if anything was refused. `list` reports HARNESS, ARTIFACT, LEVEL, STATE
 (`missing`, `current`, `stale`, `modified`, `foreign`), and PATH for every
-artifact.
+artifact. When local semantic search is off, a successful install shows how to
+turn it on.
 
 `--server` / `--server-token-file` (or `AGENTSVIEW_SKILLS_SERVER` /
 `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE`) bake those flags into every example

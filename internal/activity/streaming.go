@@ -267,8 +267,33 @@ func buildCandidateArtifactsFromSource(
 	usageIsSurvivorSet bool,
 	joint *jointActivityAccumulator,
 ) (CandidateArtifacts, error) {
+	return buildIntervalArtifacts(ctx, p, sessions, func(yield func(interval) error) error {
+		return source(ctx, func(candidate IntervalCandidate) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			iv, effective := effectiveCandidateInterval(p, candidate)
+			if !effective {
+				return nil
+			}
+			return yield(iv)
+		})
+	}, loadUsage, usageIsSurvivorSet, joint)
+}
+
+// buildIntervalArtifacts sweeps intervals given in start order. A
+// session's interval that overlaps its previous one keeps only the part
+// after it.
+func buildIntervalArtifacts(
+	ctx context.Context,
+	p Params,
+	sessions []SessionMeta,
+	each func(yield func(interval) error) error,
+	loadUsage func() ([]UsageRow, error),
+	usageIsSurvivorSet bool,
+	joint *jointActivityAccumulator,
+) (CandidateArtifacts, error) {
 	windows := rangeWindows(p)
-	membershipWindows := secondPrecisionWindows(windows)
 	report := newReport(p, windows)
 	report.Buckets = make([]Bucket, len(windows))
 	for i, window := range windows {
@@ -284,18 +309,15 @@ func buildCandidateArtifactsFromSource(
 		sessionEnds: make(map[string]time.Time),
 	}
 	heap.Init(&state.ends)
-	aggregates := make(map[string]*sessionIntervalAgg)
-	membership := make(map[string]BucketMembership)
-	words := (len(windows) + 63) / 64
+	fold := intervalFold{
+		windows: windows, membershipWindows: secondPrecisionWindows(windows),
+		kindBy: kindBy, words: (len(windows) + 63) / 64,
+		aggregates: make(map[string]*sessionIntervalAgg),
+		membership: make(map[string]BucketMembership),
+		buckets:    make([]minuteSum, len(windows)),
+	}
 	var previousStart time.Time
-	err := source(ctx, func(candidate IntervalCandidate) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		iv, effective := effectiveCandidateInterval(p, candidate)
-		if !effective {
-			return nil
-		}
+	err := each(func(iv interval) error {
 		if !previousStart.IsZero() && iv.start.Before(previousStart) {
 			return fmt.Errorf(
 				"activity candidates out of start order: %s before %s",
@@ -314,10 +336,10 @@ func buildCandidateArtifactsFromSource(
 		} else {
 			state.open(iv)
 		}
-		foldCandidateInterval(
-			&report, windows, membershipWindows, aggregates, membership, words,
-			kindBy, iv,
-		)
+		if iv.tail.Before(iv.start) {
+			iv.tail = iv.start
+		}
+		fold.add(iv)
 		if joint != nil {
 			joint.add(iv)
 		}
@@ -327,6 +349,7 @@ func buildCandidateArtifactsFromSource(
 		return CandidateArtifacts{}, err
 	}
 	state.advance(p.EffectiveEnd)
+	fold.finish(&report)
 	usage, err := loadUsage()
 	if err != nil {
 		return CandidateArtifacts{}, err
@@ -354,7 +377,7 @@ func buildCandidateArtifactsFromSource(
 		return CandidateArtifacts{}, err
 	}
 	if err := buildSessionsTableFromDedupedUsage(
-		&report, sessions, aggregates, survivors, allocated,
+		&report, sessions, fold.aggregates, survivors, allocated,
 	); err != nil {
 		return CandidateArtifacts{}, err
 	}
@@ -362,7 +385,7 @@ func buildCandidateArtifactsFromSource(
 	rows := report.BySession
 	report.BySession = []SessionRow{}
 	return CandidateArtifacts{
-		Report: report, Sessions: rows, Membership: membership,
+		Report: report, Sessions: rows, Membership: fold.membership,
 	}, nil
 }
 
@@ -376,6 +399,17 @@ func effectiveCandidateInterval(p Params, candidate IntervalCandidate) (interval
 	if !effective {
 		return interval{}, false
 	}
+	return interval{
+		sessionID: candidate.SessionID,
+		start:     intervalStart,
+		end:       intervalEnd,
+		tail:      intervalStart,
+		model:     candidateModel(candidate),
+	}, true
+}
+
+// candidateModel is the model a candidate's interval is attributed to.
+func candidateModel(candidate IntervalCandidate) string {
 	model := candidate.PriorModel
 	if candidate.ClosingRole == "assistant" && candidate.ClosingModel != "" {
 		model = candidate.ClosingModel
@@ -383,12 +417,29 @@ func effectiveCandidateInterval(p Params, candidate IntervalCandidate) (interval
 	if model == "" {
 		model = "unknown"
 	}
-	return interval{
-		sessionID: candidate.SessionID,
-		start:     intervalStart,
-		end:       intervalEnd,
-		model:     model,
-	}, true
+	return model
+}
+
+// minuteSum adds durations exactly and converts the total to minutes once,
+// so the minutes do not depend on the order of the intervals or on how a
+// stretch of activity was split into them. Whole seconds and the remaining
+// nanoseconds are kept apart, so long ranges with many sessions cannot
+// overflow. It assumes non-negative durations.
+type minuteSum struct{ sec, nsec int64 }
+
+func (m *minuteSum) add(d time.Duration) {
+	m.sec += int64(d / time.Second)
+	m.nsec += int64(d % time.Second)
+	if m.nsec >= int64(time.Second) {
+		m.sec++
+		m.nsec -= int64(time.Second)
+	}
+}
+
+// minutes matches time.Duration.Minutes for totals a Duration can hold.
+func (m *minuteSum) minutes() float64 {
+	rest := (m.sec%60)*int64(time.Second) + m.nsec
+	return float64(m.sec/60) + float64(rest)/(60*1e9)
 }
 
 type activeCandidateEnd struct {
@@ -539,36 +590,38 @@ func (s *candidateSweep) recordBucketPeak() {
 	}
 }
 
-func foldCandidateInterval(
-	report *Report,
-	windows []BucketWindow,
-	membershipWindows []BucketWindow,
-	aggregates map[string]*sessionIntervalAgg,
-	membership map[string]BucketMembership,
-	words int,
-	kindBy map[string]sessionKind,
-	iv interval,
-) {
-	minutes := iv.end.Sub(iv.start).Minutes()
-	report.Totals.AgentMinutes += minutes
-	switch kindBy[iv.sessionID] {
+// intervalFold adds each swept interval to the report's minutes, the
+// per-session aggregates, and bucket membership.
+type intervalFold struct {
+	windows           []BucketWindow
+	membershipWindows []BucketWindow
+	kindBy            map[string]sessionKind
+	words             int
+	aggregates        map[string]*sessionIntervalAgg
+	membership        map[string]BucketMembership
+	total, subagent   minuteSum
+	automated, inter  minuteSum
+	buckets           []minuteSum
+}
+
+func (f *intervalFold) add(iv interval) {
+	duration := iv.end.Sub(iv.start)
+	f.total.add(duration)
+	switch f.kindBy[iv.sessionID] {
 	case subagentSession:
-		report.Totals.SubagentAgentMinutes += minutes
+		f.subagent.add(duration)
 	case automatedSession:
-		report.Totals.AutomatedAgentMinutes += minutes
+		f.automated.add(duration)
 	default:
-		report.Totals.InteractiveAgentMinutes += minutes
+		f.inter.add(duration)
 	}
-	aggregate := aggregates[iv.sessionID]
+	aggregate := f.aggregates[iv.sessionID]
 	if aggregate == nil {
-		aggregate = &sessionIntervalAgg{
-			modelMins: make(map[string]float64), modelDuration: make(map[string]time.Duration),
-		}
-		aggregates[iv.sessionID] = aggregate
+		aggregate = &sessionIntervalAgg{modelDuration: make(map[string]time.Duration)}
+		f.aggregates[iv.sessionID] = aggregate
 	}
-	aggregate.minutes += minutes
-	aggregate.modelMins[iv.model] += minutes
-	aggregate.modelDuration[iv.model] += iv.end.Sub(iv.start)
+	aggregate.duration += duration
+	aggregate.modelDuration[iv.model] += duration
 	if !aggregate.hasIv || iv.start.Before(aggregate.first) {
 		aggregate.first = iv.start
 	}
@@ -577,29 +630,44 @@ func foldCandidateInterval(
 	}
 	aggregate.hasIv = true
 
+	windows := f.windows
 	for index := max(0, windowIndex(windows, iv.start)); index < len(windows) && windows[index].Start.Before(iv.end); index++ {
 		lo := maxTime(iv.start, windows[index].Start)
 		hi := minTime(iv.end, windows[index].End)
 		if hi.After(lo) {
-			report.Buckets[index].AgentMinutes += hi.Sub(lo).Minutes()
+			f.buckets[index].add(hi.Sub(lo))
 		}
 	}
 
-	bits := membership[iv.sessionID]
+	bits := f.membership[iv.sessionID]
 	if bits == nil {
-		bits = make(BucketMembership, words)
-		membership[iv.sessionID] = bits
+		bits = make(BucketMembership, f.words)
+		f.membership[iv.sessionID] = bits
 	}
+	// Membership is a union over the pieces an interval joins. A piece
+	// within one second adds the bucket holding that second, even when it
+	// is the first second of a bucket the half-open span below misses.
+	membershipWindows := f.membershipWindows
 	startSecond := iv.start.Truncate(time.Second)
 	endSecond := iv.end.Truncate(time.Second)
-	if startSecond.Equal(endSecond) {
-		bits.add(windowIndex(membershipWindows, startSecond))
-		return
+	if iv.tail.Truncate(time.Second).Equal(endSecond) {
+		bits.add(windowIndex(membershipWindows, endSecond))
 	}
 	for index := max(0, windowIndex(membershipWindows, startSecond)); index < len(membershipWindows) && membershipWindows[index].Start.Before(endSecond); index++ {
 		if startSecond.Before(membershipWindows[index].End) && endSecond.After(membershipWindows[index].Start) {
 			bits.add(index)
 		}
+	}
+}
+
+// finish writes the summed minutes into the report.
+func (f *intervalFold) finish(report *Report) {
+	report.Totals.AgentMinutes = f.total.minutes()
+	report.Totals.SubagentAgentMinutes = f.subagent.minutes()
+	report.Totals.AutomatedAgentMinutes = f.automated.minutes()
+	report.Totals.InteractiveAgentMinutes = f.inter.minutes()
+	for i := range f.buckets {
+		report.Buckets[i].AgentMinutes = f.buckets[i].minutes()
 	}
 }
 

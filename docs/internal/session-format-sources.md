@@ -539,33 +539,40 @@ fixtures retain this field; missing identities remain source-local.
   `5` then `631` and `6` then `798`). Usage reporting therefore keeps the
   greatest output-token snapshot for each message/request identity across the
   included sessions, attributes it to the earliest transcript, and then
-  applies cross-session replay deduplication. Session-owned dimensions and
-  display metadata also come from that earliest transcript. Numeric-string
-  token values remain accepted as compatibility input and are normalized
-  before snapshot comparison on every backend. The SQLite and PostgreSQL read
-  the exact top-level token path and nested server-tool path even in supported
-  malformed legacy JSON. Reverified 2026-08-06 with end-truncated objects
-  containing earlier nested decoy keys; PostgreSQL and its
-  Cockroach-compatible helper repair the truncated object before extracting
-  the requested path, while irreparable input contributes no counter rather
-  than an ambiguously scoped value. Equal snapshots are selected
-  deterministically by timestamp, session id, and message ordinal; equivalent
-  RFC3339 spellings use the semantic tie-breakers rather than raw timestamp
-  text. Reverified 2026-08-04 against the cross-backend stored-usage fixtures.
-  Replaying the three captured sessions after this correction matched all
-  transcript-visible output; each full-wire total remained 15 output tokens
-  higher because Claude Code's separate session-title request is not
-  persisted. Reverified 2026-08-06 that session-summary export loads matching
-  snapshots across excluded sessions and pagination before applying the same
-  snapshot, attribution, web-search, and generic deduplication rules. These
-  accounting semantics are exposed by usage, activity, and session-summary
-  schema version 5 and reporting schema version 2; reporting version 1 retains
-  its frozen first-seen, token-only semantics. Reverified 2026-08-06 that
-  DuckDB records a web-search-only flat fee as computed pricing provenance, so
-  combining it with a provider-reported cost is labeled `mixed` like the
-  SQLite archive. Reverified 2026-08-22 that activity buckets carry the
-  selected Claude input-token snapshots identically across SQLite, PostgreSQL,
-  and DuckDB.
+  applies cross-session replay deduplication. Reverified 2026-11-09 against
+  local transcripts written by Claude Code 2.1.300 through 2.1.319 and
+  [#2917](https://github.com/kenn-io/agentsview/issues/2917): records written
+  through the Claude Agent SDK (`entrypoint: "sdk-ts"`) and other embedding
+  hosts omit `requestId`, and a `tool_result` record can separate assistant
+  records of one `message.id`, so the parser cannot coalesce them. No
+  `message.id` appeared with more than one `requestId`. The `message.id` alone
+  therefore identifies the response; `requestId` joins the identity only when
+  the transcript records it. Session-owned dimensions and display metadata
+  also come from that earliest transcript. Numeric-string token values remain
+  accepted as compatibility input and are normalized before snapshot
+  comparison on every backend. The SQLite and PostgreSQL read the exact
+  top-level token path and nested server-tool path even in supported malformed
+  legacy JSON. Reverified 2026-08-06 with end-truncated objects containing
+  earlier nested decoy keys; PostgreSQL and its Cockroach-compatible helper
+  repair the truncated object before extracting the requested path, while
+  irreparable input contributes no counter rather than an ambiguously scoped
+  value. Equal snapshots are selected deterministically by timestamp, session
+  id, and message ordinal; equivalent RFC3339 spellings use the semantic
+  tie-breakers rather than raw timestamp text. Reverified 2026-08-04 against
+  the cross-backend stored-usage fixtures. Replaying the three captured sessions
+  after this correction matched all transcript-visible output; each full-wire
+  total remained 15 output tokens higher because Claude Code's separate
+  session-title request is not persisted. Reverified 2026-08-06 that
+  session-summary export loads matching snapshots across excluded sessions and
+  pagination before applying the same snapshot, attribution, web-search, and
+  generic deduplication rules. These accounting semantics are exposed by
+  usage, activity, and session-summary schema version 5 and reporting schema
+  version 2; reporting version 1 retains its frozen first-seen, token-only
+  semantics. Reverified 2026-08-06 that DuckDB records a web-search-only flat
+  fee as computed pricing provenance, so combining it with a provider-reported
+  cost is labeled `mixed` like the SQLite archive. Reverified 2026-08-22 that
+  activity buckets carry the selected Claude input-token snapshots identically
+  across SQLite, PostgreSQL, and DuckDB.
 
 - **Agentsview:** `internal/parser/claude.go` and
   `internal/parser/claude_provider.go`; local observations and fixtures are
@@ -732,6 +739,10 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Archived shell argv:** Older Codex shell calls record `command` as an
+  argument array, including `bash -lc` scripts. Commit links read these arrays
+  as shell words. Data version 170 reparses Codex sources.
 
 - **Code-mode wait output (checked 2026-11-03):** A local rollout records `wait`
   arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
@@ -1523,6 +1534,9 @@ fixtures retain this field; missing identities remain source-local.
   need output process IDs matching earlier commit calls. The reused-process-ID
   case checks that a new native commit execution owns its repository and
   prompt after a batch poll.
+  An archived `shell` call records `command` as an array. Scripts passed to
+  `sh`, `bash`, or `zsh` with `-c` or `-lc` are read as-is; direct Git
+  arguments are quoted word by word. Other executables are not classified.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)

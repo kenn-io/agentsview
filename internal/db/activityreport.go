@@ -68,27 +68,34 @@ type activityReportBackend struct {
 	usage                  activityUsageWindow
 }
 
-// activityReportCounted holds every counted message the build's pairing
-// passed, from the memo or its scan, so message counts read no messages.
+// activityReportCounted holds the counted messages of the build's sessions,
+// from the memo or its pairing scan, so message counts read no messages.
 type activityReportCounted struct {
-	sessionIDs []string
-	messages   []activityCountedMessage
-	complete   bool
+	sessions map[string]activityMemoCounted
+	complete bool
 }
 
+// ActivityReportCandidateSource is the candidate stream the report's runs
+// stand for. Reports sweep the runs; see ActivityReportRunSource.
 func (b activityReportBackend) ActivityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
-	source := b.activityReportCountingCandidateSource(ids, q,
-		func(id string, message activityCountedMessage) {
-			b.counted.sessionIDs = append(b.counted.sessionIDs, id)
-			b.counted.messages = append(b.counted.messages, message)
-		})
-	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
-		if err := source(ctx, yield); err != nil {
+	return b.activityReportCandidateSource(ids, q)
+}
+
+func (b activityReportBackend) ActivityReportRunSource(ids []string, q activity.Query) activity.RunSource {
+	return func(ctx context.Context, yield func(activity.Run) error) error {
+		runs, counted, err := b.activityReportRuns(ctx, ids, q)
+		if err != nil {
 			return err
 		}
-		b.counted.complete = true
+		b.counted.sessions, b.counted.complete = counted, true
+		// The consumer checks for cancellation before each run.
+		for _, run := range runs {
+			if err := yield(run); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 }
@@ -114,9 +121,15 @@ func (b activityReportBackend) ActivityReportMessageCounts(
 	if !b.counted.complete {
 		return errors.New("activity message counts requested before pairing finished")
 	}
-	add := newActivityMessageCounter(q, artifacts)
-	for i, message := range b.counted.messages {
-		add(b.counted.sessionIDs[i], message)
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	add := newActivityMessageCounter(q, counts)
+	for _, id := range ids {
+		session := b.counted.sessions[id]
+		counts.AddSorted(id, "user", session.users)
+		counts.AddSorted(id, "assistant", session.assistants)
+		for _, message := range session.other {
+			add(id, message)
+		}
 	}
 	return ctx.Err()
 }
@@ -221,11 +234,10 @@ func activityMessageCountBounds(q activity.Query) (lower, upper string) {
 }
 
 // newActivityMessageCounter returns a function that counts one message into
-// artifacts when its stored timestamp lies in q's padded range.
+// counts when its stored timestamp lies in q's padded range.
 func newActivityMessageCounter(
-	q activity.Query, artifacts *activity.CandidateArtifacts,
+	q activity.Query, counts *activity.MessageAccumulator,
 ) func(string, activityCountedMessage) {
-	counts := activity.NewMessageAccumulator(q, artifacts)
 	lower, upper := activityMessageCountBounds(q)
 	return func(sessionID string, m activityCountedMessage) {
 		if m.timestamp < lower || m.timestamp >= upper {
@@ -1057,7 +1069,6 @@ type activityReportUsageCandidate struct {
 
 func activityReportClaudePeerPredicate(candidateSessions string) string {
 	return `m.claude_message_id != ''
-		AND m.claude_request_id != ''
 		AND (m.claude_message_id, m.claude_request_id) IN (
 			SELECT m.claude_message_id, m.claude_request_id
 			FROM messages m
@@ -1065,7 +1076,6 @@ func activityReportClaudePeerPredicate(candidateSessions string) string {
 			WHERE ` + usageMessageEligibility + `
 				AND m.session_id IN ` + candidateSessions + `
 				AND m.claude_message_id != ''
-				AND m.claude_request_id != ''
 				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
 				AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
 		)`

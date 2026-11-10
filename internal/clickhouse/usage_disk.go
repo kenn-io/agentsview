@@ -65,7 +65,7 @@ func (s *Store) usageCaptureStable(ctx context.Context) bool {
 		return false
 	}
 	for _, table := range append(append([]string{}, chUsageReadTables...), "prepared_usage", "usage_price_models") {
-		if before[table] != after[table] {
+		if before[table].digest != after[table].digest {
 			return false
 		}
 	}

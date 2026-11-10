@@ -775,7 +775,7 @@ func appendPGExactUsageWindow(where, ts string, pb *paramBuilder, f db.UsageFilt
 
 func pgSnapshotOutputTokensSQL() string {
 	return fmt.Sprintf(`CASE
-				WHEN u.claude_message_id = '' OR u.claude_request_id = '' THEN 0
+				WHEN u.claude_message_id = '' THEN 0
 				ELSE CASE
 					WHEN u.usage_source = 'message' THEN LEAST(GREATEST(COALESCE(
 						CAST(agentsview_json_integer(
@@ -788,9 +788,9 @@ func pgSnapshotOutputTokensSQL() string {
 			END`, db.MaxPlausibleTokens)
 }
 
-// pgSnapshotRankedDailyUsageRowsSQL keeps the greatest output snapshot and the
-// maximum billed web-search count for each Claude request before rows cross
-// into Go. Rows without complete Claude request identity bypass the window.
+// pgSnapshotRankedDailyUsageRowsSQL keeps one output snapshot and the maximum
+// billed web-search count per Claude message/request identity. Snapshots
+// without a message ID bypass the window.
 func pgSnapshotRankedDailyUsageRowsSQL(
 	pb *paramBuilder, rowsSQL string, f db.UsageFilter, dialect db.QueryDialect,
 ) (string, string) {
@@ -833,7 +833,7 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 					PARTITION BY claude_message_id, claude_request_id
 				) AS snapshot_web_search_requests
 			FROM usage_snapshot_window
-			WHERE claude_message_id != '' AND claude_request_id != ''
+			WHERE claude_message_id != ''
 		),
 		usage_snapshot_survivors AS (
 			SELECT *
@@ -845,7 +845,7 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 				1 AS snapshot_rank,
 				snapshot_row_web_search_requests AS snapshot_web_search_requests
 			FROM usage_snapshot_window
-			WHERE claude_message_id = '' OR claude_request_id = ''
+			WHERE claude_message_id = ''
 		)
 		SELECT survivor.*
 		FROM usage_snapshot_survivors survivor`,

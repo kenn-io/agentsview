@@ -21,7 +21,7 @@ import (
 )
 
 func prepareUsageSchema(
-	t *testing.T, schema string,
+	t testing.TB, schema string,
 ) (string, *Store) {
 	t.Helper()
 
@@ -326,14 +326,13 @@ func TestStoreGetDailyUsagePricesGooseRequestAsRequestScoped(t *testing.T) {
 }
 
 func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
-	for _, requestID := range []string{"req-1", ""} {
-		sourceUUID := ""
-		name := "complete pair"
-		if requestID == "" {
-			name = "source UUID with incomplete pair"
-			sourceUUID = "source-1"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct{ name, requestID, sourceUUID string }{
+		{"complete pair", "req-1", ""},
+		{"message ID and source UUID without request ID", "", "source-1"},
+		{"message ID without request ID", "", ""},
+	} {
+		requestID, sourceUUID := tc.requestID, tc.sourceUUID
+		t.Run(tc.name, func(t *testing.T) {
 			_, store := prepareUsageSchema(t, "agentsview_usage_source_uuid_daily_test")
 
 			ctx := t.Context()
@@ -353,10 +352,8 @@ func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 					('usage-source-daily-002', 'test-machine', 'proj-b', 'claude',
 					 '2026-03-12T10:01:00Z'::timestamptz, 1, 1)`)
 			require.NoError(t, err, "insert sessions")
-			laterInput := 1000000
-			if requestID == "" {
-				laterInput = 2000000
-			}
+			// The later snapshot of one response wins when output ties.
+			laterInput := 2000000
 			_, err = store.DB().ExecContext(ctx, `
 				INSERT INTO messages (
 					session_id, ordinal, role, content, timestamp, content_length,
@@ -382,7 +379,7 @@ func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 			})
 			require.NoError(t, err, "GetDailyUsage")
 			require.Len(t, result.Daily, 1)
-			assert.Equal(t, 1000000, result.Daily[0].InputTokens)
+			assert.Equal(t, laterInput, result.Daily[0].InputTokens)
 			assert.Equal(t, 500000, result.Daily[0].OutputTokens)
 
 			filter := db.UsageFilter{From: "2026-03-12", To: "2026-03-12", Timezone: "UTC"}
@@ -390,7 +387,7 @@ func TestStoreDailyTopAndCountsDedupClaudeKeyVariants(t *testing.T) {
 			require.NoError(t, err, "GetTopSessionsByCost")
 			require.Len(t, top, 1)
 			assert.Equal(t, "usage-source-daily-001", top[0].SessionID)
-			assert.Equal(t, 1000000, top[0].InputTokens)
+			assert.Equal(t, laterInput, top[0].InputTokens)
 
 			counts, err := store.GetUsageSessionCounts(ctx, filter)
 			require.NoError(t, err, "GetUsageSessionCounts")
@@ -811,21 +808,20 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 func TestStoreGetSessionUsagePricesClaudeKeyVariants(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
+		messageID   string
 		requestID   string
+		sourceUUID  string
 		firstOutput int
 		lastOutput  int
 		wantCost    string
 		wantOrdinal int
 	}{
-		{"source_uuid", "", 500, 500, "0.0175", 0},
-		{"complete_pair", "req-stream", 5, 631, "0.020775", 1},
+		{"source_uuid", "", "", "source-1", 500, 500, "0.0175", 0},
+		{"message_id", "msg-1", "", "", 5, 631, "0.020775", 1},
+		{"complete_pair", "msg-1", "req-stream", "", 5, 631, "0.020775", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, store := prepareUsageSchema(t, "agentsview_session_usage_"+tc.name+"_test")
-			sourceUUID := ""
-			if tc.requestID == "" {
-				sourceUUID = "source-1"
-			}
 			ctx := t.Context()
 			_, err := store.DB().ExecContext(ctx, `
 				INSERT INTO model_pricing (
@@ -841,7 +837,7 @@ func TestStoreGetSessionUsagePricesClaudeKeyVariants(t *testing.T) {
 				) VALUES (
 					'claude:usage-source', 'test-machine', 'proj', 'claude-code',
 					'2026-03-12T10:00:00Z'::timestamptz, 2, 1, $1, $2
-				)`, tc.firstOutput+tc.lastOutput, tc.requestID != "")
+				)`, tc.firstOutput+tc.lastOutput, tc.messageID != "")
 			require.NoError(t, err, "insert session")
 			_, err = store.DB().ExecContext(ctx, `
 				INSERT INTO messages (
@@ -850,12 +846,13 @@ func TestStoreGetSessionUsagePricesClaudeKeyVariants(t *testing.T) {
 				) VALUES
 					('claude:usage-source', 0, 'assistant', 'one',
 					 '2026-03-12T10:01:00Z'::timestamptz, 3,
-					 'claude-opus-4-6', $1, 'msg-1', $3, $4),
+					 'claude-opus-4-6', $1, $5, $3, $4),
 					('claude:usage-source', 1, 'assistant', 'two',
 					 '2026-03-12T10:02:00Z'::timestamptz, 3,
-					 'claude-opus-4-6', $2, 'msg-1', $3, $4)`,
+					 'claude-opus-4-6', $2, $5, $3, $4)`,
 				fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.firstOutput),
-				fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.lastOutput), tc.requestID, sourceUUID)
+				fmt.Sprintf(`{"input_tokens":1000,"output_tokens":%d}`, tc.lastOutput),
+				tc.requestID, tc.sourceUUID, tc.messageID)
 			require.NoError(t, err, "insert messages")
 
 			got, err := store.GetSessionUsage(ctx, "claude:usage-source", true)
@@ -865,7 +862,7 @@ func TestStoreGetSessionUsagePricesClaudeKeyVariants(t *testing.T) {
 			require.Len(t, got.Breakdown, 1, "Breakdown")
 			require.NotNil(t, got.Breakdown[0].MessageOrdinal)
 			assert.Equal(t, tc.wantOrdinal, *got.Breakdown[0].MessageOrdinal)
-			if tc.requestID == "" {
+			if tc.messageID == "" {
 				assert.True(t, got.HasCost)
 				assert.Equal(t, []string{"claude-opus-4-6"}, got.Models)
 			} else {

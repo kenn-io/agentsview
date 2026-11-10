@@ -232,6 +232,8 @@ func parseGenerationID(raw string) (int64, error) {
 	return id, nil
 }
 
+const semanticSearchSetupHint = "run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on"
+
 // requireVectorEnabled rejects every embeddings subcommand up front when
 // [vector] is not configured, with the exact message the brief specifies.
 func requireVectorEnabled(cfg config.Config) error {
@@ -240,7 +242,7 @@ func requireVectorEnabled(cfg config.Config) error {
 	}
 	if !cfg.Vector.Enabled {
 		return errors.New(
-			"vector search is not enabled: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on",
+			"vector search is not enabled: " + semanticSearchSetupHint,
 		)
 	}
 	return nil

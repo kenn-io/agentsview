@@ -2,6 +2,7 @@ package db
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"path/filepath"
 	"strconv"
@@ -559,17 +560,51 @@ func TestFrictionDigestWritesRespectArchiveContent(t *testing.T) {
 	assert.Equal(t, original, *got, "rejected writes leave the stored digest unchanged")
 }
 
+// TestFrictionDayBounds builds each zone from one explicit transition, so the
+// expectations do not change with the host's or Go's tzdata release. tzdata
+// releases rewrite future rules: Cuba falls back on November 1, 2026 in
+// tzdata 2026c but stays on daylight time through that winter in 2026f.
 func TestFrictionDayBounds(t *testing.T) {
-	for _, tt := range []struct{ zone, date, start, end string }{
-		{"America/Santiago", "2026-09-05", "2026-09-05T04:00:00Z", "2026-09-06T04:00:00Z"},
-		{"America/Santiago", "2026-09-06", "2026-09-06T04:00:00Z", "2026-09-07T03:00:00Z"},
-		{"America/Havana", "2026-11-01", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z"},
-		{"Pacific/Apia", "2011-12-30", "2011-12-30T10:00:00Z", "2011-12-30T10:00:00Z"},
+	// zone returns a location at offset from until the instant at, then at offset to.
+	zone := func(t *testing.T, at string, from, to time.Duration) *time.Location {
+		t.Helper()
+		when, err := time.Parse(time.RFC3339, at)
+		require.NoError(t, err)
+		data := append([]byte("TZif"), make([]byte, 16)...) // version 1, reserved
+		// Counts: UT indicators, standard/wall indicators, leap seconds,
+		// transitions, local time types, abbreviation bytes.
+		for _, n := range []uint32{0, 0, 0, 1, 2, 4} {
+			data = binary.BigEndian.AppendUint32(data, n)
+		}
+		data = binary.BigEndian.AppendUint32(data, uint32(int32(when.Unix())))
+		data = append(data, 1) // the transition switches to type 1
+		for _, offset := range []time.Duration{from, to} {
+			data = binary.BigEndian.AppendUint32(data, uint32(int32(offset/time.Second)))
+			data = append(data, 0, 0) // not DST, abbreviation at index 0
+		}
+		data = append(data, "TST\x00"...)
+		loc, err := time.LoadLocationFromTZData("Test", data)
+		require.NoError(t, err)
+		return loc
+	}
+	// Midnight on September 6 is skipped: 24:00 at -04 becomes 01:00 at -03.
+	springForward := zone(t, "2026-09-06T04:00:00Z", -4*time.Hour, -3*time.Hour)
+	// Midnight on November 1 repeats: 01:00 at -04 becomes 00:00 at -05.
+	fallBack := zone(t, "2026-11-01T05:00:00Z", -4*time.Hour, -5*time.Hour)
+	// December 30 never happens: 24:00 on December 29 at -10 becomes
+	// 00:00 on December 31 at +14.
+	dateLineJump := zone(t, "2011-12-30T10:00:00Z", -10*time.Hour, 14*time.Hour)
+	for _, tt := range []struct {
+		name, date, start, end string
+		loc                    *time.Location
+	}{
+		{"next midnight skipped", "2026-09-05", "2026-09-05T04:00:00Z", "2026-09-06T04:00:00Z", springForward},
+		{"own midnight skipped", "2026-09-06", "2026-09-06T04:00:00Z", "2026-09-07T03:00:00Z", springForward},
+		{"own midnight repeated", "2026-11-01", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z", fallBack},
+		{"date skipped", "2011-12-30", "2011-12-30T10:00:00Z", "2011-12-30T10:00:00Z", dateLineJump},
 	} {
-		t.Run(tt.zone+"/"+tt.date, func(t *testing.T) {
-			loc, err := time.LoadLocation(tt.zone)
-			require.NoError(t, err)
-			start, end, err := FrictionDayBounds(tt.date, loc)
+		t.Run(tt.name, func(t *testing.T) {
+			start, end, err := FrictionDayBounds(tt.date, tt.loc)
 			require.NoError(t, err)
 			assert.Equal(t, tt.start, start.UTC().Format(time.RFC3339))
 			assert.Equal(t, tt.end, end.UTC().Format(time.RFC3339))

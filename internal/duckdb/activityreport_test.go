@@ -1160,7 +1160,6 @@ func TestDuckActivityReportSourceUUIDFallbackOrdersTimeBeforeSessionID(t *testin
 	earlier.Agent = "claude"
 	earlierMsg := syncMessage("z-earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
 	earlierMsg.Model = "claude-sonnet-4-20250514"
-	earlierMsg.ClaudeMessageID = "dup-m"
 	earlierMsg.SourceUUID = "dup-source"
 	earlierMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	earlierMsg.OutputTokens = 500
@@ -1169,7 +1168,6 @@ func TestDuckActivityReportSourceUUIDFallbackOrdersTimeBeforeSessionID(t *testin
 	later.Agent = "claude"
 	laterMsg := syncMessage("a-later", 0, "assistant", "x", "2026-06-14T10:30:00.123Z")
 	laterMsg.Model = "claude-sonnet-4-20250514"
-	laterMsg.ClaudeMessageID = "dup-m"
 	laterMsg.SourceUUID = "dup-source"
 	laterMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`)
 	laterMsg.OutputTokens = 9000

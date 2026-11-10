@@ -2739,9 +2739,13 @@ func distributionCount(buckets []db.DistributionBucket, label string) int {
 }
 
 func TestUsageDedupesClaudeKeyVariants(t *testing.T) {
-	for _, tc := range []struct{ name, requestID string }{
-		{"Claude pair", "shared-request"},
-		{"incomplete pair source UUID", ""},
+	for _, tc := range []struct {
+		name, requestID string
+		sharedSource    bool
+	}{
+		{"Claude pair", "shared-request", false},
+		{"message ID and source UUID without request ID", "", true},
+		{"message ID without request ID", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -2758,7 +2762,7 @@ func TestUsageDedupesClaudeKeyVariants(t *testing.T) {
 			second := syncMessage("duck-usage-b", 0, "assistant", "replayed usage", "2026-01-13T00:01:00.000Z")
 			second.ClaudeMessageID = "shared-message"
 			second.ClaudeRequestID = tc.requestID
-			if tc.requestID == "" {
+			if tc.sharedSource {
 				first.SourceUUID = "shared-source"
 				second.SourceUUID = "shared-source"
 			}

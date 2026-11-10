@@ -25,6 +25,15 @@ The latest release is
 
 **Bug fixes**
 
+- Semantic search builds on Kit's built-in local embeddings server no longer
+  fail on every attempt with `embed request failed`. The built-in server runs
+  the model on the CPU, so it now defaults to 8 inputs per request, one request
+  at a time, and a 5-minute request timeout. A request that still times out is
+  retried as two smaller requests, and the error now says the request timed
+  out. Set `batch_size`, `concurrency`, or `timeout` on a `local = true` server
+  to tune it.
+- Prune removes matching parent and child session chains in one pass, even
+  without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.
 - Antigravity app and IDE sessions now show their project and working directory
   instead of all landing in one unlabeled project. AgentsView reads each
@@ -38,6 +47,13 @@ The latest release is
   working directory since the previous archive was written.
 - Usage → Projects labels sessions without a project as "Unassigned project"
   instead of drawing an unnamed slice.
+- Claude sessions recorded through the Claude Agent SDK and other embedding
+  hosts no longer double-count tokens and cost when a tool result splits one
+  model response across several transcript records. These transcripts omit
+  `requestId`, so AgentsView now treats the response's message ID alone as its
+  identity. Web searches spread across such a response are now all billed.
+  After the upgrade, the SQLite usage cache rebuilds once and the next sync
+  reparses Claude, Cowork, Qoder, and iCodeMate sessions in place.
 
 ## 0.47.0
 

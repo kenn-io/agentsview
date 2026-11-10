@@ -2,7 +2,9 @@ package duckdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -45,6 +47,31 @@ type activityReportBackend struct {
 	rangeStartUTC          string
 	rangeEndUTC            string
 	lowerBound, upperBound string
+	kept                   *activityReportKept
+}
+
+// activityReportKept holds the kept entries of the build's sessions, from
+// the memo or its pairing scan, so message counts read no messages.
+type activityReportKept struct {
+	sessions map[string]activityRunsEntry
+	complete bool
+}
+
+func (b activityReportBackend) ActivityReportRunSource(ids []string, q activity.Query) activity.RunSource {
+	return func(ctx context.Context, yield func(activity.Run) error) error {
+		runs, sessions, err := b.activityReportRuns(ctx, ids, q)
+		if err != nil {
+			return err
+		}
+		b.kept.sessions, b.kept.complete = sessions, true
+		// The consumer checks for cancellation before each run.
+		for _, run := range runs {
+			if err := yield(run); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 func (b activityReportBackend) ActivityReportUsage(
@@ -56,10 +83,26 @@ func (b activityReportBackend) ActivityReportUsage(
 	)
 }
 
+// ActivityReportMessageCounts counts the messages the kept entries hold,
+// before the effective end cast to DuckDB's microsecond TIMESTAMP.
 func (b activityReportBackend) ActivityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
-	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
+	if !b.kept.complete {
+		return errors.New("activity message counts requested before pairing finished")
+	}
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	upper := q.EffectiveEnd.UnixMicro()
+	before := func(micros []int64) []int64 {
+		i, _ := slices.BinarySearch(micros, upper)
+		return micros[:i]
+	}
+	for _, id := range ids {
+		session := b.kept.sessions[id]
+		counts.AddSorted(id, "user", before(session.users))
+		counts.AddSorted(id, "assistant", before(session.assistants))
+	}
+	return ctx.Err()
 }
 
 func (s *Store) BuildActivityReportArtifacts(
@@ -100,6 +143,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		Store: s, filter: f,
 		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC,
 		lowerBound: lowerBound, upperBound: upperBound,
+		kept: &activityReportKept{},
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating duckdb activity report")
@@ -109,8 +153,11 @@ func (s *Store) BuildActivityReportArtifacts(
 	return artifacts, err
 }
 
-func (s *Store) activityReportMessageCounts(
-	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+// scanActivityCountedMessages passes add the sessions' counted messages from
+// q's range start to its effective end. Reports count the kept entries; see
+// ActivityReportMessageCounts.
+func (s *Store) scanActivityCountedMessages(
+	ctx context.Context, ids []string, q activity.Query, add func(sessionID, role string, at time.Time),
 ) error {
 	if len(ids) == 0 {
 		return nil
@@ -126,14 +173,13 @@ func (s *Store) activityReportMessageCounts(
 		return fmt.Errorf("querying duckdb activity message counts: %w", err)
 	}
 	defer rows.Close()
-	counts := activity.NewMessageAccumulator(q, artifacts)
 	for rows.Next() {
 		var sessionID, role string
 		var timestamp time.Time
 		if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
 			return fmt.Errorf("scanning duckdb activity message counts: %w", err)
 		}
-		counts.Add(sessionID, role, timestamp)
+		add(sessionID, role, timestamp)
 	}
 	return rows.Err()
 }
@@ -939,7 +985,7 @@ func duckActivityReportUsageQuery(candidateWhere string) string {
 		peer_keys AS (
 			SELECT DISTINCT claude_message_id, claude_request_id
 			FROM candidate_messages
-			WHERE claude_message_id != '' AND claude_request_id != ''
+			WHERE claude_message_id != ''
 		),
 		peer_messages AS (
 			SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,

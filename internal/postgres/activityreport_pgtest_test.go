@@ -611,12 +611,12 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp,
 			content_length, model, token_usage,
-			claude_message_id, source_uuid
+			source_uuid
 		) VALUES (
 			'dup-a', 0, 'assistant', 'x',
 			'2026-06-16T10:00:00Z'::timestamptz, 1,
 			'claude-sonnet-4-20250514',
-			'{"input_tokens":250,"output_tokens":500}', 'M1', 'R1'
+			'{"input_tokens":250,"output_tokens":500}', 'R1'
 		)`)
 	require.NoError(t, err, "insert dup-a message")
 
@@ -637,12 +637,12 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp,
 			content_length, model, token_usage,
-			claude_message_id, source_uuid
+			source_uuid
 		) VALUES (
 			'dup-b', 0, 'assistant', 'x',
 			'2026-06-16T10:05:00Z'::timestamptz, 1,
 			'claude-sonnet-4-20250514',
-			'{"input_tokens":450,"output_tokens":900}', 'M1', 'R1'
+			'{"input_tokens":450,"output_tokens":900}', 'R1'
 		)`)
 	require.NoError(t, err, "insert dup-b message")
 
@@ -666,7 +666,7 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 		}
 	}
 	require.Len(t, shared, 1, "only one dedup-identity row survives")
-	require.NotEmpty(t, shared[0].ClaudeMessageID, "rows carry a message id")
+	require.Equal(t, "R1", shared[0].SourceUUID, "rows carry a source UUID")
 	assert.Equal(t, "dup-a", shared[0].SessionID,
 		"earlier-timestamp row sorts first")
 	assert.Equal(t, 500, shared[0].OutputTokens, "dup-a survives first-seen")

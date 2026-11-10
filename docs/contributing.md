@@ -204,6 +204,18 @@ pull request and not a contributor-side merge gate. Automated findings also
 require judgment: fix legitimate issues and do not make speculative changes
 solely to satisfy an inapplicable finding.
 
+## AI-assisted contributions
+
+AI-assisted work is welcome and meets the same standard as any other.
+
+- End the pull request description with `Model used:` and the model, such as
+  `Model used: Opus 5.5` or `Model used: GPT-6.1 Sol`.
+- Add a `Co-authored-by:` trailer for the tool to each commit it wrote, and to
+  the end of the pull request description. Squash-merge keeps only the
+  description, so a trailer left on a single commit is lost.
+- You are responsible for the change. Be ready to explain any line of it in
+  review.
+
 ## Open a reviewable pull request
 
 Keep the pull request focused enough that a reviewer can understand its purpose
