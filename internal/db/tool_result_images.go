@@ -717,6 +717,9 @@ func retainedInlineFile(raw jsontext.Value, index int, body io.Writer) (Retained
 	return image, ok
 }
 
+// ErrImageTooLarge identifies an image whose retained size exceeds the limit.
+var ErrImageTooLarge = errors.New("image exceeds size limit")
+
 // ReadRetainedImage reads the indexed retained image with a bounded byte limit.
 func ReadRetainedImage(content string, index int, assetsDir string, limit int64) ([]byte, error) {
 	var found jsontext.Value
@@ -753,6 +756,9 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 	}
 	body := buf.Bytes()
 	if p, ok := parseOffloadedImagePlaceholder(found); ok {
+		if p.ByteSize > limit {
+			return nil, fmt.Errorf("retained image %d exceeds %d bytes: %w", index, limit, ErrImageTooLarge)
+		}
 		hash, ext, ok := assetImageDigest(p.ImageRef)
 		if !ok {
 			return nil, errors.New("invalid image reference")
@@ -770,6 +776,8 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 		if body, err = io.ReadAll(io.LimitReader(file, limit+1)); err != nil {
 			return nil, err
 		}
+	} else if int64(len(body)) > limit {
+		return nil, fmt.Errorf("retained image %d exceeds %d bytes: %w", index, limit, ErrImageTooLarge)
 	}
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("retained image %d exceeds %d bytes", index, limit)

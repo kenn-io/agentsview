@@ -67,6 +67,9 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 		}
 		item := items[0]
 		body, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
+		if errors.Is(err, db.ErrImageTooLarge) {
+			return m.DB.SaveImageText(ctx, hash, identity, "", false)
+		}
 		sum := sha256.Sum256(body)
 		if err != nil || hex.EncodeToString(sum[:]) != hash {
 			if err == nil {

@@ -436,3 +436,51 @@ func TestImageTextAcceptsLargeImage(t *testing.T) {
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT text FROM image_text_cache`).Scan(&text))
 	require.Equal(t, "large image", text)
 }
+
+func TestImageTextOversizedImageIsNotRetried(t *testing.T) {
+	for _, mode := range []string{"inline", "offloaded", "corrupt"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := t.Context()
+			d := imageTextTestDB(t)
+			assetsDir := t.TempDir()
+			d.SetAssetsDir(assetsDir)
+			body := make([]byte, glmocr.MaxDocumentBytes+1)
+			copy(body, "\x89PNG\r\n\x1a\n")
+			var content string
+			switch mode {
+			case "inline":
+				content = fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(body))
+			case "offloaded":
+				ref, _, err := assets.Put(assetsDir, "image/png", body)
+				require.NoError(t, err)
+				content = fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(body))
+			case "corrupt":
+				original := []byte("\x89PNG\r\n\x1a\noriginal")
+				ref, _, err := assets.Put(assetsDir, "image/png", original)
+				require.NoError(t, err)
+				require.NoError(t, os.Truncate(filepath.Join(assetsDir, strings.TrimPrefix(ref, "asset://")), int64(len(body))))
+				content = fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(original))
+			}
+			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "large", Project: "demo", Agent: "test"}))
+			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "large", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+			requests := 0
+			client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) { requests++ })
+			manager := Manager{DB: d, Client: client}
+			require.NoError(t, manager.Run(ctx))
+			var succeeded, failures int
+			var retry string
+			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded,failures,retry_at FROM image_text_cache`).Scan(&succeeded, &failures, &retry))
+			if mode == "corrupt" {
+				require.Zero(t, succeeded)
+				require.Equal(t, 1, failures)
+				require.NotEmpty(t, retry)
+				return
+			}
+			require.Equal(t, 1, succeeded)
+			require.Zero(t, failures)
+			require.Empty(t, retry)
+			require.NoError(t, manager.Run(ctx))
+			require.Zero(t, requests)
+		})
+	}
+}
