@@ -236,7 +236,10 @@ test.describe("Scrollbar layout", () => {
   test("keeps Analytics' right-aligned controls in place when results make the pane scroll", async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1600, height: 2400 });
+    // Tall enough that the loading cards (about 2290px of pane) fit without
+    // a scrollbar, and short enough that the loaded charts (about 3790px)
+    // overflow it.
+    await page.setViewportSize({ width: 1600, height: 2600 });
     const release = await holdRequests(page, "**/api/v1/analytics/**");
     await page.goto("/sessions");
 
