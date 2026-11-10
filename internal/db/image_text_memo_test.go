@@ -8,7 +8,7 @@ import (
 )
 
 func TestImageTextMemoEvictsLeastRecentlyUsed(t *testing.T) {
-	memo := imageTextMemo{maxEntries: 2, maxImages: 2, maxBytes: 1024}
+	memo := newImageTextMemo(2, 1024)
 	a := `[{"type":"input_image","image_url":"data:image/png;base64,YQ=="}]`
 	b := `[{"type":"input_image","image_url":"data:image/png;base64,Yg=="}]`
 	c := `[{"type":"input_image","image_url":"data:image/png;base64,Yw=="}]`
@@ -16,17 +16,13 @@ func TestImageTextMemoEvictsLeastRecentlyUsed(t *testing.T) {
 	require.Equal(t, RetainedToolResultImages(b), memo.images(b))
 	require.Equal(t, RetainedToolResultImages(a), memo.images(a))
 	require.Equal(t, RetainedToolResultImages(c), memo.images(c))
-	require.Contains(t, memo.entries, sha256.Sum256([]byte(a)))
-	require.NotContains(t, memo.entries, sha256.Sum256([]byte(b)))
-	require.Contains(t, memo.entries, sha256.Sum256([]byte(c)))
+	require.True(t, memo.items.Has(sha256.Sum256([]byte(a))))
+	require.False(t, memo.items.Has(sha256.Sum256([]byte(b))))
+	require.True(t, memo.items.Has(sha256.Sum256([]byte(c))))
 	require.Empty(t, memo.images(`[{"type":"text","text":"image"}]`))
-	require.Contains(t, memo.entries, sha256.Sum256([]byte(a)))
-	require.Contains(t, memo.entries, sha256.Sum256([]byte(c)))
+	require.Equal(t, 2, memo.items.Len())
 	image := `{"type":"input_image","image_url":"data:image/png;base64,YQ=="}`
-	memo = imageTextMemo{maxEntries: 2, maxImages: 1, maxBytes: 1024}
-	require.Len(t, memo.images("["+image+","+image+"]"), 2)
-	require.Empty(t, memo.entries)
-	memo.maxBytes = 1
+	memo = newImageTextMemo(2, 1)
 	require.Len(t, memo.images("["+image+"]"), 1)
-	require.Empty(t, memo.entries)
+	require.Zero(t, memo.items.Len())
 }

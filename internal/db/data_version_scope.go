@@ -66,14 +66,6 @@ const firstScopedDataVersion = 131
 // reads waiting until a full sync pass has reparsed affected sources.
 const scopedUpgradePendingKey = "scoped_upgrade_pending"
 
-// InstallDataVersionScopesForTest replaces the declared scopes until the
-// returned function restores them.
-func InstallDataVersionScopesForTest(scopes map[int][]parser.AgentType) func() {
-	previous := dataVersionScopes
-	dataVersionScopes = scopes
-	return func() { dataVersionScopes = previous }
-}
-
 // Version 170 protects the image projection from older writers without
 // changing parser output. Tests can override the current parser scope.
 func imageTextProjectionVersion(version int) bool {

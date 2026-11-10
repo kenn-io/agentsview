@@ -1,31 +1,41 @@
 package db
 
 import (
-	"container/list"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
-	"sync"
+	"unsafe"
+
+	"github.com/jellydator/ttlcache/v3"
 )
 
-type imageTextMemoEntry struct {
-	key    [sha256.Size]byte
-	images []RetainedImage
-	bytes  int
-}
+// Refreshes revisit unchanged results. Keep parsed image metadata, never the
+// potentially large source content, and bound both records and their bytes.
+var retainedImageMemo = newImageTextMemo(1024, 1<<20)
 
 type imageTextMemo struct {
-	mu                              sync.Mutex
-	entries                         map[[sha256.Size]byte]*list.Element
-	order                           list.List
-	imageCount, bytes               int
-	maxEntries, maxImages, maxBytes int
+	items    *ttlcache.Cache[[sha256.Size]byte, []RetainedImage]
+	maxBytes uint64
 }
 
-// Refreshes revisit unchanged results. Keep parsed image metadata, never the
-// potentially large source content, and bound both records and string bytes.
-var retainedImageMemo = imageTextMemo{maxEntries: 1024, maxImages: 4096, maxBytes: 1 << 20}
+func newImageTextMemo(maxEntries, maxBytes uint64) imageTextMemo {
+	cost := func(item ttlcache.CostItem[[sha256.Size]byte, []RetainedImage]) uint64 {
+		return retainedImagesCost(item.Value)
+	}
+	return imageTextMemo{items: ttlcache.New(
+		ttlcache.WithCapacity[[sha256.Size]byte, []RetainedImage](maxEntries),
+		ttlcache.WithMaxCost(maxBytes, cost),
+	), maxBytes: maxBytes}
+}
+
+func retainedImagesCost(images []RetainedImage) uint64 {
+	var cost uint64
+	for _, image := range images {
+		cost += uint64(unsafe.Sizeof(image)) + uint64(len(image.MediaType)+len(image.SHA256))
+	}
+	return cost
+}
 
 // imageTextBatchTx defers pruning until every changed session has refreshed
 // its occurrences, so a shared image can move between sessions in one write.
@@ -38,51 +48,15 @@ func (tx *imageTextBatchTx) pruneImageText() error {
 	return pruneImageTextHashes(tx.transactionQueries, tx.oldHashes)
 }
 
-func (m *imageTextMemo) images(content string) []RetainedImage {
+func (m imageTextMemo) images(content string) []RetainedImage {
 	key := sha256.Sum256([]byte(content))
-	m.mu.Lock()
-	if entry := m.entries[key]; entry != nil {
-		m.order.MoveToFront(entry)
-		images := entry.Value.(imageTextMemoEntry).images
-		m.mu.Unlock()
-		return images
+	if item := m.items.Get(key); item != nil {
+		return item.Value()
 	}
-	m.mu.Unlock()
-
 	images := RetainedToolResultImages(content)
-	if len(images) == 0 || len(images) > m.maxImages {
-		return images
+	if len(images) > 0 && retainedImagesCost(images) <= m.maxBytes {
+		m.items.Set(key, images, ttlcache.NoTTL)
 	}
-	bytes := 0
-	for _, image := range images {
-		bytes += len(image.MediaType) + len(image.SHA256)
-	}
-	if bytes > m.maxBytes {
-		return images
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if entry := m.entries[key]; entry != nil {
-		m.order.MoveToFront(entry)
-		return entry.Value.(imageTextMemoEntry).images
-	}
-	if m.entries == nil {
-		m.entries = make(map[[sha256.Size]byte]*list.Element)
-	}
-	for m.order.Len() >= m.maxEntries || m.imageCount+len(images) > m.maxImages || m.bytes+bytes > m.maxBytes {
-		last := m.order.Back()
-		if last == nil {
-			return images
-		}
-		old := last.Value.(imageTextMemoEntry)
-		delete(m.entries, old.key)
-		m.order.Remove(last)
-		m.imageCount -= len(old.images)
-		m.bytes -= old.bytes
-	}
-	m.entries[key] = m.order.PushFront(imageTextMemoEntry{key: key, images: images, bytes: bytes})
-	m.imageCount += len(images)
-	m.bytes += bytes
 	return images
 }
 

@@ -57,9 +57,8 @@ func TestCodexOrdinaryForkLinkSurvivesSyncAndUpgrade(t *testing.T) {
 	assertForkLink(t, database)
 
 	// Model an archive that imported the fork without its parent before data
-	// version 148, as the current scoped upgrade.
-	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{db.CurrentDataVersion(): db.ScopedDataVersionProviders(147, 148)}))
-	previousVersion := db.CurrentDataVersion() - 1
+	// version 148.
+	const previousVersion = 147
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions
 			SET parent_session_id = NULL, parser_parent_session_id = NULL, relationship_type = ''
