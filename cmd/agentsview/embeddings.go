@@ -429,16 +429,8 @@ func runEmbeddingsBuild(
 	case opts.IncludeAutomatedSet:
 		flag = "include-automated"
 	}
-	if !needsSetup && flag != "" && IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		client, err := resolveEmbeddingsDaemonClient(cfg)
-		if err != nil {
-			return err
-		}
-		// An unavailable status must not prevent an ordinary build attempt.
-		status, err := client.status(ctx)
-		if err == nil && status.Setup != nil && status.Setup.Action == "turn-on" {
-			needsSetup = true
-		}
+	if !needsSetup && flag != "" {
+		_, needsSetup = daemonSetupClient(ctx, cfg)
 	}
 	if needsSetup {
 		if flag != "" {
@@ -499,20 +491,13 @@ func runEmbeddingsBuild(
 		Using:            opts.Using,
 	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		client, err := resolveEmbeddingsDaemonClient(cfg)
-		if err != nil {
-			return err
-		}
-		client.store = daemonEmbeddingStore(req.Store)
-		err = client.startBuild(ctx, req)
-		apiErr, ok := errors.AsType[*daemonAPIError](err)
-		if flag == "" && ok && apiErr.status == http.StatusNotImplemented {
-			status, statusErr := client.status(ctx)
-			if statusErr == nil && status.Setup != nil && status.Setup.Action == "turn-on" {
+		err := runEmbeddingsBuildDaemon(ctx, out, cfg, req)
+		if apiErr, ok := errors.AsType[*daemonAPIError](err); ok && apiErr.status == http.StatusNotImplemented && flag == "" {
+			if client, pending := daemonSetupClient(ctx, cfg); pending {
 				return setupEmbeddingsBuild(ctx, out, confirmation, cfg, client)
 			}
 		}
-		return finishDaemonBuild(ctx, out, client, err)
+		return err
 	}
 	return runEmbeddingsBuildDirect(ctx, out, cfg, req)
 }
@@ -716,17 +701,26 @@ func runDirectBuild(
 	}
 }
 
+// runEmbeddingsBuildDaemon resolves the local daemon and runs the build
+// through its HTTP API.
+func runEmbeddingsBuildDaemon(
+	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
+) error {
+	client, err := resolveEmbeddingsDaemonClient(cfg)
+	if err != nil {
+		return err
+	}
+	client.store = daemonEmbeddingStore(req.Store)
+	return buildViaDaemon(ctx, out, client, req)
+}
+
 // buildViaDaemon starts a build via POST /build, printing a status line
 // instead of failing when one is already running (409), then polls
 // /status until the build stops running.
 func buildViaDaemon(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient, req vector.BuildRequest,
 ) error {
-	return finishDaemonBuild(ctx, out, client, client.startBuild(ctx, req))
-}
-
-func finishDaemonBuild(ctx context.Context, out io.Writer, client embeddingsDaemonClient, err error) error {
-	if err != nil {
+	if err := client.startBuild(ctx, req); err != nil {
 		apiErr, hasApiErr := errors.AsType[*daemonAPIError](err)
 		if hasApiErr && apiErr.status == http.StatusConflict {
 			fmt.Fprintln(out, "a build is already running (daemon)")

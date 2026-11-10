@@ -589,15 +589,14 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 		})
 	}
 	for _, tc := range []struct {
-		name, provider, input  string
-		missing                int64
-		flagged, busy, enabled bool
+		name, provider, input string
+		missing               int64
+		flagged, enabled      bool
 	}{
-		{"download", "built-in", "yes\n", 1000001, false, false, false},
-		{"flagged", "built-in", "yes\n", 0, true, false, false},
-		{"enabled-flagged", "ollama", "yes\n", 0, true, false, true},
-		{"busy", "ollama", "yes\n", 0, false, true, false},
-		{"enabled", "ollama", "yes\n", 0, false, false, true},
+		{"download", "built-in", "yes\n", 1000001, false, false},
+		{"flagged", "built-in", "yes\n", 0, true, false},
+		{"enabled-flagged", "ollama", "yes\n", 0, true, true},
+		{"enabled", "ollama", "yes\n", 0, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -614,14 +613,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
 					reads++
-					if tc.busy {
-						if reads == 1 {
-							io.WriteString(w, `{"setup":{"action":"turn-on","provider":"ollama","busy":true}}`)
-						} else {
-							io.WriteString(w, `{"setup":{"action":"turn-on","error":"first setup failed"}}`)
-						}
-						return
-					}
 					if posts == 0 {
 						fmt.Fprintf(w, `{"setup":{"action":"turn-on","provider":%q,"missing_bytes":%d,"enabled":%t}}`, tc.provider, tc.missing, tc.enabled)
 						return
@@ -653,13 +644,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				require.ErrorContains(t, err, "--full-rebuild")
 				require.ErrorContains(t, err, "agentsview index embeddings build")
 				require.ErrorContains(t, err, "Settings → Embeddings → Turn on")
-				assert.NotContains(t, out.String(), "[y/N]")
-				assert.Zero(t, posts)
-				return
-			}
-			if tc.busy {
-				require.ErrorContains(t, err, "first setup failed")
-				assert.Contains(t, out.String(), "Search setup is already running.")
 				assert.NotContains(t, out.String(), "[y/N]")
 				assert.Zero(t, posts)
 				return

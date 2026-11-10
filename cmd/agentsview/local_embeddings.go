@@ -60,7 +60,7 @@ func prepareLocalEmbeddings(ctx context.Context, cfg config.Config, name string,
 	}
 	setupPending := false
 	_, err = resolveLocalEmbeddings(ctx, server, func(ctx context.Context, size int64) (bool, error) {
-		setupPending = daemonSetupPending(ctx, cfg)
+		_, setupPending = daemonSetupClient(ctx, cfg)
 		return !setupPending && confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", downloadMegabytes(size))), nil
 	}, nil)
 	if setupPending {
@@ -69,18 +69,18 @@ func prepareLocalEmbeddings(ctx context.Context, cfg config.Config, name string,
 	return err
 }
 
-// daemonSetupPending reports whether the local daemon asks to turn search on.
-// An unavailable daemon or status counts as no pending setup.
-func daemonSetupPending(ctx context.Context, cfg config.Config) bool {
+// daemonSetupClient returns the local daemon's client and whether it asks to
+// turn search on. An unavailable daemon or status counts as no pending setup.
+func daemonSetupClient(ctx context.Context, cfg config.Config) (embeddingsDaemonClient, bool) {
 	if !IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		return false
+		return embeddingsDaemonClient{}, false
 	}
 	client, err := resolveEmbeddingsDaemonClient(cfg)
 	if err != nil {
-		return false
+		return client, false
 	}
 	status, err := client.status(ctx)
-	return err == nil && status.Setup != nil && status.Setup.Action == "turn-on"
+	return client, err == nil && status.Setup != nil && status.Setup.Action == "turn-on"
 }
 
 func downloadMegabytes(size int64) int64 { return (size + 999999) / 1000000 }
