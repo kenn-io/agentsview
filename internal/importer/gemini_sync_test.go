@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -105,7 +106,7 @@ func TestGeminiRPCPayload(t *testing.T) {
 		{name: "captured empty list", body: geminiFixture(t, "list-pinned.txt"), rpc: geminiListRPC, want: `[]`},
 		{name: "captured detail", body: geminiFixture(t, "detail-full.txt"), rpc: geminiDetailRPC, want: `[[[["c_`},
 		{name: "other RPC", body: geminiFixture(t, "list1.txt"), rpc: geminiDetailRPC, wantErr: errGeminiFormat.Error()},
-		{name: "refused call", body: []byte(")]}'\n\n40\n" + `[["wrb.fr","MaZiqc",null,null,null,[3],"generic"]]`), rpc: geminiListRPC, wantErr: "the MaZiqc request was rejected by Gemini"},
+		{name: "refused call", body: []byte(")]}'\n\n40\n" + `[["wrb.fr","MaZiqc",null,null,null,[3],"generic"]]`), rpc: geminiListRPC, wantErr: "Gemini rejected the request"},
 		{name: "HTML page", body: []byte("<html>Sign in</html>"), rpc: geminiListRPC, wantErr: errGeminiFormat.Error()},
 		{name: "invalid payload", body: []byte(")]}'\n" + `[["wrb.fr","MaZiqc","[1,",null]]`), rpc: geminiListRPC, wantErr: errGeminiFormat.Error()},
 	}
@@ -298,7 +299,7 @@ func TestSyncGeminiStops(t *testing.T) {
 				t.Helper()
 				return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{}})
 			},
-		}, wantText: "repeated its page cursor"},
+		}, wantText: "Gemini could not load more chats"},
 		{name: "unrecognized turns", pages: map[string]func(*testing.T) []byte{
 			detail: func(t *testing.T) []byte {
 				t.Helper()
@@ -328,6 +329,55 @@ func TestSyncGeminiStops(t *testing.T) {
 				assert.Contains(t, err.Error(), tc.wantText)
 			}
 			assert.Zero(t, stats.Imported)
+		})
+	}
+}
+
+// TestFetchGeminiConversationNamesChatByTitle checks that paging errors name
+// the chat the way the user sees it, falling back to its ID without a title.
+func TestFetchGeminiConversationNamesChatByTitle(t *testing.T) {
+	detailPage := func(cursor string) []byte {
+		return geminiRPCBody(t, geminiDetailRPC, []any{[]any{}, cursor, nil, []any{}})
+	}
+	tests := []struct {
+		name    string
+		title   string
+		pages   func(path string) []byte
+		wantErr string
+	}{
+		{
+			name:  "repeated cursor",
+			title: "Trip plan",
+			pages: func(string) []byte { return detailPage("same") },
+			// The second request repeats the cursor the first returned.
+			wantErr: `Gemini could not load more of "Trip plan"`,
+		},
+		{
+			name:    "untitled repeated cursor",
+			title:   " ",
+			pages:   func(string) []byte { return detailPage("same") },
+			wantErr: `Gemini could not load more of "` + geminiTestChat + `"`,
+		},
+		{
+			name:  "page limit",
+			title: "Trip plan",
+			pages: func() func(string) []byte {
+				n := 0
+				return func(string) []byte {
+					n++
+					return detailPage("next" + strconv.Itoa(n))
+				}
+			}(),
+			wantErr: `Gemini chat "Trip plan" exceeds the sync limit`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fetch := func(_ context.Context, path string) (ClaudeAIResponse, error) {
+				return ClaudeAIResponse{Status: 200, Body: tc.pages(path)}, nil
+			}
+			_, err := fetchGeminiConversation(t.Context(), fetch, geminiChat{id: geminiTestChat, title: tc.title})
+			require.EqualError(t, err, tc.wantErr)
 		})
 	}
 }

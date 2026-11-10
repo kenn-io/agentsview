@@ -157,12 +157,21 @@ func TestParseGeminiAppsWebConversationEdges(t *testing.T) {
 			},
 			wantErr: ErrGeminiAppsWebFormat,
 		},
+		{
+			name: "turn page that is not an array",
+			data: func(t *testing.T) []byte {
+				t.Helper()
+				return []byte(`{"id":"c_1","turns":[{"prompt":"x"}]}`)
+			},
+			wantErr: ErrGeminiAppsWebFormat,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := ParseGeminiAppsWebConversation(tc.data(t))
 			if tc.wantErr != nil {
-				require.ErrorIs(t, err, tc.wantErr)
+				// Format errors carry no detail past the sentinel's text.
+				require.EqualError(t, err, tc.wantErr.Error())
 				return
 			}
 			require.NoError(t, err)

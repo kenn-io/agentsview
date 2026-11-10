@@ -79,7 +79,7 @@ func geminiRPCPayload(body []byte, rpc string) (jsontext.Value, error) {
 			}
 			if json.Unmarshal(fields[2], &payload) != nil || payload == "" {
 				// A null payload is Gemini refusing the call.
-				return nil, fmt.Errorf("the %s request was rejected by Gemini", rpc)
+				return nil, errors.New("Gemini rejected the request")
 			}
 			value := jsontext.Value(payload)
 			if !value.IsValid() {
@@ -114,6 +114,15 @@ type geminiChat struct {
 	id, title string
 	updated   jsontext.Value
 	updatedAt time.Time
+}
+
+// label names the chat in errors by the title the user sees, or by its ID
+// when the chat has no title.
+func (c geminiChat) label() string {
+	if strings.TrimSpace(c.title) != "" {
+		return c.title
+	}
+	return c.id
 }
 
 // Positions inside one Gemini Apps list entry.
@@ -156,7 +165,7 @@ func SyncGemini(ctx context.Context, store BrowserSyncStore, fetch func(context.
 	cursor := ""
 	for page := 0; ; page++ {
 		if page == geminiPageLimit {
-			return stats, errors.New("the Gemini chat list exceeded the page limit")
+			return stats, errors.New("Gemini has more chats than Sync can load")
 		}
 		raw, err := fetchBrowser(ctx, fetch, chromehost.Gemini, geminiRequest(geminiListRequest, "", cursor))
 		if err != nil {
@@ -219,7 +228,7 @@ func SyncGemini(ctx context.Context, store BrowserSyncStore, fetch func(context.
 			break
 		}
 		if next == cursor {
-			return stats, errors.New("the Gemini chat list repeated its page cursor")
+			return stats, errors.New("Gemini could not load more chats")
 		}
 		cursor = next
 	}
@@ -234,7 +243,7 @@ func fetchGeminiConversation(ctx context.Context, fetch func(context.Context, st
 	size, cursor := 0, ""
 	for page := 0; ; page++ {
 		if page == geminiPageLimit {
-			return nil, fmt.Errorf("the Gemini conversation %s exceeded the page limit", chat.id)
+			return nil, fmt.Errorf("Gemini chat %q exceeds the sync limit", chat.label())
 		}
 		if err := waitBrowserGap(ctx, geminiDetailGap); err != nil {
 			return nil, err
@@ -259,7 +268,7 @@ func fetchGeminiConversation(ctx context.Context, fetch func(context.Context, st
 			break
 		}
 		if next == cursor {
-			return nil, fmt.Errorf("the Gemini conversation %s repeated its page cursor", chat.id)
+			return nil, fmt.Errorf("Gemini could not load more of %q", chat.label())
 		}
 		cursor = next
 	}
