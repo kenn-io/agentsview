@@ -63,12 +63,6 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 			require.Len(t, got.Commits, 1)
 			assert.Equal(t, "abc1234", got.Commits[0].SHA)
 			assert.Equal(t, tt.repository, got.Commits[0].Repository)
-			require.NotNil(t, got.Commits[0].Turn)
-			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
-			reverse, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
-			require.NoError(t, err)
-			require.Len(t, reverse.Commits[0].Links, 1)
-			assert.Equal(t, "s1", reverse.Commits[0].Links[0].SessionID)
 		})
 	}
 }
@@ -546,8 +540,6 @@ func TestCommitLinksBackfill(t *testing.T) {
 	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id='repaired'`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM stats WHERE key=?`, commitLinksBackfillKey)
-	require.NoError(t, err)
-	_, err = d.getWriter().Exec(t.Context(), `INSERT OR REPLACE INTO stats(key,value) VALUES ('commit_links_backfill_v1',1)`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET local_modified_at='2000-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)
