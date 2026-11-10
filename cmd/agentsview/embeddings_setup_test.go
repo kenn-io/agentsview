@@ -683,6 +683,58 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 	}
 }
 
+func TestCLIEmbeddingsEnabledSetupUsesOneConfirmation(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"), 0o600))
+	oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
+	var installed bool
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		if !installed {
+			return "", embedlocal.ErrNotFound
+		}
+		return "http://127.0.0.1:1/v1", nil
+	}
+	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		approved, err := opts.Confirm(ctx, 1000001)
+		if err != nil || !approved {
+			return embedlocal.Installation{}, errors.New("download declined")
+		}
+		installed = true
+		return embedlocal.Installation{}, nil
+	}
+	var setupPosts int
+	startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotImplemented)
+		},
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if setupPosts == 0 {
+				io.WriteString(w, `{"setup":{"action":"turn-on","provider":"built-in","missing_bytes":1000001}}`)
+			} else {
+				io.WriteString(w, `{"setup":{"enabled":true},"last_result":{}}`)
+			}
+		},
+		"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
+			setupPosts++
+			var body struct {
+				ApprovedBytes int64 `json:"approved_bytes"`
+			}
+			assert.NoError(t, json.UnmarshalRead(r.Body, &body))
+			assert.EqualValues(t, 1000001, body.ApprovedBytes)
+			w.WriteHeader(http.StatusAccepted)
+		},
+	})
+	var out strings.Builder
+	err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, setupPosts)
+	assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"), out.String())
+	assert.NotContains(t, out.String(), "Download approximately")
+}
+
 func TestCLIEmbeddingsBuildStartsBeforeStatus(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
