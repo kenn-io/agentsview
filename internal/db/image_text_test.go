@@ -374,6 +374,15 @@ func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 	page, err = d.Search(ctx, SearchFilter{Query: `"absent" OR content:invoice`})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
+	for _, query := range []string{`"invoice" OR content:absent`, `"invoice" OR content:"absent phrase"`, `"invoice" OR content:(absent OR missing)`, `"invoice" NOT content:invoice`} {
+		page, err = d.Search(ctx, SearchFilter{Query: query})
+		require.NoError(t, err, query)
+		require.Len(t, page.Results, 1, query)
+		require.Equal(t, "image", page.Results[0].SessionID)
+	}
+	page, err = d.Search(ctx, SearchFilter{Query: `"invoice" AND content:absent`})
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
 }
 
 func TestImageTextSearchContent(t *testing.T) {
