@@ -32,6 +32,13 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 	}{
 		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
 		{"shell escaped double quote", `{"command":["bash","-lc","git -C \"/work/a\\\"b\" commit"]}`, `/work/a"b`},
+		{"shell trailing double quote", `{"command":["bash","-lc","git -C \"/work/a\\\"\" commit"]}`, `/work/a"`},
+		{"shell separate login option", `{"command":["bash","-l","-c","git commit"]}`, "/work"},
+		{"timeout", `{"command":["timeout","30","git","commit"]}`, "/work"},
+		{"env directory", `{"command":["env","-C","/repo","git","commit"]}`, "/repo"},
+		{"env attached directory", `{"command":["env","-C/repo","git","commit"]}`, "/repo"},
+		{"env long directory", `{"command":["/usr/bin/env","--chdir","/repo","git","commit"]}`, "/repo"},
+		{"env equals directory", `{"command":["env","--chdir=/repo","git","commit"]}`, "/repo"},
 		{"shell cd apostrophe", `{"command":["bash","-lc","cd '/work/a'\\''b' && git commit -m fix"]}`, "/work/a'b"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
 		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},
@@ -66,30 +73,10 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 	}
 }
 
-func TestCommitLinksArgvEnvChangeDirectory(t *testing.T) {
-	for _, input := range []string{
-		`{"command":["env","-C","/repo","git","commit"]}`,
-		`{"command":["env","-C/repo","git","commit"]}`,
-		`{"command":["/usr/bin/env","-C","/repo","git","commit"]}`,
-		`{"command":["env","--chdir","/repo","git","commit"]}`,
-		`{"command":["env","--chdir=/repo","git","commit"]}`,
-	} {
-		t.Run(input, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
-			insertMessages(t, d, commitMessages("s1", input, "[main abc1234] Fix parser")...)
-			got, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			assert.Empty(t, got.Commits)
-		})
-	}
-}
-
 func TestCommitLinksArgvNonCommitOutput(t *testing.T) {
 	for _, tt := range []struct{ input, output string }{
 		{`{"command":["printf","git commit"]}`, "git commit"},
 		{`{"command":["printf","%s %s\n[main abc1234] Fix parser\n","git","commit"]}`, "git commit\n[main abc1234] Fix parser\n"},
-		{`{"command":["timeout","30","git","commit"]}`, "[main abc1234] Fix parser"},
 		{`{"command":["git","status"]}`, "On branch main\nnothing to commit, working tree clean"},
 	} {
 		t.Run(tt.input, func(t *testing.T) {

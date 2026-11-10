@@ -93,8 +93,8 @@ func commitRepository(input, cwd string) string {
 			if words, err := shlex.Split(dir); err == nil && len(words) == 1 {
 				dir = words[0]
 			}
-		} else {
-			dir = strings.Trim(dir, `"`)
+		} else if len(dir) >= 2 && strings.HasPrefix(dir, `"`) && strings.HasSuffix(dir, `"`) {
+			dir = dir[1 : len(dir)-1]
 		}
 		if path.IsAbs(dir) || (!literalTilde && strings.HasPrefix(dir, "~")) || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
@@ -177,12 +177,26 @@ func commitArgv(input string) (string, bool, bool) {
 	}
 	args := payload.Command
 	basename := func(name string) string { return path.Base(strings.ReplaceAll(name, `\`, "/")) }
+	if len(args) >= 3 && basename(args[0]) == "timeout" {
+		args = args[2:]
+	}
+	dir := ""
 	if len(args) > 0 && basename(args[0]) == "env" {
 		i := 1
 		for i < len(args) {
 			arg := args[i]
-			if strings.HasPrefix(arg, "-C") || arg == "--chdir" || strings.HasPrefix(arg, "--chdir=") {
-				return "", true, false
+			if arg == "-C" || arg == "--chdir" {
+				if i+1 >= len(args) {
+					return "", true, false
+				}
+				dir = args[i+1]
+				i += 2
+				continue
+			}
+			if strings.HasPrefix(arg, "-C") || strings.HasPrefix(arg, "--chdir=") {
+				dir = strings.TrimPrefix(strings.TrimPrefix(arg, "--chdir="), "-C")
+				i++
+				continue
 			}
 			if arg == "--" {
 				i++
@@ -214,8 +228,15 @@ func commitArgv(input string) (string, bool, bool) {
 		return "", true, false
 	}
 	program := basename(args[0])
+	prefix := ""
+	if dir != "" {
+		prefix = "cd " + shellquote.POSIXLiteral(dir) + " && "
+	}
+	if len(args) >= 4 && args[1] == "-l" && args[2] == "-c" {
+		args = append(args[:1], args[2:]...)
+	}
 	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
-		return args[2], true, false
+		return prefix + args[2], true, false
 	}
 	if program != "git" && !strings.EqualFold(program, "git.exe") {
 		return "", true, false
@@ -228,7 +249,7 @@ func commitArgv(input string) (string, bool, bool) {
 			args[i] = shellquote.POSIX(arg)
 		}
 	}
-	return strings.Join(args, " "), true, true
+	return prefix + strings.Join(args, " "), true, true
 }
 
 func commitCommandText(input string) string {

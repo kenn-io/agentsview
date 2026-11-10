@@ -1530,9 +1530,10 @@ fixtures retain this field; missing identities remain source-local.
   case checks that a new native commit execution owns its repository and
   prompt after a batch poll.
   An archived `shell` call records `command` as an array. Scripts passed to
-  `sh`, `bash`, or `zsh` with `-c` or `-lc` are read as-is; direct Git
-  arguments are quoted word by word. Leading `env` assignments are supported.
-  Directory-changing `env` options and unrelated executables are not classified.
+  `sh`, `bash`, or `zsh` with `-c`, `-lc`, or `-l -c` are read as-is;
+  direct Git arguments are quoted word by word. Leading `env` assignments,
+  directory options, and a `timeout` wrapper are supported. Unrelated
+  executables are not classified.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)
