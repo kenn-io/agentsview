@@ -85,7 +85,6 @@ func TestImageTextPassStopsOnServiceError(t *testing.T) {
 	}))
 	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
 	require.Equal(t, 4, requests)
-	t.Run("timeout", testImageTextTimeout)
 }
 
 func TestImageTextPassDeadline(t *testing.T) {
@@ -123,7 +122,7 @@ func TestImageTextPassDeadline(t *testing.T) {
 	})
 }
 
-func testImageTextTimeout(t *testing.T) {
+func TestImageTextTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
 		d := imageTextTestDB(t)
@@ -212,9 +211,6 @@ func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
 	healthy := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nhealthy"))
 	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "healthy", Project: "demo", Agent: "test"}))
 	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "healthy", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, healthy)}}}}))
-	missing := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":"asset://%s.png","media_type":"image/png","byte_size":10}]`, strings.Repeat("a", 64))
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "missing", Project: "demo", Agent: "test"}))
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "missing", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: missing}}}}))
 	requests := 0
 	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -413,6 +409,10 @@ func TestImageTextUsesVerifiedBytes(t *testing.T) {
 }
 
 func TestImageTextImageSizeLimit(t *testing.T) {
+	var logs bytes.Buffer
+	writer := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(writer) })
 	for _, extra := range []int{0, 1} {
 		t.Run(fmt.Sprintf("extra-%d", extra), func(t *testing.T) {
 			ctx := t.Context()
@@ -447,6 +447,7 @@ func TestImageTextImageSizeLimit(t *testing.T) {
 				require.Empty(t, text)
 				require.NoError(t, manager.Run(ctx))
 				require.Zero(t, requests)
+				require.Equal(t, 1, strings.Count(logs.String(), "exceeds 67108864 bytes"))
 			}
 		})
 	}

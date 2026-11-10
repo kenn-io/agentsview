@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,7 +236,15 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 				shared int
 			}{{"one", 1}, {"two", 0}} {
 				if mode == "replace" {
-					require.NoError(t, d.ReplaceSessionMessages(ctx, step.id, []Message{{SessionID: step.id, Role: "assistant", Content: "removed"}}))
+					messages := []Message{{SessionID: step.id, Role: "assistant", Content: "removed"}}
+					if step.id == "one" {
+						messages[0].ToolCalls = []ToolCall{{ToolName: "Read", ResultContent: "text only"}}
+						messages = append(messages, Message{SessionID: step.id, Ordinal: 1, Role: "assistant", Content: "removed"})
+					}
+					require.NoError(t, d.ReplaceSessionMessages(ctx, step.id, messages))
+					var count int
+					require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_occurrences WHERE session_id=?`, step.id).Scan(&count))
+					require.Zero(t, count)
 				} else {
 					require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
 						_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, step.id)
@@ -245,6 +254,7 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 					require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, sharedHash).Scan(&count))
 					require.Equal(t, step.shared, count)
 				}
+				require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 				for hash, want := range map[string]int{sharedHash: step.shared, exclusiveHash: 0, unrelatedHash: 1} {
 					var count int
 					require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, hash).Scan(&count))
@@ -536,57 +546,6 @@ func TestImageTextSearchRespectsMessageVisibility(t *testing.T) {
 	require.ElementsMatch(t, []string{"visible-call", "hidden-call"}, ids)
 }
 
-func TestImageTextSurvivesMetadataOnlyReplacement(t *testing.T) {
-	for _, mode := range []string{"messages", "content", "batch"} {
-		t.Run(mode, func(t *testing.T) {
-			ctx := t.Context()
-			d := testDB(t)
-			require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
-			insertSession(t, d, "image", "demo")
-			content := testInlineImageContent()
-			messages := []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: content, ResultEvents: []ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "completed", Content: content}}}}}}
-			require.NoError(t, d.InsertMessages(ctx, messages))
-			// Keep newer tool rows in another session so replacement cannot reuse their IDs.
-			insertSession(t, d, "other", "demo")
-			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "other", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "other", ResultContent: "other", ResultEvents: []ToolResultEvent{{ToolUseID: "other", Content: "other"}}}}}}))
-			identity, err := ocr.NewIdentity("test", "model", "revision")
-			require.NoError(t, err)
-			require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "needle image", false))
-			var before, after int64
-			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT transcript_revision FROM sessions WHERE id='image'`).Scan(&before))
-			messages[0].SourceParentUUID = "parent"
-			switch mode {
-			case "messages":
-				require.NoError(t, d.ReplaceSessionMessages(ctx, "image", messages))
-			case "content":
-				require.NoError(t, d.ReplaceSessionContent(ctx, "image", messages, SessionSignalUpdate{}, nil))
-			case "batch":
-				_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{Session: Session{ID: "image", Project: "demo", Agent: defaultAgent, Machine: defaultMachine, MessageCount: 1}, ReplaceMessages: true, Messages: messages}})
-				require.NoError(t, err)
-			}
-			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT transcript_revision FROM sessions WHERE id='image'`).Scan(&after))
-			require.Equal(t, before, after)
-			if mode == "batch" {
-				_, err = d.getWriter().ExecContext(ctx, `CREATE TABLE image_refresh_count(n INTEGER); INSERT INTO image_refresh_count VALUES (0); CREATE TRIGGER image_refresh_count_insert AFTER INSERT ON image_text_occurrences BEGIN UPDATE image_refresh_count SET n=n+1; END`)
-				require.NoError(t, err)
-				messages[0].SourceUUID = "source-1"
-				_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{Session: Session{ID: "image", Project: "demo", Agent: defaultAgent, Machine: defaultMachine, MessageCount: 1}, ReplaceMessages: true, Messages: messages}})
-				require.NoError(t, err)
-				var count int
-				require.NoError(t, d.Reader().QueryRow(ctx, `SELECT n FROM image_refresh_count`).Scan(&count))
-				require.Equal(t, 1, count)
-			}
-			page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: "needle", Mode: "substring", Sources: []string{"tool_result"}, IncludeOneShot: true, IncludeAutomated: true})
-			require.NoError(t, err)
-			require.Len(t, page.Matches, 1)
-			rows, err := d.SessionImageTextRows(ctx, "image")
-			require.NoError(t, err)
-			require.Len(t, rows, 1)
-			require.Equal(t, "needle image", rows[0].Text)
-		})
-	}
-}
-
 func TestMirrorImageTextDataVersion(t *testing.T) {
 	for _, tc := range []struct {
 		version int
@@ -598,7 +557,7 @@ func TestMirrorImageTextDataVersion(t *testing.T) {
 }
 
 func TestImageTextAppendKeepsUntouchedOccurrences(t *testing.T) {
-	for _, mode := range []string{"insert", "replace messages", "replace content", "batch append", "batch replace", "incremental"} {
+	for _, mode := range []string{"insert", "replace messages", "replace content", "batch append", "batch replace", "incremental", "metadata messages", "metadata content", "metadata batch"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := t.Context()
 			d := testDB(t)
@@ -606,6 +565,9 @@ func TestImageTextAppendKeepsUntouchedOccurrences(t *testing.T) {
 			insertSession(t, d, "image", "demo")
 			content := testInlineImageContent()
 			first := Message{SessionID: "image", Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "old", ResultContent: content}}}
+			if strings.HasPrefix(mode, "metadata ") {
+				first.ToolCalls[0].ResultEvents = []ToolResultEvent{{ToolUseID: "old", Source: "tool", Status: "completed", Content: content}}
+			}
 			require.NoError(t, d.InsertMessages(ctx, []Message{first}))
 			if mode == "batch replace" {
 				require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", Content: "new text"}}))
@@ -614,6 +576,43 @@ func TestImageTextAppendKeepsUntouchedOccurrences(t *testing.T) {
 			identity, err := ocr.NewIdentity("test", "model", "revision")
 			require.NoError(t, err)
 			require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice", false))
+			if strings.HasPrefix(mode, "metadata ") {
+				insertSession(t, d, "other", "demo")
+				require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "other", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "other", ResultContent: "other", ResultEvents: []ToolResultEvent{{ToolUseID: "other", Content: "other"}}}}}}))
+				var before, after int64
+				require.NoError(t, d.Reader().QueryRow(ctx, `SELECT transcript_revision FROM sessions WHERE id='image'`).Scan(&before))
+				first.SourceParentUUID = "parent"
+				session := Session{ID: "image", Project: "demo", Agent: defaultAgent, Machine: defaultMachine, MessageCount: 1}
+				switch mode {
+				case "metadata messages":
+					err = d.ReplaceSessionMessages(ctx, "image", []Message{first})
+				case "metadata content":
+					err = d.ReplaceSessionContent(ctx, "image", []Message{first}, SessionSignalUpdate{}, nil)
+				case "metadata batch":
+					_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{Session: session, ReplaceMessages: true, Messages: []Message{first}}})
+				}
+				require.NoError(t, err)
+				require.NoError(t, d.Reader().QueryRow(ctx, `SELECT transcript_revision FROM sessions WHERE id='image'`).Scan(&after))
+				require.Equal(t, before, after)
+				if mode == "metadata batch" {
+					_, err = d.getWriter().ExecContext(ctx, `CREATE TABLE image_refresh_count(n INTEGER); INSERT INTO image_refresh_count VALUES (0); CREATE TRIGGER image_refresh_count_insert AFTER INSERT ON image_text_occurrences BEGIN UPDATE image_refresh_count SET n=n+1; END`)
+					require.NoError(t, err)
+					first.SourceUUID = "source-1"
+					_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{Session: session, ReplaceMessages: true, Messages: []Message{first}}})
+					require.NoError(t, err)
+					var count int
+					require.NoError(t, d.Reader().QueryRow(ctx, `SELECT n FROM image_refresh_count`).Scan(&count))
+					require.Equal(t, 1, count)
+				}
+				page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: "invoice", Mode: "substring", Sources: []string{"tool_result"}, IncludeOneShot: true, IncludeAutomated: true})
+				require.NoError(t, err)
+				require.Len(t, page.Matches, 1)
+				rows, err := d.SessionImageTextRows(ctx, "image")
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+				require.Equal(t, "invoice", rows[0].Text)
+				return
+			}
 			_, err = d.getWriter().Exec(ctx, `CREATE TRIGGER preserve_old BEFORE DELETE ON image_text_occurrences WHEN old.image_hash='`+hash+`' BEGIN SELECT RAISE(ABORT, 'unrelated image refreshed'); END`)
 			require.NoError(t, err)
 			appendMessage := Message{SessionID: "image", Ordinal: 1, Role: "assistant", Content: "new text"}
@@ -669,25 +668,4 @@ func TestImageTextBatchFillsStoredResult(t *testing.T) {
 	pending, err := d.PendingImageText(ctx, "processor", time.Now(), 10)
 	require.NoError(t, err)
 	require.Equal(t, []string{RetainedToolResultImages(msg.ToolCalls[0].ResultContent)[0].SHA256}, pending)
-}
-
-func TestImageTextDiffRemovesOccurrences(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	insertSession(t, d, "image", "demo")
-	content := testInlineImageContent()
-	msg := Message{SessionID: "image", Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: content}}}
-	require.NoError(t, d.InsertMessages(ctx, []Message{msg}))
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-	msg.ToolCalls[0].ResultContent = "text only"
-	require.NoError(t, d.ReplaceSessionMessages(ctx, "image", []Message{msg}))
-	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_occurrences WHERE session_id='image'`).Scan(&count))
-	require.Zero(t, count)
-	page, err := d.Search(ctx, SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
 }

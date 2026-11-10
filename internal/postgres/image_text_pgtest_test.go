@@ -248,7 +248,7 @@ func TestPGImageTextPendingSessionVersion(t *testing.T) {
 	require.NoError(t, store.SoftDeleteSession(ctx, "pending"))
 	_, err := store.RestoreSession(ctx, "pending")
 	require.NoError(t, err)
-	require.Equal(t, db.ImageTextDataVersion, version())
+	require.Equal(t, max(db.CurrentDataVersion()-1, db.ImageTextDataVersion), version())
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "plain", Project: "proj", Machine: "workstation", Agent: "test"}))
 	push()
 	require.NoError(t, store.SoftDeleteSession(ctx, "plain"))

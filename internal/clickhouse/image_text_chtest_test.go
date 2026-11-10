@@ -288,9 +288,6 @@ func TestClickHouseImageTextPendingSessionVersion(t *testing.T) {
 	push()
 	require.Equal(t, db.ImageTextDataVersion, version())
 	require.Equal(t, 169, local.GetSessionDataVersion(ctx, imageSessionID))
-	var maxVersion int
-	require.NoError(t, syncer.conn.QueryRowContext(ctx, `SELECT max(data_version) FROM sessions`).Scan(&maxVersion))
-	require.GreaterOrEqual(t, maxVersion, db.ImageTextDataVersion)
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)

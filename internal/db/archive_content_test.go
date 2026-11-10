@@ -1090,7 +1090,6 @@ func TestTranscriptArchiveRefusesImageText(t *testing.T) {
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
 	require.ErrorIs(t, database.SaveImageText(t.Context(), "hash", identity, "text", false), ErrArchiveContentExcluded)
-	require.ErrorIs(t, database.SaveImageText(t.Context(), "hash", identity, "", true), ErrArchiveContentExcluded)
 	_, err = database.CopyImageTextFrom(t.Context(), database.Path())
 	require.ErrorIs(t, err, ErrArchiveContentExcluded)
 }

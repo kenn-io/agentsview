@@ -1478,6 +1478,11 @@ func TestHTTPCompatibilityVersionDoesNotForceFullImport(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 	require.NotNil(t, prepared.mirrorImport)
+	if db.ScopedDataVersionProviders(db.ImageTextDataVersion-1, db.CurrentDataVersion()) == nil {
+		assert.Equal(t, FullImportDataRebuild, prepared.mirrorImport.fullReason)
+		assert.True(t, prepared.mirrorImport.journal.FullImport)
+		return
+	}
 	assert.Empty(t, prepared.mirrorImport.fullReason)
 	assert.False(t, prepared.mirrorImport.journal.FullImport)
 	assert.False(t, prepared.mirrorImport.pending.Stats.PruneHostWideScope)

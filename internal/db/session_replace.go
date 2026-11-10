@@ -46,8 +46,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		return "", fmt.Errorf("beginning session replace: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var imageTextHashes []string
-	ctxTx := contextTransaction{ctx: ctx, tx: tx, imageTextHashes: &imageTextHashes}
+	ctxTx := contextTransaction{ctx: ctx, tx: tx}
 	var pending recallEvidenceRevocationEvents
 
 	var active int
@@ -144,9 +143,6 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	}
 
 	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{id, copyID}); err != nil {
-		return "", err
-	}
-	if err := pruneImageTextHashesTx(tx, imageTextHashes); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {

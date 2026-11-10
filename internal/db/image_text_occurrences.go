@@ -52,11 +52,7 @@ func (db *DB) BackfillImageTextOccurrences(ctx context.Context) error {
 
 // refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
 func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) error {
-	hashes, err := refreshImageTextOccurrencesWhereTx(tx, sessionID, "", "")
-	if err != nil {
-		return err
-	}
-	return pruneImageTextHashesTx(tx, hashes)
+	return refreshImageTextOccurrencesWhereTx(tx, sessionID, "", "")
 }
 
 func refreshMessageDiffImageTextTx(tx transactionQueries, sessionID string, plan messageDiffPlan, useDiff bool) error {
@@ -73,8 +69,7 @@ func refreshMessageDiffImageTextTx(tx transactionQueries, sessionID string, plan
 // refreshIncrementalImageTextOccurrencesTx refreshes only changed tool results.
 func refreshIncrementalImageTextOccurrencesTx(tx transactionQueries, sessionID string, msgs []Message, updated []string) error {
 	// No matching rows: remove occurrences whose source row disappeared.
-	hashes, err := refreshImageTextOccurrencesWhereTx(tx, sessionID, " AND 0", " AND 0")
-	if err != nil {
+	if err := refreshImageTextOccurrencesWhereTx(tx, sessionID, " AND 0", " AND 0"); err != nil {
 		return err
 	}
 	ids := make(map[string]bool)
@@ -96,44 +91,35 @@ func refreshIncrementalImageTextOccurrencesTx(tx transactionQueries, sessionID s
 	}
 	delete(ids, "")
 	for id := range ids {
-		removed, err := refreshImageTextOccurrencesWhereTx(tx, sessionID, ` AND tc.tool_use_id=?`, ` AND e.tool_use_id=?`, id)
-		if err != nil {
+		if err := refreshImageTextOccurrencesWhereTx(tx, sessionID, ` AND tc.tool_use_id=?`, ` AND e.tool_use_id=?`, id); err != nil {
 			return err
 		}
-		hashes = append(hashes, removed...)
 	}
 	for ordinal := range ordinals {
-		removed, err := refreshImageTextOccurrencesWhereTx(tx, sessionID, ` AND tc.message_id IN (SELECT id FROM messages WHERE session_id=tc.session_id AND ordinal=?)`, ` AND e.tool_call_message_ordinal=?`, ordinal)
-		if err != nil {
+		if err := refreshImageTextOccurrencesWhereTx(tx, sessionID, ` AND tc.message_id IN (SELECT id FROM messages WHERE session_id=tc.session_id AND ordinal=?)`, ` AND e.tool_call_message_ordinal=?`, ordinal); err != nil {
 			return err
 		}
-		hashes = append(hashes, removed...)
 	}
-	return pruneImageTextHashesTx(tx, hashes)
+	return nil
 }
 
 // refreshImageTextOccurrencesWhereTx replaces the matching tool results' occurrences and drops those of removed results.
-func refreshImageTextOccurrencesWhereTx(tx transactionQueries, sessionID, callFilter, eventFilter string, args ...any) ([]string, error) {
+func refreshImageTextOccurrencesWhereTx(tx transactionQueries, sessionID, callFilter, eventFilter string, args ...any) error {
 	var enabled int
 	if err := tx.QueryRow(`SELECT count(*) FROM stats WHERE key=? AND value!=0`, imageTextBackfillKey).Scan(&enabled); err != nil {
-		return nil, err
+		return err
 	}
 	if enabled == 0 {
-		return nil, nil
+		return nil
 	}
 	occurrences, err := imageTextOccurrencesQuery(tx, sessionID, callFilter, eventFilter, args)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	deleteArgs := append(append([]any{sessionID, sessionID}, args...), sessionID)
-	rows, err := tx.Query(`DELETE FROM image_text_occurrences WHERE session_id=? AND ((call_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_calls WHERE id=call_id)) OR (event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_result_events WHERE id=event_id))
-		OR call_id IN (SELECT tc.id FROM tool_calls tc WHERE tc.session_id=? `+callFilter+`) OR event_id IN (SELECT e.id FROM tool_result_events e WHERE e.session_id=? `+eventFilter+`)) RETURNING image_hash`, append(deleteArgs, args...)...)
-	if err != nil {
-		return nil, err
-	}
-	hashes, err := scanStrings(rows)
-	if err != nil {
-		return nil, err
+	if _, err := tx.Exec(`DELETE FROM image_text_occurrences WHERE session_id=? AND ((call_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_calls WHERE id=call_id)) OR (event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_result_events WHERE id=event_id))
+		OR call_id IN (SELECT tc.id FROM tool_calls tc WHERE tc.session_id=? `+callFilter+`) OR event_id IN (SELECT e.id FROM tool_result_events e WHERE e.session_id=? `+eventFilter+`))`, append(deleteArgs, args...)...); err != nil {
+		return err
 	}
 	for _, o := range occurrences {
 		var call, event any
@@ -144,19 +130,6 @@ func refreshImageTextOccurrencesWhereTx(tx transactionQueries, sessionID, callFi
 			event = o.EventID
 		}
 		if _, err := tx.Exec(`INSERT INTO image_text_occurrences(session_id,call_id,event_id,image_index,image_hash) VALUES(?,?,?,?,?)`, sessionID, call, event, o.Index, o.Hash); err != nil {
-			return nil, err
-		}
-	}
-	return hashes, nil
-}
-
-func pruneImageTextHashesTx(tx transactionQueries, hashes []string) error {
-	if pending, ok := tx.(contextTransaction); ok && pending.imageTextHashes != nil {
-		*pending.imageTextHashes = append(*pending.imageTextHashes, hashes...)
-		return nil
-	}
-	for _, hash := range hashes {
-		if _, err := tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)`, hash, hash); err != nil {
 			return err
 		}
 	}
