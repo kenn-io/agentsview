@@ -43,6 +43,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"absolute git", `{"command":["/usr/bin/git","commit"]}`, "/work"},
 		{"env clean", `{"command":["env","-i","PATH=/usr/bin","git","commit","-m","fix"]}`, "/work"},
 		{"env clean long", `{"command":["env","--ignore-environment","git","commit"]}`, "/work"},
+		{"env separator", `{"command":["env","--","git","commit","-m","fix"]}`, "/work"},
 		{"equals work tree", `{"command":["git","--work-tree=/path with spaces","commit"]}`, "/work"},
 		{"equals apostrophe", `{"command":["git","--git-dir=/path with o'b","commit"]}`, "/work"},
 		{"config equals", `{"command":["git","-c","user.name=A B","commit"]}`, "/work"},
@@ -52,6 +53,8 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"successive paths", `{"command":["git","-C","root","-C","child repo","commit"]}`, "/work/root/child repo"},
 		{"workdir", `{"command":["git","commit"],"workdir":"/repo"}`, "/repo"},
 		{"argv path", `{"command":["git","-C","/path with spaces","commit","-m","fix"]}`, "/path with spaces"},
+		{"argv literal tilde", `{"command":["git","-C","~project","commit"]}`, "/work/~project"},
+		{"shell quoted tilde", `{"command":"git -C '~project' commit"}`, "/work/~project"},
 		{"string command", `{"command":"git -C '/path with spaces' commit -m fix"}`, "/path with spaces"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -73,7 +76,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 			assert.Equal(t, "s1", reverse.Commits[0].Links[0].SessionID)
 		})
 	}
-	for _, input := range []string{`{"command":[]}`, `{"command":[1]}`, `{"command":["printf","git","commit"]}`, `{"command":["C:\\bin\\printf.exe","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","printf","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
+	for _, input := range []string{`{"command":[]}`, `{"command":[1]}`, `{"command":["printf","git","commit"]}`, `{"command":["C:\\bin\\printf.exe","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","printf","git","commit"]}`, `{"command":["env","--","printf","git","commit"]}`, `{"command":["env","--","git","log","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
 		d := testDB(t)
 		insertSession(t, d, "s1", "project-a")
 		insertMessages(t, d, commitMessages("s1", input, "[main abc1234] Fix parser")...)

@@ -89,12 +89,13 @@ type CommitSessionList struct {
 // commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
 	resolve := func(base, dir string) string {
+		quoted := strings.HasPrefix(dir, "'") || strings.HasPrefix(dir, `"`)
 		if strings.HasPrefix(dir, "'") && strings.HasSuffix(dir, "'") {
 			dir = strings.ReplaceAll(dir[1:len(dir)-1], `'\''`, "'")
 		} else {
 			dir = strings.Trim(dir, "\"'")
 		}
-		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
+		if path.IsAbs(dir) || (!quoted && strings.HasPrefix(dir, "~")) || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
 		}
 		if !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
@@ -176,6 +177,9 @@ func commitCommandText(input string) string {
 				if len(args) > 0 && (args[0] == "-i" || args[0] == "--ignore-environment") {
 					args = args[1:]
 				}
+				if len(args) > 0 && args[0] == "--" {
+					args = args[1:]
+				}
 				for len(args) > 0 {
 					name, _, ok := strings.Cut(args[0], "=")
 					if !ok || !commitEnvNameRE.MatchString(name) {
@@ -198,6 +202,8 @@ func commitCommandText(input string) string {
 			for i, arg := range args {
 				name, value, hasValue := strings.Cut(arg, "=")
 				switch {
+				case strings.HasPrefix(arg, "~"):
+					args[i] = shellquote.POSIXLiteral(arg)
 				case hasValue && (name == "--git-dir" || name == "--work-tree" || name == "--namespace" || name == "--config-env"):
 					args[i] = shellquote.POSIX(name+"=") + shellquote.POSIX(value)
 				default:
