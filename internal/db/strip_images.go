@@ -298,6 +298,9 @@ func (db *DB) rewriteStoredToolResultRows(
 	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 		return false, err
 	}
+	if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {
+		return false, err
+	}
 	if err := reconcileRecallEvidenceForSessionTx(
 		ctx, tx, sessionID, &pendingRecallRevocations,
 	); err != nil {

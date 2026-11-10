@@ -436,9 +436,6 @@ func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string
 			return err
 		}
 	}
-	if update.ReplaceFromOrdinal != nil {
-		return bumpTranscriptRevisionTx(tx, sessionID)
-	}
 	if err := bumpTranscriptRevision(tx, sessionID, true); err != nil {
 		return err
 	}

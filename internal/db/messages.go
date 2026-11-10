@@ -1605,6 +1605,9 @@ func (db *DB) insertMessages(ctx context.Context,
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
+		if err := refreshIncrementalImageTextOccurrencesTx(tx, sessionID, messagesForSession(msgs, sessionID), nil); err != nil {
+			return err
+		}
 	}
 	sessionIDs := messageSessionIDs(rawMessages)
 	for _, sessionID := range sessionIDs {
@@ -2160,10 +2163,9 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
-	} else if !useDiff || len(plan.updates) > 0 {
-		if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {
-			return err
-		}
+	}
+	if err := refreshMessageDiffImageTextTx(tx, sessionID, plan, useDiff); err != nil {
+		return err
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
@@ -2306,7 +2308,7 @@ func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
 	if err := refreshSessionCommitLinksTx(tx, sessionID); err != nil {
 		return err
 	}
-	return refreshImageTextOccurrencesTx(tx, sessionID)
+	return nil
 }
 
 // bumpInsertedTranscriptRevisionTx advances the revision for a session
@@ -2320,7 +2322,7 @@ func bumpInsertedTranscriptRevisionTx(tx transactionQueries, sessionID string) e
 	if err := refreshSessionCommitLinksTx(tx, sessionID); err != nil {
 		return err
 	}
-	return refreshImageTextOccurrencesTx(tx, sessionID)
+	return nil
 }
 
 func bumpTranscriptRevision(
@@ -2620,10 +2622,8 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 			return err
 		}
 	}
-	if !transcriptChanged && (!useDiff || len(plan.updates) > 0) {
-		if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {
-			return err
-		}
+	if err := refreshMessageDiffImageTextTx(tx, sessionID, plan, useDiff); err != nil {
+		return err
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(

@@ -55,8 +55,29 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 	return refreshImageTextOccurrencesWhereTx(tx, sessionID, "", "")
 }
 
+func refreshMessageDiffImageTextTx(tx transactionQueries, sessionID string, plan messageDiffPlan, useDiff bool) error {
+	if !useDiff {
+		return refreshImageTextOccurrencesTx(tx, sessionID)
+	}
+	msgs := append([]Message(nil), plan.inserts...)
+	for _, update := range plan.updates {
+		msgs = append(msgs, update.msg)
+	}
+	return refreshIncrementalImageTextOccurrencesTx(tx, sessionID, msgs, nil)
+}
+
 // refreshIncrementalImageTextOccurrencesTx refreshes only changed tool results.
 func refreshIncrementalImageTextOccurrencesTx(tx transactionQueries, sessionID string, msgs []Message, updated []string) error {
+	var enabled int
+	if err := tx.QueryRow(`SELECT count(*) FROM stats WHERE key=? AND value!=0`, imageTextBackfillKey).Scan(&enabled); err != nil {
+		return err
+	}
+	if enabled == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`DELETE FROM image_text_occurrences WHERE session_id=? AND ((call_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_calls WHERE id=call_id)) OR (event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_result_events WHERE id=event_id)))`, sessionID); err != nil {
+		return err
+	}
 	ids := make(map[string]bool)
 	ordinals := make(map[int]bool)
 	for _, msg := range msgs {
