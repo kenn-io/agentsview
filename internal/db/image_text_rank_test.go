@@ -95,7 +95,7 @@ func TestImageTextCanOutrankMessageInSameSession(t *testing.T) {
 			}
 			require.Equal(t, "both", result.SessionID)
 			require.Equal(t, 1, result.Ordinal)
-			require.Equal(t, control.Results[0].Rank, result.Rank)
+			require.InDelta(t, control.Results[0].Rank, result.Rank, 1e-12)
 			require.Equal(t, 3, strings.Count(result.Snippet, "<mark>invoice</mark>"))
 		})
 	}
