@@ -2146,6 +2146,82 @@ func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 	assert.Equal(t, 2, pgTableCount(t, ctx, pg, "cursor_usage_events"))
 }
 
+// An incremental push sends only the Cursor rows added since the last one;
+// a full push sends them all again.
+func TestPushSendsOnlyNewCursorUsageEvents(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_cursor_usage_high_water_pg_test"
+	pg, err := Open(t.Context(), pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := t.Context()
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(ctx, filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err, "open local db")
+	dbtest.SeedPricingMeta(t, localDB)
+	defer localDB.Close()
+	event := func(dedupKey string) []db.CursorUsageEvent {
+		return []db.CursorUsageEvent{{
+			OccurredAt: "2026-05-14T10:05:00Z", Model: "claude-4.6-opus-high-thinking",
+			Kind: "USAGE_EVENT_KIND_USAGE_BASED", InputTokens: 1234, OutputTokens: 567,
+			Charged: money.MustParseDollars("0.1566"), DedupKey: dedupKey,
+		}}
+	}
+	pgDedupKeys := func() []string {
+		rows, err := pg.QueryContext(ctx, `SELECT dedup_key FROM cursor_usage_events ORDER BY dedup_key`)
+		require.NoError(t, err)
+		defer rows.Close()
+		var keys []string
+		for rows.Next() {
+			var key string
+			require.NoError(t, rows.Scan(&key))
+			keys = append(keys, key)
+		}
+		require.NoError(t, rows.Err())
+		return keys
+	}
+	sync := &Sync{
+		local:      localDB,
+		pg:         pg,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	require.NoError(t, localDB.InsertCursorUsageEvents(ctx, event("first")))
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first push")
+	// A row the target lost stays lost until a full push, which shows the
+	// next incremental push did not resend it.
+	_, err = pg.ExecContext(ctx, `DELETE FROM cursor_usage_events`)
+	require.NoError(t, err)
+
+	require.NoError(t, localDB.InsertCursorUsageEvents(ctx, event("second")))
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "incremental push")
+	assert.Equal(t, []string{"second"}, pgDedupKeys())
+
+	_, err = sync.Push(ctx, true, nil)
+	require.NoError(t, err, "full push")
+	assert.Equal(t, []string{"first", "second"}, pgDedupKeys())
+
+	// A rebuild renumbers local ids under a new database generation, so an
+	// id recorded under another generation sends every row again.
+	_, err = pg.ExecContext(ctx, `DELETE FROM cursor_usage_events`)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(ctx, `UPDATE sync_metadata SET value = '2:rebuilt-away'
+		WHERE key LIKE 'cursor_usage_max_id:%'`)
+	require.NoError(t, err)
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "push after a rebuild")
+	assert.Equal(t, []string{"first", "second"}, pgDedupKeys())
+}
+
 // checkIsSystem asserts that PG contains exactly wantTotal rows for the
 // session with ordinals 0..wantTotal-1, and that each row's is_system
 // matches wantSystem. Tracking the exact ordinal set prevents false

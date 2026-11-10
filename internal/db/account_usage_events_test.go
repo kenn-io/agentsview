@@ -115,3 +115,26 @@ func TestAccountUsageUsesBaseRatesForCacheSavings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, live.Totals, got.Totals)
 }
+
+// A mirror holding rows up to MaxCursorUsageEventID has nothing left to load.
+func TestMaxCursorUsageEventIDIsTheLoadHighWater(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	empty, err := d.MaxCursorUsageEventID(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, empty)
+
+	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{
+		{OccurredAt: "2026-11-05T00:30:00Z", Model: "m", InputTokens: 1, DedupKey: "cursor:late"},
+		{OccurredAt: "2026-11-04T13:00:00Z", Model: "m", InputTokens: 2, DedupKey: "cursor:early"},
+	}))
+	highWater, err := d.MaxCursorUsageEventID(ctx)
+	require.NoError(t, err)
+	all, err := d.GetCursorUsageEvents(ctx, 0)
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+	assert.Equal(t, max(all[0].ID, all[1].ID), highWater)
+	rest, err := d.GetCursorUsageEvents(ctx, highWater)
+	require.NoError(t, err)
+	assert.Empty(t, rest)
+}
