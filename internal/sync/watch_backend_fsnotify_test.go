@@ -603,6 +603,17 @@ func TestFSNotifyBackendRemoveShallowRootClearsOwnership(t *testing.T) {
 func TestFSNotifyBackendRemoveRecursiveRootRemovesDescendantWatches(t *testing.T) {
 	for _, coverage := range []string{"native", "deferred", "overflow", "deferred release error", "overflow release error", "missing release"} {
 		t.Run(coverage, func(t *testing.T) {
+			if runtime.GOOS == "darwin" && coverage != "native" {
+				// These cases create a folder under the watched root just
+				// before Remove. fsnotify's kqueue reader then rescans the
+				// root while Remove closes the same descriptors, and that race
+				// can close a descriptor twice or leave close(2) stuck in the
+				// kernel, which stops the test binary from exiting. macOS
+				// watches recursive roots with FSEvents, so this fsnotify path
+				// runs in production only on Linux and Windows, where these
+				// cases still run.
+				t.Skip("fsnotify kqueue Remove races its own directory rescan")
+			}
 			backend := testFSNotifyBackend(t)
 			root := filepath.Clean(t.TempDir())
 			descendant := filepath.Join(root, "child", "nested")

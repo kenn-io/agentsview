@@ -54,6 +54,7 @@ func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testin
 	gate := &recordingLifecycleGate{acknowledged: make(chan uint64, 1)}
 	calls := make(chan WatchBatch, 2)
 	releaseSuccess := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseSuccess) })
 	var attempts atomic.Int32
 	w, err := newWatcherWithBackend(
 		0, 0,
@@ -70,6 +71,9 @@ func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testin
 	require.NoError(t, err)
 	w.Start()
 	t.Cleanup(w.Stop)
+	// Cleanups run last-in first-out: release the callback before Stop waits
+	// for it, so a failed assertion ends the test instead of hanging it.
+	t.Cleanup(release)
 
 	backend.sendBackendEvent(t, backendEvent{
 		Path: "/sync", Root: "/sync", Op: backendOpReconcileRootChange,
@@ -84,7 +88,7 @@ func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testin
 	}
 	second := requireReceiveWithin(t, calls, time.Second)
 	assert.Equal(t, []string{"/sync"}, second.ReconcileRoots)
-	close(releaseSuccess)
+	release()
 	assert.Equal(t, uint64(7), requireReceiveWithin(t, gate.acknowledged, time.Second))
 }
 
