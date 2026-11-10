@@ -2757,8 +2757,9 @@ enabled = true
 # endpoint = "http://127.0.0.1:30004/glmocr/parse"
 ```
 
-Restart the daemon after changing this setting. Disabling it clears extracted
-text; enabling it again extracts images anew. The endpoint must use a loopback
+Restart the daemon after changing this setting. Images removed by the `drop`
+storage policy cannot be indexed. Disabling image text clears extracted text;
+enabling it again extracts images anew. The endpoint must use a loopback
 address. See
 [search text in images](commands.md#search-text-in-images) for supported images
 and search modes.
