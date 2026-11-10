@@ -1287,7 +1287,7 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const id = "chunk-test"
-			path := createCursorIDEDB(t, []cursorIDETestComposer{{id: id, bubbles: []cursorIDETestBubble{{id: "b1", bubbleType: 1, text: "hello"}, {id: "b2", bubbleType: 2, text: "answer"}}}})
+			path := createCursorIDEDB(t, []cursorIDETestComposer{{id: id, bubbles: []cursorIDETestBubble{{id: "b1", raw: []byte(`{"text":"hello"}`)}, {id: "b2", raw: []byte(`{"text":"answer"}`)}}}})
 			execCursorIDEDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, tc.root, "composerData:"+id)
 			for i, chunk := range []string{tc.first, tc.second} {
 				if chunk != "" {
@@ -1313,6 +1313,11 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 			var ids []string
 			for _, message := range result.Messages {
 				ids = append(ids, message.SourceUUID)
+				if message.SourceUUID == "b1" {
+					assert.Equal(t, RoleUser, message.Role)
+				} else if message.SourceUUID == "b2" {
+					assert.Equal(t, RoleAssistant, message.Role)
+				}
 			}
 			assert.Equal(t, tc.want, ids)
 		})
