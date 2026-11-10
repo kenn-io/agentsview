@@ -150,3 +150,41 @@ func TestChangeStreamSendsEditedMessageOnceBehindUsageBacklog(t *testing.T) {
 	require.NotNil(t, edited[0].Usage)
 	assert.Equal(t, 40, edited[0].Usage.InputTokens)
 }
+
+// Sessions written before the usage change journal existed have no journal
+// row. A replay from the beginning must still send the ones without projected
+// messages, more than a page of them.
+func TestChangeStreamReplaysSessionsThatPredateUsageJournal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	_, err = d.EnsureConversationExportInitialized(t.Context())
+	require.NoError(t, err)
+	want := make([]string, MaxSessionLimit+1)
+	for i := range want {
+		want[i] = "empty-" + strconv.Itoa(i)
+		require.NoError(t, d.UpsertSession(t.Context(), Session{ID: want[i], Project: "sample", Machine: "local", Agent: "codex"}))
+	}
+	_, err = d.getWriter().Exec(t.Context(), "DELETE FROM usage_session_changes")
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	upgraded, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+	var got []string
+	cursor := ""
+	for {
+		batch, err := upgraded.ReadChangeStream(t.Context(), cursor)
+		require.NoError(t, err)
+		for _, session := range batch.Sessions {
+			assert.False(t, session.Deleted, session.SessionID)
+			got = append(got, session.SessionID)
+		}
+		cursor = batch.To
+		if !batch.More {
+			break
+		}
+	}
+	assert.ElementsMatch(t, want, got)
+}

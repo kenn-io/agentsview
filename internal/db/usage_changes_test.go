@@ -324,7 +324,9 @@ func TestUsageChangeJournalPersistsForOtherWriters(t *testing.T) {
 	assert.Equal(t, []string{"external"}, ids)
 }
 
-func TestUsageChangeJournalUpgradeStartsWithoutHistory(t *testing.T) {
+// An archive written before the journal existed journals its sessions when it
+// opens, so a change stream replay can find sessions without messages.
+func TestUsageChangeJournalUpgradeJournalsExistingSessions(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "existing", "project-a")
@@ -343,7 +345,10 @@ func TestUsageChangeJournalUpgradeStartsWithoutHistory(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 	before, err := upgraded.UsageChangeRevision(ctx)
 	require.NoError(t, err)
-	assert.Zero(t, before)
+	require.Equal(t, int64(1), before)
+	ids, err := upgraded.LoadUsageChanges(ctx, 0, before)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"existing"}, ids)
 	for _, query := range []string{
 		`UPDATE sessions SET machine = 'machine-b' WHERE id = 'existing'`,
 		`INSERT INTO usage_events (session_id, source, model, output_tokens) VALUES ('existing', 'session', 'model-x', 7)`,
@@ -356,7 +361,7 @@ func TestUsageChangeJournalUpgradeStartsWithoutHistory(t *testing.T) {
 		assert.Greater(t, after, before, query)
 		before = after
 	}
-	ids, err := upgraded.LoadUsageChanges(ctx, 0, before)
+	ids, err = upgraded.LoadUsageChanges(ctx, 1, before)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"existing"}, ids)
 }

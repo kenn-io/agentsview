@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -90,7 +92,8 @@ var conversationUsageSchema = conversationUsageSchemaSQL()
 
 // ensureConversationUsageSchema adds per-message usage revisions. Existing
 // live rows take their current fingerprint once, so the first later usage
-// change is published rather than silently recorded.
+// change is published rather than silently recorded. It also journals sessions
+// that predate the usage change journal, so a change stream replay sends them.
 func ensureConversationUsageSchema(ctx context.Context, tx *sql.Tx) error {
 	var present bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_table_info('conversation_messages') WHERE name='usage_key')`).Scan(&present); err != nil {
@@ -110,6 +113,40 @@ func ensureConversationUsageSchema(ctx context.Context, tx *sql.Tx) error {
 			return err
 		}
 	}
-	_, err := tx.ExecContext(ctx, conversationUsageSchema)
-	return err
+	if _, err := tx.ExecContext(ctx, conversationUsageSchema); err != nil {
+		return err
+	}
+	return backfillUsageSessionChangesTx(ctx, tx)
+}
+
+// backfillUsageSessionChangesTx journals each session the usage change journal
+// has never recorded. The journal started in v0.47.0 without a backfill, so a
+// session written earlier and untouched since has no row. A change stream
+// replay would then find that session only through its projected messages, and
+// a session without any would be missing. Each session takes its own revision
+// so the stream can page between any two of them. Every later session write
+// journals the session, so later opens find nothing to add.
+func backfillUsageSessionChangesTx(ctx context.Context, tx *sql.Tx) error {
+	var base int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key=?),0)`,
+		archiveMetadataUsageChangeRevisionKey).Scan(&base); err != nil {
+		return fmt.Errorf("reading usage change revision: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO usage_session_changes(session_id,revision)
+	 SELECT id,?+ROW_NUMBER() OVER (ORDER BY id) FROM sessions s
+	 WHERE NOT EXISTS(SELECT 1 FROM usage_session_changes u WHERE u.session_id=s.id)`, base)
+	if err != nil {
+		return fmt.Errorf("journaling unrecorded sessions: %w", err)
+	}
+	added, err := result.RowsAffected()
+	if err != nil || added == 0 {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES(?,?)
+	 ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+		archiveMetadataUsageChangeRevisionKey, strconv.FormatInt(base+added, 10))
+	if err != nil {
+		return fmt.Errorf("advancing usage change revision: %w", err)
+	}
+	return nil
 }

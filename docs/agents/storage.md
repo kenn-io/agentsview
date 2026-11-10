@@ -242,6 +242,12 @@ revision. The change stream re-sends marked messages; the conversation export
 ignores these columns. The writable open that adds the columns records every
 live row's fingerprint first.
 
+The change stream's replay finds a session through its projected messages or
+its `usage_session_changes` row. That journal began in v0.47.0 without a
+backfill, so every writable open journals each session that has no row, one
+fresh `usage_change_revision` per session, so the stream can page between any
+two of them. Usage cache consumers then see those sessions change once.
+
 Keep only digests and compact latest changes, not a body event log; bounded body
 reads take text from the archived message at the projected ordinal and reject it
 when its digest no longer matches the pinned revision. Project-only changes
