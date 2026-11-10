@@ -653,7 +653,7 @@ func TestMirrorImageTextDataVersion(t *testing.T) {
 		version int
 		hasText bool
 		want    int
-	}{{169, false, 169}, {169, true, ImageTextDataVersion}, {172, true, ImageTextDataVersion}, {173, true, 173}} {
+	}{{169, false, 169}, {169, true, ImageTextDataVersion}, {172, true, ImageTextDataVersion}, {174, true, 174}} {
 		require.Equal(t, tc.want, MirrorDataVersion(tc.version, tc.hasText))
 	}
 }

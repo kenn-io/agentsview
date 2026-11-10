@@ -186,6 +186,21 @@ func formatMicrodollarsAsLegacyCents(microdollars int64) string {
 	return formatted
 }
 
+// MaxCursorUsageEventID returns the largest account usage row id, or 0
+// when there are no rows. Mirrors compare it with their high-water id
+// before asking their target for it.
+func (db *DB) MaxCursorUsageEventID(ctx context.Context) (int64, error) {
+	if !db.hasCursorUsageTable(ctx) {
+		return 0, nil
+	}
+	var id int64
+	if err := db.getReader().QueryRow(ctx,
+		`SELECT COALESCE(MAX(id), 0) FROM cursor_usage_events`).Scan(&id); err != nil {
+		return 0, fmt.Errorf("querying max cursor usage event id: %w", err)
+	}
+	return id, nil
+}
+
 // GetCursorUsageEvents returns account usage rows with id greater than
 // sinceID, in (occurred_at, id) order. The table is append-only (no
 // updates or deletes), so its integer primary key grows monotonically and

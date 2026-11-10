@@ -18,7 +18,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/fsevents"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/kit/stacktest"
@@ -202,7 +201,7 @@ func TestDarwinWatcherNativeSinkContentionUsesBoundedHandoff(t *testing.T) {
 		"ordinary consumer mutex contention is not a capacity overflow")
 }
 
-func TestDarwinWatcherMeaningfulNativeDeliveryAdvancesKqueueTimer(t *testing.T) {
+func TestDarwinWatcherMeaningfulNativeDeliveryAdvancesShallowTimer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const batchDelay = 300 * time.Millisecond
 		backend := newDarwinDirectTestBackend()
@@ -222,8 +221,8 @@ func TestDarwinWatcherMeaningfulNativeDeliveryAdvancesKqueueTimer(t *testing.T) 
 		watcher.Start()
 		t.Cleanup(watcher.Stop)
 
-		backend.sendKqueue(t, backendEvent{
-			Path: "/sessions/kqueue.jsonl",
+		backend.sendShallow(t, backendEvent{
+			Path: "/sessions/shallow.jsonl",
 			Root: "/sessions",
 			Op:   backendOpWrite,
 		})
@@ -237,20 +236,20 @@ func TestDarwinWatcherMeaningfulNativeDeliveryAdvancesKqueueTimer(t *testing.T) 
 
 		batch := requireReceiveWithin(t, batches, 150*time.Millisecond)
 		assert.ElementsMatch(t, []string{
-			"/sessions/kqueue.jsonl",
+			"/sessions/shallow.jsonl",
 			"/sessions/native.jsonl",
 		}, batch.Paths)
 		assert.Less(t, time.Since(nativeAt), 150*time.Millisecond)
 	})
 }
 
-func TestWatchEventSinkFilteredNativeDeliveryDoesNotWakePendingKqueue(t *testing.T) {
+func TestWatchEventSinkFilteredNativeDeliveryDoesNotWakePendingShallow(t *testing.T) {
 	sink := newWatchEventSink(
 		defaultWatchBatchMaxEntries,
 		defaultWatchBatchMaxPathBytes,
 	)
 	sink.Add(backendEvent{
-		Path: "/sessions/kqueue.jsonl",
+		Path: "/sessions/shallow.jsonl",
 		Root: "/sessions",
 		Op:   backendOpWrite,
 	})
@@ -260,12 +259,12 @@ func TestWatchEventSinkFilteredNativeDeliveryDoesNotWakePendingKqueue(t *testing
 	}))
 	select {
 	case <-sink.wake:
-		require.Fail(t, "filtered native delivery woke unrelated kqueue work")
+		require.Fail(t, "filtered native delivery woke unrelated shallow work")
 	default:
 	}
 }
 
-func TestDarwinWatcherFilteredNativeDeliveryPreservesKqueueTimer(t *testing.T) {
+func TestDarwinWatcherFilteredNativeDeliveryPreservesShallowTimer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const batchDelay = 180 * time.Millisecond
 		backend := newDarwinDirectTestBackend()
@@ -286,8 +285,8 @@ func TestDarwinWatcherFilteredNativeDeliveryPreservesKqueueTimer(t *testing.T) {
 		t.Cleanup(watcher.Stop)
 
 		queuedAt := time.Now()
-		backend.sendKqueue(t, backendEvent{
-			Path: "/sessions/kqueue.jsonl",
+		backend.sendShallow(t, backendEvent{
+			Path: "/sessions/shallow.jsonl",
 			Root: "/sessions",
 			Op:   backendOpWrite,
 		})
@@ -296,7 +295,7 @@ func TestDarwinWatcherFilteredNativeDeliveryPreservesKqueueTimer(t *testing.T) {
 
 		select {
 		case <-dispatched:
-			require.Fail(t, "filtered native delivery advanced the kqueue timer")
+			require.Fail(t, "filtered native delivery advanced the shallow timer")
 		case <-time.After(80 * time.Millisecond):
 		}
 		dispatchedAt := requireReceiveWithin(t, dispatched, 250*time.Millisecond)
@@ -353,13 +352,13 @@ func TestDarwinWatcherFileLifecycleAndNativeLatency(t *testing.T) {
 
 func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T) {
 	type observation struct {
-		streams           int
-		roots             int
-		logicalRoots      int
-		shallowRoots      int
-		nativeDescriptors int
-		appendPaths       int
-		appendRenames     int
+		streams        int
+		roots          int
+		logicalRoots   int
+		shallowRoots   int
+		shallowStreams int
+		appendPaths    int
+		appendRenames  int
 	}
 	var observations []observation
 	for _, tc := range []struct {
@@ -408,19 +407,19 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 
 			backend.mu.Lock()
 			got := observation{
-				streams:           len(backend.streams),
-				roots:             len(backend.roots.Load().roots),
-				logicalRoots:      len(backend.logical),
-				shallowRoots:      len(backend.shallow),
-				nativeDescriptors: len(backend.kqueue.watcher.WatchList()),
+				streams:        len(backend.streams),
+				roots:          len(backend.roots.Load().roots),
+				logicalRoots:   len(backend.logical),
+				shallowRoots:   len(backend.shallow),
+				shallowStreams: backend.shallowWatcher.streamCount(),
 			}
 			backend.mu.Unlock()
 			assert.Equal(t, 1, got.streams)
 			assert.Equal(t, 1, got.roots)
 			assert.Equal(t, 1, got.logicalRoots)
 			assert.Zero(t, got.shallowRoots)
-			assert.Zero(t, got.nativeDescriptors,
-				"recursive FSEvents coverage must not allocate per-file kqueue descriptors")
+			assert.Zero(t, got.shallowStreams,
+				"recursive FSEvents coverage must not open shallow streams")
 
 			appendFile, err := os.OpenFile(changedPath, os.O_APPEND|os.O_WRONLY, 0)
 			require.NoError(t, err)
@@ -517,7 +516,7 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			assert.Len(t, backend.roots.Load().roots, got.roots)
 			assert.Len(t, backend.logical, got.logicalRoots)
 			assert.Len(t, backend.shallow, got.shallowRoots)
-			assert.Len(t, backend.kqueue.watcher.WatchList(), got.nativeDescriptors)
+			assert.Equal(t, got.shallowStreams, backend.shallowWatcher.streamCount())
 			backend.mu.Unlock()
 			observations = append(observations, got)
 		})
@@ -576,36 +575,36 @@ func TestDarwinWatcherExcludesRecursiveEvents(t *testing.T) {
 	}, 400*time.Millisecond, 10*time.Millisecond)
 }
 
-// TestDarwinWatcherKqueueLostEventsReachConsumer covers the kqueue backend's
-// lost-events full sync. That event carries no path, and the wrapper drops
-// kqueue events it cannot attribute to a root, so the full sync must bypass
-// root matching or the events it stands in for are never reconciled.
-func TestDarwinWatcherKqueueLostEventsReachConsumer(t *testing.T) {
+// TestDarwinWatcherShallowLostEventsReachConsumer covers the shallow
+// watcher's lost-events full sync. That event carries no path, and the
+// wrapper drops shallow events it cannot attribute to a root, so the full sync
+// must bypass root matching or the events it stands in for are never
+// reconciled.
+func TestDarwinWatcherShallowLostEventsReachConsumer(t *testing.T) {
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
-	errorInput := make(chan error, 1)
-	backend.kqueue.errorInput = errorInput
 	watcher, batches := newDarwinTestWatcherWithBackend(t, backend)
 	watcher.Start()
 
-	errorInput <- fsnotify.ErrEventOverflow
+	backend.shallowWatcher.consume(darwinShallowRoot{}, []fsevents.Event{{
+		Flags: fseventFlagMustScanSubDirs,
+	}})
 
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
 }
 
-// TestDarwinWatcherKqueueLostEventsInvalidateShallowRoots covers shallow-root
-// recovery after kqueue overflow. A dropped event can be the shallow root's
-// own removal, which normally signals loss through handleKqueueEvent; the
-// full-sync marker must therefore mark every active kqueue-backed root lost
-// so lifecycle recovery revalidates its watch or hands it to polling.
-func TestDarwinWatcherKqueueLostEventsInvalidateShallowRoots(t *testing.T) {
+// TestDarwinWatcherLostShallowEventsInvalidateRoots covers shallow-root
+// recovery after FSEvents drops shallow events. A dropped event can be the
+// shallow root's own removal, which normally signals loss through
+// handleShallowEvent; the full-sync marker must therefore mark every active
+// shallow root lost so lifecycle recovery revalidates its watch or hands it to
+// polling.
+func TestDarwinWatcherLostShallowEventsInvalidateRoots(t *testing.T) {
 	root := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
 	backend.retryInitial = 5 * time.Millisecond
 	backend.retryMax = 10 * time.Millisecond
-	errorInput := make(chan error, 1)
-	backend.kqueue.errorInput = errorInput
 
 	polling := make(chan PollingObligation, 4)
 	batches := make(chan WatchBatch, 8)
@@ -631,20 +630,22 @@ func TestDarwinWatcherKqueueLostEventsInvalidateShallowRoots(t *testing.T) {
 	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
 	require.NoError(t, watcher.Start())
 
-	errorInput <- fsnotify.ErrEventOverflow
+	backend.shallowWatcher.consume(darwinShallowRoot{
+		logicalPath: root, nativePath: canonicalWatchRoot(root),
+	}, []fsevents.Event{{Flags: fseventFlagMustScanSubDirs}})
 
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
 	obligation := requireReceiveWithin(t, polling, 5*time.Second)
 	assert.Equal(t, root, obligation.Key,
-		"kqueue overflow must move the shallow root through loss recovery")
+		"dropped shallow events must move the shallow root through loss recovery")
 }
 
-// A kqueue overflow marker arriving while FSEvents fallback is collecting or
+// A shallow full-sync marker arriving while FSEvents fallback is collecting or
 // reconciling is buffered for replay, and replayed events bypass
-// handleKqueueEvent. The loss marking for kqueue-backed roots must therefore
+// handleShallowEvent. The loss marking for shallow roots must therefore
 // happen before fallback collection or a dropped root removal permanently
 // loses coverage once fallback ends.
-func TestDarwinHandleKqueueFullSyncDuringFallbackMarksShallowRootsLost(t *testing.T) {
+func TestDarwinHandleShallowFullSyncDuringFallbackMarksShallowRootsLost(t *testing.T) {
 	for _, phase := range []darwinFallbackPhase{
 		darwinFallbackCollecting, darwinFallbackReconciling,
 	} {
@@ -661,7 +662,7 @@ func TestDarwinHandleKqueueFullSyncDuringFallbackMarksShallowRootsLost(t *testin
 		backend.fallbackPhase.Store(uint32(phase))
 
 		marker := backendEvent{Op: backendOpFullSync}
-		_, dispatch := backend.handleKqueueEvent(marker)
+		_, dispatch := backend.handleShallowEvent(marker)
 
 		assert.False(t, dispatch,
 			"phase %d: the marker must be buffered for fallback replay", phase)
@@ -901,14 +902,18 @@ func TestDarwinWatcherRegistrationOwnsRootCreatedAfterCollection(t *testing.T) {
 	}, trace, "the pending root advances into native recursive coverage")
 }
 
-func TestDarwinWatcherPendingRootRetriesWithoutNativeKqueueDelivery(t *testing.T) {
+func TestDarwinWatcherPendingRootRetriesWithoutNativeShallowDelivery(t *testing.T) {
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "state", "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
 	backend.retryInitial = 10 * time.Millisecond
 	backend.retryMax = 20 * time.Millisecond
-	backend.startKqueue = func() error { return nil }
+	backend.startShallow = func() error { return nil }
+	// Without a parent-folder observer, only the lifecycle retry can notice
+	// the root appearing.
+	backend.addAncestor = func(string) error { return nil }
+	backend.removeAncestor = func(string) error { return nil }
 
 	missingChecked := make(chan struct{})
 	var missingCheckedOnce sync.Once
@@ -959,7 +964,7 @@ func TestDarwinWatcherMissingIntermediateMovesCoverageBeforeRelease(t *testing.T
 	}}, 10)
 	require.NoError(t, os.Mkdir(intermediate, 0o700))
 
-	_, dispatch := backend.handleKqueueEvent(backendEvent{
+	_, dispatch := backend.handleShallowEvent(backendEvent{
 		Path: intermediate, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 	backend.processLifecycleSignals()
@@ -987,7 +992,7 @@ func TestDarwinWatcherMissingRootStartsCollectingBeforeReleaseAndDispatch(t *tes
 	setDarwinLifecycleRunningForTest(t, backend)
 	require.NoError(t, os.Mkdir(root, 0o700))
 
-	_, dispatch := backend.handleKqueueEvent(backendEvent{
+	_, dispatch := backend.handleShallowEvent(backendEvent{
 		Path: root, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 	backend.processLifecycleSignals()
@@ -1032,7 +1037,7 @@ func TestDarwinWatcherHybridHandoffRetainsWritesFromEveryPhase(t *testing.T) {
 	setDarwinLifecycleRunningForTest(t, backend)
 	require.NoError(t, os.Mkdir(root, 0o700))
 
-	backend.handleKqueueEvent(backendEvent{
+	backend.handleShallowEvent(backendEvent{
 		Path: root, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 	backend.processLifecycleSignals()
@@ -1090,7 +1095,7 @@ func TestDarwinWatcherRootDeletionBridgesTeardownAndRecreation(t *testing.T) {
 	backend.processLifecycleSignals()
 
 	require.NoError(t, os.Mkdir(root, 0o700))
-	backend.handleKqueueEvent(backendEvent{
+	backend.handleShallowEvent(backendEvent{
 		Path: root, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 	backend.processLifecycleSignals()
@@ -1211,7 +1216,7 @@ func TestDarwinWatcherMissingRootAncestorAvoidsPerEntryWatch(t *testing.T) {
 	require.Len(t, results, 1)
 	require.True(t, results[0].MissingRootLifecycleOwned)
 	assert.Empty(t, shallowAdds,
-		"ancestor coverage must not use the per-entry kqueue shallow watch")
+		"ancestor coverage must not use a shallow watch")
 	require.NotNil(t, backend.vnode)
 	assert.Equal(t, 1, backend.vnode.watchedCount())
 }
@@ -1377,7 +1382,7 @@ func TestDarwinWatcherHybridTransitionDoesNotSuppressOtherShallowRootEvent(t *te
 	}, results)
 	require.NoError(t, os.Mkdir(pending, 0o700))
 
-	event, dispatch := backend.handleKqueueEvent(backendEvent{
+	event, dispatch := backend.handleShallowEvent(backendEvent{
 		Path: pending, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 
@@ -1434,7 +1439,7 @@ func TestDarwinWatcherCollectingGateWaitsForSuccessfulReconciliation(t *testing.
 	}, results[0])
 	watcher.Start()
 	require.NoError(t, os.Mkdir(root, 0o700))
-	backend.handleKqueueEvent(backendEvent{
+	backend.handleShallowEvent(backendEvent{
 		Path: root, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 	requireReceiveWithin(t, firstEntered, time.Second)
@@ -1513,7 +1518,7 @@ func TestDarwinWatcherShallowRenameABAReplacesCoverage(t *testing.T) {
 	initialGeneration := backend.logical[root].generation
 	watcher.Start()
 
-	backend.handleKqueueEvent(backendEvent{
+	backend.handleShallowEvent(backendEvent{
 		Path: root, Root: root, Op: backendOpRename, ItemType: backendItemDirectory,
 	})
 
@@ -1762,7 +1767,7 @@ func TestDarwinWatcherFallbackKeepsPollingUntilNativeRetrySucceeds(t *testing.T)
 // while the recovery handoff is inside its polling-release callback, which
 // runs with the backend mutex released. The lifecycle goroutine reports the
 // release failure on the shared error channel after the callback returns, so
-// the kqueue forwarder must not close that channel until the lifecycle
+// the shallow forwarder must not close that channel until the lifecycle
 // goroutine has exited; a premature close panics with a send on a closed
 // channel.
 func TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic(t *testing.T) {
@@ -1790,8 +1795,8 @@ func TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic(t *testing.T) {
 					return nil
 				}
 				close(releaseEntered)
-				// Wait until shutdown has stopped the kqueue event source.
-				<-backend.kqueue.done
+				// Wait until shutdown has stopped the shallow event source.
+				<-backend.shallowWatcher.done
 				return errors.New("release failed during shutdown")
 			},
 		},
@@ -2002,7 +2007,7 @@ func TestDarwinWatcherStartupFallbackRetainsMissingShallowRootLifecycle(t *testi
 	changed := filepath.Join(missingShallow, "session.jsonl")
 	sent := make(chan struct{})
 	go func() {
-		backend.kqueue.events <- backendEvent{Path: changed, Op: backendOpWrite}
+		backend.shallowWatcher.events <- backendEvent{Path: changed, Op: backendOpWrite}
 		close(sent)
 	}()
 	batch := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
@@ -2047,14 +2052,17 @@ func TestDarwinWatcherStartupStreamStartFailureFallsBack(t *testing.T) {
 	assert.Equal(t, uint32(1), backend.fallbackActivations.Load())
 }
 
-func TestDarwinWatcherStartupFallbackKqueueFailurePollsEveryScope(t *testing.T) {
+func TestDarwinWatcherStartupFallbackShallowFailurePollsEveryScope(t *testing.T) {
 	root := t.TempDir()
+	shallow := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
 	backend.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
 		return nil, errors.New("stream create unavailable")
 	}
-	backend.startKqueue = func() error { return errors.New("kqueue unavailable") }
+	backend.shallowWatcher.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
+		return &failingStartStream{err: errors.New("shallow FSEvents unavailable")}, nil
+	}
 	coverage := make(chan []string, 1)
 	watcher, err := newWatcherWithBackendOptions(
 		0, 0, func(context.Context, WatchBatch) error { return nil }, backend,
@@ -2069,18 +2077,28 @@ func TestDarwinWatcherStartupFallbackKqueueFailurePollsEveryScope(t *testing.T) 
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{SyncDir: root}},
+	}, {
+		Path: shallow, Exists: true,
+		Scopes: []WatchScope{{SyncDir: shallow}},
 	}}, 10)
-	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
+	require.Equal(t, []RecursiveWatchResult{{Watched: 1}, {Watched: 1}}, results)
 
 	watcher.Start()
-	assert.Equal(t, []string{root}, requireReceiveWithin(t, coverage, time.Second))
+	assert.ElementsMatch(t, []string{root, shallow},
+		requireReceiveWithin(t, coverage, time.Second))
 	require.Eventually(t, func() bool {
 		return backend.fallbackPhaseValue() == darwinFallbackOpen
 	}, time.Second, time.Millisecond)
 	_, retry := backend.nextLifecycleRetry()
 	assert.False(t, retry,
-		"an unrecoverable kqueue start failure must not wake the lifecycle loop forever")
+		"an unrecoverable shallow start failure must not wake the lifecycle loop forever")
 }
+
+// failingStartStream is a stream whose Start always fails.
+type failingStartStream struct{ err error }
+
+func (s *failingStartStream) Start() error { return s.err }
+func (s *failingStartStream) Close() error { return nil }
 
 func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *testing.T) {
 	for _, reconcileErr := range []error{
@@ -2105,7 +2123,7 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 				nativeSink = sink
 				return &handoffRecordingStream{close: func() {
 					order <- "invalidate"
-					_, dispatch := backend.handleKqueueEvent(backendEvent{
+					_, dispatch := backend.handleShallowEvent(backendEvent{
 						Path: afterInvalidation, Op: backendOpWrite,
 					})
 					invalidationDispatch <- dispatch
@@ -2130,7 +2148,7 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 					order <- "reconcile"
 					attempt := attempts.Add(1)
 					if attempt == 1 {
-						_, dispatch := backend.handleKqueueEvent(backendEvent{
+						_, dispatch := backend.handleShallowEvent(backendEvent{
 							Path: duringReconcile, Op: backendOpWrite,
 						})
 						reconcileDispatch <- dispatch
@@ -2327,13 +2345,13 @@ func TestDarwinWatcherFallbackNativeCallbackDoesNotRunPolling(t *testing.T) {
 	unblockPolling()
 }
 
-func TestDarwinWatcherKqueueStartFailureFallbackPollsBeforeInvalidation(t *testing.T) {
+func TestDarwinWatcherShallowStartFailureFallbackPollsBeforeInvalidation(t *testing.T) {
 	root := t.TempDir()
 	shallow := filepath.Join(root, "shallow")
 	require.NoError(t, os.Mkdir(shallow, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
-	backend.startKqueue = func() error { return errors.New("kqueue unavailable") }
+	backend.startShallow = func() error { return errors.New("shallow FSEvents unavailable") }
 	var nativeSink func([]fsevents.Event)
 	pollingOwned := atomic.Bool{}
 	invalidated := make(chan struct{})
@@ -2706,7 +2724,7 @@ func (b *darwinDirectTestBackend) emitFiltered() bool {
 	})
 }
 
-func (b *darwinDirectTestBackend) sendKqueue(t *testing.T, event backendEvent) {
+func (b *darwinDirectTestBackend) sendShallow(t *testing.T, event backendEvent) {
 	t.Helper()
 	sent := make(chan struct{})
 	go func() {

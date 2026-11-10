@@ -667,8 +667,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (171: credit every record of a Claude response split by a tool result with
 // the response's web-search total. Re-parse Claude-format sources in place;
 // source and session identities are unchanged.)
-// (172: prevent older binaries from writing archives with an image-text index.)
-const dataVersion = 172
+// (172: import Cursor IDE chunked conversation headers.)
+// (173: prevent older binaries from writing archives with an image-text index.)
+const dataVersion = 173
 
 const archiveOnlyVersionBase = 1 << 20
 

@@ -515,7 +515,7 @@ func (s *Sync) pushWithOptions(
 		return result, err
 	}
 	if err := timedPushSetupStep("cursor usage event sync",
-		func() error { return s.syncCursorUsageEvents(ctx) }); err != nil {
+		func() error { return s.syncCursorUsageEvents(ctx, full) }); err != nil {
 		return result, err
 	}
 	// Candidate selection shares ListSessionsForMirrorWindow with the
@@ -4354,23 +4354,59 @@ func nilIfEmpty(s string) any {
 	return s
 }
 
-func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
+// cursorUsageHighWaterKeyPrefix, followed by the source archive id, names
+// the sync_metadata row recording the largest local cursor_usage_events id
+// this target holds, as "<id>:<database generation>".
+const cursorUsageHighWaterKeyPrefix = "cursor_usage_max_id:"
+
+// syncCursorUsageEvents sends the account usage rows the target has not
+// received from this archive yet. Local ids only grow within one database
+// generation; a rebuild renumbers them, so a stored id from another
+// generation, or a full push, sends every row again. The dedup index makes
+// rows the target already holds no-ops.
+func (s *Sync) syncCursorUsageEvents(ctx context.Context, full bool) error {
 	// Cursor admin rows are global and unattributed, so project-filtered pushes
 	// cannot sync them honestly.
 	if s.isFiltered() {
 		return nil
 	}
 
-	// The PG push is explicit and on-demand, so it keeps the full-history
-	// load (sinceID 0): the remote dedup index makes re-inserts no-ops and
-	// there is no per-filesystem-event pressure to bound, unlike the DuckDB
-	// automatic push which tracks a high-water id in mirror metadata.
-	events, err := s.local.GetCursorUsageEvents(ctx, 0)
+	localMax, err := s.local.MaxCursorUsageEventID(ctx)
+	if err != nil {
+		return err
+	}
+	if localMax == 0 {
+		return nil
+	}
+	key := cursorUsageHighWaterKeyPrefix + s.archiveID
+	var sinceID int64
+	if !full {
+		var stored string
+		err = s.pg.QueryRowContext(ctx,
+			`SELECT value FROM sync_metadata WHERE key = $1`, key).Scan(&stored)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("reading cursor usage high-water id: %w", err)
+		}
+		if id, generation, ok := strings.Cut(stored, ":"); ok && generation == s.databaseGeneration {
+			if sinceID, err = strconv.ParseInt(id, 10, 64); err != nil {
+				return fmt.Errorf("parsing cursor usage high-water id %q: %w", stored, err)
+			}
+		}
+	}
+	if sinceID >= localMax {
+		return nil
+	}
+
+	events, err := s.local.GetCursorUsageEvents(ctx, sinceID)
 	if err != nil {
 		return fmt.Errorf("loading local cursor usage events: %w", err)
 	}
 	if len(events) == 0 {
 		return nil
+	}
+	maxID := sinceID
+	for _, ev := range events {
+		maxID = max(maxID, ev.ID)
 	}
 
 	tx, err := s.pg.BeginTx(ctx, nil)
@@ -4381,6 +4417,13 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 
 	if err := bulkInsertCursorUsageEvents(ctx, tx, events); err != nil {
 		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO sync_metadata (key, value) VALUES ($1, $2)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+		key, strconv.FormatInt(maxID, 10)+":"+s.databaseGeneration,
+	); err != nil {
+		return fmt.Errorf("recording cursor usage high-water id: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing pg cursor usage sync: %w", err)

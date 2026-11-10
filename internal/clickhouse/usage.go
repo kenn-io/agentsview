@@ -234,19 +234,50 @@ func chUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 	messageWhere, messageArgs, eventWhere, eventArgs := chUsageSourceWheres(
 		f, sessionID, chUsageMessageEligibility, chUsageBoundsForFilter(f))
 	return chUsageRawSQLFromWheres(
-		"JOIN", messageWhere, messageArgs, eventWhere, eventArgs)
+		true, messageWhere, messageArgs, eventWhere, eventArgs)
 }
 
+// chUsageJoinedSessionColumns selects a raw usage row's session columns from
+// the session s it joins.
+const chUsageJoinedSessionColumns = `
+			s.project AS project, s.agent AS agent, s.machine AS machine,
+			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
+			` + chUsageDisplayNameSQL + ` AS display_name,
+			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
+			s.started_at AS started_at,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at`
+
+// chUsageUnjoinedSessionColumns gives raw usage rows read without their
+// session the session columns' types and empty values.
+const chUsageUnjoinedSessionColumns = `
+			'' AS project, '' AS agent, '' AS machine,
+			toInt64(0) AS user_message_count, false AS is_automated,
+			'' AS display_name, '' AS group_key, '' AS session_name,
+			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS started_at,
+			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS activity_at`
+
 // chUsageRawSQLFromWheres renders the message and usage-event raw rows.
-// sessionJoin is "JOIN" for readers; push pricing uses "LEFT JOIN" because
-// it prices a batch before that batch's session rows exist.
+// Readers join each row's session. Push pricing reads the rows without
+// their sessions: no pricing input comes from the session, and a batch is
+// priced before its session rows land. Its rows then carry empty session
+// columns, and ts is the row's own timestamp.
 func chUsageRawSQLFromWheres(
-	sessionJoin, messageWhere string, messageArgs []any,
+	joinSessions bool, messageWhere string, messageArgs []any,
 	eventWhere string, eventArgs []any,
 ) (string, []any) {
+	messageTS, eventTS := "m.timestamp", "ue.occurred_at"
+	messageJoin, eventJoin := "", ""
+	sessionColumns := chUsageUnjoinedSessionColumns
+	if joinSessions {
+		messageTS = "COALESCE(m.timestamp, s.started_at)"
+		eventTS = "COALESCE(ue.occurred_at, s.started_at)"
+		messageJoin = "\n\t\tJOIN sessions s ON s.id = m.session_id"
+		eventJoin = "\n\t\tJOIN sessions s ON s.id = ue.session_id"
+		sessionColumns = chUsageJoinedSessionColumns
+	}
 	query := fmt.Sprintf(`
 		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
-			'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
+			'message' AS source, %[1]s AS ts,
 			m.timestamp AS pricing_ts,
 			m.model AS model, m.provider_id AS provider_id, m.token_usage AS token_json,
 			m.claude_message_id AS claude_message_id,
@@ -258,19 +289,12 @@ func chUsageRawSQLFromWheres(
 				JSONExtractInt(m.token_usage, 'reasoning_tokens') AS reasoning_tokens,
 				JSONExtractInt(m.token_usage, 'cache_creation', 'ephemeral_1h_input_tokens') AS cache_create_1h,
 				JSONExtractInt(m.token_usage, 'server_tool_use', 'web_search_requests') AS web_search_requests,
-				NULL AS cost_microdollars, '' AS cost_source,
-			s.project AS project, s.agent AS agent, s.machine AS machine,
-			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			`+chUsageDisplayNameSQL+` AS display_name,
-			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
-			s.started_at AS started_at,
-			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
-		FROM messages m
-		%[1]s sessions s ON s.id = m.session_id
-		WHERE %[2]s
+				NULL AS cost_microdollars, '' AS cost_source,%[5]s
+		FROM messages m%[3]s
+		WHERE %[6]s
 		UNION ALL
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
-			ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
+			ue.source AS source, %[2]s AS ts,
 			ue.occurred_at AS pricing_ts,
 			ue.model AS model, ue.provider_id AS provider_id, '' AS token_json,
 			'' AS claude_message_id, '' AS claude_request_id,
@@ -285,17 +309,11 @@ func chUsageRawSQLFromWheres(
 				ue.reasoning_tokens AS reasoning_tokens,
 				0 AS cache_create_1h, 0 AS web_search_requests,
 				ue.cost_microdollars AS cost_microdollars,
-				ue.cost_source AS cost_source,
-			s.project AS project, s.agent AS agent, s.machine AS machine,
-			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			`+chUsageDisplayNameSQL+` AS display_name,
-			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
-			s.started_at AS started_at,
-			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
-		FROM usage_events ue
-		%[1]s sessions s ON s.id = ue.session_id
-		WHERE %[3]s`,
-		sessionJoin, messageWhere, eventWhere)
+				ue.cost_source AS cost_source,%[5]s
+		FROM usage_events ue%[4]s
+		WHERE %[7]s`,
+		messageTS, eventTS, messageJoin, eventJoin, sessionColumns,
+		messageWhere, eventWhere)
 	args := make([]any, 0, len(messageArgs)+len(eventArgs))
 	args = append(args, messageArgs...)
 	args = append(args, eventArgs...)

@@ -13754,6 +13754,8 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(ctx context.Context,
 // remaining content. The emitted result still counts as present for
 // ownership reconciliation, so a preserved session stays active rather than
 // being marked source-missing.
+// Forced parses bypass archive verification. Empty truncated results are still
+// filtered during sync; read-only parse-diff receives them for comparison.
 // The returned verifyFailed reports that an archive read failed during
 // verification: the caller must not skip-cache the pass as clean, so the
 // dropped result is re-attempted instead of frozen behind a cached skip.
@@ -13762,8 +13764,18 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 	file parser.DiscoveredFile,
 	results []parser.ParseResult,
 ) (kept []parser.ParseResult, verifyFailed bool) {
-	if file.Agent != parser.AgentCursorIDE || len(results) == 0 ||
-		e.forceParseRequested(file) {
+	if file.Agent != parser.AgentCursorIDE || len(results) == 0 || e.forceParse {
+		return results, false
+	}
+	kept = results[:0]
+	for _, r := range results {
+		if r.Session.IsTruncated && len(r.Messages) == 0 {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	results = kept
+	if len(results) == 0 || e.forceParseRequested(file) {
 		return results, false
 	}
 	type messageSourceUUIDReader interface {
