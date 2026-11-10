@@ -167,6 +167,8 @@ func commitRepository(input, cwd string) string {
 	return cwd
 }
 
+// commitArgv returns an argv command's shell text. A git argv that does not
+// start with a commit invocation returns none, since later matches are argument text.
 func commitArgv(input string) (string, bool) {
 	var payload struct {
 		Command []string `json:"command"`
@@ -175,18 +177,10 @@ func commitArgv(input string) (string, bool) {
 		return "", false
 	}
 	args := payload.Command
-	basename := func(name string) string { return path.Base(strings.ReplaceAll(name, `\`, "/")) }
 	if len(args) == 0 {
 		return "", true
 	}
-	// Argv words are never tilde-expanded, so a leading tilde names a relative path.
-	word := func(arg string) string {
-		if strings.HasPrefix(arg, "~") {
-			arg = "./" + arg
-		}
-		return shellquote.POSIX(arg)
-	}
-	program := basename(args[0])
+	program := path.Base(strings.ReplaceAll(args[0], `\`, "/"))
 	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
 		return args[2], true
 	}
@@ -194,11 +188,15 @@ func commitArgv(input string) (string, bool) {
 		return "", true
 	}
 	args[0] = "git"
+	// Argv words are never tilde-expanded, so a leading tilde names a relative path.
 	for i, arg := range args {
-		args[i] = word(arg)
+		if strings.HasPrefix(arg, "~") {
+			arg = "./" + arg
+		}
+		args[i] = shellquote.POSIX(arg)
 	}
 	command := strings.Join(args, " ")
-	if match := commitInvocationRE.FindStringIndex(command); match == nil || match[0] != 0 {
+	if match := commitInvocationRE.FindStringIndex(command); match != nil && match[0] != 0 {
 		return "", true
 	}
 	return command, true
@@ -619,20 +617,23 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 			}
 		}
 	}
+	if err := markCommitLinksBackfilled(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// markCommitLinksBackfilled records the backfill. A version 169 archive-only
+// archive moves to the Codex-scoped version so older readers refuse it; its
+// pending marker keeps the preservation rebuild. Older archives keep their version.
+func markCommitLinksBackfilled(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {
 		return err
 	}
-	version, archiveOnly, err := readUserVersion(ctx, tx)
-	if err != nil {
+	if version, archiveOnly, err := readUserVersion(ctx, tx); err != nil || !archiveOnly || version != 169 {
 		return err
 	}
-	// Older archives must retain their version until the preservation rebuild.
-	if archiveOnly && version == 169 {
-		if err := advanceDataVersion(ctx, tx, dataVersion); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	return advanceDataVersion(ctx, tx, dataVersion)
 }
 
 // The time fallback adapts Pando's turnThatWrote; see
