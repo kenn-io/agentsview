@@ -658,31 +658,23 @@ type RetainedImage struct {
 // RetainedToolResultImages walks the same sections used by image retention.
 func RetainedToolResultImages(content string) []RetainedImage {
 	var images []RetainedImage
-	walkRetainedImages(content, func(_ jsontext.Value, image RetainedImage) {
-		images = append(images, image)
-	})
-	return images
-}
-
-func walkRetainedImages(content string, visit func(jsontext.Value, RetainedImage)) {
-	index := 0
 	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
 		var blocks []jsontext.Value
 		if json.Unmarshal(raw, &blocks) != nil {
 			return
 		}
-		for _, raw := range blocks {
-			if image, ok := retainedImageBlock(raw, index); ok {
-				visit(raw, image)
-				index++
+		for _, block := range blocks {
+			if image, ok := retainedImageBlock(block, len(images), true); ok {
+				images = append(images, image)
 			}
 		}
 	})
+	return images
 }
 
 // retainedImageBlock reads one tool-result block as retained image evidence. A
 // placeholder left by the drop policy has no image_ref, so it has no digest.
-func retainedImageBlock(raw jsontext.Value, index int) (RetainedImage, bool) {
+func retainedImageBlock(raw jsontext.Value, index int, hashImage bool) (RetainedImage, bool) {
 	if p, ok := parseOffloadedImagePlaceholder(raw); ok {
 		digest, _, ok := assetImageDigest(p.ImageRef)
 		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize), SHA256: digest}, ok && (p.Version == nil || *p.Version == 1)
@@ -691,17 +683,25 @@ func retainedImageBlock(raw jsontext.Value, index int) (RetainedImage, bool) {
 	if json.Unmarshal(raw, &p, json.MatchCaseInsensitiveNames(true)) == nil && p.Type == "agentsview_image" && p.ImageRef == "" {
 		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize)}, p.MediaType != "" && p.ByteSize >= 0 && (p.Version == nil || *p.Version == 1)
 	}
-	return retainedInlineFile(raw, index)
+	return retainedInlineFile(raw, index, hashImage)
 }
 
-func retainedInlineFile(raw jsontext.Value, index int) (RetainedImage, bool) {
+func retainedInlineFile(raw jsontext.Value, index int, hashImage bool) (RetainedImage, bool) {
 	uri, imageOnly, ok := retainedInlineURI(raw)
 	if !ok {
 		return RetainedImage{}, false
 	}
-	hash := sha256.New()
-	mediaType, size, _, ok := streamInlineData(uri, hash, imageOnly)
-	return RetainedImage{Index: index, MediaType: mediaType, Size: new(size), SHA256: hex.EncodeToString(hash.Sum(nil))}, ok
+	var out io.Writer = io.Discard
+	var hash = sha256.New()
+	if hashImage {
+		out = hash
+	}
+	mediaType, size, _, ok := streamInlineData(uri, out, imageOnly)
+	image := RetainedImage{Index: index, MediaType: mediaType, Size: new(size)}
+	if hashImage {
+		image.SHA256 = hex.EncodeToString(hash.Sum(nil))
+	}
+	return image, ok
 }
 
 func retainedInlineURI(raw jsontext.Value) (jsontext.Value, bool, bool) {
@@ -738,18 +738,7 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 			if found != nil {
 				break
 			}
-			recognized := false
-			if p, ok := parseOffloadedImagePlaceholder(block); ok {
-				_, _, valid := assetImageDigest(p.ImageRef)
-				recognized = valid && (p.Version == nil || *p.Version == 1)
-			} else {
-				var p offloadedImagePlaceholder
-				if json.Unmarshal(block, &p, json.MatchCaseInsensitiveNames(true)) == nil && p.Type == "agentsview_image" && p.ImageRef == "" {
-					recognized = p.MediaType != "" && p.ByteSize >= 0 && (p.Version == nil || *p.Version == 1)
-				} else if uri, imageOnly, ok := retainedInlineURI(block); ok {
-					_, _, _, recognized = streamInlineData(uri, io.Discard, imageOnly)
-				}
-			}
+			_, recognized := retainedImageBlock(block, count, false)
 			if recognized {
 				if count == index {
 					found = block

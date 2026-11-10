@@ -1601,9 +1601,8 @@ func (db *DB) insertMessages(ctx context.Context,
 		}
 	}
 	storedSessionIDs := messageSessionIDs(msgs)
-	imageTx := contextTransaction{ctx: ctx, tx: tx}
 	for _, sessionID := range storedSessionIDs {
-		if err := bumpTranscriptRevisionTx(imageTx, sessionID); err != nil {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
 	}

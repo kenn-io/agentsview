@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -30,9 +29,6 @@ var passBudget = 2 * time.Minute
 const pageSize = 20
 
 func (m *Manager) Run(ctx context.Context) error {
-	if m.DB.ArchiveContent().OmitsToolContent() {
-		return nil
-	}
 	if err := m.DB.BackfillImageTextOccurrences(ctx); err != nil {
 		return err
 	}
@@ -81,11 +77,11 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 		item := items[0]
 		body, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
 		sum := sha256.Sum256(body)
-		if err != nil || len(body) == 0 || hex.EncodeToString(sum[:]) != hash {
+		if err != nil || hex.EncodeToString(sum[:]) != hash {
 			continue
 		}
 		mediaType := http.DetectContentType(body)
-		if !strings.HasPrefix(mediaType, "image/") || !slices.Contains(glmocr.SupportedMediaTypes(), mediaType) {
+		if !strings.HasPrefix(mediaType, "image/") {
 			return m.DB.SaveImageText(ctx, hash, identity, "", false)
 		}
 		source, err := ocr.NewSource(io.NopCloser(bytes.NewReader(body)), mediaType, int64(len(body)), hash)
@@ -94,9 +90,6 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 		}
 		result, err := m.Client.Process(ctx, source)
 		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
 			if ocr.ErrorKindOf(err) == ocr.ErrorInvalidInput {
 				return m.DB.SaveImageText(ctx, hash, identity, "", false)
 			}

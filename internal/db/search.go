@@ -453,15 +453,9 @@ func (db *DB) Search(
 	defer func() { _ = tx.Rollback() }()
 	imageQuery := f.Query
 	var walk *searchRankWalk
-	var hasImageText bool
 	imageTable := "image_text_fts"
 	if ftsQuery.table == "messages_cjk_fts" {
 		imageTable = "image_text_cjk_fts"
-	}
-	if imageQuery != "" {
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+imageTable+` JOIN image_text_cache c ON c.rowid=`+imageTable+`.rowid WHERE `+imageTable+` MATCH ? AND c.succeeded=1)`, imageQuery).Scan(&hasImageText); err != nil {
-			return SearchPage{}, err
-		}
 	}
 	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
 		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
@@ -509,18 +503,16 @@ func (db *DB) Search(
 	}
 	args = append(args, bestArgs...)
 
-	imageBranchSQL := ""
 	imageOccurrenceSQL := ` JOIN image_text_occurrences o ON o.image_hash=c.image_hash
 		 LEFT JOIN tool_result_events e ON e.id=o.event_id
 		 LEFT JOIN tool_calls tc ON tc.id=o.call_id
 		 LEFT JOIN messages cm ON cm.id=tc.message_id
 		 JOIN messages im ON im.session_id=o.session_id AND im.ordinal=COALESCE(e.tool_call_message_ordinal,cm.ordinal)`
 	imageVisibilitySQL := `im.is_system = 0 AND ` + SystemPrefixSQL("im.content", "im.role")
-	if hasImageText {
-		args = append(args, imageQuery)
-		args = append(args, nameProjectArgs...)
-		args = append(args, ftsArgs...)
-		imageBranchSQL = fmt.Sprintf(`
+	args = append(args, imageQuery)
+	args = append(args, nameProjectArgs...)
+	args = append(args, ftsArgs...)
+	imageBranchSQL := fmt.Sprintf(`
 			UNION ALL
 			SELECT session_id,project,agent,machine,name,session_ended_at,ordinal,NULL,image_rowid,NULL,image_rank,0
 			FROM (
@@ -537,7 +529,6 @@ func (db *DB) Search(
 			 WHERE %s MATCH ? AND s.deleted_at IS NULL AND %s %s
 			 AND NOT EXISTS (SELECT 1 FROM sessions s2 JOIN messages m2 ON m2.session_id=s2.id CROSS JOIN messages_fts WHERE messages_fts.rowid=m2.id AND `+innerWhereSQL+` AND s2.id=s.id)
 			) WHERE rn=1`, imageTable, imageTable, imageTable, imageTable, imageOccurrenceSQL, imageTable, imageVisibilitySQL, nameProjectClause)
-	}
 	nameBranchSQL := ""
 	if includeNames {
 		args = append(args, likePattern)        // CASE COALESCE(display_name,session_name) LIKE
@@ -546,9 +537,7 @@ func (db *DB) Search(
 		args = append(args, likePattern)        // name WHERE first_message LIKE
 		args = append(args, nameProjectArgs...) // optional name branch project and dates
 		args = append(args, ftsSessionsArgs...) // NOT IN WHERE
-		if hasImageText {
-			args = append(args, imageQuery)
-		}
+		args = append(args, imageQuery)
 		nameBranchSQL = fmt.Sprintf(`
 			UNION ALL
 
@@ -579,12 +568,7 @@ func (db *DB) Search(
 				%s
 				AND s.id NOT IN (
 					%s
-				)`+func() string {
-			if hasImageText {
-				return ` AND NOT EXISTS (SELECT 1 FROM ` + imageTable + ` JOIN image_text_cache c ON c.rowid=` + imageTable + `.rowid AND c.succeeded=1 ` + imageOccurrenceSQL + ` WHERE o.session_id=s.id AND ` + imageVisibilitySQL + ` AND ` + imageTable + ` MATCH ?)`
-			}
-			return ``
-		}(), nameProjectClause, ftsSessionsSQL)
+				) AND NOT EXISTS (SELECT 1 FROM `+imageTable+` JOIN image_text_cache c ON c.rowid=`+imageTable+`.rowid AND c.succeeded=1 `+imageOccurrenceSQL+` WHERE o.session_id=s.id AND `+imageVisibilitySQL+` AND `+imageTable+` MATCH ?)`, nameProjectClause, ftsSessionsSQL)
 	}
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
 	args = append(args, imageQuery, f.Query) // paged image and message snippet MATCH

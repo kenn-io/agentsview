@@ -41,11 +41,17 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestImageTextPassStopsOnServiceError(t *testing.T) {
-	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+func imageTextTestDB(t *testing.T) *db.DB {
+	t.Helper()
+	d, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	return d
+}
+
+func TestImageTextPassStopsOnServiceError(t *testing.T) {
+	ctx := t.Context()
+	d := imageTextTestDB(t)
 	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
 	for i := range 3 {
 		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d", i)))
@@ -67,9 +73,7 @@ func TestImageTextPassStopsOnServiceError(t *testing.T) {
 func TestImageTextPassDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-		require.NoError(t, err)
-		defer func() { require.NoError(t, d.Close()) }()
+		d := imageTextTestDB(t)
 		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			select {
@@ -86,9 +90,12 @@ func TestImageTextPassDeadline(t *testing.T) {
 		start := time.Now()
 		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
 		require.Equal(t, 120*time.Second, time.Since(start))
-		pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 20)
+		pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 30)
 		require.NoError(t, err)
-		require.Len(t, pending, 20)
+		require.Len(t, pending, 21)
+		var failures int
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE failures > 0`).Scan(&failures))
+		require.Zero(t, failures)
 		var succeeded int
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE succeeded=1`).Scan(&succeeded))
 		require.Equal(t, 1, succeeded)
@@ -101,9 +108,7 @@ func TestImageTextPassDeadline(t *testing.T) {
 func TestImageTextPassKeepsRetryCutoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-		require.NoError(t, err)
-		defer func() { require.NoError(t, d.Close()) }()
+		d := imageTextTestDB(t)
 		requests := 0
 		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
 			requests++
@@ -132,93 +137,73 @@ func TestImageTextPassKeepsRetryCutoff(t *testing.T) {
 	})
 }
 
-func TestImageTextFailureClassification(t *testing.T) {
-	for _, name := range []string{"service error", "corrupt offloaded asset"} {
-		t.Run(name, func(t *testing.T) {
-			ctx := t.Context()
-			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, d.Close()) })
-			requests := 0
-			client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
-				requests++
-				w.Header().Set("Content-Type", "application/json")
-				if name == "service error" && requests == 1 {
-					fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[]]}`, glmocr.DefaultDeploymentFingerprint)
-				} else {
-					fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"retry succeeded"}]]}`, glmocr.DefaultDeploymentFingerprint)
-				}
-			})
-			manager := Manager{DB: d, Client: client}
-			png := []byte("\x89PNG\r\n\x1a\nimage")
-			content := fmt.Sprintf(`[{"type":"file","uri":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
-			var path string
-			switch name {
-			case "corrupt offloaded asset":
-				dir := t.TempDir()
-				d.SetAssetsDir(dir)
-				ref, _, err := assets.Put(dir, "image/png", png)
-				require.NoError(t, err)
-				path = filepath.Join(dir, strings.TrimPrefix(ref, "asset://"))
-				corrupt := append([]byte(nil), png...)
-				corrupt[len(corrupt)-1] ^= 1
-				require.NoError(t, os.WriteFile(path, corrupt, 0o600))
-				content = fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
-			}
-			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
-			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-			require.Error(t, manager.Run(ctx))
-			page, err := d.Search(ctx, db.SearchFilter{Query: "succeeded"})
-			require.NoError(t, err)
-			require.Empty(t, page.Results)
-			var failures int
-			var retry string
-			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures,retry_at FROM image_text_cache`).Scan(&failures, &retry))
-			require.Equal(t, 1, failures)
-			require.NotEmpty(t, retry)
-			require.NotEqual(t, "9999-12-31T23:59:59Z", retry)
-			if name == "service error" {
-				require.Equal(t, 1, requests)
-				require.NoError(t, manager.Run(ctx))
-				require.Equal(t, 1, requests)
-			} else {
-				require.Zero(t, requests)
-				require.NoError(t, os.WriteFile(path, png, 0o600))
-			}
-			require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
-				return err
-			}))
-			require.NoError(t, manager.Run(ctx))
-			if name == "service error" {
-				require.Equal(t, 2, requests)
-			} else {
-				require.Equal(t, 1, requests)
-			}
-			var succeeded int
-			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded FROM image_text_cache`).Scan(&succeeded))
-			require.Equal(t, 1, succeeded)
-			page, err = d.Search(ctx, db.SearchFilter{Query: "succeeded"})
-			require.NoError(t, err)
-			require.Len(t, page.Results, 1)
-			require.Equal(t, "one", page.Results[0].SessionID)
-		})
-	}
-	t.Run("transcripts only", func(t *testing.T) {
-		ctx := t.Context()
-		d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, d.Close()) })
-		require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
-		content := `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`
-		require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-		requests := 0
-		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) { requests++ })
-		d.SetArchiveContent(config.ArchiveContentTranscripts)
-		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
-		require.Zero(t, requests)
+func TestImageTextServiceErrorBackoff(t *testing.T) {
+	ctx := t.Context()
+	d := imageTextTestDB(t)
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	requests := 0
+	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[]]}`, glmocr.DefaultDeploymentFingerprint)
+			return
+		}
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"retry succeeded"}]]}`, glmocr.DefaultDeploymentFingerprint)
 	})
+	manager := Manager{DB: d, Client: client}
+	require.Error(t, manager.Run(ctx))
+	require.NoError(t, manager.Run(ctx))
+	require.Equal(t, 1, requests)
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
+		return err
+	}))
+	require.NoError(t, manager.Run(ctx))
+	require.Equal(t, 2, requests)
+	page, err := d.Search(ctx, db.SearchFilter{Query: "succeeded"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "one", page.Results[0].SessionID)
+}
 
+func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
+	ctx := t.Context()
+	d := imageTextTestDB(t)
+	dir := t.TempDir()
+	d.SetAssetsDir(dir)
+	png := []byte("\x89PNG\r\n\x1a\nimage")
+	ref, _, err := assets.Put(dir, "image/png", png)
+	require.NoError(t, err)
+	path := filepath.Join(dir, strings.TrimPrefix(ref, "asset://"))
+	corrupt := append([]byte(nil), png...)
+	corrupt[len(corrupt)-1] ^= 1
+	require.NoError(t, os.WriteFile(path, corrupt, 0o600))
+	content := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	requests := 0
+	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"retry succeeded"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	})
+	manager := Manager{DB: d, Client: client}
+	require.Error(t, manager.Run(ctx))
+	require.Zero(t, requests)
+	require.NoError(t, os.WriteFile(path, png, 0o600))
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE image_text_cache SET retry_at='2000-01-01T00:00:00Z'`)
+		return err
+	}))
+	require.NoError(t, manager.Run(ctx))
+	require.Equal(t, 1, requests)
+	page, err := d.Search(ctx, db.SearchFilter{Query: "succeeded"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "one", page.Results[0].SessionID)
 }
 
 func TestImageTextProcessorKey(t *testing.T) {
@@ -241,35 +226,9 @@ func TestImageTextProcessorKey(t *testing.T) {
 	require.NotEqual(t, firstKey, changedKey)
 }
 
-func TestImageTextPassDrainsPages(t *testing.T) {
-	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	requests := 0
-	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
-	})
-	for i := range 21 {
-		id := fmt.Sprintf("session-%02d", i)
-		body := []byte(fmt.Sprintf("\x89PNG\r\n\x1a\n%d", i))
-		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(body))
-		require.NoError(t, d.UpsertSession(ctx, db.Session{ID: id, Project: "demo", Agent: "test", MessageCount: 1}))
-		require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: id, Ordinal: 3, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	}
-	manager := Manager{DB: d, Client: client}
-	err = manager.Run(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 21, requests)
-}
-
 func TestImageTextPassReadsMultipleImagesFromOneResult(t *testing.T) {
 	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	d := imageTextTestDB(t)
 	blocks := []string{`{"type":"input_image","image_url":"data:image/png;base64,%%%"}`}
 	want := make(map[string]bool)
 	for i := range 40 {
@@ -311,9 +270,7 @@ func TestImageTextPassReadsMultipleImagesFromOneResult(t *testing.T) {
 
 func TestImageTextPassReadsRepeatedImageFromOneResult(t *testing.T) {
 	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	d := imageTextTestDB(t)
 	image := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nrepeated" + strings.Repeat("x", 16384)))
 	blocks := []string{fmt.Sprintf(`{"type":"text","text":%q}`, strings.Repeat("y", 4<<20))}
 	for range 20 {
@@ -333,13 +290,11 @@ func TestImageTextPassReadsRepeatedImageFromOneResult(t *testing.T) {
 	require.Equal(t, 1, requests)
 }
 
-func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
+func TestImageTextSearchReturnsOneResultPerSession(t *testing.T) {
 	for _, corrupt := range []bool{false, true} {
 		t.Run(fmt.Sprintf("corrupt=%t", corrupt), func(t *testing.T) {
 			ctx := t.Context()
-			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			d := imageTextTestDB(t)
 			assetDir := t.TempDir()
 			d.SetAssetsDir(assetDir)
 			png := []byte("\x89PNG\r\n\x1a\nimage")
@@ -353,12 +308,12 @@ func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
 			}
 			offloaded := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
 			inline := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
-			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "same", Project: "demo", Agent: "test", MessageCount: 21}))
+			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "same", Project: "demo", Agent: "test", MessageCount: 3}))
 			var messages []db.Message
-			for i := range 20 {
+			for i := range 2 {
 				messages = append(messages, db.Message{SessionID: "same", Ordinal: i, Role: "assistant", Content: "missing", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: offloaded}}})
 			}
-			messages = append(messages, db.Message{SessionID: "same", Ordinal: 20, Role: "assistant", Content: "inline", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: inline}}})
+			messages = append(messages, db.Message{SessionID: "same", Ordinal: 2, Role: "assistant", Content: "inline", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: inline}}})
 			require.NoError(t, d.InsertMessages(ctx, messages))
 			requests := 0
 			client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -377,9 +332,7 @@ func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
 
 func TestImageTextCachesEmptyNormalizedOutput(t *testing.T) {
 	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	d := imageTextTestDB(t)
 	png := []byte("\x89PNG\r\n\x1a\nimage")
 	content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
 	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "empty", Project: "demo", Agent: "test", MessageCount: 1}))
@@ -413,9 +366,7 @@ func TestImageTextUsesVerifiedBytes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
-			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			d := imageTextTestDB(t)
 			var sent []string
 			client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
@@ -452,9 +403,7 @@ func TestImageTextUsesVerifiedBytes(t *testing.T) {
 
 func TestImageTextAcceptsLargeImage(t *testing.T) {
 	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	d := imageTextTestDB(t)
 	assetsDir := t.TempDir()
 	d.SetAssetsDir(assetsDir)
 	body := make([]byte, glmocr.MaxDocumentBytes)

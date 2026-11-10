@@ -706,7 +706,7 @@ func (s *Sync) pushEverything(
 		return result, err
 	}
 
-	changed, unchanged, fingerprints, imageText, err := s.selectChangedSessions(ctx, sessions)
+	changed, unchanged, fingerprints, err := s.selectChangedSessions(ctx, sessions)
 	if err != nil {
 		return result, err
 	}
@@ -717,7 +717,7 @@ func (s *Sync) pushEverything(
 		end := min(batchStart+duckSessionPushBatchSize, len(changed))
 		if err := s.pushSessionBatchForMode(
 			ctx, changed[batchStart:end], batchStart, len(changed),
-			&result, &pushed, onProgress, fingerprints, imageText,
+			&result, &pushed, onProgress, fingerprints,
 		); err != nil {
 			return result, err
 		}

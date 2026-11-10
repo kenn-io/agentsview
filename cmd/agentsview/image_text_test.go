@@ -15,13 +15,15 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/docbank/document/glmocr"
+	"go.kenn.io/docbank/document/ocr"
 )
 
 func TestImageTextRespectsArchiveContent(t *testing.T) {
 	ctx := t.Context()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	first := d
+	t.Cleanup(func() { require.NoError(t, first.Close()) })
 	cfg := config.Config{ArchiveContent: config.ArchiveContentTranscripts, ImageText: config.ImageTextConfig{Enabled: true}}
 	manager, err := setupImageText(t.Context(), cfg, d)
 	require.NoError(t, err)
@@ -37,6 +39,20 @@ func TestImageTextRespectsArchiveContent(t *testing.T) {
 	manager, err = setupImageText(t.Context(), cfg, d)
 	require.NoError(t, err)
 	require.NotNil(t, manager)
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+	cfg.ImageText.Enabled = false
+	manager, err = setupImageText(ctx, cfg, d)
+	require.NoError(t, err)
+	require.Nil(t, manager)
+	var count int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+	require.Zero(t, count)
 }
 
 func TestImageTextJobKeepsDaemonAwake(t *testing.T) {
@@ -80,6 +96,11 @@ func TestImageTextJobKeepsDaemonAwake(t *testing.T) {
 	}
 	close(release)
 	require.NoError(t, <-finished)
+	policy, err := (config.ImageTextConfig{Enabled: true}).Policy()
+	require.NoError(t, err)
+	var processor string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT processor FROM image_text_cache`).Scan(&processor))
+	require.Equal(t, policy.Fingerprint(), processor)
 	cancel()
 	<-trackerDone
 }

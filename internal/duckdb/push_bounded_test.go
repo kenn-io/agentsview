@@ -471,13 +471,13 @@ func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
 	// Mirror only sess-1; sess-2 stays local-only.
 	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
 	require.NoError(t, err)
-	fingerprints, imageText, err := syncer.sessionFingerprints(ctx, sessions)
+	fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
 	require.NoError(t, err)
 	for _, sess := range sessions {
 		if sess.ID != "sess-1" {
 			continue
 		}
-		_, err := syncer.pushSingleSession(ctx, sess, fingerprints[sess.ID], imageText[sess.ID])
+		_, err := syncer.pushSingleSession(ctx, sess, fingerprints[sess.ID])
 		require.NoError(t, err)
 	}
 
@@ -587,14 +587,14 @@ func TestCurationRefreshRetriesUntilSkippedSessionIsMirrored(t *testing.T) {
 
 	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
 	require.NoError(t, err)
-	fingerprints, imageText, err := syncer.sessionFingerprints(ctx, sessions)
+	fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
 	require.NoError(t, err)
 	pushOne := func(id string) {
 		for _, sess := range sessions {
 			if sess.ID != id {
 				continue
 			}
-			_, err := syncer.pushSingleSession(ctx, sess, fingerprints[sess.ID], imageText[sess.ID])
+			_, err := syncer.pushSingleSession(ctx, sess, fingerprints[sess.ID])
 			require.NoError(t, err)
 		}
 	}

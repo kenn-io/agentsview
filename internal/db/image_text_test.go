@@ -234,6 +234,9 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 						_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, step.id)
 						return err
 					}))
+					var count int
+					require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, sharedHash).Scan(&count))
+					require.Equal(t, step.shared, count)
 				}
 				require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 				for hash, want := range map[string]int{sharedHash: step.shared, exclusiveHash: 0, unrelatedHash: 1} {
@@ -287,9 +290,21 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 		require.Equal(t, 2, count)
 	})
 
+	t.Run("shared writes", imageTextSharedAcrossSessionWrites)
+	t.Run("legacy archive without image cache", func(t *testing.T) {
+		source := filepath.Join(t.TempDir(), "legacy.db")
+		legacy, err := sql.Open(sqliteArchiveDriverName, makeDSN(source, false))
+		require.NoError(t, err)
+		_, err = legacy.ExecContext(t.Context(), `CREATE TABLE legacy (id INTEGER)`)
+		require.NoError(t, err)
+		require.NoError(t, legacy.Close())
+		dst := testDB(t)
+		require.NoError(t, dst.CopyImageTextFrom(t.Context(), source))
+	})
+
 }
 
-func TestImageTextSharedAcrossSessionWrites(t *testing.T) {
+func imageTextSharedAcrossSessionWrites(t *testing.T) {
 	for _, mode := range []string{"atomic batch", "trashed copy"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := t.Context()

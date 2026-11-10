@@ -30,7 +30,7 @@ func TestPushRejectsIntegerOverflowReplacement(t *testing.T) {
 	sess, err := local.GetSession(ctx, write.Session.ID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	_, err = syncer.pushSingleSession(ctx, *sess, "before", nil)
+	_, err = syncer.pushSingleSession(ctx, *sess, "before")
 	require.NoError(t, err)
 
 	sess.TotalOutputTokens = 2147483648
@@ -39,7 +39,7 @@ func TestPushRejectsIntegerOverflowReplacement(t *testing.T) {
 	sess, err = local.GetSession(ctx, sess.ID)
 	require.NoError(t, err)
 	require.Equal(t, 2147483648, sess.TotalOutputTokens)
-	_, err = syncer.tryPushSessionBatch(ctx, []db.Session{*sess}, map[string]string{sess.ID: "after"}, nil)
+	_, err = syncer.tryPushSessionBatch(ctx, []db.Session{*sess}, map[string]string{sess.ID: "after"})
 	require.ErrorContains(t, err, "total_output_tokens")
 	require.ErrorContains(t, err, "INTEGER")
 	var total int64
@@ -185,7 +185,7 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 				require.NoError(t, createSchema(ctx, syncer.DB()))
 				sess, err := local.GetSession(ctx, old.Session.ID)
 				require.NoError(t, err)
-				_, err = syncer.pushSingleSession(ctx, *sess, "before", nil)
+				_, err = syncer.pushSingleSession(ctx, *sess, "before")
 				require.NoError(t, err)
 				before := duckBatchSnapshot(t, syncer.DB(), sess.ID)
 
@@ -221,7 +221,7 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 					}
 					return nil
 				}
-				_, err = syncer.tryPushSessionBatch(attemptCtx, []db.Session{*sess}, map[string]string{sess.ID: "after"}, nil)
+				_, err = syncer.tryPushSessionBatch(attemptCtx, []db.Session{*sess}, map[string]string{sess.ID: "after"})
 				require.True(t, injected, "the failure must follow one real inserted chunk: %v", err)
 				if canceled {
 					require.ErrorIs(t, err, context.Canceled)
@@ -237,7 +237,7 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 				assert.Equal(t, "before", fingerprint)
 
 				duckAppendHook = previousHook
-				_, err = syncer.pushSingleSession(ctx, *sess, "after", nil)
+				_, err = syncer.pushSingleSession(ctx, *sess, "after")
 				require.NoError(t, err)
 				assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
 				require.NoError(t, syncer.DB().QueryRowContext(ctx,
@@ -432,7 +432,7 @@ func TestPushReplacementClearsAllSessionRows(t *testing.T) {
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	sess, err := local.GetSession(ctx, write.Session.ID)
 	require.NoError(t, err)
-	_, err = syncer.pushSingleSession(ctx, *sess, "before", nil)
+	_, err = syncer.pushSingleSession(ctx, *sess, "before")
 	require.NoError(t, err)
 	tables := []string{"messages", "tool_calls", "tool_result_events", "usage_events", "commit_links", "secret_findings", "pinned_messages"}
 	for _, table := range tables {
@@ -451,7 +451,7 @@ func TestPushReplacementClearsAllSessionRows(t *testing.T) {
 	require.NoError(t, err)
 	sess, err = local.GetSession(ctx, sess.ID)
 	require.NoError(t, err)
-	_, err = syncer.pushSingleSession(ctx, *sess, "after", nil)
+	_, err = syncer.pushSingleSession(ctx, *sess, "after")
 	require.NoError(t, err)
 	for _, table := range tables {
 		want := 0
@@ -487,7 +487,7 @@ func TestPushDuckDBTimestampCastParity(t *testing.T) {
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	sess, err := local.GetSession(ctx, write.Session.ID)
 	require.NoError(t, err)
-	_, err = syncer.pushSingleSession(ctx, *sess, "timestamp", nil)
+	_, err = syncer.pushSingleSession(ctx, *sess, "timestamp")
 	require.NoError(t, err)
 	for _, field := range []struct{ table, column, where string }{
 		{"sessions", "started_at", "id = 'timestamp-cast'"},

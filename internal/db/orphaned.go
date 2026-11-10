@@ -261,12 +261,6 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			return nil, err
 		}
 	}
-	imageTx := contextTransaction{ctx: ctx, tx: tx}
-	for _, id := range ids {
-		if err := refreshImageTextOccurrencesTx(imageTx, id); err != nil {
-			return nil, err
-		}
-	}
 	if err := retainConversationTombstonesTx(ctx, tx); err != nil {
 		return nil, fmt.Errorf("retaining conversation tombstones: %w", err)
 	}
@@ -417,12 +411,6 @@ func (d *DB) CopyTrashedDataFrom(ctx context.Context, sourcePath string) ([]stri
 		return nil, fmt.Errorf("retaining Codex trash thread rows: %w", err)
 	}
 
-	imageTx := contextTransaction{ctx: ctx, tx: tx}
-	for _, id := range ids {
-		if err := refreshImageTextOccurrencesTx(imageTx, id); err != nil {
-			return nil, err
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("committing trashed copy: %w", err)
 	}

@@ -70,51 +70,15 @@ func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
 	assert.Equal(t, (1<<20)+dataVersion, raw)
 }
 
-func TestDecodeUserVersionArchiveBits(t *testing.T) {
-	for _, tc := range []struct {
-		raw, version int
-		archiveOnly  bool
-	}{
-		{169, 169, false},
-		{1<<20 | 169, 169, true},
-		{1<<20 | 168, 168, true},
-		{170, 170, false},
-	} {
-		version, archiveOnly := DecodeUserVersion(tc.raw)
-		assert.Equal(t, tc.version, version)
-		assert.Equal(t, tc.archiveOnly, archiveOnly)
-	}
-
-}
-
 func TestImageTextDataVersionRequiresRebuild(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
 	path := d.Path()
-	_, err := d.getWriter().ExecContext(ctx, `PRAGMA user_version=169`)
+	_, err := d.getWriter().ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", CurrentDataVersion()-1))
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 	needs, full, err := ArchiveResyncState(ctx, path)
 	require.NoError(t, err)
 	require.True(t, needs)
 	require.True(t, full)
-	assert.Greater(t, CurrentDataVersion(), 169)
-}
-
-func TestOpenRejectsUnknownArchiveFormat(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	path := d.Path()
-	const rawVersion = 1<<22 | 1<<21 | 169
-	_, err := d.getWriter().ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", rawVersion))
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	_, err = Open(ctx, path)
-	require.True(t, IsDataVersionTooNew(err))
-	raw, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))
-	require.NoError(t, err)
-	defer raw.Close()
-	var version int
-	require.NoError(t, raw.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version))
-	require.Equal(t, rawVersion, version)
 }

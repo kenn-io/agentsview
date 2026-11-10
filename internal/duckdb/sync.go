@@ -483,7 +483,7 @@ func (s *Sync) pushChangedSessions(
 		return nil, nil, err
 	}
 
-	changed, unchanged, fingerprints, imageText, err := s.selectChangedSessions(ctx, inScope)
+	changed, unchanged, fingerprints, err := s.selectChangedSessions(ctx, inScope)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -494,7 +494,7 @@ func (s *Sync) pushChangedSessions(
 		end := min(batchStart+duckSessionPushBatchSize, len(changed))
 		if err := s.pushSessionBatchForMode(
 			ctx, changed[batchStart:end], batchStart, len(changed),
-			result, &pushed, onProgress, fingerprints, imageText,
+			result, &pushed, onProgress, fingerprints,
 		); err != nil {
 			return nil, nil, err
 		}
@@ -569,18 +569,17 @@ func (s *Sync) deleteOutOfScopeMirrorSessions(
 // row reads back as "", which never equals a real fingerprint, so a session
 // whose mirror row disappeared (deleted directly, corrupted, never pushed)
 // is treated as changed and repaired here instead of needing a separate
-// orphan-repair pass. imageText holds the rows the changed sessions'
-// fingerprints hashed, so each push writes exactly what it fingerprinted.
+// orphan-repair pass.
 func (s *Sync) selectChangedSessions(
 	ctx context.Context, candidates []db.Session,
-) (changed, unchanged []db.Session, fingerprints map[string]string, imageText map[string][]db.ImageTextRow, err error) {
-	fingerprints, imageText, err = s.sessionFingerprints(ctx, candidates)
+) (changed, unchanged []db.Session, fingerprints map[string]string, err error) {
+	fingerprints, err = s.sessionFingerprints(ctx, candidates)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	mirrorFPs, err := s.readMirrorFingerprints(ctx, sessionIDs(candidates))
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	changed = make([]db.Session, 0, len(candidates))
 	unchanged = make([]db.Session, 0, len(candidates))
@@ -589,10 +588,9 @@ func (s *Sync) selectChangedSessions(
 			changed = append(changed, sess)
 		} else {
 			unchanged = append(unchanged, sess)
-			delete(imageText, sess.ID)
 		}
 	}
-	return changed, unchanged, fingerprints, imageText, nil
+	return changed, unchanged, fingerprints, nil
 }
 
 // readMirrorFingerprints fetches stored fingerprints for exactly the
@@ -758,15 +756,14 @@ func (s *Sync) pushSessionBatchForMode(
 	pushed *[]db.Session,
 	onProgress func(storage.MirrorPushProgress),
 	fingerprints map[string]string,
-	imageText map[string][]db.ImageTextRow,
 ) error {
 	return pushSessionBatchWith(
 		ctx, sessions, offset, total, result, pushed, onProgress,
 		func(ctx context.Context, sessions []db.Session) ([]int, error) {
-			return s.tryPushSessionBatch(ctx, sessions, fingerprints, imageText)
+			return s.tryPushSessionBatch(ctx, sessions, fingerprints)
 		},
 		func(ctx context.Context, sess db.Session) (int, error) {
-			return s.pushSingleSession(ctx, sess, fingerprints[sess.ID], imageText[sess.ID])
+			return s.pushSingleSession(ctx, sess, fingerprints[sess.ID])
 		},
 	)
 }
@@ -879,10 +876,9 @@ func reportDuckPushProgress(
 }
 
 // tryPushSessionBatch keeps native appenders and SQL on the transaction's
-// connection. imageText must come from the read that produced fingerprints.
+// connection.
 func (s *Sync) tryPushSessionBatch(
 	ctx context.Context, sessions []db.Session, fingerprints map[string]string,
-	imageText map[string][]db.ImageTextRow,
 ) ([]int, error) {
 	conn, err := s.duck.Conn(ctx)
 	if err != nil {
@@ -933,7 +929,11 @@ func (s *Sync) tryPushSessionBatch(
 		if err := s.replaceCommitLinks(ctx, tx, sess.ID); err != nil {
 			return nil, err
 		}
-		if err := insertImageText(ctx, tx, imageText[sess.ID]); err != nil {
+		rows, err := s.local.SessionImageTextRows(ctx, sess.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := insertImageText(ctx, tx, rows); err != nil {
 			return nil, err
 		}
 		if err := s.replaceSecretFindings(ctx, tx, sess.ID); err != nil {
@@ -949,8 +949,8 @@ func (s *Sync) tryPushSessionBatch(
 	return counts, nil
 }
 
-func (s *Sync) pushSingleSession(ctx context.Context, sess db.Session, fingerprint string, imageText []db.ImageTextRow) (int, error) {
-	counts, err := s.tryPushSessionBatch(ctx, []db.Session{sess}, map[string]string{sess.ID: fingerprint}, map[string][]db.ImageTextRow{sess.ID: imageText})
+func (s *Sync) pushSingleSession(ctx context.Context, sess db.Session, fingerprint string) (int, error) {
+	counts, err := s.tryPushSessionBatch(ctx, []db.Session{sess}, map[string]string{sess.ID: fingerprint})
 	if err != nil {
 		return 0, err
 	}
@@ -981,49 +981,47 @@ func sessionIDs(sessions []db.Session) []string {
 	return ids
 }
 
-// sessionFingerprints also returns the image text rows it hashed; pushes
-// write those rows rather than re-reading them.
 func (s *Sync) sessionFingerprints(
 	ctx context.Context,
 	sessions []db.Session,
-) (map[string]string, map[string][]db.ImageTextRow, error) {
+) (map[string]string, error) {
 	ids := sessionIDs(sessions)
 	usage, err := s.local.UsageEventFingerprints(ctx, ids)
 	if err != nil {
-		return nil, nil, fmt.Errorf("computing usage fingerprints: %w", err)
+		return nil, fmt.Errorf("computing usage fingerprints: %w", err)
 	}
 	planUsage, err := s.local.PlanUsageFingerprints(ctx, ids)
 	if err != nil {
-		return nil, nil, fmt.Errorf("computing plan usage fingerprints: %w", err)
+		return nil, fmt.Errorf("computing plan usage fingerprints: %w", err)
 	}
 	commitLinks, err := s.local.SessionCommitLinkRowsBySession(ctx, ids)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	imageText, err := s.local.SessionImageTextRowsBySession(ctx, ids)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading image text: %w", err)
+		return nil, fmt.Errorf("reading image text: %w", err)
 	}
 	out := make(map[string]string, len(sessions))
 	for _, sess := range sessions {
 		msgs, err := s.local.GetAllMessages(ctx, sess.ID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("message fingerprint %s: %w", sess.ID, err)
+			return nil, fmt.Errorf("message fingerprint %s: %w", sess.ID, err)
 		}
 		findings, err := s.local.SessionSecretFindings(ctx, sess.ID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("secret finding fingerprint %s: %w", sess.ID, err)
+			return nil, fmt.Errorf("secret finding fingerprint %s: %w", sess.ID, err)
 		}
 		pins, err := s.local.ListPinnedMessages(ctx, sess.ID, "")
 		if err != nil {
-			return nil, nil, fmt.Errorf("pin fingerprint %s: %w", sess.ID, err)
+			return nil, fmt.Errorf("pin fingerprint %s: %w", sess.ID, err)
 		}
 		// file_path and call_index are json:"-" on ToolCall, so the
 		// marshaled Messages do not cover them. Fold in the tool-call
 		// fingerprint so a file_path-only backfill invalidates the mirror.
 		toolCalls, err := s.local.ToolCallFingerprint(ctx, sess.ID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
+			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
 		}
 		payload := struct {
 			SessionFields  []any
@@ -1052,12 +1050,12 @@ func (s *Sync) sessionFingerprints(
 		}
 		data, err := json.Marshal(payload)
 		if err != nil {
-			return nil, nil, fmt.Errorf("encoding session fingerprint %s: %w", sess.ID, err)
+			return nil, fmt.Errorf("encoding session fingerprint %s: %w", sess.ID, err)
 		}
 		sum := sha256.Sum256(data)
 		out[sess.ID] = hex.EncodeToString(sum[:])
 	}
-	return out, imageText, nil
+	return out, nil
 }
 
 // duckSessionFingerprintFields lists the session-scalar portion of the

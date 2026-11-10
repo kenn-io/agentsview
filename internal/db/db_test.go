@@ -731,14 +731,14 @@ func TestOpenDataVersionBump_PreservesData(t *testing.T) {
 	requireNoError(t, err, "get messages")
 	require.Len(t, msgs, 2, "expected 2 messages preserved, got")
 
-	// The parser version stays stale until a successful ResyncAll.
+	// user_version must stay stale — it is only bumped
+	// after a successful ResyncAll, not at Open() time.
 	var ver int
 	err = d2.getReader().QueryRow(t.Context(),
 		"PRAGMA user_version",
 	).Scan(&ver)
 	requireNoError(t, err, "read version")
-	parserVersion, _ := DecodeUserVersion(ver)
-	require.Zero(t, parserVersion, "expected stale parser version")
+	require.Equal(t, 0, ver, "expected user_version=0 (stale)")
 	d2.Close() // simulate process exit without resync
 
 	// Second reopen: must still detect stale because the

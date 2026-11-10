@@ -128,9 +128,8 @@ func scopeLegacyDevinSourceUUIDsLocked(
 	); err != nil {
 		return fmt.Errorf("scoping devin recall end uuids: %w", err)
 	}
-	imageTx := contextTransaction{ctx: ctx, tx: tx}
 	for _, id := range sessionIDs {
-		if err := bumpTranscriptRevisionTx(imageTx, id); err != nil {
+		if err := bumpTranscriptRevisionTx(tx, id); err != nil {
 			return err
 		}
 	}

@@ -47,7 +47,6 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	}
 	defer func() { _ = tx.Rollback() }()
 	ctxTx := contextTransaction{ctx: ctx, tx: tx}
-	imageTx := ctxTx
 	var pending recallEvidenceRevocationEvents
 
 	var active int
@@ -91,7 +90,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	}
 	var pins []savedPin
 	if _, err := db.writeOneSessionBatchTx(
-		ctx, tx, imageTx, write, &pending, db.usageOnlyStorage(), &pins,
+		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(), &pins,
 	); err != nil {
 		return "", err
 	}
@@ -115,7 +114,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		}
 		copyWrite.PlanUsage = planUsage
 		if _, err := db.writeOneSessionBatchTx(
-			ctx, tx, imageTx, copyWrite, &pending, db.usageOnlyStorage(), nil,
+			ctx, tx, ctxTx, copyWrite, &pending, db.usageOnlyStorage(), nil,
 		); err != nil {
 			return "", fmt.Errorf("writing replaced session copy: %w", err)
 		}

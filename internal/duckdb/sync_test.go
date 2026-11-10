@@ -1098,7 +1098,7 @@ func TestPushSessionBatchReturnsContextCancellation(t *testing.T) {
 			"duck-canceled", "alpha", "canceled",
 			"2026-01-10T00:00:00.000Z", 1,
 		)},
-		0, 1, &result, &pushed, nil, nil, nil,
+		0, 1, &result, &pushed, nil, nil,
 	)
 
 	require.ErrorIs(t, err, context.Canceled)
@@ -1149,7 +1149,7 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 			if p.SessionsDone == 1 {
 				cancel()
 			}
-		}, nil, nil,
+		}, nil,
 	)
 
 	require.ErrorIs(t, err, context.Canceled)
