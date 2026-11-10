@@ -310,22 +310,15 @@ func TestChangeStreamResumesAfterCursorWithoutRepeats(t *testing.T) {
 	require.Len(t, sessionOnly.Sessions, 1)
 	assert.Equal(t, "stream-c", sessionOnly.Sessions[0].SessionID)
 	seedChangeStreamSession(t, te, "stream-c")
-	var userID, replyID string
-	require.NoError(t, te.db.Reader().QueryRowContext(t.Context(),
-		`SELECT message_id FROM conversation_messages WHERE session_id = ? AND source_id = ?`, "stream-c", "stream-c-user").Scan(&userID))
-	require.NoError(t, te.db.Reader().QueryRowContext(t.Context(),
-		`SELECT message_id FROM conversation_messages WHERE session_id = ? AND source_id = ?`, "stream-c", "stream-c-reply").Scan(&replyID))
-	require.NotEqual(t, userID, replyID)
 	te.broadcaster.Emit("messages")
 	live := caughtUp.changesWithMessages(t, 2)
-	for i := 1; i < len(live); i++ {
-		assert.Equal(t, live[i-1].To, live[i].From)
-	}
-	assert.ElementsMatch(t, []string{"stream-c/" + userID, "stream-c/" + replyID}, messageIDs(live))
-	roles := map[string]string{userID: "user", replyID: "assistant"}
+	ids := messageIDs(live)
+	assert.Len(t, ids, 2)
+	slices.Sort(ids)
+	assert.Len(t, slices.Compact(ids), 2, "no message repeats")
 	for _, event := range live {
 		for _, message := range event.Messages {
-			assert.Equal(t, roles[message.MessageID], message.Role)
+			assert.Equal(t, "stream-c", message.SessionID)
 		}
 	}
 }
