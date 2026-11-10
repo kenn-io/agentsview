@@ -39,7 +39,7 @@ func TestMusePersonalFixture(t *testing.T) {
 		assert.Equal(t, RoleSystem, result.Messages[1].Role)
 		assert.Equal(t, "Synthetic reasoning text for the fixture.", result.Messages[2].ThinkingText)
 		assert.Equal(t, "commentary", result.Messages[3].SourceSubtype)
-		assert.Empty(t, *result.Messages[3].DialogueText)
+		assert.Equal(t, "Checking the synthetic inventory now.", *result.Messages[3].DialogueText)
 		require.Len(t, result.Messages[4].ToolCalls, 1)
 		require.Len(t, result.Messages[4].ToolCalls[0].ResultEvents, 1)
 		assert.Equal(t, "synthetic widget inventory: 3 widgets", result.Messages[4].ToolCalls[0].ResultEvents[0].Content)
