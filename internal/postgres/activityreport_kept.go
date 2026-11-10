@@ -67,7 +67,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		err = s.pg.QueryRowContext(ctx, `SELECT EXISTS (
    SELECT 1 FROM messages m JOIN sessions s ON s.id = m.session_id
    WHERE m.session_id = ANY($1)
-    AND m.claude_message_id != '' AND m.claude_request_id != ''
+    AND m.claude_message_id != ''
     AND (`+activityReportClaudePeerPredicate("$2", "$3", "$4")+`)
     AND COALESCE(m.timestamp, s.started_at) >= $3::timestamptz
     AND COALESCE(m.timestamp, s.started_at) <= $4::timestamptz)`,

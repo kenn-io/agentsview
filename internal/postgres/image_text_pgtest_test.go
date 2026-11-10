@@ -155,7 +155,7 @@ func TestPGStampedCodexPageMigration(t *testing.T) {
 	for _, tc := range []struct {
 		name, old string
 		version   int
-	}{{"thread", thread, 130}, {"rollout", "codex:" + rollout, 130}, {"current", "codex:" + rollout, 171}} {
+	}{{"thread", thread, 130}, {"rollout", "codex:" + rollout, 130}, {"current", "codex:" + rollout, db.ImageTextDataVersion}} {
 		t.Run(tc.name, func(t *testing.T) {
 			old := tc.old
 			ctx := t.Context()
@@ -174,14 +174,14 @@ func TestPGStampedCodexPageMigration(t *testing.T) {
 			require.Zero(t, result.Errors)
 			var version int
 			require.NoError(t, pg.QueryRowContext(ctx, `SELECT data_version FROM sessions WHERE id=$1`, old).Scan(&version))
-			require.Equal(t, 171, version)
+			require.Equal(t, db.ImageTextDataVersion, version)
 			result, err = syncer.Push(ctx, true, nil)
 			require.NoError(t, err)
 			require.Zero(t, result.Errors)
 			var exists bool
 			require.NoError(t, pg.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1)`, old).Scan(&exists))
 			require.True(t, exists, "a missing canonical page must preserve the old session")
-			if tc.version == 171 {
+			if tc.version == db.ImageTextDataVersion {
 				return
 			}
 			store := &Store{pg: pg}
@@ -206,7 +206,7 @@ func TestPGStampedCodexPageMigration(t *testing.T) {
 			require.NoError(t, pg.QueryRowContext(ctx, `SELECT owner_marker FROM sessions WHERE id=$1`, old).Scan(&owner))
 			require.NoError(t, upgraded.reconcilePGMissingSessions(ctx, owner, nil))
 			require.NoError(t, pg.QueryRowContext(ctx, `SELECT data_version FROM sessions WHERE id=$1`, page).Scan(&version))
-			require.Equal(t, 171, version)
+			require.Equal(t, db.ImageTextDataVersion, version)
 			var imageCount int
 			require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM image_text WHERE session_id=$1`, page).Scan(&imageCount))
 			require.Equal(t, 1, imageCount)
@@ -244,14 +244,14 @@ func TestPGImageTextPendingSessionVersion(t *testing.T) {
 		return v
 	}
 	push()
-	require.Equal(t, 171, version())
+	require.Equal(t, db.ImageTextDataVersion, version())
 	require.Equal(t, 169, local.GetSessionDataVersion(ctx, "pending"))
 	push()
 	store := &Store{pg: pg}
 	require.NoError(t, store.SoftDeleteSession(ctx, "pending"))
 	_, err := store.RestoreSession(ctx, "pending")
 	require.NoError(t, err)
-	require.Equal(t, 171, version())
+	require.Equal(t, db.ImageTextDataVersion, version())
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "plain", Project: "proj", Machine: "workstation", Agent: "test"}))
 	push()
 	require.NoError(t, store.SoftDeleteSession(ctx, "plain"))

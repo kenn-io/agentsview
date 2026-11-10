@@ -11,7 +11,7 @@ import (
 )
 
 // ImageTextDataVersion is the first version that maintains image text.
-const ImageTextDataVersion = 171
+const ImageTextDataVersion = 172
 
 // MirrorDataVersion marks mirror rows carrying image text for older binaries.
 func MirrorDataVersion(version int, hasImageText bool) int {

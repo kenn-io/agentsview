@@ -24,6 +24,10 @@ Read this file before adding or changing tests.
   builds use `-trimpath`, so those paths are module-relative. Tests run from
   their package directory, so use paths relative to it, such as `testdata/...`
   or `filepath.Join("..", "..", "docs")`.
+- Put a test that exercises the macOS file watcher in a `watch*_test.go` or
+  `*_darwin_test.go` file, or give its file a build constraint that names
+  darwin. On pull requests, the macOS FSEvents job runs only the tests that
+  `scripts/macos-watcher-tests.sh` selects by those rules.
 - A package whose tests load IANA timezone names, such as `America/New_York`,
   keeps a `tzdata_test.go` that imports `time/tzdata`. Trimmed test binaries
   cannot read the zone database in `GOROOT`, and Windows has no system copy.

@@ -2600,7 +2600,8 @@ hash: install updates safe generated files, refuses hand-edited or foreign files
 unless `--force` is passed, continues processing the other artifacts, and exits
 non-zero if anything was refused. `list` reports HARNESS, ARTIFACT, LEVEL, STATE
 (`missing`, `current`, `stale`, `modified`, `foreign`), and PATH for every
-artifact.
+artifact. When local semantic search is off, a successful install shows how to
+turn it on.
 
 `--server` / `--server-token-file` (or `AGENTSVIEW_SKILLS_SERVER` /
 `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE`) bake those flags into every example

@@ -792,20 +792,20 @@ func chUsageCTEFromRawSource(
 		usage_snapshot_ranked AS (
 			SELECT *,
 				CASE
-					WHEN claude_message_id != '' AND claude_request_id != ''
+					WHEN claude_message_id != ''
 						THEN first_value(session_id) OVER (
 							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
+								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
 							ORDER BY ts ASC, session_id ASC,
 								COALESCE(message_ordinal, -1) ASC
 						)
 					ELSE session_id
 				END AS snapshot_attribution_session_id,
 				CASE
-					WHEN claude_message_id != '' AND claude_request_id != ''
+					WHEN claude_message_id != ''
 						THEN row_number() OVER (
 							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
+								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
 							ORDER BY output_tokens_norm DESC, ts DESC,
 								session_id DESC,
 								COALESCE(message_ordinal, -1) DESC
@@ -813,21 +813,21 @@ func chUsageCTEFromRawSource(
 					ELSE 1
 				END AS snapshot_rank,
 				CASE
-					WHEN claude_message_id != '' AND claude_request_id != ''
+					WHEN claude_message_id != ''
 						THEN sum(output_tokens_norm) OVER (
 							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
+								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
 						) - max(output_tokens_norm) OVER (
 							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
+								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
 						)
 					ELSE 0
 				END AS snapshot_deduplicated_output_tokens,
 				CASE
-					WHEN claude_message_id != '' AND claude_request_id != ''
+					WHEN claude_message_id != ''
 						THEN max(web_search_requests_norm) OVER (
 							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
+								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
 						)
 					ELSE web_search_requests_norm
 				END AS snapshot_web_search_requests
@@ -936,7 +936,7 @@ func chUsageCTEFromRawSource(
 					if(source = 'session' OR session_id = '', greatest(reasoning_tokens, 0),
 						least(greatest(reasoning_tokens, 0), %[4]d))) AS reasoning_tokens_norm,
 				if(source = 'message', %[15]s, 0) AS web_search_requests_norm,
-				if(claude_message_id != '' AND claude_request_id != '',
+				if(claude_message_id != '',
 					concat('claude:', claude_message_id, ':', claude_request_id),
 					if(source = 'message' AND agent != '' AND source_uuid != '',
 						concat('source:', agent, ':', source_uuid),

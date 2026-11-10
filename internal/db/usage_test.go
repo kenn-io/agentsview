@@ -2144,15 +2144,15 @@ func TestSnapshotRankedDailyUsageRowsRanksOnlyDuplicatedRequests(t *testing.T) {
 }
 
 func TestDailyTopSessionsAndSessionCountsDedupClaudeKeyVariants(t *testing.T) {
-	for _, tc := range []struct{ name, requestID string }{
-		{"complete Claude pair", "req_dup"},
-		{"source UUID with incomplete pair", ""},
+	for _, tc := range []struct{ name, requestID, sourceUUID string }{
+		{"complete Claude pair", "req_dup", ""},
+		{"message ID and source UUID without request ID", "", "source-1"},
+		{"message ID without request ID", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sourceUUID := ""
+			sourceUUID := tc.sourceUUID
 			uniqueSourceUUID := ""
-			if tc.requestID == "" {
-				sourceUUID = "source-1"
+			if sourceUUID != "" {
 				uniqueSourceUUID = "source-unique"
 			}
 			d := testDB(t)

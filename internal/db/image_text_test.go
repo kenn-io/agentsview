@@ -31,6 +31,13 @@ func TestImageTextBackfillExistingResults(t *testing.T) {
 	pending, err = d.PendingImageText(ctx, "test", time.Now(), 20)
 	require.NoError(t, err)
 	require.Equal(t, []string{RetainedToolResultImages(content)[0].SHA256}, pending)
+	disabledSource, disabledDest := testDB(t), testDB(t)
+	require.NoError(t, disabledDest.CopyImageTextWithOccurrencesFrom(ctx, disabledSource.Path()))
+	insertSession(t, disabledDest, "new-image", "demo")
+	require.NoError(t, disabledDest.InsertMessages(ctx, []Message{{SessionID: "new-image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	pending, err = disabledDest.PendingImageText(ctx, "processor", time.Now(), 20)
+	require.NoError(t, err)
+	require.Empty(t, pending)
 }
 
 func TestImageTextDisableClearsSearchAndCache(t *testing.T) {
@@ -641,7 +648,7 @@ func TestMirrorImageTextDataVersion(t *testing.T) {
 		version int
 		hasText bool
 		want    int
-	}{{169, false, 169}, {169, true, 171}, {171, true, 171}, {172, true, 172}} {
+	}{{169, false, 169}, {169, true, ImageTextDataVersion}, {172, true, ImageTextDataVersion}, {173, true, 173}} {
 		require.Equal(t, tc.want, MirrorDataVersion(tc.version, tc.hasText))
 	}
 }

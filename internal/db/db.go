@@ -664,8 +664,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Re-parse DeepSeek Harness sources in place; source and session identities
 // are unchanged.)
 // (170: reparse Codex sources for recovered commit links.)
-// (171: prevent older binaries from writing archives with an image-text index.)
-const dataVersion = 171
+// (171: credit every record of a Claude response split by a tool result with
+// the response's web-search total. Re-parse Claude-format sources in place;
+// source and session identities are unchanged.)
+// (172: prevent older binaries from writing archives with an image-text index.)
+const dataVersion = 172
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -4034,6 +4037,9 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 	if !terminalIndexExists {
 		log.Print("building SQLite activity index; startup waits for the tool-result scan to finish")
 	}
+	if err := dropLegacyClaudeSnapshotIndexLocked(ctx, w); err != nil {
+		return err
+	}
 	indexes := []string{
 		// Activity checks terminal events even for sessions whose ended_at
 		// predates the report. Avoid reading historical result payloads for
@@ -4076,8 +4082,7 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		 WHERE token_usage != ''
 		   AND model != ''
 		   AND model != '<synthetic>'
-		   AND claude_message_id != ''
-		   AND claude_request_id != ''`,
+		   AND claude_message_id != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_rules_version
@@ -4255,6 +4260,39 @@ func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
 		 WHERE role = 'assistant' AND model != '<synthetic>'`,
 	); err != nil {
 		return err
+	}
+	return nil
+}
+
+// dropLegacyClaudeSnapshotIndexLocked drops the older Claude snapshot index
+// that also required a request ID. Claude Agent SDK transcripts omit
+// requestId, so snapshot lookups now match on the message ID alone and the
+// older predicate no longer covers them. The caller recreates the index.
+func dropLegacyClaudeSnapshotIndexLocked(ctx context.Context, w *writerHandle) error {
+	var ddl sql.NullString
+	if err := w.QueryRow(ctx, `
+		SELECT sql FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_messages_claude_snapshot'
+	`).Scan(&ddl); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("probing Claude snapshot index: %w", err)
+	}
+	normalized := strings.Join(strings.Fields(ddl.String), " ")
+	if !strings.Contains(normalized, "claude_request_id != ''") {
+		return nil
+	}
+	populated, err := tableHasRowsLocked(ctx, w, "messages")
+	if err != nil {
+		return fmt.Errorf("checking rows for Claude snapshot index: %w", err)
+	}
+	if populated {
+		log.Printf("rebuilding stale SQLite index idx_messages_claude_snapshot; " +
+			"startup continues after the archive index migration completes")
+	}
+	if _, err := w.Exec(ctx, `DROP INDEX IF EXISTS idx_messages_claude_snapshot`); err != nil {
+		return fmt.Errorf("dropping stale Claude snapshot index: %w", err)
 	}
 	return nil
 }

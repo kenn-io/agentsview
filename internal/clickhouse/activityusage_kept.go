@@ -190,12 +190,12 @@ const (
 )
 
 // usageToken returns the dedup token a row carries, the way
-// UsageSurvivorSelectionForSessions picks it: the Claude message and
-// request pair, else the agent and source UUID, else the usage key. The
+// UsageSurvivorSelectionForSessions picks it: the Claude response identity,
+// else the agent and source UUID, else the usage key. The
 // token's value joins a and b with a colon, except a usage key, which is a.
 func usageToken(r *clickActivityReportUsageRow) (usageTokenKind, string, string) {
 	switch {
-	case r.claudeMessageID != "" && r.claudeRequestID != "":
+	case r.claudeMessageID != "":
 		return usageTokenClaude, r.claudeMessageID, r.claudeRequestID
 	case r.agent != "" && r.sourceUUID != "":
 		return usageTokenSource, r.agent, r.sourceUUID

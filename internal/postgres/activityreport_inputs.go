@@ -323,7 +323,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 	type key struct{ message, request string }
 	keys := map[key]bool{}
 	for _, r := range merged {
-		if selected[r.sessionID.Value()] && r.claudeMessageID != "" && r.claudeRequestID != "" {
+		if selected[r.sessionID.Value()] && r.claudeMessageID != "" {
 			keys[key{r.claudeMessageID, r.claudeRequestID}] = true
 		}
 	}

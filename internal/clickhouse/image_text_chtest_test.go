@@ -276,16 +276,16 @@ func TestClickHouseImageTextPendingSessionVersion(t *testing.T) {
 		return v
 	}
 	push()
-	require.Equal(t, 171, version())
+	require.Equal(t, db.ImageTextDataVersion, version())
 	require.Equal(t, 169, local.GetSessionDataVersion(ctx, imageSessionID))
 	var maxVersion int
 	require.NoError(t, syncer.conn.QueryRowContext(ctx, `SELECT max(data_version) FROM sessions`).Scan(&maxVersion))
-	require.GreaterOrEqual(t, maxVersion, 171)
+	require.GreaterOrEqual(t, maxVersion, db.ImageTextDataVersion)
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
 	require.Zero(t, result.SessionsPushed)
-	require.Equal(t, 171, version())
+	require.Equal(t, db.ImageTextDataVersion, version())
 	require.NoError(t, local.ClearImageText(ctx))
 	push()
 	require.Equal(t, 169, version())
