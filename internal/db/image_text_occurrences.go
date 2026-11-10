@@ -52,6 +52,51 @@ func (db *DB) BackfillImageTextOccurrences(ctx context.Context) error {
 
 // refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
 func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) error {
+	return refreshImageTextOccurrencesWhereTx(tx, sessionID, "", "")
+}
+
+// refreshIncrementalImageTextOccurrencesTx refreshes only changed tool results.
+func refreshIncrementalImageTextOccurrencesTx(tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate) error {
+	ids := make(map[string]bool)
+	ordinals := make(map[int]bool)
+	for _, msg := range msgs {
+		for _, call := range msg.ToolCalls {
+			if call.ToolUseID != "" {
+				ids[call.ToolUseID] = true
+			} else {
+				ordinals[msg.Ordinal] = true
+			}
+			for _, event := range call.ResultEvents {
+				ids[event.ToolUseID] = true
+			}
+		}
+	}
+	for _, link := range update.SubagentLinks {
+		if link.HasResult {
+			ids[link.ToolUseID] = true
+		}
+	}
+	for _, result := range update.ToolCallResultUpdates {
+		if len(result.Events) > 0 {
+			ids[result.ToolUseID] = true
+		}
+	}
+	delete(ids, "")
+	for id := range ids {
+		if err := refreshImageTextOccurrencesWhereTx(tx, sessionID, ` AND tc.tool_use_id=?`, ` AND e.tool_use_id=?`, id); err != nil {
+			return err
+		}
+	}
+	for ordinal := range ordinals {
+		if err := refreshImageTextOccurrencesWhereTx(tx, sessionID, ` AND tc.message_id IN (SELECT id FROM messages WHERE session_id=tc.session_id AND ordinal=?)`, ` AND e.tool_call_message_ordinal=?`, ordinal); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// refreshImageTextOccurrencesWhereTx replaces the matching tool results' occurrences and drops those of removed results.
+func refreshImageTextOccurrencesWhereTx(tx transactionQueries, sessionID, callFilter, eventFilter string, args ...any) error {
 	var enabled int
 	if err := tx.QueryRow(`SELECT count(*) FROM stats WHERE key=? AND value!=0`, imageTextBackfillKey).Scan(&enabled); err != nil {
 		return err
@@ -59,11 +104,13 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 	if enabled == 0 {
 		return nil
 	}
-	occurrences, err := sessionImageTextOccurrences(tx, sessionID)
+	occurrences, err := imageTextOccurrencesQuery(tx, sessionID, callFilter, eventFilter, args)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM image_text_occurrences WHERE session_id=?`, sessionID); err != nil {
+	deleteArgs := append(append([]any{sessionID, sessionID}, args...), sessionID)
+	if _, err := tx.Exec(`DELETE FROM image_text_occurrences WHERE session_id=? AND ((call_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_calls WHERE id=call_id)) OR (event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_result_events WHERE id=event_id))
+		OR call_id IN (SELECT tc.id FROM tool_calls tc WHERE tc.session_id=? `+callFilter+`) OR event_id IN (SELECT e.id FROM tool_result_events e WHERE e.session_id=? `+eventFilter+`))`, append(deleteArgs, args...)...); err != nil {
 		return err
 	}
 	for _, o := range occurrences {
@@ -79,86 +126,6 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 		}
 	}
 	return nil
-}
-
-// refreshIncrementalImageTextOccurrencesTx refreshes only changed tool results.
-func refreshIncrementalImageTextOccurrencesTx(tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate) error {
-	var enabled int
-	if err := tx.QueryRow(`SELECT count(*) FROM stats WHERE key=? AND value!=0`, imageTextBackfillKey).Scan(&enabled); err != nil {
-		return err
-	}
-	if enabled == 0 {
-		return nil
-	}
-	if _, err := tx.Exec(`DELETE FROM image_text_occurrences WHERE session_id=? AND ((call_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_calls WHERE id=call_id)) OR (event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_result_events WHERE id=event_id)))`, sessionID); err != nil {
-		return err
-	}
-	ids := make(map[string]bool)
-	ordinals := make(map[int]bool)
-	for _, msg := range msgs {
-		for _, call := range msg.ToolCalls {
-			if call.ToolUseID != "" {
-				ids[call.ToolUseID] = true
-			} else {
-				ordinals[msg.Ordinal] = true
-			}
-			for _, event := range call.ResultEvents {
-				if event.ToolUseID != "" {
-					ids[event.ToolUseID] = true
-				}
-			}
-		}
-	}
-	for _, link := range update.SubagentLinks {
-		if link.HasResult && link.ToolUseID != "" {
-			ids[link.ToolUseID] = true
-		}
-	}
-	for _, result := range update.ToolCallResultUpdates {
-		if len(result.Events) > 0 {
-			ids[result.ToolUseID] = true
-		}
-	}
-	refresh := func(callFilter, eventFilter string, value any) error {
-		occurrences, err := imageTextOccurrencesQuery(tx, sessionID, callFilter, eventFilter, []any{value})
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(`DELETE FROM image_text_occurrences WHERE session_id=? AND (call_id IN (SELECT tc.id FROM tool_calls tc WHERE tc.session_id=? `+callFilter+`) OR event_id IN (SELECT e.id FROM tool_result_events e WHERE e.session_id=? `+eventFilter+`))`, sessionID, sessionID, value, sessionID, value)
-		if err != nil {
-			return err
-		}
-		for _, o := range occurrences {
-			var call, event any
-			if o.CallID != 0 {
-				call = o.CallID
-			}
-			if o.EventID != 0 {
-				event = o.EventID
-			}
-			if _, err := tx.Exec(`INSERT INTO image_text_occurrences(session_id,call_id,event_id,image_index,image_hash) VALUES(?,?,?,?,?)`, sessionID, call, event, o.Index, o.Hash); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	for id := range ids {
-		if id != "" {
-			if err := refresh(` AND tc.tool_use_id=?`, ` AND e.tool_use_id=?`, id); err != nil {
-				return err
-			}
-		}
-	}
-	for ordinal := range ordinals {
-		if err := refresh(` AND tc.message_id IN (SELECT id FROM messages WHERE session_id=tc.session_id AND ordinal=?)`, ` AND e.tool_call_message_ordinal=?`, ordinal); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func sessionImageTextOccurrences(tx transactionQueries, sessionID string) ([]ImageTextOccurrence, error) {
-	return imageTextOccurrencesQuery(tx, sessionID, "", "", nil)
 }
 
 func imageTextOccurrencesQuery(tx transactionQueries, sessionID, callFilter, eventFilter string, args []any) ([]ImageTextOccurrence, error) {
