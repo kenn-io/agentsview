@@ -1531,8 +1531,20 @@ test.describe('Recall and Quality', () => {
           })),
         }),
       };
+      // The header adds the step count and cost when the session's usage
+      // request returns. Waiting for it keeps both capture passes identical.
+      const usage = page.waitForResponse(
+        (r) =>
+          decodeURIComponent(new URL(r.url()).pathname) ===
+          `/api/v1/sessions/${session.id}/usage`
+      );
       await page.goto(`/sessions/${encodeURIComponent(session.id)}`);
       await expect(page.locator('.message').first()).toBeVisible();
+      const cost = await (await usage).json();
+      const rollup = cost.rollup_subagent_count > 0 && cost.has_rollup_cost === true;
+      if (rollup ? cost.rollup_cost != null : cost.has_cost) {
+        await expect(page.locator('.cost-badge')).toBeVisible();
+      }
       await page.getByRole('button', { name: 'Session actions', exact: true }).click();
       await expect(page.getByRole('button', { name: 'Analyze tool effectiveness', exact: true })).toBeVisible();
       await snap(page, 'tool-effectiveness-action');
