@@ -26,7 +26,7 @@ import (
 // "bubbleId:<composerId>:<bubbleUuid>" row holding the turn's text.
 // conversationMap, the alternative inline-message field, was observed empty
 // on every real (including large) conversation, so it is not a usable source
-// in the observed _v: 16 schema.
+// in this schema version (_v: 16 composerData / _v: 3 bubbles).
 const (
 	cursorIDEIDPrefix = "cursor-ide:"
 	// CursorIDEDBRelPath is the container's path relative to the provider
@@ -518,10 +518,6 @@ func loadCursorIDEHeaderChunks(
 ) ([]cursorIDEComposerHeader, bool, error) {
 	prefix := cursorIDEHeaderKeyPrefix + composerID + ":"
 	end := fmt.Sprintf("%s%06d", prefix, chunkCount)
-	if chunkCount > 999999 {
-		// Include the highest six-digit index; longer keys are filtered below.
-		end = prefix + "999999;"
-	}
 	rows, err := q.QueryContext(ctx,
 		`SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key`, prefix, end)
 	if err != nil {
@@ -539,7 +535,7 @@ func loadCursorIDEHeaderChunks(
 		}
 		suffix := strings.TrimPrefix(key, prefix)
 		index, err := strconv.Atoi(suffix)
-		if err != nil || len(suffix) != 6 || index < 0 || index >= chunkCount || fmt.Sprintf("%06d", index) != suffix {
+		if err != nil || index < 0 || index >= chunkCount || fmt.Sprintf("%06d", index) != suffix {
 			continue
 		}
 		var part []cursorIDEComposerHeader

@@ -2859,8 +2859,7 @@ schemas keep their existing ordering behavior.
   `composerConvHeaders:<composerId>:<six-digit index>` rows. The synthetic
   parser and sync tests reproduce this reported shape. Agentsview reads only
   the declared chunks and marks missing, empty, or short sets truncated.
-  Malformed chunk JSON fails the chat. Header-row-only edits appear on the
-  next 15-minute scheduled reconciliation if the container fingerprint changed.
+  Malformed chunk JSON fails the chat.
 - **Tool results:**
   [Issue #1798](https://github.com/kenn-io/agentsview/issues/1798) supplies
   one redacted `todo_write` bubble with an object-valued
