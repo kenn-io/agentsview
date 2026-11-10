@@ -150,7 +150,9 @@ async function toggleBlockFilter(page: Page, label: string) {
 async function setTranscriptMode(page: Page, mode: "normal" | "focused") {
   await page.locator(".view-trigger").click();
   await page
-    .getByRole("menuitemradio", { name: mode === "normal" ? "Everything" : "Prompts and final answers" })
+    .getByRole("menuitemradio", {
+      name: mode === "normal" ? "Everything" : "Prompts and final answers",
+    })
     .click();
   // Mode picks keep the View menu open; close it so the transcript gets input.
   await page.keyboard.press("Escape");
@@ -532,7 +534,9 @@ test.describe("In-session find", () => {
   });
 });
 
-test("tool output controls stay usable beside the raw-output hint in a narrow pane", async ({ page }) => {
+test("tool output controls stay usable beside the raw-output hint in a narrow pane", async ({
+  page,
+}) => {
   const { releaseHistory } = await installFixture(page);
   // Spanish has the longest hint; the analysis panel and sidebar leave the
   // transcript about 260px at this width.
@@ -567,7 +571,13 @@ test("tool output controls stay usable beside the raw-output hint in a narrow pa
     return {
       inside: parts.every(([, r]) => r.left >= box.left - 0.5 && r.right <= box.right + 0.5),
       overlaps: parts.flatMap(([a, ra], i) =>
-        parts.slice(i + 1).filter(([, rb]) => ra.right > rb.left + 0.5 && rb.right > ra.left + 0.5 && ra.width > 0 && rb.width > 0).map(([b]) => `${a}/${b}`),
+        parts
+          .slice(i + 1)
+          .filter(
+            ([, rb]) =>
+              ra.right > rb.left + 0.5 && rb.right > ra.left + 0.5 && ra.width > 0 && rb.width > 0,
+          )
+          .map(([b]) => `${a}/${b}`),
       ),
       labelWhole: label.scrollWidth <= label.clientWidth + 1,
       hintTitle: row.querySelector(".search-output-hint")!.getAttribute("title"),
@@ -582,41 +592,62 @@ test("tool output controls stay usable beside the raw-output hint in a narrow pa
 
 // The analysis panel and sidebar leave the transcript about 260px at 770
 // and about 300px at 810.
-for (const [viewport, minInput] of [[770, 36], [810, 72]] as const) {
-test(`the find field and its buttons stay usable in a narrow pane at ${viewport}px`, async ({ page }) => {
-  const { releaseHistory } = await installFixture(page);
-  await page.addInitScript(() => localStorage.setItem("agentsview-session-vitals", "true"));
-  await page.setViewportSize({ width: viewport, height: 900 });
-  await openSession(page);
-  await openFind(page);
-  releaseHistory();
-  await expect(page.locator(".search-announcement")).toContainText(String(ALL_MATCHES));
-  const pane = await page.locator(".message-list-scroll").boundingBox();
-  expect(pane!.width).toBeLessThan(330);
+for (const [viewport, minInput] of [
+  [770, 36],
+  [810, 72],
+] as const) {
+  test(`the find field and its buttons stay usable in a narrow pane at ${viewport}px`, async ({
+    page,
+  }) => {
+    const { releaseHistory } = await installFixture(page);
+    await page.addInitScript(() => localStorage.setItem("agentsview-session-vitals", "true"));
+    await page.setViewportSize({ width: viewport, height: 900 });
+    await openSession(page);
+    await openFind(page);
+    releaseHistory();
+    await expect(page.locator(".search-announcement")).toContainText(String(ALL_MATCHES));
+    const pane = await page.locator(".message-list-scroll").boundingBox();
+    expect(pane!.width).toBeLessThan(330);
 
-  const layout = await page.locator(".session-find .find-controls").evaluate((bar) => {
-    const box = bar.getBoundingClientRect();
-    const input = bar.querySelector(".kit-find-bar__input")!.getBoundingClientRect();
-    const buttons = [...bar.querySelectorAll("button")]
-      .map((b) => ({ name: b.getAttribute("aria-label") ?? "", r: b.getBoundingClientRect() }))
-      .filter((b) => b.r.width > 0);
-    const overlaps = buttons.flatMap((a, i) =>
-      buttons.slice(i + 1).filter((b) => a.r.right > b.r.left + 0.5 && b.r.right > a.r.left + 0.5 && a.r.bottom > b.r.top + 0.5 && b.r.bottom > a.r.top + 0.5).map((b) => `${a.name}/${b.name}`),
-    );
-    return {
-      inputWidth: input.width,
-      overlaps,
-      outside: buttons.filter((b) => b.r.left < box.left - 0.5 || b.r.right > box.right + 0.5).map((b) => b.name),
-    };
+    const layout = await page.locator(".session-find .find-controls").evaluate((bar) => {
+      const box = bar.getBoundingClientRect();
+      const input = bar.querySelector(".kit-find-bar__input")!.getBoundingClientRect();
+      const buttons = [...bar.querySelectorAll("button")]
+        .map((b) => ({ name: b.getAttribute("aria-label") ?? "", r: b.getBoundingClientRect() }))
+        .filter((b) => b.r.width > 0);
+      const overlaps = buttons.flatMap((a, i) =>
+        buttons
+          .slice(i + 1)
+          .filter(
+            (b) =>
+              a.r.right > b.r.left + 0.5 &&
+              b.r.right > a.r.left + 0.5 &&
+              a.r.bottom > b.r.top + 0.5 &&
+              b.r.bottom > a.r.top + 0.5,
+          )
+          .map((b) => `${a.name}/${b.name}`),
+      );
+      return {
+        inputWidth: input.width,
+        overlaps,
+        outside: buttons
+          .filter((b) => b.r.left < box.left - 0.5 || b.r.right > box.right + 0.5)
+          .map((b) => b.name),
+      };
+    });
+    expect(layout.overlaps).toEqual([]);
+    expect(layout.outside).toEqual([]);
+    // Room to read and edit a short query.
+    expect(
+      layout.inputWidth,
+      JSON.stringify({ ...layout, pane: pane!.width }),
+    ).toBeGreaterThanOrEqual(minInput);
   });
-  expect(layout.overlaps).toEqual([]);
-  expect(layout.outside).toEqual([]);
-  // Room to read and edit a short query.
-  expect(layout.inputWidth, JSON.stringify({ ...layout, pane: pane!.width })).toBeGreaterThanOrEqual(minInput);
-});
 }
 
-test("the raw-output hint shows whole beside the output controls in a wide pane", async ({ page }) => {
+test("the raw-output hint shows whole beside the output controls in a wide pane", async ({
+  page,
+}) => {
   const { releaseHistory } = await installFixture(page);
   await page.addInitScript(() => localStorage.setItem("agentsview-message-layout", "default"));
   await page.setViewportSize({ width: 1400, height: 900 });
@@ -646,7 +677,10 @@ test("find results share the find field's edge on a wide pane", async ({ page })
   await expectCompleteIndex(page);
   await openResults(page);
   const field = await page.locator(".session-find .find-field").boundingBox();
-  const heading = await page.getByRole("region", { name: "Search results" }).locator("h2").boundingBox();
+  const heading = await page
+    .getByRole("region", { name: "Search results" })
+    .locator("h2")
+    .boundingBox();
   expect(Math.abs(heading!.x - field!.x)).toBeLessThanOrEqual(1);
 });
 
@@ -656,13 +690,21 @@ test("the selected message stays marked while find is open", async ({ page }) =>
   await openSession(page);
   await openFind(page);
   releaseHistory();
-  await page.locator(".virtual-row:not(.selected) p").filter({ hasText: /^Message \d+$/ }).first().click();
+  await page
+    .locator(".virtual-row:not(.selected) p")
+    .filter({ hasText: /^Message \d+$/ })
+    .first()
+    .click();
   const selected = page.locator(".virtual-row.selected");
   await expect(selected).toHaveCount(1);
   const mark = await selected.evaluate((element) => {
     const card = element.firstElementChild as HTMLElement;
     const style = getComputedStyle(card);
-    return { style: style.outlineStyle, width: parseFloat(style.outlineWidth), color: style.outlineColor };
+    return {
+      style: style.outlineStyle,
+      width: parseFloat(style.outlineWidth),
+      color: style.outlineColor,
+    };
   });
   expect(mark.style, JSON.stringify(mark)).not.toBe("none");
   expect(mark.width).toBeGreaterThan(0);

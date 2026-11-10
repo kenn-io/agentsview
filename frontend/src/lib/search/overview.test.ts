@@ -72,7 +72,9 @@ describe("find overview model", () => {
     expect(ticks.length).toBeLessThanOrEqual(120);
     expect(ticks[0]?.y).toBe(0);
     expect(ticks.every((tick) => tick.height === 2 && tick.y + tick.height <= 120)).toBe(true);
-    expect(ticks.every((tick, index) => index === 0 || tick.y >= ticks[index - 1]!.y + 3)).toBe(true);
+    expect(ticks.every((tick, index) => index === 0 || tick.y >= ticks[index - 1]!.y + 3)).toBe(
+      true,
+    );
     expect(nearestOverviewMatch(locations, 4321.1)?.occurrence).toBe(4321);
   });
   it("selects real matches at endpoints and breaks equal-distance ties consistently", () => {

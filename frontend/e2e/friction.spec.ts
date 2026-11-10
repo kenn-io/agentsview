@@ -341,8 +341,9 @@ test.describe("Friction Log missing states", () => {
 
     // Same column and nearly the same height: the two pages' headers
     // differ by a few pixels, not by a layout.
-    expect(Math.abs(offIcon.x + offIcon.width / 2 - (pinnedIcon.x + pinnedIcon.width / 2)))
-      .toBeLessThanOrEqual(2);
+    expect(
+      Math.abs(offIcon.x + offIcon.width / 2 - (pinnedIcon.x + pinnedIcon.width / 2)),
+    ).toBeLessThanOrEqual(2);
     expect(Math.abs(offIcon.y - pinnedIcon.y)).toBeLessThanOrEqual(12);
   });
 });

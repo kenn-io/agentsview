@@ -36,7 +36,8 @@ test("a long hunk header wraps inside the diff strip", async ({ page }) => {
 
   const block = page.locator(".tool-block").first();
   await expect(block).toBeVisible();
-  if ((await block.locator(".diff-view").count()) === 0) await block.locator(".tool-header").click();
+  if ((await block.locator(".diff-view").count()) === 0)
+    await block.locator(".tool-header").click();
   const hunk = block.locator(".diff-strip-hunk");
   await expect(hunk).toContainText("handleSessionTranscriptExport");
 

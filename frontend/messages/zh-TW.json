@@ -464,7 +464,13 @@
   "sidebar_row_star_session": "釘選對話",
   "sidebar_row_unstar_session": "取消釘選對話",
   "sidebar_row_rename": "重新命名",
-  "sidebar_row_user_message_count": [{"declarations": ["input count", "input countLabel", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=other": "{countLabel} 則使用者訊息"}}],
+  "sidebar_row_user_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countLabel} 則使用者訊息" }
+    }
+  ],
   "sidebar_row_open_in_new_tab": "在新分頁開啟",
   "sidebar_row_delete": "刪除",
   "sidebar_row_change_project": "變更專案…",
@@ -1748,7 +1754,12 @@
   "insights_page_pct_affected": "{pct}% 受影響",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affectedLabel", "input total", "input totalLabel", "local totalPlural = total: plural"],
+      "declarations": [
+        "input affectedLabel",
+        "input total",
+        "input totalLabel",
+        "local totalPlural = total: plural"
+      ],
       "selectors": ["totalPlural"],
       "match": {
         "totalPlural=other": "{totalLabel} 個對話中有 {affectedLabel} 個觸發此確定性模式。"

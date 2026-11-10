@@ -528,7 +528,9 @@ describe("QualityPage evidence navigation", () => {
     await flushEffects();
 
     const card = document.querySelector<HTMLElement>(".pattern-card")!;
-    const head = Array.from(card.querySelectorAll(".driver-head span"), (cell) => cell.textContent?.trim());
+    const head = Array.from(card.querySelectorAll(".driver-head span"), (cell) =>
+      cell.textContent?.trim(),
+    );
     expect(head).toEqual(["Signal", "Count", "Sessions", "Outcome"]);
 
     const row = card.querySelector<HTMLButtonElement>(".driver-row")!;

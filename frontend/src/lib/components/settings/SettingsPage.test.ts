@@ -138,9 +138,9 @@ describe("SettingsPage", () => {
     expect(document.body.textContent).toContain("Date ranges");
     expect(document.body.textContent).toContain("Link date ranges across pages");
     // Classification rules live on the Data page; Settings has no panel for them.
-    const navLabels = Array.from(
-      document.body.querySelectorAll(".kit-settings__nav button"),
-    ).map((button) => button.textContent ?? "");
+    const navLabels = Array.from(document.body.querySelectorAll(".kit-settings__nav button")).map(
+      (button) => button.textContent ?? "",
+    );
     expect(navLabels.some((label) => label.includes("Date ranges"))).toBe(true);
     expect(navLabels.some((label) => label.includes("Worktree mappings"))).toBe(false);
     expect(document.body.textContent).not.toContain("Open Data › Rules");
@@ -224,7 +224,10 @@ describe("SettingsPage", () => {
     const navItems = Array.from(nav!.querySelectorAll<HTMLElement>(".kit-settings__nav-item"));
     expect(navItems).toHaveLength(10);
     for (const item of navItems) {
-      expect(item.querySelector(".kit-settings__nav-icon svg"), item.textContent ?? "").not.toBeNull();
+      expect(
+        item.querySelector(".kit-settings__nav-icon svg"),
+        item.textContent ?? "",
+      ).not.toBeNull();
     }
 
     const visiblePanel = () =>

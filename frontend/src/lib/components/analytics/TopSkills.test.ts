@@ -65,15 +65,11 @@ describe("TopSkills", () => {
   }
 
   function headerLabels(): string[] {
-    return [...document.querySelectorAll("thead th")].map((th) =>
-      th.textContent!.trim(),
-    );
+    return [...document.querySelectorAll("thead th")].map((th) => th.textContent!.trim());
   }
 
   function disclosure(): HTMLButtonElement {
-    const button = document.querySelector<HTMLButtonElement>(
-      "tbody button[aria-expanded]",
-    );
+    const button = document.querySelector<HTMLButtonElement>("tbody button[aria-expanded]");
     expect(button).toBeTruthy();
     return button!;
   }
@@ -93,13 +89,7 @@ describe("TopSkills", () => {
     expect(document.body.textContent).toContain("Top skills");
     expect(document.body.textContent).toContain("9 calls");
     expect(document.body.textContent).toContain("2 skills");
-    expect(headerLabels()).toEqual([
-      "Skill",
-      "Share",
-      "Calls",
-      "Sessions",
-      "Last used",
-    ]);
+    expect(headerLabels()).toEqual(["Skill", "Share", "Calls", "Sessions", "Last used"]);
 
     const row = disclosure().closest("tr")!;
     const cells = [...row.children].map((cell) => cell.textContent!.trim());
@@ -126,8 +116,7 @@ describe("TopSkills", () => {
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(details.hidden).toBe(false);
     const groups = [...details.querySelectorAll("ul")].map((list) => ({
-      label: document.getElementById(list.getAttribute("aria-labelledby")!)!
-        .textContent!.trim(),
+      label: document.getElementById(list.getAttribute("aria-labelledby")!)!.textContent!.trim(),
       // Name, count, and share as separate pieces of each chip.
       items: [...list.querySelectorAll("li")].map((item) =>
         [...item.querySelectorAll(".kit-chip__label, .item-count, .item-pct")]

@@ -57,11 +57,7 @@ function resolveUsageColor(color: string, resolveColor?: (color: string) => stri
 // adjacent stacked series always differ in lightness as well as hue.
 const DARK_LIGHTNESS = [0.94, 0.82] as const;
 
-function calmColor(
-  color: string,
-  rank: number,
-  options: UsageChartColorOptions,
-): string {
+function calmColor(color: string, rank: number, options: UsageChartColorOptions): string {
   if (color === MUTED) return color;
   const resolved = resolveUsageColor(color, options.resolveColor);
   const calmed = options.dark

@@ -53,7 +53,11 @@ test("Top skills rows open their breakdown from the keyboard", async ({ page }) 
   await expect(commit).toHaveAttribute("aria-expanded", "true");
   const details = page.locator(`[id="${await commit.getAttribute("aria-controls")}"]`);
   await expect(details).toBeVisible();
-  await expect(details.getByRole("listitem")).toHaveText([/codex\s*6\s*67%/, /claude\s*3\s*33%/, /project-alpha\s*9/]);
+  await expect(details.getByRole("listitem")).toHaveText([
+    /codex\s*6\s*67%/,
+    /claude\s*3\s*33%/,
+    /project-alpha\s*9/,
+  ]);
   // Opening one row leaves the others closed.
   await expect(review).toHaveAttribute("aria-expanded", "false");
 

@@ -153,7 +153,9 @@ test("the usage breakdown follows the pane when the sidebar opens", async ({ pag
   await expectMenuInsidePane(page);
 });
 
-test("the usage breakdown follows a pane wider than the reading column when the sidebar opens", async ({ page }) => {
+test("the usage breakdown follows a pane wider than the reading column when the sidebar opens", async ({
+  page,
+}) => {
   // At this width the pane is wider than the reading column with the
   // sidebar shown or hidden, so opening the sidebar changes only the
   // pane's centring padding, never its content box. The menu starts
@@ -209,7 +211,9 @@ test("transcript controls fit a very narrow transcript pane", async ({ page }) =
   expect(view.x + view.width).toBeLessThanOrEqual(pane.x + pane.width);
 });
 
-test("the View trigger shows its full label and keeps its width across layouts and modes", async ({ page }) => {
+test("the View trigger shows its full label and keeps its width across layouts and modes", async ({
+  page,
+}) => {
   const sp = new SessionsPage(page);
   await sp.goto();
   await sp.selectFirstSession();
@@ -236,7 +240,9 @@ test("the View trigger shows its full label and keeps its width across layouts a
 for (const width of [600, 760]) {
   // On phones the transcript controls move into the top bar beside its
   // actions.
-  test(`every top bar control stays on screen with a session open at ${width}px`, async ({ page }) => {
+  test(`every top bar control stays on screen with a session open at ${width}px`, async ({
+    page,
+  }) => {
     await page.setViewportSize({ width, height: 800 });
     const listed = await page.request.get("/api/v1/sessions?limit=1");
     const id = (await listed.json()).sessions[0].id;
@@ -256,7 +262,10 @@ for (const width of [600, 760]) {
           const r = control.getBoundingClientRect();
           return r.left < pane.left - 0.5 || r.right > right + 0.5;
         })
-        .map((control) => control.getAttribute("aria-label") ?? control.textContent?.trim() ?? control.className);
+        .map(
+          (control) =>
+            control.getAttribute("aria-label") ?? control.textContent?.trim() ?? control.className,
+        );
     });
     expect(offscreen).toEqual([]);
   });

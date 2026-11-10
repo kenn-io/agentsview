@@ -58,8 +58,18 @@ describe("Treemap", () => {
       target: document.body,
       props: {
         items: [
-          { id: "lime", label: "Lime", value: 60, style: { color: "var(--test-series-lime)", fill: "solid" as const } },
-          { id: "navy", label: "Navy", value: 40, style: { color: "var(--test-series-navy)", fill: "solid" as const } },
+          {
+            id: "lime",
+            label: "Lime",
+            value: 60,
+            style: { color: "var(--test-series-lime)", fill: "solid" as const },
+          },
+          {
+            id: "navy",
+            label: "Navy",
+            value: 40,
+            style: { color: "var(--test-series-navy)", fill: "solid" as const },
+          },
         ],
       },
     });
@@ -92,7 +102,14 @@ describe("Treemap", () => {
     const component = mount(Treemap, {
       target: document.body,
       props: {
-        items: [{ id: "swap", label: "Swap", value: 1, style: { color: "var(--test-series-swap)", fill: "solid" as const } }],
+        items: [
+          {
+            id: "swap",
+            label: "Swap",
+            value: 1,
+            style: { color: "var(--test-series-swap)", fill: "solid" as const },
+          },
+        ],
       },
     });
     await tick();

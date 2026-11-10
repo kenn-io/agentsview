@@ -157,7 +157,8 @@ describe("usageChartStyleMaps", () => {
 
     const separated = usageChartStyleMaps(tenModelSummary(), "agentsview", { resolveColor }).model;
     const shared = usageChartStyleMaps(tenModelSummary(), "agentsview", {
-      resolveColor: (color) => (color === "var(--usage-series-amber)" ? color : resolveColor(color)),
+      resolveColor: (color) =>
+        color === "var(--usage-series-amber)" ? color : resolveColor(color),
     }).model;
 
     const orange = seriesFrom(separated, "#e09040")!;

@@ -219,7 +219,8 @@ test.describe("Top bar current tab", () => {
     await expect(page.locator('[aria-current="page"]')).toHaveCount(0);
 
     // Leaving Settings for the tab the bar would fall back to marks it again.
-    await page.getByRole("navigation", { name: "Primary navigation" })
+    await page
+      .getByRole("navigation", { name: "Primary navigation" })
       .getByRole("button", { name: "Sessions", exact: true })
       .click();
     await expect(page.locator('[aria-current="page"]')).toHaveText("Sessions");
@@ -245,7 +246,9 @@ test.describe("Top bar current tab", () => {
       page.locator(".kit-top-bar__nav-select [role=option][aria-selected=true]:enabled"),
     ).toHaveCount(0);
     await expect(
-      page.locator(".kit-top-bar__nav-select [role=option]:enabled .kit-select-dropdown__check svg:visible"),
+      page.locator(
+        ".kit-top-bar__nav-select [role=option]:enabled .kit-select-dropdown__check svg:visible",
+      ),
     ).toHaveCount(0);
     // Move the highlight off Sessions so it is measured at rest.
     await options.last().hover();
@@ -292,7 +295,10 @@ test.describe("Project picker", () => {
 
   for (const zoom of ["100", "150"]) {
     test(`the list shows only whole rows at ${zoom}% zoom`, async ({ page }) => {
-      await page.addInitScript((value) => localStorage.setItem("agentsview-zoom-level", value), zoom);
+      await page.addInitScript(
+        (value) => localStorage.setItem("agentsview-zoom-level", value),
+        zoom,
+      );
       await page.setViewportSize({ width: 1400, height: 700 });
       await openPicker(page);
       const layout = await page.locator(".kit-typeahead__body").evaluate((body) => {
@@ -315,7 +321,9 @@ test.describe("Project picker", () => {
 });
 
 for (const width of [320, 375]) {
-  test(`search results keep titles readable and stay inside the palette at ${width}px`, async ({ page }) => {
+  test(`search results keep titles readable and stay inside the palette at ${width}px`, async ({
+    page,
+  }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto("/usage");
     await page.keyboard.press("ControlOrMeta+k");

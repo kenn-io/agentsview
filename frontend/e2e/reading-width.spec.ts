@@ -22,22 +22,25 @@ async function openSession(page: Page) {
 
 /** The first transcript card's width and the row it centers in. */
 async function columnGeometry(page: Page) {
-  return page.locator(".virtual-row").first().evaluate((row) => {
-    const card = row.firstElementChild as HTMLElement;
-    const style = getComputedStyle(row);
-    const rowContent =
-      row.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-    const cardBox = card.getBoundingClientRect();
-    const title = document.querySelector(".session-breadcrumb");
-    const header = title ? getComputedStyle(title) : null;
-    return {
-      card: cardBox.width,
-      cardLeft: cardBox.left,
-      rowContent,
-      headerPaddingLeft: header ? parseFloat(header.paddingLeft) : 0,
-      headerLeft: title?.getBoundingClientRect().left ?? 0,
-    };
-  });
+  return page
+    .locator(".virtual-row")
+    .first()
+    .evaluate((row) => {
+      const card = row.firstElementChild as HTMLElement;
+      const style = getComputedStyle(row);
+      const rowContent =
+        row.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const cardBox = card.getBoundingClientRect();
+      const title = document.querySelector(".session-breadcrumb");
+      const header = title ? getComputedStyle(title) : null;
+      return {
+        card: cardBox.width,
+        cardLeft: cardBox.left,
+        rowContent,
+        headerPaddingLeft: header ? parseFloat(header.paddingLeft) : 0,
+        headerLeft: title?.getBoundingClientRect().left ?? 0,
+      };
+    });
 }
 
 test.describe("Reading width", () => {

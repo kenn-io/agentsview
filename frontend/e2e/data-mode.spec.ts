@@ -369,7 +369,12 @@ test("rules actions stay reachable with a long mapping list", async ({ page }) =
   }));
   await page.route("**/api/v1/data/project-rules*", (route) =>
     route.fulfill({
-      json: { local_machine: "fixture-machine", machine: "fixture-machine", machines: ["fixture-machine"], rules },
+      json: {
+        local_machine: "fixture-machine",
+        machine: "fixture-machine",
+        machines: ["fixture-machine"],
+        rules,
+      },
     }),
   );
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -382,7 +387,10 @@ test("rules actions stay reachable with a long mapping list", async ({ page }) =
   await page.mouse.move(start.x + 20, start.y + 5);
   // Apply mappings sits with the machine picker above the list, so it is
   // in reach before scrolling; the form's Add mapping is under the list.
-  for (const [name, wheel] of [["Apply mappings", 0], ["Add mapping", 400]] as const) {
+  for (const [name, wheel] of [
+    ["Apply mappings", 0],
+    ["Add mapping", 400],
+  ] as const) {
     const action = page.getByRole("button", { name, exact: true });
     await expect(action).toBeAttached();
     // Wheel scrolling is asynchronous and a busy page can drop events, so

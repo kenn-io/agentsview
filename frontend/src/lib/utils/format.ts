@@ -145,8 +145,9 @@ function searchTerms(raw: string): string[] {
 export function highlightTerms(text: string, query: string): HighlightSegment[] {
   // Terms keep their exact spelling and the regex uses Unicode case folding,
   // so "İstanbul" and the Kelvin sign match as typed.
-  const terms = [...new Set(searchTerms(query).filter((term) => term.length >= 2))]
-    .sort((a, b) => b.length - a.length);
+  const terms = [...new Set(searchTerms(query).filter((term) => term.length >= 2))].sort(
+    (a, b) => b.length - a.length,
+  );
   if (terms.length === 0 || text === "") return [{ text, match: false }];
   const pattern = new RegExp(
     `(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,

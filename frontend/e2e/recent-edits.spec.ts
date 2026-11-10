@@ -190,7 +190,8 @@ test.describe("Recent Edits feed", () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/recent-edits");
     await expect(page.locator(".re-file-row")).toHaveCount(3);
-    const listWidth = () => page.locator(".re-list").evaluate((el) => el.getBoundingClientRect().width);
+    const listWidth = () =>
+      page.locator(".re-list").evaluate((el) => el.getBoundingClientRect().width);
     const wide = await tableLayout(page);
     const wideList = await listWidth();
 
@@ -349,9 +350,9 @@ test.describe("Recent Edits feed", () => {
       at(x + 60, "pointerup", 0);
     });
 
-    await expect.poll(async () => Number(await handle.getAttribute("aria-valuenow"))).toBeGreaterThan(
-      before + 40,
-    );
+    await expect
+      .poll(async () => Number(await handle.getAttribute("aria-valuenow")))
+      .toBeGreaterThan(before + 40);
     await expect.poll(() => keptColumns(page)).toEqual(["project"]);
   });
 
@@ -403,9 +404,7 @@ test.describe("Recent Edits feed", () => {
     await expect.poll(() => width(2)).toBe(wideEdits);
   });
 
-  test("a window resize keeps an expanded file's height and the rows in view", async ({
-    page,
-  }) => {
+  test("a window resize keeps an expanded file's height and the rows in view", async ({ page }) => {
     const edits = Array.from({ length: 10 }, (_, i) => ({
       session_id: `session-${i}`,
       ordinal: i,
@@ -415,7 +414,12 @@ test.describe("Recent Edits feed", () => {
       timestamp: "2026-11-05T10:00:00Z",
     }));
     const files = Array.from({ length: 80 }, (_, i) => ({
-      ...fileRow("tools", `/src/pkg/file-${String(i).padStart(2, "0")}.go`, 10, "2026-11-05T10:00:00Z"),
+      ...fileRow(
+        "tools",
+        `/src/pkg/file-${String(i).padStart(2, "0")}.go`,
+        10,
+        "2026-11-05T10:00:00Z",
+      ),
       edits,
     }));
     await page.route("**/api/v1/recent-edits?*", (route) =>
@@ -448,7 +452,10 @@ test.describe("Recent Edits feed", () => {
       });
     const before = await firstInView();
     const fileWidth = () =>
-      page.locator(".re-list thead th").nth(1).evaluate((th) => th.getBoundingClientRect().width);
+      page
+        .locator(".re-list thead th")
+        .nth(1)
+        .evaluate((th) => th.getBoundingClientRect().width);
     const wideFile = await fileWidth();
 
     // Narrow the window below the page's 1088px cap: File gives way, and

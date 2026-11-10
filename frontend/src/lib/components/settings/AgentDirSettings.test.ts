@@ -59,9 +59,7 @@ describe("AgentDirSettings", () => {
     await tick();
 
     const path = document.body.querySelector("code.provider-path");
-    expect(path?.textContent).toBe(
-      "/Users/me/Library/Application Support/Claude/sessions",
-    );
+    expect(path?.textContent).toBe("/Users/me/Library/Application Support/Claude/sessions");
     // Break opportunities sit between segments, and every segment but the
     // last ends with the separator, so a line never breaks inside a name.
     const segments = Array.from(

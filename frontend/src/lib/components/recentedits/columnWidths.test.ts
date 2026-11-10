@@ -1,10 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import {
-  COLUMN_WIDTHS_STORAGE_KEY,
-  loadColumnWidths,
-  saveColumnWidths,
-} from "./columnWidths.js";
+import { COLUMN_WIDTHS_STORAGE_KEY, loadColumnWidths, saveColumnWidths } from "./columnWidths.js";
 
 describe("recent edits column widths", () => {
   afterEach(() => localStorage.clear());

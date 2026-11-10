@@ -316,16 +316,12 @@ describe("TopSessions", () => {
       // the sessions in this fixture have no timestamps, so
       // age comparisons fail and they fall straight into the
       // unclean tier.
-      expect(
-        document.querySelectorAll(".session-row .kit-status-dot--unclean").length,
-      ).toBe(2);
+      expect(document.querySelectorAll(".session-row .kit-status-dot--unclean").length).toBe(2);
 
       // The clean and NULL sessions resolve to "quiet" — a
       // transparent dot is still rendered so the layout column
       // stays consistent.
-      expect(
-        document.querySelectorAll(".session-row .kit-status-dot--quiet").length,
-      ).toBe(2);
+      expect(document.querySelectorAll(".session-row .kit-status-dot--quiet").length).toBe(2);
 
       unmount(component);
     });

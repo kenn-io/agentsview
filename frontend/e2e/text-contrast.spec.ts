@@ -99,7 +99,10 @@ for (const [mode, highContrast] of THEMES) {
         const summary = summaries.nth(i);
         if (await summary.evaluate((el) => !!el.closest("[aria-current]"))) sawSelected = true;
         const contrast = await renderedContrast(summary);
-        expect(contrast.ratio, `nav summary ${i} ${JSON.stringify(contrast)}`).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrast.ratio,
+          `nav summary ${i} ${JSON.stringify(contrast)}`,
+        ).toBeGreaterThanOrEqual(4.5);
       }
       expect(sawSelected).toBe(true);
     });
@@ -109,7 +112,9 @@ for (const [mode, highContrast] of THEMES) {
       test.skip(browserName !== "chromium", "placeholder colour is read over CDP");
       await page.goto("/settings");
       await page.locator(".kit-settings__nav").getByText("Session providers").first().click();
-      const inputs = page.locator(".kit-settings__panel input.kit-text-input__control[placeholder]:enabled");
+      const inputs = page.locator(
+        ".kit-settings__panel input.kit-text-input__control[placeholder]:enabled",
+      );
       await expect(inputs.first()).toBeVisible();
       const input = inputs.first();
       const contrast = await renderedContrast(input, {
@@ -143,7 +148,9 @@ for (const [mode, highContrast] of THEMES) {
           background: paint.tile,
           opacity: paint.opacity,
         });
-        expect(contrast.ratio, `tile text ${i} ${JSON.stringify(contrast)}`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast.ratio, `tile text ${i} ${JSON.stringify(contrast)}`).toBeGreaterThanOrEqual(
+          4.5,
+        );
       }
     });
 
@@ -158,14 +165,19 @@ for (const [mode, highContrast] of THEMES) {
         const dot = dots.nth(i);
         const fill = await dot.evaluate((el) => getComputedStyle(el).backgroundColor);
         const contrast = await renderedContrast(dot.locator(".."), { foreground: fill });
-        expect(contrast.ratio, `unclean dot ${i} ${JSON.stringify(contrast)}`).toBeGreaterThanOrEqual(3);
+        expect(
+          contrast.ratio,
+          `unclean dot ${i} ${JSON.stringify(contrast)}`,
+        ).toBeGreaterThanOrEqual(3);
       }
       const pill = page.locator(".status-count-pill");
       await expect(pill).toBeVisible();
       const resting = await renderedContrast(pill);
       expect(resting.ratio, JSON.stringify(resting)).toBeGreaterThanOrEqual(4.5);
       await pill.hover();
-      await expect.poll(async () => (await renderedContrast(pill)).background).not.toBe(resting.background);
+      await expect
+        .poll(async () => (await renderedContrast(pill)).background)
+        .not.toBe(resting.background);
       const hovered = await renderedContrast(pill);
       expect(hovered.ratio, JSON.stringify(hovered)).toBeGreaterThanOrEqual(4.5);
     });
@@ -174,15 +186,17 @@ for (const [mode, highContrast] of THEMES) {
       const sp = new SessionsPage(page);
       await sp.goto();
       await sp.selectFirstSession();
-      const modifier = await page.evaluate(() => (/Mac/.test(navigator.platform) ? "Meta" : "Control"));
+      const modifier = await page.evaluate(() =>
+        /Mac/.test(navigator.platform) ? "Meta" : "Control",
+      );
       await page.keyboard.press(`${modifier}+f`);
       await page.locator(".kit-find-bar__input").fill("e");
       const rail = page.locator(".find-overview-rail");
       await expect(rail.locator(".tick.current")).toHaveCount(1);
       const track = await rail.locator(".track").evaluate((el) => getComputedStyle(el).fill);
-      const ticks = await rail.locator(".tick").evaluateAll((els) =>
-        [...new Set(els.map((el) => getComputedStyle(el).fill))],
-      );
+      const ticks = await rail
+        .locator(".tick")
+        .evaluateAll((els) => [...new Set(els.map((el) => getComputedStyle(el).fill))]);
       expect(ticks.length).toBeGreaterThanOrEqual(2);
       for (const tick of ticks) {
         const contrast = await renderedContrast(rail, { foreground: tick, background: track });

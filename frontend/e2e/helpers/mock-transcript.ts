@@ -43,7 +43,10 @@ export async function serveTranscript(page: Page, sessionId: string, messages: M
     const from = Number(url.searchParams.get("from") ?? (descending ? last : 0));
     const limit = Number(url.searchParams.get("limit") ?? 1000);
     const selected = descending
-      ? messages.filter((m) => m.ordinal <= from).slice(-limit).reverse()
+      ? messages
+          .filter((m) => m.ordinal <= from)
+          .slice(-limit)
+          .reverse()
       : messages.filter((m) => m.ordinal >= from).slice(0, limit);
     await route.fulfill({ json: { messages: selected, count: selected.length } });
   });

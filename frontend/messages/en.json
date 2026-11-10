@@ -478,7 +478,16 @@
   "sidebar_row_star_session": "Star session",
   "sidebar_row_unstar_session": "Unstar session",
   "sidebar_row_rename": "Rename",
-  "sidebar_row_user_message_count": [{"declarations": ["input count", "input countLabel", "local countPlural = count: plural"], "selectors": ["countPlural"], "match": {"countPlural=one": "{countLabel} user message", "countPlural=other": "{countLabel} user messages"}}],
+  "sidebar_row_user_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} user message",
+        "countPlural=other": "{countLabel} user messages"
+      }
+    }
+  ],
   "sidebar_row_open_in_new_tab": "Open in new tab",
   "sidebar_row_delete": "Delete",
   "sidebar_row_change_project": "Change project…",
@@ -1265,7 +1274,11 @@
   "recent_edits_loading": "Loading recent edits...",
   "recent_edits_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countNumber} edit",
@@ -1837,7 +1850,12 @@
   "insights_page_pct_affected": "{pct}% affected",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affectedLabel", "input total", "input totalLabel", "local totalPlural = total: plural"],
+      "declarations": [
+        "input affectedLabel",
+        "input total",
+        "input totalLabel",
+        "local totalPlural = total: plural"
+      ],
       "selectors": ["totalPlural"],
       "match": {
         "totalPlural=one": "{affectedLabel} of {totalLabel} session has this deterministic pattern.",

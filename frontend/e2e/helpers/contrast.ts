@@ -67,7 +67,11 @@ export async function renderedContrast(
       };
       const [hi, lo] = [luminance(ink), luminance(background)].sort((x, y) => y - x);
       const hex = (c: Rgba) =>
-        "#" + c.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+        "#" +
+        c
+          .slice(0, 3)
+          .map((v) => Math.round(v).toString(16).padStart(2, "0"))
+          .join("");
       return {
         foreground: hex(ink),
         background: hex(background),
@@ -105,7 +109,10 @@ export async function placeholderColor(page: Page, input: Locator): Promise<stri
       }
       return null;
     };
-    const target = find(root as DomNode, (n) => n.attributes?.includes("data-placeholder-probe") ?? false);
+    const target = find(
+      root as DomNode,
+      (n) => n.attributes?.includes("data-placeholder-probe") ?? false,
+    );
     const placeholder =
       target &&
       find(target, (n) => {

@@ -99,11 +99,7 @@ describe("CallRow measured timing", () => {
     expect(row.querySelector(".cbar-wrap")).toBeNull();
     expect(row.querySelector(".cd")).toBeNull();
     expect(row.textContent).not.toContain("unknown");
-    expect([...row.children].map((el) => el.className.split(" ")[0])).toEqual([
-      "chev",
-      "cn",
-      "ca",
-    ]);
+    expect([...row.children].map((el) => el.className.split(" ")[0])).toEqual(["chev", "cn", "ca"]);
     unmount(component);
   });
 });

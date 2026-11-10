@@ -136,9 +136,27 @@ describe("AppHeader export actions", () => {
   });
 
   it.each([
-    { archive_only: false, read_only: false, importLabel: "Import conversations", importDisabled: false, syncLabel: "Sync sessions" },
-    { archive_only: false, read_only: true, importLabel: "Import unavailable in read-only mode", importDisabled: true, syncLabel: "Refresh data" },
-    { archive_only: true, read_only: false, importLabel: "Import unavailable in archive-only mode", importDisabled: true, syncLabel: null },
+    {
+      archive_only: false,
+      read_only: false,
+      importLabel: "Import conversations",
+      importDisabled: false,
+      syncLabel: "Sync sessions",
+    },
+    {
+      archive_only: false,
+      read_only: true,
+      importLabel: "Import unavailable in read-only mode",
+      importDisabled: true,
+      syncLabel: "Refresh data",
+    },
+    {
+      archive_only: true,
+      read_only: false,
+      importLabel: "Import unavailable in archive-only mode",
+      importDisabled: true,
+      syncLabel: null,
+    },
   ])(
     "offers the available actions for archive_only=$archive_only read_only=$read_only",
     async ({ archive_only, read_only, importLabel, importDisabled, syncLabel }) => {

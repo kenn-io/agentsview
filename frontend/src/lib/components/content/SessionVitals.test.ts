@@ -208,9 +208,7 @@ describe("SessionVitals", () => {
     await tick();
     await tick();
 
-    const labels = [...document.querySelectorAll(".calls .cd")].map((el) =>
-      el.textContent?.trim(),
-    );
+    const labels = [...document.querySelectorAll(".calls .cd")].map((el) => el.textContent?.trim());
     expect(document.querySelector(".calls")?.textContent).not.toContain("unknown");
     if (running) {
       expect(labels[0]).toBe("");

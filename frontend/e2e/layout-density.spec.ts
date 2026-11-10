@@ -1,5 +1,8 @@
 import { expect, test, type Browser } from "@playwright/test";
-import type { DbMessage as Message, DbToolCall as ToolCall } from "../src/lib/api/generated/index.js";
+import type {
+  DbMessage as Message,
+  DbToolCall as ToolCall,
+} from "../src/lib/api/generated/index.js";
 import { serveTranscript, transcriptMessage } from "./helpers/mock-transcript";
 
 // A fixture session whose messages are replaced with a run of single-call

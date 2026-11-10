@@ -47,14 +47,19 @@ function getHighlighter(): Promise<HighlighterCore> {
 
   highlighterPromise = (async () => {
     // Grammars do not depend on the core modules, so every chunk loads at once.
-    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme, lightTheme, langModules] =
-      await Promise.all([
-        import("shiki/core"),
-        import("shiki/engine/javascript"),
-        import("shiki/themes/catppuccin-mocha.mjs"),
-        import("shiki/themes/github-light.mjs"),
-        Promise.all(Object.values(GRAMMAR_LOADERS).map((load) => load())),
-      ]);
+    const [
+      { createHighlighterCore },
+      { createJavaScriptRegexEngine },
+      theme,
+      lightTheme,
+      langModules,
+    ] = await Promise.all([
+      import("shiki/core"),
+      import("shiki/engine/javascript"),
+      import("shiki/themes/catppuccin-mocha.mjs"),
+      import("shiki/themes/github-light.mjs"),
+      Promise.all(Object.values(GRAMMAR_LOADERS).map((load) => load())),
+    ]);
 
     const hl = await createHighlighterCore({
       themes: [theme.default ?? theme, lightTheme.default ?? lightTheme],
@@ -164,7 +169,8 @@ export async function highlightToHtml(
   if (resolved === null || code.length > HIGHLIGHT_MAX_BYTES) return null;
   // Reject large blocks before starting either highlighting runtime.
   if ((code.match(/\r\n|\r|\n/g)?.length ?? 0) + 1 > HIGHLIGHT_MAX_LINES) return null;
-  if (workerFailed || typeof Worker === "undefined") return highlightInline(code, resolved, options);
+  if (workerFailed || typeof Worker === "undefined")
+    return highlightInline(code, resolved, options);
 
   if (worker === null) {
     try {

@@ -14,7 +14,10 @@ function holdSignals(page: Page): Promise<() => void> {
 }
 
 async function summaryHeight(page: Page): Promise<number> {
-  return page.locator(".summary-grid").first().evaluate((el) => el.getBoundingClientRect().height);
+  return page
+    .locator(".summary-grid")
+    .first()
+    .evaluate((el) => el.getBoundingClientRect().height);
 }
 
 test("Quality summary cards stay in their columns at 200% interface zoom", async ({ page }) => {
@@ -82,10 +85,19 @@ for (const width of [320, 375]) {
       expect(row.inside, JSON.stringify(row)).toBe(true);
       expect(row.valuesWhole, JSON.stringify(row)).toBe(true);
     }
-    const head = await page.locator(".driver-head").first().evaluate((head) => {
-      const spans = [...head.children].map((s) => s.getBoundingClientRect());
-      return spans.every((a, i) => spans.slice(i + 1).every((b) => a.right <= b.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5));
-    });
+    const head = await page
+      .locator(".driver-head")
+      .first()
+      .evaluate((head) => {
+        const spans = [...head.children].map((s) => s.getBoundingClientRect());
+        return spans.every((a, i) =>
+          spans
+            .slice(i + 1)
+            .every(
+              (b) => a.right <= b.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5,
+            ),
+        );
+      });
     expect(head, "column headings do not overlap").toBe(true);
   });
 }

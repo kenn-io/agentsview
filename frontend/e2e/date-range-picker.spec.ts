@@ -11,9 +11,7 @@ async function openPicker(page: Page, theme: "light" | "dark") {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`date presets are a lower tier tucked under the mode tabs in ${theme}`, async ({
-    page,
-  }) => {
+  test(`date presets are a lower tier tucked under the mode tabs in ${theme}`, async ({ page }) => {
     const { panel } = await openPicker(page, theme);
 
     for (const mode of [0, 1]) {
@@ -39,7 +37,12 @@ for (const theme of ["light", "dark"] as const) {
         const style = (node: Element) => getComputedStyle(node);
         const corners = (node: Element) => {
           const s = style(node);
-          return [s.borderTopLeftRadius, s.borderTopRightRadius, s.borderBottomRightRadius, s.borderBottomLeftRadius];
+          return [
+            s.borderTopLeftRadius,
+            s.borderTopRightRadius,
+            s.borderBottomRightRadius,
+            s.borderBottomLeftRadius,
+          ];
         };
         return {
           gap: p.top - t.bottom,
@@ -66,14 +69,24 @@ for (const theme of ["light", "dark"] as const) {
           optionHeight: chosenOption.getBoundingClientRect().height,
           modeFontSize: parseFloat(style(chosenMode).fontSize),
           optionFontSize: parseFloat(style(chosenOption).fontSize),
-          chosenMode: [style(chosenMode).backgroundColor, style(chosenMode).boxShadow, style(chosenMode).fontWeight],
-          chosenOption: [style(chosenOption).backgroundColor, style(chosenOption).boxShadow, style(chosenOption).fontWeight],
+          chosenMode: [
+            style(chosenMode).backgroundColor,
+            style(chosenMode).boxShadow,
+            style(chosenMode).fontWeight,
+          ],
+          chosenOption: [
+            style(chosenOption).backgroundColor,
+            style(chosenOption).boxShadow,
+            style(chosenOption).fontWeight,
+          ],
           otherModeFill: style(otherMode).backgroundColor,
           otherOptionFill: style(otherOption).backgroundColor,
-          ornaments: [presets, track, el.querySelector(".kit-date-range-picker__tabs")!].flatMap((node) => [
-            getComputedStyle(node, "::before").content,
-            getComputedStyle(node, "::after").content,
-          ]),
+          ornaments: [presets, track, el.querySelector(".kit-date-range-picker__tabs")!].flatMap(
+            (node) => [
+              getComputedStyle(node, "::before").content,
+              getComputedStyle(node, "::after").content,
+            ],
+          ),
         };
       });
       const info = JSON.stringify(geometry);
@@ -101,7 +114,9 @@ for (const theme of ["light", "dark"] as const) {
       // mitred corner pixel, so the tier has none.
       expect(geometry.presetFill, info).not.toBe(geometry.trackFill);
       expect(geometry.presetBorders, info).toEqual(["0px", "0px", "0px", "0px"]);
-      const [contactLine, ring, ...extra] = geometry.presetShadow.split(/,(?![^(]*\))/).map((s) => s.trim());
+      const [contactLine, ring, ...extra] = geometry.presetShadow
+        .split(/,(?![^(]*\))/)
+        .map((s) => s.trim());
       expect(extra, info).toEqual([]);
       expect(contactLine, info).toMatch(/ 0px 1px 0px 0px inset$/);
       expect(ring, info).toMatch(/ 0px 0px 0px 1px inset$/);
@@ -127,7 +142,8 @@ test("a picker that opens upward keeps the preset tier clear of its trigger", as
   await page.addInitScript(() => {
     document.addEventListener("DOMContentLoaded", () => {
       const style = document.createElement("style");
-      style.textContent = ".kit-date-range-picker { position: fixed !important; left: 48px; bottom: 20px; top: auto; z-index: 50; }";
+      style.textContent =
+        ".kit-date-range-picker { position: fixed !important; left: 48px; bottom: 20px; top: auto; z-index: 50; }";
       document.head.append(style);
     });
   });
@@ -146,10 +162,12 @@ test("a picker that opens upward keeps the preset tier clear of its trigger", as
         presetBottom: presetBox.y + presetBox.height,
       };
     };
-    await expect.poll(async () => {
-      const b = await bottoms();
-      return b.panelBottom <= b.triggerTop;
-    }).toBe(true);
+    await expect
+      .poll(async () => {
+        const b = await bottoms();
+        return b.panelBottom <= b.triggerTop;
+      })
+      .toBe(true);
     const b = await bottoms();
     const info = JSON.stringify(b);
     // The preset tier stays inside the panel, so it never reaches the

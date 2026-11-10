@@ -47,16 +47,21 @@ async function transcriptLayout(page: Page): Promise<Layout> {
 
 async function expectHealthy(page: Page, check: (layout: Layout) => boolean, label: string) {
   await expect
-    .poll(async () => {
-      const layout = await transcriptLayout(page);
-      return layout.visibleRows > 0 && layout.problems.length === 0 && check(layout)
-        ? "ok"
-        : JSON.stringify(layout);
-    }, { message: label })
+    .poll(
+      async () => {
+        const layout = await transcriptLayout(page);
+        return layout.visibleRows > 0 && layout.problems.length === 0 && check(layout)
+          ? "ok"
+          : JSON.stringify(layout);
+      },
+      { message: label },
+    )
     .toBe("ok");
 }
 
-test("switching content and layout with the View menu open keeps the transcript laid out", async ({ page }) => {
+test("switching content and layout with the View menu open keeps the transcript laid out", async ({
+  page,
+}) => {
   await withMultiStepTurns(page);
   await page.goto(`/sessions/${SESSION}`);
   const scroller = page.locator(".message-list-scroll");

@@ -19,7 +19,6 @@ export function callsHaveTiming(timing: SessionTiming): boolean {
   const hasLiveCall =
     !!timing.running && last != null && last.duration_ms == null && last.calls.length > 0;
   return (
-    hasLiveCall ||
-    timing.turns.some((turn) => turn.calls.some((call) => call.duration_ms != null))
+    hasLiveCall || timing.turns.some((turn) => turn.calls.some((call) => call.duration_ms != null))
   );
 }

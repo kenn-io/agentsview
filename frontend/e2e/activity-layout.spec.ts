@@ -123,14 +123,12 @@ test("shows the whole Sessions breakdown in narrow summary cards", async ({ page
 
   // Cards on one line of the wrapped row share a height whatever their
   // sublabels hold.
-  const boxes = await page
-    .locator(".summary-cards .stat-card")
-    .evaluateAll((cards) =>
-      cards.map((card) => {
-        const { top, height } = card.getBoundingClientRect();
-        return { top: Math.round(top), height: Math.round(height) };
-      }),
-    );
+  const boxes = await page.locator(".summary-cards .stat-card").evaluateAll((cards) =>
+    cards.map((card) => {
+      const { top, height } = card.getBoundingClientRect();
+      return { top: Math.round(top), height: Math.round(height) };
+    }),
+  );
   const sessionsTop = Math.round((await sessions.boundingBox())!.y);
   const line = boxes.filter((box) => box.top === sessionsTop);
   expect(line.length).toBeGreaterThan(1);
