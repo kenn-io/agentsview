@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/sync"
 )
 
 type changeStreamUsageWire struct {
@@ -598,4 +599,32 @@ func TestChangeStreamWakesWithoutEventCoalescing(t *testing.T) {
 		assert.Fail(t, "the coalesced data_changed signal must still wait for its window")
 	default:
 	}
+}
+
+func TestChangeStreamShortensSyncIntervalWhileConnected(t *testing.T) {
+	override := &sync.IntervalOverride{}
+	te := setupWithServerOpts(t, []server.Option{server.WithSyncIntervalOverride(override)})
+	interval := func() time.Duration {
+		d, _ := override.Current()
+		return d
+	}
+	require.Zero(t, interval(), "no subscriber keeps the configured interval")
+
+	first := openChangeStream(t, te, "")
+	first.ready(t)
+	assert.Equal(t, time.Second, interval())
+	second := openChangeStream(t, te, "")
+	second.ready(t)
+
+	first.close()
+	assert.Equal(t, time.Second, interval(), "a remaining subscriber keeps the shorter interval")
+
+	_, changed := override.Current()
+	second.close()
+	select {
+	case <-changed:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "the last subscriber leaving must clear the override")
+	}
+	assert.Zero(t, interval(), "the configured interval returns after the last subscriber leaves")
 }

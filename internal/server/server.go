@@ -126,6 +126,7 @@ type Server struct {
 	onDemandEngine        *sync.Engine
 	sessions              service.SessionService
 	broadcaster           *Broadcaster
+	changeStreamSync      changeStreamSyncHold
 	mux                   *http.ServeMux
 	api                   huma.API
 	httpSrv               *http.Server
@@ -563,6 +564,12 @@ func WithHTTPRemoteCleanupRegistry(registry *remotesync.CleanupRegistry) Option 
 // live-refresh SSE; absent in PG serve mode where the engine is nil.
 func WithBroadcaster(b *Broadcaster) Option {
 	return func(s *Server) { s.broadcaster = b }
+}
+
+// WithSyncIntervalOverride lets connected change-stream subscribers shorten
+// the minimum interval between watcher-triggered syncs that share override.
+func WithSyncIntervalOverride(override *sync.IntervalOverride) Option {
+	return func(s *Server) { s.changeStreamSync.override = override }
 }
 
 // WithUpdateChecker overrides the update check function,

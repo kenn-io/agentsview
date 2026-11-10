@@ -85,8 +85,11 @@ records only.
 
 A `changes` event follows each sync pass that wrote archive data, without the
 `events_coalesce_interval` delay that `/api/v1/events` applies.
-Watcher-triggered syncs start at most once per `sync_interval` (default `"5s"`),
-so that setting bounds how soon a change reaches the stream.
+Watcher-triggered syncs start at most once per `sync_interval` (default `"5s"`).
+While at least one subscriber is connected, the daemon shortens that interval to
+one second, or keeps a shorter configured `sync_interval`, so a session file
+change usually reaches the stream within about a second. When the last
+subscriber disconnects, the configured `sync_interval` applies again.
 
 The stream sends these events. Each `data` line is one JSON object:
 

@@ -5,15 +5,51 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	gosync "sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/sessionwatch"
+	"go.kenn.io/agentsview/internal/sync"
 )
 
 const changeStreamSchemaVersion = 1
+
+// changeStreamSyncInterval is the minimum interval between watcher-triggered
+// syncs while a change-stream subscriber is connected. A shorter configured
+// sync_interval still applies.
+const changeStreamSyncInterval = time.Second
+
+// changeStreamSyncHold sets the sync interval override while at least one
+// change-stream subscriber is connected and clears it after the last one
+// leaves.
+type changeStreamSyncHold struct {
+	override    *sync.IntervalOverride
+	mu          gosync.Mutex
+	subscribers int
+}
+
+func (h *changeStreamSyncHold) acquire() (release func()) {
+	if h.override == nil {
+		return func() {}
+	}
+	h.mu.Lock()
+	h.subscribers++
+	if h.subscribers == 1 {
+		h.override.Set(changeStreamSyncInterval)
+	}
+	h.mu.Unlock()
+	return func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.subscribers--
+		if h.subscribers == 0 {
+			h.override.Set(0)
+		}
+	}
+}
 
 func (s *Server) registerChangeStreamRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1")
@@ -82,6 +118,8 @@ func (s *Server) humaChangeStream(
 		streamCtx := hctx.Context()
 		sub, unsub := s.broadcaster.SubscribeWakes()
 		defer unsub()
+		releaseSync := s.changeStreamSync.acquire()
+		defer releaseSync()
 		head, err := local.ReadChangeStreamHead(streamCtx)
 		if err != nil {
 			sendChangeStreamError(stream, err)
