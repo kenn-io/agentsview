@@ -6681,13 +6681,20 @@ func (e *Engine) streamReconciliationCandidates(
 				kiroWinners = make(map[string]reconciliationCandidate)
 			}
 			var spoolErr error
+			var emitted bool
 			discover := discoverer.DiscoverEach
 			if scoped, ok := scopeProvider.(parser.ScopedStreamingDiscoverer); ok {
 				discover = func(ctx context.Context, yield func(parser.SourceRef) error) error {
-					return scoped.DiscoverScopesEach(ctx, group.scopes, yield)
+					err := scoped.DiscoverScopesEach(ctx, group.scopes, yield)
+					unsupported, missing := errors.AsType[parser.UnsupportedProviderFeatureError](err)
+					if !emitted && missing && unsupported.Feature == parser.ProviderFeatureScopedDiscovery {
+						return discoverer.DiscoverEach(ctx, yield)
+					}
+					return err
 				}
 			}
 			err = discover(ctx, func(source parser.SourceRef) error {
+				emitted = true
 				candidate, ok := e.reconciliationCandidate(ctx,
 					provider, source, rankingRoots, watchRoots,
 				)

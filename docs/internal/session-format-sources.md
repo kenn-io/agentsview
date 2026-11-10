@@ -5836,7 +5836,12 @@ schemas keep their existing ordering behavior.
   The local daemon's startup sync establishes its baseline first. Failed
   metadata-only updates recover on the next full sync (normally within 15
   minutes) or transcript write. Direct session lookups refresh metadata
-  without consuming the watcher baseline.
+  without consuming the watcher baseline, including ID-only and unsuccessful
+  lookups. Reverified 2026-11-11 against two-session metadata edits and
+  metadata-only reconciliation fixtures: full and scoped discovery use shared
+  preparation for selected roots. Descendant scans refresh their active index
+  snapshot without acknowledging pending metadata changes for other sessions;
+  whole-root discovery still establishes the watcher baseline.
 
 ## fx (`fx`)
 

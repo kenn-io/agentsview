@@ -79,6 +79,7 @@ func newJunieSourceSetWithCache(
 ) junieSourceSet {
 	return junieSourceSet{
 		JSONLSourceSet: NewDirectoryJSONLSourceSet(AgentJunie, roots,
+			WithPrepareDiscovery(indexCache.prepareDiscovery),
 			WithIncludePath(func(_, path string) bool {
 				return filepath.Base(path) == "events.jsonl"
 			}),
@@ -92,23 +93,12 @@ func newJunieSourceSetWithCache(
 	}
 }
 
-func (s junieSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	return collectDiscoveredSources(ctx, s.DiscoverEach)
-}
-
-func (s junieSourceSet) DiscoverEach(
-	ctx context.Context, yield func(SourceRef) error,
-) error {
-	if err := s.refreshJunieIndexes(ctx); err != nil {
-		return err
-	}
-	return s.JSONLSourceSet.DiscoverEach(ctx, yield)
-}
-
 func (s junieSourceSet) FindSource(
 	ctx context.Context, req FindSourceRequest,
 ) (SourceRef, bool, error) {
-	source, found, err := s.JSONLSourceSet.FindSource(ctx, req)
+	lookup := s.JSONLSourceSet
+	lookup.options.PrepareDiscovery = nil
+	source, found, err := lookup.FindSource(ctx, req)
 	if err != nil || !found {
 		return source, found, err
 	}
@@ -316,30 +306,29 @@ func changedJunieSummaryIDs(
 	return changed
 }
 
-func (s junieSourceSet) refreshJunieIndexes(ctx context.Context) error {
-	for _, root := range s.roots {
-		indexPath := filepath.Join(root, "index.jsonl")
-		snapshot, present, err := loadJunieIndexSnapshot(
-			ctx, indexPath, openJunieRoot,
-		)
-		if err != nil {
-			if !errors.Is(err, errInvalidJunieIndex) {
-				return err
-			}
-			// Keep the last complete snapshot. A root without one will fail
-			// its own fingerprint reads without blocking healthy roots.
-			log.Printf("Junie index refresh: %v", err)
-			continue
+func (c *junieIndexCache) prepareDiscovery(ctx context.Context, preparation JSONLDiscoveryPreparation) error {
+	root := preparation.Root
+	indexPath := filepath.Join(root, "index.jsonl")
+	snapshot, present, err := loadJunieIndexSnapshot(ctx, indexPath, openJunieRoot)
+	if err != nil {
+		if !errors.Is(err, errInvalidJunieIndex) {
+			return err
 		}
-		s.indexCache.mu.Lock()
-		state := s.indexCache.stateLocked(root)
-		if !present {
-			snapshot = map[string]junieIndexSummary{}
-		}
-		state.watchSummaries = snapshot
-		state.activeSummaries = snapshot
-		s.indexCache.mu.Unlock()
+		// Keep the last complete snapshot. A root without one will fail
+		// its own fingerprint reads without blocking healthy roots.
+		log.Printf("Junie index refresh: %v", err)
+		return nil
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.stateLocked(root)
+	if !present {
+		snapshot = map[string]junieIndexSummary{}
+	}
+	if preparation.FullRoot {
+		state.watchSummaries = snapshot
+	}
+	state.activeSummaries = snapshot
 	return nil
 }
 
