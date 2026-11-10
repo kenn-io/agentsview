@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -64,26 +63,32 @@ func BenchmarkSQLiteActivityReportRefresh(b *testing.B) {
 	}
 	ctx := b.Context()
 
-	var candidates []activity.IntervalCandidate
-	var counted []struct {
+	sessionRows := make([]activity.SessionRow, len(metas))
+	for i, m := range metas {
+		sessionRows[i] = activity.SessionRow{SessionID: m.SessionID, IsAutomated: m.IsAutomated, IsSubagent: m.IsSubagent}
+	}
+	type countedMessage struct {
 		id string
 		m  activityCountedMessage
 	}
+	pair := func() ([]activity.IntervalCandidate, []countedMessage) {
+		var candidates []activity.IntervalCandidate
+		var counted []countedMessage
+		upper := q.EffectiveEnd.UnixMicro()
+		require.NoError(b, d.activityReportCandidateSQL(ids, activityPairingWindow(q), func(id string, m activityCountedMessage) {
+			counted = append(counted, countedMessage{id, m})
+		})(ctx, func(c activity.IntervalCandidate) error {
+			if c.Start.UnixMicro() < upper {
+				candidates = append(candidates, c)
+			}
+			return nil
+		}))
+		return candidates, counted
+	}
+	candidates, counted := pair()
 	b.Run("before/pair", func(b *testing.B) {
 		for b.Loop() {
-			candidates, counted = candidates[:0], counted[:0]
-			upper := q.EffectiveEnd.UnixMicro()
-			require.NoError(b, d.activityReportCandidateSQL(ids, activityPairingWindow(q), func(id string, m activityCountedMessage) {
-				counted = append(counted, struct {
-					id string
-					m  activityCountedMessage
-				}{id, m})
-			})(ctx, func(c activity.IntervalCandidate) error {
-				if c.Start.UnixMicro() < upper {
-					candidates = append(candidates, c)
-				}
-				return nil
-			}))
+			pair()
 		}
 		b.ReportMetric(float64(len(candidates)), "candidates")
 	})
@@ -95,7 +100,7 @@ func BenchmarkSQLiteActivityReportRefresh(b *testing.B) {
 	})
 	b.Run("before/counts", func(b *testing.B) {
 		artifacts := activity.CandidateArtifacts{
-			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Membership: map[string]activity.BucketMembership{},
+			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Sessions: sessionRows, Membership: map[string]activity.BucketMembership{},
 		}
 		for b.Loop() {
 			add := newActivityMessageCounter(q, activity.NewMessageAccumulator(q, &artifacts))
@@ -105,6 +110,26 @@ func BenchmarkSQLiteActivityReportRefresh(b *testing.B) {
 		}
 	})
 
+	// Keep every session, then refresh as after/refresh-runs does, so each
+	// step below measures the whole archive when it runs alone.
+	_, _, err = d.activityReportRuns(ctx, ids, q)
+	require.NoError(b, err)
+	forget := func() {
+		d.activityMemo.mu.Lock()
+		defer d.activityMemo.mu.Unlock()
+		for _, id := range ids[:10] {
+			for key, element := range d.activityMemo.entries {
+				if key.id == id {
+					d.activityMemo.bytes -= element.Value.(activityMemoEntry).bytes()
+					d.activityMemo.order.Remove(element)
+					delete(d.activityMemo.entries, key)
+				}
+			}
+		}
+	}
+	forget()
+	runs, kept, err := d.activityReportRuns(ctx, ids, q)
+	require.NoError(b, err)
 	b.Run("after/derive-all", func(b *testing.B) {
 		for b.Loop() {
 			d.activityMemo.swap(func() {})
@@ -114,25 +139,13 @@ func BenchmarkSQLiteActivityReportRefresh(b *testing.B) {
 		require.Len(b, d.activityMemo.entries, sessions)
 		b.ReportMetric(float64(d.activityMemo.bytes)/(1<<20), "memo-MiB")
 	})
-	var runs []activity.Run
-	var kept map[string]activityMemoCounted
 	b.Run("after/refresh-runs", func(b *testing.B) {
 		for b.Loop() {
 			// Ten sessions changed since the last refresh.
 			b.StopTimer()
-			d.activityMemo.mu.Lock()
-			for _, id := range ids[:10] {
-				for key, element := range d.activityMemo.entries {
-					if key.id == id {
-						d.activityMemo.bytes -= element.Value.(activityMemoEntry).bytes()
-						d.activityMemo.order.Remove(element)
-						delete(d.activityMemo.entries, key)
-					}
-				}
-			}
-			d.activityMemo.mu.Unlock()
+			forget()
 			b.StartTimer()
-			runs, kept, err = d.activityReportRuns(ctx, ids, q)
+			_, _, err := d.activityReportRuns(ctx, ids, q)
 			require.NoError(b, err)
 		}
 		b.ReportMetric(float64(len(runs)), "runs")
@@ -140,20 +153,13 @@ func BenchmarkSQLiteActivityReportRefresh(b *testing.B) {
 	b.Run("after/sweep", func(b *testing.B) {
 		for b.Loop() {
 			_, err := activity.BuildRunArtifactsWithSurvivorUsage(ctx, p, metas,
-				func(_ context.Context, yield func(activity.Run) error) error {
-					for _, run := range runs {
-						if err := yield(run); err != nil {
-							return err
-						}
-					}
-					return nil
-				}, func() ([]activity.UsageRow, error) { return nil, nil })
+				runSlice(runs), func() ([]activity.UsageRow, error) { return nil, nil })
 			require.NoError(b, err)
 		}
 	})
 	b.Run("after/counts", func(b *testing.B) {
 		artifacts := activity.CandidateArtifacts{
-			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Membership: map[string]activity.BucketMembership{},
+			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Sessions: sessionRows, Membership: map[string]activity.BucketMembership{},
 		}
 		backend := activityReportBackend{DB: d, counted: &activityReportCounted{sessions: kept, complete: true}}
 		for b.Loop() {

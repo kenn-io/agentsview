@@ -59,20 +59,28 @@ func BenchmarkDuckDBActivityReportRefresh(b *testing.B) {
 		RangeStart: q.RangeStart, RangeEnd: q.RangeEnd, Loc: q.Loc, EffectiveEnd: q.EffectiveEnd,
 		Partial: q.Partial, GapCapSeconds: q.GapCapSeconds, Bucket: q.Bucket,
 	}
+	sessionRows := make([]activity.SessionRow, len(metas))
+	for i, m := range metas {
+		sessionRows[i] = activity.SessionRow{SessionID: m.SessionID, IsAutomated: m.IsAutomated, IsSubagent: m.IsSubagent}
+	}
 	emptyArtifacts := func() activity.CandidateArtifacts {
 		return activity.CandidateArtifacts{
-			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Membership: map[string]activity.BucketMembership{},
+			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Sessions: sessionRows, Membership: map[string]activity.BucketMembership{},
 		}
 	}
 
-	var candidates []activity.IntervalCandidate
+	pair := func() []activity.IntervalCandidate {
+		var candidates []activity.IntervalCandidate
+		require.NoError(b, store.ActivityReportCandidateSource(ids, q)(ctx, func(c activity.IntervalCandidate) error {
+			candidates = append(candidates, c)
+			return nil
+		}))
+		return candidates
+	}
+	candidates := pair()
 	b.Run("before/pair", func(b *testing.B) {
 		for b.Loop() {
-			candidates = candidates[:0]
-			require.NoError(b, store.ActivityReportCandidateSource(ids, q)(ctx, func(c activity.IntervalCandidate) error {
-				candidates = append(candidates, c)
-				return nil
-			}))
+			pair()
 		}
 		b.ReportMetric(float64(len(candidates)), "candidates")
 	})
@@ -89,6 +97,24 @@ func BenchmarkDuckDBActivityReportRefresh(b *testing.B) {
 		}
 	})
 
+	// Keep every session, then refresh as after/refresh-runs does, so each
+	// step below measures the whole archive when it runs alone.
+	_, _, err = store.activityReportRuns(ctx, ids, q)
+	require.NoError(b, err)
+	forget := func() {
+		m := &store.activityRuns
+		for _, id := range ids[:10] {
+			key := activityRunsKey{id, q.GapCapSeconds}
+			if element := m.entries[key]; element != nil {
+				m.bytes -= element.Value.(activityRunsEntry).bytes()
+				m.order.Remove(element)
+				delete(m.entries, key)
+			}
+		}
+	}
+	forget()
+	runs, kept, err := store.activityReportRuns(ctx, ids, q)
+	require.NoError(b, err)
 	b.Run("after/derive-all", func(b *testing.B) {
 		for b.Loop() {
 			store.activityRuns = activityRunsMemo{}
@@ -98,21 +124,13 @@ func BenchmarkDuckDBActivityReportRefresh(b *testing.B) {
 		require.Len(b, store.activityRuns.entries, sessions)
 		b.ReportMetric(float64(store.activityRuns.bytes)/(1<<20), "memo-MiB")
 	})
-	var runs []activity.Run
-	var kept map[string]activityRunsEntry
 	b.Run("after/refresh-runs", func(b *testing.B) {
 		for b.Loop() {
 			// Ten sessions changed since the last refresh.
 			b.StopTimer()
-			m := &store.activityRuns
-			for _, id := range ids[:10] {
-				element := m.entries[activityRunsKey{id, q.GapCapSeconds}]
-				m.bytes -= element.Value.(activityRunsEntry).bytes()
-				m.order.Remove(element)
-				delete(m.entries, activityRunsKey{id, q.GapCapSeconds})
-			}
+			forget()
 			b.StartTimer()
-			runs, kept, err = store.activityReportRuns(ctx, ids, q)
+			_, _, err := store.activityReportRuns(ctx, ids, q)
 			require.NoError(b, err)
 		}
 		b.ReportMetric(float64(len(runs)), "runs")

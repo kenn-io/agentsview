@@ -13,6 +13,18 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 )
 
+// runSlice streams runs in order.
+func runSlice(runs []activity.Run) activity.RunSource {
+	return func(_ context.Context, yield func(activity.Run) error) error {
+		for _, run := range runs {
+			if err := yield(run); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 // seedActivityRunSessions stores sessions with the shapes the runs must
 // preserve: clock reversals, unstamped messages, tool events, sessions with
 // only tool events, gaps of exactly the cap, sub-microsecond times, offsets
@@ -154,14 +166,7 @@ func TestSQLiteActivityRunsMatchCandidateSweep(t *testing.T) {
 				runs, counted, err := d.activityReportRuns(ctx, ids, q)
 				require.NoError(t, err)
 				got, err := activity.BuildRunArtifactsWithSurvivorUsage(ctx, p, metas,
-					func(_ context.Context, yield func(activity.Run) error) error {
-						for _, run := range runs {
-							if err := yield(run); err != nil {
-								return err
-							}
-						}
-						return nil
-					}, func() ([]activity.UsageRow, error) { return nil, nil })
+					runSlice(runs), func() ([]activity.UsageRow, error) { return nil, nil })
 				require.NoError(t, err)
 				backend := activityReportBackend{DB: d, counted: &activityReportCounted{sessions: counted, complete: true}}
 				require.NoError(t, backend.ActivityReportMessageCounts(ctx, ids, q, &got))

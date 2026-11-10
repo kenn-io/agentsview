@@ -381,7 +381,18 @@ func TestActivityMemoLRUAndBudget(t *testing.T) {
 	assert.Equal(t, []string{"b"}, rereadRuns(activityRuns(t, d, q, "a", "b", "c"), "reread-2"),
 		"keeping c evicted b; keeping b again evicted a")
 	assert.Equal(t, []string{"a"}, rereadRuns(activityRuns(t, d, q, "a"), "reread-2"))
-	assert.LessOrEqual(t, d.activityMemo.bytes, activityMemoMaxBytes)
+
+	// Sessions without activity count too: keeping three of them after a
+	// leaves room for only two, so a is evicted and read again.
+	activityMemoMaxBytes = old
+	d.activityMemo.swap(func() {})
+	activityRuns(t, d, q, "d")
+	empty := d.activityMemo.bytes
+	require.Positive(t, empty)
+	d.activityMemo.swap(func() {})
+	activityRuns(t, d, q, "a")
+	activityMemoMaxBytes = d.activityMemo.bytes + 2*empty
 	activityRuns(t, d, q, "d", "e", "f")
-	assert.LessOrEqual(t, d.activityMemo.bytes, activityMemoMaxBytes, "sessions without activity count too")
+	rewriteActivityModels(t, d, "reread-3", "a")
+	assert.Equal(t, []string{"a"}, rereadRuns(activityRuns(t, d, q, "a"), "reread-3"))
 }

@@ -964,7 +964,7 @@ fingerprint is paired on every report. Like PostgreSQL, DuckDB pairs over all
 time and clips runs at the effective end cast to its microsecond `TIMESTAMP`. On
 the same scratch data, the kept runs took 74 MiB, and a refresh with ten changed
 sessions spent 328 ms pairing instead of 3.4 s, 224 ms sweeping instead of
-1.1 s, and 31 ms counting messages instead of 540 ms.
+1.1 s, and 42 ms counting messages instead of 593 ms.
 
 ### PostgreSQL push preparation indexes
 

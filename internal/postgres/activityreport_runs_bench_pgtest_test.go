@@ -56,21 +56,29 @@ func BenchmarkPGActivityReportRefresh(b *testing.B) {
 		RangeStart: q.RangeStart, RangeEnd: q.RangeEnd, Loc: q.Loc, EffectiveEnd: q.EffectiveEnd,
 		Partial: q.Partial, GapCapSeconds: q.GapCapSeconds, Bucket: q.Bucket,
 	}
+	sessionRows := make([]activity.SessionRow, len(metas))
+	for i, m := range metas {
+		sessionRows[i] = activity.SessionRow{SessionID: m.SessionID, IsAutomated: m.IsAutomated, IsSubagent: m.IsSubagent}
+	}
 	emptyArtifacts := func() activity.CandidateArtifacts {
 		return activity.CandidateArtifacts{
-			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Membership: map[string]activity.BucketMembership{},
+			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Sessions: sessionRows, Membership: map[string]activity.BucketMembership{},
 		}
 	}
 
-	var candidates []activity.IntervalCandidate
-	var counted []pgActivityCountedMessage
+	pair := func() ([]activity.IntervalCandidate, []pgActivityCountedMessage) {
+		var candidates []activity.IntervalCandidate
+		var counted []pgActivityCountedMessage
+		require.NoError(b, store.activityReportCandidateSourceWithCounts(ids, q, &counted)(ctx, func(c activity.IntervalCandidate) error {
+			candidates = append(candidates, c)
+			return nil
+		}))
+		return candidates, counted
+	}
+	candidates, counted := pair()
 	b.Run("before/pair", func(b *testing.B) {
 		for b.Loop() {
-			candidates, counted = candidates[:0], counted[:0]
-			require.NoError(b, store.activityReportCandidateSourceWithCounts(ids, q, &counted)(ctx, func(c activity.IntervalCandidate) error {
-				candidates = append(candidates, c)
-				return nil
-			}))
+			pair()
 		}
 		b.ReportMetric(float64(len(candidates)), "candidates")
 	})
@@ -93,23 +101,33 @@ func BenchmarkPGActivityReportRefresh(b *testing.B) {
 		}
 	})
 
+	// Keep every session, then refresh as after/refresh-runs does, so each
+	// step below measures the whole archive when it runs alone.
 	inputs := &pgActivityInputs{sessions: map[string]pgActivitySession{}}
+	_, err = store.activityReportRuns(ctx, ids, q, inputs)
+	require.NoError(b, err)
+	forget := func() {
+		for _, id := range ids[:10] {
+			delete(inputs.sessions, id)
+		}
+	}
+	forget()
+	runs, err := store.activityReportRuns(ctx, ids, q, inputs)
+	require.NoError(b, err)
 	b.Run("after/derive-all", func(b *testing.B) {
+		all := &pgActivityInputs{}
 		for b.Loop() {
-			inputs.sessions = map[string]pgActivitySession{}
-			_, err := store.activityReportRuns(ctx, ids, q, inputs)
+			all.sessions = map[string]pgActivitySession{}
+			_, err := store.activityReportRuns(ctx, ids, q, all)
 			require.NoError(b, err)
 		}
-		b.ReportMetric(float64(pgActivityInputBytes(*inputs))/(1<<20), "kept-MiB")
+		b.ReportMetric(float64(pgActivityInputBytes(*all))/(1<<20), "kept-MiB")
 	})
-	var runs []activity.Run
 	b.Run("after/refresh-runs", func(b *testing.B) {
 		for b.Loop() {
 			// Ten sessions changed since the last refresh.
-			for _, id := range ids[:10] {
-				delete(inputs.sessions, id)
-			}
-			runs, err = store.activityReportRuns(ctx, ids, q, inputs)
+			forget()
+			_, err := store.activityReportRuns(ctx, ids, q, inputs)
 			require.NoError(b, err)
 		}
 		b.ReportMetric(float64(len(runs)), "runs")

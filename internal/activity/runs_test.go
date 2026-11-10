@@ -12,6 +12,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// runSlice streams runs in order.
+func runSlice(runs []Run) RunSource {
+	return func(_ context.Context, yield func(Run) error) error {
+		for _, run := range runs {
+			if err := yield(run); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 func runsTestQuery(t *testing.T) Query {
 	t.Helper()
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-01-10", Timezone: "UTC", BucketOverride: "1h"},
@@ -51,14 +63,7 @@ func sweepRuns(t *testing.T, q Query, runs []Run) CandidateArtifacts {
 		}
 	}
 	artifacts, err := BuildRunArtifactsWithSurvivorUsage(t.Context(), runsTestParams(q), sessions,
-		func(_ context.Context, yield func(Run) error) error {
-			for _, run := range runs {
-				if err := yield(run); err != nil {
-					return err
-				}
-			}
-			return nil
-		}, func() ([]UsageRow, error) { return nil, nil })
+		runSlice(runs), func() ([]UsageRow, error) { return nil, nil })
 	require.NoError(t, err)
 	return artifacts
 }
@@ -217,14 +222,7 @@ func TestRunsMatchCandidatesWithMicrosecondStartBound(t *testing.T) {
 		want, err := BuildCandidateArtifacts(t.Context(), p, sessions, streamed, nil)
 		require.NoError(t, err)
 		got, err := BuildRunArtifactsWithSurvivorUsage(t.Context(), p, sessions,
-			func(_ context.Context, yield func(Run) error) error {
-				for _, run := range runs {
-					if err := yield(run); err != nil {
-						return err
-					}
-				}
-				return nil
-			}, func() ([]UsageRow, error) { return nil, nil })
+			runSlice(runs), func() ([]UsageRow, error) { return nil, nil })
 		require.NoError(t, err)
 		require.Equal(t, want, got, "trial %d", trial)
 	}

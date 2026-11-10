@@ -67,6 +67,10 @@ func BenchmarkActivityReportRefresh(b *testing.B) {
 	lower := q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second)
 	var store Store
 
+	sessionRows := make([]activity.SessionRow, len(metas))
+	for i, m := range metas {
+		sessionRows[i] = activity.SessionRow{SessionID: m.SessionID, IsAutomated: m.IsAutomated, IsSubagent: m.IsSubagent}
+	}
 	b.Run("before/pair", func(b *testing.B) {
 		for b.Loop() {
 			_, _, err := store.pairActivitySessions(ctx, inputs, ids, lower, q.EffectiveEnd, q)
@@ -92,7 +96,7 @@ func BenchmarkActivityReportRefresh(b *testing.B) {
 	})
 	b.Run("before/counts", func(b *testing.B) {
 		artifacts := activity.CandidateArtifacts{
-			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Membership: map[string]activity.BucketMembership{},
+			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Sessions: sessionRows, Membership: map[string]activity.BucketMembership{},
 		}
 		for b.Loop() {
 			counts := activity.NewMessageAccumulator(q, &artifacts)
@@ -159,7 +163,7 @@ func BenchmarkActivityReportRefresh(b *testing.B) {
 		close(done)
 		pairing := &activityReportPairing{done: done, sessions: derived}
 		artifacts := activity.CandidateArtifacts{
-			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Membership: map[string]activity.BucketMembership{},
+			Report: activity.Report{Buckets: make([]activity.Bucket, 40)}, Sessions: sessionRows, Membership: map[string]activity.BucketMembership{},
 		}
 		for b.Loop() {
 			require.NoError(b, pairing.countMessages(ctx, ids, q, &artifacts))
