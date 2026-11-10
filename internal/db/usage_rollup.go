@@ -273,12 +273,7 @@ func (c *usageRollupCoordinator) Ensure(
 	if len(stale) == 0 && cursorCurrent {
 		return installs, usageRollupMetrics{}, nil
 	}
-	if usageWorkDeferred(ctx) && snapshot.exactAccountRevision && !cursorCurrent {
-		// External account generations must be rebuilt from their full source.
-		// A session refresh can invalidate this install after journal readiness
-		// was checked, so defer the rebuild to the background warm pass.
-		return nil, usageRollupMetrics{}, ErrUsageCacheWarming
-	}
+	snapshot.deferAccountBuild = usageWorkDeferred(ctx) && snapshot.exactAccountRevision
 	// The catalog digest only keys single-flight; staleness is per session.
 	catalogHash := snapshot.PricingIdentity
 	batch := snapshot
@@ -567,7 +562,7 @@ func (c *usageRollupCoordinator) ensureAttempt(
 	if err != nil {
 		return nil, false, usageRollupMetrics{}, err
 	}
-	if installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+	if !snapshot.deferAccountBuild && installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
 		cursorBuild, cursorErr := loadCursorUsageRollupBuild(
 			ctx, conn, installs[usageRollupCursorSessionID].FactRevision,
 			snapshot, pricing)
@@ -601,6 +596,15 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		ctx, conn, identity, snapshot.location, builds, cross)
 	metrics.InstallDuration = time.Since(installStarted)
 	if err != nil {
+		if snapshot.deferAccountBuild && errors.Is(err, errUsageCacheSourceChanged) {
+			current, _, readErr := readUsageRollupInstalls(ctx, conn, identity, snapshot, fills, pricing)
+			if readErr != nil {
+				return nil, false, metrics, readErr
+			}
+			if current[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+				return nil, false, metrics, ErrUsageCacheWarming
+			}
+		}
 		if errors.Is(err, errUsageCacheSourceChanged) && !snapshot.exactAccountRevision {
 			return nil, false, metrics, nil
 		}
@@ -613,6 +617,9 @@ func (c *usageRollupCoordinator) ensureAttempt(
 	}
 	if len(stale) != 0 ||
 		installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+		if snapshot.deferAccountBuild && installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+			return nil, false, metrics, ErrUsageCacheWarming
+		}
 		if snapshot.exactAccountRevision {
 			return nil, false, metrics, errUsageCacheSourceChanged
 		}
@@ -1048,6 +1055,7 @@ func usageRollupCallKey(
 	writeUsageHashString(digest,
 		usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals).Key)
 	writeUsageHashString(digest, catalogHash)
+	writeUsageHashBool(digest, snapshot.deferAccountBuild)
 	writeUsageHashInt64(digest, snapshot.CursorHighWater)
 	writeUsageHashInt64(digest, snapshot.ChangeRevision)
 	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))

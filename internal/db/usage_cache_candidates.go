@@ -77,6 +77,7 @@ type usageQueryInterval struct {
 
 type usageQuerySnapshot struct {
 	exactAccountRevision bool
+	deferAccountBuild    bool
 	ChangeIDs            []string
 	ChangeRevision       int64
 	DatabaseID           string

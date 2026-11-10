@@ -992,6 +992,87 @@ func TestUsageRollupPublishesOnlyCurrentFactRevisions(t *testing.T) {
 	}
 }
 
+func TestUsageRollupDefersAccountRebuildAfterConcurrentFill(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "rollup-race", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+	databaseID, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	source := &rollupRaceSource{rollupAccountSource: rollupAccountSource{
+		database: database, databaseID: databaseID, revision: 10,
+		accounts: []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, DedupKey: "shared"}},
+	}}
+	reader, err := NewUsageCacheReader(t.TempDir(), source)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	snapshot, fills, cache := prepareUsageRollupTest(t, reader.engine)
+	resolver := export.NewPricingResolver(snapshot.PricingRows)
+	_, _, err = cache.rollup.Ensure(t.Context(), snapshot, fills, resolver)
+	require.NoError(t, err)
+
+	// The foreground request needs a session rollup, but its account rollup is current.
+	snapshot.Sessions[0].Project = "project-b"
+	started := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	cache.rollup.observer.beforeEnsure = func() {
+		close(started)
+		<-release
+	}
+	var rebuiltAccount atomic.Bool
+	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+		if slices.ContainsFunc(builds, func(build usageRollupBuild) bool { return build.SessionID == usageRollupCursorSessionID }) {
+			rebuiltAccount.Store(true)
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := cache.rollup.Ensure(withUsageWorkDeferred(t.Context()), snapshot, fills, resolver)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "foreground rollup did not start")
+	}
+
+	// A concurrent fill introduces a session key that matches the account row.
+	source.key = "shared"
+	seedUsageSnapshotSession(t, database, "other-session", "project-a", "2026-08-10T10:00:00Z", 0, 10, "model-a")
+	_, _, _ = prepareUsageRollupTest(t, reader.engine)
+	var accounts int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
+	require.Zero(t, accounts, "the concurrent fill must invalidate the account rollup")
+	unblock()
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, ErrUsageCacheWarming)
+		assert.False(t, rebuiltAccount.Load(), "the foreground request must defer the account rebuild")
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "foreground rollup did not finish")
+	}
+	cache.rollup.observer.beforeEnsure = nil
+	_, _, err = cache.rollup.Ensure(t.Context(), snapshot, fills, resolver)
+	require.NoError(t, err)
+	require.True(t, rebuiltAccount.Load(), "the background build must install account totals")
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
+	require.Equal(t, 1, accounts)
+}
+
+type rollupRaceSource struct {
+	rollupAccountSource
+	key string
+}
+
+func (s *rollupRaceSource) StreamUsage(ctx context.Context, ids []string, emit func(string, usagefacts.Fact) error) (UsageSourceSnapshot, error) {
+	for _, id := range ids {
+		if err := emit(id, usagefacts.Fact{Source: "session", Model: "model-a", UsesSessionStart: true, OutputTokens: 10, UsageDedupKey: s.key, TokenEligible: true}); err != nil {
+			return UsageSourceSnapshot{}, err
+		}
+	}
+	return s.CaptureUsage(ctx, UsageSourceRequest{Filter: UsageFilter{Timezone: "UTC"}})
+}
+
 func TestUsageRollupCursorAppendsOnlyNewEvents(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
