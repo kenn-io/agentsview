@@ -39,11 +39,11 @@ type ImageTextRow struct {
 }
 
 // PendingImageText lists hashes never attempted before due retries, oldest
-// retry first, so repeated failures cannot starve other images.
+// retry first, with the newest occurrence first among equally eligible images.
 func (db *DB) PendingImageText(ctx context.Context, processor string, now time.Time, limit int) ([]string, error) {
 	rows, err := db.getReader().QueryContext(ctx, `SELECT o.image_hash FROM image_text_occurrences o LEFT JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.processor=?
  WHERE c.image_hash IS NULL OR (c.succeeded=0 AND c.retry_at<=?)
- GROUP BY o.image_hash ORDER BY MAX(c.image_hash IS NOT NULL), MAX(c.retry_at), o.image_hash LIMIT ?`, processor, now.UTC().Format(time.RFC3339), limit)
+ GROUP BY o.image_hash ORDER BY MAX(c.image_hash IS NOT NULL), MAX(c.retry_at), MAX(o.rowid) DESC, o.image_hash LIMIT ?`, processor, now.UTC().Format(time.RFC3339), limit)
 	if err != nil {
 		return nil, err
 	}

@@ -90,15 +90,18 @@ func TestImageTextPendingPrefersUnattempted(t *testing.T) {
 		hashes = append(hashes, RetainedToolResultImages(content)[0].SHA256)
 		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Ordinal: i, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 	}
-	slices.Sort(hashes)
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
+	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
+	require.NoError(t, err)
+	require.Equal(t, []string{hashes[2], hashes[1], hashes[0]}, pending)
+	slices.Sort(hashes)
 	for _, hash := range hashes[:2] {
 		require.NoError(t, d.SaveImageText(ctx, hash, identity, "", true))
 	}
 	_, err = d.getWriter().Exec(ctx, `UPDATE image_text_cache SET retry_at=CASE image_hash WHEN ? THEN '2000-01-02T00:00:00Z' ELSE '2000-01-01T00:00:00Z' END`, hashes[0])
 	require.NoError(t, err)
-	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
+	pending, err = d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
 	require.NoError(t, err)
 	require.Equal(t, []string{hashes[2], hashes[1], hashes[0]}, pending)
 }
@@ -292,6 +295,17 @@ func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 	page, err = d.Search(ctx, SearchFilter{Query: `"absent" OR content:invoice`})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
+	for _, query := range []string{`"invoice" OR content:missing`, `"invoice" OR content:"missing phrase"`, `"invoice" OR content:(missing OR absent)`, `"invoice" OR content:"missing" + "phrase"`, `"invoice" NOT content:invoice`, `"invoice" OR -{content rendered}:missing`, `"absent" OR -content:(content:missing OR invoice)`} {
+		page, err = d.Search(ctx, SearchFilter{Query: query})
+		require.NoError(t, err, query)
+		require.Len(t, page.Results, 1, query)
+		require.Equal(t, "image", page.Results[0].SessionID)
+	}
+	for _, query := range []string{`"invoice" AND content:invoice`, `"invoice" content:invoice`, `"absent" OR rendered:(invoice OR absent)`} {
+		page, err = d.Search(ctx, SearchFilter{Query: query})
+		require.NoError(t, err, query)
+		require.Empty(t, page.Results, query)
+	}
 }
 
 func TestImageTextSearchContent(t *testing.T) {

@@ -451,14 +451,15 @@ func (db *DB) Search(
 		return SearchPage{}, fmt.Errorf("starting search read: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	imageQuery := imageFTSQuery(f.Query)
 	var walk *searchRankWalk
 	var hasImageText bool
 	imageTable := "image_text_fts"
 	if ftsQuery.table == "messages_cjk_fts" {
 		imageTable = "image_text_cjk_fts"
 	}
-	if !hasFTSColumnFilter(f.Query) {
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+imageTable+` JOIN image_text_cache c ON c.rowid=`+imageTable+`.rowid WHERE `+imageTable+` MATCH ? AND c.succeeded=1)`, f.Query).Scan(&hasImageText); err != nil {
+	if imageQuery != "" {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+imageTable+` JOIN image_text_cache c ON c.rowid=`+imageTable+`.rowid WHERE `+imageTable+` MATCH ? AND c.succeeded=1)`, imageQuery).Scan(&hasImageText); err != nil {
 			return SearchPage{}, err
 		}
 	}
@@ -516,7 +517,7 @@ func (db *DB) Search(
 		 JOIN messages im ON im.session_id=o.session_id AND im.ordinal=COALESCE(e.tool_call_message_ordinal,cm.ordinal)`
 	imageVisibilitySQL := `im.is_system = 0 AND ` + SystemPrefixSQL("im.content", "im.role")
 	if hasImageText {
-		args = append(args, f.Query)
+		args = append(args, imageQuery)
 		args = append(args, nameProjectArgs...)
 		args = append(args, ftsArgs...)
 		imageBranchSQL = fmt.Sprintf(`
@@ -546,7 +547,7 @@ func (db *DB) Search(
 		args = append(args, nameProjectArgs...) // optional name branch project and dates
 		args = append(args, ftsSessionsArgs...) // NOT IN WHERE
 		if hasImageText {
-			args = append(args, f.Query)
+			args = append(args, imageQuery)
 		}
 		nameBranchSQL = fmt.Sprintf(`
 			UNION ALL
@@ -586,7 +587,7 @@ func (db *DB) Search(
 		}(), nameProjectClause, ftsSessionsSQL)
 	}
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
-	args = append(args, f.Query, f.Query)    // paged image and message snippet MATCH
+	args = append(args, imageQuery, f.Query) // paged image and message snippet MATCH
 
 	// Relevance ordering needs match_pos before pagination. Recency ordering
 	// does not, so it avoids scanning every matching message for the position.
@@ -817,4 +818,137 @@ func StripFTSQuotes(v string) string {
 		return v
 	}
 	return strings.Join(FTSTerms(v), " ")
+}
+
+// imageFTSQuery replaces message-column filters with an expression that can
+// never match an image. Excluding text leaves the single-column image index
+// with no searchable columns. The surrounding FTS expression stays intact.
+func imageFTSQuery(query string) string {
+	if !hasFTSColumnFilter(query) {
+		return query
+	}
+	var out strings.Builder
+	for i := 0; i < len(query); {
+		start := i
+		if query[i] == '"' {
+			i = ftsQuotedEnd(query, i)
+		} else if query[i] == '{' || query[i] == '-' && i+1 < len(query) && query[i+1] == '{' {
+			for i < len(query) && query[i] != '}' {
+				i++
+			}
+			if i < len(query) {
+				i++
+			}
+		} else if query[i] == '-' || query[i] == '_' || query[i] >= 'a' && query[i] <= 'z' || query[i] >= 'A' && query[i] <= 'Z' {
+			i++
+			for i < len(query) && (query[i] == '_' || query[i] >= 'a' && query[i] <= 'z' || query[i] >= 'A' && query[i] <= 'Z') {
+				i++
+			}
+		} else {
+			out.WriteByte(query[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(query) && strings.ContainsRune(" \t\n\r", rune(query[j])) {
+			j++
+		}
+		if j == len(query) || query[j] != ':' {
+			out.WriteString(query[start:i])
+			continue
+		}
+		column := strings.TrimSpace(query[start:i])
+		negated := strings.HasPrefix(column, "-")
+		column = strings.TrimPrefix(column, "-")
+		column = strings.Trim(column, "{}")
+		for _, name := range strings.Fields(column) {
+			name = strings.Trim(name, `"`)
+			if !strings.EqualFold(name, "content") && !strings.EqualFold(name, "rendered") {
+				return ""
+			}
+		}
+		i = j + 1
+		for i < len(query) && strings.ContainsRune(" \t\n\r", rune(query[i])) {
+			i++
+		}
+		end := ftsFilterEnd(query, i)
+		if end <= i {
+			return ""
+		}
+		if negated {
+			inner := imageFTSQuery(query[i:end])
+			if inner == "" {
+				return ""
+			}
+			out.WriteString(inner)
+		} else {
+			out.WriteString(`-text:"imagenevermatches"`)
+		}
+		i = end
+	}
+	return out.String()
+}
+
+func ftsQuotedEnd(query string, i int) int {
+	i++
+	for i < len(query) {
+		if query[i] == '"' {
+			i++
+			if i < len(query) && query[i] == '"' {
+				i++
+				continue
+			}
+			break
+		}
+		i++
+	}
+	return i
+}
+
+// ftsFilterEnd finds the phrase, NEAR group, or parenthesized expression
+// governed by a column filter, including phrase concatenation and prefixes.
+func ftsFilterEnd(query string, i int) int {
+	start := i
+	for i < len(query) {
+		switch {
+		case query[i] == '"':
+			i = ftsQuotedEnd(query, i)
+		case query[i] == '(':
+			depth := 1
+			i++
+			for i < len(query) && depth > 0 {
+				switch query[i] {
+				case '"':
+					i = ftsQuotedEnd(query, i)
+					continue
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+				i++
+			}
+			if depth != 0 {
+				return start
+			}
+		case query[i] == '+':
+			i++
+			for i < len(query) && strings.ContainsRune(" \t\n\r", rune(query[i])) {
+				i++
+			}
+		case strings.ContainsRune(" \t\n\r)", rune(query[i])):
+			j := i
+			for j < len(query) && strings.ContainsRune(" \t\n\r", rune(query[j])) {
+				j++
+			}
+			if j < len(query) && (query[j] == '+' || query[j] == '(' && strings.EqualFold(query[start:i], "NEAR")) {
+				i = j
+				continue
+			}
+			return i
+		default:
+			i++
+		}
+	}
+	return i
 }

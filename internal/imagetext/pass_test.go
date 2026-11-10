@@ -62,18 +62,16 @@ func TestImageTextPassDeadline(t *testing.T) {
 		}
 		start := time.Now()
 		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
-		require.LessOrEqual(t, time.Since(start), passBudget)
+		require.Equal(t, 140*time.Second, time.Since(start))
 		pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 20)
 		require.NoError(t, err)
 		require.Len(t, pending, 20)
-		var timedOut string
-		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT image_hash FROM image_text_cache WHERE succeeded=0`).Scan(&timedOut))
-		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
-		var succeeded, failures int
+		var succeeded int
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE succeeded=1`).Scan(&succeeded))
 		require.Equal(t, 2, succeeded)
-		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures FROM image_text_cache WHERE image_hash=?`, timedOut).Scan(&failures))
-		require.Equal(t, 1, failures)
+		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE succeeded=1`).Scan(&succeeded))
+		require.Equal(t, 4, succeeded)
 	})
 }
 
@@ -294,6 +292,7 @@ func TestImageTextUsesVerifiedBytes(t *testing.T) {
 	}{
 		{"mislabeled png", "image/gif", []byte("\x89PNG\r\n\x1a\nimage"), "image/png"},
 		{"unsupported gif", "image/png", []byte("GIF89a\x01\x00\x01\x00"), ""},
+		{"mislabeled webp", "image/png", []byte("RIFF\x04\x00\x00\x00WEBP"), "image/webp"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -332,4 +331,31 @@ func TestImageTextUsesVerifiedBytes(t *testing.T) {
 			require.Equal(t, 1, succeeded)
 		})
 	}
+}
+
+func TestImageTextAcceptsLargeImage(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	assetsDir := t.TempDir()
+	d.SetAssetsDir(assetsDir)
+	body := make([]byte, 20<<20+1)
+	copy(body, "\x89PNG\r\n\x1a\n")
+	ref, _, err := assets.Put(assetsDir, "image/png", body)
+	require.NoError(t, err)
+	content := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(body))
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "large", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "large", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	requests := 0
+	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"large image"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	})
+	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
+	require.Equal(t, 1, requests)
+	page, err := d.Search(ctx, db.SearchFilter{Query: "large image"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
 }

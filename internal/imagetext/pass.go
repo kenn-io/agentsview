@@ -7,8 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -23,47 +21,31 @@ type Manager struct {
 	Processor string
 }
 
-// passBudget bounds one scheduled pass; the poller resumes the rest on its
-// next interval.
+// passBudget limits when a pass may start another image.
 var passBudget = 2 * time.Minute
 
-const (
-	pageSize        = 20
-	passSaveReserve = time.Second
-)
+const pageSize = 20
 
 func (m *Manager) Run(ctx context.Context) error {
-	passCtx, cancel := context.WithTimeout(ctx, passBudget)
-	defer cancel()
-	workCtx, stopWork := context.WithTimeout(passCtx, passBudget-passSaveReserve)
-	defer stopWork()
+	deadline := time.Now().Add(passBudget)
 	identity := m.Client.Identity()
 	if m.Processor != "" {
 		identity.Fingerprint = m.Processor
 	}
 	cutoff := time.Now()
 	for {
-		pending, err := m.DB.PendingImageText(passCtx, identity.Fingerprint, cutoff, pageSize)
+		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, cutoff, pageSize)
 		if err != nil {
-			if passCtx.Err() != nil && ctx.Err() == nil {
-				return nil
-			}
 			return err
 		}
 		if len(pending) == 0 {
 			return nil
 		}
 		for _, hash := range pending {
-			if workCtx.Err() != nil {
+			if !time.Now().Before(deadline) {
 				return ctx.Err()
 			}
-			if err := m.processImage(workCtx, identity, hash); err != nil {
-				if workCtx.Err() != nil && passCtx.Err() == nil {
-					return m.DB.SaveImageText(passCtx, hash, identity, "", true)
-				}
-				if passCtx.Err() != nil && ctx.Err() == nil {
-					return nil
-				}
+			if err := m.processImage(ctx, identity, hash); err != nil {
 				return err
 			}
 		}
@@ -89,45 +71,40 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 			if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != hash {
 				continue
 			}
-			mediaType := detectMediaType(body)
-			if !slices.Contains(glmocr.SupportedMediaTypes(), mediaType) || !strings.HasPrefix(mediaType, "image/") {
-				return m.DB.SaveImageTextTerminal(ctx, hash, identity)
-			}
-			source, err := ocr.NewSource(io.NopCloser(bytes.NewReader(body)), mediaType, int64(len(body)), hash)
-			if err != nil {
-				return err
-			}
-			result, err := m.Client.Process(ctx, source)
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
+			// Process verifies the type against the bytes before sending a request.
+			// Try image types so a stale label does not hide usable image data.
+			for _, mediaType := range glmocr.SupportedMediaTypes() {
+				if !strings.HasPrefix(mediaType, "image/") {
+					continue
 				}
-				if ocr.ErrorKindOf(err) == ocr.ErrorInvalidInput {
-					return m.DB.SaveImageTextTerminal(ctx, hash, identity)
+				source, err := ocr.NewSource(io.NopCloser(bytes.NewReader(body)), mediaType, int64(len(body)), hash)
+				if err != nil {
+					return err
 				}
-				return m.DB.SaveImageText(ctx, hash, identity, "", true)
+				result, err := m.Client.Process(ctx, source)
+				if err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					if ocr.ErrorKindOf(err) == ocr.ErrorInvalidInput {
+						continue
+					}
+					return m.DB.SaveImageText(ctx, hash, identity, "", true)
+				}
+				var parts []string
+				for _, unit := range result.Document.Units {
+					parts = append(parts, unit.Text)
+				}
+				text := strings.TrimSpace(strings.Join(parts, "\n"))
+				return m.DB.SaveImageText(ctx, hash, identity, text, false)
 			}
-			var parts []string
-			for _, unit := range result.Document.Units {
-				parts = append(parts, unit.Text)
-			}
-			text := strings.TrimSpace(strings.Join(parts, "\n"))
-			return m.DB.SaveImageText(ctx, hash, identity, text, false)
+			return m.DB.SaveImageTextTerminal(ctx, hash, identity)
 		}
 		if len(items) < pageSize {
 			break
 		}
 	}
 	return m.DB.SaveImageText(ctx, hash, identity, "", true)
-}
-
-// detectMediaType follows Docbank's sniffing so a label never decides the
-// type sent for OCR.
-func detectMediaType(body []byte) string {
-	if len(body) >= 12 && string(body[:4]) == "RIFF" && string(body[8:12]) == "WEBP" {
-		return "image/webp"
-	}
-	return http.DetectContentType(body)
 }
 
 // ProcessorKey includes the output policy while excluding the service address.
