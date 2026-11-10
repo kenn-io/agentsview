@@ -127,9 +127,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - set: doubleclose
+          - set: watcher
             shard: 1
-          - set: doubleclose
+          - set: watcher
             shard: 2
     steps:
       - uses: actions/checkout@v7.0.1
@@ -155,10 +155,8 @@ jobs:
         timeout-minutes: 36
         run: |
           mkdir -p gotestsum
-          status=0
-          go test -json -tags fts5 -run '^TestZZZKqueueDoubleClose$' -count=1 -timeout=10m ./internal/sync > gotestsum/repro.json || status=$?
-          jq -rj 'select(.Action == "output") | .Output' gotestsum/repro.json | grep -E 'iteration|ZZZ|closed|FAIL|ok' | tail -40
-          exit "$status"
+          pattern=$(GOFLAGS="$GOFLAGS -tags=fts5" scripts/macos-watcher-tests.sh ./internal/sync)
+          go test -json -tags fts5 -run "$pattern" -count=40 -timeout=30m ./internal/sync > gotestsum/repro.json
         env:
           CGO_ENABLED: "1"
 
