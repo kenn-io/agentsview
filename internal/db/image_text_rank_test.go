@@ -23,6 +23,8 @@ func TestImageTextSearchFirstPageWithManyMessages(t *testing.T) {
 	}
 	insertSession(t, d, "zz-image", "demo")
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "zz-image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET started_at='2024-01-01T00:00:00Z', ended_at='2024-01-01T00:00:00Z'`)
+	require.NoError(t, err)
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
 	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "needle", false))
