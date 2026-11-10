@@ -24,6 +24,17 @@ type imageTextMemo struct {
 // potentially large source content, and bound both records and string bytes.
 var retainedImageMemo = imageTextMemo{maxEntries: 1024, maxImages: 4096, maxBytes: 1 << 20}
 
+// imageTextBatchTx defers pruning until every changed session has refreshed
+// its occurrences, so a shared image can move between sessions in one write.
+type imageTextBatchTx struct {
+	transactionQueries
+	oldHashes map[string]bool
+}
+
+func (tx *imageTextBatchTx) pruneImageText() error {
+	return pruneImageTextHashes(tx.transactionQueries, tx.oldHashes)
+}
+
 func (m *imageTextMemo) images(content string) []RetainedImage {
 	key := sha256.Sum256([]byte(content))
 	m.mu.Lock()
@@ -97,8 +108,18 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 			return err
 		}
 	}
-	for hash := range oldHashes {
-		if _, err = tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=?)`, hash, hash); err != nil {
+	if batch, ok := tx.(*imageTextBatchTx); ok {
+		for hash := range oldHashes {
+			batch.oldHashes[hash] = true
+		}
+		return nil
+	}
+	return pruneImageTextHashes(tx, oldHashes)
+}
+
+func pruneImageTextHashes(tx transactionQueries, hashes map[string]bool) error {
+	for hash := range hashes {
+		if _, err := tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=?)`, hash, hash); err != nil {
 			return err
 		}
 	}

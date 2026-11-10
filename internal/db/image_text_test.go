@@ -199,6 +199,54 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 	require.Zero(t, count)
 }
 
+func TestImageTextMovesBetweenSessionsInAtomicBatch(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	content := testInlineImageContent()
+	insertSession(t, d, "a", "demo")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "a", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	hash := RetainedToolResultImages(content)[0].SHA256
+	require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice", false))
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{
+		{Session: Session{ID: "a", Project: "demo", Agent: "test"}, ReplaceMessages: true, Messages: []Message{{SessionID: "a", Role: "assistant", Content: "removed"}}},
+		{Session: Session{ID: "b", Project: "demo", Agent: "test"}, ReplaceMessages: true, Messages: []Message{{SessionID: "b", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}},
+	})
+	require.NoError(t, err)
+	page, err := d.Search(ctx, SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "b", page.Results[0].SessionID)
+	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "b", []Message{{SessionID: "b", Role: "assistant", Content: "removed"}}))
+	var count int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, hash).Scan(&count))
+	require.Zero(t, count)
+}
+
+func TestImageTextSurvivesReplacementWithTrashedCopy(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	content := testInlineImageContent()
+	insertSession(t, d, "image", "demo")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	hash := RetainedToolResultImages(content)[0].SHA256
+	require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice", false))
+	copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, SessionBatchWrite{Session: Session{ID: "image", Project: "demo", Agent: "test"}, Messages: []Message{{SessionID: "image", Role: "assistant", Content: "removed"}}})
+	require.NoError(t, err)
+	_, err = d.RestoreSession(ctx, copyID)
+	require.NoError(t, err)
+	page, err := d.Search(ctx, SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, copyID, page.Results[0].SessionID)
+}
+
 func TestImageTextMigrationStrippingAndDeletion(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
