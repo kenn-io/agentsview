@@ -569,6 +569,10 @@
     color: var(--text-muted);
   }
 
+  .item-snippet :global(mark) {
+    color: var(--accent-amber-foreground);
+  }
+
   .item-match-kind {
     margin-right: 6px;
     font-weight: 500;
