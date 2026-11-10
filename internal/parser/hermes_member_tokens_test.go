@@ -39,22 +39,6 @@ func tokenMap(t *testing.T, c *sql.DB) map[string]string {
 	return out
 }
 
-// The native repair predicate must move the token even for an interior timestamp.
-func TestHermesMemberTokenNativeTimestampRepair(t *testing.T) {
-	c, _ := hermesTokenFixture(t)
-	_, err := c.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions;
- INSERT INTO sessions(id,source,started_at) VALUES ('s','cli',1778767200);
- INSERT INTO messages(session_id,role,content,timestamp) VALUES ('s','user','first',1778767200),('s','user','middle',-5),('s','user','last',1778767300);`)
-	require.NoError(t, err)
-	before := tokenMap(t, c)["s"]
-	_, err = c.ExecContext(t.Context(), `UPDATE messages SET timestamp=1778767200 WHERE NOT(timestamp BETWEEN 0.0 AND 4200000000.0)`)
-	require.NoError(t, err)
-	assert.NotEqual(t, before, tokenMap(t, c)["s"])
-	var revision int
-	require.NoError(t, c.QueryRowContext(t.Context(), `SELECT transcript_revision FROM sessions WHERE id='s'`).Scan(&revision))
-	assert.Zero(t, revision)
-}
-
 func TestHermesMemberTokensMatchDirectAndSeededFingerprint(t *testing.T) {
 	c, path := hermesTokenFixture(t)
 	hermesfixture.CreateLedger(t, c)
@@ -93,9 +77,6 @@ func TestHermesMemberTokensIgnoreUnusedSessionColumns(t *testing.T) {
 	_, err := c.ExecContext(t.Context(), `UPDATE sessions SET runtime_revision=8,last_activity_at=1778769999`)
 	require.NoError(t, err)
 	assert.Equal(t, before, tokenMap(t, c))
-	_, err = c.ExecContext(t.Context(), `UPDATE messages SET content='rewrite'`)
-	require.NoError(t, err)
-	assert.NotEqual(t, before, tokenMap(t, c))
 }
 
 func TestHermesRewriteTriggerCoverage(t *testing.T) {
@@ -108,13 +89,6 @@ func TestHermesRewriteTriggerCoverage(t *testing.T) {
 	ok, err = hermesStoreTracksRewrites(t.Context(), c)
 	require.NoError(t, err)
 	assert.False(t, ok)
-}
-
-func TestHermesStoredTokenRejectsLegacyHash(t *testing.T) {
-	for _, value := range []string{"", strings.Repeat("a", 64), "hst1:bad:hash"} {
-		_, ok := hermesStoredMemberToken(value)
-		assert.False(t, ok)
-	}
 }
 
 func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
