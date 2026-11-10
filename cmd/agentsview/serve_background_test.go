@@ -186,6 +186,46 @@ func TestRunServeBackgroundGeneratesAuthTokenForRemoteSync(t *testing.T) {
 	assert.Contains(t, string(data), `auth_token = "`)
 }
 
+func TestRunServeBackgroundStreamsStartupProgressUntilReady(t *testing.T) {
+	oldStart := startServeBackgroundForRun
+	startServeBackgroundForRun = func(_ context.Context,
+		_ config.Config, _ []string, _ serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		assert.False(t, policy.Attached,
+			"serve --background must retain its inactivity timeout")
+		require.NotNil(t, policy.OnProgress)
+		policy.OnProgress(&startupState{Phase: "opening database"}, 2*time.Second)
+		policy.OnProgress(&startupState{
+			Phase: "initial sync", Detail: "local: 120/450 sessions (27%)",
+		}, 6*time.Second)
+		return backgroundLaunchResult{
+			Runtime: &DaemonRuntime{
+				Record: daemon.RuntimeRecord{PID: 92},
+				Host:   "127.0.0.1", Port: 8080,
+			},
+			Started: true, childPID: 92, LogPath: "/data/serve.log",
+		}, nil
+	}
+	t.Cleanup(func() { startServeBackgroundForRun = oldStart })
+
+	out := captureStdout(t, func() {
+		runServeBackground(t.Context(),
+			config.Config{DataDir: t.TempDir()},
+			[]string{"serve", "--background"},
+			serveReplacementOptions{},
+		)
+	})
+
+	assert.Equal(t,
+		"  opening database (2s)\n"+
+			"  initial sync: local: 120/450 sessions (27%) (6s)\n"+
+			"agentsview running at http://127.0.0.1:8080 (pid 92)\n"+
+			"Logs: /data/serve.log\n",
+		out,
+	)
+}
+
 func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 	setStartProbeTickForTest(t, 25*time.Millisecond)
 

@@ -497,6 +497,9 @@ func (db *DB) writeOneSessionBatchTx(
 	}
 	sessionExists := !upsertResult.inserted
 	replacementTranscriptChanged := false
+	// A transcript whose rows only gain source IDs changes in place, so the
+	// rows keep their pins and notes; the revision still advances.
+	sourceIDsOnly := false
 	var stored []Message
 	if replaceMessages && sessionExists {
 		stored, err = sessionMessagesTx(
@@ -516,6 +519,8 @@ func (db *DB) writeOneSessionBatchTx(
 		replacementTranscriptChanged = !transcriptMessagesEqual(
 			stored, write.Messages,
 		)
+		sourceIDsOnly = replacementTranscriptChanged &&
+			transcriptMessagesGainSourceIDs(stored, write.Messages)
 	}
 
 	if err := writeSessionBatchMetadataTx(ctx, tx, queries, write, upsertResult); err != nil {
@@ -529,7 +534,7 @@ func (db *DB) writeOneSessionBatchTx(
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
 		}
-		if replacementTranscriptChanged {
+		if replacementTranscriptChanged && !sourceIDsOnly {
 			pins, err = savePinsTx(queries, write.Session.ID, msgs)
 			if err != nil {
 				return 0, err
@@ -541,6 +546,15 @@ func (db *DB) writeOneSessionBatchTx(
 				return 0, err
 			}
 		} else {
+			// The rows keep their pins, but a caller that copies the old
+			// transcript still needs them for the copy.
+			if sourceIDsOnly && pinSnapshot != nil {
+				snapshot, err := savePinsTx(queries, write.Session.ID, msgs)
+				if err != nil {
+					return 0, err
+				}
+				*pinSnapshot = snapshot
+			}
 			// Keep IDs held by open clients. Parser metadata can still change
 			// without changing the transcript, so refresh those rows in place.
 			byOrdinal := make(map[int]Message, len(stored))

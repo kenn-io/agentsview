@@ -1194,7 +1194,7 @@ When some contributing models are unpriced, the cost line reads
 GET /api/v1/sessions/{id}/usage
 ```
 
-On `main` after v0.46.1, this endpoint accepts raw agent session IDs
+In 0.47.0 and later, this endpoint accepts raw agent session IDs
 as well as canonical archive IDs. Exact matches take precedence. If an exact
 lookup misses or reports an ambiguous identity, an ID without a known agent
 prefix or `~` host namespace is matched literally against stored IDs ending in
@@ -1634,7 +1634,7 @@ session ID. Unknown agents and invalid trailer values are ignored.
 Every matching line in the commit message counts, including lines in squash
 commit bodies. Inline mentions don't create links. Merge commits count.
 
-`agentsview sync` scans repositories used by local sessions. Under
+`agentsview source sync` scans repositories used by local sessions. Under
 `agentsview serve`, editor commits appear at the next scheduled pass, within 15
 minutes. Each pass rereads every repository's history, including fetched older
 branches. Only checkouts a local session ran in are read. If a checkout has

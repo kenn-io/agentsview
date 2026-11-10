@@ -1996,11 +1996,10 @@ backing off to daily; a restart also retries.
 
 ## History from a saved archive
 
-This feature is unreleased. It lets an ordinary AgentsView installation browse
-and search a retired machine's history alongside current local sessions. The
-original Claude and Codex files stay in their Docbank storage; you can attach a
-backup snapshot or an existing archive directory. Neither requires a permanent
-extracted transcript directory.
+Browse and search a retired machine's history alongside your current local
+sessions. The original Claude and Codex files stay in their Docbank storage; you
+can attach a backup snapshot or an existing archive directory. Neither requires
+a permanent extracted transcript directory.
 
 Copy an AgentsView archive backup repository to a local disk or mounted share.
 Add its path and the exact snapshot ID from the backup report to `config.toml`:
@@ -2233,7 +2232,8 @@ progress detail, and log path while the daemon holds the start lock.
 The Friction Log records moments a session went wrong: corrections, failed
 commands, workarounds, deferrals, repeated patterns, frustration, and
 interruptions. Review is off by default because it reads every changed
-transcript a second time.
+transcript a second time. To learn how to read a digest, see
+[Friction Log](/docs/quality/#friction-log).
 
 ```toml
 [friction]

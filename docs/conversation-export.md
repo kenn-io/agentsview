@@ -183,8 +183,11 @@ the same utterance.
 
 A full resync is a replacement too. If a session's complete projection changes,
 messages without native IDs can become `identity_ambiguous` even when their own
-text is unchanged. An identical complete projection preserves those IDs. Each
-exported message corresponds to a normalized database message record.
+text is unchanged. An identical complete projection preserves those IDs. So does
+a projection that is identical except that messages gain native IDs, each used
+once, such as after a parser upgrade starts keeping them; those messages lose
+their `identity_unavailable` gap. Each exported message corresponds to a
+normalized database message record.
 
 Messages without stored content and content excluded by archive policy are
 explicit gaps. They are not empty successful conversations. The `gap` values

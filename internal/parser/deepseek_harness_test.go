@@ -1685,6 +1685,12 @@ func TestDeepSeekHarnessV4SessionParses(t *testing.T) {
 	assert.True(t, developer.IsSystem)
 	assert.Equal(t, "tool-registry", developer.SourceType)
 	assert.Equal(t, "Use the read-only connection\nTool added: read\nTool removed: write", developer.Content)
+	sourceIDs := make([]string, 0, len(result.Messages))
+	for _, message := range result.Messages {
+		sourceIDs = append(sourceIDs, message.SourceUUID)
+	}
+	assert.Equal(t, []string{"sys-1", "u1", "a1", "tr1", "dev-1"}, sourceIDs,
+		"every transcript row keeps its native Harness message id")
 }
 
 func TestDeepSeekHarnessV4SessionWithJobEventsParses(t *testing.T) {

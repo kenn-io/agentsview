@@ -660,7 +660,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // from conversation_summaries.db. Re-parse unchanged antigravity and
 // antigravity-cli sources in place, so remote mirrors that are otherwise
 // unchanged catch up; source and session identities are unchanged.)
-// (169: keep DeepSeek Harness native message IDs as source IDs.)
+// (169: keep DeepSeek Harness native message ids as message source ids.
+// Re-parse DeepSeek Harness sources in place; source and session identities
+// are unchanged.)
 // (170: protect the image text occurrence projection from older writers.)
 const dataVersion = 170
 
