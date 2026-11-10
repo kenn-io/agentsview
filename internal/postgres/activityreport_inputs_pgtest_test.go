@@ -110,6 +110,35 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), after)
 }
 
+func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	var queries []activity.Query
+	for _, input := range []activity.QueryInput{
+		{Preset: "week", Date: "2026-06-14", Timezone: "UTC"},
+		{Preset: "month", Date: "2026-06-14", Timezone: "UTC"},
+		{Preset: "custom", From: "2026-01-01T00:00:00Z", To: "2027-01-01T00:00:00Z", Timezone: "UTC"},
+	} {
+		q, err := activity.ResolveQuery(input, now)
+		require.NoError(t, err)
+		queries = append(queries, q)
+		pgKeptBuild(t, store, f, q, true)
+	}
+	pgKeptSession(t, local, "b", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	defer fresh.Close()
+	for _, q := range queries {
+		got := pgKeptBuild(t, store, f, q, true)
+		assert.Equal(t, 1000, got.Report.Totals.OutputTokens)
+		requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	}
+}
+
 func TestPGActivityReportInputRetry(t *testing.T) {
 	for _, mode := range []string{"budget", "cancel", "journal", "regressed", "unavailable"} {
 		t.Run(mode, func(t *testing.T) {
