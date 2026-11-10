@@ -48,8 +48,10 @@ dashboard as well.
 
 Commit lookups return the copied links and prompts.
 The first push after upgrading is a full push that repairs existing commit links.
-Commit lookups require that push. Upgrade serving replicas too: older readers
-can miss newly retained links for deleted sessions.
+If the serving role cannot create tables, run an upgraded push first, or
+`hosted-provision` for a hosted schema, to create the table used by commit
+lookups. Upgrade serving replicas too: older readers can miss newly retained
+links for deleted sessions.
 Each archive keeps its own retained copies; a rebuild removes only that archive's
 discarded copies. Retained links without a recorded owner remain unclaimed,
 including links kept when a session is permanently deleted from the replica.

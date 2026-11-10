@@ -571,6 +571,14 @@ administrator grants it:
 GRANT SELECT ON agentsview.session_plan_usage TO agentsview_reader;
 ```
 
+Commit lookups also use a new `retained_commit_links` table. After provisioning
+or pushing the schema upgrade, grant each serving role access:
+
+```sql
+GRANT SELECT ON hosted_sessions.retained_commit_links TO hosted_runtime;
+GRANT SELECT ON agentsview.retained_commit_links TO agentsview_reader;
+```
+
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.
 Manifest commits retire the previous source head's pending parse job. As the
