@@ -34,6 +34,12 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"shell escaped double quote", `{"command":["bash","-lc","git -C \"/work/a\\\"b\" commit"]}`, `/work/a"b`},
 		{"shell cd apostrophe", `{"command":["bash","-lc","cd '/work/a'\\''b' && git commit -m fix"]}`, "/work/a'b"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
+		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},
+		{"env assignment", `{"command":["env","GIT_AUTHOR_DATE=now","git","commit"]}`, "/work"},
+		{"wrapper", `{"command":["timeout","30","git","-C","/work/other repo","commit"]}`, "/work/other repo"},
+		{"trailing apostrophe", `{"command":["git","-C","/work/a'","commit"]}`, "/work/a'"},
+		{"literal tilde", `{"command":["git","-C","~/repo","commit"]}`, "/work/~/repo"},
+		{"exec path and decoy", `{"command":["git","--exec-path=/bin","-c","name=-C decoy","-C","child","commit"]}`, "/work/child"},
 		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
 		{"successive paths", `{"command":["git","-C","root","-C","child repo","commit"]}`, "/work/root/child repo"},
 		{"argv path", `{"command":["git","-C","/path with spaces","commit","-m","fix"]}`, "/path with spaces"},
@@ -63,11 +69,29 @@ func TestCommitLinksArgvEnvChangeDirectory(t *testing.T) {
 	for _, input := range []string{
 		`{"command":["env","-C","/repo","git","commit"]}`,
 		`{"command":["/usr/bin/env","-C","/repo","git","commit"]}`,
+		`{"command":["env","--chdir","/repo","git","commit"]}`,
+		`{"command":["env","--chdir=/repo","git","commit"]}`,
 	} {
 		t.Run(input, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
 			insertMessages(t, d, commitMessages("s1", input, "[main abc1234] Fix parser")...)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			assert.Empty(t, got.Commits)
+		})
+	}
+}
+
+func TestCommitLinksArgvNonCommitOutput(t *testing.T) {
+	for _, tt := range []struct{ input, output string }{
+		{`{"command":["printf","git commit"]}`, "git commit"},
+		{`{"command":["git","status"]}`, "On branch main\nnothing to commit, working tree clean"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			insertMessages(t, d, commitMessages("s1", tt.input, tt.output)...)
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			assert.Empty(t, got.Commits)
@@ -536,11 +560,16 @@ func TestCommitLinksBackfill(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET local_modified_at='2000-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `PRAGMA user_version=169`)
+	require.NoError(t, err)
 	require.NoError(t, d.Close())
 	var firstModified string
 	for i := range 2 {
 		d, err = Open(t.Context(), archive)
 		require.NoError(t, err)
+		var version int
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+		assert.Equal(t, 170, version)
 		got, err := d.SessionCommitLinks(t.Context(), "repaired")
 		require.NoError(t, err)
 		require.Len(t, got.Commits, 1)
@@ -561,6 +590,29 @@ func TestCommitLinksBackfill(t *testing.T) {
 		assert.Equal(t, "2000-01-01T00:00:00.000Z", unchanged)
 		require.NoError(t, d.Close())
 	}
+}
+
+func TestCommitLinksBackfillFailureRetries(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	insertMessages(t, d, commitMessages("s1", `{"command":["bash","-lc","git commit"]}`, "[main abc1234] Fix")...)
+	_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2'; PRAGMA user_version=169;
+		CREATE TRIGGER fail_commit_link BEFORE INSERT ON commit_links BEGIN SELECT RAISE(ABORT, 'failure'); END`)
+	require.NoError(t, err)
+	require.Error(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
+	var version, marker int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, commitLinksBackfillKey).Scan(&marker))
+	assert.Equal(t, 169, version)
+	assert.Zero(t, marker)
+	_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_commit_link`)
+	require.NoError(t, err)
+	require.NoError(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+	assert.Equal(t, 170, version)
+	got, err := d.SessionCommitLinks(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got.Commits, 1)
 }
 
 func TestCommitLinksResyncAndPolicy(t *testing.T) {

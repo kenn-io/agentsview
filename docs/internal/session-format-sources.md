@@ -733,6 +733,13 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Archived shell argv:** Older Codex shell calls record `command` as an
+  argument array, including `bash -lc` scripts. Commit links read these arrays
+  as shell words; leading `env` directory changes are left unlinked because
+  the recorded session directory would otherwise identify the wrong repository.
+  Data version 170 reparses Codex-format sources in place and preserves their
+  identities.
+
 - **Code-mode wait output (checked 2026-11-03):** A local rollout records `wait`
   arguments with `cell_id`, `yield_time_ms`, and `max_tokens`. Its
   `function_call_output.output` is an array of `input_text` blocks containing

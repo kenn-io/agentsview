@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/shlex"
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/shellquote"
@@ -26,7 +27,7 @@ const (
 	MaxCommitSHAs          = 200
 	commitLinksBackfillKey = "commit_links_backfill_v2"
 	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'(?:[^']|'\\'')*'|[^\s;&|"']+)`
-	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
+	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env|exec-path)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
 )
 
 var (
@@ -87,10 +88,15 @@ type CommitSessionList struct {
 
 // commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
-	resolve := func(base, dir string) string {
-		dir = strings.Trim(dir, "\"'")
-		dir = strings.ReplaceAll(dir, `'\''`, "'")
-		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
+	resolve := func(base, dir string, literalTilde bool) string {
+		if strings.HasPrefix(dir, "'") {
+			if words, err := shlex.Split(dir); err == nil && len(words) == 1 {
+				dir = words[0]
+			}
+		} else {
+			dir = strings.Trim(dir, `"`)
+		}
+		if path.IsAbs(dir) || (!literalTilde && strings.HasPrefix(dir, "~")) || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
 		}
 		if !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
@@ -139,7 +145,7 @@ func commitRepository(input, cwd string) string {
 		}
 	}
 	if dir != "" {
-		cwd = resolve(cwd, dir)
+		cwd = resolve(cwd, dir, false)
 	}
 	shellWord := func(word string) string {
 		if strings.HasPrefix(word, `"`) {
@@ -148,41 +154,57 @@ func commitRepository(input, cwd string) string {
 		return word
 	}
 	command := commitCommandText(input)
+	_, _, argv := commitArgv(input)
 	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
 		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
-			cwd = resolve(cwd, shellWord(matches[len(matches)-1][1]))
+			cwd = resolve(cwd, shellWord(matches[len(matches)-1][1]), false)
 		}
 	}
 	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
 		if strings.HasPrefix(option, "-C") {
-			cwd = resolve(cwd, shellWord(strings.TrimSpace(option[2:])))
+			cwd = resolve(cwd, shellWord(strings.TrimSpace(option[2:])), argv && strings.HasPrefix(strings.TrimSpace(option[2:]), "'~"))
 		}
 	}
 	return cwd
 }
 
-func commitArgv(input string) (string, bool) {
+func commitArgv(input string) (string, bool, bool) {
 	var payload struct {
 		Command []string `json:"command"`
 	}
 	if json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
-		return "", false
+		return "", false, false
 	}
 	args := payload.Command
 	if len(args) > 0 && path.Base(args[0]) == "env" {
-		return "", true
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			if arg == "-C" || arg == "--chdir" || strings.HasPrefix(arg, "--chdir=") {
+				return "", true, false
+			}
+			if arg == "--" || (!strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=")) {
+				break
+			}
+			if arg == "-u" || arg == "--unset" || arg == "-S" || arg == "--split-string" {
+				i++
+			}
+		}
 	}
-	if len(args) >= 3 && (args[0] == "sh" || args[0] == "bash" || args[0] == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
-		return args[2], true
+	if len(args) >= 3 && (path.Base(args[0]) == "sh" || path.Base(args[0]) == "bash" || path.Base(args[0]) == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+		return args[2], true, false
 	}
 	for i, arg := range args {
-		args[i] = shellquote.POSIX(arg)
+		if strings.HasPrefix(arg, "~") {
+			args[i] = shellquote.POSIXLiteral(arg)
+		} else {
+			args[i] = shellquote.POSIX(arg)
+		}
 	}
-	return strings.Join(args, " "), true
+	return strings.Join(args, " "), true, true
 }
 
 func commitCommandText(input string) string {
-	if command, present := commitArgv(input); present {
+	if command, present, _ := commitArgv(input); present {
 		return command
 	}
 	if jsontext.Value(input).IsValid() {
@@ -598,6 +620,15 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {
 		return err
+	}
+	version, _, err := readUserVersion(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if version == 169 {
+		if err := advanceDataVersion(ctx, tx, dataVersion); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

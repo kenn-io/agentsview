@@ -395,11 +395,10 @@ func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
 }
 
 func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
-	scope := db.ScopedDataVersionProviders(132, 133)
+	scope := db.ScopedDataVersionProviders(169, 170)
 	assert.ElementsMatch(t,
-		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode}, scope)
+		parser.CodexFormatAgents(), scope)
 	version := db.CurrentDataVersion()
-	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	ctx := t.Context()
 	database := dbtest.OpenTestDB(t)
 	codexRoot, claudeRoot := t.TempDir(), t.TempDir()
@@ -424,7 +423,7 @@ func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 	require.NoError(t, database.Reader().QueryRow(ctx,
 		"SELECT id FROM sessions WHERE agent='claude'").Scan(&claudeID))
 
-	// Reproduce an archive from the version before the Codex branch upgrade.
+	// Reproduce an archive from before the argv commit-link upgrade.
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, fmt.Sprintf(
 			"UPDATE sessions SET git_branch='', data_version=%d; PRAGMA user_version=%d",
