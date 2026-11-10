@@ -36,6 +36,7 @@ func TestClickHouseCommitLinksBeforeUpgradePush(t *testing.T) {
 func TestClickHouseCommitLinkParity(t *testing.T) {
 	local, target := seedFixture(t)
 	dbtest.SeedCommitLinks(t, local)
+	dbtest.SeedUnrepairedCommitLink(t, local)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"commit-project"}})
 	_, err := syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
@@ -43,6 +44,10 @@ func TestClickHouseCommitLinkParity(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertCommitLinkParity(t, local, store)
+	dbtest.AssertRepairedCommitLinkPush(t, local, func() db.CommitLinkReader { return store }, func() {
+		_, err := syncer.Push(t.Context(), false, nil)
+		require.NoError(t, err)
+	})
 	dbtest.AssertTrailerIncrementalPush(t, local, func() db.CommitLinkReader { return store }, func() {
 		_, err := syncer.Push(t.Context(), false, nil)
 		require.NoError(t, err)

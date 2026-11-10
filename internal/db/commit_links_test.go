@@ -36,6 +36,13 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
 		{"zsh -c", `{"command":["zsh","-c","git commit -m fix"]}`, "/work"},
 		{"zsh -lc", `{"command":["zsh","-lc","git commit -m fix"]}`, "/work"},
+		{"absolute shell", `{"command":["/bin/bash","-lc","cd repo && git commit -m fix"]}`, "/work/repo"},
+		{"absolute git", `{"command":["/usr/bin/git","commit"]}`, "/work"},
+		{"env", `{"command":["env","X=1","git","commit"]}`, "/work"},
+		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
+		{"literal apostrophe", `{"command":"git -C '/work/a'\\''b' commit"}`, "/work/a'b"},
+		{"successive paths", `{"command":["git","-C","root","-C","child repo","commit"]}`, "/work/root/child repo"},
+		{"workdir", `{"command":["git","commit"],"workdir":"/repo"}`, "/repo"},
 		{"argv path", `{"command":["git","-C","/path with spaces","commit","-m","fix"]}`, "/path with spaces"},
 		{"string command", `{"command":"git -C '/path with spaces' commit -m fix"}`, "/path with spaces"},
 	} {
@@ -50,7 +57,17 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 			require.Len(t, got.Commits, 1)
 			assert.Equal(t, "abc1234", got.Commits[0].SHA)
 			assert.Equal(t, tt.repository, got.Commits[0].Repository)
+			require.NotNil(t, got.Commits[0].Turn)
+			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
 		})
+	}
+	for _, input := range []string{`{"command":[]}`, `{"command":[1]}`, `{"command":["printf","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
+		d := testDB(t)
+		insertSession(t, d, "s1", "project-a")
+		insertMessages(t, d, commitMessages("s1", input, "[main abc1234] Fix parser")...)
+		got, err := d.SessionCommitLinks(t.Context(), "s1")
+		require.NoError(t, err)
+		assert.Empty(t, got.Commits, input)
 	}
 }
 
@@ -493,23 +510,55 @@ func TestCommitLinksDeleteParserExcludedSessions(t *testing.T) {
 }
 
 func TestCommitLinksBackfill(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := Open(t.Context(), path)
+	archive := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(t.Context(), archive)
 	require.NoError(t, err)
-	insertSession(t, d, "s1", "project-a")
-	insertMessages(t, d, commitMessages("s1", `{"command":"git commit -m fix"}`, "[main abc1234] Fix parser")...)
-	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links`)
+	for _, id := range []string{"repaired", "unchanged"} {
+		insertSession(t, d, id, "project-a", func(s *Session) { s.Cwd = "/work" })
+		input := `{"command":"git commit -m fix"}`
+		if id == "repaired" {
+			input = `{"command":["bash","-lc","git commit -m fix"]}`
+		}
+		insertMessages(t, d, commitMessages(id, input, "[main abc1234] Fix parser")...)
+	}
+	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id='repaired'`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM stats WHERE key=?`, commitLinksBackfillKey)
 	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `INSERT OR REPLACE INTO stats(key,value) VALUES ('commit_links_backfill_v1',1)`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET local_modified_at='2000-01-01T00:00:00.000Z'`)
+	require.NoError(t, err)
 	require.NoError(t, d.Close())
-	d, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	got, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	require.Len(t, got.Commits, 1)
-	assert.Equal(t, "abc1234", got.Commits[0].SHA)
+	var firstModified string
+	for i := 0; i < 2; i++ {
+		d, err = Open(t.Context(), archive)
+		require.NoError(t, err)
+		got, err := d.SessionCommitLinks(t.Context(), "repaired")
+		require.NoError(t, err)
+		require.Len(t, got.Commits, 1)
+		assert.Equal(t, "abc1234", got.Commits[0].SHA)
+		assert.Equal(t, "/work", got.Commits[0].Repository)
+		require.NotNil(t, got.Commits[0].Turn)
+		assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
+		reverse, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
+		require.NoError(t, err)
+		require.Len(t, reverse.Commits[0].Links, 2)
+		var repaired, unchanged string
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='repaired'`).Scan(&repaired))
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='unchanged'`).Scan(&unchanged))
+		assert.Greater(t, repaired, "2000-01-01T00:00:00.000Z")
+		assert.Equal(t, "2000-01-01T00:00:00.000Z", unchanged)
+		if i == 0 {
+			firstModified = repaired
+		} else {
+			assert.Equal(t, firstModified, repaired)
+		}
+		var selected int
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM sessions WHERE id='repaired' AND sync_marker > '2025-01-01T00:00:00.000Z'`).Scan(&selected))
+		assert.Equal(t, 1, selected)
+		require.NoError(t, d.Close())
+	}
 }
 
 func TestCommitLinksResyncAndPolicy(t *testing.T) {

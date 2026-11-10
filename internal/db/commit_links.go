@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -23,14 +24,15 @@ import (
 
 const (
 	MaxCommitSHAs          = 200
-	commitLinksBackfillKey = "commit_links_backfill_v1"
-	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
+	commitLinksBackfillKey = "commit_links_backfill_v2"
+	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'(?:[^']|'\\'')*'|[^\s;&|"']+)`
 	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
 )
 
 var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
+	commitEnvNameRE           = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(detached HEAD|[^\s\[\]~^:?*\\]+) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
@@ -87,7 +89,11 @@ type CommitSessionList struct {
 // commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
 	resolve := func(base, dir string) string {
-		dir = strings.Trim(dir, "\"'")
+		if strings.HasPrefix(dir, "'") && strings.HasSuffix(dir, "'") {
+			dir = strings.ReplaceAll(dir[1:len(dir)-1], `'\''`, "'")
+		} else {
+			dir = strings.Trim(dir, "\"'")
+		}
 		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
 		}
@@ -160,13 +166,35 @@ func commitCommandText(input string) string {
 		}
 		if json.Unmarshal([]byte(input), &payload) == nil && payload.Command != nil {
 			args := payload.Command
-			if len(args) >= 3 && (args[0] == "sh" || args[0] == "bash" || args[0] == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+			if len(args) > 0 && path.Base(args[0]) == "env" {
+				args = args[1:]
+				for len(args) > 0 {
+					name, _, ok := strings.Cut(args[0], "=")
+					if !ok || !commitEnvNameRE.MatchString(name) {
+						break
+					}
+					args = args[1:]
+				}
+			}
+			if len(args) == 0 {
+				return ""
+			}
+			executable := path.Base(args[0])
+			if len(args) >= 3 && (executable == "sh" || executable == "bash" || executable == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
 				return args[2]
 			}
+			if executable != "git" {
+				return ""
+			}
+			args[0] = "git"
 			for i, arg := range args {
 				args[i] = shellquote.POSIX(arg)
 			}
-			return strings.Join(args, " ")
+			command := strings.Join(args, " ")
+			if match := commitInvocationRE.FindStringIndex(command); match == nil || match[0] != 0 {
+				return ""
+			}
+			return command
 		}
 		return signals.CommandText(input)
 	}
@@ -561,8 +589,21 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 		return err
 	}
 	for _, id := range ids {
+		before, err := sessionCommitLinkRows(ctx, tx, "{}", "l.session_id=?", id)
+		if err != nil {
+			return err
+		}
 		if err := refreshSessionCommitLinksTx(tx, id); err != nil {
 			return fmt.Errorf("backfilling commit links: %w", err)
+		}
+		after, err := sessionCommitLinkRows(ctx, tx, "{}", "l.session_id=?", id)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(before, after) {
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, id); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {

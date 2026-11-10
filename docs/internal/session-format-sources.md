@@ -1521,6 +1521,11 @@ fixtures retain this field; missing identities remain source-local.
   need output process IDs matching earlier commit calls. The reused-process-ID
   case checks that a new native commit execution owns its repository and
   prompt after a batch poll.
+  An archived `shell` call also records `command` as an array such as
+  `["bash", "-lc", "git commit ..."]`. `TestCommitLinksArgvCommands` and
+  `TestCommitLinksBackfill` cover extraction and archive repair;
+  `TestPGCommitLinkParity`, `TestClickHouseCommitLinkParity`, and
+  `TestDuckDBIncrementalRetainedCommitLinkScope` cover incremental publication.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)

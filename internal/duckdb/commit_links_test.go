@@ -15,6 +15,7 @@ import (
 func TestDuckDBIncrementalRetainedCommitLinkScope(t *testing.T) {
 	local := newLocalDB(t)
 	dbtest.SeedCommitLinks(t, local)
+	dbtest.SeedUnrepairedCommitLink(t, local)
 	path := filepath.Join(t.TempDir(), "commits.duckdb")
 	opts := storage.MirrorPushOptions{Projects: []string{"commit-project"}}
 	_, err := Push(t.Context(), path, local, "m", opts, false, nil)
@@ -29,6 +30,7 @@ func TestDuckDBIncrementalRetainedCommitLinkScope(t *testing.T) {
 		require.NoError(t, err)
 		store = openPushedStore(t, path)
 	}
+	dbtest.AssertRepairedCommitLinkPush(t, local, func() db.CommitLinkReader { return store }, func() { push("commit-project") })
 	dbtest.AssertTrailerIncrementalPush(t, local, func() db.CommitLinkReader { return store }, func() { push("commit-project") })
 	require.NoError(t, local.DeleteSession(t.Context(), "commit-delete"))
 	push("commit-project")
