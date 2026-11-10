@@ -53,6 +53,18 @@ jobs:
               - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,frontend/**}'
               - 'frontend/chrome-extension/claude_fetch.js'
               - 'internal/importer/claude_ai_requests.txt'
+            release-commands:
+              - 'README.md'
+              - 'scripts/install.sh'
+              - 'scripts/install.ps1'
+              - '.github/workflows/release-commands.yml'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/actions.lock'
+
+  release-commands:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'release-commands')) }}
+    uses: ./.github/workflows/release-commands.yml
 
   lint:
     env:
