@@ -714,7 +714,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 		})
 		var out strings.Builder
 		err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 1, setupPosts)
 		assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"), out.String())
 		assert.NotContains(t, out.String(), "Download approximately")
