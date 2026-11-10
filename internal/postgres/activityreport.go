@@ -63,7 +63,47 @@ func (b activityReportBackend) ActivityReportUsage(
 }
 
 func (b activityReportBackend) ActivityReportCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
-	return b.activityReportCandidateSourceWithInputs(ids, q, b.inputs, b.counted)
+	return b.activityReportCandidateSourceWithCounts(ids, q, b.counted)
+}
+
+// activityReportRunBackend sweeps the runs kept in inputs.
+type activityReportRunBackend struct {
+	activityReportBackend
+}
+
+func (b activityReportRunBackend) ActivityReportRunSource(ids []string, q activity.Query) activity.RunSource {
+	return func(ctx context.Context, yield func(activity.Run) error) error {
+		runs, err := b.activityReportRuns(ctx, ids, q, b.inputs)
+		if err != nil {
+			return err
+		}
+		// The consumer checks for cancellation before each run.
+		for _, run := range runs {
+			if err := yield(run); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// ActivityReportMessageCounts counts the messages the kept sessions hold,
+// before the effective end at PostgreSQL's microsecond precision.
+func (b activityReportRunBackend) ActivityReportMessageCounts(
+	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+) error {
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	upper := q.EffectiveEnd.UnixMicro()
+	before := func(micros []int64) []int64 {
+		i, _ := slices.BinarySearch(micros, upper)
+		return micros[:i]
+	}
+	for _, id := range ids {
+		session := b.inputs.sessions[id]
+		counts.AddSorted(id, "user", before(session.users))
+		counts.AddSorted(id, "assistant", before(session.assistants))
+	}
+	return ctx.Err()
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
@@ -167,12 +207,16 @@ func (s *Store) BuildActivityReportArtifacts(
 		Store:         s,
 		lowerBound:    lowerBound, upperBound: upperBound,
 	}
+	var reportBackend activity.ReportBackend = backend
+	if inputs != nil {
+		reportBackend = activityReportRunBackend{backend}
+	}
 	artifacts, done, err := activity.BuildReportArtifacts(
-		ctx, backend, sessions, ids, q, onProgress, "aggregating pg activity report")
+		ctx, reportBackend, sessions, ids, q, onProgress, "aggregating pg activity report")
 	if err == nil && ctx.Err() == nil && inputs != nil {
-		for id := range inputs.transcripts {
+		for id := range inputs.sessions {
 			if !inputs.candidates[id] {
-				delete(inputs.transcripts, id)
+				delete(inputs.sessions, id)
 			}
 		}
 		s.runtimeState().activityInputs.Put(lowerBound+"|"+upperBound, inputVersion, []pgActivityInputs{*inputs})
@@ -441,10 +485,12 @@ func (s *Store) activityReportSessions(
 func (s *Store) activityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
-	return s.activityReportCandidateSourceWithInputs(ids, q, nil, nil)
+	return s.activityReportCandidateSourceWithCounts(ids, q, nil)
 }
 
-func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity.Query, inputs *pgActivityInputs, counted *[]pgActivityCountedMessage) activity.CandidateSource {
+// activityReportCandidateSourceWithCounts also appends to counted, when set,
+// each counted message from the range start to the effective end.
+func (s *Store) activityReportCandidateSourceWithCounts(ids []string, q activity.Query, counted *[]pgActivityCountedMessage) activity.CandidateSource {
 	return func(
 		ctx context.Context,
 		yield func(activity.IntervalCandidate) error,
@@ -623,7 +669,7 @@ func (s *Store) activityReportCandidateSourceWithInputs(ids []string, q activity
 			// pgx truncates SQL timestamp bounds to microseconds.
 			lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
 			countLowerMicro := q.RangeStart.UnixMicro()
-			err := s.activityTranscriptSource(ctx, ids, inputs, func(id string, session []activity.TranscriptMessage) {
+			err := s.activityTranscriptSource(ctx, ids, func(id string, session []activity.TranscriptMessage) {
 				for i := range session {
 					us := session[i].At.UnixMicro()
 					if counted != nil && session[i].Counted && us >= countLowerMicro && us < upperMicro {

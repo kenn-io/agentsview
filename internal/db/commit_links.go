@@ -9,22 +9,25 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/google/shlex"
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/shellquote"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 const (
 	MaxCommitSHAs          = 200
-	commitLinksBackfillKey = "commit_links_backfill_v1"
-	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'[^']*'|[^\s;&|"']+)`
-	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
+	commitLinksBackfillKey = "commit_links_backfill_v2"
+	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'(?:[^']|'\\'')*'|[^\s;&|"']+)`
+	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|'--(?:git-dir|work-tree|namespace|config-env)=(?:[^']|'\\'')*'|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
 )
 
 var (
@@ -86,11 +89,17 @@ type CommitSessionList struct {
 // commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
 	resolve := func(base, dir string) string {
-		dir = strings.Trim(dir, "\"'")
+		if strings.HasPrefix(dir, "'") {
+			if words, err := shlex.Split(dir); err == nil && len(words) == 1 {
+				dir = words[0]
+			}
+		} else if len(dir) >= 2 && strings.HasPrefix(dir, `"`) && strings.HasSuffix(dir, `"`) {
+			dir = dir[1 : len(dir)-1]
+		}
 		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
 		}
-		if !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
+		if path.IsAbs(base) && !strings.HasPrefix(base, "//") || !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
 			return path.Join(base, dir)
 		}
 		// filepath follows the host OS; transcript paths can come from any OS.
@@ -138,6 +147,12 @@ func commitRepository(input, cwd string) string {
 	if dir != "" {
 		cwd = resolve(cwd, dir)
 	}
+	shellWord := func(word string) string {
+		if strings.HasPrefix(word, `"`) {
+			return strings.ReplaceAll(word, `\"`, `"`)
+		}
+		return word
+	}
 	command := commitCommandText(input)
 	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
 		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
@@ -146,13 +161,51 @@ func commitRepository(input, cwd string) string {
 	}
 	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
 		if strings.HasPrefix(option, "-C") {
-			cwd = resolve(cwd, strings.TrimSpace(option[2:]))
+			cwd = resolve(cwd, shellWord(strings.TrimSpace(option[2:])))
 		}
 	}
 	return cwd
 }
 
+// commitArgv returns an argv command's shell text. A git argv that does not
+// start with a commit invocation returns none, since later matches are argument text.
+func commitArgv(input string) (string, bool) {
+	var payload struct {
+		Command []string `json:"command"`
+	}
+	if json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
+		return "", false
+	}
+	args := payload.Command
+	if len(args) == 0 {
+		return "", true
+	}
+	program := path.Base(strings.ReplaceAll(args[0], `\`, "/"))
+	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+		return args[2], true
+	}
+	if program != "git" && !strings.EqualFold(program, "git.exe") {
+		return "", true
+	}
+	args[0] = "git"
+	// Argv words are never tilde-expanded, so a leading tilde names a relative path.
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "~") {
+			arg = "./" + arg
+		}
+		args[i] = shellquote.POSIX(arg)
+	}
+	command := strings.Join(args, " ")
+	if match := commitInvocationRE.FindStringIndex(command); match != nil && match[0] != 0 {
+		return "", true
+	}
+	return command, true
+}
+
 func commitCommandText(input string) string {
+	if command, present := commitArgv(input); present {
+		return command
+	}
 	if jsontext.Value(input).IsValid() {
 		return signals.CommandText(input)
 	}
@@ -547,14 +600,39 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 		return err
 	}
 	for _, id := range ids {
+		before, err := sessionCommitLinkRows(ctx, tx, "{}", "l.session_id=?", id)
+		if err != nil {
+			return err
+		}
 		if err := refreshSessionCommitLinksTx(tx, id); err != nil {
 			return fmt.Errorf("backfilling commit links: %w", err)
 		}
+		after, err := sessionCommitLinkRows(ctx, tx, "{}", "l.session_id=?", id)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(before, after) {
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, id); err != nil {
+				return err
+			}
+		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {
+	if err := markCommitLinksBackfilled(ctx, tx); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// markCommitLinksBackfilled records the backfill and protects recovered links.
+// Earlier archives retain their version for the Codex identity rebuild.
+func markCommitLinksBackfilled(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {
+		return err
+	}
+	if version, _, err := readUserVersion(ctx, tx); err != nil || version < codexThreadIdentityDataVersion || version >= 170 {
+		return err
+	}
+	return advanceDataVersion(ctx, tx, 170)
 }
 
 // The time fallback adapts Pando's turnThatWrote; see

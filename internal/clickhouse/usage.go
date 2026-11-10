@@ -8,6 +8,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"hash"
 	"maps"
 	"slices"
 	"sort"
@@ -786,13 +787,15 @@ func chUsageCTEFromRawSource(
 			snapshotFilter, snapshotFilterArgs, "survivor.model", f)
 		snapshotFilter, snapshotFilterArgs = appendChUsageSessionFilterClauses(
 			snapshotFilter, snapshotFilterArgs, f, "")
+		// Complete pairs share zero; incomplete rows discard the window results.
 		snapshotCTE = `,
 		usage_snapshot_ranked AS (
 			SELECT *,
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN first_value(session_id) OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 							ORDER BY ts ASC, session_id ASC,
 								COALESCE(message_ordinal, -1) ASC
 						)
@@ -801,7 +804,8 @@ func chUsageCTEFromRawSource(
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN row_number() OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 							ORDER BY output_tokens_norm DESC, ts DESC,
 								session_id DESC,
 								COALESCE(message_ordinal, -1) DESC
@@ -811,16 +815,19 @@ func chUsageCTEFromRawSource(
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN sum(output_tokens_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 						) - max(output_tokens_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 						)
 					ELSE 0
 				END AS snapshot_deduplicated_output_tokens,
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN max(web_search_requests_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id
+							PARTITION BY claude_message_id, claude_request_id,
+								if(claude_message_id = '' OR claude_request_id = '', cityHash64(session_id), toUInt64(0))
 						)
 					ELSE web_search_requests_norm
 				END AS snapshot_web_search_requests
@@ -976,42 +983,43 @@ type chUsageBucket struct {
 	cost      money.Money
 }
 
-type chUsageAggregateRow struct {
-	date                  string
-	ts                    string
-	pricingTS             string
-	sessionID             string
-	project               string
-	agent                 string
-	machine               string
-	model                 string
-	providerID            string
-	priceModel            string
-	source                string
-	messageOrdinal        sql.NullInt64
-	displayName           string
-	startedAt             string
-	inputTok              int
-	outputTok             int
-	cacheCr               int
-	cacheCr1h             int
-	cacheRd               int
-	billableInput         int
-	billableOutput        int
-	billableReason        int
-	billableCacheCr       int
-	billableCacheCr1h     int
-	billableCacheRd       int
-	billableWebSearch     int
-	explicitCost          int64
-	reportedCostRows      int
-	authoritativeCost     int64
-	authoritativeCostRows int
-	snapshotDedupOutput   int
-	groupKey, sessionName string
-	// breakdownEntry reports that the row is one of the session's usage
+// CHUsageAggregateRow holds the fields shared by daily and session usage rows.
+type CHUsageAggregateRow struct {
+	Date                  string
+	TS                    string
+	PricingTS             string
+	SessionID             string
+	Project               string
+	Agent                 string
+	Machine               string
+	Model                 string
+	ProviderID            string
+	PriceModel            string
+	Source                string
+	MessageOrdinal        sql.NullInt64
+	DisplayName           string
+	StartedAt             string
+	InputTok              int
+	OutputTok             int
+	CacheCr               int
+	CacheCr1h             int
+	CacheRd               int
+	BillableInput         int
+	BillableOutput        int
+	BillableReason        int
+	BillableCacheCr       int
+	BillableCacheCr1h     int
+	BillableCacheRd       int
+	BillableWebSearch     int
+	ExplicitCost          int64
+	ReportedCostRows      int
+	AuthoritativeCost     int64
+	AuthoritativeCostRows int
+	SnapshotDedupOutput   int
+	GroupKey, SessionName string
+	// BreakdownEntry reports that the row is one of the session's usage
 	// breakdown entries; see chSessionUsageBreakdownEntrySQL.
-	breakdownEntry bool
+	BreakdownEntry bool
 }
 
 // chSessionUsageBreakdownEntrySQL selects the usage_localized rows that a
@@ -1281,18 +1289,18 @@ const chUsageBillableSelect = `
 // an event with no price record under the current digest. The last is an
 // ordinary cache miss that Go prices for this read; only push writes records.
 type chDailyUsageGroupRow struct {
-	chUsageAggregateRow
-	explicit        bool
-	kind            string
-	contextID       string
-	bandAbove       int64
-	events          int
-	tokenCost       int64
-	savings         int64
-	priceError      string
-	overflow        bool
-	inexactModels   []string
-	inexactProjects []string
+	CHUsageAggregateRow
+	Explicit        bool
+	Kind            string
+	ContextID       string
+	BandAbove       int64
+	Events          int
+	TokenCost       int64
+	Savings         int64
+	PriceError      string
+	Overflow        bool
+	InexactModels   []string
+	InexactProjects []string
 }
 
 // chUsagePricedCTE attaches each row's price record under pricingDigest.
@@ -1350,17 +1358,42 @@ func (s *Store) forEachDailyUsageGroupRow(
 	}
 	var memoSlot, memoVersion string
 	if !top {
-		memoSlot, memoVersion, err = s.usageRowMemoKey(ctx, state, "daily", f, "", pricingDigest, customModels)
+		memoVersion, err = s.usageReadFingerprint(ctx, state, pricingDigest)
+		if err != nil {
+			return err
+		}
+		keyFilter := s.usageDiskFilter(ctx, state, f, memoVersion)
+		if memoVersion != "" {
+			memoSlot, err = usageRowMemoKeyFor("daily", keyFilter, "", pricingDigest, customModels)
+		}
 		if err != nil {
 			return err
 		}
 		if rows, ok := s.dailyUsageRows.Get(memoSlot, memoVersion); ok {
+			if state.ready && len(state.raw) == 0 {
+				s.usageDisk.Keep(memoSlot, usageDiskVersion+memoVersion, func() ([]byte, error) { return encodeUsageRows(rows, dailyUsageRowsBytes, dailyUsageRowBytes) })
+			}
 			for _, r := range rows {
 				if err := visit(r); err != nil {
 					return err
 				}
 			}
 			return nil
+		}
+	}
+	// Persist only fully prepared reads.
+	diskReady := !top && s.usageDisk.Enabled() && state.ready && len(state.raw) == 0 && memoSlot != ""
+	if diskReady {
+		if data, ok := s.usageDisk.Get(memoSlot, usageDiskVersion+memoVersion); ok {
+			if keptRows, ok := decodeUsageRows[chDailyUsageGroupRow](data); ok {
+				for _, row := range keptRows {
+					if err := visit(row); err != nil {
+						return err
+					}
+				}
+				s.dailyUsageRows.Put(memoSlot, memoVersion, keptRows)
+				return nil
+			}
 		}
 	}
 	var source chUsageSource
@@ -1463,30 +1496,30 @@ func (s *Store) forEachDailyUsageGroupRow(
 		var explicitKey string
 		var ts, pricingTS any
 		targets := []any{
-			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
-			&r.providerID,
-			&explicitKey, &r.kind, &r.contextID, &r.bandAbove, &r.events,
-			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
-			&r.tokenCost, &r.savings,
-			&r.explicitCost, &r.billableWebSearch,
-			&r.priceError, &r.overflow,
-			&r.priceModel, &r.source, &r.messageOrdinal, &ts, &pricingTS,
+			&r.SessionID, &r.Date, &r.Project, &r.Agent, &r.Machine, &r.Model,
+			&r.ProviderID,
+			&explicitKey, &r.Kind, &r.ContextID, &r.BandAbove, &r.Events,
+			&r.InputTok, &r.OutputTok, &r.CacheCr, &r.CacheRd,
+			&r.TokenCost, &r.Savings,
+			&r.ExplicitCost, &r.BillableWebSearch,
+			&r.PriceError, &r.Overflow,
+			&r.PriceModel, &r.Source, &r.MessageOrdinal, &ts, &pricingTS,
 			new(string),
-			&r.cacheCr1h,
-			&r.billableInput, &r.billableOutput, &r.billableReason,
-			&r.billableCacheCr, &r.billableCacheCr1h, &r.billableCacheRd,
-			&r.reportedCostRows,
-			&r.authoritativeCost, &r.authoritativeCostRows,
+			&r.CacheCr1h,
+			&r.BillableInput, &r.BillableOutput, &r.BillableReason,
+			&r.BillableCacheCr, &r.BillableCacheCr1h, &r.BillableCacheRd,
+			&r.ReportedCostRows,
+			&r.AuthoritativeCost, &r.AuthoritativeCostRows,
 		}
 		if f.PairwiseSides && !top {
-			targets = append(targets, &r.inexactModels, &r.inexactProjects)
+			targets = append(targets, &r.InexactModels, &r.InexactProjects)
 		}
 		if err := rows.Scan(targets...); err != nil {
 			return fmt.Errorf("scanning clickhouse daily usage aggregate: %w", err)
 		}
-		r.explicit = explicitKey != ""
-		r.ts = formatDBTime(ts)
-		r.pricingTS = formatDBTime(pricingTS)
+		r.Explicit = explicitKey != ""
+		r.TS = formatDBTime(ts)
+		r.PricingTS = formatDBTime(pricingTS)
 		if !top {
 			memo = append(memo, r)
 		}
@@ -1497,8 +1530,13 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating clickhouse daily usage aggregates: %w", err)
 	}
-	if !top {
+	if !top && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
 		s.dailyUsageRows.Put(memoSlot, memoVersion, memo)
+		if diskReady {
+			if data, err := encodeUsageRows(memo, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
+				s.usageDisk.Put(memoSlot, usageDiskVersion+memoVersion, data)
+			}
+		}
 	}
 	return nil
 }
@@ -1511,35 +1549,35 @@ func chPricedUsageGroupCost(
 	pricingDigest string,
 	pricing *export.PricingResolver,
 ) (money.Money, money.Money, error) {
-	if r.priceError != "" {
-		return money.Money{}, money.Money{}, decodeUsagePriceError(r.priceError)
+	if r.PriceError != "" {
+		return money.Money{}, money.Money{}, decodeUsagePriceError(r.PriceError)
 	}
-	if r.overflow {
+	if r.Overflow {
 		return money.Money{}, money.Money{}, fmt.Errorf(
-			"summing clickhouse usage for model %q: %w", r.model, money.ErrOverflow)
+			"summing clickhouse usage for model %q: %w", r.Model, money.ErrOverflow)
 	}
-	priceContext, ok := contexts[r.contextID]
+	priceContext, ok := contexts[r.ContextID]
 	if !ok {
 		return money.Money{}, money.Money{}, fmt.Errorf(
 			"%w: missing context %q for model %q under pricing digest %s",
-			errUsagePriceContextChanged, r.contextID, r.model, pricingDigest)
+			errUsagePriceContextChanged, r.ContextID, r.Model, pricingDigest)
 	}
-	if err := priceContext.record(pricing, r.kind, r.bandAbove, r.events); err != nil {
+	if err := priceContext.record(pricing, r.Kind, r.BandAbove, r.Events); err != nil {
 		return money.Money{}, money.Money{}, err
 	}
 	cost, err := money.Add(
-		money.Money{Microdollars: r.explicitCost},
-		money.Money{Microdollars: r.tokenCost})
+		money.Money{Microdollars: r.ExplicitCost},
+		money.Money{Microdollars: r.TokenCost})
 	if err != nil {
 		return money.Money{}, money.Money{},
-			fmt.Errorf("summing clickhouse usage for model %q: %w", r.model, err)
+			fmt.Errorf("summing clickhouse usage for model %q: %w", r.Model, err)
 	}
-	cost, err = export.AddWebSearchFee(cost, r.billableWebSearch)
+	cost, err = export.AddWebSearchFee(cost, r.BillableWebSearch)
 	if err != nil {
 		return money.Money{}, money.Money{},
-			fmt.Errorf("pricing clickhouse usage for model %q: %w", r.model, err)
+			fmt.Errorf("pricing clickhouse usage for model %q: %w", r.Model, err)
 	}
-	return cost, money.Money{Microdollars: r.savings}, nil
+	return cost, money.Money{Microdollars: r.Savings}, nil
 }
 
 func chUsageGroupCost(
@@ -1548,18 +1586,18 @@ func chUsageGroupCost(
 	pricingDigest string,
 	pricing *export.PricingResolver,
 ) (money.Money, money.Money, error) {
-	if !r.explicit {
+	if !r.Explicit {
 		return chPricedUsageGroupCost(r, contexts, pricingDigest, pricing)
 	}
 	cost, savings, _, _, err := chUsageAggregateResolvedCost(
-		r.model, r.priceModel, r.providerID, chUsagePricingTimestamp(r.pricingTS),
-		r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-		r.billableInput, r.billableOutput, r.billableReason,
-		r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-		r.billableWebSearch,
-		r.explicitCost,
-		r.reportedCostRows > 0,
-		db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
+		r.Model, r.PriceModel, r.ProviderID, chUsagePricingTimestamp(r.PricingTS),
+		r.InputTok, r.OutputTok, r.CacheCr, r.CacheCr1h, r.CacheRd,
+		r.BillableInput, r.BillableOutput, r.BillableReason,
+		r.BillableCacheCr, r.BillableCacheCr1h, r.BillableCacheRd,
+		r.BillableWebSearch,
+		r.ExplicitCost,
+		r.ReportedCostRows > 0,
+		db.UsageSourceIsRequestScoped(r.Source) || r.MessageOrdinal.Valid,
 		pricing,
 	)
 	return cost, savings, err
@@ -1691,24 +1729,24 @@ func (s *Store) dailyUsageForCatalog(
 	var totalSavings money.Money
 	err = s.forEachDailyUsageGroupRow(ctx, f, catalog.digest, customModels, false, func(r chDailyUsageGroupRow) error {
 		if sides != nil {
-			for _, model := range r.inexactModels {
+			for _, model := range r.InexactModels {
 				sides.Models.MarkInexact(model)
 			}
-			for _, project := range r.inexactProjects {
+			for _, project := range r.InexactProjects {
 				sides.Projects.MarkInexact(project)
 			}
 		}
 		key := usageAccumKey{
-			date: r.date, project: r.project, agent: r.agent,
-			machine: r.machine, model: r.model, providerID: r.providerID,
+			date: r.Date, project: r.Project, agent: r.Agent,
+			machine: r.Machine, model: r.Model, providerID: r.ProviderID,
 		}
-		if r.project != "" {
-			projectLabels[r.project] = true
+		if r.Project != "" {
+			projectLabels[r.Project] = true
 		}
-		if seenSessions != nil && r.sessionID != "" {
-			seenSessions[r.sessionID] = db.UsageSessionInfo{
-				Project: r.project,
-				Agent:   r.agent,
+		if seenSessions != nil && r.SessionID != "" {
+			seenSessions[r.SessionID] = db.UsageSessionInfo{
+				Project: r.Project,
+				Agent:   r.Agent,
 			}
 		}
 		b := accum[key]
@@ -1728,11 +1766,11 @@ func (s *Store) dailyUsageForCatalog(
 			return fmt.Errorf(
 				"summing clickhouse cache savings: %w", priceErr)
 		}
-		b.inputTok += r.inputTok
-		b.outputTok += r.outputTok
-		b.cacheCr += r.cacheCr
-		b.cacheRd += r.cacheRd
-		sc := sessionCosts[r.sessionID]
+		b.inputTok += r.InputTok
+		b.outputTok += r.OutputTok
+		b.cacheCr += r.CacheCr
+		b.cacheRd += r.CacheRd
+		sc := sessionCosts[r.SessionID]
 		if sc.estimated == nil {
 			sc.estimated = map[usageAccumKey]money.Money{}
 		}
@@ -1741,12 +1779,12 @@ func (s *Store) dailyUsageForCatalog(
 			return fmt.Errorf(
 				"summing clickhouse usage: %w", priceErr)
 		}
-		if useAuthoritativeCost && r.authoritativeCostRows > 0 {
-			v := money.Money{Microdollars: r.authoritativeCost}
+		if useAuthoritativeCost && r.AuthoritativeCostRows > 0 {
+			v := money.Money{Microdollars: r.AuthoritativeCost}
 			sc.authoritative = &v
 			rateResolver.RecordUnattributedReported()
 		}
-		sessionCosts[r.sessionID] = sc
+		sessionCosts[r.SessionID] = sc
 		return nil
 	})
 	if err != nil {
@@ -2025,7 +2063,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	ctx context.Context,
 	f db.UsageFilter,
 	sessionID string,
-	visit func(chUsageAggregateRow) error,
+	visit func(CHUsageAggregateRow) error,
 ) error {
 	var state preparedUsageState
 	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, state, "session", f, sessionID, "", nil)
@@ -2065,28 +2103,28 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		return fmt.Errorf("querying clickhouse session usage aggregates: %w", err)
 	}
 	defer rows.Close()
-	var memo []chUsageAggregateRow
+	var memo []CHUsageAggregateRow
 	for rows.Next() {
-		var r chUsageAggregateRow
+		var r CHUsageAggregateRow
 		var ts, pricingTS, startedAt any
 		if err := rows.Scan(
-			&r.sessionID, &r.project, &r.agent, &r.model, &r.providerID,
-			&r.priceModel, &r.source, &r.messageOrdinal, &ts, &pricingTS,
-			&r.displayName, &startedAt, &r.groupKey, &r.sessionName, &r.machine,
-			&r.inputTok, &r.outputTok, &r.snapshotDedupOutput,
-			&r.cacheCr, &r.cacheCr1h, &r.cacheRd,
-			&r.billableInput, &r.billableOutput, &r.billableReason,
-			&r.billableCacheCr, &r.billableCacheCr1h, &r.billableCacheRd,
-			&r.billableWebSearch,
-			&r.explicitCost, &r.reportedCostRows,
-			&r.authoritativeCost, &r.authoritativeCostRows,
-			&r.breakdownEntry,
+			&r.SessionID, &r.Project, &r.Agent, &r.Model, &r.ProviderID,
+			&r.PriceModel, &r.Source, &r.MessageOrdinal, &ts, &pricingTS,
+			&r.DisplayName, &startedAt, &r.GroupKey, &r.SessionName, &r.Machine,
+			&r.InputTok, &r.OutputTok, &r.SnapshotDedupOutput,
+			&r.CacheCr, &r.CacheCr1h, &r.CacheRd,
+			&r.BillableInput, &r.BillableOutput, &r.BillableReason,
+			&r.BillableCacheCr, &r.BillableCacheCr1h, &r.BillableCacheRd,
+			&r.BillableWebSearch,
+			&r.ExplicitCost, &r.ReportedCostRows,
+			&r.AuthoritativeCost, &r.AuthoritativeCostRows,
+			&r.BreakdownEntry,
 		); err != nil {
 			return fmt.Errorf("scanning clickhouse session usage aggregate: %w", err)
 		}
-		r.ts = formatDBTime(ts)
-		r.pricingTS = formatDBTime(pricingTS)
-		r.startedAt = formatDBTime(startedAt)
+		r.TS = formatDBTime(ts)
+		r.PricingTS = formatDBTime(pricingTS)
+		r.StartedAt = formatDBTime(startedAt)
 		memo = append(memo, r)
 		if err := visit(r); err != nil {
 			return err
@@ -2156,13 +2194,35 @@ func (s *Store) GetTopSessionsByCost(
 	}
 	// Keep one total per session rather than every usage row. Grouped reads
 	// also keep member metadata so repeat reads avoid scanning every title.
-	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, state, "top", f, "", pricing.digest, nil)
+	memoVersion, err := s.usageReadFingerprint(ctx, state, pricing.catalog.digest)
 	if err != nil {
 		return nil, err
 	}
+	keyFilter := s.usageDiskFilter(ctx, state, f, memoVersion)
+	var memoSlot string
+	if memoVersion != "" {
+		memoSlot, err = usageRowMemoKeyFor("top", keyFilter, "", pricing.digest+"|"+pricing.catalog.digest, nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	diskReady := s.usageDisk.Enabled() && state.ready && len(state.raw) == 0 && memoSlot != ""
 	out, ok := s.topSessionTotals.Get(memoSlot, memoVersion)
+	if ok && diskReady {
+		s.usageDisk.Keep(memoSlot, topUsageDiskVersion+memoVersion, func() ([]byte, error) { return encodeUsageRows(out, kept.DefaultMaxBytes, db.TopSessionBytes) })
+	}
+	if !ok && diskReady {
+		if data, found := s.usageDisk.Get(memoSlot, topUsageDiskVersion+memoVersion); found {
+			out, ok = decodeUsageRows[db.TopSessionEntry](data)
+			if ok {
+				s.topSessionTotals.Put(memoSlot, memoVersion, out)
+			}
+		}
+	}
 	if !ok {
+		catalogDigest := pricing.catalog.digest
 		out, err = retryUsagePriceContexts(pricing, func(pricing *pricingSnapshot) ([]db.TopSessionEntry, error) {
+			catalogDigest = pricing.catalog.digest
 			return s.topSessionsForCatalog(ctx, f, pricing)
 		})
 		if err != nil {
@@ -2173,7 +2233,14 @@ func (s *Store) GetTopSessionsByCost(
 				return nil, err
 			}
 		}
-		s.topSessionTotals.Put(memoSlot, memoVersion, out)
+		if catalogDigest == pricing.catalog.digest && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
+			s.topSessionTotals.Put(memoSlot, memoVersion, out)
+			if diskReady {
+				if data, err := encodeUsageRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
+					s.usageDisk.Put(memoSlot, topUsageDiskVersion+memoVersion, data)
+				}
+			}
+		}
 	}
 	if f.TopSessionsByGroup {
 		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
@@ -2242,12 +2309,12 @@ func (s *Store) topSessionsForCatalog(
 	bySession := map[string]*acc{}
 	err = s.forEachDailyUsageGroupRow(
 		ctx, f, catalog.digest, customModels, true, func(r chDailyUsageGroupRow) error {
-			a := bySession[r.sessionID]
+			a := bySession[r.SessionID]
 			if a == nil {
 				a = &acc{row: db.TopSessionEntry{
-					SessionID: r.sessionID, Agent: r.agent, Project: r.project,
+					SessionID: r.SessionID, Agent: r.Agent, Project: r.Project,
 				}}
-				bySession[r.sessionID] = a
+				bySession[r.SessionID] = a
 			}
 			var cost money.Money
 			var priceErr error
@@ -2256,17 +2323,17 @@ func (s *Store) topSessionsForCatalog(
 			if priceErr != nil {
 				return priceErr
 			}
-			a.row.InputTokens += r.inputTok
-			a.row.OutputTokens += r.outputTok
-			a.row.CacheCreationTokens += r.cacheCr
-			a.row.CacheReadTokens += r.cacheRd
-			a.tokens += r.inputTok + r.outputTok + r.cacheCr + r.cacheRd
+			a.row.InputTokens += r.InputTok
+			a.row.OutputTokens += r.OutputTok
+			a.row.CacheCreationTokens += r.CacheCr
+			a.row.CacheReadTokens += r.CacheRd
+			a.tokens += r.InputTok + r.OutputTok + r.CacheCr + r.CacheRd
 			a.cost, priceErr = money.Add(a.cost, cost)
 			if priceErr != nil {
 				return fmt.Errorf("summing clickhouse top-session cost: %w", priceErr)
 			}
-			if !f.HasModelFilter() && r.authoritativeCostRows > 0 {
-				v := money.Money{Microdollars: r.authoritativeCost}
+			if !f.HasModelFilter() && r.AuthoritativeCostRows > 0 {
+				v := money.Money{Microdollars: r.AuthoritativeCost}
 				a.authoritativeCost = &v
 			}
 			return nil
@@ -2424,11 +2491,14 @@ func usageVersionKey(table, pricingDigest string) string {
 	return table
 }
 
-// usageRowsVersion probes only tables whose parts changed. If parts move
-// during the probe or the probe fails, the read is served uncached. The
-// version names only pricingDigest's price records: hashing every digest's
-// records read the whole table, which took two minutes on a mirror holding
-// hundreds of digests.
+// usageRowsVersion names the rows of the tables as of the request's parts
+// snapshot. The sessions, snapshot, and price record tables are followed
+// by finalRows trackers, whose checks read only the keys new parts hold;
+// the other, small tables are hashed again when their parts change. If
+// parts move during the probe or the probe fails, the read is served
+// uncached. The version names only pricingDigest's price records: hashing
+// every digest's records read the whole table, which took two minutes on a
+// mirror holding hundreds of digests.
 func (s *Store) usageRowsVersion(ctx context.Context, tables []string, pricingDigest string) (string, bool, error) {
 	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	if !ok {
@@ -2437,50 +2507,143 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string, pricingDi
 			return "", false, err
 		}
 	}
-	// The fill mutex shares a probe with concurrent requests, which recheck
-	// the kept digests after acquiring it.
+	// The mutex shares a probe with concurrent requests, which recheck the
+	// kept state after acquiring it.
 	s.usageVersions.Lock()
 	defer s.usageVersions.Unlock()
+	identities, ok := s.usageIdentitiesLocked(ctx, snapshot, tables, pricingDigest)
+	if !ok {
+		return "", false, nil
+	}
+	return tableValuesFingerprint(tables, func(table string) string { return identities[table] }), true, nil
+}
+
+// usageIdentitiesLocked returns each table's row identity as of snapshot,
+// keeping what it read. It reports false, keeping nothing, when a probe
+// fails or the parts move while it reads. The caller holds usageVersions.
+func (s *Store) usageIdentitiesLocked(
+	ctx context.Context, snapshot partsSnapshot, tables []string, pricingDigest string,
+) (map[string]string, bool) {
 	var changed []string
+	var trackers []*finalRows
+	var changes []trackedChange
 	for _, table := range tables {
+		if f := s.finalRowsTracker(table, pricingDigest); f != nil {
+			change, err := s.prepareFinalRows(ctx, f, snapshot[table])
+			if err != nil {
+				s.logUsageReadiness(fmt.Sprintf("row identity probe failed, serving uncached: %v", err))
+				return nil, false
+			}
+			trackers = append(trackers, f)
+			if change != nil {
+				changes = append(changes, trackedChange{f, change})
+			}
+			continue
+		}
 		kept, exists := s.usageVersions.tables[usageVersionKey(table, pricingDigest)]
-		if !exists || kept.parts != snapshot[table] {
+		if !exists || kept.parts != snapshot[table].digest {
 			changed = append(changed, table)
 		}
 	}
+	read := map[string]string{}
 	if len(changed) > 0 {
-		identities, err := s.readUsageRowIdentities(ctx, changed, pricingDigest)
-		if err != nil {
+		var err error
+		if read, err = s.readUsageRowIdentities(ctx, changed, pricingDigest); err != nil {
 			s.logUsageReadiness(fmt.Sprintf("row identity probe failed, serving uncached: %v", err))
-			return "", false, nil
+			return nil, false
 		}
+	}
+	if len(changed) > 0 || len(changes) > 0 {
 		fresh, err := s.readPartsSnapshot(ctx)
 		if err != nil {
 			s.logUsageReadiness(fmt.Sprintf("parts recheck failed, serving uncached: %v", err))
-			return "", false, nil
+			return nil, false
 		}
 		for _, table := range tables {
-			if fresh[table] != snapshot[table] {
-				return "", false, nil
+			if fresh[table].digest != snapshot[table].digest {
+				return nil, false
 			}
 		}
-		for i, table := range changed {
-			s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{snapshot[table], identities[i]}
+	}
+	for _, c := range changes {
+		c.tracker.apply(c.change)
+	}
+	identities := make(map[string]string, len(tables))
+	for _, f := range trackers {
+		identities[f.spec.table] = f.identity()
+	}
+	for table, identity := range read {
+		s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{snapshot[table].digest, identity}
+	}
+	for _, table := range tables {
+		if _, ok := identities[table]; !ok {
+			identities[table] = s.usageVersions.tables[usageVersionKey(table, pricingDigest)].identity
 		}
 	}
-	return tableValuesFingerprint(tables, func(table string) string {
-		return s.usageVersions.tables[usageVersionKey(table, pricingDigest)].identity
-	}), true, nil
+	return identities, true
+}
+
+// trackedChange is a tracker's new state, applied once the parts it was
+// read from prove stable.
+type trackedChange struct {
+	tracker *finalRows
+	change  *finalRowsChange
+}
+
+// maxPriceTrackers bounds the pricing digests whose price records are
+// tracked: the catalog digest prepared rows and reads share, the empty
+// digest of the session counts, and the catalog digest a change replaced.
+const maxPriceTrackers = 3
+
+// finalRowsTracker returns the tracker of table's rows, or nil for a table
+// hashed whole. The caller holds usageVersions.
+func (s *Store) finalRowsTracker(table, pricingDigest string) *finalRows {
+	v := &s.usageVersions
+	switch table {
+	case sessionsFinalTable.table:
+		if v.sessions == nil {
+			v.sessions = &finalRows{spec: sessionsFinalTable}
+		}
+		return v.sessions
+	case snapshotsFinalTable.table:
+		if v.snapshots == nil {
+			v.snapshots = &finalRows{spec: snapshotsFinalTable}
+		}
+		return v.snapshots
+	case pricesFinalTable.table:
+		return s.priceRowsTracker(pricingDigest)
+	}
+	return nil
+}
+
+// priceRowsTracker returns the tracker of pricingDigest's price records.
+// The caller holds usageVersions.
+func (s *Store) priceRowsTracker(pricingDigest string) *finalRows {
+	v := &s.usageVersions
+	v.priceOrder = slices.DeleteFunc(v.priceOrder, func(d string) bool { return d == pricingDigest })
+	v.priceOrder = append(v.priceOrder, pricingDigest)
+	f, ok := v.prices[pricingDigest]
+	if !ok {
+		f = &finalRows{spec: pricesFinalTable, digest: pricingDigest}
+		v.prices[pricingDigest] = f
+	}
+	if len(v.priceOrder) > maxPriceTrackers {
+		delete(v.prices, v.priceOrder[0])
+		v.priceOrder = v.priceOrder[1:]
+	}
+	return f
 }
 
 func chUsageRowHashSQL(columns string) string {
 	return "reinterpretAsUInt128(sipHash128Reference(tuple(" + columns + ")))"
 }
 
-// readUsageRowIdentities returns one identity per table, in order. The
-// price table's identity covers only pricingDigest's records, which the
-// table's sort key reads without touching the other digests.
-func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string, pricingDigest string) ([]string, error) {
+// readUsageRowIdentities returns each table's identity. The price table's
+// identity covers only pricingDigest's records, which the table's sort key
+// reads without touching the other digests.
+func (s *Store) readUsageRowIdentities(
+	ctx context.Context, tables []string, pricingDigest string,
+) (map[string]string, error) {
 	queries := make([]string, len(tables))
 	var args []any
 	for i, table := range tables {
@@ -2489,6 +2652,10 @@ func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string, pri
 		case "usage_session_snapshots":
 			// Revision identifies the usage arrays without hashing them; push_version identifies publication.
 			columns = "id, revision, push_version"
+		case "sync_metadata":
+			columns = "key, value"
+			where = " WHERE key != ?"
+			args = append(args, chExchangeProbeKey)
 		case chUsagePriceTable:
 			where = " WHERE pricing_digest = ?"
 			args = append(args, pricingDigest)
@@ -2500,7 +2667,14 @@ func (s *Store) readUsageRowIdentities(ctx context.Context, tables []string, pri
 	if err := s.queryRowContext(ctx, "SELECT ["+strings.Join(queries, ",")+"]", args...).Scan(&identities); err != nil {
 		return nil, fmt.Errorf("reading clickhouse usage row identities: %w", err)
 	}
-	return identities, nil
+	if len(identities) != len(tables) {
+		return nil, fmt.Errorf("reading clickhouse usage row identities: got %d for %d tables", len(identities), len(tables))
+	}
+	byTable := make(map[string]string, len(tables))
+	for i, table := range tables {
+		byTable[table] = identities[i]
+	}
+	return byTable, nil
 }
 
 // usageRowMemoKeyFor renders the key. The filter is JSON and the custom
@@ -2542,7 +2716,7 @@ func (s *Store) tablePartsFingerprint(ctx context.Context, tables []string) (str
 	if len(tables) == 0 {
 		tables = slices.Collect(maps.Keys(snapshot))
 	}
-	return tableValuesFingerprint(tables, func(table string) string { return snapshot[table] }), nil
+	return tableValuesFingerprint(tables, func(table string) string { return snapshot[table].digest }), nil
 }
 
 func tableValuesFingerprint(tables []string, value func(string) string) string {
@@ -2554,30 +2728,58 @@ func tableValuesFingerprint(tables []string, value func(string) string) string {
 	return hex.EncodeToString(sum.Sum(nil))
 }
 
-// partsSnapshot maps each table to a digest of its active parts.
-type partsSnapshot map[string]string
+// partsSnapshot maps each table to its active parts.
+type partsSnapshot map[string]tableParts
+
+// tableParts lists one table's active parts and a digest of their names and
+// files.
+type tableParts struct {
+	digest string
+	parts  []partInfo
+}
 
 type partsSnapshotKey struct{}
 
 // readPartsSnapshot reads the active parts of every table in one query.
 func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
-	rows, err := s.queryContext(ctx, `SELECT table,
-		hex(SHA256(toString(arraySort(groupArray((name, hash_of_all_files))))))
-		FROM system.parts WHERE database = currentDatabase() AND active GROUP BY table`)
+	rows, err := s.queryContext(ctx, `SELECT table, name, partition_id, min_block_number, max_block_number,
+		data_version, rows, hash_of_all_files
+		FROM system.parts WHERE database = currentDatabase() AND active ORDER BY table, name`)
 	if err != nil {
 		return nil, fmt.Errorf("reading clickhouse parts: %w", err)
 	}
 	defer rows.Close()
 	snapshot := partsSnapshot{}
+	digests := map[string]hash.Hash{}
 	for rows.Next() {
-		var table, digest string
-		if err := rows.Scan(&table, &digest); err != nil {
+		var table, files string
+		var p partInfo
+		var dataVersion uint64
+		if err := rows.Scan(&table, &p.name, &p.partition, &p.minBlock, &p.maxBlock, &dataVersion, &p.rows, &files); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse parts: %w", err)
 		}
-		snapshot[table] = digest
+		// A part's data version is its first block until a mutation
+		// rewrites it.
+		if int64(dataVersion) != p.minBlock {
+			p.mutation = int64(dataVersion)
+		}
+		tp := snapshot[table]
+		tp.parts = append(tp.parts, p)
+		snapshot[table] = tp
+		sum, ok := digests[table]
+		if !ok {
+			sum = sha256.New()
+			digests[table] = sum
+		}
+		fmt.Fprintf(sum, "%s\x00%s\x00", p.name, files)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating clickhouse parts: %w", err)
+	}
+	for table, sum := range digests {
+		tp := snapshot[table]
+		tp.digest = hex.EncodeToString(sum.Sum(nil))
+		snapshot[table] = tp
 	}
 	return snapshot, nil
 }
@@ -2757,24 +2959,24 @@ func (s *Store) GetSessionUsage(
 	if mayHaveRows {
 		err = s.forEachSessionUsageAggregateRow(
 			ctx, db.UsageFilter{}, sessionID,
-			func(r chUsageAggregateRow) error {
-				deduplicatedOutputTokens += r.snapshotDedupOutput
-				if r.breakdownEntry {
+			func(r CHUsageAggregateRow) error {
+				deduplicatedOutputTokens += r.SnapshotDedupOutput
+				if r.BreakdownEntry {
 					breakdownCount++
 				}
-				if r.authoritativeCostRows > 0 {
-					v := money.Money{Microdollars: r.authoritativeCost}
+				if r.AuthoritativeCostRows > 0 {
+					v := money.Money{Microdollars: r.AuthoritativeCost}
 					authoritativeCost = &v
 				}
 				cost, _, priced, contributes, priceErr := chUsageAggregateResolvedCost(
-					r.model, r.priceModel, r.providerID, chUsagePricingTimestamp(r.pricingTS),
-					r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-					r.billableInput, r.billableOutput, r.billableReason,
-					r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-					r.billableWebSearch,
-					r.explicitCost,
-					r.reportedCostRows > 0,
-					db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
+					r.Model, r.PriceModel, r.ProviderID, chUsagePricingTimestamp(r.PricingTS),
+					r.InputTok, r.OutputTok, r.CacheCr, r.CacheCr1h, r.CacheRd,
+					r.BillableInput, r.BillableOutput, r.BillableReason,
+					r.BillableCacheCr, r.BillableCacheCr1h, r.BillableCacheRd,
+					r.BillableWebSearch,
+					r.ExplicitCost,
+					r.ReportedCostRows > 0,
+					db.UsageSourceIsRequestScoped(r.Source) || r.MessageOrdinal.Valid,
 					rateResolver,
 				)
 				if priceErr != nil {
@@ -2784,21 +2986,21 @@ func (s *Store) GetSessionUsage(
 					return nil
 				}
 				hasRows = true
-				models[r.model] = true
+				models[r.Model] = true
 				totalCost, priceErr = money.Add(totalCost, cost)
 				if priceErr != nil {
 					return fmt.Errorf("summing clickhouse session usage: %w", priceErr)
 				}
-				if r.reportedCostRows > 0 {
+				if r.ReportedCostRows > 0 {
 					hasReportedCost = true
 				}
-				if r.billableInput != 0 || r.billableOutput != 0 ||
-					r.billableReason != 0 || r.billableCacheCr != 0 ||
-					r.billableCacheRd != 0 || r.billableWebSearch > 0 {
+				if r.BillableInput != 0 || r.BillableOutput != 0 ||
+					r.BillableReason != 0 || r.BillableCacheCr != 0 ||
+					r.BillableCacheRd != 0 || r.BillableWebSearch > 0 {
 					hasComputedCost = true
 				}
 				if !priced {
-					unpriced[r.model] = true
+					unpriced[r.Model] = true
 				}
 				return nil
 			})

@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Store) SessionCommitLinks(ctx context.Context, id string) (*db.SessionCommitList, error) {
-	out, err := readbase.SessionCommitLinks(ctx, s.pg, db.PostgresQueryDialect(), id)
+	out, err := readbase.SessionCommitLinks(ctx, s.pg, db.PostgresQueryDialect(), true, id)
 	if isUndefinedTable(err) {
 		return nil, db.ErrCommitLinksUnavailable
 	}
@@ -17,7 +17,7 @@ func (s *Store) SessionCommitLinks(ctx context.Context, id string) (*db.SessionC
 }
 
 func (s *Store) CommitSessionLinks(ctx context.Context, shas []string) (*db.CommitSessionList, error) {
-	out, err := readbase.CommitSessionLinks(ctx, s.pg, db.PostgresQueryDialect(), shas)
+	out, err := readbase.CommitSessionLinks(ctx, s.pg, db.PostgresQueryDialect(), true, shas)
 	if isUndefinedTable(err) {
 		return nil, db.ErrCommitLinksUnavailable
 	}
@@ -109,7 +109,7 @@ func containsCommitLinks(published map[publishedCommitLink]struct{}, rows []db.C
 }
 
 func (s *Sync) replaceRetainedCommitLinks(ctx context.Context) error {
-	ids, rows, err := readbase.RetainedCommitLinks(ctx, s.local, s.pg, db.PostgresQueryDialect(), s.projects, s.excludeProjects)
+	rows, err := readbase.ScopedRetainedCommitLinks(ctx, s.local, s.projects, s.excludeProjects)
 	if err != nil {
 		return err
 	}
@@ -118,16 +118,14 @@ func (s *Sync) replaceRetainedCommitLinks(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM commit_links WHERE session_id=$1", id); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM retained_commit_links WHERE source_archive_id=$1", s.archiveID); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		l := newPublishedCommitLink(r, true)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO retained_commit_links (source_archive_id,session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, s.archiveID, l.sessionID, l.sha, l.branch, l.subject, l.repository, l.messageOrdinal, l.callIndex, l.toolUseID, l.committedAt); err != nil {
 			return err
 		}
-	}
-	if err := insertCommitLinks(ctx, tx, rows, true); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE NOT retained AND session_id NOT IN (SELECT id FROM sessions)`); err != nil {
-		return err
 	}
 	return tx.Commit()
 }

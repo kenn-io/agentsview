@@ -25,10 +25,12 @@ closes with its connection. The serving pool retains at most four connections.
 Cold read-only opens and standalone schema probes use their existing uncached
 connections.
 
-Reconciliation spools and Codex staging databases also cache up to 64 prepared
-statements per connection. Writable vector indexes use the same limit with the
-cgo driver; the modernc driver keeps its existing configuration. These caches
-close with their connections and do not change the stored data.
+Reconciliation spools, Codex staging databases, and temporary parser indexes for
+discovery and reconciliation also cache up to 64 prepared statements per
+connection. Parser indexes use one connection. Writable vector indexes use the
+same limit with the cgo driver; the modernc driver keeps its existing
+configuration. These caches close with their connections and do not change the
+stored data.
 
 The startup worker snapshots freshness for digest-capable providers while it
 holds the archive write lock, before the daemon opens the archive; later passes
@@ -874,25 +876,33 @@ because a cached fingerprint merely looks newer.
 
 ### Activity report index
 
-SQLite keeps paired candidates in memory per session and range start, with
-separate limits of 200,000 candidates and 4,096 entries. A full cache measured
-64.3 MiB of resident Go heap on Windows amd64, using the post-GC
-`runtime.MemStats.HeapInuse` delta for 200,000 candidates across 4,096 entries,
-with 36-byte session IDs, 24-byte models, and append-grown slices. Each entry
-also keeps the window's counted user and assistant messages. A report counts
-messages from those entries and from its own pairing scan of the other sessions,
-so it never reads messages a second time. The scan's counted messages live only
-for that build, outside the budgets. Every counted message except a session's
-last starts a candidate, so the candidate budget bounds them too. They add about
-57 bytes each: on Linux amd64 a full cache grew from 48.3 MiB to 59.3 MiB. Empty
-sessions use only the entry budget. A week report then a month report keep
-separate entries for their range starts. Entries run to
-`max(EffectiveEnd, RangeEnd)` and remain valid while the transcript revision and
-session creation time match. Reader swaps clear the entries and reject stores
-from earlier generations. Reports exceeding the entry limit reuse retained hits
-and store up to the cap. Reports exceeding the candidate budget skip storing new
-entries. Warm reads still load session revisions and merge the per-session
-candidates in SQLite's microsecond order.
+SQLite keeps each session's activity runs in memory per session and range
+start, within a 128 MiB budget that also counts each entry's overhead. A run is
+a stretch of touching pieces of one session with one model, each already capped
+at the idle gap and trimmed against the session's earlier activity, as
+`activity.SessionRunsBuilder` derives them from the pairing scan's candidates.
+A report sweeps the runs through `activity.BuildRunArtifactsWithSurvivorUsage`,
+so a refresh pairs only the sessions whose entries miss and sweeps far fewer
+intervals than candidates. On a scratch archive of 100,000 sessions and 2.6
+million candidates over seven months, the kept runs took 73 MiB, and a refresh
+with ten changed sessions spent 163 ms pairing instead of 106 s and 168 ms
+sweeping instead of 949 ms. The first report after a start still pairs every
+session.
+
+Each entry also keeps the window's counted user and assistant messages. A
+message stored at a whole microsecond with an offset from -13:59 to +14:00 keeps
+only its time, because the message counter's padded stored-string bounds pick
+the same messages as the range does; any other message keeps its stored
+timestamp. A report counts messages from those entries, so it never reads
+messages a second time. A week report then a month report keep separate entries
+for their range starts. Entries run to `max(EffectiveEnd, RangeEnd)` and remain
+valid while the transcript revision and session creation time match. The
+candidate stream leaves out candidates that start at or after the effective end
+floored to microseconds, so runs keep one bit per piece that says whether an
+earlier piece trimmed it, and clipping keeps a trimmed piece that starts in that
+microsecond. Reader swaps clear the entries and reject stores from earlier
+generations. A report whose new entries alone exceed the budget stores none of
+them. Warm reads still load session revisions.
 
 Activity session selection checks terminal tool-execution events even when a
 session's `ended_at` predates the report. Keep the partial
@@ -929,43 +939,61 @@ or an in-window Claude peer changes; a changed project identity map also
 invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
-PostgreSQL keeps ongoing Activity reports' ordered transcript metadata and raw
-usage inputs in memory with a 128 MiB estimated-size budget. The usage
-change journal invalidates changed sessions and their matching snapshot peers.
-Each visit selects sessions, pairs messages against the current clock, selects
-usage snapshots, and prices the surviving rows again. Message counts reuse the
-pairing read; tool events are read fresh. Journal replacement and unavailable or
-regressed revisions rebuild the inputs. Large change sets use a full read, and
-inputs above the budget aren't retained. Hosted stores and transaction views use
-their existing reads.
+PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
+inputs in memory with a 128 MiB estimated-size budget. Each session keeps its
+runs and the ascending times of its counted user and assistant messages,
+derived from one pairing over all time: the candidates a report range leaves out
+are ones the aggregator rejects for that range anyway, so one entry serves every
+effective end of the slot. The usage change journal invalidates changed sessions
+and their matching snapshot peers. Tool events are not journaled; a tool event
+change reaches PostgreSQL through a push that also changes the session's
+`transcript_revision`, which the journal records. Each visit selects sessions,
+pairs only sessions without an entry, sweeps the runs, selects usage snapshots,
+and prices the surviving rows again. On a scratch database of 100,000 sessions
+and 2.6 million candidates over seven months, the kept activity took 71 MiB,
+and a refresh with ten changed sessions spent 90 ms pairing instead of 3.2 s
+and 209 ms sweeping instead of 1.0 s. Journal replacement, a changed gap cap,
+and unavailable or regressed revisions rebuild the inputs. Large change sets
+use a full read, and inputs above the budget aren't retained. Hosted stores and
+transaction views use their existing reads.
+
+DuckDB keeps each session's runs and counted message times in memory per
+session and gap cap, within a 128 MiB budget, at the session's
+`agentsview_push_fingerprint`. A push changes that fingerprint whenever a
+session's messages or tool events change, so entries survive mirror
+replacements and a refresh pairs only changed sessions. A session without a
+fingerprint is paired on every report. Like PostgreSQL, DuckDB pairs over all
+time and clips runs at the effective end cast to its microsecond `TIMESTAMP`. On
+the same scratch data, the kept runs took 74 MiB, and a refresh with ten changed
+sessions spent 328 ms pairing instead of 3.4 s, 224 ms sweeping instead of
+1.1 s, and 42 ms counting messages instead of 593 ms.
 
 ### PostgreSQL push preparation indexes
 
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
 `idx_sessions_source_missing` bound the parser-version check and empty repair
-queries. `idx_sessions_id_tail` serves [raw session ID
-lookups](#raw-session-id-lookups). Owner preparation installs missing indexes
-automatically. Each first build scans `sessions` and blocks writes until
-installation commits. Restricted publishers keep writing before owner
-installation, using the existing queries until the indexes are available.
+queries. `idx_sessions_id_tail` serves
+[raw session ID lookups](#raw-session-id-lookups). Owner preparation installs
+missing indexes automatically. Each first build scans `sessions` and blocks
+writes until installation commits. Restricted publishers keep writing before
+owner installation, using the existing queries until the indexes are available.
 
 ### Raw session ID lookups
 
-`FindSessionIDsByRawSuffix` resolves a raw ID such as a bare Codex thread
-UUID to stored IDs like `codex:<uuid>` or `host~codex:<uuid>`. Every match
-shares the raw ID's tail, the text after its last `:` or `~`
-(`db.SessionIDTail`), so each backend filters on that tail before it checks
-the exact suffix forms:
+`FindSessionIDsByRawSuffix` resolves a raw ID such as a bare Codex thread UUID
+to stored IDs like `codex:<uuid>` or `host~codex:<uuid>`. Every match shares the
+raw ID's tail, the text after its last `:` or `~` (`db.SessionIDTail`), so each
+backend filters on that tail before it checks the exact suffix forms:
 
-- SQLite and PostgreSQL index the tail expression as `idx_sessions_id_tail`.
-  The query must repeat the indexed expression exactly. PostgreSQL installs it
-  as a [push preparation index](#postgresql-push-preparation-indexes), so a
+- SQLite and PostgreSQL index the tail expression as `idx_sessions_id_tail`. The
+  query must repeat the indexed expression exactly. PostgreSQL installs it as
+  a [push preparation index](#postgresql-push-preparation-indexes), so a
   restricted publisher keeps pushing and lookups scan until an owner installs
   it.
-- ClickHouse keeps an `id_tail` bloom filter skipping index on `sessions`.
-  The candidate subquery reads with `final = 0` because FINAL widens each
-  matching granule to every overlapping key range in other parts. The outer
-  read applies FINAL by primary key.
+- ClickHouse keeps an `id_tail` bloom filter skipping index on `sessions`. The
+  candidate subquery reads with `final = 0` because FINAL widens each matching
+  granule to every overlapping key range in other parts. The outer read
+  applies FINAL by primary key.
 - DuckDB scans. It does not use an expression index for this filter, and a
   columnar scan of the disposable mirror's IDs takes a few milliseconds.
 
@@ -1144,13 +1172,13 @@ column and must join the events table to recover the text.
 ### PostgreSQL frustration marker reads
 
 Signals counts frustration markers for sessions the in-memory memo does not
-hold. PostgreSQL and CockroachDB read the session versions and those
-sessions' prompts in one statement, `pgFrustrationPromptsSQL`, with the
-session IDs as one array parameter (`= ANY($1)`). A prompt made of ASCII and
+hold. PostgreSQL and CockroachDB read the session versions and those sessions'
+prompts in one statement, `pgFrustrationPromptsSQL`, with the session IDs as one
+array parameter (`= ANY($1)`). A prompt made of ASCII and
 `signals.PlainPromptSymbols`, the alphabet the
-[ClickHouse read](../internal/clickhouse-mirror.md#dashboard-facts) also
-uses, is judged in SQL and comes back only when it is a marker, without its
-text. Go judges the rest with `signals.IsFrustrationMarker`:
+[ClickHouse read](../internal/clickhouse-mirror.md#dashboard-facts) also uses,
+is judged in SQL and comes back only when it is a marker, without its text. Go
+judges the rest with `signals.IsFrustrationMarker`:
 
 - prompts with any other rune;
 - every prompt when the server encoding is not UTF8. The store reads the
@@ -1158,41 +1186,41 @@ text. Go judges the rest with `signals.IsFrustrationMarker`:
   the session IDs: PostgreSQL converts parameters to the server encoding
   before the query runs, and the alphabet pattern holds runes LATIN1 and
   similar encodings lack;
-- plain prompts longer than 16 KiB after code fences are stripped, when a
-  cheap bound cannot rule out the all-capitals rule.
+- plain prompts longer than 16 KiB after code fences are stripped, when a cheap
+  bound cannot rule out the all-capitals rule.
 
 The SQL follows `IsFrustrationMarker` step by step. Port it with these rules:
 
 - PostgreSQL patterns are POSIX ARE and CockroachDB patterns are RE2, so use
-  only syntax both read the same way. `\b` means backspace in ARE, and the
-  ARE word escapes and `lower()` follow the server locale. Write word
-  boundaries as `(^|[^0-9A-Za-z_])` and `($|[^0-9A-Za-z_])`, letters as ASCII
-  case pairs, whitespace as the ASCII class `unicode.IsSpace` accepts, and
-  non-ASCII runes as literal characters.
+  only syntax both read the same way. `\b` means backspace in ARE, and the ARE
+  word escapes and `lower()` follow the server locale. Write word boundaries
+  as `(^|[^0-9A-Za-z_])` and `($|[^0-9A-Za-z_])`, letters as ASCII case pairs,
+  whitespace as the ASCII class `unicode.IsSpace` accepts, and non-ASCII runes
+  as literal characters.
 - Measure lengths with `octet_length`; Go compares bytes.
-- Count matches with `cardinality(regexp_split_to_array(...)) - 1`.
-  CockroachDB has no `regexp_count`. Cast numeric parameters, because
-  CockroachDB does not infer their types.
+- Count matches with `cardinality(regexp_split_to_array(...)) - 1`. CockroachDB
+  has no `regexp_count`. Cast numeric parameters, because CockroachDB does not
+  infer their types.
 - Prefer boolean `~` tests to `regexp_replace` over long text. On a 484 MiB
   fixture a boolean pass took about 1 s and a replacing pass 11 to 17 s, so
-  counting every word of every prompt took 55 s against 6.6 s for the Go
-  scan. The caps rule is therefore ruled out with a bound: all-capital words
-  are at most the `[A-Z]{2,}` runs, and words of two or more letters are at
-  least 32 per match of 32 such words in a row and at least
-  `FrustrationCapsMinWords`. When that ratio is below the threshold, so is
-  the exact one. SQL counts every word only for stripped prompts of at most
-  16 KiB, which covers typed prompts and short prompts after a fenced paste.
-  `translate()` is slower still (42 s), so the SQL never uses it.
+  counting every word of every prompt took 55 s against 6.6 s for the Go scan.
+  The caps rule is therefore ruled out with a bound: all-capital words are at
+  most the `[A-Z]{2,}` runs, and words of two or more letters are at least 32
+  per match of 32 such words in a row and at least `FrustrationCapsMinWords`.
+  When that ratio is below the threshold, so is the exact one. SQL counts
+  every word only for stripped prompts of at most 16 KiB, which covers typed
+  prompts and short prompts after a fenced paste. `translate()` is slower
+  still (42 s), so the SQL never uses it.
 
-On a fixture of 2,500 sessions with 41,162 prompts (484 MiB of prompt text,
-1.9% of it outside the plain alphabet), one Signals load with an empty memo
-took 4.1 s instead of 6.6 s. It sent 15.8 MiB to Go instead of 485.5 MiB, and
-Go allocated 139 MiB instead of 1.62 GiB, with the same per-session counts.
+On a fixture of 2,500 sessions with 41,162 prompts (484 MiB of prompt text, 1.9%
+of it outside the plain alphabet), one Signals load with an empty memo took 4.1
+s instead of 6.6 s. It sent 15.8 MiB to Go instead of 485.5 MiB, and Go
+allocated 139 MiB instead of 1.62 GiB, with the same per-session counts.
 
-`frustration_sql_pgtest_test.go` compares the counts with
-`IsFrustrationMarker` on hand-labeled edge cases and on a seeded random
-corpus, and checks which prompts come back with text. Run it against
-CockroachDB as well when changing the SQL.
+`frustration_sql_pgtest_test.go` compares the counts with `IsFrustrationMarker`
+on hand-labeled edge cases and on a seeded random corpus, and checks which
+prompts come back with text. Run it against CockroachDB as well when changing
+the SQL.
 
 ## DuckDB Mirror
 
@@ -1234,23 +1262,22 @@ own metadata, which is why the docs below call the database a mirror.
   [ClickHouse push and serve](../internal/clickhouse-mirror.md).
 - Keep push order per batch: insert dependents, then
   `DELETE ... WHERE session_id IN (...) AND push_version < v` limited to keys
-  with no row at `v` or later (`vanishedRowsDeleteSQL`), then session rows.
-  Do not delete older rows whose key the push rewrote; `final=1` reads
-  already collapse them, and deleting them writes patch rows. Store every ClickHouse push cursor and version in the mirror's
-  `sync_metadata`. Never store ClickHouse sync state in SQLite.
+  with no row at `v` or later (`vanishedRowsDeleteSQL`), then session rows. Do
+  not delete older rows whose key the push rewrote; `final=1` reads already
+  collapse them, and deleting them writes patch rows. Store every ClickHouse
+  push cursor and version in the mirror's `sync_metadata`. Never store
+  ClickHouse sync state in SQLite.
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
   sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not
   write `FINAL` in query text. One exception: a lookup may collect sort keys
   in an `IN` subquery with `SETTINGS final = 0` and let the outer read apply
   FINAL, because a skipping index loses most of its effect under FINAL (see
-  [Raw session ID lookups](#raw-session-id-lookups)). `clickhouse serve`
-  keeps a separate 4-connection pool for the session list, sidebar filters,
-  and one-session reads
-  (`pageQueryContext`); dashboard, Usage, report, and search scans use the
-  main pool (`queryContext`), sized by the URL's `max_open_conns` (default
-  12). `OpenForAdmin`
-  bootstraps through the server `default` database; do not ping a DSN-path
-  database that does not exist yet.
+  [Raw session ID lookups](#raw-session-id-lookups)). `clickhouse serve` keeps
+  a separate 4-connection pool for the session list, sidebar filters, and
+  one-session reads (`pageQueryContext`); dashboard, Usage, report, and search
+  scans use the main pool (`queryContext`), sized by the URL's
+  `max_open_conns` (default 12). `OpenForAdmin` bootstraps through the server
+  `default` database; do not ping a DSN-path database that does not exist yet.
 - Derived tables (`usage_messages`, `terminal_event_snapshots`) are
   insert-maintained by materialized views and keyed by
   `ReplacingMergeTree(revision)`, where live rows use an odd revision above
@@ -1259,8 +1286,8 @@ own metadata, which is why the docs below call the database a mirror.
   session row is published, and `terminal_event_snapshots` rows match it
   exactly. A materialized view runs inside the insert and reads joined tables
   in full, so filter a joined table to the inserted block's sessions. Create
-  and update long-lived views through `ensureView`, which replaces the query of
-  a view an older release created. Views never see deletes;
+  and update long-lived views through `ensureView`, which replaces the query
+  of a view an older release created. Views never see deletes;
   `deleteMirrorSessions` clears the derived tables. Startup backfills record
   completion in `sync_metadata` only after finishing, never modify source
   tables, and must stay safe to repeat. See the

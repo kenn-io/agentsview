@@ -8,11 +8,11 @@ import (
 )
 
 func (s *Store) SessionCommitLinks(ctx context.Context, id string) (*db.SessionCommitList, error) {
-	return readbase.SessionCommitLinks(ctx, sessionsSQL{Store: s}, db.DuckDBQueryDialect(), id)
+	return readbase.SessionCommitLinks(ctx, sessionsSQL{Store: s}, db.DuckDBQueryDialect(), false, id)
 }
 
 func (s *Store) CommitSessionLinks(ctx context.Context, shas []string) (*db.CommitSessionList, error) {
-	return readbase.CommitSessionLinks(ctx, sessionsSQL{Store: s}, db.DuckDBQueryDialect(), shas)
+	return readbase.CommitSessionLinks(ctx, sessionsSQL{Store: s}, db.DuckDBQueryDialect(), false, shas)
 }
 
 func insertCommitLinks(ctx context.Context, exec duckMutationExecutor, rows []db.CommitLinkRow, retained bool) error {

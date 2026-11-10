@@ -1194,7 +1194,7 @@ When some contributing models are unpriced, the cost line reads
 GET /api/v1/sessions/{id}/usage
 ```
 
-On `main` after v0.46.1, this endpoint accepts raw agent session IDs
+In 0.47.0 and later, this endpoint accepts raw agent session IDs
 as well as canonical archive IDs. Exact matches take precedence. If an exact
 lookup misses or reports an ambiguous identity, an ID without a known agent
 prefix or `~` host namespace is matched literally against stored IDs ending in
@@ -1599,7 +1599,8 @@ because their stored tool calls are already gone.
 Transcript links require a `git commit` invocation, allowing Git global options,
 and Git's commit summary with a SHA of 7 to 64 characters in the call's stored
 output. Quiet commits and summaries with shorter SHAs have no link. Older Codex
-commands stored as argument arrays are unsupported. Codex output received
+commands stored as argument arrays support direct Git calls and scripts passed
+to `sh`, `bash`, or `zsh` with `-c` or `-lc`. Codex output received
 through a later `write_stdin` poll links to the original commit call when its
 process ID matches. Polls with no originating commit call produce no links.
 Code-mode scripts with exactly one tool call and a fixed command literal can
@@ -1634,7 +1635,7 @@ session ID. Unknown agents and invalid trailer values are ignored.
 Every matching line in the commit message counts, including lines in squash
 commit bodies. Inline mentions don't create links. Merge commits count.
 
-`agentsview sync` scans repositories used by local sessions. Under
+`agentsview source sync` scans repositories used by local sessions. Under
 `agentsview serve`, editor commits appear at the next scheduled pass, within 15
 minutes. Each pass rereads every repository's history, including fetched older
 branches. Only checkouts a local session ran in are read. If a checkout has

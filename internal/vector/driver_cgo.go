@@ -41,6 +41,9 @@ func vectorDSN(path string, readOnly bool) string {
 		params.Set("mode", "ro")
 		params.Set("_busy_timeout", "5000")
 	} else {
+		// Message and Recall builds share this file. Reserve the writer before
+		// reading so a concurrent commit cannot invalidate a write snapshot.
+		params.Set("_txlock", "immediate")
 		params.Set("_stmt_cache_size", "64")
 		params.Set("_journal_mode", "WAL")
 		params.Set("_busy_timeout", "5000")

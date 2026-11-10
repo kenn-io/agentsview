@@ -487,7 +487,7 @@ func newPruneCommandWithRunner(run func(context.Context, PruneConfig)) *cobra.Co
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&agent, "agent", "", "Exact agent name; includes matching trash and parents unless needed by surviving descendants")
+	cmd.Flags().StringVar(&agent, "agent", "", "Exact agent name; includes matching trash")
 	cmd.Flags().StringVar(&project, "project", "", "Sessions whose project contains this substring")
 	cmd.Flags().IntVar(&maxMessages, "max-messages", -1, "Sessions with at most N user messages")
 	cmd.Flags().StringVar(&before, "before", "", "Sessions that ended before this date (YYYY-MM-DD)")

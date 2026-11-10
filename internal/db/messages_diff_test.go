@@ -289,8 +289,9 @@ func TestReplaceSessionMessagesKeepsPinOnMergedRow(t *testing.T) {
 // merge instead of being remapped and dropped.
 func TestReplaceSessionMessagesKeepsPinOnCompletedRow(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		sourceUUIDs []string
+		name          string
+		sourceUUIDs   []string
+		completedUUID string
 	}{
 		{
 			name:        "empty UUID",
@@ -299,6 +300,12 @@ func TestReplaceSessionMessagesKeepsPinOnCompletedRow(t *testing.T) {
 		{
 			name:        "duplicate UUID",
 			sourceUUIDs: []string{"tail", "duplicate", "duplicate"},
+		},
+		{
+			// A streamed reply has no native ID until its final record.
+			name:          "UUID arrives with completion",
+			sourceUUIDs:   []string{"", "", ""},
+			completedUUID: "reply-1",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -319,6 +326,9 @@ func TestReplaceSessionMessagesKeepsPinOnCompletedRow(t *testing.T) {
 			v2 := append([]Message(nil), v1...)
 			v2[1].Content = "partial now complete"
 			v2[1].ContentLength = len(v2[1].Content)
+			if tc.completedUUID != "" {
+				v2[1].SourceUUID = tc.completedUUID
+			}
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "pin-complete", v2))
 
 			pins, err := d.ListPinnedMessages(
@@ -407,4 +417,56 @@ func TestIsTextExtension(t *testing.T) {
 		assert.Equal(t, tt.want, IsTextExtension(tt.stored, tt.incoming),
 			"IsTextExtension(%q, %q)", tt.stored, tt.incoming)
 	}
+}
+
+// A parser that starts keeping native IDs rewrites every stored row with
+// only a new source UUID. The rows must stay in place, so pins and notes
+// survive, including on system rows that the legacy pin match skips.
+func TestReplaceSessionMessagesKeepsRowsThatGainSourceUUIDs(t *testing.T) {
+	d := testDB(t)
+	const sessionID = "gain-uuid"
+	v1 := []Message{
+		diffTestMsg(sessionID, 0, "user", "be brief", func(m *Message) { m.IsSystem = true }),
+		diffTestMsg(sessionID, 1, "user", "question"),
+		diffTestMsg(sessionID, 2, "assistant", "answer"),
+	}
+	seedDiffSession(t, d, sessionID, v1)
+	ids := messageIDsByOrdinal(t, d, sessionID)
+	note := "keep the prompt"
+	_, err := d.PinMessage(t.Context(), sessionID, ids[0], &note)
+	require.NoError(t, err)
+
+	v2 := append([]Message(nil), v1...)
+	for i, id := range []string{"s-1", "u-1", "a-1"} {
+		v2[i].SourceUUID = id
+	}
+	plan, ok := planSessionMessageDiff(v1, v2)
+	require.True(t, ok, "rows that only gain IDs are updated in place")
+	assert.Len(t, plan.updates, 3)
+	assert.Empty(t, plan.unsafePinUpdateIDs)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), sessionID, v2))
+
+	assert.Equal(t, ids, messageIDsByOrdinal(t, d, sessionID))
+	stored, err := d.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"s-1", "u-1", "a-1"},
+		[]string{stored[0].SourceUUID, stored[1].SourceUUID, stored[2].SourceUUID})
+	pins, err := d.ListPinnedMessages(t.Context(), sessionID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, ids[0], pins[0].MessageID)
+	require.NotNil(t, pins[0].Note)
+	assert.Equal(t, note, *pins[0].Note)
+}
+
+func TestPlanSessionMessageDiffRejectsSharedGainedSourceUUID(t *testing.T) {
+	v1 := []Message{
+		diffTestMsg("s", 0, "user", "question"),
+		diffTestMsg("s", 1, "assistant", "answer"),
+	}
+	v2 := append([]Message(nil), v1...)
+	v2[0].SourceUUID = "shared"
+	v2[1].SourceUUID = "shared"
+	_, ok := planSessionMessageDiff(v1, v2)
+	assert.False(t, ok, "an ID used twice identifies neither row")
 }

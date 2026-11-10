@@ -24,7 +24,7 @@ func (s *Server) frictionAutoFileOn() bool {
 	return autoFile && s.frictionRunner != nil && kataCfg.Enabled && kataCfg.Hub
 }
 
-// autoFileFriction is the friction job's automatic filing pass. It does
+// autoFileFriction is the friction job's automatic filing pass and reopens recurring linked issues. It does
 // nothing unless frictionAutoFileOn.
 func (s *Server) autoFileFriction(ctx context.Context) error {
 	if !s.frictionAutoFileOn() {
@@ -49,19 +49,28 @@ func (s *Server) autoFileFriction(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if s.frictionEvaluatedOccurrences == nil {
+		s.frictionEvaluatedOccurrences = make(map[string]time.Time)
+	}
 	f := &filing.Filer{
 		Kata: s.kataConn(), Store: store, PublicURL: s.frictionPublicURL(),
-		Exclusive: func(work func() error) error { return s.SerializeArchiveWrite(ctx, work) },
+		Exclusive:            func(work func() error) error { return s.SerializeArchiveWrite(ctx, work) },
+		EvaluatedOccurrences: s.frictionEvaluatedOccurrences,
 	}
+	since := latest.AddDate(0, 0, 1-max(backfill, 1)).Format(time.DateOnly)
 	rep, err := f.Reconcile(ctx, filing.Policy{
 		Kinds:       policy.FileKinds(),
-		Since:       latest.AddDate(0, 0, 1-max(backfill, 1)).Format(time.DateOnly),
+		Since:       since,
 		MinSessions: policy.FileMinSessions(),
 		MaxNew:      frictionAutoFilePerPass,
 	})
-	if rep != (filing.ReconcileReport{}) {
-		log.Printf("friction: automatic filing created %d, linked %d, will retry %d, needs a person %d",
-			rep.Created, rep.Linked, rep.Retry, rep.NeedsPerson)
+	reopened := 0
+	if err == nil {
+		reopened, err = f.Reopen(ctx, since, latest.Format(time.DateOnly), runner.Loc)
+	}
+	if rep != (filing.ReconcileReport{}) || reopened != 0 {
+		log.Printf("friction: automatic filing created %d, linked %d, will retry %d, needs a person %d, reopened %d",
+			rep.Created, rep.Linked, rep.Retry, rep.NeedsPerson, reopened)
 	}
 	return err
 }

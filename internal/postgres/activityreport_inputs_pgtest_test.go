@@ -188,8 +188,7 @@ func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
 	}))
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", messages))
 	pgKeptPush(t, syncer, false)
-	inputs := &pgActivityInputs{transcripts: map[string][]pgActivityMessage{}}
-	require.NoError(t, store.activityTranscriptSource(t.Context(), []string{"a"}, inputs, func(id string, got []activity.TranscriptMessage) {
+	require.NoError(t, store.activityTranscriptSource(t.Context(), []string{"a"}, func(id string, got []activity.TranscriptMessage) {
 		assert.Equal(t, "a", id)
 		require.Len(t, got, 5)
 		assert.Equal(t, 1, got[1].Ordinal)

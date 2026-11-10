@@ -66,6 +66,8 @@ type Kata interface {
 	FindByMetadata(ctx context.Context, key, value string) ([]kata.Issue, error)
 	CreateIssue(ctx context.Context, idempotencyKey string, req kata.CreateIssue) (kata.CreateResult, error)
 	GetIssue(ctx context.Context, ref string) (kata.Issue, error)
+	Reopen(ctx context.Context, ref string) (bool, error)
+	Comment(ctx context.Context, ref, key, body string) error
 }
 
 var _ Kata = (*kata.Conn)(nil)
@@ -89,6 +91,9 @@ type Filer struct {
 	// archive write barrier, so a write that meets archive maintenance waits
 	// for it instead of failing after Kata created the issue.
 	Exclusive func(func() error) error
+	// EvaluatedOccurrences tracks successful recurrence checks by issue UID.
+	// A nil map disables caching; callers must serialize access to a shared map.
+	EvaluatedOccurrences map[string]time.Time
 }
 
 // Result is the outcome of filing one pattern.

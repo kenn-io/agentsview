@@ -497,6 +497,7 @@ func TestHostedTenantUpgradeInstallsTablesBeforeCatalogCheck(t *testing.T) {
 	for _, tt := range []struct{ table, index string }{
 		{"friction_findings", "idx_friction_findings_session"},
 		{"commit_links", "idx_commit_links_sha"},
+		{"retained_commit_links", "idx_retained_commit_links_sha"},
 	} {
 		t.Run(tt.table, func(t *testing.T) {
 			f := newHostedFixture(t, "tenant-a")

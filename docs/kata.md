@@ -119,6 +119,9 @@ min_sessions = 2 # Optional; file only patterns seen in at least this many sessi
   seen in at least `min_sessions` sessions (default 2). It uses the same
   lookup as `friction file`, so it links an issue Kata already holds instead
   of filing a duplicate.
+- With automatic filing on, the hourly job reopens a linked issue closed as
+  `done` when a signal in a saved digest within `backfill_days` occurred after
+  the close, and comments with the date it recurred.
 - Corrections, `pattern` findings, and deferrals are tracked per session, so
   each appears in one session only. At the default `min_sessions` they are
   never filed automatically; set `min_sessions = 1` to file every one of them.

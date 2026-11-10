@@ -59,7 +59,7 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 			assert.Equal(t, "hybrid_keyword", result.EffectiveMode)
 			wantNote := "Search by meaning is unavailable: " + tc.reason + ". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
 			if tc.wantSetup {
-				wantNote += " To enable search by meaning, set `enabled = true` in the `[vector]` section of `~/.agentsview/config.toml`, restart the daemon, then run `agentsview index embeddings build`. If `[vector]` is already enabled, run the build now."
+				wantNote += " To enable search by meaning, run `agentsview index embeddings build` or turn it on in Settings → Embeddings → Turn on."
 			}
 			assert.Equal(t, wantNote, result.Note)
 			if tc.empty {

@@ -183,6 +183,12 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
 - `BenchmarkReconciliationSpoolAdd` and
   `BenchmarkReconciliationSpoolContainsSource` — candidate writes and
   membership lookups in the temporary discovery spool.
+- `BenchmarkDiscoveryDiskMap` — repeated lookups, replacements, and span appends
+  in a 10k-entry temporary parser index. Setup and SQL warmup stay outside the
+  timed loop.
+- `BenchmarkVisualStudioCopilotStreamingDiscovery` — a streaming discovery pass
+  over 4k synthetic spans for 1k conversations, including a fresh
+  reconciliation cache and its cleanup on every iteration.
 - `BenchmarkCodexStagingToolResult` — stage short tool results with their
   deduplication checks. Large result bodies can make SQL preparation a smaller
   share of the parse cost.

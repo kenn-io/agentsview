@@ -4,8 +4,8 @@ Your agents already write the raw data. AgentsView turns it into a searchable
 archive, and the archive into answers your agents can use on their next run.
 Nine stops, five minutes.
 
-Updated for [v0.46.1](/docs/changelog/#0461), including cloud chats, selectable
-cost breakdowns, and tool-effectiveness reports.
+Updated for [v0.47.0](/docs/changelog/#0470), including the Friction Log, the
+prompt behind any line of code, and one-click search by meaning.
 
 ## 01. Capture every session
 
@@ -49,15 +49,11 @@ Git totals for the selected dates.
 Usage reports show recorded tokens and estimated costs, including prompt-cache
 writes and reads. Reports reuse saved archive data; the first request after an
 upgrade or sync may need time to prepare its cache. The CLI answers in the
-terminal (`agentsview usage daily`), the statusline shows today's spend inside
-your editor, and one-shot capture reports recorded usage for a single Claude or
-Codex CI run. Total Input includes prompt-cache reads and writes; Uncached Input
-keeps those tokens separate. Choose Smooth, Lines, or Bars for the cost chart.
-[Token usage and costs](/docs/token-usage/).
-
-On `main`, these reports use `agentsview report usage`. See the
-[command migration](/docs/commands/#command-migration) for release-compatible
-names.
+terminal (`agentsview report usage daily`), the statusline shows today's spend
+inside your editor, and one-shot capture reports recorded usage for a single
+Claude or Codex CI run. Total Input includes prompt-cache reads and writes;
+Uncached Input keeps those tokens separate. Choose Smooth, Lines, or Bars for
+the cost chart. [Token usage and costs](/docs/token-usage/).
 
 Select a project, model, or agent in the cost breakdown to narrow the page. Open
 hermes-cron to compare individual jobs. Model aliases combine variants after
@@ -67,8 +63,8 @@ each has been priced.
 
 Press `Ctrl/Cmd+K` to search, then choose a project and date range in the
 palette. Select **All Projects** to widen the search without changing the
-sidebar. Full-text search finds exact words; opt-in semantic and hybrid search
-find related meaning and cite the matching conversation.
+sidebar. Full-text search finds exact words. Turn on search by meaning from the
+palette or Settings to find related ideas and cite the matching conversation.
 [Search controls](/docs/usage/#command-palette) ·
 [Semantic search](/docs/semantic-search/).
 
@@ -84,6 +80,10 @@ charges. [Session intelligence](/docs/session-intelligence/).
 Tool Usage shows empty-result, repeat-call, and recovery rates with links to
 contributing sessions. Choose Analyze tool effectiveness from a session's
 actions menu for a model assessment that cites the calls it judged.
+
+Turn on the [Friction Log](/docs/quality/#friction-log) for a daily review of
+corrections, tool errors, and recurring problems, each linked to its message.
+File recurring problems as Kata issues.
 
 ## 07. Keep what the sessions learned
 
@@ -103,7 +103,9 @@ bundle recall instructions, focused search, and session-start refresh.
 [MCP server](/docs/mcp/) · [Session API](/docs/session-api/).
 
 Read-only MCP tools also expose file edits, tool calls, child sessions, Activity
-reports, tool usage, cost comparisons, and offline guide search.
+reports, tool usage, cost comparisons, and offline guide search. Run
+[`agentsview why file.go:120-140`](/docs/commands/#agentsview-why) to find the
+session and prompt behind a line of code.
 
 ## 09. Extend beyond one machine
 

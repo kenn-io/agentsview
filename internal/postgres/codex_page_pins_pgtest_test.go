@@ -65,6 +65,10 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			before, err := store.ListPinnedMessages(ctx, thread, "")
 			require.NoError(t, err)
 			require.Len(t, before, 1)
+			if tc.name == "page_only" || tc.name == "other_owner" {
+				_, err = syncer.pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) VALUES ($1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','','',0,0,'','',0,'prompt','',false),($1,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','','','',0,0,'','',NULL,'','',true)`, thread)
+				require.NoError(t, err)
+			}
 			if tc.name == "missing_unpinned_page" || tc.name == "filtered_unpinned_page" {
 				require.NoError(t, store.UnpinMessage(ctx, thread, before[0].MessageID))
 			}
@@ -180,6 +184,13 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Zero(t, result.Errors)
+			if tc.name == "page_only" || tc.name == "other_owner" {
+				var live, retained int
+				require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT retained), count(*) FILTER (WHERE retained) FROM commit_links WHERE session_id=$1`, thread).Scan(&live, &retained))
+				assert.Equal(t, map[string]int{"page_only": 0, "other_owner": 1}[tc.name], live)
+				assert.Equal(t, 1, retained)
+
+			}
 			if tc.name == "filtered_head" || tc.name == "excluded_head" {
 				head, err := store.GetSessionFull(ctx, thread)
 				require.NoError(t, err)

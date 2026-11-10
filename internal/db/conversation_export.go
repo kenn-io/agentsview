@@ -504,9 +504,21 @@ func projectConversationMessagesTx(tx transactionQueries, sessionID string, msgs
 	}
 	equal := replace && len(old) == len(incoming)
 	for i := range incoming {
-		if equal && !conversationRowsEqual(old[i], incoming[i]) {
-			equal = false
+		if !equal || conversationRowsEqual(old[i], incoming[i]) {
+			continue
 		}
+		if !conversationRowGainsSourceID(old[i], incoming[i], counts) {
+			equal = false
+			continue
+		}
+		// A gained ID already held by a kept row or a tombstone needs the
+		// native-identity reconciliation below.
+		var held bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=? AND source_id=?)`,
+			sessionID, incoming[i].sourceID).Scan(&held); err != nil {
+			return err
+		}
+		equal = !held
 	}
 	// Tombstones are absent from old, so only the table can prove a session is new.
 	fresh := len(old) == 0
@@ -521,8 +533,10 @@ func projectConversationMessagesTx(tx transactionQueries, sessionID string, msgs
 		if equal {
 			row.MessageID = old[i].MessageID
 			// Identity gaps survive an unchanged projection; policy gaps must
-			// reflect this write even when stored text is still absent.
-			if old[i].Gap != "archive_content_excluded" {
+			// reflect this write even when stored text is still absent. A row
+			// that gains its native ID no longer lacks one.
+			gainedSourceID := old[i].Gap == "identity_unavailable" && row.sourceID != ""
+			if old[i].Gap != "archive_content_excluded" && !gainedSourceID {
 				row.Gap = old[i].Gap
 			}
 		} else if row.sourceID != "" && fresh {
@@ -584,6 +598,18 @@ func projectConversationMessagesTx(tx transactionQueries, sessionID string, msgs
 		}
 	}
 	return putConversationRowsTx(tx, incoming, fresh)
+}
+
+// conversationRowGainsSourceID reports whether incoming is the stored row
+// with a native source ID it lacked before, unique within the projection.
+// Every other projected field must match, so the unchanged projection still
+// proves the identity.
+func conversationRowGainsSourceID(old, incoming conversationRow, counts map[string]int) bool {
+	if old.sourceID != "" || incoming.sourceID == "" || counts[incoming.sourceID] != 1 {
+		return false
+	}
+	old.sourceID = incoming.sourceID
+	return conversationRowsEqual(old, incoming)
 }
 
 func conversationRowsEqual(a, b conversationRow) bool {

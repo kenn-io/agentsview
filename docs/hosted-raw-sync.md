@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-02
+last_edited: 2026-11-09
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -230,8 +230,8 @@ parser-output byte-limit rejection fails that selected generation immediately
 with a `size_limit` diagnostic. Other failures retain bounded retries. Streaming
 the parser result avoids a separate complete JSON buffer; the parser, hosting
 process and projection still retain normalized content in memory. The child
-memory limits do not bound the hosting process. Accepted source bytes
-are untrusted, even after device authentication. Publication atomically writes
+memory limits do not bound the hosting process. Accepted source bytes are
+untrusted, even after device authentication. Publication atomically writes
 normalized rows, source proof, identity changes, curation and job outcome under
 the selected generation and lease fence. Partial results retain older proof for
 unresolved members and retry finitely. Attempts that end without an outcome,
@@ -246,17 +246,17 @@ provider session identity. Piebald's numeric database IDs stay scoped to their
 source, so unrelated chats on different devices do not merge. Without a stable
 provider identity, sources remain separate even when their content matches.
 
-Device machine filters are available on `main` after v0.46.1. The Machine filter
+Device machine filters are available in 0.47.0 and later. The Machine filter
 lists contributing devices by their enrollment display names. Its stable
-selector is `raw-device:<hex-encoded-device-id>`, using the lowercase hexadecimal
-UTF-8 representation of the enrolled device ID. Display names need not be
-unique. Selecting several devices matches sessions supplied by any of them and
-counts each shared session once in the result. This selects whole sessions,
-rather than allocating their tokens or cost between devices. Session and search
-responses include the contributing IDs in `source_machines`; `machine` stays
-`hosted` for compatibility. The session browser displays the source names,
-including all contributors to a shared session. Retained contributions remain
-selectable when their source file has left the device.
+selector is `raw-device:<hex-encoded-device-id>`, using the lowercase
+hexadecimal UTF-8 representation of the enrolled device ID. Display names need
+not be unique. Selecting several devices matches sessions supplied by any of
+them and counts each shared session once in the result. This selects whole
+sessions, rather than allocating their tokens or cost between devices. Session
+and search responses include the contributing IDs in `source_machines`;
+`machine` stays `hosted` for compatibility. The session browser displays the
+source names, including all contributors to a shared session. Retained
+contributions remain selectable when their source file has left the device.
 Usage machine breakdowns and top-session rows still report hosted sessions under
 the `hosted` machine.
 
@@ -293,8 +293,8 @@ content and curation writes do not take those identity locks.
 
 Search and session reads keep one read-only PostgreSQL snapshot for each hosted
 store operation, including transcript rows, public identities, links and pins.
-Concurrent publication does not invalidate that operation. A later operation
-can see a newer publication; a composed HTTP response is not one shared snapshot.
+Concurrent publication does not invalidate that operation. A later operation can
+see a newer publication; a composed HTTP response is not one shared snapshot.
 Activity-report source probes still check live content, identity and parser
 selection revisions so report construction can detect changed inputs.
 
@@ -315,9 +315,9 @@ and PostgreSQL.
 
 ## Reparse and rollback
 
-After an executable upgrade changes the parser data version, Friction Log
-rules or hosted parser runtime version, schedule current heads explicitly in
-bounded batches:
+After an executable upgrade changes the parser data version, Friction Log rules
+or hosted parser runtime version, schedule current heads explicitly in bounded
+batches:
 
 ```bash
 agentsview replica pg raw-reparse hosted --run-id parser-rollout-1 --batch-size 64
@@ -334,7 +334,7 @@ to its original version. Upgrading alone does not reselect retained failures.
 After fixing the cause of a failed job, give it a fresh attempt budget:
 
 ```bash
-agentsview pg raw-reparse hosted --repair --batch-size 64
+agentsview replica pg raw-reparse hosted --repair --batch-size 64
 ```
 
 Repeat until the command prints `Rescheduled 0 failed jobs`. If the count stops
@@ -571,6 +571,13 @@ administrator grants it:
 GRANT SELECT ON agentsview.session_plan_usage TO agentsview_reader;
 ```
 
+Commit lookups also read the new `retained_commit_links` table; grant it too:
+
+```sql
+GRANT SELECT ON hosted_sessions.retained_commit_links TO hosted_runtime;
+GRANT SELECT ON agentsview.retained_commit_links TO agentsview_reader;
+```
+
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.
 Manifest commits retire the previous source head's pending parse job. As the
@@ -611,10 +618,10 @@ The implemented routes are:
 | `PATCH /api/v1/raw-sync/uploads/{id}`   | Access token with the `upload` scope    | Append and finalize object bytes        |
 | `POST /api/v1/raw-sync/manifests`       | Access token with the `commit` scope    | Validate and commit one raw generation  |
 
-An empty PATCH finalizes an upload whose accepted offset equals its
-object length, including a zero-byte source file. The server still verifies
-the object's length and SHA-256 digest. An empty PATCH before the full length
-is rejected.
+An empty PATCH finalizes an upload whose accepted offset equals its object
+length, including a zero-byte source file. The server still verifies the
+object's length and SHA-256 digest. An empty PATCH before the full length is
+rejected.
 
 These machine routes use their own device credentials and scoped tokens. They do
 not accept the shared bearer token that can protect the rest of a remote
@@ -846,7 +853,7 @@ results from a signed server omit browser session links, because the machine
 listener serves no browser UI.
 
 | Grant       | Supported operations                                                                                                                                                                                                                                                                                           |
-| -------------------------------------------- | ------------------------------------------------ |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Contributor | Device token exchange, missing-object negotiation, resumable upload initiation/PATCH/HEAD, manifest commit, raw status and health                                                                                                                                                                              |
 | Reader      | Version/ping, session lists and stored session/message/tool/activity/timing/usage reads, usage summaries and pairwise comparisons, recent edits, tool and signal analytics, activity reports, projects/machines/agents/branches, search, recall reads and queries, memory status, session/server event streams |
 

@@ -200,12 +200,12 @@ func TestSQLiteActivityReportMemoCountsMatchSQLCounts(t *testing.T) {
 		t.Helper()
 		d.activityMemo.swap(func() {})
 		clearKeptActivity(d)
-		old := activityMemoMaxEntries
+		old := activityMemoMaxBytes
 		if !keep {
-			activityMemoMaxEntries = 0
+			activityMemoMaxBytes = 0
 		}
 		artifacts, err := d.BuildActivityReportArtifacts(t.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
-		activityMemoMaxEntries = old
+		activityMemoMaxBytes = old
 		require.NoError(t, err)
 		require.Equal(t, keep, len(d.activityMemo.entries) > 0)
 		var out []int

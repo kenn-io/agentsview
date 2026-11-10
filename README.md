@@ -4,23 +4,19 @@ Browse, search, and track costs across your AI coding agents. Your session
 archive stays on your machine unless you choose a feature that shares it.
 
 This README and the [documentation](https://agentsview.io/docs/) follow `main`.
-The latest release is **v0.46.1**. Check the
+The latest release is **v0.47.0**. Check the
 [changelog](https://agentsview.io/docs/changelog/) for what it includes.
 
-Version 0.46.1 fixes Antigravity transcripts and read-only mounts, preserves
-repeated prompts, and restores container builds.
-
-Version 0.46.0 adds
-[Claude.ai Sync through Chrome](https://agentsview.io/docs/chat-import/#sync-claudeai-chats),
-opt-in
-[Codex cloud chats](https://agentsview.io/docs/configuration/#codex-cloud), and
-Muse Code and fx sessions. Preserve a retired machine's history with
-[local archives](https://agentsview.io/docs/commands/#agentsview-archive), or
-sync a remote machine over
-[SSH](https://agentsview.io/docs/remote-access/#ssh-remote-sync) without
-installing a daemon. Find work by label or linked pull request, narrow cost
-charts by project, and inspect tool effectiveness with transcript evidence.
-Connected assistants gain eight read-only MCP tools for the same archive.
+Version 0.47.0 adds the
+[Friction Log](https://agentsview.io/docs/quality/#friction-log), a daily review
+of corrections, tool errors, and recurring problems that can file Kata issues.
+Find the session and prompt behind a line of code with
+[`agentsview why`](https://agentsview.io/docs/commands/#agentsview-why), and
+turn on [search by meaning](https://agentsview.io/docs/semantic-search/) from
+Settings without editing configuration. Usage and search are much faster on
+large archives. Choose message colors and a color-blind safe chart palette, and
+import Open Interpreter sessions. Commands are now grouped under `source`,
+`report`, `replica`, and `index`; older names still work.
 
 <p align="center">
   <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
@@ -103,9 +99,8 @@ Use `agentsview daemon start` when you want to start the writable SQLite daemon
 explicitly. It loads the normal effective configuration from `config.toml` and
 supported environment variables; `daemon start` and `daemon restart` accept no
 serve-specific flags. `daemon start` and `daemon restart` stay running until
-stopped.
-Automatically started daemons self-exit after an idle period unless a client
-request or daemon-owned job is active.
+stopped. Automatically started daemons self-exit after an idle period unless a
+client request or daemon-owned job is active.
 
 The existing `agentsview serve --background`, `agentsview serve status`, and
 `agentsview serve stop` commands remain available. Use `serve --background` when
