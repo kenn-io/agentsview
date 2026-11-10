@@ -1,6 +1,8 @@
 <script lang="ts">
   import {
+    Card,
     EmptyState,
+    MEDIA,
     SearchInput,
     TableHeaderCell,
     VirtualTable,
@@ -54,9 +56,9 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   const pageRead = new LatestRead();
 
-  // Phones stack the project above the path in one File column, so the
-  // file name keeps the row's width.
-  const stacked = new MediaQuery("max-width: 520px");
+  // Phones (kit-ui's compact breakpoint) stack the project above the path
+  // in one File column, so the file name keeps the row's width.
+  const stacked = new MediaQuery(MEDIA.compact);
   const columns = $derived(
     stacked.current
       ? ["file", "edits", "time"]
@@ -261,7 +263,7 @@
       {/snippet}
     </EmptyState>
   {:else}
-    <div class="re-list">
+    <Card level="default" padding="none" class="re-list">
       <!-- The phone layout has other columns and defaults, so crossing the
            breakpoint starts a fresh table: a width set in one layout must
            not carry into the other. Within a layout the table stays, so
@@ -370,7 +372,7 @@
         {/snippet}
       </VirtualTable>
       {/key}
-    </div>
+    </Card>
     {#if hasMore}
       <button class="re-load-more" onclick={loadMore} disabled={loading}>
         {m.recent_edits_load_more()}
@@ -432,31 +434,28 @@
     font-size: 13px;
   }
 
-  /* One table with hairline rows. kit-ui's VirtualTable owns the column
-     widths: the File column takes the spare width, and the others resize
-     by dragging a header edge (double-click it to fit the content). Wider
-     columns than the page scroll sideways. Clip, not
-     hidden, so the sticky header still follows the page scroll; the table's
-     last row border tucks under the frame's own edge. */
-  .re-list {
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
+  /* One table with hairline rows in a kit-ui Card frame. kit-ui's
+     VirtualTable owns the column widths: the File column takes the spare
+     width, and the others resize by dragging a header edge (double-click it
+     to fit the content). Wider columns than the page scroll sideways. Clip,
+     not hidden, so the sticky header still follows the page scroll; the
+     table's last row border tucks under the frame's own edge. */
+  .recent-edits-page :global(.re-list) {
     overflow: clip;
-    background: var(--bg-surface);
   }
 
-  .re-list :global(.kit-table) {
+  .recent-edits-page :global(.re-list .kit-table) {
     margin-bottom: -1px;
   }
 
-  .re-list :global(tbody td) {
+  .recent-edits-page :global(.re-list tbody td) {
     padding: 7px 14px;
     vertical-align: middle;
     white-space: nowrap;
     overflow: hidden;
   }
 
-  .re-list :global(.kit-th) {
+  .recent-edits-page :global(.re-list .kit-th) {
     padding-inline: 14px;
   }
 
@@ -516,23 +515,23 @@
   }
 
   /* The edits of an expanded file span the whole row. */
-  .re-list :global(tbody tr.re-edits-row td) {
+  .recent-edits-page :global(.re-list tbody tr.re-edits-row td) {
     padding: 0;
     white-space: normal;
   }
 
-  .re-list :global(tbody tr.re-edits-row:hover) {
+  .recent-edits-page :global(.re-list tbody tr.re-edits-row:hover) {
     background: none;
   }
 
   /* Phones: the project moves above the path inside the File column. */
-  @media (max-width: 520px) {
+  @media (max-width: 640px) {
     .recent-edits-page {
       padding: 20px 12px;
     }
 
-    .re-list :global(tbody td),
-    .re-list :global(.kit-th) {
+    .recent-edits-page :global(.re-list tbody td),
+    .recent-edits-page :global(.re-list .kit-th) {
       padding-inline: 10px;
     }
 

@@ -111,7 +111,7 @@ test.describe("Recent Edits feed", () => {
     for (const time of times) expect(time.right).toBe(head.time.right);
   });
 
-  for (const width of [521, 600]) {
+  for (const width of [641, 700]) {
     test(`keeps file names readable just above the stacked layout at ${width}px`, async ({
       page,
     }) => {
