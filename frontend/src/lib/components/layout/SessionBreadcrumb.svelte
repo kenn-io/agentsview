@@ -2377,11 +2377,17 @@
      reading column (MessageList .virtual-row), so the title shares the
      first card's left edge and the stats end at its right edge. The bottom
      rule still spans the pane. A pane narrower than the column keeps the
-     usual 14px inset. */
+     usual 14px inset. The transcript's scrollbar (MessageList publishes
+     its width) narrows the area the column centers in, so it is left out
+     of the centering and added back on the right. */
   /* kit-ui-check-ignore: content breakpoint where the title, transcript controls, and actions stop fitting one row; the script's wideQuery uses the same width */
   @media (min-width: 1100px) {
     .session-breadcrumb {
-      padding-inline: max(14px, calc((100% - var(--reading-column)) / 2));
+      --column-inset: calc(
+        (100% - var(--transcript-scrollbar, 0px) - var(--reading-column)) / 2
+      );
+      padding-left: max(14px, var(--column-inset));
+      padding-right: max(14px, calc(var(--column-inset) + var(--transcript-scrollbar, 0px)));
     }
   }
 

@@ -51,6 +51,29 @@
   onDestroy(() => fileReferences.reset());
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
+
+  // Classic scrollbars take width from the transcript, which moves its
+  // centered reading column left by half their width. Publish that width
+  // on the content column so the session header above can center its
+  // title and stats on the same column.
+  $effect(() => {
+    const scroller = containerRef;
+    // SessionFindView wraps the scroller; its parent holds the header too.
+    const column = scroller?.closest(".find-viewport")?.parentElement;
+    if (!scroller || !column) return;
+    const publish = () => {
+      const width = scroller.offsetWidth - scroller.clientWidth;
+      column.style.setProperty("--transcript-scrollbar", `${width}px`);
+    };
+    publish();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(publish);
+    observer.observe(scroller);
+    return () => {
+      observer.disconnect();
+      column.style.removeProperty("--transcript-scrollbar");
+    };
+  });
   let containerScrollTop = $state(0);
   let scrollRaf: number | null = null;
   let lastScrollRequest = 0;
