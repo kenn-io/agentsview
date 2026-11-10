@@ -255,6 +255,10 @@ func TestUsageJournaledConfiguredAliasChanges(t *testing.T) {
 	}))
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC"}
 	cache := warmJournaledUsage(t, database, filter)
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	database.usageBackfillMu.Lock()
+	database.usageBackfillEnabled = false
+	database.usageBackfillMu.Unlock()
 	var original int64
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT install_revision FROM usage_rollup_installs WHERE session_id='unrelated'`).Scan(&original))
 	for _, step := range []struct {

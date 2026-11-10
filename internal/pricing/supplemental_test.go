@@ -334,7 +334,6 @@ func TestSetConfiguredAliases(t *testing.T) {
 	} {
 		assert.Equal(t, want, ConfiguredAliasTarget(model), model)
 	}
-
 }
 
 func TestFixedPricingAliasesReturnsCopy(t *testing.T) {

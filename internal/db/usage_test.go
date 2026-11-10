@@ -5503,7 +5503,6 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, tc.wantCost, report.Totals.Cost)
 	}
-
 }
 
 // TestGetDailyUsage_GPTReserveLunaPricing proves Codex Luna Reserve turns
