@@ -684,9 +684,11 @@ func TestCodexCodeModeWaitOutputUpgradeReparsesInPlace(t *testing.T) {
 }
 
 func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(137, 138)
 	assert.ElementsMatch(t,
 		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
-		db.ScopedDataVersionProviders(137, 138))
+		scope)
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{db.CurrentDataVersion(): scope}))
 	const recorded = "example.com/team/api"
 	for _, tc := range []struct {
 		name                         string
@@ -776,9 +778,9 @@ func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
 			require.Len(t, priorSnapshots, 1)
 			oldRoot := priorSnapshots[0].RootPath
 			// Older parsers discarded the URL and kept checkout-derived evidence.
-			version := 137
+			version := db.CurrentDataVersion() - 1
 			if tc.fullRebuild {
-				version = 135
+				version--
 			}
 			oldIdentity := export.BuildStoredProjectIdentity(export.ProjectIdentityInput{
 				RootPath: oldRoot, GitRemote: tc.remote, GitRemoteName: tc.remoteName,

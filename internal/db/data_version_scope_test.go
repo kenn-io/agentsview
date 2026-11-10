@@ -35,8 +35,9 @@ func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 }
 
 func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
-	// The version before preserving classification, even after later upgrades.
-	const completedVersion = 145
+	scope := ScopedDataVersionProviders(145, 146)
+	t.Cleanup(InstallDataVersionScopesForTest(map[int][]parser.AgentType{CurrentDataVersion(): scope}))
+	completedVersion := CurrentDataVersion() - 1
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "completed Codex upgrade")
 	for _, agent := range []string{"codex", "pi", "hermes"} {
