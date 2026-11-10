@@ -114,7 +114,7 @@ it("offers Chrome Sync for ChatGPT and opens ChatGPT sign-in after auth failure"
     expect.objectContaining({ onProgress: expect.any(Function) }),
     expect.any(AbortSignal),
   );
-  await fireEvent.click(screen.getByRole("button", { name: m.import_chatgpt_signed_out() }));
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
   expect(open).toHaveBeenCalledExactlyOnceWith(
     "https://chatgpt.com/",
     "_blank",

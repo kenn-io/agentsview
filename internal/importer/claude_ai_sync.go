@@ -249,8 +249,21 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	keepCopy := false
 	if result.Session.Agent == parser.AgentChatGPT {
 		prefix := false
+		var completed []int
 		if stored != nil && len(stored) >= len(archived) {
-			_, prefix = compareChatGPTPrefix(archived, stored[:len(archived)], true)
+			completed, prefix = compareChatGPTPrefix(archived, stored[:len(archived)], true)
+		}
+		// Under usage-only storage an appended reply resizes the identity
+		// groups a full replacement uses to restore pins, so a compatible
+		// prefix keeps its rows in place and appends.
+		if prefix && storeArchiveContent(store).UsageOnly() && len(msgs) >= existing.MessageCount {
+			rows := chatGPTFillRows(archived, stored, completed, true)
+			rows = append(rows, stored[len(archived):]...)
+			err := appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
+			if errors.Is(err, db.ErrSessionExcluded) {
+				return importSkipped, nil
+			}
+			return importUpdated, err
 		}
 		keepCopy = !prefix
 	}
