@@ -675,10 +675,13 @@ func TestLiveEmbeddingsSetupFailurePersistsUntilBuildStarts(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, owner.Close()) })
 	require.NoError(t, owner.Setup(0, &vector.BuildRequest{Using: "local"}))
 	<-owner.done
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, status.Error, `no embeddings server named "local"`)
 	manager := owner.Manager("")
 	require.NoError(t, manager.StartBuild(vector.BuildRequest{Using: "other"}))
 	owner.BuildStarted()
-	status, err := owner.SetupStatus(t.Context())
+	status, err = owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, status.Error)
 }
