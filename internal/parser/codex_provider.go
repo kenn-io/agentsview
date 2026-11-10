@@ -1198,6 +1198,11 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			})
 		}
 	}
+	if s.agent == AgentCodex {
+		for i := range roots {
+			roots[i].SourceFileGlobs = append([]string(nil), roots[i].IncludeGlobs...)
+		}
+	}
 	return WatchPlan{Roots: roots}, nil
 }
 
