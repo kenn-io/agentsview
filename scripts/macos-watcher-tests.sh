@@ -23,10 +23,9 @@ names=$(
         base=${file##*/}
         [[ $base == watch*_test.go || $base == *_darwin_test.go ]] ||
             grep -q '^//go:build.*darwin' "$file" || continue
-        sed -nE 's/^func (Test[A-Z0-9_][A-Za-z0-9_]*)\(.*/\1/p' "$file"
+        sed -nE '/^func TestMain\(/d; s/^func (Test[A-Z0-9_][A-Za-z0-9_]*)\(.*/\1/p' "$file"
     done | LC_ALL=C sort -u
 )
-names=$(printf '%s\n' "$names" | { grep -vx -e TestMain -e '' || true; })
 
 if [[ -z $names ]]; then
     echo "no macOS watcher tests found in: $*" >&2
