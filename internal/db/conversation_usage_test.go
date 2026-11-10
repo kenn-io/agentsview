@@ -54,3 +54,40 @@ func TestConversationUsageRevisionsSurviveUpgrade(t *testing.T) {
 	assert.Equal(t, 20, batch.Messages[0].Usage.InputTokens)
 	assert.Equal(t, 5, batch.Messages[0].Usage.OutputTokens)
 }
+
+// A resync copies archive metadata into a database whose own triggers have
+// already stamped message usage revisions. The copy must keep that database's
+// counter, or a stream reading from the head re-sends unchanged messages.
+func TestCopySessionMetadataKeepsConversationUsageRevision(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.db")
+	old := testDBAtPath(t, oldPath, "old")
+	_, err := old.getWriter().Exec(t.Context(),
+		`INSERT INTO archive_metadata(key,value) VALUES ('conversation_usage_revision','1')
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
+	require.NoError(t, err)
+	require.NoError(t, old.Close())
+
+	fresh := testDBAtPath(t, filepath.Join(dir, "fresh.db"), "fresh")
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	_, err = fresh.EnsureConversationExportInitialized(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, fresh.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
+	msgs := []Message{
+		{SessionID: "chat", Ordinal: 0, Role: "user", Content: "Run it", SourceUUID: "user-one"},
+		{SessionID: "chat", Ordinal: 1, Role: "assistant", Content: "Done", SourceUUID: "reply-one", Model: "sample-model"},
+	}
+	require.NoError(t, fresh.InsertMessages(t.Context(), msgs))
+	for _, usage := range []string{`{"input_tokens":20,"output_tokens":5}`, `{"input_tokens":30,"output_tokens":8}`} {
+		msgs[1].TokenUsage = []byte(usage)
+		require.NoError(t, fresh.ReplaceSessionMessages(t.Context(), "chat", msgs))
+	}
+
+	require.NoError(t, fresh.CopySessionMetadataFrom(t.Context(), oldPath))
+	head, err := fresh.ReadChangeStreamHead(t.Context())
+	require.NoError(t, err)
+	batch, err := fresh.ReadChangeStream(t.Context(), head.Head)
+	require.NoError(t, err)
+	assert.False(t, batch.Reset)
+	assert.Empty(t, batch.Messages, "nothing changed after the head")
+}
