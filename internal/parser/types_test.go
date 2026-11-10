@@ -311,6 +311,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"grok web prefix",
+			"grok-web:sess-id",
+			AgentGrokWeb,
+			true,
+		},
+		{
 			"mimocode prefix",
 			"mimocode:sess-id",
 			AgentMiMoCode,
@@ -487,6 +493,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCopilot,
 		AgentGemini,
 		AgentGeminiApps,
+		AgentGrokWeb,
 		AgentMiMoCode,
 		AgentOpenCode,
 		AgentOpenCodeReview,

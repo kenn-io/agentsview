@@ -128,6 +128,19 @@ func testDB(t *testing.T) *db.DB {
 	return dbtest.OpenTestDB(t)
 }
 
+func preventChatGPTMessageIDReuse(t *testing.T, d *db.DB) {
+	t.Helper()
+	// Keep a higher message ID in another session so replacement cannot reuse the original IDs.
+	_, err := d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session:  db.Session{ID: "another-chat", Agent: "chatgpt", Project: "chatgpt"},
+		Messages: []db.Message{{SessionID: "another-chat", Ordinal: 0, Role: "assistant", Content: "Another chat"}},
+	}})
+	require.NoError(t, err)
+	messages, err := d.GetAllMessages(t.Context(), "another-chat")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+}
+
 func TestImportClaudeAI(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -642,6 +655,7 @@ func TestImportChatGPTAppendsVerifiedHistory(t *testing.T) {
 	before, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
 	require.NoError(t, err)
 	require.Len(t, before, 1)
+	preventChatGPTMessageIDReuse(t, d)
 	_, err = d.PinMessage(ctx, "chatgpt:cg-1", before[0].ID, nil)
 	require.NoError(t, err)
 
@@ -704,6 +718,7 @@ func TestImportChatGPTRejectsShorterOrDivergentHistory(t *testing.T) {
 			require.NoError(t, err)
 			before, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
 			require.NoError(t, err)
+			preventChatGPTMessageIDReuse(t, d)
 
 			require.NoError(t, os.WriteFile(path, []byte(tc.data), 0o644))
 			stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
@@ -801,6 +816,7 @@ func TestImportChatGPTUsageArchiveSkipsAppend(t *testing.T) {
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	before, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
 	require.NoError(t, err)
+	preventChatGPTMessageIDReuse(t, d)
 
 	require.NoError(t, os.WriteFile(path, []byte(testChatGPTConvWithAppend()), 0o644))
 	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
@@ -1059,6 +1075,7 @@ func TestImportChatGPTFillsArchivedToolResult(t *testing.T) {
 			require.Len(t, before[1].ToolCalls, 1)
 			require.Empty(t, before[1].ToolCalls[0].ResultContent)
 			require.Zero(t, before[1].ToolCalls[0].ResultContentLength)
+			preventChatGPTMessageIDReuse(t, d)
 			_, err = d.PinMessage(ctx, "chatgpt:cg-tool", before[1].ID, nil)
 			require.NoError(t, err)
 			revBefore := chatGPTTranscriptRevision(t, d)
@@ -1167,6 +1184,7 @@ func TestImportChatGPTPolicyChangeBetweenImports(t *testing.T) {
 			require.Len(t, before, 4)
 			require.Positive(t, before[1].ToolCalls[0].ResultContentLength)
 			require.Zero(t, before[3].ToolCalls[0].ResultContentLength)
+			preventChatGPTMessageIDReuse(t, d)
 			require.NoError(t, d.Close())
 
 			d, err = db.OpenWithArchiveContent(ctx, dbPath, tt.archive)
@@ -1254,6 +1272,7 @@ func TestImportChatGPTKeepsCompletedToolResult(t *testing.T) {
 	before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
 	require.NoError(t, err)
 	require.Len(t, before, 2)
+	preventChatGPTMessageIDReuse(t, d)
 
 	// A result that changed from one value to another keeps the archived one.
 	require.NoError(t, os.WriteFile(path, []byte(chatGPTToolRunConv("4242", true)), 0o644))
@@ -1309,6 +1328,7 @@ func TestImportChatGPTComparesToolCallStructure(t *testing.T) {
 			}
 			before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
 			require.NoError(t, err)
+			preventChatGPTMessageIDReuse(t, d)
 			require.Len(t, before, 2)
 			require.NotEmpty(t, before[1].ToolCalls)
 
@@ -1392,6 +1412,7 @@ func TestImportChatGPTFailedFillKeepsSessionRow(t *testing.T) {
 	beforeMsgs, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
 	require.NoError(t, err)
 	require.Len(t, beforeMsgs, 2)
+	preventChatGPTMessageIDReuse(t, d)
 	_, err = d.PinMessage(ctx, "chatgpt:cg-tool", beforeMsgs[1].ID, nil)
 	require.NoError(t, err)
 	before, err := d.GetSession(ctx, "chatgpt:cg-tool")
@@ -1425,6 +1446,97 @@ func TestImportChatGPTFailedFillKeepsSessionRow(t *testing.T) {
 	assert.Zero(t, stats.Errors)
 	assert.Equal(t, 1, stats.Updated)
 	assert.Empty(t, stats.Refusals)
+}
+
+func TestImportChatGPTReimportLegacyRows(t *testing.T) {
+	for _, legacy := range []bool{true, false} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			id := "chatgpt:" + chatGPTSyncID
+			var stats ImportStats
+			var err error
+			var body, detail, legacyDetail string
+			details := 0
+			if legacy {
+				id = "chatgpt:cg-tool"
+				// Seed the row shape written before source identities were archived.
+				_, err = d.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+					Session: db.Session{ID: id, Agent: "chatgpt", Project: "ChatGPT", Machine: "web"},
+					Messages: []db.Message{
+						{SessionID: id, Ordinal: 0, Role: "user", Content: "Question", ContentLength: 8, Timestamp: "2024-02-01T00:00:00Z"},
+						{SessionID: id, Ordinal: 1, Role: "assistant", Content: "Answer", ContentLength: 6, Timestamp: "2024-02-01T00:00:10Z", Model: "old-model"},
+					},
+				}})
+				require.NoError(t, err)
+			} else {
+				legacyDetail = chatGPTSyncDetail(1706745710, false, "Question")
+				detail = strings.ReplaceAll(legacyDetail, `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
+				stats, err = SyncChatGPT(ctx, d, chatGPTSyncFetch(t, "1706745710", legacyDetail, &details), nil)
+				require.NoError(t, err)
+				require.Equal(t, 1, stats.Imported)
+			}
+			before, err := d.GetAllMessages(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, before, 2)
+			preventChatGPTMessageIDReuse(t, d)
+			_, err = d.PinMessage(ctx, id, before[1].ID, new("Saved answer"))
+			require.NoError(t, err)
+			wantModel := "old-model"
+			if legacy {
+				body = chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Question"}, chatGPTNodeSpec{"assistant", "text", "Answer"})
+				body = strings.ReplaceAll(body, `"metadata":{}`, `"metadata":{"model_slug":"gpt-4o"}`)
+			} else {
+				require.Empty(t, before[1].Model)
+				// A ZIP re-import does not fill the missing model; Sync does.
+				modelDir, modelCleanup, err := ExtractZip(createTestZip(t, map[string]string{"conversations.json": "[" + detail + "]"}))
+				require.NoError(t, err)
+				defer modelCleanup()
+				stats, err = ImportChatGPT(ctx, d, modelDir, t.TempDir(), nil)
+				require.NoError(t, err)
+				assert.Equal(t, 1, stats.Skipped)
+				assert.Zero(t, stats.Updated)
+				unfilled, err := d.GetAllMessages(ctx, id)
+				require.NoError(t, err)
+				require.Len(t, unfilled, 2)
+				assert.Empty(t, unfilled[1].Model)
+				assert.Equal(t, before[1].SourceUUID, unfilled[1].SourceUUID)
+				detail = strings.Replace(detail, `"update_time":1706745710`, `"update_time":1706745720`, 1)
+				_, err = SyncChatGPT(ctx, d, chatGPTSyncFetch(t, "1706745720", detail, &details), nil)
+				require.NoError(t, err)
+				synced, err := d.GetAllMessages(ctx, id)
+				require.NoError(t, err)
+				require.Len(t, synced, 2)
+				require.Equal(t, "gpt-4o", synced[1].Model)
+
+				body = "[" + legacyDetail + "]"
+				wantModel = "gpt-4o"
+			}
+			dir, cleanup, err := ExtractZip(createTestZip(t, map[string]string{"conversations.json": body}))
+			require.NoError(t, err)
+			defer cleanup()
+			stats, err = ImportChatGPT(ctx, d, dir, t.TempDir(), nil)
+			require.NoError(t, err)
+			assert.Equal(t, ImportStats{Skipped: 1}, stats)
+			after, err := d.GetAllMessages(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, after, 2)
+			for i := range after {
+				assert.Equal(t, before[i].ID, after[i].ID)
+				if legacy {
+					assert.Empty(t, after[i].SourceUUID)
+					assert.Empty(t, after[i].SourceParentUUID)
+				}
+			}
+			assert.Empty(t, after[0].Model)
+			assert.Equal(t, wantModel, after[1].Model)
+			pins, err := d.ListPinnedMessages(ctx, id, "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, before[1].ID, pins[0].MessageID)
+			assert.Equal(t, new("Saved answer"), pins[0].Note)
+		})
+	}
 }
 
 func TestImportChatGPTReimportRestoresExportImage(t *testing.T) {
@@ -1527,6 +1639,7 @@ func TestImportChatGPTExtendsTruncatedText(t *testing.T) {
 		stats, err := ImportChatGPT(t.Context(), d, dir, assetsDir, nil)
 		require.NoError(t, err)
 		require.Equal(t, 1, stats.Imported)
+		preventChatGPTMessageIDReuse(t, d)
 		return d, dir, path, assetsDir
 	}
 

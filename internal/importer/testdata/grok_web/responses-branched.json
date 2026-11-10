@@ -1,0 +1,4303 @@
+{
+ "responses": [
+  {
+   "responseId": "00000000-0000-4000-8000-00000000000b",
+   "message": "Text 11",
+   "sender": "human",
+   "createTime": "2025-06-01T00:00:36.189Z",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-00000000000c",
+   "message": "Text 13",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:02:47.993Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000000b",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 14",
+     "title": "Text 15",
+     "preview": "Text 16"
+    },
+    {
+     "url": "Text 17",
+     "title": "Text 18",
+     "preview": "Text 19"
+    },
+    {
+     "url": "Text 20",
+     "title": "Text 21",
+     "preview": "Text 22"
+    },
+    {
+     "url": "Text 23",
+     "title": "Text 24",
+     "preview": "Text 25"
+    },
+    {
+     "url": "Text 26",
+     "title": "Text 27",
+     "preview": "Text 28"
+    },
+    {
+     "url": "Text 29",
+     "title": "Text 30",
+     "preview": "Text 31"
+    },
+    {
+     "url": "Text 32",
+     "title": "Text 33",
+     "preview": "Text 34"
+    },
+    {
+     "url": "Text 35",
+     "title": "Text 36",
+     "preview": "Text 37"
+    },
+    {
+     "url": "Text 38",
+     "title": "Text 39",
+     "preview": "Text 40"
+    },
+    {
+     "url": "Text 41",
+     "title": "Text 42",
+     "preview": "Text 43"
+    },
+    {
+     "url": "Text 44",
+     "title": "Text 45",
+     "preview": "Text 46"
+    },
+    {
+     "url": "Text 29",
+     "title": "Text 30",
+     "preview": "Text 31"
+    },
+    {
+     "url": "Text 23",
+     "title": "Text 24",
+     "preview": "Text 47"
+    },
+    {
+     "url": "Text 48",
+     "title": "Text 49",
+     "preview": "Text 50"
+    },
+    {
+     "url": "Text 51",
+     "title": "Text 52",
+     "preview": "Text 53"
+    },
+    {
+     "url": "Text 54",
+     "title": "Text 55",
+     "preview": "Text 56"
+    },
+    {
+     "url": "Text 57",
+     "title": "Text 58",
+     "preview": "Text 59"
+    },
+    {
+     "url": "Text 60",
+     "title": "Text 61",
+     "preview": "Text 62"
+    },
+    {
+     "url": "Text 63",
+     "title": "Text 64",
+     "preview": "Text 65"
+    },
+    {
+     "url": "Text 66",
+     "title": "Text 67",
+     "preview": "Text 68"
+    },
+    {
+     "url": "Text 48",
+     "title": "Text 69",
+     "preview": "Text 70"
+    },
+    {
+     "url": "Text 66",
+     "title": "Text 71",
+     "preview": "Text 72"
+    },
+    {
+     "url": "Text 73",
+     "title": "Text 74",
+     "preview": "Text 75"
+    },
+    {
+     "url": "Text 76",
+     "title": "Text 77",
+     "preview": "Text 78"
+    },
+    {
+     "url": "Text 79",
+     "title": "Text 80",
+     "preview": "Text 81"
+    },
+    {
+     "url": "Text 82",
+     "title": "Text 83",
+     "preview": "Text 84"
+    },
+    {
+     "url": "Text 85",
+     "title": "Text 86",
+     "preview": "Text 87"
+    },
+    {
+     "url": "Text 88",
+     "title": "Text 89",
+     "preview": "Text 90"
+    },
+    {
+     "url": "Text 91",
+     "title": "Text 92",
+     "preview": "Text 93"
+    },
+    {
+     "url": "Text 94",
+     "title": "Text 95",
+     "preview": "Text 96"
+    },
+    {
+     "url": "Text 97",
+     "title": "Text 98",
+     "preview": "Text 99"
+    },
+    {
+     "url": "Text 100",
+     "title": "Text 101",
+     "preview": "Text 102"
+    },
+    {
+     "url": "Text 79",
+     "title": "Text 103",
+     "preview": "Text 104"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 105"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000000d",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 14",
+          "title": "Text 15",
+          "preview": "Text 16"
+         },
+         {
+          "url": "Text 17",
+          "title": "Text 18",
+          "preview": "Text 19"
+         },
+         {
+          "url": "Text 20",
+          "title": "Text 21",
+          "preview": "Text 22"
+         },
+         {
+          "url": "Text 23",
+          "title": "Text 24",
+          "preview": "Text 25"
+         },
+         {
+          "url": "Text 26",
+          "title": "Text 27",
+          "preview": "Text 28"
+         },
+         {
+          "url": "Text 29",
+          "title": "Text 30",
+          "preview": "Text 31"
+         },
+         {
+          "url": "Text 32",
+          "title": "Text 33",
+          "preview": "Text 34"
+         },
+         {
+          "url": "Text 35",
+          "title": "Text 36",
+          "preview": "Text 37"
+         },
+         {
+          "url": "Text 38",
+          "title": "Text 39",
+          "preview": "Text 40"
+         },
+         {
+          "url": "Text 41",
+          "title": "Text 42",
+          "preview": "Text 43"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000000d",
+       "webSearch": {
+        "args": {
+         "query": "Text 107"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 108"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000000e",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 44",
+          "title": "Text 45",
+          "preview": "Text 46"
+         },
+         {
+          "url": "Text 29",
+          "title": "Text 30",
+          "preview": "Text 31"
+         },
+         {
+          "url": "Text 23",
+          "title": "Text 24",
+          "preview": "Text 47"
+         },
+         {
+          "url": "Text 48",
+          "title": "Text 49",
+          "preview": "Text 50"
+         },
+         {
+          "url": "Text 51",
+          "title": "Text 52",
+          "preview": "Text 53"
+         },
+         {
+          "url": "Text 54",
+          "title": "Text 55",
+          "preview": "Text 56"
+         },
+         {
+          "url": "Text 57",
+          "title": "Text 58",
+          "preview": "Text 59"
+         },
+         {
+          "url": "Text 60",
+          "title": "Text 61",
+          "preview": "Text 62"
+         },
+         {
+          "url": "Text 63",
+          "title": "Text 64",
+          "preview": "Text 65"
+         },
+         {
+          "url": "Text 66",
+          "title": "Text 67",
+          "preview": "Text 68"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000000e",
+       "webSearch": {
+        "args": {
+         "query": "Text 109"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 110"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000000f",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 48",
+          "title": "Text 69",
+          "preview": "Text 70"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000000f",
+       "browsePage": {
+        "args": {
+         "url": "Text 48",
+         "instructions": "Text 111"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 112"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000010",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 66",
+          "title": "Text 71",
+          "preview": "Text 72"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000010",
+       "browsePage": {
+        "args": {
+         "url": "Text 66",
+         "instructions": "Text 113"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 114"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000011",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 73",
+          "title": "Text 74",
+          "preview": "Text 75"
+         },
+         {
+          "url": "Text 76",
+          "title": "Text 77",
+          "preview": "Text 78"
+         },
+         {
+          "url": "Text 79",
+          "title": "Text 80",
+          "preview": "Text 81"
+         },
+         {
+          "url": "Text 82",
+          "title": "Text 83",
+          "preview": "Text 84"
+         },
+         {
+          "url": "Text 85",
+          "title": "Text 86",
+          "preview": "Text 87"
+         },
+         {
+          "url": "Text 88",
+          "title": "Text 89",
+          "preview": "Text 90"
+         },
+         {
+          "url": "Text 91",
+          "title": "Text 92",
+          "preview": "Text 93"
+         },
+         {
+          "url": "Text 94",
+          "title": "Text 95",
+          "preview": "Text 96"
+         },
+         {
+          "url": "Text 97",
+          "title": "Text 98",
+          "preview": "Text 99"
+         },
+         {
+          "url": "Text 100",
+          "title": "Text 101",
+          "preview": "Text 102"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000011",
+       "webSearch": {
+        "args": {
+         "query": "Text 115"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 116"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000012",
+       "webSearch": {
+        "args": {
+         "query": "Text 117"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 118"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000013",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 79",
+          "title": "Text 103",
+          "preview": "Text 104"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000013",
+       "browsePage": {
+        "args": {
+         "url": "Text 79",
+         "instructions": "Text 119"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 120"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000014",
+       "webSearch": {
+        "args": {
+         "query": "Text 121"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      ""
+     ],
+     "tags": [
+      "Text 122"
+     ],
+     "webSearchResults": [
+      {
+       "url": "Text 14",
+       "title": "Text 15",
+       "preview": "Text 16"
+      },
+      {
+       "url": "Text 17",
+       "title": "Text 18",
+       "preview": "Text 19"
+      },
+      {
+       "url": "Text 20",
+       "title": "Text 21",
+       "preview": "Text 22"
+      },
+      {
+       "url": "Text 23",
+       "title": "Text 24",
+       "preview": "Text 25"
+      },
+      {
+       "url": "Text 26",
+       "title": "Text 27",
+       "preview": "Text 28"
+      },
+      {
+       "url": "Text 29",
+       "title": "Text 30",
+       "preview": "Text 31"
+      },
+      {
+       "url": "Text 32",
+       "title": "Text 33",
+       "preview": "Text 34"
+      },
+      {
+       "url": "Text 35",
+       "title": "Text 36",
+       "preview": "Text 37"
+      },
+      {
+       "url": "Text 38",
+       "title": "Text 39",
+       "preview": "Text 40"
+      },
+      {
+       "url": "Text 41",
+       "title": "Text 42",
+       "preview": "Text 43"
+      },
+      {
+       "url": "Text 44",
+       "title": "Text 45",
+       "preview": "Text 46"
+      },
+      {
+       "url": "Text 29",
+       "title": "Text 30",
+       "preview": "Text 31"
+      },
+      {
+       "url": "Text 23",
+       "title": "Text 24",
+       "preview": "Text 47"
+      },
+      {
+       "url": "Text 48",
+       "title": "Text 49",
+       "preview": "Text 50"
+      },
+      {
+       "url": "Text 51",
+       "title": "Text 52",
+       "preview": "Text 53"
+      },
+      {
+       "url": "Text 54",
+       "title": "Text 55",
+       "preview": "Text 56"
+      },
+      {
+       "url": "Text 57",
+       "title": "Text 58",
+       "preview": "Text 59"
+      },
+      {
+       "url": "Text 60",
+       "title": "Text 61",
+       "preview": "Text 62"
+      },
+      {
+       "url": "Text 63",
+       "title": "Text 64",
+       "preview": "Text 65"
+      },
+      {
+       "url": "Text 66",
+       "title": "Text 67",
+       "preview": "Text 68"
+      },
+      {
+       "url": "Text 48",
+       "title": "Text 69",
+       "preview": "Text 70"
+      },
+      {
+       "url": "Text 66",
+       "title": "Text 71",
+       "preview": "Text 72"
+      },
+      {
+       "url": "Text 73",
+       "title": "Text 74",
+       "preview": "Text 75"
+      },
+      {
+       "url": "Text 76",
+       "title": "Text 77",
+       "preview": "Text 78"
+      },
+      {
+       "url": "Text 79",
+       "title": "Text 80",
+       "preview": "Text 81"
+      },
+      {
+       "url": "Text 82",
+       "title": "Text 83",
+       "preview": "Text 84"
+      },
+      {
+       "url": "Text 85",
+       "title": "Text 86",
+       "preview": "Text 87"
+      },
+      {
+       "url": "Text 88",
+       "title": "Text 89",
+       "preview": "Text 90"
+      },
+      {
+       "url": "Text 91",
+       "title": "Text 92",
+       "preview": "Text 93"
+      },
+      {
+       "url": "Text 94",
+       "title": "Text 95",
+       "preview": "Text 96"
+      },
+      {
+       "url": "Text 97",
+       "title": "Text 98",
+       "preview": "Text 99"
+      },
+      {
+       "url": "Text 100",
+       "title": "Text 101",
+       "preview": "Text 102"
+      },
+      {
+       "url": "Text 79",
+       "title": "Text 103",
+       "preview": "Text 104"
+      }
+     ],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 126",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:00:47.902Z",
+   "thinkingEndTime": "2025-06-01T00:02:23.337Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000015",
+   "message": "Text 130",
+   "sender": "human",
+   "createTime": "2025-06-01T00:04:43.984Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000000c",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "is_quick_answer": true,
+    "is_think_harder": false,
+    "last_used_model": "Text 12",
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 131"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-3"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-3",
+   "requestMetadata": {
+    "model": "grok-3",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000016",
+   "message": "Text 132",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:05:08.239Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000015",
+   "manual": false,
+   "partial": true,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 133"
+    },
+    "request_metadata": {
+     "effort": "Text 134",
+     "mode": "Text 125",
+     "model": "grok-3"
+    },
+    "request_trace_id": "Text 135",
+    "ui_layout": {
+     "effort": "Text 136",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 136",
+    "rolloutIds": []
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-3",
+   "requestMetadata": {
+    "model": "grok-3",
+    "mode": "Text 129",
+    "effort": "Text 136"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000017",
+   "message": "",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:05:10.751Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000015",
+   "manual": false,
+   "partial": true,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 137"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000018",
+       "webSearch": {
+        "args": {
+         "query": "Text 138"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 139"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000019",
+       "webSearch": {
+        "args": {
+         "query": "Text 140"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 141"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000001a",
+       "browsePage": {
+        "args": {
+         "url": "Text 142",
+         "instructions": "Text 143"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      ""
+     ],
+     "tags": [
+      "Text 122"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 144",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:04:59.133Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-00000000001b",
+   "message": "Text 130",
+   "sender": "human",
+   "createTime": "2025-06-01T00:05:10.770Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000000c",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-4"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-00000000001c",
+   "message": "Text 145",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:08:09.959Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000001b",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 146",
+     "title": "Text 147",
+     "preview": "Text 148"
+    },
+    {
+     "url": "Text 149",
+     "title": "Text 150",
+     "preview": "Text 151"
+    },
+    {
+     "url": "Text 152",
+     "title": "Text 153",
+     "preview": "Text 154"
+    },
+    {
+     "url": "Text 155",
+     "title": "Text 150",
+     "preview": "Text 156"
+    },
+    {
+     "url": "Text 157",
+     "title": "Text 158",
+     "preview": "Text 159"
+    },
+    {
+     "url": "Text 160",
+     "title": "Text 161",
+     "preview": "Text 162"
+    },
+    {
+     "url": "Text 163",
+     "title": "Text 164",
+     "preview": "Text 165"
+    },
+    {
+     "url": "Text 160",
+     "title": "Text 161",
+     "preview": "Text 166"
+    },
+    {
+     "url": "Text 167",
+     "title": "Text 168",
+     "preview": "Text 169"
+    },
+    {
+     "url": "Text 170",
+     "title": "Text 168",
+     "preview": "Text 171"
+    },
+    {
+     "url": "Text 146",
+     "title": "Text 172",
+     "preview": "Text 173"
+    },
+    {
+     "url": "Text 174",
+     "title": "Text 175",
+     "preview": "Text 176"
+    },
+    {
+     "url": "Text 163",
+     "title": "Text 164",
+     "preview": "Text 177"
+    },
+    {
+     "url": "Text 160",
+     "title": "Text 161",
+     "preview": "Text 178"
+    },
+    {
+     "url": "Text 179",
+     "title": "Text 180",
+     "preview": "Text 181"
+    },
+    {
+     "url": "Text 182",
+     "title": "Text 183",
+     "preview": "Text 184"
+    },
+    {
+     "url": "Text 170",
+     "title": "Text 168",
+     "preview": "Text 185"
+    },
+    {
+     "url": "Text 167",
+     "title": "Text 168",
+     "preview": "Text 186"
+    },
+    {
+     "url": "Text 187",
+     "title": "Text 188",
+     "preview": "Text 189"
+    },
+    {
+     "url": "Text 190",
+     "title": "Text 191",
+     "preview": "Text 192"
+    },
+    {
+     "url": "Text 155",
+     "title": "Text 150",
+     "preview": "Text 193"
+    },
+    {
+     "url": "Text 157",
+     "title": "Text 158",
+     "preview": "Text 159"
+    },
+    {
+     "url": "Text 194",
+     "title": "Text 195",
+     "preview": "Text 196"
+    },
+    {
+     "url": "Text 197",
+     "title": "Text 198",
+     "preview": "Text 199"
+    },
+    {
+     "url": "Text 200",
+     "title": "Text 201",
+     "preview": "Text 202"
+    },
+    {
+     "url": "Text 203",
+     "title": "Text 204",
+     "preview": "Text 205"
+    },
+    {
+     "url": "Text 163",
+     "title": "Text 164",
+     "preview": "Text 206"
+    },
+    {
+     "url": "Text 179",
+     "title": "Text 180",
+     "preview": "Text 207"
+    },
+    {
+     "url": "Text 174",
+     "title": "Text 175",
+     "preview": "Text 208"
+    },
+    {
+     "url": "Text 160",
+     "title": "Text 161",
+     "preview": "Text 209"
+    },
+    {
+     "url": "Text 182",
+     "title": "Text 183",
+     "preview": "Text 210"
+    },
+    {
+     "url": "Text 170",
+     "title": "Text 168",
+     "preview": "Text 211"
+    },
+    {
+     "url": "Text 167",
+     "title": "Text 168",
+     "preview": "Text 212"
+    },
+    {
+     "url": "Text 160",
+     "title": "Text 161",
+     "preview": "Text 209"
+    },
+    {
+     "url": "Text 146",
+     "title": "Text 147",
+     "preview": "Text 213"
+    },
+    {
+     "url": "Text 170",
+     "title": "Text 168",
+     "preview": "Text 211"
+    },
+    {
+     "url": "Text 167",
+     "title": "Text 168",
+     "preview": "Text 212"
+    },
+    {
+     "url": "Text 214",
+     "title": "Text 215",
+     "preview": "Text 216"
+    },
+    {
+     "url": "Text 217",
+     "title": "Text 218",
+     "preview": "Text 219"
+    },
+    {
+     "url": "Text 220",
+     "title": "Text 221",
+     "preview": "Text 222"
+    },
+    {
+     "url": "Text 223",
+     "title": "Text 224",
+     "preview": "Text 225"
+    },
+    {
+     "url": "Text 226",
+     "title": "Text 227",
+     "preview": "Text 228"
+    },
+    {
+     "url": "Text 229",
+     "title": "Text 230",
+     "preview": "Text 231"
+    },
+    {
+     "url": "Text 232",
+     "title": "Text 233",
+     "preview": "Text 234"
+    },
+    {
+     "url": "Text 235",
+     "title": "Text 236",
+     "preview": "Text 237"
+    },
+    {
+     "url": "Text 238",
+     "title": "Text 239",
+     "preview": "Text 240"
+    },
+    {
+     "url": "Text 241",
+     "title": "Text 242",
+     "preview": "Text 243"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 244"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000001d",
+       "webSearch": {
+        "args": {
+         "query": "Text 245"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 246"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000001e",
+       "browsePage": {
+        "args": {
+         "url": "Text 247",
+         "instructions": "Text 248"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 249"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000001f",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 146",
+          "title": "Text 147",
+          "preview": "Text 148"
+         },
+         {
+          "url": "Text 149",
+          "title": "Text 150",
+          "preview": "Text 151"
+         },
+         {
+          "url": "Text 152",
+          "title": "Text 153",
+          "preview": "Text 154"
+         },
+         {
+          "url": "Text 155",
+          "title": "Text 150",
+          "preview": "Text 156"
+         },
+         {
+          "url": "Text 157",
+          "title": "Text 158",
+          "preview": "Text 159"
+         },
+         {
+          "url": "Text 160",
+          "title": "Text 161",
+          "preview": "Text 162"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000001f",
+       "webSearch": {
+        "args": {
+         "query": "Text 250"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 251"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000020",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 163",
+          "title": "Text 164",
+          "preview": "Text 165"
+         },
+         {
+          "url": "Text 160",
+          "title": "Text 161",
+          "preview": "Text 166"
+         },
+         {
+          "url": "Text 167",
+          "title": "Text 168",
+          "preview": "Text 169"
+         },
+         {
+          "url": "Text 170",
+          "title": "Text 168",
+          "preview": "Text 171"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000020",
+       "webSearch": {
+        "args": {
+         "query": "Text 252"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 253"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000021",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 146",
+          "title": "Text 172",
+          "preview": "Text 173"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000021",
+       "browsePage": {
+        "args": {
+         "url": "Text 146",
+         "instructions": "Text 254"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 255"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000022",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 174",
+          "title": "Text 175",
+          "preview": "Text 176"
+         },
+         {
+          "url": "Text 163",
+          "title": "Text 164",
+          "preview": "Text 177"
+         },
+         {
+          "url": "Text 160",
+          "title": "Text 161",
+          "preview": "Text 178"
+         },
+         {
+          "url": "Text 179",
+          "title": "Text 180",
+          "preview": "Text 181"
+         },
+         {
+          "url": "Text 182",
+          "title": "Text 183",
+          "preview": "Text 184"
+         },
+         {
+          "url": "Text 170",
+          "title": "Text 168",
+          "preview": "Text 185"
+         },
+         {
+          "url": "Text 167",
+          "title": "Text 168",
+          "preview": "Text 186"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000022",
+       "webSearch": {
+        "args": {
+         "query": "Text 256"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 257"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000023",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 187",
+          "title": "Text 188",
+          "preview": "Text 189"
+         },
+         {
+          "url": "Text 190",
+          "title": "Text 191",
+          "preview": "Text 192"
+         },
+         {
+          "url": "Text 155",
+          "title": "Text 150",
+          "preview": "Text 193"
+         },
+         {
+          "url": "Text 157",
+          "title": "Text 158",
+          "preview": "Text 159"
+         },
+         {
+          "url": "Text 194",
+          "title": "Text 195",
+          "preview": "Text 196"
+         },
+         {
+          "url": "Text 197",
+          "title": "Text 198",
+          "preview": "Text 199"
+         },
+         {
+          "url": "Text 200",
+          "title": "Text 201",
+          "preview": "Text 202"
+         },
+         {
+          "url": "Text 203",
+          "title": "Text 204",
+          "preview": "Text 205"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000023",
+       "webSearch": {
+        "args": {
+         "query": "Text 258"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 259"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000024",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 163",
+          "title": "Text 164",
+          "preview": "Text 206"
+         },
+         {
+          "url": "Text 179",
+          "title": "Text 180",
+          "preview": "Text 207"
+         },
+         {
+          "url": "Text 174",
+          "title": "Text 175",
+          "preview": "Text 208"
+         },
+         {
+          "url": "Text 160",
+          "title": "Text 161",
+          "preview": "Text 209"
+         },
+         {
+          "url": "Text 182",
+          "title": "Text 183",
+          "preview": "Text 210"
+         },
+         {
+          "url": "Text 170",
+          "title": "Text 168",
+          "preview": "Text 211"
+         },
+         {
+          "url": "Text 167",
+          "title": "Text 168",
+          "preview": "Text 212"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000024",
+       "webSearch": {
+        "args": {
+         "query": "Text 260"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 261"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000025",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 160",
+          "title": "Text 161",
+          "preview": "Text 209"
+         },
+         {
+          "url": "Text 146",
+          "title": "Text 147",
+          "preview": "Text 213"
+         },
+         {
+          "url": "Text 170",
+          "title": "Text 168",
+          "preview": "Text 211"
+         },
+         {
+          "url": "Text 167",
+          "title": "Text 168",
+          "preview": "Text 212"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000025",
+       "webSearch": {
+        "args": {
+         "query": "Text 262"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 263"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000026",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 214",
+          "title": "Text 215",
+          "preview": "Text 216"
+         },
+         {
+          "url": "Text 217",
+          "title": "Text 218",
+          "preview": "Text 219"
+         },
+         {
+          "url": "Text 220",
+          "title": "Text 221",
+          "preview": "Text 222"
+         },
+         {
+          "url": "Text 223",
+          "title": "Text 224",
+          "preview": "Text 225"
+         },
+         {
+          "url": "Text 226",
+          "title": "Text 227",
+          "preview": "Text 228"
+         },
+         {
+          "url": "Text 229",
+          "title": "Text 230",
+          "preview": "Text 231"
+         },
+         {
+          "url": "Text 232",
+          "title": "Text 233",
+          "preview": "Text 234"
+         },
+         {
+          "url": "Text 235",
+          "title": "Text 236",
+          "preview": "Text 237"
+         },
+         {
+          "url": "Text 238",
+          "title": "Text 239",
+          "preview": "Text 240"
+         },
+         {
+          "url": "Text 241",
+          "title": "Text 242",
+          "preview": "Text 243"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000026",
+       "webSearch": {
+        "args": {
+         "query": "Text 264"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      ""
+     ],
+     "tags": [
+      "Text 122"
+     ],
+     "webSearchResults": [
+      {
+       "url": "Text 146",
+       "title": "Text 147",
+       "preview": "Text 148"
+      },
+      {
+       "url": "Text 149",
+       "title": "Text 150",
+       "preview": "Text 151"
+      },
+      {
+       "url": "Text 152",
+       "title": "Text 153",
+       "preview": "Text 154"
+      },
+      {
+       "url": "Text 155",
+       "title": "Text 150",
+       "preview": "Text 156"
+      },
+      {
+       "url": "Text 157",
+       "title": "Text 158",
+       "preview": "Text 159"
+      },
+      {
+       "url": "Text 160",
+       "title": "Text 161",
+       "preview": "Text 162"
+      },
+      {
+       "url": "Text 163",
+       "title": "Text 164",
+       "preview": "Text 165"
+      },
+      {
+       "url": "Text 160",
+       "title": "Text 161",
+       "preview": "Text 166"
+      },
+      {
+       "url": "Text 167",
+       "title": "Text 168",
+       "preview": "Text 169"
+      },
+      {
+       "url": "Text 170",
+       "title": "Text 168",
+       "preview": "Text 171"
+      },
+      {
+       "url": "Text 146",
+       "title": "Text 172",
+       "preview": "Text 173"
+      },
+      {
+       "url": "Text 174",
+       "title": "Text 175",
+       "preview": "Text 176"
+      },
+      {
+       "url": "Text 163",
+       "title": "Text 164",
+       "preview": "Text 177"
+      },
+      {
+       "url": "Text 160",
+       "title": "Text 161",
+       "preview": "Text 178"
+      },
+      {
+       "url": "Text 179",
+       "title": "Text 180",
+       "preview": "Text 181"
+      },
+      {
+       "url": "Text 182",
+       "title": "Text 183",
+       "preview": "Text 184"
+      },
+      {
+       "url": "Text 170",
+       "title": "Text 168",
+       "preview": "Text 185"
+      },
+      {
+       "url": "Text 167",
+       "title": "Text 168",
+       "preview": "Text 186"
+      },
+      {
+       "url": "Text 187",
+       "title": "Text 188",
+       "preview": "Text 189"
+      },
+      {
+       "url": "Text 190",
+       "title": "Text 191",
+       "preview": "Text 192"
+      },
+      {
+       "url": "Text 155",
+       "title": "Text 150",
+       "preview": "Text 193"
+      },
+      {
+       "url": "Text 157",
+       "title": "Text 158",
+       "preview": "Text 159"
+      },
+      {
+       "url": "Text 194",
+       "title": "Text 195",
+       "preview": "Text 196"
+      },
+      {
+       "url": "Text 197",
+       "title": "Text 198",
+       "preview": "Text 199"
+      },
+      {
+       "url": "Text 200",
+       "title": "Text 201",
+       "preview": "Text 202"
+      },
+      {
+       "url": "Text 203",
+       "title": "Text 204",
+       "preview": "Text 205"
+      },
+      {
+       "url": "Text 163",
+       "title": "Text 164",
+       "preview": "Text 206"
+      },
+      {
+       "url": "Text 179",
+       "title": "Text 180",
+       "preview": "Text 207"
+      },
+      {
+       "url": "Text 174",
+       "title": "Text 175",
+       "preview": "Text 208"
+      },
+      {
+       "url": "Text 160",
+       "title": "Text 161",
+       "preview": "Text 209"
+      },
+      {
+       "url": "Text 182",
+       "title": "Text 183",
+       "preview": "Text 210"
+      },
+      {
+       "url": "Text 170",
+       "title": "Text 168",
+       "preview": "Text 211"
+      },
+      {
+       "url": "Text 167",
+       "title": "Text 168",
+       "preview": "Text 212"
+      },
+      {
+       "url": "Text 160",
+       "title": "Text 161",
+       "preview": "Text 209"
+      },
+      {
+       "url": "Text 146",
+       "title": "Text 147",
+       "preview": "Text 213"
+      },
+      {
+       "url": "Text 170",
+       "title": "Text 168",
+       "preview": "Text 211"
+      },
+      {
+       "url": "Text 167",
+       "title": "Text 168",
+       "preview": "Text 212"
+      },
+      {
+       "url": "Text 214",
+       "title": "Text 215",
+       "preview": "Text 216"
+      },
+      {
+       "url": "Text 217",
+       "title": "Text 218",
+       "preview": "Text 219"
+      },
+      {
+       "url": "Text 220",
+       "title": "Text 221",
+       "preview": "Text 222"
+      },
+      {
+       "url": "Text 223",
+       "title": "Text 224",
+       "preview": "Text 225"
+      },
+      {
+       "url": "Text 226",
+       "title": "Text 227",
+       "preview": "Text 228"
+      },
+      {
+       "url": "Text 229",
+       "title": "Text 230",
+       "preview": "Text 231"
+      },
+      {
+       "url": "Text 232",
+       "title": "Text 233",
+       "preview": "Text 234"
+      },
+      {
+       "url": "Text 235",
+       "title": "Text 236",
+       "preview": "Text 237"
+      },
+      {
+       "url": "Text 238",
+       "title": "Text 239",
+       "preview": "Text 240"
+      },
+      {
+       "url": "Text 241",
+       "title": "Text 242",
+       "preview": "Text 243"
+      }
+     ],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 265",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:05:23.911Z",
+   "thinkingEndTime": "2025-06-01T00:07:41.020Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000027",
+   "message": "Text 266",
+   "sender": "human",
+   "createTime": "2025-06-01T00:09:46.605Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000001c",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-4"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000028",
+   "message": "Text 267",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:11:26.778Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000027",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 44",
+     "title": "Text 45",
+     "preview": "Text 268"
+    },
+    {
+     "url": "Text 23",
+     "title": "Text 24",
+     "preview": "Text 47"
+    },
+    {
+     "url": "Text 38",
+     "title": "Text 39",
+     "preview": "Text 269"
+    },
+    {
+     "url": "Text 29",
+     "title": "Text 30",
+     "preview": "Text 31"
+    },
+    {
+     "url": "Text 270",
+     "title": "Text 271",
+     "preview": "Text 272"
+    },
+    {
+     "url": "Text 63",
+     "title": "Text 64",
+     "preview": "Text 273"
+    },
+    {
+     "url": "Text 274",
+     "title": "Text 275",
+     "preview": "Text 276"
+    },
+    {
+     "url": "Text 277",
+     "title": "Text 278",
+     "preview": "Text 279"
+    },
+    {
+     "url": "Text 79",
+     "title": "Text 280",
+     "preview": "Text 281"
+    },
+    {
+     "url": "Text 282",
+     "title": "Text 283",
+     "preview": "Text 284"
+    },
+    {
+     "url": "Text 277",
+     "title": "Text 285",
+     "preview": "Text 286"
+    },
+    {
+     "url": "Text 23",
+     "title": "Text 287",
+     "preview": "Text 288"
+    },
+    {
+     "url": "Text 76",
+     "title": "Text 77",
+     "preview": "Text 78"
+    },
+    {
+     "url": "Text 73",
+     "title": "Text 74",
+     "preview": "Text 75"
+    },
+    {
+     "url": "Text 289",
+     "title": "Text 290",
+     "preview": "Text 291"
+    },
+    {
+     "url": "Text 85",
+     "title": "Text 86",
+     "preview": "Text 292"
+    },
+    {
+     "url": "Text 88",
+     "title": "Text 89",
+     "preview": "Text 293"
+    },
+    {
+     "url": "Text 294",
+     "title": "Text 295",
+     "preview": "Text 296"
+    },
+    {
+     "url": "Text 297",
+     "title": "Text 298",
+     "preview": ""
+    },
+    {
+     "url": "Text 299",
+     "title": "Text 300",
+     "preview": "Text 301"
+    },
+    {
+     "url": "Text 82",
+     "title": "Text 83",
+     "preview": ""
+    },
+    {
+     "url": "Text 302",
+     "title": "Text 303",
+     "preview": "Text 304"
+    },
+    {
+     "url": "Text 305",
+     "title": "Text 306",
+     "preview": "Text 307"
+    },
+    {
+     "url": "Text 308",
+     "title": "Text 309",
+     "preview": "Text 310"
+    },
+    {
+     "url": "Text 311",
+     "title": "Text 312",
+     "preview": "Text 313"
+    },
+    {
+     "url": "Text 314",
+     "title": "Text 315",
+     "preview": "Text 316"
+    },
+    {
+     "url": "Text 317",
+     "title": "Text 287",
+     "preview": "Text 318"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 319"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000029",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 44",
+          "title": "Text 45",
+          "preview": "Text 268"
+         },
+         {
+          "url": "Text 23",
+          "title": "Text 24",
+          "preview": "Text 47"
+         },
+         {
+          "url": "Text 38",
+          "title": "Text 39",
+          "preview": "Text 269"
+         },
+         {
+          "url": "Text 29",
+          "title": "Text 30",
+          "preview": "Text 31"
+         },
+         {
+          "url": "Text 270",
+          "title": "Text 271",
+          "preview": "Text 272"
+         },
+         {
+          "url": "Text 63",
+          "title": "Text 64",
+          "preview": "Text 273"
+         },
+         {
+          "url": "Text 274",
+          "title": "Text 275",
+          "preview": "Text 276"
+         },
+         {
+          "url": "Text 277",
+          "title": "Text 278",
+          "preview": "Text 279"
+         },
+         {
+          "url": "Text 79",
+          "title": "Text 280",
+          "preview": "Text 281"
+         },
+         {
+          "url": "Text 282",
+          "title": "Text 283",
+          "preview": "Text 284"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000029",
+       "webSearch": {
+        "args": {
+         "query": "Text 320"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 321"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002a",
+       "browsePage": {
+        "args": {
+         "url": "Text 322",
+         "instructions": "Text 323"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 324"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002b",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 277",
+          "title": "Text 285",
+          "preview": "Text 286"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002b",
+       "browsePage": {
+        "args": {
+         "url": "Text 277",
+         "instructions": "Text 325"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 326"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002c",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 23",
+          "title": "Text 287",
+          "preview": "Text 288"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002c",
+       "browsePage": {
+        "args": {
+         "url": "Text 23",
+         "instructions": "Text 327"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 328"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002d",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 76",
+          "title": "Text 77",
+          "preview": "Text 78"
+         },
+         {
+          "url": "Text 73",
+          "title": "Text 74",
+          "preview": "Text 75"
+         },
+         {
+          "url": "Text 289",
+          "title": "Text 290",
+          "preview": "Text 291"
+         },
+         {
+          "url": "Text 85",
+          "title": "Text 86",
+          "preview": "Text 292"
+         },
+         {
+          "url": "Text 88",
+          "title": "Text 89",
+          "preview": "Text 293"
+         },
+         {
+          "url": "Text 294",
+          "title": "Text 295",
+          "preview": "Text 296"
+         },
+         {
+          "url": "Text 297",
+          "title": "Text 298",
+          "preview": ""
+         },
+         {
+          "url": "Text 299",
+          "title": "Text 300",
+          "preview": "Text 301"
+         },
+         {
+          "url": "Text 82",
+          "title": "Text 83",
+          "preview": ""
+         },
+         {
+          "url": "Text 302",
+          "title": "Text 303",
+          "preview": "Text 304"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002d",
+       "webSearch": {
+        "args": {
+         "query": "Text 329"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 330"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002e",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 305",
+          "title": "Text 306",
+          "preview": "Text 307"
+         },
+         {
+          "url": "Text 308",
+          "title": "Text 309",
+          "preview": "Text 310"
+         },
+         {
+          "url": "Text 311",
+          "title": "Text 312",
+          "preview": "Text 313"
+         },
+         {
+          "url": "Text 314",
+          "title": "Text 315",
+          "preview": "Text 316"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002e",
+       "webSearch": {
+        "args": {
+         "query": "Text 331"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 332"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002f",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 317",
+          "title": "Text 287",
+          "preview": "Text 318"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000002f",
+       "browsePage": {
+        "args": {
+         "url": "Text 333",
+         "instructions": "Text 334"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      ""
+     ],
+     "tags": [
+      "Text 122"
+     ],
+     "webSearchResults": [
+      {
+       "url": "Text 44",
+       "title": "Text 45",
+       "preview": "Text 268"
+      },
+      {
+       "url": "Text 23",
+       "title": "Text 24",
+       "preview": "Text 47"
+      },
+      {
+       "url": "Text 38",
+       "title": "Text 39",
+       "preview": "Text 269"
+      },
+      {
+       "url": "Text 29",
+       "title": "Text 30",
+       "preview": "Text 31"
+      },
+      {
+       "url": "Text 270",
+       "title": "Text 271",
+       "preview": "Text 272"
+      },
+      {
+       "url": "Text 63",
+       "title": "Text 64",
+       "preview": "Text 273"
+      },
+      {
+       "url": "Text 274",
+       "title": "Text 275",
+       "preview": "Text 276"
+      },
+      {
+       "url": "Text 277",
+       "title": "Text 278",
+       "preview": "Text 279"
+      },
+      {
+       "url": "Text 79",
+       "title": "Text 280",
+       "preview": "Text 281"
+      },
+      {
+       "url": "Text 282",
+       "title": "Text 283",
+       "preview": "Text 284"
+      },
+      {
+       "url": "Text 277",
+       "title": "Text 285",
+       "preview": "Text 286"
+      },
+      {
+       "url": "Text 23",
+       "title": "Text 287",
+       "preview": "Text 288"
+      },
+      {
+       "url": "Text 76",
+       "title": "Text 77",
+       "preview": "Text 78"
+      },
+      {
+       "url": "Text 73",
+       "title": "Text 74",
+       "preview": "Text 75"
+      },
+      {
+       "url": "Text 289",
+       "title": "Text 290",
+       "preview": "Text 291"
+      },
+      {
+       "url": "Text 85",
+       "title": "Text 86",
+       "preview": "Text 292"
+      },
+      {
+       "url": "Text 88",
+       "title": "Text 89",
+       "preview": "Text 293"
+      },
+      {
+       "url": "Text 294",
+       "title": "Text 295",
+       "preview": "Text 296"
+      },
+      {
+       "url": "Text 297",
+       "title": "Text 298",
+       "preview": ""
+      },
+      {
+       "url": "Text 299",
+       "title": "Text 300",
+       "preview": "Text 301"
+      },
+      {
+       "url": "Text 82",
+       "title": "Text 83",
+       "preview": ""
+      },
+      {
+       "url": "Text 302",
+       "title": "Text 303",
+       "preview": "Text 304"
+      },
+      {
+       "url": "Text 305",
+       "title": "Text 306",
+       "preview": "Text 307"
+      },
+      {
+       "url": "Text 308",
+       "title": "Text 309",
+       "preview": "Text 310"
+      },
+      {
+       "url": "Text 311",
+       "title": "Text 312",
+       "preview": "Text 313"
+      },
+      {
+       "url": "Text 314",
+       "title": "Text 315",
+       "preview": "Text 316"
+      },
+      {
+       "url": "Text 317",
+       "title": "Text 287",
+       "preview": "Text 318"
+      }
+     ],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 335",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:10:02.351Z",
+   "thinkingEndTime": "2025-06-01T00:11:06.058Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000030",
+   "message": "Text 336",
+   "sender": "human",
+   "createTime": "2025-06-01T00:14:40.666Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000028",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-4"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000031",
+   "message": "Text 337",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:15:08.039Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000030",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 338",
+     "title": "Text 339",
+     "preview": "Text 340"
+    },
+    {
+     "url": "Text 341",
+     "title": "Text 342",
+     "preview": "Text 343"
+    },
+    {
+     "url": "Text 344",
+     "title": "Text 345",
+     "preview": "Text 346"
+    },
+    {
+     "url": "Text 347",
+     "title": "Text 348",
+     "preview": "Text 349"
+    },
+    {
+     "url": "Text 66",
+     "title": "Text 67",
+     "preview": "Text 68"
+    },
+    {
+     "url": "Text 350",
+     "title": "Text 351",
+     "preview": "Text 352"
+    },
+    {
+     "url": "Text 353",
+     "title": "Text 354",
+     "preview": "Text 355"
+    },
+    {
+     "url": "Text 60",
+     "title": "Text 61",
+     "preview": "Text 356"
+    },
+    {
+     "url": "Text 357",
+     "title": "Text 358",
+     "preview": "Text 359"
+    },
+    {
+     "url": "Text 360",
+     "title": "Text 361",
+     "preview": "Text 362"
+    },
+    {
+     "url": "Text 44",
+     "title": "Text 45",
+     "preview": "Text 363"
+    },
+    {
+     "url": "Text 364",
+     "title": "Text 365",
+     "preview": "Text 366"
+    },
+    {
+     "url": "Text 367",
+     "title": "Text 368",
+     "preview": "Text 369"
+    },
+    {
+     "url": "Text 370",
+     "title": "Text 371",
+     "preview": "Text 372"
+    },
+    {
+     "url": "Text 373",
+     "title": "Text 374",
+     "preview": "Text 375"
+    },
+    {
+     "url": "Text 376",
+     "title": "Text 377",
+     "preview": "Text 378"
+    },
+    {
+     "url": "Text 379",
+     "title": "Text 380",
+     "preview": "Text 381"
+    },
+    {
+     "url": "Text 382",
+     "title": "Text 383",
+     "preview": "Text 384"
+    },
+    {
+     "url": "Text 385",
+     "title": "Text 386",
+     "preview": "Text 387"
+    },
+    {
+     "url": "Text 388",
+     "title": "Text 389",
+     "preview": "Text 390"
+    },
+    {
+     "url": "Text 391",
+     "title": "Text 392",
+     "preview": "Text 393"
+    },
+    {
+     "url": "Text 394",
+     "title": "Text 395",
+     "preview": "Text 396"
+    },
+    {
+     "url": "Text 397",
+     "title": "Text 398",
+     "preview": "Text 399"
+    },
+    {
+     "url": "Text 400",
+     "title": "Text 401",
+     "preview": "Text 402"
+    },
+    {
+     "url": "Text 403",
+     "title": "Text 404",
+     "preview": "Text 405"
+    },
+    {
+     "url": "Text 406",
+     "title": "Text 407",
+     "preview": "Text 408"
+    },
+    {
+     "url": "Text 409",
+     "title": "Text 410",
+     "preview": "Text 411"
+    },
+    {
+     "url": "Text 412",
+     "title": "Text 413",
+     "preview": "Text 414"
+    },
+    {
+     "url": "Text 415",
+     "title": "Text 416",
+     "preview": "Text 417"
+    },
+    {
+     "url": "Text 418",
+     "title": "Text 419",
+     "preview": "Text 420"
+    },
+    {
+     "url": "Text 421",
+     "title": "Text 422",
+     "preview": "Text 402"
+    },
+    {
+     "url": "Text 423",
+     "title": "Text 424",
+     "preview": "Text 425"
+    },
+    {
+     "url": "Text 426",
+     "title": "Text 427",
+     "preview": "Text 428"
+    },
+    {
+     "url": "Text 341",
+     "title": "Text 429",
+     "preview": "Text 430"
+    },
+    {
+     "url": "Text 431",
+     "title": "Text 432",
+     "preview": "Text 433"
+    },
+    {
+     "url": "Text 338",
+     "title": "Text 339",
+     "preview": "Text 434"
+    },
+    {
+     "url": "Text 338",
+     "title": "Text 435",
+     "preview": "Text 436"
+    },
+    {
+     "url": "Text 341",
+     "title": "Text 437",
+     "preview": "Text 438"
+    },
+    {
+     "url": "Text 423",
+     "title": "Text 424",
+     "preview": "Text 425"
+    },
+    {
+     "url": "Text 439",
+     "title": "Text 440",
+     "preview": "Text 441"
+    },
+    {
+     "url": "Text 442",
+     "title": "Text 443",
+     "preview": "Text 444"
+    },
+    {
+     "url": "Text 445",
+     "title": "Text 446",
+     "preview": "Text 447"
+    },
+    {
+     "url": "Text 448",
+     "title": "Text 449",
+     "preview": "Text 450"
+    },
+    {
+     "url": "Text 423",
+     "title": "Text 451",
+     "preview": "Text 452"
+    },
+    {
+     "url": "Text 453",
+     "title": "Text 454",
+     "preview": "Text 455"
+    },
+    {
+     "url": "Text 44",
+     "title": "Text 45",
+     "preview": "Text 363"
+    },
+    {
+     "url": "Text 456",
+     "title": "Text 457",
+     "preview": "Text 458"
+    },
+    {
+     "url": "Text 459",
+     "title": "Text 460",
+     "preview": "Text 461"
+    },
+    {
+     "url": "Text 462",
+     "title": "Text 463",
+     "preview": "Text 399"
+    },
+    {
+     "url": "Text 464",
+     "title": "Text 465",
+     "preview": "Text 466"
+    },
+    {
+     "url": "Text 357",
+     "title": "Text 358",
+     "preview": "Text 467"
+    },
+    {
+     "url": "Text 468",
+     "title": "Text 469",
+     "preview": "Text 470"
+    },
+    {
+     "url": "Text 471",
+     "title": "Text 472",
+     "preview": "Text 473"
+    },
+    {
+     "url": "Text 474",
+     "title": "Text 475",
+     "preview": "Text 476"
+    },
+    {
+     "url": "Text 431",
+     "title": "Text 477",
+     "preview": "Text 478"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 479"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 480",
+    "side_by_side_config": {
+     "enablePreferButtonTrigger": "Text 481",
+     "hideThinkingTrace": true,
+     "singleThinkingDifferentSummary": {
+      "kind": "KIND_SINGLE_THINKING_DIFFERENT_SUMMARY"
+     },
+     "streamFinalAnswersTogether": true,
+     "useLengthControlContainer": true
+    }
+   },
+   "thinkingStartTime": "2025-06-01T00:14:45.214Z",
+   "thinkingEndTime": "2025-06-01T00:15:02.907Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "sideBySideConfig": {
+    "singleThinkingDifferentSummary": {
+     "kind": "KIND_SINGLE_THINKING_DIFFERENT_SUMMARY"
+    },
+    "enablePreferButtonTrigger": "Text 481",
+    "streamFinalAnswersTogether": true,
+    "hideThinkingTrace": true,
+    "useLengthControlContainer": true
+   },
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000032",
+   "message": "Text 482",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:15:08.058Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000030",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 431",
+     "title": "Text 432",
+     "preview": "Text 483"
+    },
+    {
+     "url": "Text 350",
+     "title": "Text 351",
+     "preview": "Text 484"
+    },
+    {
+     "url": "Text 485",
+     "title": "Text 486",
+     "preview": "Text 487"
+    },
+    {
+     "url": "Text 488",
+     "title": "Text 489",
+     "preview": "Text 490"
+    },
+    {
+     "url": "Text 491",
+     "title": "Text 492",
+     "preview": "Text 493"
+    },
+    {
+     "url": "Text 338",
+     "title": "Text 339",
+     "preview": "Text 494"
+    },
+    {
+     "url": "Text 341",
+     "title": "Text 342",
+     "preview": "Text 430"
+    },
+    {
+     "url": "Text 495",
+     "title": "Text 496",
+     "preview": "Text 497"
+    },
+    {
+     "url": "Text 498",
+     "title": "Text 499",
+     "preview": "Text 500"
+    },
+    {
+     "url": "Text 379",
+     "title": "Text 380",
+     "preview": "Text 381"
+    },
+    {
+     "url": "Text 364",
+     "title": "Text 365",
+     "preview": "Text 366"
+    },
+    {
+     "url": "Text 501",
+     "title": "Text 502",
+     "preview": "Text 503"
+    },
+    {
+     "url": "Text 504",
+     "title": "Text 505",
+     "preview": "Text 506"
+    },
+    {
+     "url": "Text 507",
+     "title": "Text 508",
+     "preview": "Text 509"
+    },
+    {
+     "url": "Text 373",
+     "title": "Text 374",
+     "preview": "Text 375"
+    },
+    {
+     "url": "Text 391",
+     "title": "Text 392",
+     "preview": "Text 393"
+    },
+    {
+     "url": "Text 510",
+     "title": "Text 511",
+     "preview": "Text 512"
+    },
+    {
+     "url": "Text 370",
+     "title": "Text 371",
+     "preview": "Text 372"
+    },
+    {
+     "url": "Text 513",
+     "title": "Text 514",
+     "preview": "Text 515"
+    },
+    {
+     "url": "Text 270",
+     "title": "Text 271",
+     "preview": "Text 516"
+    },
+    {
+     "url": "Text 23",
+     "title": "Text 24",
+     "preview": "Text 517"
+    },
+    {
+     "url": "Text 423",
+     "title": "Text 424",
+     "preview": "Text 425"
+    },
+    {
+     "url": "Text 426",
+     "title": "Text 427",
+     "preview": "Text 428"
+    },
+    {
+     "url": "Text 341",
+     "title": "Text 429",
+     "preview": "Text 430"
+    },
+    {
+     "url": "Text 431",
+     "title": "Text 432",
+     "preview": "Text 433"
+    },
+    {
+     "url": "Text 338",
+     "title": "Text 339",
+     "preview": "Text 434"
+    },
+    {
+     "url": "Text 431",
+     "title": "Text 477",
+     "preview": "Text 478"
+    },
+    {
+     "url": "Text 338",
+     "title": "Text 435",
+     "preview": "Text 436"
+    },
+    {
+     "url": "Text 341",
+     "title": "Text 437",
+     "preview": "Text 438"
+    },
+    {
+     "url": "Text 423",
+     "title": "Text 451",
+     "preview": "Text 452"
+    },
+    {
+     "url": "Text 518",
+     "title": "Text 519",
+     "preview": "Text 520"
+    },
+    {
+     "url": "Text 521",
+     "title": "Text 522",
+     "preview": "Text 523"
+    },
+    {
+     "url": "Text 524",
+     "title": "Text 525",
+     "preview": "Text 526"
+    },
+    {
+     "url": "Text 527",
+     "title": "Text 528",
+     "preview": "Text 529"
+    },
+    {
+     "url": "Text 530",
+     "title": "Text 531",
+     "preview": "Text 532"
+    },
+    {
+     "url": "Text 431",
+     "title": "Text 432",
+     "preview": "Text 433"
+    },
+    {
+     "url": "Text 431",
+     "title": "Text 432",
+     "preview": "Text 483"
+    },
+    {
+     "url": "Text 23",
+     "title": "Text 24",
+     "preview": "Text 47"
+    },
+    {
+     "url": "Text 29",
+     "title": "Text 30",
+     "preview": "Text 31"
+    },
+    {
+     "url": "Text 270",
+     "title": "Text 271",
+     "preview": "Text 533"
+    },
+    {
+     "url": "Text 534",
+     "title": "Text 535",
+     "preview": "Text 536"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 479"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 480"
+   },
+   "thinkingStartTime": "2025-06-01T00:14:45.109Z",
+   "thinkingEndTime": "2025-06-01T00:15:01.923Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000033",
+   "message": "Text 537",
+   "sender": "human",
+   "createTime": "2025-06-01T00:18:56.465Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000032",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-4"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000034",
+   "message": "Text 538",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:20:03.036Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000033",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 539",
+     "title": "Text 540",
+     "preview": "Text 541"
+    },
+    {
+     "url": "Text 542",
+     "title": "Text 540",
+     "preview": "Text 543"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 544"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000035",
+       "mcp": {
+        "toolName": "Text 545",
+        "toolArgsJson": "Text 546"
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 547"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000036",
+       "browsePage": {
+        "args": {
+         "url": "Text 548",
+         "instructions": "Text 549"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 550"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000037",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 539",
+          "title": "Text 540",
+          "preview": "Text 541"
+         },
+         {
+          "url": "Text 542",
+          "title": "Text 540",
+          "preview": "Text 543"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000037",
+       "webSearch": {
+        "args": {
+         "query": "Text 551"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 552"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000038",
+       "browsePage": {
+        "args": {
+         "url": "Text 553",
+         "instructions": "Text 554"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      ""
+     ],
+     "tags": [
+      "Text 122"
+     ],
+     "webSearchResults": [
+      {
+       "url": "Text 539",
+       "title": "Text 540",
+       "preview": "Text 541"
+      },
+      {
+       "url": "Text 542",
+       "title": "Text 540",
+       "preview": "Text 543"
+      }
+     ],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 555",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:19:16.007Z",
+   "thinkingEndTime": "2025-06-01T00:19:55.991Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000039",
+   "message": "Text 556",
+   "sender": "human",
+   "createTime": "2025-06-01T00:26:23.543Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000034",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-4"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-00000000003a",
+   "message": "Text 557",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:27:08.501Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000039",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 558"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000003b",
+       "webSearch": {
+        "args": {
+         "query": "Text 559"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      "Text 560"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000003c",
+       "browsePage": {
+        "args": {
+         "url": "Text 561",
+         "instructions": "Text 562"
+        }
+       }
+      }
+     ]
+    },
+    {
+     "text": [
+      ""
+     ],
+     "tags": [
+      "Text 122"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": []
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 563",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:26:39.679Z",
+   "thinkingEndTime": "2025-06-01T00:27:03.273Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  }
+ ],
+ "inflightResponses": []
+}
