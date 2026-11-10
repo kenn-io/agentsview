@@ -584,7 +584,7 @@ price_as = "gpt-6-sol"
 
 A bare key also matches a provider-prefixed name; a key containing `/` matches
 only that exact name. An exact custom rate takes precedence. Each entry selects
-its target once, then uses the target's built-in pricing ladder.
+its target once, then uses the target's pricing ladder, including any custom rate.
 Unknown targets remain unpriced. Empty rate tables set all rates to zero.
 Restart after changing mappings, and use the same configuration on machines
 that share a mirror.
