@@ -649,6 +649,20 @@ with the current time, so their rows are never kept. Kept reads include usage
 rows, analytics session listings, Activity pairing inputs per session version,
 candidate listings, project label maps, and the whole report of an ended range.
 
+**Usage of a range in progress.** An Activity report over a range that has not
+ended keeps every session's prepared usage rows in the range, plus the usage
+survivors derived from them. Survivors are kept per dedup token: a Claude
+message and request pair, a source UUID, or a usage key. Each candidate session
+keeps its survivors summed per model and bucket window. A push re-reads only the
+sessions it changed. The report then re-derives only the tokens those sessions'
+rows carry, and only the sums of the sessions that share those tokens. A session
+entering or leaving the candidate set counts as changed, and so does a session
+with a row that the moving effective end passes. A new pricing digest or bucket
+size re-prices and re-sums every survivor, but keeps the token selection. A
+range of 1.5 million rows keeps about 250 MiB. A refresh after a push of a few
+sessions derives its usage in tens of milliseconds, against more than a second
+for a selection over every kept row.
+
 Ungrouped Top sessions are the exception. Each request reloads display metadata
 for its ranked winners. Grouped Top sessions keep member metadata with their
 totals.

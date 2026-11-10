@@ -71,6 +71,13 @@ type activityReportBackend struct {
 	pairing       *activityReportPairing
 }
 
+// ActivityReportSecondRead lets usage run beside the sweep. Pairing already
+// reads in its own goroutine and the sweep reads nothing, so overlapping them
+// takes no connection that the serial order would not.
+func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
+	return func() {}, true
+}
+
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
@@ -657,72 +664,86 @@ func (s *Store) activityReportUsage(
 	lowerBound, upperBound string,
 	q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	out := []activity.UsageRow{}
-	rateResolver, err := s.loadPricingResolver(ctx)
+	snapshot, err := s.pricingSnapshot(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading clickhouse pricing: %w", err)
 	}
-	if len(ids) == 0 {
-		block, err := rateResolver.BuildBlock()
-		if err != nil {
-			return nil, nil, fmt.Errorf("building pricing block: %w", err)
-		}
-		return out, &block, nil
-	}
-
-	state, err := s.preparedUsageState(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	// Rows are visited in report order: time, then session, then ordinal.
-	var ordered iter.Seq[*clickActivityReportUsageRow]
-	var count int
-	if state.ready && q.Partial {
-		// Every push changes a range in progress, so its rows are kept for
-		// every session and a push re-reads only the sessions it changed.
-		kept, err := s.activityUsageRange(ctx, state, lowerBound, upperBound)
-		if err != nil {
+	rateResolver := export.NewPricingResolverWithDigest(snapshot.rows, snapshot.digest)
+	out := []activity.UsageRow{}
+	if len(ids) > 0 {
+		if out, err = s.selectActivityReportUsage(ctx, candidates, ids, lowerBound, upperBound, q, rateResolver, snapshot.digest); err != nil {
 			return nil, nil, err
 		}
-		ordered, count = activityUsageSelection(kept, ids)
-	} else {
-		// Raw rows depend on the usage source, the candidate set, and the
-		// range; the same key between pushes serves the kept rows unchanged.
-		// An ended range's report is kept whole once prepared rows back it,
-		// and any change to these rows also changes the report's key, so its
-		// rows would never be read again and are not kept.
-		var memoSlot, memoVersion string
-		if !state.ready {
-			fingerprint, err := s.partsFingerprint(ctx)
-			if err != nil {
-				return nil, nil, err
-			}
-			memoSlot = fmt.Sprintf("%s|%s|%s", lowerBound, upperBound, chSessionIDsDigest(ids))
-			memoVersion = fingerprint
-		}
-		if kept, ok := s.activityUsageRows.Get(memoSlot, memoVersion); ok {
-			ordered, count = kept[0].all(), kept[0].count
-		} else {
-			query, args := clickActivityReportUsageQuery(candidates, lowerBound, upperBound)
-			if state.ready {
-				query, args = clickPreparedActivityUsageQuery(state, candidates, lowerBound, upperBound)
-			}
-			readCtx, err := withUsageDeltaTables(ctx, state)
-			if err != nil {
-				return nil, nil, err
-			}
-			s.activityUsageQueries.Add(1)
-			kept, err := s.readActivityUsageKept(readCtx, query, args)
-			if err != nil {
-				return nil, nil, err
-			}
-			if memoSlot != "" {
-				s.activityUsageRows.Put(memoSlot, memoVersion, []*activityUsageKept{kept})
-			}
-			ordered, count = kept.all(), kept.count
-		}
 	}
+	block, err := rateResolver.BuildBlock()
+	if err != nil {
+		return nil, nil, fmt.Errorf("building pricing block: %w", err)
+	}
+	return out, &block, nil
+}
 
+func (s *Store) selectActivityReportUsage(
+	ctx context.Context,
+	candidates chSessionSet,
+	ids []string,
+	lowerBound, upperBound string,
+	q activity.Query,
+	rateResolver *export.PricingResolver,
+	pricingDigest string,
+) ([]activity.UsageRow, error) {
+	state, err := s.preparedUsageState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if state.ready && q.Partial {
+		// Every push changes a range in progress, so its rows and survivors
+		// are kept for every session and a push re-derives only what the
+		// sessions it changed can change.
+		return s.keptActivityUsage(ctx, state, lowerBound, upperBound, ids, q, rateResolver, pricingDigest)
+	}
+	// Raw rows depend on the usage source, the candidate set, and the
+	// range; the same key between pushes serves the kept rows unchanged.
+	// An ended range's report is kept whole once prepared rows back it,
+	// and any change to these rows also changes the report's key, so its
+	// rows would never be read again and are not kept.
+	var memoSlot, memoVersion string
+	if !state.ready {
+		fingerprint, err := s.partsFingerprint(ctx)
+		if err != nil {
+			return nil, err
+		}
+		memoSlot = fmt.Sprintf("%s|%s|%s", lowerBound, upperBound, chSessionIDsDigest(ids))
+		memoVersion = fingerprint
+	}
+	if kept, ok := s.activityUsageRows.Get(memoSlot, memoVersion); ok {
+		return selectActivityUsage(ctx, kept[0].all(), kept[0].count, ids, q, rateResolver)
+	}
+	query, args := clickActivityReportUsageQuery(candidates, lowerBound, upperBound)
+	if state.ready {
+		query, args = clickPreparedActivityUsageQuery(state, candidates, lowerBound, upperBound)
+	}
+	readCtx, err := withUsageDeltaTables(ctx, state)
+	if err != nil {
+		return nil, err
+	}
+	s.activityUsageQueries.Add(1)
+	kept, err := s.readActivityUsageKept(readCtx, query, args)
+	if err != nil {
+		return nil, err
+	}
+	if memoSlot != "" {
+		s.activityUsageRows.Put(memoSlot, memoVersion, []*activityUsageKept{kept})
+	}
+	return selectActivityUsage(ctx, kept.all(), kept.count, ids, q, rateResolver)
+}
+
+// selectActivityUsage selects and prices the usage survivors of the
+// candidate sessions ids from ordered, the count rows a read of them and
+// their Claude peers returns, in report order.
+func selectActivityUsage(
+	ctx context.Context, ordered iter.Seq[*clickActivityReportUsageRow], count int,
+	ids []string, q activity.Query, rateResolver *export.PricingResolver,
+) ([]activity.UsageRow, error) {
 	baseRows := make([]activity.UsageRow, 0, count)
 	for r := range ordered {
 		baseRows = append(baseRows, activity.UsageRow{
@@ -743,9 +764,9 @@ func (s *Store) activityReportUsage(
 		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	out = make([]activity.UsageRow, 0, count)
+	out := make([]activity.UsageRow, 0, count)
 	i := -1
 	for r := range ordered {
 		i++
@@ -756,7 +777,7 @@ func (s *Store) activityReportUsage(
 		costRow.webSearchRequests = webSearchRequests[i]
 		cost, costSource, priced, contributes, sessionCost, priceErr := clickActivityUsageCost(costRow, rateResolver)
 		if priceErr != nil {
-			return nil, nil, priceErr
+			return nil, priceErr
 		}
 		out = append(out, activity.UsageRow{
 			SessionID:         attribution[i],
@@ -777,11 +798,7 @@ func (s *Store) activityReportUsage(
 			UsageDedupKey:     costRow.usageDedupKey,
 		})
 	}
-	block, err := rateResolver.BuildBlock()
-	if err != nil {
-		return nil, nil, fmt.Errorf("building pricing block: %w", err)
-	}
-	return out, &block, nil
+	return out, nil
 }
 
 // clickActivityReportUsageQuery reads candidate usage and any peers needed
@@ -853,13 +870,6 @@ func clickPreparedActivityUsageQuery(
 	return query, args
 }
 
-// activityUsageRange holds every session's prepared usage rows in a range,
-// in report order, with the snapshot revisions they were read at.
-type activityUsageRange struct {
-	revisions map[string]string
-	rows      *activityUsageKept
-}
-
 // activityUsageRangeLimit caps the ranges whose rows are kept. Only ranges
 // still in progress keep them: today, this week, this month, and the few
 // custom ranges a client has open.
@@ -869,57 +879,30 @@ const activityUsageRangeLimit = 8
 // range always re-reads instead of reading the whole range.
 const activityUsageRereadSessions = 64
 
-// activityUsageRange returns every session's prepared usage rows in the
-// range, in report order. The rows are kept with the snapshot revisions
-// they were read at. A session's prepared rows are derived from its current
-// snapshot alone, so a later read re-reads only the sessions whose snapshot
-// revision changed since and merges them in; sessions that are gone drop
-// out. When most sessions changed, one read of the range is cheaper.
-func (s *Store) activityUsageRange(
+// keptActivityUsage returns the usage survivors of the candidate sessions
+// ids in a range in progress, from the range's kept rows and survivors.
+func (s *Store) keptActivityUsage(
 	ctx context.Context, state preparedUsageState, lowerBound, upperBound string,
-) (*activityUsageKept, error) {
+	ids []string, q activity.Query, rateResolver *export.PricingResolver, pricingDigest string,
+) ([]activity.UsageRow, error) {
 	slot := lowerBound + "|" + upperBound
-	kept, ok := s.activityUsageRanges.Get(slot, "")
-	incremental := ok && len(kept) > 0
-	var prev activityUsageRange
-	var changed []string
-	if incremental {
-		prev = kept[0]
-		changed = changedSnapshotSessions(prev.revisions, state.revisions)
-		if len(changed) == 0 {
-			return prev.rows, nil
-		}
-		incremental = len(changed) <= max(activityUsageRereadSessions, len(state.revisions)/4)
+	r := &activityUsageRange{}
+	if kept, ok := s.activityUsageRanges.Get(slot, ""); ok && len(kept) > 0 {
+		r = kept[0]
 	}
-	s.activityUsageQueries.Add(1)
-	var rows *activityUsageKept
-	if incremental {
-		where, args := chPreparedActivityRangeSQL(lowerBound, upperBound)
-		where += " AND session_id IN (SELECT id FROM activity_usage_changed)"
-		readCtx, err := withUsageDeltaTables(ctx, state)
-		if err != nil {
-			return nil, err
-		}
-		table, err := usageSessionListTable("activity_usage_changed", changed)
-		if err != nil {
-			return nil, err
-		}
-		readCtx = chdriver.Context(readCtx, chdriver.WithExternalTable(table))
-		sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, where, args)
-		fresh, err := s.readActivityUsageKept(readCtx, "SELECT "+chPreparedUsageColumns+" FROM ("+sourceSQL+")", sourceArgs)
-		if err != nil {
-			return nil, err
-		}
-		replaced := make(map[string]bool, len(changed))
-		for _, id := range changed {
-			replaced[id] = true
-		}
-		rows = mergeActivityUsage(prev.rows, replaced, fresh)
-	} else {
-		var err error
-		if rows, err = s.readActivityUsageSlices(ctx, state, lowerBound, upperBound); err != nil {
-			return nil, err
-		}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := s.refreshActivityUsageRange(ctx, r, state, lowerBound, upperBound); err != nil {
+		return nil, err
+	}
+	rows, err := r.usage(ctx, ids, q, rateResolver, pricingDigest)
+	if err != nil {
+		// A derivation that stopped part way leaves no state to build on.
+		// The refresh may already have changed the rows, so store the range
+		// again for the memo to record its current size.
+		r.survivors = usageSurvivors{}
+		s.activityUsageRanges.Put(slot, "", []*activityUsageRange{r})
+		return nil, err
 	}
 	// Only ranges in progress read this memo, so a range that has ended is
 	// never read again.
@@ -929,8 +912,49 @@ func (s *Store) activityUsageRange(
 		end, err := time.Parse(time.RFC3339Nano, upper)
 		return err == nil && end.Before(now)
 	})
-	s.activityUsageRanges.Put(slot, "", []activityUsageRange{{revisions: state.revisions, rows: rows}})
+	s.activityUsageRanges.Put(slot, "", []*activityUsageRange{r})
 	return rows, nil
+}
+
+// refreshActivityUsageRange brings the range's kept rows to the snapshot
+// revisions of state. A session's prepared rows are derived from its
+// current snapshot alone, so it re-reads only the sessions whose snapshot
+// revision changed since the rows were read; sessions that are gone drop
+// out. When most sessions changed, one read of the range is cheaper.
+func (s *Store) refreshActivityUsageRange(
+	ctx context.Context, r *activityUsageRange, state preparedUsageState, lowerBound, upperBound string,
+) error {
+	changed := changedSnapshotSessions(r.revisions, state.revisions)
+	if r.number != nil && len(changed) == 0 {
+		return nil
+	}
+	s.activityUsageQueries.Add(1)
+	if r.number == nil || len(changed) > max(activityUsageRereadSessions, len(state.revisions)/4) {
+		rows, err := s.readActivityUsageSlices(ctx, state, lowerBound, upperBound)
+		if err != nil {
+			return err
+		}
+		r.reset(state.revisions, rows)
+		return nil
+	}
+	where, args := chPreparedActivityRangeSQL(lowerBound, upperBound)
+	where += " AND session_id IN (SELECT id FROM activity_usage_changed)"
+	readCtx, err := withUsageDeltaTables(ctx, state)
+	if err != nil {
+		return err
+	}
+	table, err := usageSessionListTable("activity_usage_changed", changed)
+	if err != nil {
+		return err
+	}
+	readCtx = chdriver.Context(readCtx, chdriver.WithExternalTable(table))
+	sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, where, args)
+	fresh, err := s.readActivityUsageKept(readCtx, "SELECT "+chPreparedUsageColumns+" FROM ("+sourceSQL+")", sourceArgs)
+	if err != nil {
+		return err
+	}
+	r.patch(state.revisions, changed, fresh)
+	return nil
 }
 
 // activityUsageSliceRows is the fewest stored rows worth a slice of their own
@@ -1416,72 +1440,163 @@ func clickActivityUsageCost(
 ) (cost money.Money, costSource export.CostSource, priced, contributes bool,
 	sessionCost *money.Money, err error,
 ) {
+	price, record, err := clickActivityUsagePrice(r, pricing)
+	if err != nil {
+		return money.Money{}, "", false, false, nil, err
+	}
+	record.apply(pricing, 1)
+	return price.cost, price.costSource, price.priced, price.contributes, price.sessionCost, nil
+}
+
+// clickActivityUsagePriced is a usage row's price.
+type clickActivityUsagePriced struct {
+	cost        money.Money
+	costSource  export.CostSource
+	sessionCost *money.Money
+	priced      bool
+	contributes bool
+}
+
+// clickActivityUsagePrice prices a usage row and returns what pricing it
+// records on the resolver, without recording it, so a kept price can record
+// it again on a later request's resolver.
+func clickActivityUsagePrice(
+	r clickActivityReportUsageRow, pricing *export.PricingResolver,
+) (clickActivityUsagePriced, usagePricingRecord, error) {
+	var price clickActivityUsagePriced
 	costRow := r
+	unattributed := false
 	if r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
 		v := money.Money{Microdollars: r.cost.Int64}
-		sessionCost = &v
+		price.sessionCost = &v
 		costRow.cost = sql.NullInt64{}
-		pricing.RecordUnattributedReported()
+		unattributed = true
 	}
-	cost, priced, contributes, err = clickActivityReportRowStatus(costRow, pricing)
-	costSource = export.CostSourceComputed
+	cost, priced, contributes, record, err := clickActivityReportRowPrice(costRow, pricing)
+	if err != nil {
+		return clickActivityUsagePriced{}, usagePricingRecord{}, err
+	}
+	record.unattributed = unattributed
+	price.cost, price.priced, price.contributes = cost, priced, contributes
+	price.costSource = export.CostSourceComputed
 	if costRow.cost.Valid {
-		costSource = export.CostSourceReported
+		price.costSource = export.CostSourceReported
 	}
-	return
+	return price, record, nil
 }
 
 func clickActivityReportRowStatus(
 	r clickActivityReportUsageRow, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
+	cost, priced, contributes, record, err := clickActivityReportRowPrice(r, pricing)
+	if err != nil {
+		return money.Money{}, false, false, err
+	}
+	record.apply(pricing, 1)
+	return cost, priced, contributes, nil
+}
+
+func clickActivityReportRowPrice(
+	r clickActivityReportUsageRow, pricing *export.PricingResolver,
+) (cost money.Money, priced, contributes bool, record usagePricingRecord, err error) {
 	canonicalModel := chUsageLookupModel(r.model, r.pricingTS)
 	if r.cost.Valid {
 		pricedModel, lookup := pricing.ResolveAt(
 			r.model, canonicalModel, chUsagePricingTimestamp(r.pricingTS),
 		)
-		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
-		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
+		record = usagePricingRecord{kind: usagePricingReported, reportedModel: r.model, pricedModel: pricedModel, lookup: lookup}
+		return money.Money{Microdollars: r.cost.Int64}, true, true, record, nil
 	}
 	if !activity.UsageDataContributes(
 		false, r.inputTok, r.outputTok, r.reasoningTok,
 		r.cacheCr, r.cacheRd, r.webSearchRequests,
 	) {
-		return money.Money{}, true, false, nil
+		return money.Money{}, true, false, record, nil
 	}
 	pricedModel, lookup, err := pricing.ResolveBilledAt(
 		r.providerID, r.model, canonicalModel, chUsagePricingTimestamp(r.pricingTS))
 	if err != nil {
-		return money.Money{}, false, false, err
+		return money.Money{}, false, false, record, err
 	}
+	record = usagePricingRecord{reportedModel: r.model, pricedModel: pricedModel, lookup: lookup}
 	if !lookup.OK {
-		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+		record.kind = usagePricingUnresolved
 		fee, feeErr := export.WebSearchFee(r.webSearchRequests)
 		if feeErr != nil {
-			return money.Money{}, false, false, feeErr
+			return money.Money{}, false, false, usagePricingRecord{}, feeErr
 		}
-		return fee, false, true, nil
+		return fee, false, true, record, nil
 	}
 	requestScoped := db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid
 	cost, err = lookup.Rates.CostForTokensScoped(
 		requestScoped,
 		r.inputTok, r.outputTok, r.reasoningTok, r.cacheCr, r.cacheCr1h, r.cacheRd)
 	if err != nil {
-		return money.Money{}, false, false,
+		return money.Money{}, false, false, usagePricingRecord{},
 			fmt.Errorf("pricing clickhouse activity usage for model %q: %w", r.model, err)
 	}
 	cost, err = export.AddWebSearchFee(cost, r.webSearchRequests)
 	if err != nil {
-		return money.Money{}, false, false,
+		return money.Money{}, false, false, usagePricingRecord{},
 			fmt.Errorf("pricing clickhouse activity usage for model %q: %w", r.model, err)
 	}
+	record.kind = usagePricingAggregate
 	if requestScoped {
-		pricing.RecordResolvedComputedRequest(
-			r.model, pricedModel, lookup,
-			r.inputTok, r.cacheCr, r.cacheRd)
-	} else {
-		pricing.RecordResolvedComputedAggregate(r.model, pricedModel, lookup)
+		record.kind = usagePricingRequest
+		record.band, record.hasBand = lookup.Rates.RequestBand(r.inputTok, r.cacheCr, r.cacheRd)
 	}
-	return cost, true, true, nil
+	return cost, true, true, record, nil
+}
+
+// usagePricingKind is which resolver record a priced usage row makes.
+type usagePricingKind uint8
+
+const (
+	usagePricingNone usagePricingKind = iota
+	usagePricingReported
+	usagePricingUnresolved
+	usagePricingRequest
+	usagePricingAggregate
+)
+
+// usagePricingRecord is what pricing one usage row records on the resolver
+// whose pricing block the report carries.
+type usagePricingRecord struct {
+	kind                       usagePricingKind
+	reportedModel, pricedModel string
+	lookup                     export.PricingLookup
+	// band is the request band's input threshold; set only with hasBand.
+	band    int
+	hasBand bool
+	// unattributed marks a session total no model can be credited with.
+	unattributed bool
+}
+
+// apply records n rows that each made this record. The request and
+// aggregate counts add up, and every other record is a flag, so recording
+// n rows at once records what recording each of them would.
+func (rec usagePricingRecord) apply(pricing *export.PricingResolver, n int) {
+	if n == 0 {
+		return
+	}
+	if rec.unattributed {
+		pricing.RecordUnattributedReported()
+	}
+	switch rec.kind {
+	case usagePricingNone:
+	case usagePricingReported:
+		pricing.RecordResolvedReported(rec.reportedModel, rec.pricedModel, rec.lookup)
+	case usagePricingUnresolved:
+		pricing.RecordResolvedComputed(rec.reportedModel, rec.pricedModel, rec.lookup)
+	case usagePricingRequest:
+		var band *int
+		if rec.hasBand {
+			band = &rec.band
+		}
+		pricing.RecordResolvedCounts(rec.reportedModel, rec.pricedModel, rec.lookup, 0, n, 0, band)
+	case usagePricingAggregate:
+		pricing.RecordResolvedCounts(rec.reportedModel, rec.pricedModel, rec.lookup, 0, 0, n, nil)
+	}
 }
 
 // activityUsageKept is one activity usage read kept for reuse. A scanned row
@@ -1594,6 +1709,18 @@ func (e *keptUsageEncoder) addKept(r *keptUsageRow) {
 }
 
 func (e *keptUsageEncoder) write(r *clickActivityReportUsageRow, refs keptUsageRefs, us int64, validTS bool) {
+	e.encode(r, refs, us, validTS)
+	if session := refs[0]; session >= uint64(len(e.session)) || !e.session[session] {
+		if grow := int(session) + 1 - len(e.session); grow > 0 {
+			e.session = append(e.session, make([]bool, grow)...)
+		}
+		e.session[session] = true
+		e.k.sessions = append(e.k.sessions, session)
+	}
+}
+
+// encode appends a row without recording its session in k.sessions.
+func (e *keptUsageEncoder) encode(r *clickActivityReportUsageRow, refs keptUsageRefs, us int64, validTS bool) {
 	var flags byte
 	if r.messageOrdinal.Valid {
 		flags |= keptOrdinalValid
@@ -1638,13 +1765,6 @@ func (e *keptUsageEncoder) write(r *clickActivityReportUsageRow, refs keptUsageR
 		data = binary.AppendVarint(data, r.cost.Int64)
 	}
 	e.data = data
-	if session := refs[0]; session >= uint64(len(e.session)) || !e.session[session] {
-		if grow := int(session) + 1 - len(e.session); grow > 0 {
-			e.session = append(e.session, make([]bool, grow)...)
-		}
-		e.session[session] = true
-		e.k.sessions = append(e.k.sessions, session)
-	}
 	e.k.count++
 }
 
@@ -1898,124 +2018,4 @@ func joinActivityUsageSlices(parts []*keptUsageSorter) *activityUsageKept {
 	}
 	out.arena = arena.String()
 	return out
-}
-
-// keptUsageBefore reports whether a comes before b in report order.
-func keptUsageBefore(a, b *keptUsageRow) bool {
-	if a.validTS && b.validTS && a.us != b.us {
-		return a.us < b.us
-	}
-	if a.sessionID != b.sessionID {
-		return a.sessionID < b.sessionID
-	}
-	return db.UsageRowMessageOrdinal(a.messageOrdinal) < db.UsageRowMessageOrdinal(b.messageOrdinal)
-}
-
-// mergeActivityUsage returns prev without the rows of the sessions in
-// replaced, merged in report order with fresh, the replaced sessions'
-// current rows.
-func mergeActivityUsage(prev *activityUsageKept, replaced map[string]bool, fresh *activityUsageKept) *activityUsageKept {
-	e := newKeptUsageEncoder(prev.dict, len(prev.arena)+len(fresh.arena), prev.count+fresh.count)
-	dropped := make([]bool, len(prev.dict))
-	for _, session := range prev.sessions {
-		dropped[session] = replaced[prev.dict[session]]
-	}
-	// Each fresh row's strings point into fresh's arena and dictionary, so
-	// copying the decoded value keeps it valid.
-	pending := make([]keptUsageRow, 0, fresh.count)
-	for r := range fresh.rows() {
-		pending = append(pending, *r)
-	}
-	next := 0
-	for r := range prev.rows() {
-		if dropped[r.refs[0]] {
-			continue
-		}
-		for ; next < len(pending) && keptUsageBefore(&pending[next], r); next++ {
-			e.add(&pending[next].clickActivityReportUsageRow, pending[next].us, pending[next].validTS)
-		}
-		e.addKept(r)
-	}
-	for ; next < len(pending); next++ {
-		e.add(&pending[next].clickActivityReportUsageRow, pending[next].us, pending[next].validTS)
-	}
-	return e.finish()
-}
-
-// claudeUsageKey is a Claude message and request ID pair.
-type claudeUsageKey struct{ message, request string }
-
-// activityUsageSelection returns the kept rows a read of the candidate
-// sessions returns, in report order, and how many there are: every row of
-// a candidate session, and every message row of another session that
-// carries the Claude message and request IDs of a candidate row. Those
-// peers are what complete-snapshot selection compares the candidates with.
-func activityUsageSelection(k *activityUsageKept, candidates []string) (iter.Seq[*clickActivityReportUsageRow], int) {
-	selected := make(map[string]bool, len(candidates))
-	for _, id := range candidates {
-		selected[id] = true
-	}
-	candidate := make([]bool, len(k.dict))
-	others := false
-	for _, session := range k.sessions {
-		candidate[session] = selected[k.dict[session]]
-		others = others || !candidate[session]
-	}
-	if !others {
-		return k.all(), k.count
-	}
-	peerKey := func(r *keptUsageRow) (claudeUsageKey, bool) {
-		return claudeUsageKey{r.claudeMessageID, r.claudeRequestID}, r.claudeMessageID != "" && r.claudeRequestID != ""
-	}
-	// The other sessions' message rows are grouped by key first; a
-	// candidate row carrying the key then selects the whole group.
-	type peerGroup struct {
-		rows     int
-		selected bool
-	}
-	peers := map[claudeUsageKey]*peerGroup{}
-	count := 0
-	for r := range k.rows() {
-		if candidate[r.refs[0]] {
-			count++
-			continue
-		}
-		if key, ok := peerKey(r); ok && r.source == "message" {
-			group := peers[key]
-			if group == nil {
-				group = &peerGroup{}
-				peers[key] = group
-			}
-			group.rows++
-		}
-	}
-	if len(peers) > 0 {
-		for r := range k.rows() {
-			if !candidate[r.refs[0]] {
-				continue
-			}
-			if key, ok := peerKey(r); ok {
-				if group := peers[key]; group != nil && !group.selected {
-					group.selected = true
-					count += group.rows
-				}
-			}
-		}
-	}
-	return func(yield func(*clickActivityReportUsageRow) bool) {
-		for r := range k.rows() {
-			if !candidate[r.refs[0]] {
-				key, ok := peerKey(r)
-				if !ok || r.source != "message" {
-					continue
-				}
-				if group := peers[key]; group == nil || !group.selected {
-					continue
-				}
-			}
-			if !yield(&r.clickActivityReportUsageRow) {
-				return
-			}
-		}
-	}, count
 }

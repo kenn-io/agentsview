@@ -403,6 +403,16 @@ func rangeWindows(p Params) []BucketWindow {
 	return windows
 }
 
+// QueryWindows returns the bucket windows a report over q sums usage into.
+func QueryWindows(q Query) []BucketWindow {
+	return rangeWindows(Params{RangeStart: q.RangeStart, RangeEnd: q.RangeEnd, Bucket: q.Bucket, Loc: q.Loc})
+}
+
+// WindowIndex returns the index of the window that holds t, or -1.
+func WindowIndex(windows []BucketWindow, t time.Time) int {
+	return windowIndex(windows, t)
+}
+
 // Aggregate builds the range's report from the three input streams.
 func Aggregate(
 	p Params, sessions []SessionMeta, activity []ActivityEvent, usage []UsageRow,
