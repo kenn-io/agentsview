@@ -96,14 +96,13 @@ App-level glue that remains local:
   Calendar) should receive `locale={getLocale()}` from the i18n facade so
   their date formatting follows the app language setting instead of the
   browser locale; the shared wrappers above do this.
-- `frontend/src/lib/components/shared/MissingData.svelte` is the one state for
-  a page or panel with nothing to show: nothing saved yet, no rows for these
-  filters, or a feature this server does not offer. It takes an icon, a title,
-  an optional description, and an optional action such as Retry, and it sits
-  centered a fixed step below the page header. Use it instead of kit-ui
-  `EmptyState` or hand-built empty blocks. Keep `StateNotice` for framed notes
-  that sit above content that still renders (read-only mode, date-filter
-  scope), and the alert card for failed loads. It is proposed for kit-ui.
+- A page or panel with nothing to show uses kit-ui `EmptyState`: nothing saved
+  yet, no rows for these filters, or a feature this server does not offer. Pass
+  an icon, a title, an optional description, and controls such as Retry as
+  children. Use `align="top"` for a whole page or a panel under its header, so
+  the state sits the same fixed step below the header on every page. Keep
+  `StateNotice` for framed notes that sit above content that still renders
+  (read-only mode, date-filter scope), and the alert card for failed loads.
 - `frontend/src/lib/components/content/SessionFindBar.svelte` wires kit-ui
   `FindBar` to the in-session search store.
 - kit-ui `SettingsLayout` owns grouped settings navigation and scroll behavior;
@@ -121,9 +120,13 @@ App-level glue that remains local:
   `frontend/e2e/appearance-a11y.spec.ts`. The date picker retains its current
   scale until kit-ui can size its fixed-width panel for zoom.
 - Resizable tables use kit-ui `VirtualTable` with `TableHeaderCell`. kit-ui
-  reports column widths but does not store them, so pages that offer resizing
-  persist the widths they care about (Recent edits keeps them in
-  `localStorage` through `recentedits/columnWidths.ts`).
+  reports only the widths a person sets, through `oncolumnresize`, and does
+  not store them. Pages that offer resizing persist the widths they care
+  about: Recent edits keeps them in `localStorage` through
+  `recentedits/columnWidths.ts`, keyed by column position, because kit-ui
+  names a column by its translated label. Columns nobody resized follow the
+  window, and Recent edits' File column takes the spare width (`fill`).
+  Pass a translated `resizeLabel` on every resizable header.
 
 Relative date ranges follow kit-ui semantics: "Last N days" spans N calendar
 days inclusive of today. `presetRange()` (dateRangeSelector.ts) and
@@ -132,35 +135,46 @@ kit-ui's `RangePicker`, which seeds its Custom tab from the same math.
 
 ### Known kit-ui gaps (tracked upstream)
 
-These gaps ship with the current kit-ui pin and are resolved by adding props
-upstream, then bumping the commit hash in `frontend/package.json` and threading
-the new props through the app wrappers. Do not work around them with unsupported
-props or forked styles.
+These app overrides stay until kit-ui covers them. Remove each one with the
+pin bump that adopts the kit-ui fix, not before.
 
-- `Modal`'s close-X `aria-label` is hardcoded English; needs a label prop.
-- `CodeBlock` forwards `copyLabel` but keeps CopyButton's English "Copied" label.
-- The column resize handle's label ("Resize the {label} column") is hardcoded
-  English; needs a label prop.
-- `TopBar` cannot express "no active tab"; on routes that are not tabs
-  (settings), it falls back to the first tab. Until the pin includes a fix,
-  `AppHeader.svelte` corrects the result with the temporary
-  `topBarNoCurrentTab` action and the `no-current-tab` styles; remove both
-  when the pin moves. The action also clears the open collapsed menu's
-  selected option.
-- `VirtualTable` keeps measured row heights by index for one `items` array,
-  so any change to the rows (expanding a Recent edits file, loading the next
-  page) drops every measurement. Rows outside the rendered window fall back
-  to the estimate and the list can shift. It needs heights kept by row key.
-- `VirtualTable` keeps the column widths it first sized until someone resizes
-  a column. Recent edits rebuilds the table when its width settles, so
-  columns nobody resized follow the window.
+Waiting for kit-ui pull request `kenn-io/kit-ui#203`:
 
-Resolved upstream (adopted at the current pin): `RefreshControl` takes a
-`formatAge` prop, `DateRangePicker`'s `weekOfLabel` substitutes a `{date}`
-placeholder, and both take a `locale` prop — the shared wrappers inject all
-three. `RefreshControl` also takes `ageWidthSamples`, which the shared wrapper
-uses to keep the label box a fixed width, and an `ageTooltip` snippet, which it
-uses for the query step list.
+- A disabled primary button (`.kit-button--solid.kit-button--info:disabled`
+  in `frontend/src/app.css`) keeps a faint accent fill and edge at full
+  opacity, with the same disabled ink as a disabled secondary button. It reads
+  the app's `--disabled-ink` and `--disabled-edge` tokens.
+- A disabled menu item stays at full opacity in muted ink, so its reason
+  ("Import unavailable in read-only mode") stays readable (`app.css`).
+- The current Settings panel in `SettingsLayout`'s navigation uses primary
+  ink instead of kit-ui's blue (`SettingsPage.svelte`).
+- An unclean session end is an orange `StatusDot`, apart from the red
+  failure and amber stale dots (`.kit-status-dot--unclean` in `app.css`).
+
+Accepted as kit-ui ships it, with a possible kit-ui follow-up:
+
+- With no current tab and the tabs collapsed, `TopBar`'s menu trigger reads
+  "Primary navigation: —", and the open menu shows a disabled, checked "—"
+  row.
+
+Resolved upstream (adopted at the current pin):
+
+- `RefreshControl` takes `formatAge`, `ageWidthSamples`, an `ageTooltip`
+  snippet, and `size="sm"`, which page toolbars use. `DateRangePicker`'s
+  `weekOfLabel` substitutes a `{date}` placeholder, its presets sit under the
+  mode control as a lower tier, and both components take a `locale` prop. The
+  shared wrappers inject all of these.
+- `TopBar` takes `compact`, and an `active` value that names no tab means no
+  tab is current (Settings, and Friction while its tab is hidden).
+- `EmptyState` takes `align="top"`.
+- `VirtualTable` keeps measured row heights by row key, refits columns nobody
+  resized when the table width changes, and reports person-set widths through
+  `oncolumnresize`. `TableHeaderCell` takes `resizeLabel` and `fill`.
+- `Modal` takes `closeLabel`, and `CodeBlock` takes `copiedLabel`.
+- `formatCount` takes a locale; the app's `formatCount` passes the app
+  language.
+- kit-ui's theme owns the selected-state pill, popover surface and edge, card
+  edge, overlay backdrop and shadow, light text inks, and one icon line weight.
 
 ## Legacy Exceptions
 
