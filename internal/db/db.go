@@ -766,7 +766,8 @@ END;
 const schemaFTS = `
 CREATE VIEW IF NOT EXISTS message_search_content AS
 SELECT id, session_id, content AS rendered,
-    COALESCE(dialogue_text, content) AS content FROM messages;
+    COALESCE(dialogue_text, content) AS content FROM messages
+UNION ALL SELECT id, NULL, text, '' FROM image_text_cache;
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content, rendered,
     content='message_search_content',
@@ -777,10 +778,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
     INSERT INTO messages_fts(rowid, rendered, content) VALUES (new.id, new.content, COALESCE(new.dialogue_text, new.content));
 END;
-` + messagesADTriggerDDL + messagesAUTriggerDDL
+` + messagesADTriggerDDL + messagesAUTriggerDDL + `
+CREATE TRIGGER IF NOT EXISTS image_text_ai AFTER INSERT ON image_text_cache BEGIN
+    INSERT INTO messages_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
+CREATE TRIGGER IF NOT EXISTS image_text_ad AFTER DELETE ON image_text_cache BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+END;
+CREATE TRIGGER IF NOT EXISTS image_text_au AFTER UPDATE ON image_text_cache BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+    INSERT INTO messages_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
+`
 
 const schemaCJKFTS = `
-DROP TABLE IF EXISTS image_text_cjk_fts;
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
     content, rendered,
     content='message_search_content',
@@ -790,6 +801,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
 `
 
 const schemaCJKFTSTriggers = `
+CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_ai AFTER INSERT ON main.image_text_cache
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_cjk_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_ad AFTER DELETE ON main.image_text_cache
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_au AFTER UPDATE ON main.image_text_cache
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+    INSERT INTO messages_cjk_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
 CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_ai
 AFTER INSERT ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
@@ -5101,7 +5125,6 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	stmts := []string{
 		"DROP TRIGGER IF EXISTS image_text_cjk_ai", "DROP TRIGGER IF EXISTS image_text_cjk_ad", "DROP TRIGGER IF EXISTS image_text_cjk_au",
 		"DROP TRIGGER IF EXISTS image_text_ai", "DROP TRIGGER IF EXISTS image_text_ad", "DROP TRIGGER IF EXISTS image_text_au",
-		"DROP TABLE IF EXISTS image_text_cjk_fts", "DROP TABLE IF EXISTS image_text_fts",
 		"DROP TRIGGER IF EXISTS messages_cjk_ai",
 		"DROP TRIGGER IF EXISTS messages_cjk_ad",
 		"DROP TRIGGER IF EXISTS messages_cjk_au",
@@ -5150,7 +5173,7 @@ func (db *DB) RebuildFTS(ctx context.Context) error {
 	if err := ensureCJKFTS(ctx, w, true); err != nil {
 		return fmt.Errorf("rebuild CJK fts index: %w", err)
 	}
-	return ensureImageTextFTS(ctx, w, true)
+	return nil
 }
 
 // bulkImportWALAutocheckpointBytes is the WAL growth between automatic
@@ -5403,10 +5426,6 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	if err := ensureCJKFTS(ctx, w, false); err != nil {
 		return fmt.Errorf("initializing CJK FTS: %w", err)
 	}
-	if err := ensureImageTextFTS(ctx, w, false); err != nil {
-		return err
-	}
-
 	var recallFTSCount int
 	if err := w.QueryRowContext(ctx,
 		"SELECT count(*) FROM sqlite_master"+

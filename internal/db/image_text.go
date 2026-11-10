@@ -94,7 +94,7 @@ func (db *DB) SaveImageText(ctx context.Context, hash string, identity ocr.Ident
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if failure {
-		_, err := db.getWriter().ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,failures,retry_at) SELECT ?,?,?,?,?,1,? WHERE EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)
+		_, err := db.getWriter().ExecContext(ctx, `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,failures,retry_at) SELECT (SELECT COALESCE(MIN(id),0)-1 FROM image_text_cache),?,?,?,?,?,1,? WHERE EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)
 			ON CONFLICT(image_hash,processor) DO UPDATE SET failures=failures+1, retry_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+' || min(3600, 60 * (1 << min(failures, 6))) || ' seconds')`, hash, identity.Fingerprint, identity.Provider, identity.Model, identity.Revision, time.Now().UTC().Add(time.Minute).Format(time.RFC3339), hash)
 		return err
 	}
@@ -103,7 +103,7 @@ func (db *DB) SaveImageText(ctx context.Context, hash string, identity ocr.Ident
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded,updated_at) SELECT ?,?,?,?,?,?,1,strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)
+	_, err = tx.ExecContext(ctx, `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text,succeeded,updated_at) SELECT (SELECT COALESCE(MIN(id),0)-1 FROM image_text_cache),?,?,?,?,?,?,1,strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)
 		ON CONFLICT(image_hash,processor) DO UPDATE SET text=excluded.text,succeeded=1,failures=0,retry_at='',updated_at=excluded.updated_at`, hash, identity.Fingerprint, identity.Provider, identity.Model, identity.Revision, text, hash)
 	if err != nil {
 		return err
@@ -167,7 +167,7 @@ func (db *DB) CopyImageTextFrom(ctx context.Context, sourcePath string) error {
 	if !hasCache {
 		return nil
 	}
-	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at) SELECT image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at FROM old_db.image_text_cache c`); err != nil {
+	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO image_text_cache(id,image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at) SELECT (SELECT COALESCE(MIN(id),0) FROM main.image_text_cache)-ROW_NUMBER() OVER (),image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at FROM old_db.image_text_cache c`); err != nil {
 		return fmt.Errorf("copy image text: %w", err)
 	}
 	return nil

@@ -1787,6 +1787,7 @@ CREATE TABLE IF NOT EXISTS codex_fork_state (
 
 -- OCR text is shared by all occurrences of the same image and processor.
 CREATE TABLE IF NOT EXISTS image_text_cache (
+    id INTEGER PRIMARY KEY,
     image_hash TEXT NOT NULL,
     processor TEXT NOT NULL,
     provider TEXT NOT NULL,
@@ -1797,7 +1798,7 @@ CREATE TABLE IF NOT EXISTS image_text_cache (
     failures INTEGER NOT NULL DEFAULT 0,
     retry_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (image_hash, processor)
+    UNIQUE (image_hash, processor)
 );
 
 CREATE TABLE IF NOT EXISTS image_text_occurrences (

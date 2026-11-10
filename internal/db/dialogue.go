@@ -10,7 +10,7 @@ import (
 
 // The same corpus version invalidates ordinary FTS and the CJK fingerprint.
 const (
-	searchCorpusVersion         = "1"
+	searchCorpusVersion         = "2"
 	searchCorpusVersionStatsKey = "message_search_corpus_version"
 )
 
@@ -52,6 +52,7 @@ func rebuildMessageFTS(ctx context.Context, w *writerHandle, progress OpenProgre
 	progress.report("Updating full-text search")
 	for _, query := range []string{
 		"DROP TRIGGER IF EXISTS messages_ai", "DROP TRIGGER IF EXISTS messages_ad", "DROP TRIGGER IF EXISTS messages_au",
+		"DROP TRIGGER IF EXISTS image_text_ai", "DROP TRIGGER IF EXISTS image_text_ad", "DROP TRIGGER IF EXISTS image_text_au",
 		"DROP TABLE IF EXISTS messages_fts", "DROP VIEW IF EXISTS message_search_content", schemaFTS,
 		"INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
 	} {

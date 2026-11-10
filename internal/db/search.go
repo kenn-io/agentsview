@@ -453,10 +453,7 @@ func (db *DB) Search(
 	defer func() { _ = tx.Rollback() }()
 	imageQuery := f.Query
 	var walk *searchRankWalk
-	imageTable := "image_text_fts"
-	if ftsQuery.table == "messages_cjk_fts" {
-		imageTable = "image_text_cjk_fts"
-	}
+	imageTable := ftsQuery.table
 	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
 		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
 		if err != nil {
@@ -602,7 +599,7 @@ func (db *DB) Search(
 		)
 		SELECT session_id, project, agent, machine, name,
 			session_ended_at, ordinal,
-			CASE WHEN image_rowid IS NOT NULL THEN (SELECT snippet(IMAGE_FTS, 0, '<mark>', '</mark>', '...', %d) FROM IMAGE_FTS WHERE IMAGE_FTS.rowid=page.image_rowid AND IMAGE_FTS MATCH ?) WHEN best_rowid IS NULL THEN snippet ELSE (
+			CASE WHEN image_rowid IS NOT NULL THEN (SELECT snippet(IMAGE_FTS, 1, '<mark>', '</mark>', '...', %d) FROM IMAGE_FTS WHERE IMAGE_FTS.rowid=page.image_rowid AND IMAGE_FTS MATCH ?) WHEN best_rowid IS NULL THEN snippet ELSE (
 				SELECT snippet(messages_fts, -1, '<mark>', '</mark>', '...', %d)
 				FROM messages_fts
 				WHERE messages_fts.rowid = page.best_rowid AND %s

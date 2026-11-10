@@ -107,7 +107,7 @@ func TestImageTextIndexRebuild(t *testing.T) {
 				require.Len(t, page.Results, 1)
 			}
 		}
-		_, err = d.getWriter().Exec(ctx, `DROP TABLE image_text_cjk_fts`)
+		_, err = d.getWriter().Exec(ctx, `DROP TABLE messages_cjk_fts`)
 		require.NoError(t, err)
 		require.NoError(t, d.Close())
 		d, err = Open(ctx, path)
