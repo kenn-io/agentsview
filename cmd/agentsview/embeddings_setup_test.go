@@ -519,6 +519,60 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 
 func TestCLIEmbeddingsSetup(t *testing.T) {
 	for _, tc := range []struct {
+		name       string
+		postStatus int
+	}{
+		{"finished-before-status", 0},
+		{"setup-conflict", http.StatusConflict},
+		{"finished-during-confirmation", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
+			var reads, setupPosts, buildPosts int
+			startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+					reads++
+					w.Header().Set("Content-Type", "application/json")
+					switch {
+					case tc.postStatus != 0 && reads == 1:
+						io.WriteString(w, `{"setup":{"action":"turn-on","provider":"ollama"}}`)
+					case tc.postStatus == http.StatusConflict && reads == 2:
+						io.WriteString(w, `{"setup":{"action":"turn-on","busy":true}}`)
+					case tc.postStatus != http.StatusConflict && buildPosts == 0:
+						io.WriteString(w, `{"setup":{"enabled":true},"running":true}`)
+					default:
+						io.WriteString(w, `{"setup":{},"last_result":{}}`)
+					}
+				},
+				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, _ *http.Request) {
+					setupPosts++
+					w.WriteHeader(tc.postStatus)
+				},
+				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+					buildPosts++
+					w.WriteHeader(http.StatusAccepted)
+				},
+			})
+			var out strings.Builder
+			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+			require.NoError(t, err)
+			if tc.postStatus == 0 {
+				assert.NotContains(t, out.String(), "[y/N]")
+				assert.Zero(t, setupPosts)
+			} else {
+				assert.Equal(t, 1, setupPosts)
+			}
+			if tc.postStatus == http.StatusConflict {
+				assert.Contains(t, out.String(), "Search setup is already running.")
+				assert.Zero(t, buildPosts)
+			} else {
+				assert.Equal(t, 1, buildPosts)
+			}
+		})
+	}
+	for _, tc := range []struct {
 		name, provider, input  string
 		missing                int64
 		flagged, busy, enabled bool

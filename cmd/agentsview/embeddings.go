@@ -1063,12 +1063,11 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 		return err
 	}
 	setup := status.Setup
+	if handled, err := joinActiveSetup(ctx, out, cfg, client, status); handled {
+		return err
+	}
 	if setup == nil || setup.Action != "turn-on" {
 		return errors.New("search setup is unavailable")
-	}
-	if setup.Busy {
-		fmt.Fprintln(out, "Search setup is already running.")
-		return pollDaemonBuildStatus(ctx, out, client, true)
 	}
 	action, question := "Turning it on", "Turn on search by meaning?"
 	if cfg.Vector.Enabled || setup.Enabled {
@@ -1093,9 +1092,27 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 		return errors.New("search setup declined")
 	}
 	if err := client.startSetup(ctx, approved); err != nil {
+		if status, statusErr := client.status(ctx); statusErr == nil {
+			if handled, joinErr := joinActiveSetup(ctx, out, cfg, client, status); handled {
+				return joinErr
+			}
+		}
 		return err
 	}
 	return pollDaemonBuildStatus(ctx, out, client, true)
+}
+
+func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, client embeddingsDaemonClient, status vector.BuildStatus) (bool, error) {
+	setup := status.Setup
+	if setup != nil && setup.Busy {
+		fmt.Fprintln(out, "Search setup is already running.")
+		return true, pollDaemonBuildStatus(ctx, out, client, true)
+	}
+	if setup != nil && setup.Enabled && setup.Action == "" {
+		fmt.Fprintln(out, "Search by meaning is on.")
+		return true, buildViaDaemon(ctx, out, client, vector.BuildRequest{IncludeAutomated: vector.MessageIndexSpec().NormalizeIncludeAutomated(cfg.Vector.IncludeAutomated)})
+	}
+	return false, nil
 }
 
 func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64) error {
