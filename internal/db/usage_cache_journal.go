@@ -122,12 +122,33 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	if !zone.revision.Valid || zone.foreignPricing {
 		return usagePreparedWindow{claimZone: &zone, claimDatabaseID: databaseID}, false, fallback()
 	}
+	if summarizer, ok := db.usageSource.(UsageChangeSummarizer); ok && usageWorkDeferred(ctx) {
+		// One query decides most deferrals before the full source capture.
+		// Global changes include pricing, which leaves the zone untrusted.
+		changes, err := summarizer.SummarizeUsageChanges(ctx, zone.revision.Int64)
+		if err != nil {
+			return usagePreparedWindow{}, false, err
+		}
+		if changes.Global || (cursor && changes.Accounts) ||
+			changes.Sessions+len(lost) > usageDeferredRefreshLimit {
+			return usagePreparedWindow{}, false, ErrUsageCacheWarming
+		}
+	}
 	snapshot, refresh, refreshIDs, trusted, err := db.captureJournaledUsageWindow(ctx, filter, kind, cursor, databaseID, zone, lost, window)
 	if err != nil {
 		return usagePreparedWindow{}, false, err
 	}
 	if !trusted {
 		return usagePreparedWindow{snapshot: snapshot, claimZone: &zone, claimDatabaseID: databaseID}, false, fallback()
+	}
+	if usageWorkDeferred(ctx) {
+		ready, err := cache.usageRefreshReady(ctx, zone.id, refreshIDs, snapshot.CursorHighWater)
+		if err != nil {
+			return usagePreparedWindow{}, false, err
+		}
+		if !ready {
+			return usagePreparedWindow{}, false, ErrUsageCacheWarming
+		}
 	}
 	captureDuration := time.Since(started)
 	installs, timings, err := cache.refreshJournaledUsageWindow(ctx, &snapshot, refresh, refreshIDs, report)

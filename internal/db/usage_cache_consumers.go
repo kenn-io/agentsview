@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -41,6 +42,29 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 		round(timings.rollup.InstallDuration), round(timings.read),
 		timings.candidates, timings.rollup.DailyRows,
 		timings.rollup.ExceptionRows, timings.rollup.ExceptionGroups)
+}
+
+// ErrUsageCacheWarming reports that a read declined to fill or rebuild much
+// of the cache. Its caller serves a direct read while a background pass
+// prepares the cache.
+var ErrUsageCacheWarming = errors.New("usage cache is not ready for this report")
+
+// usageDeferredRefreshLimit bounds the changed sessions a deferring read
+// refreshes itself. Larger refreshes cost more than the direct read they
+// would replace.
+const usageDeferredRefreshLimit = 64
+
+type usageWorkDeferredKey struct{}
+
+// withUsageWorkDeferred marks a read that must not fill or rebuild much of
+// the cache. Such a read returns ErrUsageCacheWarming instead.
+func withUsageWorkDeferred(ctx context.Context) context.Context {
+	return context.WithValue(ctx, usageWorkDeferredKey{}, true)
+}
+
+func usageWorkDeferred(ctx context.Context) bool {
+	deferred, _ := ctx.Value(usageWorkDeferredKey{}).(bool)
+	return deferred
 }
 
 type usagePreparedWindow struct {
@@ -138,6 +162,11 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 			return prepared, err
 		}
 	}
+	if usageWorkDeferred(ctx) && kind != usageQueryKindActivity {
+		// Without current journal coverage, this read would check, fill,
+		// and build every session in its window.
+		return usagePreparedWindow{}, ErrUsageCacheWarming
+	}
 	snapshot := prepared.snapshot
 	if snapshot.DatabaseID == "" {
 		snapshot, err = db.captureUsageQuery(ctx, filter, kind)
@@ -159,6 +188,15 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return usagePreparedWindow{}, err
 	}
+	if usageWorkDeferred(ctx) {
+		ready, err := cache.usageActivityWindowReady(ctx, filter, snapshot)
+		if err != nil {
+			return usagePreparedWindow{}, err
+		}
+		if !ready {
+			return usagePreparedWindow{}, ErrUsageCacheWarming
+		}
+	}
 	full := db.usageSource != nil && filter.From == "" && filter.To == ""
 	if full {
 		if err := cache.sweepAbsentUsageOwners(ctx, snapshot); err != nil {
@@ -176,6 +214,69 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 		result.claimZone = prepared.claimZone
 	}
 	return result, nil
+}
+
+// usageActivityWindowReady reports whether an activity read can bring its
+// window up to date with a small fill. The zone must hold journal coverage
+// at the snapshot's pricing, and few sessions may need new facts or rollups.
+func (cache *usageCache) usageActivityWindowReady(
+	ctx context.Context, filter UsageFilter, snapshot usageQuerySnapshot,
+) (bool, error) {
+	zone, err := readUsageZoneCoverage(ctx, cache.db,
+		usageTimezoneIdentityFor(filter.Location(), nil).Key)
+	if err != nil {
+		return false, err
+	}
+	if !zone.revision.Valid || zone.foreignPricing || zone.pricing != snapshot.PricingIdentity {
+		return false, nil
+	}
+	lost, err := usageSessionsWithoutRollup(ctx, cache.db, zone.id, usageDeferredRefreshLimit+1)
+	if err != nil {
+		return false, err
+	}
+	ids := usageSourceVersionIDs(snapshot.Versions)
+	cached, err := readUsageCachedSessions(ctx, cache.db, ids)
+	if err != nil {
+		return false, err
+	}
+	pending := len(lost)
+	for _, version := range snapshot.Versions {
+		if current, ok := cached[version.SessionID]; !ok || !current.source.Equal(version) {
+			pending++
+		}
+	}
+	return pending <= usageDeferredRefreshLimit, nil
+}
+
+// usageRefreshReady reports whether a journaled read can refresh its changed
+// sessions and account rows itself. A changed account generation rebuilds
+// every account row, so a deferring read leaves it to the warm pass.
+func (cache *usageCache) usageRefreshReady(
+	ctx context.Context, zoneID int64, refreshIDs []string, cursorHighWater int64,
+) (bool, error) {
+	if len(refreshIDs) > usageDeferredRefreshLimit {
+		return false, nil
+	}
+	if cursorHighWater == 0 {
+		return true, nil
+	}
+	var stored int64
+	if err := cache.db.QueryRowContext(ctx, `SELECT CAST(value AS INTEGER)
+		FROM usage_cache_metadata WHERE key = ?`,
+		usageCacheMetadataCursorHighWaterMark).Scan(&stored); err != nil {
+		return false, err
+	}
+	if stored != cursorHighWater {
+		return false, nil
+	}
+	var installed int64
+	err := cache.db.QueryRowContext(ctx, `SELECT fact_install_revision
+		FROM usage_rollup_installs WHERE timezone_id = ? AND session_id = ?`,
+		zoneID, usageRollupCursorSessionID).Scan(&installed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && installed >= cursorHighWater, err
 }
 
 func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot, window *usageQuerySnapshot, report func(string)) (map[string]usageRollupInstall, usageRollupRequestTimings, error) {

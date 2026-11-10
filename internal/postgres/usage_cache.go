@@ -31,13 +31,38 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	if err != nil {
 		return err
 	}
+	// A read that would fill or rebuild much of the cache serves its direct
+	// read instead, so a cold or stale cache never makes a report slower.
+	reader.DeferWork()
 	s.usageCache = reader
 	return nil
+}
+
+// WaitUsageCacheWarm waits for background usage cache preparation queued by
+// earlier reads. Without a cache it returns at once.
+func (s *Store) WaitUsageCacheWarm(ctx context.Context) error {
+	if s.usageCache == nil {
+		return nil
+	}
+	return s.usageCache.WaitWarm(ctx)
 }
 
 type pgUsageCacheSource struct {
 	*Store
 	target string
+}
+
+// SummarizeUsageChanges counts journal entries committed after a revision.
+// Revision 0 marks entries a writer has not committed yet.
+func (source *pgUsageCacheSource) SummarizeUsageChanges(ctx context.Context, afterRevision int64) (db.UsageChangeSummary, error) {
+	var summary db.UsageChangeSummary
+	err := source.pg.QueryRowContext(ctx, `SELECT
+ COUNT(*) FILTER (WHERE session_id NOT IN ('', `+usageAccountChangeKeyPG+`)),
+ COALESCE(bool_or(session_id = ''), false),
+ COALESCE(bool_or(session_id = `+usageAccountChangeKeyPG+`), false)
+ FROM usage_session_changes WHERE revision > $1`, afterRevision).Scan(
+		&summary.Sessions, &summary.Global, &summary.Accounts)
+	return summary, err
 }
 
 func usageJournalOID(ctx context.Context, q storeExecutor) (uint32, error) {

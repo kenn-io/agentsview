@@ -737,9 +737,14 @@ details, and Activity retain their existing read paths.
 A first bounded visit fills candidate sessions for its date window. Widening the
 window adds missing sessions. Only a complete, verified all-history read can
 establish global journal coverage; later covered reads replay changed sessions
-and missing installs. The first build and repricing can take longer than warm
-reads. Format 23 rebuilds each SQLite usage cache once after upgrading; the
-31,000-session fixture previously took about 19 seconds and 92 MB.
+and missing installs. On SQLite, the first build and repricing can take longer
+than warm reads. Native PostgreSQL serves its direct read instead whenever the
+cache lacks current coverage for the timezone, the catalog or account
+generation changed, or more than 64 sessions changed. A background worker then
+reads all history in that timezone to rebuild the cache and claim coverage; see
+[Usage cache backfill](background-work.md#usage-cache-backfill). Format 23
+rebuilds each SQLite usage cache once after upgrading; the 31,000-session
+fixture previously took about 19 seconds and 92 MB.
 Both implementations are co-maintained under the same
 behavior contract: daily usage, top sessions, billed session counts, relaxed
 matching counts, and per-session usage must remain observably equal. The

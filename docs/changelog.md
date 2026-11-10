@@ -17,8 +17,11 @@ The latest release is
 **Improvements**
 
 - Usage reuses priced work after restarting native PostgreSQL serving and after
-  pushes. Its disposable cache lives in `<data-dir>/usage-postgres/`. SQLite
-  rebuilds its Usage cache once after this upgrade.
+  pushes. When that cache would first need a large rebuild, such as on first
+  use, after a price change, or after new account usage, Usage shows the direct
+  PostgreSQL result and rebuilds the cache in the background. Its disposable
+  cache lives in `<data-dir>/usage-postgres/`. SQLite rebuilds its Usage cache
+  once after this upgrade.
 
 **Bug fixes**
 

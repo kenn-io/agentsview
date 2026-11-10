@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync"
+	"time"
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/usagefacts"
@@ -49,7 +51,51 @@ type UsageCacheSource interface {
 }
 
 // UsageCacheReader exposes aggregate reads backed by the shared cache engine.
-type UsageCacheReader struct{ engine *DB }
+// A read that would first have to fill or rebuild much of the cache returns
+// an error instead, so the caller serves its direct read, and one background
+// worker brings the cache up to date for later reads.
+type UsageCacheReader struct {
+	engine *DB
+	// deferWork makes reads hand large preparation to the warm worker.
+	deferWork bool
+
+	warmMu      sync.Mutex
+	warmPending map[string]bool // timezone names waiting for a warm pass
+	warmRunning string          // timezone of the running warm pass
+	warmBusy    bool            // a warm pass is running
+	warmIdle    chan struct{}   // closed while no warm pass runs
+	warmCtx     context.Context
+	warmCancel  context.CancelFunc
+	// directReads counts callers serving a direct read after a deferred
+	// read; lastDeferred is when a read last deferred. A warm pass waits
+	// for both to settle, so it does not compete with those direct reads.
+	directReads  int
+	lastDeferred time.Time
+}
+
+// UsageChangeSummary describes journal changes after a claimed revision.
+type UsageChangeSummary struct {
+	Sessions int  // sessions with changed usage or metadata
+	Global   bool // pricing or project identity changed
+	Accounts bool // account usage changed
+}
+
+// UsageChangeSummarizer is an optional UsageCacheSource capability. It lets
+// a deferring read decide from one cheap query whether the cache is close
+// enough to current to refresh during the read.
+type UsageChangeSummarizer interface {
+	SummarizeUsageChanges(ctx context.Context, afterRevision int64) (UsageChangeSummary, error)
+}
+
+const (
+	// usageWarmDirectReadWait bounds how long a warm pass yields to direct
+	// reads, so steady traffic cannot postpone it indefinitely.
+	usageWarmDirectReadWait = 5 * time.Second
+	// usageWarmDeferGrace covers the gap between a deferred read returning
+	// and its caller calling HoldWarm before its direct read.
+	usageWarmDeferGrace   = 20 * time.Millisecond
+	usageWarmPollInterval = 10 * time.Millisecond
+)
 
 // NewUsageCacheReader keeps each remote target in its own retirement directory.
 // The source identity further separates incarnations inside that directory.
@@ -60,31 +106,197 @@ func NewUsageCacheReader(directory string, source UsageCacheSource) (*UsageCache
 	engine := &DB{usageSource: source}
 	engine.usageCache = newUsageCacheManager(filepath.Join(directory, "source"))
 	engine.usageCache.attachArchive(engine)
-	return &UsageCacheReader{engine: engine}, nil
+	// Warm passes belong to the reader, not to the request that queued them,
+	// so they start from Background and end when Close cancels them.
+	warmCtx, warmCancel := context.WithCancel(context.Background())
+	idle := make(chan struct{})
+	close(idle)
+	return &UsageCacheReader{
+		engine: engine, warmPending: make(map[string]bool), warmIdle: idle,
+		warmCtx: warmCtx, warmCancel: warmCancel,
+	}, nil
 }
 
-func (reader *UsageCacheReader) Close() error { return reader.engine.usageCache.Close() }
+func (reader *UsageCacheReader) Close() error {
+	reader.warmCancel()
+	reader.warmMu.Lock()
+	idle := reader.warmIdle
+	reader.warmMu.Unlock()
+	<-idle
+	return reader.engine.usageCache.Close()
+}
+
+// DeferWork makes reads that would fill or rebuild much of the cache return
+// an error and queue a background warm pass instead. Call it before reads.
+func (reader *UsageCacheReader) DeferWork() { reader.deferWork = true }
+
+func (reader *UsageCacheReader) readContext(ctx context.Context) context.Context {
+	if !reader.deferWork {
+		return ctx
+	}
+	return withUsageWorkDeferred(ctx)
+}
+
+// WaitWarm waits until no background warm pass is running or queued.
+func (reader *UsageCacheReader) WaitWarm(ctx context.Context) error {
+	reader.warmMu.Lock()
+	idle := reader.warmIdle
+	reader.warmMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-idle:
+		return nil
+	}
+}
 
 func (reader *UsageCacheReader) GetDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsageResult, error) {
-	return reader.engine.GetDailyUsage(ctx, filter)
+	if reader.warming(filter) {
+		return DailyUsageResult{}, ErrUsageCacheWarming
+	}
+	result, err := reader.engine.GetDailyUsage(reader.readContext(ctx), filter)
+	return result, reader.deferred(filter, err)
 }
 
 func (reader *UsageCacheReader) GetTopSessionsByCost(ctx context.Context, filter UsageFilter, limit int) ([]TopSessionEntry, error) {
-	return reader.engine.GetTopSessionsByCost(ctx, filter, limit)
+	if reader.warming(filter) {
+		return nil, ErrUsageCacheWarming
+	}
+	result, err := reader.engine.GetTopSessionsByCost(reader.readContext(ctx), filter, limit)
+	return result, reader.deferred(filter, err)
 }
 
 func (reader *UsageCacheReader) GetUsageSessionCounts(ctx context.Context, filter UsageFilter) (UsageSessionCounts, error) {
-	return reader.engine.GetUsageSessionCounts(ctx, filter)
+	if reader.warming(filter) {
+		return UsageSessionCounts{}, ErrUsageCacheWarming
+	}
+	result, err := reader.engine.GetUsageSessionCounts(reader.readContext(ctx), filter)
+	return result, reader.deferred(filter, err)
 }
 
 func (reader *UsageCacheReader) GetUsageMatchingSessionCount(ctx context.Context, filter UsageFilter) (int, error) {
-	return reader.engine.GetUsageMatchingSessionCount(ctx, filter)
+	if reader.warming(filter) {
+		return 0, ErrUsageCacheWarming
+	}
+	result, err := reader.engine.GetUsageMatchingSessionCount(reader.readContext(ctx), filter)
+	return result, reader.deferred(filter, err)
+}
+
+// warming reports whether a deferring read should skip the cache because a
+// warm pass for its timezone is queued or running. The pass will replace
+// what the read would have checked.
+func (reader *UsageCacheReader) warming(filter UsageFilter) bool {
+	if !reader.deferWork {
+		return false
+	}
+	reader.warmMu.Lock()
+	defer reader.warmMu.Unlock()
+	queued := reader.warmPending[filter.Timezone] ||
+		(reader.warmBusy && reader.warmRunning == filter.Timezone)
+	if queued {
+		reader.lastDeferred = time.Now()
+	}
+	return queued
+}
+
+// deferred queues a warm pass for a read that declined to build the cache.
+func (reader *UsageCacheReader) deferred(filter UsageFilter, err error) error {
+	if errors.Is(err, ErrUsageCacheWarming) {
+		reader.queueWarm(filter.Timezone)
+	}
+	return err
+}
+
+// HoldWarm marks a direct read served after a deferred cache read. Warm
+// passes wait until every hold is released, within a bounded time. Call the
+// returned function when the direct read finishes.
+func (reader *UsageCacheReader) HoldWarm() func() {
+	reader.warmMu.Lock()
+	reader.directReads++
+	reader.warmMu.Unlock()
+	return sync.OnceFunc(func() {
+		reader.warmMu.Lock()
+		reader.directReads--
+		reader.warmMu.Unlock()
+	})
+}
+
+// waitForDirectReads lets the direct reads that deferred to this pass
+// finish first. It polls because a deferred read takes its hold just after
+// it returns; the grace period covers that gap.
+func (reader *UsageCacheReader) waitForDirectReads() {
+	deadline := time.Now().Add(usageWarmDirectReadWait)
+	for time.Now().Before(deadline) {
+		reader.warmMu.Lock()
+		quiet := reader.directReads == 0 &&
+			time.Since(reader.lastDeferred) >= usageWarmDeferGrace
+		reader.warmMu.Unlock()
+		if quiet {
+			return
+		}
+		select {
+		case <-reader.warmCtx.Done():
+			return
+		case <-time.After(usageWarmPollInterval):
+		}
+	}
+}
+
+func (reader *UsageCacheReader) queueWarm(timezone string) {
+	reader.warmMu.Lock()
+	defer reader.warmMu.Unlock()
+	if reader.warmCtx.Err() != nil {
+		return
+	}
+	reader.warmPending[timezone] = true
+	reader.lastDeferred = time.Now()
+	select {
+	case <-reader.warmIdle:
+	default:
+		return // The running worker drains the queue before it stops.
+	}
+	idle := make(chan struct{})
+	reader.warmIdle = idle
+	go reader.runWarm(idle)
+}
+
+// runWarm reads the whole history of each queued timezone. That read fills
+// every changed session, rebuilds stale rollups, and records journal
+// coverage for the zone, so later reads of any window refresh only the
+// sessions changed since. One worker keeps the warm's memory to one pass.
+func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
+	for {
+		reader.waitForDirectReads()
+		reader.warmMu.Lock()
+		var timezone string
+		found := false
+		for name := range reader.warmPending {
+			timezone, found = name, true
+			delete(reader.warmPending, name)
+			break
+		}
+		if !found || reader.warmCtx.Err() != nil {
+			reader.warmBusy = false
+			close(idle)
+			reader.warmMu.Unlock()
+			return
+		}
+		reader.warmBusy, reader.warmRunning = true, timezone
+		reader.warmMu.Unlock()
+		_, err := reader.engine.GetDailyUsage(reader.warmCtx, UsageFilter{Timezone: timezone})
+		if err != nil && reader.warmCtx.Err() == nil {
+			log.Printf("warming usage cache for timezone %q: %v", timezone, err)
+		}
+	}
 }
 
 func (db *DB) captureExternalUsage(ctx context.Context, filter UsageFilter, ids *[]string, after *int64) (usageQuerySnapshot, error) {
 	snapshot, err := db.usageSource.CaptureUsage(ctx, UsageSourceRequest{Filter: filter, IDs: ids, AfterRevision: after})
 	if err != nil {
 		return snapshot, err
+	}
+	if snapshot.DatabaseID != "" {
+		db.usageSourceDatabaseID.Store(&snapshot.DatabaseID)
 	}
 	snapshot.exactAccountRevision = true
 	snapshot.location = filter.Location()

@@ -1564,6 +1564,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 		if !directUsageRequired(ctx, err) {
 			return result, err
 		}
+		defer cache.HoldWarm()()
 	}
 	loc := f.Location()
 
@@ -2172,6 +2173,7 @@ func (s *Store) GetTopSessionsByCost(
 		if !directUsageRequired(ctx, err) {
 			return result, err
 		}
+		defer cache.HoldWarm()()
 	}
 	out, err := s.runtimeState().topUsage.Do(ctx, slot, version, func(ctx context.Context) ([]db.TopSessionEntry, error) {
 		if slot != "" && version != "" {
@@ -2365,6 +2367,7 @@ func (s *Store) GetUsageSessionCounts(
 		if !directUsageRequired(ctx, err) {
 			return result, err
 		}
+		defer cache.HoldWarm()()
 	}
 	pb := &paramBuilder{}
 	query := pgTopSessionsUsageRowQuery(pb, f, false, s.sessionDialect())
@@ -2473,6 +2476,7 @@ func (s *Store) GetUsageMatchingSessionCount(
 		if !directUsageRequired(ctx, err) {
 			return result, err
 		}
+		defer cache.HoldWarm()()
 	}
 	pb := &paramBuilder{}
 

@@ -105,6 +105,19 @@ func requireCachedUsageMatchesDirect(t *testing.T, store *Store, filter db.Usage
 	require.NoError(t, completeUsageParity(t.Context(), direct, store.usageCache, filter))
 }
 
+// readWarmedUsage reads daily usage from a configured cache, waiting once
+// for the background pass that a deferring read queues.
+func readWarmedUsage(t *testing.T, store *Store, filter db.UsageFilter) db.DailyUsageResult {
+	t.Helper()
+	got, err := store.usageCache.GetDailyUsage(t.Context(), filter)
+	if errors.Is(err, db.ErrUsageCacheWarming) {
+		require.NoError(t, store.usageCache.WaitWarm(t.Context()))
+		got, err = store.usageCache.GetDailyUsage(t.Context(), filter)
+	}
+	require.NoError(t, err)
+	return got
+}
+
 func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
 	local, syncer, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
@@ -606,6 +619,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 			require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
 			require.NotNil(t, reader.usageCache)
 			if name == "granted role" {
+				readWarmedUsage(t, reader, filter)
 				requireCachedUsageMatchesDirect(t, reader, filter)
 				return
 			}
@@ -627,8 +641,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 						reader.usageCache = nil
 						require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
 					}
-					got, err := reader.usageCache.GetDailyUsage(ctx, filter)
-					require.NoError(t, err)
+					got := readWarmedUsage(t, reader, filter)
 					require.Equal(t, 1268, got.Totals.OutputTokens)
 					require.Equal(t, int64(8938), got.Totals.TotalCost.Microdollars)
 					requireCachedUsageMatchesDirect(t, reader, filter)
@@ -680,4 +693,44 @@ func TestPGUsageCacheAccountTotalsMatchDirect(t *testing.T) {
 	for _, filter := range filters {
 		requireCachedUsageMatchesDirect(t, store, filter)
 	}
+}
+
+func TestPGUsageCacheDefersLargePreparation(t *testing.T) {
+	local, syncer, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',2,200,'account-one')`)
+	require.NoError(t, err)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	store.usageCache.DeferWork()
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	direct := &Store{pg: store.pg}
+	requireDeferred := func(step string) {
+		t.Helper()
+		_, err := store.usageCache.GetDailyUsage(ctx, filter)
+		require.ErrorIs(t, err, db.ErrUsageCacheWarming, step)
+		want, err := direct.GetDailyUsage(ctx, filter)
+		require.NoError(t, err)
+		got, err := store.GetDailyUsage(ctx, filter)
+		require.NoError(t, err)
+		require.Equal(t, want, got, step)
+		require.NoError(t, store.usageCache.WaitWarm(ctx))
+		requireCachedUsageMatchesDirect(t, store, filter)
+	}
+	requireDeferred("empty cache")
+	probe.takeExtracted()
+
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "paid-a", []db.UsageEvent{{SessionID: "paid-a", Source: "provider", Model: "paid-a", OutputTokens: 900, DedupKey: "event", OccurredAt: "2026-01-01T09:00:00Z"}}))
+	pushed, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	requireCachedUsageMatchesDirect(t, store, filter)
+	require.Equal(t, []string{"paid-a"}, probe.takeExtracted(), "a small push refreshes during the read")
+
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(2,'cursor','2026-01-01','paid-a',3,300,'account-two')`)
+	require.NoError(t, err)
+	requireDeferred("account change")
+
+	_, err = store.pg.ExecContext(ctx, `UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`)
+	require.NoError(t, err)
+	requireDeferred("price change")
 }
