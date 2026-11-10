@@ -12,6 +12,7 @@ func TestImageTextSearchPaginationByRelevance(t *testing.T) {
 	t.Run("first page with many messages", func(t *testing.T) {
 		ctx := t.Context()
 		d := testDB(t)
+		require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 		content := testInlineImageContent()
 		for i := range 50 {
 			id := fmt.Sprintf("message-%02d", i)
@@ -48,6 +49,7 @@ func TestImageTextSearchPaginationByRelevance(t *testing.T) {
 	t.Run("cursor pages", func(t *testing.T) {
 		ctx := t.Context()
 		d := testDB(t)
+		require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 		content := testInlineImageContent()
 		for _, id := range []string{"message-a", "message-b", "message-c", "message-d"} {
 			insertSession(t, d, id, "demo")

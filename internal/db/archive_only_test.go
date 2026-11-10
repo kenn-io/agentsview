@@ -17,9 +17,9 @@ func TestArchiveOnlyPreservesPendingRebuild(t *testing.T) {
 		wantRaw     int
 		stale       bool
 	}{
-		{"pending archive", dataVersion - 1, true, (1 << 21) + (1 << 20) + dataVersion - 1, true},
-		{"current archive", dataVersion, true, (1 << 21) + (1 << 20) + dataVersion, false},
-		{"ordinary archive", dataVersion, false, (1 << 21) + dataVersion, false},
+		{"pending archive", dataVersion - 1, true, (1 << 20) + dataVersion - 1, true},
+		{"current archive", dataVersion, true, (1 << 20) + dataVersion, false},
+		{"ordinary archive", dataVersion, false, dataVersion, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -67,7 +67,7 @@ func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
 	require.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
 	var raw int
 	require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
-	assert.Equal(t, (1<<21)+(1<<20)+dataVersion, raw)
+	assert.Equal(t, (1<<20)+dataVersion, raw)
 }
 
 func TestDecodeUserVersionArchiveBits(t *testing.T) {
@@ -76,23 +76,29 @@ func TestDecodeUserVersionArchiveBits(t *testing.T) {
 		archiveOnly  bool
 	}{
 		{169, 169, false},
-		{1<<21 | 169, 169, false},
 		{1<<20 | 169, 169, true},
-		{1<<21 | 1<<20 | 168, 168, true},
-		{1<<22 | 1<<21 | 169, 1<<22 | 169, false},
+		{1<<20 | 168, 168, true},
+		{170, 170, false},
 	} {
 		version, archiveOnly := DecodeUserVersion(tc.raw)
 		assert.Equal(t, tc.version, version)
 		assert.Equal(t, tc.archiveOnly, archiveOnly)
 	}
-	// The default branch subtracts only the archive-only bit before comparing.
-	for _, raw := range []int{1<<21 | 169, 1<<21 | 1<<20 | 169} {
-		oldVersion := raw
-		if oldVersion >= 1<<20 {
-			oldVersion -= 1 << 20
-		}
-		assert.Greater(t, oldVersion, 169)
-	}
+
+}
+
+func TestImageTextDataVersionRequiresRebuild(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	path := d.Path()
+	_, err := d.getWriter().ExecContext(ctx, `PRAGMA user_version=169`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	needs, full, err := ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	require.True(t, needs)
+	require.True(t, full)
+	assert.Greater(t, CurrentDataVersion(), 169)
 }
 
 func TestOpenRejectsUnknownArchiveFormat(t *testing.T) {

@@ -1601,7 +1601,7 @@ func (db *DB) insertMessages(ctx context.Context,
 		}
 	}
 	storedSessionIDs := messageSessionIDs(msgs)
-	imageTx := &imageTextBatchTx{transactionQueries: contextTransaction{ctx: ctx, tx: tx}, oldHashes: make(map[string]bool)}
+	imageTx := contextTransaction{ctx: ctx, tx: tx}
 	for _, sessionID := range storedSessionIDs {
 		if err := bumpTranscriptRevisionTx(imageTx, sessionID); err != nil {
 			return err
@@ -1628,9 +1628,6 @@ func (db *DB) insertMessages(ctx context.Context,
 		if err != nil {
 			return err
 		}
-	}
-	if err := imageTx.pruneImageText(); err != nil {
-		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err

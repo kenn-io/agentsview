@@ -138,6 +138,7 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 	identity := ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}
 	callHash := db.RetainedToolResultImages(callImage)[0].SHA256
 	eventHash := db.RetainedToolResultImages(eventImage)[0].SHA256
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
 	require.NoError(t, local.SaveImageText(ctx, callHash, identity, "invoice 4827", false))
 	require.NoError(t, local.SaveImageText(ctx, eventHash, identity, "receipt 9931", false))
 
@@ -219,6 +220,7 @@ func TestClickHouseImageTextContentPageOrder(t *testing.T) {
 	images := db.RetainedToolResultImages(content)
 	require.Len(t, images, 2)
 	identity := ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
 	require.NoError(t, local.SaveImageText(ctx, images[0].SHA256, identity, "needle zebra", false))
 	require.NoError(t, local.SaveImageText(ctx, images[1].SHA256, identity, "needle apple "+strings.Repeat("界", 250)+" invoice example", false))
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})

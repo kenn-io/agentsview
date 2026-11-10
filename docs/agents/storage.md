@@ -182,10 +182,8 @@ as complete for draining attached archive sources.
 The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
-store `1 << 20` plus their parser version in `PRAGMA user_version`. All
-archives also carry `1 << 21` for the image-text index, so older builds refuse
-archives whose index they cannot maintain. This build decodes both bits and
-preserves pending rebuilds without changing the parser version.
+store `1 << 20` plus their parser version in `PRAGMA user_version`. Data version 170 triggers a preservation rebuild and prevents older binaries
+from writing archives whose image-text index they cannot maintain.
 
 ### Artifact checkpoint landings
 
@@ -1317,14 +1315,14 @@ TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
 When `[image_text]` is enabled, the daemon extracts text from retained inline
 and offloaded tool-result images using the configured local GLM-OCR service. It
 caches normalized text by decoded image hash and processor identity, and tracks
-current occurrences in the same transaction as tool results. Startup and
-periodic passes backfill existing archives in bounded pages, each pass limited
-to two minutes. Each image is read from a copy whose bytes match its hash, and
+current occurrences in the same transaction as tool results. The first enabled pass builds occurrences for existing archives. Extraction
+passes run for at most two minutes, including requests in flight. Each image is read from a copy whose bytes match its hash, and
 its type is detected from those bytes. Failed requests and missing, corrupt, or
 oversized copies retry with backoff; verified bytes that are not PNG, JPEG, or
 WebP, or that GLM-OCR rejects, are terminal. A full archive rebuild preserves
-cache entries for retained images and rebuilds their occurrences. Removing the
-last occurrence removes its cached text. Usage-only archives do not store image
+cache entries for retained images and rebuilds their occurrences. Removing the last occurrence removes its cached text during the next pass.
+Disabling image text and restarting removes cached text and mirror matches;
+re-enabling extracts it again. Usage-only archives do not store image
 text.
 
 Successful text is published to PostgreSQL, DuckDB, and ClickHouse as

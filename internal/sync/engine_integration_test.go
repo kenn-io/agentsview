@@ -18163,62 +18163,50 @@ func TestResyncAllUsageOnlyDropsFrictionDigestText(t *testing.T) {
 }
 
 func TestImageTextSurvivesFullResync(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	ctx := t.Context()
-	env.writeClaudeSession(t, "test-proj", "present.jsonl", testjsonl.NewSessionBuilder().AddClaudeUser(tsEarly, "hello").AddClaudeAssistant(tsEarlyS5, "answer").String())
-	require.Equal(t, 1, env.engine.SyncAll(ctx, nil).Synced)
-	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-	unreadable := `[{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
-	images := db.RetainedToolResultImages(content)
-	require.Len(t, images, 1)
-	require.NoError(t, env.db.UpsertSession(ctx, db.Session{ID: "orphan-image", Project: "demo", Agent: "claude", MessageCount: 1}))
-	require.NoError(t, env.db.InsertMessages(ctx, []db.Message{{SessionID: "orphan-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}, {ToolName: "Read", ResultContent: unreadable}}}}))
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, env.db.SaveImageText(ctx, images[0].SHA256, identity, "invoice 42", false))
-	require.NoError(t, env.db.SaveImageTextTerminal(ctx, db.RetainedToolResultImages(unreadable)[0].SHA256, identity))
-	stats := env.engine.ResyncAll(ctx, nil)
-	require.False(t, stats.Aborted, "%v", stats.Warnings)
-	pending, err := env.db.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
-	require.NoError(t, err)
-	require.Empty(t, pending, "terminal results survive the rebuild")
-	page, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, "orphan-image", page.Results[0].SessionID)
-}
-
-func TestImageTextExcludedFromTranscriptsResync(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	ctx := t.Context()
-	env.writeClaudeSession(t, "test-proj", "present.jsonl", testjsonl.NewSessionBuilder().AddClaudeUser(tsEarly, "hello").AddClaudeAssistant(tsEarlyS5, "answer").String())
-	require.Equal(t, 1, env.engine.SyncAll(ctx, nil).Synced)
-	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-	require.NoError(t, env.db.UpsertSession(ctx, db.Session{ID: "orphan-image", Project: "demo", Agent: "claude", MessageCount: 1}))
-	require.NoError(t, env.db.InsertMessages(ctx, []db.Message{{SessionID: "orphan-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, env.db.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice 42", false))
-	page, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-
-	env.engine.Close()
-	env.db.SetArchiveContent(config.ArchiveContentTranscripts)
-	engine := sync.NewEngine(ctx, env.db, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}},
-		Machine:   "local", ArchiveContent: config.ArchiveContentTranscripts,
-	})
-	t.Cleanup(engine.Close)
-	stats := engine.ResyncAll(ctx, nil)
-	require.False(t, stats.Aborted, "%v", stats.Warnings)
-	session, err := env.db.GetSessionFull(ctx, "orphan-image")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	var count int
-	require.NoError(t, env.db.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
-	require.Zero(t, count)
-	page, err = env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
+	for _, mode := range []string{"full", "transcripts", "copy fails"} {
+		t.Run(mode, func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+			ctx := t.Context()
+			env.writeClaudeSession(t, "test-proj", "present.jsonl", testjsonl.NewSessionBuilder().AddClaudeUser(tsEarly, "hello").AddClaudeAssistant(tsEarlyS5, "answer").String())
+			require.Equal(t, 1, env.engine.SyncAll(ctx, nil).Synced)
+			content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+			require.NoError(t, env.db.UpsertSession(ctx, db.Session{ID: "orphan-image", Project: "demo", Agent: "claude", MessageCount: 1}))
+			require.NoError(t, env.db.InsertMessages(ctx, []db.Message{{SessionID: "orphan-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+			identity, err := ocr.NewIdentity("test", "model", "revision")
+			require.NoError(t, err)
+			require.NoError(t, env.db.BackfillImageTextOccurrences(ctx))
+			require.NoError(t, env.db.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice 42", false))
+			engine := env.engine
+			if mode == "transcripts" {
+				env.engine.Close()
+				env.db.SetArchiveContent(config.ArchiveContentTranscripts)
+				engine = sync.NewEngine(ctx, env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}}, Machine: "local", ArchiveContent: config.ArchiveContentTranscripts})
+				t.Cleanup(engine.Close)
+			}
+			if mode == "copy fails" {
+				require.NoError(t, env.db.Update(ctx, func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx, `DROP TABLE image_text_cache; CREATE TABLE image_text_cache (broken TEXT)`)
+					return err
+				}))
+			}
+			stats := engine.ResyncAll(ctx, nil)
+			if mode == "copy fails" {
+				require.True(t, stats.Aborted)
+				require.Contains(t, strings.Join(stats.Warnings, " "), "image text copy failed")
+				session, err := env.db.GetSessionFull(ctx, "orphan-image")
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				return
+			}
+			require.False(t, stats.Aborted, "%v", stats.Warnings)
+			require.Empty(t, stats.Warnings)
+			if mode == "full" {
+				require.NoError(t, env.db.BackfillImageTextOccurrences(ctx))
+				page, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
+				require.NoError(t, err)
+				require.Len(t, page.Results, 1)
+				require.Equal(t, "orphan-image", page.Results[0].SessionID)
+			}
+		})
+	}
 }

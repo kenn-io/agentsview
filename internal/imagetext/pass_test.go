@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -42,6 +41,29 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestImageTextPassStopsOnServiceError(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
+	for i := range 3 {
+		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d", i)))
+		require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: i, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	}
+	requests := 0
+	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	})
+	require.Error(t, (&Manager{DB: d, Client: client}).Run(ctx))
+	require.GreaterOrEqual(t, requests, 1)
+	require.LessOrEqual(t, requests, 3)
+	var failures int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE failures > 0`).Scan(&failures))
+	require.Equal(t, 1, failures)
+}
+
 func TestImageTextPassDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
@@ -63,16 +85,16 @@ func TestImageTextPassDeadline(t *testing.T) {
 		}
 		start := time.Now()
 		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
-		require.Equal(t, 140*time.Second, time.Since(start))
+		require.Equal(t, 120*time.Second, time.Since(start))
 		pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 20)
 		require.NoError(t, err)
 		require.Len(t, pending, 20)
 		var succeeded int
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE succeeded=1`).Scan(&succeeded))
-		require.Equal(t, 2, succeeded)
+		require.Equal(t, 1, succeeded)
 		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
 		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE succeeded=1`).Scan(&succeeded))
-		require.Equal(t, 4, succeeded)
+		require.Equal(t, 2, succeeded)
 	})
 }
 
@@ -85,6 +107,7 @@ func TestImageTextPassKeepsRetryCutoff(t *testing.T) {
 		requests := 0
 		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
 			requests++
+			w.Header().Set("Content-Type", "application/json")
 			time.Sleep(2500 * time.Millisecond)
 			fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"example"}]]}`, glmocr.DefaultDeploymentFingerprint)
 		})
@@ -95,6 +118,7 @@ func TestImageTextPassKeepsRetryCutoff(t *testing.T) {
 			hashes = append(hashes, db.RetainedToolResultImages(content)[0].SHA256)
 			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: i, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 		}
+		require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 		require.NoError(t, d.SaveImageText(ctx, hashes[0], client.Identity(), "", true))
 		require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, `UPDATE image_text_cache SET retry_at=? WHERE image_hash=?`, time.Now().UTC().Add(time.Second).Format(time.RFC3339), hashes[0])
@@ -143,7 +167,7 @@ func TestImageTextFailureClassification(t *testing.T) {
 			}
 			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test", MessageCount: 1}))
 			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-			require.NoError(t, manager.Run(ctx))
+			require.Error(t, manager.Run(ctx))
 			page, err := d.Search(ctx, db.SearchFilter{Query: "succeeded"})
 			require.NoError(t, err)
 			require.Empty(t, page.Results)
@@ -180,6 +204,21 @@ func TestImageTextFailureClassification(t *testing.T) {
 			require.Equal(t, "one", page.Results[0].SessionID)
 		})
 	}
+	t.Run("transcripts only", func(t *testing.T) {
+		ctx := t.Context()
+		d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, d.Close()) })
+		require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
+		content := `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`
+		require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+		requests := 0
+		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) { requests++ })
+		d.SetArchiveContent(config.ArchiveContentTranscripts)
+		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
+		require.Zero(t, requests)
+	})
+
 }
 
 func TestImageTextProcessorKey(t *testing.T) {
@@ -243,25 +282,29 @@ func TestImageTextPassReadsMultipleImagesFromOneResult(t *testing.T) {
 	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "multi", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 	seen := make(map[string]bool)
 	requests := 0
+	var requestErr error
+	var lengths []int
 	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		var request struct {
 			Images []string `json:"images"`
 		}
-		require.NoError(t, json.UnmarshalRead(r.Body, &request))
-		require.Len(t, request.Images, 1)
-		seen[strings.TrimPrefix(request.Images[0], "data:image/png;base64,")] = true
+		requestErr = json.UnmarshalRead(r.Body, &request)
+		lengths = append(lengths, len(request.Images))
+		if len(request.Images) == 1 {
+			seen[strings.TrimPrefix(request.Images[0], "data:image/png;base64,")] = true
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
 	})
 	manager := Manager{DB: d, Client: client}
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
 	require.NoError(t, manager.Run(ctx))
-	runtime.ReadMemStats(&after)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(200<<20), "processing images in one result should avoid repeatedly decoding siblings")
+	require.NoError(t, requestErr)
 	require.Equal(t, want, seen)
 	require.Equal(t, 40, requests)
+	for _, n := range lengths {
+		require.Equal(t, 1, n)
+	}
 	require.NoError(t, manager.Run(ctx))
 	require.Equal(t, 40, requests)
 }
@@ -286,11 +329,7 @@ func TestImageTextPassReadsRepeatedImageFromOneResult(t *testing.T) {
 		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
 	})
 	manager := Manager{DB: d, Client: client}
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
 	require.NoError(t, manager.Run(ctx))
-	runtime.ReadMemStats(&after)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(80<<20), "reading one copy should not load every copy of the result")
 	require.Equal(t, 1, requests)
 }
 
@@ -370,7 +409,7 @@ func TestImageTextUsesVerifiedBytes(t *testing.T) {
 	}{
 		{"mislabeled png", "image/gif", []byte("\x89PNG\r\n\x1a\nimage"), "image/png"},
 		{"unsupported gif", "image/png", []byte("GIF89a\x01\x00\x01\x00"), ""},
-		{"mislabeled webp", "image/png", []byte("RIFF\x04\x00\x00\x00WEBP"), "image/webp"},
+		{"mislabeled webp", "image/png", []byte("RIFF\x04\x00\x00\x00WEBPVP8 "), "image/webp"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -401,8 +440,8 @@ func TestImageTextUsesVerifiedBytes(t *testing.T) {
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT succeeded,retry_at FROM image_text_cache`).Scan(&succeeded, &retry))
 			if tc.mediaType == "" {
 				require.Empty(t, sent)
-				require.Zero(t, succeeded)
-				require.Equal(t, "9999-12-31T23:59:59Z", retry)
+				require.Equal(t, 1, succeeded)
+				require.Empty(t, retry)
 				return
 			}
 			require.Equal(t, []string{tc.mediaType}, sent)

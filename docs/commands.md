@@ -2818,5 +2818,7 @@ the web palette or with, for example,
 `tool_result` searches include image text; other `--in` sources and in-session
 find search only text shown in the transcript. Each new extraction is sent on
 the next incremental push to PostgreSQL, DuckDB, and ClickHouse, so `pg serve`
-and the other mirrors return the same matches. Removing the last retained copy
-of an image removes its extracted text.
+and the other mirrors return the same matches. Removing the last retained copy of an image removes its extracted text.
+Disabling image text and restarting clears extracted text and removes mirror
+matches on the next push. Session and artifact exports carry image references or
+placeholders rather than extracted text.

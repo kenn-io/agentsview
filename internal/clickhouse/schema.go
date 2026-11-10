@@ -17,7 +17,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 8
+const SchemaVersion = 9
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (

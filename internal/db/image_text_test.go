@@ -15,87 +15,50 @@ import (
 
 func TestImageTextBackfillExistingResults(t *testing.T) {
 	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := Open(ctx, path)
-	require.NoError(t, err)
-	defer func() { _ = d.Close() }()
+	d := testDB(t)
 	insertSession(t, d, "image", "demo")
-	content := `[{"type":"file","mime":"application/octet-stream","uri":"data:application/octet-stream;base64,iVBORw0KGgppbWFnZQ=="}]`
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: testInlineImageContent()}}}}))
-	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE tool_calls SET result_content=? WHERE session_id='image'`, content); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES ('image_text_occurrences_backfill_v1',1)`); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key='image_text_occurrences_backfill_v2'`); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `PRAGMA user_version=169`)
-		return err
-	}))
-	require.NoError(t, d.Close())
-	d, err = Open(ctx, path)
-	require.NoError(t, err)
+	content := testInlineImageContent()
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 	pending, err := d.PendingImageText(ctx, "test", time.Now(), 20)
 	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	require.Equal(t, RetainedToolResultImages(content)[0].SHA256, pending[0])
-	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.Empty(t, pending)
+	_, err = d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_image_backfill BEFORE INSERT ON image_text_occurrences BEGIN SELECT RAISE(ABORT,'backfill interrupted'); END`)
 	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, pending[0], identity, "invoice", false))
-	page, err := d.Search(ctx, SearchFilter{Query: "invoice"})
+	require.ErrorContains(t, d.BackfillImageTextOccurrences(ctx), "backfill interrupted")
+	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER fail_image_backfill`)
 	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, "image", page.Results[0].SessionID)
-	_, err = d.getWriter().ExecContext(ctx, `PRAGMA user_version=169`)
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	pending, err = d.PendingImageText(ctx, "test", time.Now(), 20)
 	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = Open(ctx, path)
-	require.NoError(t, err)
-	var raw int
-	require.NoError(t, d.Reader().QueryRow(ctx, `PRAGMA user_version`).Scan(&raw))
-	require.Equal(t, (1<<21)+169, raw)
-	page, err = d.Search(ctx, SearchFilter{Query: "invoice"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
+	require.Equal(t, []string{RetainedToolResultImages(content)[0].SHA256}, pending)
 }
 
-func TestImageTextBackfillRetriesAfterFailure(t *testing.T) {
+func TestImageTextDisableClearsSearchAndCache(t *testing.T) {
 	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := Open(ctx, path)
-	require.NoError(t, err)
+	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 	insertSession(t, d, "image", "demo")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: testInlineImageContent()}}}}))
-	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key='image_text_occurrences_backfill_v2';
-			PRAGMA user_version=169;
-			CREATE TRIGGER fail_image_backfill BEFORE INSERT ON image_text_occurrences BEGIN SELECT RAISE(ABORT,'backfill interrupted'); END`)
-		return err
-	}))
-	require.NoError(t, d.Close())
-	_, err = Open(ctx, path)
-	require.ErrorContains(t, err, "backfill interrupted")
-	raw, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, false))
+	content := testInlineImageContent()
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
-	var version, marker int
-	require.NoError(t, raw.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version))
-	require.Equal(t, 169, version)
-	require.NoError(t, raw.QueryRowContext(ctx, `SELECT count(*) FROM stats WHERE key='image_text_occurrences_backfill_v2'`).Scan(&marker))
-	require.Zero(t, marker)
-	_, err = raw.ExecContext(ctx, `DROP TRIGGER fail_image_backfill`)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET sync_marker='2000-01-01T00:00:00.000Z' WHERE id='image'`)
 	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	d, err = Open(ctx, path)
+	require.NoError(t, d.ClearImageText(ctx))
+	page, err := d.Search(ctx, SearchFilter{Query: "invoice"})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	pending, err := d.PendingImageText(ctx, "test", time.Now(), 20)
+	require.Empty(t, page.Results)
+	var count int
+	var marker string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+	require.Zero(t, count)
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT sync_marker FROM sessions WHERE id='image'`).Scan(&marker))
+	require.Greater(t, marker, "2000-01-01T00:00:00.000Z")
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-	require.NoError(t, d.Reader().QueryRow(ctx, `PRAGMA user_version`).Scan(&version))
-	require.Equal(t, (1<<21)+169, version)
 }
 
 func TestImageTextIndexRebuild(t *testing.T) {
@@ -103,6 +66,7 @@ func TestImageTextIndexRebuild(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d, err := Open(ctx, path)
 	require.NoError(t, err)
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 	t.Cleanup(func() {
 		if d != nil {
 			_ = d.Close()
@@ -169,6 +133,7 @@ func TestImageTextIndexRebuild(t *testing.T) {
 func TestImageTextPendingPrefersUnattempted(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 	insertSession(t, d, "image", "demo")
 	var hashes []string
 	for i := range 3 {
@@ -195,6 +160,7 @@ func TestImageTextPendingPrefersUnattempted(t *testing.T) {
 func TestImageTextMirrorRows(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 	insertSession(t, d, "image", "demo")
 	content := testInlineImageContent()
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Ordinal: 3, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{
@@ -234,39 +200,93 @@ func TestImageTextMirrorRows(t *testing.T) {
 }
 
 func TestImageTextMembershipAndPruning(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	image := []byte("\x89PNG\r\n\x1a\nfixture")
-	content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(image))
-	images := RetainedToolResultImages(content)
-	require.Len(t, images, 1)
-	add := func(id string) {
-		t.Helper()
-		insertSession(t, d, id, "demo")
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	for _, mode := range []string{"replace", "delete"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := t.Context()
+			d := testDB(t)
+			require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
+			shared := testInlineImageContent()
+			exclusive := `[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+			unrelated := `[{"type":"input_image","image_url":"data:image/png;base64,BAUG"}]`
+			for _, id := range []string{"one", "two", "unrelated"} {
+				insertSession(t, d, id, "demo")
+				content := shared
+				if id == "unrelated" {
+					content = unrelated
+				}
+				require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+			}
+			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "one", Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: exclusive}}}}))
+			identity, err := ocr.NewIdentity("test", "model", "revision")
+			require.NoError(t, err)
+			sharedHash, exclusiveHash, unrelatedHash := RetainedToolResultImages(shared)[0].SHA256, RetainedToolResultImages(exclusive)[0].SHA256, RetainedToolResultImages(unrelated)[0].SHA256
+			for _, hash := range []string{sharedHash, exclusiveHash, unrelatedHash} {
+				require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice", false))
+			}
+			for _, step := range []struct {
+				id     string
+				shared int
+			}{{"one", 1}, {"two", 0}} {
+				if mode == "replace" {
+					require.NoError(t, d.ReplaceSessionMessages(ctx, step.id, []Message{{SessionID: step.id, Role: "assistant", Content: "removed"}}))
+				} else {
+					require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+						_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, step.id)
+						return err
+					}))
+				}
+				require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+				for hash, want := range map[string]int{sharedHash: step.shared, exclusiveHash: 0, unrelatedHash: 1} {
+					var count int
+					require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, hash).Scan(&count))
+					require.Equal(t, want, count)
+				}
+			}
+			require.NoError(t, d.SaveImageText(ctx, sharedHash, identity, "late", false))
+			var count int
+			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, sharedHash).Scan(&count))
+			require.Zero(t, count)
+		})
 	}
-	add("one")
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, images[0].SHA256, identity, "invoice", false))
-	add("two")
-	insertSession(t, d, "other", "demo")
-	other := `[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "other", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: other}}}}))
-	otherHash := RetainedToolResultImages(other)[0].SHA256
-	require.NoError(t, d.SaveImageText(ctx, otherHash, identity, "other text", false))
-	require.NoError(t, d.ReplaceSessionMessages(ctx, "one", []Message{{SessionID: "one", Role: "assistant", Content: "removed"}}))
-	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, images[0].SHA256).Scan(&count))
-	require.Equal(t, 1, count)
-	require.NoError(t, d.ReplaceSessionMessages(ctx, "two", []Message{{SessionID: "two", Role: "assistant", Content: "removed"}}))
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, images[0].SHA256).Scan(&count))
-	require.Zero(t, count)
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, otherHash).Scan(&count))
-	require.Equal(t, 1, count)
-	require.NoError(t, d.SaveImageText(ctx, images[0].SHA256, identity, "late", false))
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, images[0].SHA256).Scan(&count))
-	require.Zero(t, count)
+	t.Run("copy", func(t *testing.T) {
+		ctx := t.Context()
+		src := testDB(t)
+		require.NoError(t, src.BackfillImageTextOccurrences(t.Context()))
+		dst := testDB(t)
+		require.NoError(t, dst.BackfillImageTextOccurrences(t.Context()))
+		first := testInlineImageContent()
+		terminal := `[{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
+		orphan := `[{"type":"input_image","image_url":"data:image/png;base64,BgcI"}]`
+		for _, item := range []struct{ id, content string }{{"success", first}, {"terminal", terminal}, {"orphan", orphan}} {
+			insertSession(t, src, item.id, "demo")
+			require.NoError(t, src.InsertMessages(ctx, []Message{{SessionID: item.id, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: item.content}}}}))
+			if item.id != "orphan" {
+				insertSession(t, dst, item.id, "demo")
+				require.NoError(t, dst.InsertMessages(ctx, []Message{{SessionID: item.id, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: item.content}}}}))
+			}
+		}
+		identity, err := ocr.NewIdentity("test", "model", "revision")
+		require.NoError(t, err)
+		for _, content := range []string{first, orphan} {
+			require.NoError(t, src.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+		}
+		require.NoError(t, src.SaveImageText(ctx, RetainedToolResultImages(terminal)[0].SHA256, identity, "", false))
+		require.NoError(t, dst.CopyImageTextFrom(ctx, src.Path()))
+		page, err := dst.Search(ctx, SearchFilter{Query: "invoice"})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		require.Equal(t, "success", page.Results[0].SessionID)
+		pending, err := dst.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
+		require.NoError(t, err)
+		require.Empty(t, pending)
+		var count int
+		require.NoError(t, dst.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+		require.Equal(t, 3, count)
+		require.NoError(t, dst.BackfillImageTextOccurrences(ctx))
+		require.NoError(t, dst.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
+		require.Equal(t, 2, count)
+	})
+
 }
 
 func TestImageTextSharedAcrossSessionWrites(t *testing.T) {
@@ -274,6 +294,7 @@ func TestImageTextSharedAcrossSessionWrites(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			ctx := t.Context()
 			d := testDB(t)
+			require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 			content := testInlineImageContent()
 			insertSession(t, d, "a", "demo")
 			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "a", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
@@ -313,6 +334,7 @@ func TestImageTextSharedAcrossSessionWrites(t *testing.T) {
 func TestImageTextMigrationStrippingAndDeletion(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 	insertSession(t, d, "image", "demo")
 	insertMessages(t, d, testImageMessage("image"))
 	images := RetainedToolResultImages(testInlineImageContent())
@@ -338,6 +360,7 @@ func TestImageTextMigrationStrippingAndDeletion(t *testing.T) {
 func TestImageTextProcessorReplacement(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 	insertSession(t, d, "image", "demo")
 	insertMessages(t, d, testImageMessage("image"))
 	images := RetainedToolResultImages(testInlineImageContent())
@@ -362,6 +385,7 @@ func TestImageTextProcessorReplacement(t *testing.T) {
 func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 	insertSession(t, d, "image", "demo")
 	insertMessages(t, d, testImageMessage("image"))
 	image := RetainedToolResultImages(testInlineImageContent())[0]
@@ -388,6 +412,7 @@ func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 func TestImageTextSearchContent(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 	insertSession(t, d, "session", "demo")
 	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	messages := []Message{
@@ -419,6 +444,7 @@ func TestImageTextSearchContent(t *testing.T) {
 func TestImageTextSearchUsesCurrentResultEvents(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 	insertSession(t, d, "session", "demo")
 	stale := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	current := `[{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
@@ -446,6 +472,7 @@ func TestImageTextSearchUsesCurrentResultEvents(t *testing.T) {
 func TestImageTextSearchRespectsMessageVisibility(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 	content := testInlineImageContent()
 	for _, tc := range []struct {
 		id, role, body string
@@ -486,6 +513,7 @@ func TestImageTextSurvivesMetadataOnlyReplacement(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			ctx := t.Context()
 			d := testDB(t)
+			require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 			insertSession(t, d, "image", "demo")
 			content := testInlineImageContent()
 			messages := []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: content, ResultEvents: []ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "completed", Content: content}}}}}}
@@ -521,6 +549,7 @@ func TestImageTextSurvivesMetadataOnlyReplacement(t *testing.T) {
 func TestImageTextContentPageOrder(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
 	insertSession(t, d, "image", "demo")
 	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
@@ -545,45 +574,5 @@ func TestImageTextContentPageOrder(t *testing.T) {
 			require.Contains(t, page.Matches[0].Snippet, "zebra")
 			require.Zero(t, page.NextCursor)
 		})
-	}
-}
-
-func TestImageTextSessionDeletionPrunesOnlyOwnedHashes(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	shared := testInlineImageContent()
-	exclusive := `[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
-	for _, id := range []string{"one", "two"} {
-		insertSession(t, d, id, "demo")
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: shared}}}}))
-	}
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: exclusive}}}}))
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	sharedHash := RetainedToolResultImages(shared)[0].SHA256
-	exclusiveHash := RetainedToolResultImages(exclusive)[0].SHA256
-	for _, hash := range []string{sharedHash, exclusiveHash} {
-		require.NoError(t, d.SaveImageText(ctx, hash, identity, "needle", false))
-	}
-	unrelated := `[{"type":"input_image","image_url":"data:image/png;base64,BAUG"}]`
-	insertSession(t, d, "unrelated", "demo")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "unrelated", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: unrelated}}}}))
-	unrelatedHash := RetainedToolResultImages(unrelated)[0].SHA256
-	require.NoError(t, d.SaveImageText(ctx, unrelatedHash, identity, "unrelated", false))
-	for _, step := range []struct {
-		id                string
-		shared, exclusive int
-	}{{"one", 1, 0}, {"two", 0, 0}} {
-		require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, step.id)
-			return err
-		}))
-		var sharedCount, exclusiveCount, unrelatedCount int
-		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, sharedHash).Scan(&sharedCount))
-		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, exclusiveHash).Scan(&exclusiveCount))
-		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, unrelatedHash).Scan(&unrelatedCount))
-		require.Equal(t, step.shared, sharedCount)
-		require.Equal(t, step.exclusive, exclusiveCount)
-		require.Equal(t, 1, unrelatedCount)
 	}
 }

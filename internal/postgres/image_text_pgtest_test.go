@@ -96,6 +96,7 @@ func TestPGImageTextPushAndSearch(t *testing.T) {
 
 	// OCR-only change: the ordinary incremental push publishes it.
 	staleUpdatedAt()
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
 	require.NoError(t, local.SaveImageText(ctx, hash, ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}, "invoice 4827", false))
 	push()
 	want := []hit{{"shot", 1}}

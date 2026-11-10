@@ -172,7 +172,7 @@ func (db *DB) WriteSessionBatchContext(
 	}
 	defer func() { _ = tx.Rollback() }()
 	ctxTx := contextTransaction{ctx: ctx, tx: tx}
-	imageTx := &imageTextBatchTx{transactionQueries: ctxTx, oldHashes: make(map[string]bool)}
+	imageTx := ctxTx
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var writtenUsageIDs []string
 
@@ -236,9 +236,6 @@ func (db *DB) WriteSessionBatchContext(
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if err := imageTx.pruneImageText(); err != nil {
-		return result, err
-	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing batch tx: %w", err)
 	}
@@ -270,7 +267,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	imageTx := &imageTextBatchTx{transactionQueries: contextTransaction{ctx: ctx, tx: tx}, oldHashes: make(map[string]bool)}
+	imageTx := contextTransaction{ctx: ctx, tx: tx}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var writtenUsageIDs []string
 
@@ -312,9 +309,6 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	}
 
 	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, writtenUsageIDs); err != nil {
-		return result, err
-	}
-	if err := imageTx.pruneImageText(); err != nil {
 		return result, err
 	}
 

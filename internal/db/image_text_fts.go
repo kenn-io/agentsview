@@ -6,29 +6,30 @@ import (
 )
 
 const imageTextFTS = `
-CREATE VIRTUAL TABLE IF NOT EXISTS image_text_fts USING fts5(text, content='image_text_cache', content_rowid='rowid', tokenize='porter unicode61');
+CREATE VIEW IF NOT EXISTS image_text_search_content AS SELECT rowid, text, '' AS content, '' AS rendered FROM image_text_cache;
+CREATE VIRTUAL TABLE IF NOT EXISTS image_text_fts USING fts5(text, content, rendered, content='image_text_search_content', content_rowid='rowid', tokenize='porter unicode61');
 CREATE TRIGGER IF NOT EXISTS image_text_ai AFTER INSERT ON image_text_cache BEGIN
- INSERT INTO image_text_fts(rowid,text) VALUES(new.rowid,new.text);
+ INSERT INTO image_text_fts(rowid,text,content,rendered) VALUES(new.rowid,new.text,'','');
 END;
 CREATE TRIGGER IF NOT EXISTS image_text_ad AFTER DELETE ON image_text_cache BEGIN
- INSERT INTO image_text_fts(image_text_fts,rowid,text) VALUES('delete',old.rowid,old.text);
+ INSERT INTO image_text_fts(image_text_fts,rowid,text,content,rendered) VALUES('delete',old.rowid,old.text,'','');
 END;
 CREATE TRIGGER IF NOT EXISTS image_text_au AFTER UPDATE OF text ON image_text_cache BEGIN
- INSERT INTO image_text_fts(image_text_fts,rowid,text) VALUES('delete',old.rowid,old.text);
- INSERT INTO image_text_fts(rowid,text) VALUES(new.rowid,new.text);
+ INSERT INTO image_text_fts(image_text_fts,rowid,text,content,rendered) VALUES('delete',old.rowid,old.text,'','');
+ INSERT INTO image_text_fts(rowid,text,content,rendered) VALUES(new.rowid,new.text,'','');
 END;`
 
 const imageTextCJKFTS = `
-CREATE VIRTUAL TABLE IF NOT EXISTS image_text_cjk_fts USING fts5(text, content='image_text_cache', content_rowid='rowid', tokenize='simple 0');
+CREATE VIRTUAL TABLE IF NOT EXISTS image_text_cjk_fts USING fts5(text, content, rendered, content='image_text_search_content', content_rowid='rowid', tokenize='simple 0');
 CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_ai AFTER INSERT ON main.image_text_cache WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
- INSERT INTO image_text_cjk_fts(rowid,text) VALUES(new.rowid,new.text);
+ INSERT INTO image_text_cjk_fts(rowid,text,content,rendered) VALUES(new.rowid,new.text,'','');
 END;
 CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_ad AFTER DELETE ON main.image_text_cache WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
- INSERT INTO image_text_cjk_fts(image_text_cjk_fts,rowid,text) VALUES('delete',old.rowid,old.text);
+ INSERT INTO image_text_cjk_fts(image_text_cjk_fts,rowid,text,content,rendered) VALUES('delete',old.rowid,old.text,'','');
 END;
 CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_au AFTER UPDATE OF text ON main.image_text_cache WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
- INSERT INTO image_text_cjk_fts(image_text_cjk_fts,rowid,text) VALUES('delete',old.rowid,old.text);
- INSERT INTO image_text_cjk_fts(rowid,text) VALUES(new.rowid,new.text);
+ INSERT INTO image_text_cjk_fts(image_text_cjk_fts,rowid,text,content,rendered) VALUES('delete',old.rowid,old.text,'','');
+ INSERT INTO image_text_cjk_fts(rowid,text,content,rendered) VALUES(new.rowid,new.text,'','');
 END;`
 
 // ensureImageTextFTS rebuilds an index only when it is missing or rebuild is

@@ -120,18 +120,29 @@ func (db *DB) SaveImageText(ctx context.Context, hash string, identity ocr.Ident
 	return tx.Commit()
 }
 
-// SaveImageTextTerminal records that verified bytes cannot be read by this
-// processor, so the result holds for every copy of the image.
-func (db *DB) SaveImageTextTerminal(ctx context.Context, hash string, identity ocr.Identity) error {
-	if err := db.requireImageTextStorage(); err != nil {
-		return err
-	}
+// ClearImageText removes the active index and published matches. Cached text
+// is removed when image text is disabled.
+func (db *DB) ClearImageText(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,failures,retry_at)
- SELECT ?,?,?,?,?,1,'9999-12-31T23:59:59Z' WHERE EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)
- ON CONFLICT(image_hash,processor) DO UPDATE SET retry_at=excluded.retry_at`, hash, identity.Fingerprint, identity.Provider, identity.Model, identity.Revision, hash)
-	return err
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `UPDATE sessions SET sync_marker=MAX(COALESCE(sync_marker,''),strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id IN (SELECT DISTINCT o.session_id FROM image_text_occurrences o JOIN image_text_cache c ON c.image_hash=o.image_hash WHERE c.succeeded=1 AND c.text<>'')`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM image_text_occurrences`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM stats WHERE key=?`, imageTextBackfillKey); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM image_text_cache`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (db *DB) CopyImageTextFrom(ctx context.Context, sourcePath string) error {
@@ -149,7 +160,14 @@ func (db *DB) CopyImageTextFrom(ctx context.Context, sourcePath string) error {
 		return err
 	}
 	defer func() { _, _ = execWithoutCancel(ctx, conn, `DETACH DATABASE old_db`) }()
-	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at) SELECT image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at FROM old_db.image_text_cache c WHERE EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=c.image_hash)`); err != nil {
+	var hasCache bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='image_text_cache')`).Scan(&hasCache); err != nil {
+		return err
+	}
+	if !hasCache {
+		return nil
+	}
+	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at) SELECT image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at FROM old_db.image_text_cache c`); err != nil {
 		return fmt.Errorf("copy image text: %w", err)
 	}
 	return nil
@@ -188,7 +206,7 @@ func sessionImageTextRows(ctx context.Context, q messageRowsQuerier, ids []strin
 		COALESCE(e.tool_call_message_ordinal,m.ordinal),COALESCE(e.call_index,tc.call_index,0),COALESCE(e.event_index,0),
 		o.image_index,o.image_hash,c.processor,c.provider,c.model,c.revision,c.text
 		FROM image_text_occurrences o
-		JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.succeeded=1
+		JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.succeeded=1 AND c.text<>''
 		LEFT JOIN tool_result_events e ON e.id=o.event_id
 		LEFT JOIN tool_calls tc ON tc.id=o.call_id
 		LEFT JOIN messages m ON m.id=tc.message_id

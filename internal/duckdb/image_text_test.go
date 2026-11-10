@@ -99,6 +99,7 @@ func TestDuckDBImageTextFollowsIncrementalPushes(t *testing.T) {
 	require.Empty(t, found("invoice"))
 
 	first := ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
 	require.NoError(t, local.SaveImageText(ctx, hash, first, "invoice 4827", false))
 	result := push()
 	require.False(t, result.Diagnostics.Full, result.Diagnostics.RebuildReason)
@@ -112,6 +113,15 @@ func TestDuckDBImageTextFollowsIncrementalPushes(t *testing.T) {
 	want := func() []db.ImageTextRow { return []db.ImageTextRow{event, call} }
 	assert.Equal(t, want(), mirrorRows())
 	assert.Equal(t, []int{1, 1, 1, 1, 1}, found("invoice 4827"))
+	require.NoError(t, local.ClearImageText(ctx))
+	result = push()
+	require.False(t, result.Diagnostics.Full)
+	assert.Empty(t, mirrorRows())
+	assert.Empty(t, found("invoice"))
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
+	require.NoError(t, local.SaveImageText(ctx, hash, first, "invoice 4827", false))
+	push()
+	assert.Equal(t, want(), mirrorRows())
 
 	result = push()
 	assert.Zero(t, result.SessionsPushed, "an unchanged push must skip the session")
@@ -152,6 +162,7 @@ func TestDuckDBImageTextContentPageOrder(t *testing.T) {
 	images := db.RetainedToolResultImages(content)
 	require.Len(t, images, 2)
 	identity := ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
 	require.NoError(t, local.SaveImageText(ctx, images[0].SHA256, identity, "needle zebra", false))
 	require.NoError(t, local.SaveImageText(ctx, images[1].SHA256, identity, "needle apple "+strings.Repeat("界", 250)+" invoice example", false))
 	path := filepath.Join(t.TempDir(), "image.duckdb")

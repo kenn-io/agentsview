@@ -1813,11 +1813,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_image_text_occurrences_event ON image_text
 CREATE INDEX IF NOT EXISTS idx_image_text_occurrences_session ON image_text_occurrences(session_id);
 CREATE INDEX IF NOT EXISTS idx_image_text_occurrences_hash ON image_text_occurrences(image_hash);
 
+
+
 CREATE TRIGGER IF NOT EXISTS image_text_session_delete BEFORE DELETE ON sessions BEGIN
-    DELETE FROM image_text_cache WHERE image_hash IN (
-        SELECT image_hash FROM image_text_occurrences WHERE session_id=old.id
-    ) AND NOT EXISTS (
-        SELECT 1 FROM image_text_occurrences o
-        WHERE o.image_hash=image_text_cache.image_hash AND o.session_id<>old.id
-    );
+    DELETE FROM image_text_cache WHERE image_hash IN (SELECT image_hash FROM image_text_occurrences WHERE session_id=old.id)
+    AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash AND o.session_id<>old.id);
 END;

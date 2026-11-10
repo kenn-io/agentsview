@@ -5,8 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,7 +24,7 @@ type Manager struct {
 	Processor string
 }
 
-// passBudget limits when a pass may start another image.
+// passBudget bounds extraction, including a request in flight.
 var passBudget = 2 * time.Minute
 
 const pageSize = 20
@@ -30,101 +33,88 @@ func (m *Manager) Run(ctx context.Context) error {
 	if m.DB.ArchiveContent().OmitsToolContent() {
 		return nil
 	}
-	deadline := time.Now().Add(passBudget)
+	if err := m.DB.BackfillImageTextOccurrences(ctx); err != nil {
+		return err
+	}
+	passCtx, cancel := context.WithTimeout(ctx, passBudget)
+	defer cancel()
 	identity := m.Client.Identity()
 	if m.Processor != "" {
 		identity.Fingerprint = m.Processor
 	}
 	cutoff := time.Now()
-	reader := &db.RetainedImageReader{}
 	for {
-		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, cutoff, pageSize)
+		pending, err := m.DB.PendingImageText(passCtx, identity.Fingerprint, cutoff, pageSize)
 		if err != nil {
-			return err
+			return passError(ctx, passCtx, err)
 		}
 		if len(pending) == 0 {
 			return nil
 		}
 		for _, hash := range pending {
-			if !time.Now().Before(deadline) {
-				return ctx.Err()
-			}
-			if err := m.processImage(ctx, identity, hash, reader); err != nil {
-				return err
+			if err := m.processImage(passCtx, identity, hash); err != nil {
+				return passError(ctx, passCtx, err)
 			}
 		}
 	}
 }
 
-// processImage reads the first retained copy whose bytes match hash. Only
-// verified bytes can fail permanently; unusable copies leave a retry.
-func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash string, reader *db.RetainedImageReader) error {
+func passError(parent, pass context.Context, err error) error {
+	if parent.Err() != nil {
+		return parent.Err()
+	}
+	if errors.Is(pass.Err(), context.DeadlineExceeded) {
+		return nil
+	}
+	return err
+}
+
+func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash string) error {
 	for offset := 0; ; offset++ {
 		items, err := m.DB.ImageTextSources(ctx, hash, offset, 1)
 		if err != nil {
 			return err
 		}
-		for _, item := range items {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			body := m.readSource(reader, item, hash)
-			if body == nil {
-				continue
-			}
-			// Process verifies the type against the bytes before sending a request.
-			// Try image types so a stale label does not hide usable image data.
-			for _, mediaType := range glmocr.SupportedMediaTypes() {
-				if !strings.HasPrefix(mediaType, "image/") {
-					continue
-				}
-				source, err := ocr.NewSource(io.NopCloser(bytes.NewReader(body)), mediaType, int64(len(body)), hash)
-				if err != nil {
-					return err
-				}
-				result, err := m.Client.Process(ctx, source)
-				if err != nil {
-					if ctx.Err() != nil {
-						return ctx.Err()
-					}
-					if ocr.ErrorKindOf(err) == ocr.ErrorInvalidInput {
-						continue
-					}
-					return m.DB.SaveImageText(ctx, hash, identity, "", true)
-				}
-				var parts []string
-				for _, unit := range result.Document.Units {
-					parts = append(parts, unit.Text)
-				}
-				text := strings.TrimSpace(strings.Join(parts, "\n"))
-				return m.DB.SaveImageText(ctx, hash, identity, text, false)
-			}
-			return m.DB.SaveImageTextTerminal(ctx, hash, identity)
-		}
 		if len(items) == 0 {
 			break
 		}
-	}
-	return m.DB.SaveImageText(ctx, hash, identity, "", true)
-}
-
-// readSource returns the item's image bytes when they match hash. Cached block
-// locations come first; a full scan covers a source that changed in place,
-// which can happen without changing its length.
-func (m *Manager) readSource(reader *db.RetainedImageReader, item db.PendingImageText, hash string) []byte {
-	matches := func(body []byte, err error) bool {
+		item := items[0]
+		body, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
 		sum := sha256.Sum256(body)
-		return err == nil && len(body) > 0 && hex.EncodeToString(sum[:]) == hash
+		if err != nil || len(body) == 0 || hex.EncodeToString(sum[:]) != hash {
+			continue
+		}
+		mediaType := http.DetectContentType(body)
+		if !strings.HasPrefix(mediaType, "image/") || !slices.Contains(glmocr.SupportedMediaTypes(), mediaType) {
+			return m.DB.SaveImageText(ctx, hash, identity, "", false)
+		}
+		source, err := ocr.NewSource(io.NopCloser(bytes.NewReader(body)), mediaType, int64(len(body)), hash)
+		if err != nil {
+			return err
+		}
+		result, err := m.Client.Process(ctx, source)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if ocr.ErrorKindOf(err) == ocr.ErrorInvalidInput {
+				return m.DB.SaveImageText(ctx, hash, identity, "", false)
+			}
+			if saveErr := m.DB.SaveImageText(ctx, hash, identity, "", true); saveErr != nil {
+				return saveErr
+			}
+			return err
+		}
+		var parts []string
+		for _, unit := range result.Document.Units {
+			parts = append(parts, unit.Text)
+		}
+		return m.DB.SaveImageText(ctx, hash, identity, strings.TrimSpace(strings.Join(parts, "\n")), false)
 	}
-	body, err := reader.Read(item.Content, item.CallID, item.EventID, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
-	if matches(body, err) {
-		return body
+	if err := m.DB.SaveImageText(ctx, hash, identity, "", true); err != nil {
+		return err
 	}
-	body, err = db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
-	if matches(body, err) {
-		return body
-	}
-	return nil
+	return fmt.Errorf("no readable retained copy for image %s", hash)
 }
 
 // ProcessorKey includes the output policy while excluding the service address.

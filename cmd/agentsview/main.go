@@ -375,7 +375,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		emitter = extractTeeEmitter{primary: emitter, scheduler: extractSched}
 	}
 
-	imageTextManager, err := setupImageText(cfg, database)
+	imageTextManager, err := setupImageText(ctx, cfg, database)
 	if err != nil {
 		fatal("setting up image text: %v", err)
 	}

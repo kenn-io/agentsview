@@ -663,11 +663,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (169: keep DeepSeek Harness native message ids as message source ids.
 // Re-parse DeepSeek Harness sources in place; source and session identities
 // are unchanged.)
-const dataVersion = 169
+const dataVersion = 170
 
 const archiveOnlyVersionBase = 1 << 20
-
-const imageTextFormatVersionBit = 1 << 21
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -2364,12 +2362,13 @@ func readUserVersion(ctx context.Context, conn interface {
 
 // DecodeUserVersion returns the parser version and permanent archive-only mode.
 func DecodeUserVersion(version int) (int, bool) {
-	archiveOnly := version&archiveOnlyVersionBase != 0
-	return version &^ (archiveOnlyVersionBase | imageTextFormatVersionBit), archiveOnly
+	if version >= archiveOnlyVersionBase {
+		return version - archiveOnlyVersionBase, true
+	}
+	return version, false
 }
 
 func writeUserVersion(ctx context.Context, tx *sql.Tx, version int) error {
-	version |= imageTextFormatVersionBit
 	var metadataExists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_metadata')`).Scan(&metadataExists); err != nil {
 		return err
@@ -3360,9 +3359,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	if err := db.backfillCommitLinksLocked(ctx, w); err != nil {
-		return err
-	}
-	if err := db.backfillImageTextOccurrencesLocked(ctx, w); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {

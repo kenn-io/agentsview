@@ -23,11 +23,6 @@ func TestReadRetainedImageInlineLimit(t *testing.T) {
 	uri := "data:image/png;base64," + base64.StdEncoding.EncodeToString(body)
 	raw, err := json.Marshal(uri)
 	require.NoError(t, err)
-	var decoded bytes.Buffer
-	_, size, _, ok := streamInlineDataLimit(raw, &decoded, true, 32)
-	require.True(t, ok)
-	require.EqualValues(t, 33, size)
-	require.Equal(t, 33, decoded.Len())
 	content := fmt.Sprintf(`[{"type":"input_image","image_url":%s}]`, raw)
 	_, err = ReadRetainedImage(content, 0, "", 32)
 	require.ErrorContains(t, err, "exceeds 32 bytes")

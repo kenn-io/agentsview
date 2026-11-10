@@ -47,7 +47,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	}
 	defer func() { _ = tx.Rollback() }()
 	ctxTx := contextTransaction{ctx: ctx, tx: tx}
-	imageTx := &imageTextBatchTx{transactionQueries: ctxTx, oldHashes: make(map[string]bool)}
+	imageTx := ctxTx
 	var pending recallEvidenceRevocationEvents
 
 	var active int
@@ -144,9 +144,6 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	}
 
 	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{id, copyID}); err != nil {
-		return "", err
-	}
-	if err := imageTx.pruneImageText(); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {

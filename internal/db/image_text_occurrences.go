@@ -36,17 +36,6 @@ func retainedImagesCost(images []RetainedImage) uint64 {
 	return cost
 }
 
-// imageTextBatchTx defers pruning until every changed session has refreshed
-// its occurrences, so a shared image can move between sessions in one write.
-type imageTextBatchTx struct {
-	transactionQueries
-	oldHashes map[string]bool
-}
-
-func (tx *imageTextBatchTx) pruneImageText() error {
-	return pruneImageTextHashes(tx.transactionQueries, tx.oldHashes)
-}
-
 func (m imageTextMemo) images(content string) []RetainedImage {
 	key := sha256.Sum256([]byte(content))
 	if item := m.items.Get(key); item != nil {
@@ -61,8 +50,10 @@ func (m imageTextMemo) images(content string) []RetainedImage {
 
 const imageTextBackfillKey = "image_text_occurrences_backfill_v2"
 
-func (db *DB) backfillImageTextOccurrencesLocked(ctx context.Context, w *writerHandle) error {
-	tx, err := w.BeginTx(ctx, nil)
+func (db *DB) BackfillImageTextOccurrences(ctx context.Context) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -72,21 +63,18 @@ func (db *DB) backfillImageTextOccurrencesLocked(ctx context.Context, w *writerH
 		return err
 	}
 	if done != 0 {
-		version, _, err := readUserVersion(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if err := writeUserVersion(ctx, tx, version); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM image_text_cache WHERE NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash)`); err != nil {
 			return err
 		}
 		return tx.Commit()
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT session_id FROM tool_calls WHERE result_content LIKE '%image%' OR result_content LIKE '%data:%'
-		UNION SELECT session_id FROM tool_result_events WHERE content LIKE '%image%' OR content LIKE '%data:%'`)
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, imageTextBackfillKey); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT session_id FROM tool_calls WHERE result_content LIKE '%image%' OR result_content LIKE '%data:%' UNION SELECT session_id FROM tool_result_events WHERE content LIKE '%image%' OR content LIKE '%data:%'`)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var id string
@@ -103,23 +91,15 @@ func (db *DB) backfillImageTextOccurrencesLocked(ctx context.Context, w *writerH
 	if err != nil {
 		return err
 	}
-	batch := &imageTextBatchTx{transactionQueries: tx, oldHashes: make(map[string]bool)}
 	for _, id := range ids {
-		if err := refreshImageTextOccurrencesTx(batch, id); err != nil {
+		if err := refreshImageTextOccurrencesTx(tx, id); err != nil {
 			return fmt.Errorf("backfilling image text occurrences: %w", err)
 		}
 	}
-	if err := batch.pruneImageText(); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET sync_marker=MAX(COALESCE(sync_marker,''),strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id IN (SELECT o.session_id FROM image_text_occurrences o JOIN image_text_cache c ON c.image_hash=o.image_hash WHERE c.succeeded=1 AND c.text<>'')`); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, imageTextBackfillKey); err != nil {
-		return err
-	}
-	version, _, err := readUserVersion(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if err := writeUserVersion(ctx, tx, version); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM image_text_cache WHERE NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash)`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -127,9 +107,12 @@ func (db *DB) backfillImageTextOccurrencesLocked(ctx context.Context, w *writerH
 
 // refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
 func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) error {
-	oldHashes, err := sessionImageTextHashes(tx, sessionID)
-	if err != nil {
+	var enabled int
+	if err := tx.QueryRow(`SELECT count(*) FROM stats WHERE key=? AND value!=0`, imageTextBackfillKey).Scan(&enabled); err != nil {
 		return err
+	}
+	if enabled == 0 {
+		return nil
 	}
 	occurrences, err := sessionImageTextOccurrences(tx, sessionID)
 	if err != nil {
@@ -150,39 +133,7 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 			return err
 		}
 	}
-	if batch, ok := tx.(*imageTextBatchTx); ok {
-		for hash := range oldHashes {
-			batch.oldHashes[hash] = true
-		}
-		return nil
-	}
-	return pruneImageTextHashes(tx, oldHashes)
-}
-
-func pruneImageTextHashes(tx transactionQueries, hashes map[string]bool) error {
-	for hash := range hashes {
-		if _, err := tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=?)`, hash, hash); err != nil {
-			return err
-		}
-	}
 	return nil
-}
-
-func sessionImageTextHashes(tx transactionQueries, sessionID string) (map[string]bool, error) {
-	rows, err := tx.Query(`SELECT DISTINCT image_hash FROM image_text_occurrences WHERE session_id=?`, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	hashes := make(map[string]bool)
-	for rows.Next() {
-		var hash string
-		if err := rows.Scan(&hash); err != nil {
-			return nil, err
-		}
-		hashes[hash] = true
-	}
-	return hashes, rows.Err()
 }
 
 func sessionImageTextOccurrences(tx transactionQueries, sessionID string) ([]ImageTextOccurrence, error) {

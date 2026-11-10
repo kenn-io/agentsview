@@ -722,54 +722,40 @@ func retainedInlineURI(raw jsontext.Value) (jsontext.Value, bool, bool) {
 	return uri, block.Type == "input_image", true
 }
 
-// RetainedImageReader caches image block locations for one source result.
-// Callers verify the returned bytes against the occurrence hash.
-type RetainedImageReader struct {
-	callID, eventID int64
-	contentLen      int
-	blocks          [][2]int
-}
-
-func (r *RetainedImageReader) Read(content string, callID, eventID int64, index int, assetsDir string, limit int64) ([]byte, error) {
-	if r.blocks == nil || r.callID != callID || r.eventID != eventID || r.contentLen != len(content) {
-		r.callID, r.eventID, r.contentLen = callID, eventID, len(content)
-		r.blocks = make([][2]int, 0)
-		scanSummarySections(content, func(_, end int, raw jsontext.Value) {
-			var blocks []jsontext.Value
-			if json.Unmarshal(raw, &blocks) != nil {
-				return
-			}
-			base, offset := end-len(raw), 0
-			for _, block := range blocks {
-				at := bytes.Index(raw[offset:], block)
-				if at < 0 {
-					return
-				}
-				start := offset + at
-				offset = start + len(block)
-				if _, ok := retainedImageBlock(block, len(r.blocks)); ok {
-					r.blocks = append(r.blocks, [2]int{base + start, base + offset})
-				}
-			}
-		})
-	}
-	if index < 0 || index >= len(r.blocks) {
-		return nil, fmt.Errorf("retained image %d missing", index)
-	}
-	span := r.blocks[index]
-	if span[0] < 0 || span[1] > len(content) || span[0] >= span[1] {
-		return nil, errors.New("retained image location changed")
-	}
-	return readRetainedImageBlock(jsontext.Value(content[span[0]:span[1]]), index, assetsDir, limit)
-}
-
-// ReadRetainedImage reads the indexed retained image without changing its
-// stored form, refusing copies larger than limit bytes.
+// ReadRetainedImage reads the indexed retained image with a bounded byte limit.
 func ReadRetainedImage(content string, index int, assetsDir string, limit int64) ([]byte, error) {
 	var found jsontext.Value
-	walkRetainedImages(content, func(block jsontext.Value, image RetainedImage) {
-		if image.Index == index {
-			found = block
+	count := 0
+	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
+		if found != nil {
+			return
+		}
+		var blocks []jsontext.Value
+		if json.Unmarshal(raw, &blocks) != nil {
+			return
+		}
+		for _, block := range blocks {
+			if found != nil {
+				break
+			}
+			recognized := false
+			if p, ok := parseOffloadedImagePlaceholder(block); ok {
+				_, _, valid := assetImageDigest(p.ImageRef)
+				recognized = valid && (p.Version == nil || *p.Version == 1)
+			} else {
+				var p offloadedImagePlaceholder
+				if json.Unmarshal(block, &p, json.MatchCaseInsensitiveNames(true)) == nil && p.Type == "agentsview_image" && p.ImageRef == "" {
+					recognized = p.MediaType != "" && p.ByteSize >= 0 && (p.Version == nil || *p.Version == 1)
+				} else if uri, imageOnly, ok := retainedInlineURI(block); ok {
+					_, _, _, recognized = streamInlineData(uri, io.Discard, imageOnly)
+				}
+			}
+			if recognized {
+				if count == index {
+					found = block
+				}
+				count++
+			}
 		}
 	})
 	if found == nil {

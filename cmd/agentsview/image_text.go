@@ -12,9 +12,9 @@ import (
 	"go.kenn.io/docbank/document/glmocr"
 )
 
-func setupImageText(cfg config.Config, database *db.DB) (*imagetext.Manager, error) {
+func setupImageText(ctx context.Context, cfg config.Config, database *db.DB) (*imagetext.Manager, error) {
 	if !cfg.ImageText.Enabled || cfg.ArchiveContent.OmitsToolContent() || database.ArchiveContent().OmitsToolContent() {
-		return nil, nil
+		return nil, database.ClearImageText(ctx)
 	}
 	policy, err := cfg.ImageText.Policy()
 	if err != nil {
