@@ -299,10 +299,10 @@ On the machine that owns the sessions, choose **Settings → Embeddings → Turn
 1. Build the local index. AgentsView discovers Ollama with Nomic or uses Kit's
    shared local server. For other providers, see
    [Enabling `[vector]`](/docs/semantic-search/#enabling-vector). The CLI asks
-   before the first download; declining stops the download and build. `--yes` skips rebuild
-   confirmation but does not approve this download. Approve the first install
-   interactively before running unattended builds. Confirm an active
-   generation exists:
+   before the first download; declining stops the download and build. `--yes`
+   skips rebuild confirmation but does not approve this download. Approve the
+   first install interactively before running unattended builds. Confirm an
+   active generation exists:
 
     ```bash
     agentsview index embeddings build --yes
