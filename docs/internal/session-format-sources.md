@@ -735,8 +735,7 @@ fixtures retain this field; missing identities remain source-local.
 
 - **Archived shell argv:** Older Codex shell calls record `command` as an
   argument array, including `bash -lc` scripts. Commit links read these arrays
-  as shell words; leading `env` directory changes are left unlinked because
-  the recorded session directory would otherwise identify the wrong repository.
+  as shell words, including leading `env` directory options.
   Data version 170 guards the repaired links without reparsing source files.
 
 - **Code-mode wait output (checked 2026-11-03):** A local rollout records `wait`
