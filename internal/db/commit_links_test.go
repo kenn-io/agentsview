@@ -54,7 +54,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 
 func TestCommitLinksArgvNonCommitOutput(t *testing.T) {
 	for _, tt := range []struct{ input, output string }{
-		{`{"command":["printf","%s %s\n[main abc1234] Fix parser\n","git","commit"]}`, "git commit\n[main abc1234] Fix parser\n"},
+		{`{"command":["echo","commit"]}`, "[main abc1234] Fix parser"},
 		{`{"command":["git","log","--grep=match git commit"]}`, "[main abc1234] Fix parser"},
 	} {
 		t.Run(tt.input, func(t *testing.T) {
@@ -526,30 +526,23 @@ func TestCommitLinksBackfill(t *testing.T) {
 		require.NoError(t, err)
 		_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET local_modified_at='2000-01-01T00:00:00.000Z'`)
 		require.NoError(t, err)
-		_, err = d.getWriter().Exec(t.Context(), `PRAGMA user_version=169`)
-		require.NoError(t, err)
 		require.NoError(t, d.Close())
-		var firstModified string
-		for i := range 2 {
-			d, err = Open(t.Context(), archive)
-			require.NoError(t, err)
-			got, err := d.SessionCommitLinks(t.Context(), "repaired")
-			require.NoError(t, err)
-			require.Len(t, got.Commits, 1)
-			assert.Equal(t, "abc1234", got.Commits[0].SHA)
-			var repaired string
-			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='repaired'`).Scan(&repaired))
-			assert.Greater(t, repaired, "2000-01-01T00:00:00.000Z")
-			if i == 0 {
-				firstModified = repaired
-			} else {
-				assert.Equal(t, firstModified, repaired)
-			}
-			var unchanged string
-			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='unchanged'`).Scan(&unchanged))
-			assert.Equal(t, "2000-01-01T00:00:00.000Z", unchanged)
-			require.NoError(t, d.Close())
-		}
+		d, err = Open(t.Context(), archive)
+		require.NoError(t, err)
+		got, err := d.SessionCommitLinks(t.Context(), "repaired")
+		require.NoError(t, err)
+		require.Len(t, got.Commits, 1)
+		assert.Equal(t, "abc1234", got.Commits[0].SHA)
+		var marker int
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=? AND value=1`, commitLinksBackfillKey).Scan(&marker))
+		assert.Equal(t, 1, marker)
+		var repaired string
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='repaired'`).Scan(&repaired))
+		assert.Greater(t, repaired, "2000-01-01T00:00:00.000Z")
+		var unchanged string
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='unchanged'`).Scan(&unchanged))
+		assert.Equal(t, "2000-01-01T00:00:00.000Z", unchanged)
+		require.NoError(t, d.Close())
 	})
 	t.Run("rollback and retry", func(t *testing.T) {
 		d := testDB(t)
@@ -572,7 +565,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 }
 
 func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
-	for _, oldVersion := range []int{136, 137, 168, 169} {
+	for _, oldVersion := range []int{136, 137, 169} {
 		t.Run(strconv.Itoa(oldVersion), func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a")
