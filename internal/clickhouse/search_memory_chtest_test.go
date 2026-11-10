@@ -40,7 +40,7 @@ func TestClickHouseSearchMemory(t *testing.T) {
 	require.Equal(t, "session-23950", page.Results[49].SessionID)
 }
 
-func TestClickHouseSearchWinningMessageAndPages(t *testing.T) {
+func TestClickHouseSearchResultsAndPages(t *testing.T) {
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	target := Target{URL: dsn, Database: database}
@@ -48,7 +48,7 @@ func TestClickHouseSearchWinningMessageAndPages(t *testing.T) {
 	conn := chtest.Open(t, dsn, database)
 	_, err := conn.ExecContext(ctx, `INSERT INTO sessions (id, project, machine, agent, session_name, started_at, ended_at, created_at, push_version)
 		SELECT id, 'project', 'machine', 'claude', name, ts, ts, ts, 1
-		FROM (SELECT arrayJoin([('a', 'context named'), ('b', 'other'), ('c', 'context name only'), ('d', 'other')]) AS row,
+		FROM (SELECT arrayJoin([('a', 'other'), ('b', 'other'), ('c', 'context name only'), ('d', 'other')]) AS row,
 			row.1 AS id, row.2 AS name, toDateTime64('2026-01-01 00:00:00', 6, 'UTC') AS ts)`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp, content_length, is_system, push_version)
@@ -71,7 +71,6 @@ func TestClickHouseSearchWinningMessageAndPages(t *testing.T) {
 		{"a", string([]rune("context extra 世界" + strings.Repeat("界", 200))[:200]), 1, 1},
 		{"b", "context extra second", 0, 2},
 		{"d", "context alone", 0, 3},
-		{"c", "context name only", -1, 0},
 	} {
 		page, err := store.Search(ctx, f)
 		require.NoError(t, err)
@@ -82,7 +81,13 @@ func TestClickHouseSearchWinningMessageAndPages(t *testing.T) {
 		require.Equal(t, want.next, page.NextCursor)
 		f.Cursor = page.NextCursor
 	}
-	page, err := store.Search(ctx, db.SearchFilter{Query: "context extra", Limit: 10})
+	page, err := store.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "c", page.Results[0].SessionID)
+	require.Zero(t, page.NextCursor)
+
+	page, err = store.Search(ctx, db.SearchFilter{Query: "context extra", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, page.Results, 2)
 	require.Equal(t, "a", page.Results[0].SessionID)
