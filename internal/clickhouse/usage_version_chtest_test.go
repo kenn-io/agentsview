@@ -110,12 +110,11 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 			probes, results := usageQueryCounts(t, store)
 			require.Equal(t, before, read())
 			mergedProbes, mergedResults := usageQueryCounts(t, store)
-			// Price records are probed per digest: the prepared state's stored
-			// digest, the digest the daily and Top sessions reads join, and the
-			// session counts' empty digest.
+			// Prepared, daily, and Top share the catalog digest; session
+			// counts use an empty digest.
 			wantProbes := uint64(1)
 			if table == chUsagePriceTable {
-				wantProbes = 3
+				wantProbes = 2
 			}
 			require.Equal(t, probes+wantProbes, mergedProbes)
 			require.Equal(t, results, mergedResults, "merge must reuse daily usage, Top sessions, and session count results")

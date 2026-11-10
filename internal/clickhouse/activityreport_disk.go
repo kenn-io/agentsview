@@ -21,7 +21,11 @@ func (s *Store) openActivityReportDisk(t Target) error {
 	// The mirror is named by its host and database only; the URL's
 	// credentials stay out of the path.
 	mirrorID := sha256.Sum256([]byte(mirror.Host + "/" + database))
-	return s.reports.OpenDisk("clickhouse-activity-reports", hex.EncodeToString(mirrorID[:8]))
+	id := hex.EncodeToString(mirrorID[:8])
+	if err := s.reports.OpenDisk("clickhouse-activity-reports", id); err != nil {
+		return err
+	}
+	return s.usageDisk.Open("clickhouse-usage", id, 128<<20, 256<<20)
 }
 
 // StartBackground prepares usage before serving and starts report cleanup.
@@ -29,7 +33,7 @@ func (s *Store) StartBackground(ctx context.Context) {
 	if _, err := s.preparedUsageState(ctx); err != nil {
 		log.Printf("clickhouse: preparing usage state at startup: %v", err)
 	}
-	s.reports.StartSweep(ctx)
+	s.reports.StartSweep(ctx, s.usageDisk.Sweep)
 }
 
 func (s *Store) stopBackground() { s.reports.Close() }

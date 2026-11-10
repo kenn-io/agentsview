@@ -257,8 +257,8 @@ func dailyUsageGroupRowStats(
 	var stats usageGroupRowStats
 	err = store.forEachDailyUsageGroupRow(t.Context(), filter, catalog.digest, customModels, false, func(r chDailyUsageGroupRow) error {
 		stats.rows++
-		stats.events += r.events
-		if r.explicit {
+		stats.events += r.Events
+		if r.Explicit {
 			stats.explicit++
 		}
 		return nil

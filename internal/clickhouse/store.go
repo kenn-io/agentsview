@@ -51,9 +51,11 @@ type Store struct {
 	// afterUsageSlices, when set, runs once a sliced range read has read
 	// every slice. Tests use it to change the rows mid-read.
 	afterUsageSlices func()
-	cursorMu         sync.RWMutex
-	cursorSecret     []byte
-	customPricing    map[string]config.CustomModelRate
+	// beforeUsageExtent lets tests change source rows after the request snapshot.
+	beforeUsageExtent func()
+	cursorMu          sync.RWMutex
+	cursorSecret      []byte
+	customPricing     map[string]config.CustomModelRate
 
 	// vectorMu guards the searcher and reason installed by the serve gate.
 	vectorMu                  sync.RWMutex
@@ -76,8 +78,16 @@ type Store struct {
 	// deltaCache keeps the prepared rows of changed snapshots.
 	deltaCache usageDeltaCache
 	// The usage row memos keep recent range reads per rows and filter.
-	dailyUsageRows       kept.Memo[chDailyUsageGroupRow]
-	sessionAggregateRows kept.Memo[chUsageAggregateRow]
+	dailyUsageRows kept.Memo[chDailyUsageGroupRow]
+	usageDisk      kept.Disk
+	usageExtent    struct {
+		sync.Mutex
+		version string
+		latest  time.Time
+		unknown bool
+		valid   bool
+	}
+	sessionAggregateRows kept.Memo[CHUsageAggregateRow]
 	usageSessionRows     kept.Memo[chUsageSessionRow]
 	// topSessionTotals keeps each session's totals per top-sessions read.
 	topSessionTotals kept.Memo[db.TopSessionEntry]

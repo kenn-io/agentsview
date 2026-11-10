@@ -549,6 +549,12 @@ only makes the next open of those days slower. A new binary rebuilds them on its
 own. If the directory cannot be created, serve logs a warning and keeps reports
 in memory only.
 
+Usage also keeps fully prepared selections under `agentsview/clickhouse-usage`
+in the same cache directory. Each selection can use up to 128 MiB, with a
+256 MiB limit per mirror. The next read rebuilds a selection after a push,
+pricing change, new binary, or deletion of the cache directory. If the cache is
+unavailable, Usage reads the mirror instead.
+
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
 
