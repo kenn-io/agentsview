@@ -111,6 +111,15 @@ func TestProviderCapabilitiesStoredMemberFreshnessListingMatchConsumers(t *testi
 			assert.Equal(t, dbPath, container)
 			continue
 		}
+		if agent == AgentHermes || agent == AgentAugureDesktop {
+			createHermesStateDB(t, root)
+			assert.Equal(t, CapabilitySupported, got)
+			dbPath := filepath.Join(root, "state.db")
+			container, ok := ResolveStoredMemberFreshnessContainer(provider, dbPath)
+			assert.True(t, ok)
+			assert.Equal(t, dbPath, container)
+			continue
+		}
 		assert.Equalf(t, CapabilityUnsupported, got,
 			"%s must not declare a stored member freshness listing", agent)
 		_, ok := ResolveStoredMemberFreshnessContainer(

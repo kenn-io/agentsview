@@ -1368,6 +1368,8 @@ const storedMemberFreshnessPageSize = 512
 // freshness in step with an ascending virtual-path stream, retaining one page
 // at a time.
 type StoredMemberFreshnessCursor struct {
+	// Passed receives stored rows absent from the ascending live listing.
+	Passed func(StoredMemberFreshness) error
 	pager  StoredMemberFreshnessPager
 	rows   []StoredMemberFreshness
 	index  int
@@ -1390,12 +1392,18 @@ func (c *StoredMemberFreshnessCursor) Lookup(
 		for c.index < len(c.rows) {
 			row := c.rows[c.index]
 			if row.Path < path {
+				if c.Passed != nil {
+					if err := c.Passed(row); err != nil {
+						return StoredMemberFreshness{}, false, err
+					}
+				}
 				c.index++
 				continue
 			}
 			if row.Path > path {
 				return StoredMemberFreshness{}, false, nil
 			}
+			c.index++
 			return row, true, nil
 		}
 		if c.done {
@@ -1411,6 +1419,34 @@ func (c *StoredMemberFreshnessCursor) Lookup(
 		} else if !done {
 			// A pager reporting neither rows nor completion cannot make
 			// progress; treat the stored side as exhausted.
+			c.done = true
+		}
+	}
+}
+
+// Rest drains trailing stored rows not consumed by Lookup.
+func (c *StoredMemberFreshnessCursor) Rest(ctx context.Context, fn func(StoredMemberFreshness) error) error {
+	for {
+		for c.index < len(c.rows) {
+			row := c.rows[c.index]
+			c.index++
+			if fn != nil {
+				if err := fn(row); err != nil {
+					return err
+				}
+			}
+		}
+		if c.done {
+			return nil
+		}
+		rows, done, err := c.pager(ctx, c.after, storedMemberFreshnessPageSize)
+		if err != nil {
+			return err
+		}
+		c.rows, c.index, c.done = rows, 0, done
+		if len(rows) > 0 {
+			c.after = rows[len(rows)-1].Path
+		} else {
 			c.done = true
 		}
 	}

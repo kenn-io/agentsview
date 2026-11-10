@@ -157,3 +157,30 @@ func TestAdvanceScopedDataVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestHermesMemberTokenUpgradeScopes(t *testing.T) {
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop}, ScopedDataVersionProviders(169, 170))
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d := testDBAtPath(t, path, "member token upgrade")
+			id := string(agent) + ":member"
+			sourcePath := "state.db#member"
+			insertSession(t, d, id, "project", func(s *Session) { s.Agent = string(agent); s.FilePath = &sourcePath })
+			require.NoError(t, d.SetSessionDataVersion(t.Context(), id, 169))
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return writeUserVersion(t.Context(), tx, 169) }))
+			require.NoError(t, d.Close())
+			reopened, err := OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+			session, err := reopened.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, id, session.ID)
+			require.NotNil(t, session.FilePath)
+			assert.Equal(t, sourcePath, *session.FilePath)
+			assert.Equal(t, 169, reopened.GetSessionDataVersion(t.Context(), id))
+			assert.False(t, reopened.NeedsResync())
+		})
+	}
+}
