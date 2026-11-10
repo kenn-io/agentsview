@@ -571,8 +571,7 @@ administrator grants it:
 GRANT SELECT ON agentsview.session_plan_usage TO agentsview_reader;
 ```
 
-Commit lookups also use a new `retained_commit_links` table. After provisioning
-or pushing the schema upgrade, grant each serving role access:
+Commit lookups also read the new `retained_commit_links` table; grant it too:
 
 ```sql
 GRANT SELECT ON hosted_sessions.retained_commit_links TO hosted_runtime;

@@ -30,11 +30,7 @@ func (*retainedDeleteBarrier) TraceQueryEnd(context.Context, *pgx.Conn, pgx.Trac
 
 func TestPGRetainedCommitLinkPublicationRace(t *testing.T) {
 	for _, withPrompt := range []bool{true, false} {
-		name := "empty"
-		if withPrompt {
-			name = "prompt"
-		}
-		t.Run(name, func(t *testing.T) {
+		t.Run(map[bool]string{false: "empty", true: "prompt"}[withPrompt], func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 			a, localA, pg, _ := newSessionProvenancePushSync(t, "agentsview_commit_race_test")
@@ -71,38 +67,27 @@ func TestPGRetainedCommitLinkPublicationRace(t *testing.T) {
 			_, err = b.Push(ctx, true, nil)
 			close(barrier.release)
 			require.NoError(t, err)
-			select {
-			case err := <-done:
-				require.NoError(t, err)
-			case <-ctx.Done():
-				t.Fatal(ctx.Err())
-			}
+			require.NoError(t, <-done)
 			store, err := NewStore(ctx, testPGURL(t), a.schema, true)
 			require.NoError(t, err)
 			defer func() { _ = store.Close() }()
 			for range 2 {
 				links, err := store.SessionCommitLinks(ctx, "commit-live")
 				require.NoError(t, err)
-				if withPrompt {
-					require.Len(t, links.Commits, 1)
-					require.False(t, links.Commits[0].Missing)
-					require.NotNil(t, links.Commits[0].Turn)
-					require.Equal(t, "Record the parser fix", links.Commits[0].Turn.Text)
-				} else {
-					require.Empty(t, links.Commits)
-				}
 				matches, err := store.CommitSessionLinks(ctx, []string{"abc1234567890123456789012345678901234567"})
 				require.NoError(t, err)
-				found := false
+				got := links.Commits
 				for _, link := range matches.Commits[0].Links {
 					if link.SessionID == "commit-live" {
-						found = true
-						require.True(t, withPrompt)
-						require.NotNil(t, link.Turn)
-						require.Equal(t, "Record the parser fix", link.Turn.Text)
+						got = append(got, link)
 					}
 				}
-				require.Equal(t, withPrompt, found)
+				require.Len(t, got, map[bool]int{false: 0, true: 2}[withPrompt])
+				for _, link := range got {
+					require.False(t, link.Missing)
+					require.NotNil(t, link.Turn)
+					require.Equal(t, "Record the parser fix", link.Turn.Text)
+				}
 				_, err = b.Push(ctx, false, nil)
 				require.NoError(t, err)
 			}

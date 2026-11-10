@@ -3038,6 +3038,7 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 	const schema = "agentsview_push_archive_identity_change_test"
 	syncer, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj", "")
+	dbtest.SeedRetainedCommitLink(t, localDB, "retained", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	require.NoError(t, localDB.UpsertProjectIdentityObservation(
 		ctx, export.ProjectIdentityObservation{
 			SessionID: "sess-1", Project: "proj", Machine: "workstation",
@@ -3104,6 +3105,7 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 		"source_project_identity_observation_scopes",
 		"source_session_project_identity_snapshots",
 		"source_session_project_identity_snapshot_scopes",
+		"retained_commit_links",
 		"source_worktree_project_mappings",
 		"source_worktree_project_mapping_scopes",
 	} {
@@ -3118,6 +3120,7 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 		"source_archives",
 		"source_project_identity_observations",
 		"source_session_project_identity_snapshots",
+		"retained_commit_links",
 		"source_worktree_project_mappings",
 	} {
 		var repairedCount int
@@ -3184,6 +3187,8 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	}
 	oldArchiveID, err := local.GetArchiveID(ctx)
 	require.NoError(t, err)
+	_, err = alpha.pg.ExecContext(ctx, `INSERT INTO retained_commit_links (source_archive_id,session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at) VALUES ($1,'retained','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','','',0,0,'','')`, oldArchiveID)
+	require.NoError(t, err)
 	const repairedArchiveID = "filtered-repaired-archive-id"
 	require.NoError(t, local.SetArchiveIdentityForTest(
 		ctx, repairedArchiveID,
@@ -3192,6 +3197,9 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 
 	_, err = alpha.Push(ctx, false, nil)
 	require.NoError(t, err)
+	var retainedCount int
+	require.NoError(t, alpha.pg.QueryRowContext(ctx, `SELECT count(*) FROM retained_commit_links WHERE source_archive_id=$1`, oldArchiveID).Scan(&retainedCount))
+	require.Equal(t, 1, retainedCount)
 	for _, fixture := range []struct {
 		query string
 		args  []any

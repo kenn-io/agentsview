@@ -47,15 +47,12 @@ dashboard as well.
     a schema that has been adopted for hosted raw processing.
 
 Commit lookups return the copied links and prompts.
-The first push after upgrading is a full push that repairs existing commit links.
-If the serving role cannot create tables, run an upgraded push first, or
-`hosted-provision` for a hosted schema, to create the table used by commit
-lookups. Upgrade serving replicas too: older readers can miss newly retained
-links for deleted sessions.
-Each archive keeps its own retained copies; a rebuild removes only that archive's
-discarded copies. Retained links without a recorded owner remain unclaimed,
-including links kept when a session is permanently deleted from the replica.
-An unclaimed link can reappear after an archive discards its matching copy.
+The first push after upgrading is a full push to copy existing commit links.
+A serving role that cannot create tables needs an upgraded push, or
+`hosted-provision` for a hosted schema, before commit lookups work. Each
+archive's rebuild removes only the deleted-session links that archive pushed.
+Links with no recorded archive, from older pushes or permanent deletion in the
+replica, stay and can reappear after an archive discards its matching copy.
 A deleted session remains visible as a missing record. Project filters use the
 project saved with its links in SQLite, including after a rebuild or a deletion
 before the first push.

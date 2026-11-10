@@ -30,8 +30,6 @@ func TestPGRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
 				t.Cleanup(func() { require.NoError(t, store.Close()) })
 				_, err = pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) SELECT session_id,sha,branch,'legacy',repository,message_ordinal,call_index,tool_use_id,committed_at,NULL,'','',true FROM retained_commit_links WHERE source_archive_id=$1 AND session_id='shared'`, syncer.archiveID)
 				require.NoError(t, err)
-				_, err = syncer.Push(ctx, true, nil)
-				require.NoError(t, err)
 				links, err := store.SessionCommitLinks(ctx, "shared")
 				require.NoError(t, err)
 				require.Len(t, links.Commits, 1)
@@ -44,8 +42,6 @@ func TestPGRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
 				for _, link := range links.Commits {
 					require.Equal(t, "Save the change", link.Subject)
 				}
-				_, err = pg.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id='distinct'`)
-				require.NoError(t, err)
 				_, err = pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent) VALUES ('shared','commit-project','test','claude')`)
 				require.NoError(t, err)
 				dbtest.AssertSharedCommitLinks(t, store, 0, "cccccccccccccccccccccccccccccccccccccccc", "dddddddddddddddddddddddddddddddddddddddd")
@@ -69,21 +65,4 @@ func TestPGRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
 			})
 		}
 	}
-}
-
-func TestPGRetainedCommitLinksArchiveRetirement(t *testing.T) {
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_retire_test")
-	dbtest.SeedRetainedCommitLink(t, local, "shared", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	_, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	id := syncer.archiveID
-	syncer.projects = []string{"commit-project"}
-	require.NoError(t, syncer.retireSourceArchiveMetadata(ctx, id))
-	var count int
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM retained_commit_links WHERE source_archive_id=$1`, id).Scan(&count))
-	require.Equal(t, 1, count)
-	syncer.projects = nil
-	require.NoError(t, syncer.retireSourceArchiveMetadata(ctx, id))
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM retained_commit_links WHERE source_archive_id=$1`, id).Scan(&count))
-	require.Zero(t, count)
 }

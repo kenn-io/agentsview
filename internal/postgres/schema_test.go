@@ -616,6 +616,10 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"idx_sessions_parentless_workers": true,
 		"idx_sessions_source_missing":     true,
 	}
+	require.True(t, pushSchemaCurrent(t.Context(), pg))
+	delete(state.existingTables, "retained_commit_links")
+	require.False(t, pushSchemaCurrent(t.Context(), pg))
+	state.existingTables["retained_commit_links"] = true
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
