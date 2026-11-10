@@ -307,6 +307,8 @@ func TestChangeStreamResumesAfterCursorWithoutRepeats(t *testing.T) {
 	sessionOnly := caughtUp.changes(t, 1)[0]
 	assert.Equal(t, changes.To, sessionOnly.From)
 	assert.Empty(t, sessionOnly.Messages)
+	require.Len(t, sessionOnly.Sessions, 1)
+	assert.Equal(t, "stream-c", sessionOnly.Sessions[0].SessionID)
 	seedChangeStreamSession(t, te, "stream-c")
 	var userID, replyID string
 	require.NoError(t, te.db.Reader().QueryRowContext(t.Context(),
