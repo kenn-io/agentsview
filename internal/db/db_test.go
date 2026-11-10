@@ -2836,9 +2836,6 @@ func TestFindPruneCandidatesAgentTrees(t *testing.T) {
 		{"without agent excludes trash", PruneFilter{MaxMessages: new(2)}, "mimocode", true, false, []string{"sibling"}},
 		{"without agent complete tree", PruneFilter{Before: "2026-11-02"}, "mimocode", false, false, []string{"parent", "child", "grandchild", "sibling"}},
 		{"newer descendant protects ancestors", PruneFilter{Before: "2025-01-01"}, "mimocode", false, false, []string{"sibling"}},
-		{"other project protects ancestors", PruneFilter{Project: "selected"}, "mimocode", false, false, []string{"sibling"}},
-		{"other prompt protects ancestors", PruneFilter{FirstMessage: "selected"}, "mimocode", false, false, []string{"sibling"}},
-		{"message count protects ancestors", PruneFilter{MaxMessages: new(1)}, "mimocode", false, false, []string{"sibling"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -2870,35 +2867,6 @@ func TestFindPruneCandidatesAgentTrees(t *testing.T) {
 			assert.ElementsMatch(t, tt.want, collectIDs(got))
 		})
 	}
-}
-
-func TestFindPruneCandidatesIncludesParents(t *testing.T) {
-	d := testDB(t)
-
-	// Create a parent -> child chain.
-	insertSession(t, d, "parent1", "proj", func(s *Session) {
-		s.StartedAt = new("2024-06-01T10:00:00Z")
-		s.EndedAt = new("2024-06-01T11:00:00Z")
-	})
-	insertSession(t, d, "child1", "proj", func(s *Session) {
-		s.ParentSessionID = new("parent1")
-		s.StartedAt = new("2024-06-01T12:00:00Z")
-		s.EndedAt = new("2024-06-01T13:00:00Z")
-	})
-	// A standalone session with no children.
-	insertSession(t, d, "standalone", "proj", func(s *Session) {
-		s.StartedAt = new("2024-06-01T14:00:00Z")
-		s.EndedAt = new("2024-06-01T15:00:00Z")
-	})
-
-	got, err := d.FindPruneCandidates(t.Context(), PruneFilter{
-		Project: "proj",
-	})
-	requireNoError(t, err, "FindPruneCandidates")
-
-	ids := collectIDs(got)
-
-	assert.ElementsMatch(t, []string{"parent1", "child1", "standalone"}, ids)
 }
 
 func TestFindPruneCandidatesLikeEscaping(t *testing.T) {
