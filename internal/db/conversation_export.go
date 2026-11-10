@@ -144,8 +144,8 @@ func (db *DB) ExportConversationChanges(ctx context.Context, opts ConversationEx
 	// read-only and builds through the writer owner on
 	// ErrConversationInitializationRequired.
 	if !db.readOnly {
-		var active bool
-		if err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&active); err != nil {
+		active, err := db.ConversationExportActive(ctx)
+		if err != nil {
 			return result, err
 		}
 		if !active {

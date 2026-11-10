@@ -9,43 +9,74 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s *reportingExportSource) error {
-	if schema != export.ReportingJointSchemaVersion {
-		return errors.New("machine snapshots require reporting schema 5")
-	}
+// machineIdentities maps a session's stored machine key to the identity of
+// the machine it originated on. Per-machine reporting snapshots and the
+// change stream use the same rule, so their identities compare equal.
+type machineIdentities struct {
+	// local is this installation's identity, or empty when the archive has
+	// none recorded.
+	local   string
+	aliases map[string]string
+}
+
+func loadMachineIdentities(ctx context.Context, tx *sql.Tx) (machineIdentities, error) {
+	var ids machineIdentities
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM pg_sync_state
-		WHERE key = 'artifact_local_installation_id'), '')`).Scan(&s.localMachineID); err != nil {
-		return err
+		WHERE key = 'artifact_local_installation_id'), '')`).Scan(&ids.local); err != nil {
+		return ids, err
 	}
-	if strings.TrimSpace(s.localMachineID) == "" {
-		return errors.New("machine snapshots require recorded installation identity; run agentsview source sync first")
+	if strings.TrimSpace(ids.local) == "" {
+		ids.local = ""
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT substr(key, length('machine_alias:') + 1), value
 		FROM pg_sync_state WHERE key LIKE 'machine\_alias:%' ESCAPE '\'`)
 	if err != nil {
-		return err
+		return ids, err
 	}
 	defer rows.Close()
-	s.machineAliases = make(map[string]string)
+	ids.aliases = make(map[string]string)
 	for rows.Next() {
 		var alias, id string
 		if err := rows.Scan(&alias, &id); err != nil {
-			return err
+			return ids, err
 		}
-		s.machineAliases[alias] = id
+		ids.aliases[alias] = id
 	}
-	return rows.Err()
+	return ids, errors.Join(rows.Err(), rows.Close())
 }
 
-func (s reportingDaySource) machineID(machine string) string {
+// origin returns the originating machine identity for a stored machine key.
+// Usage recorded without a session belongs to the archive itself. It returns
+// empty for this installation's own sessions when no local identity is
+// recorded.
+func (m machineIdentities) origin(machine, archiveID string) string {
 	if machine == "" {
-		return "archive:" + s.archiveID
+		return "archive:" + archiveID
 	}
 	if machine == "local" {
-		return s.localMachineID
+		return m.local
 	}
-	if canonical := s.machineAliases[machine]; canonical != "" {
+	if canonical := m.aliases[machine]; canonical != "" {
 		return canonical
 	}
 	return machine
+}
+
+func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s *reportingExportSource) error {
+	if schema != export.ReportingJointSchemaVersion {
+		return errors.New("machine snapshots require reporting schema 5")
+	}
+	ids, err := loadMachineIdentities(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if ids.local == "" {
+		return errors.New("machine snapshots require recorded installation identity; run agentsview source sync first")
+	}
+	s.localMachineID, s.machineAliases = ids.local, ids.aliases
+	return nil
+}
+
+func (s reportingDaySource) machineID(machine string) string {
+	return machineIdentities{local: s.localMachineID, aliases: s.machineAliases}.origin(machine, s.archiveID)
 }

@@ -6322,6 +6322,8 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	_, err = raw.ExecContext(t.Context(), `
 		DROP VIEW IF EXISTS message_search_content;
 		DROP VIEW IF EXISTS message_trigram_source;
+		DROP TRIGGER IF EXISTS conversation_usage_key_insert;
+		DROP TRIGGER IF EXISTS conversation_usage_key_move;
 		CREATE TABLE messages_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,

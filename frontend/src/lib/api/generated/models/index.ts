@@ -288,6 +288,7 @@ export * from "./getApiV1AnalyticsVelocityAutomatedScope.ts";
 export * from "./getApiV1AnalyticsVelocityParams.ts";
 export * from "./getApiV1AssetsByFilenamePathParameters.ts";
 export * from "./getApiV1BranchesParams.ts";
+export * from "./getApiV1ChangesStreamParams.ts";
 export * from "./getApiV1DataProjectReclassificationCandidatesParams.ts";
 export * from "./getApiV1DataProjectRulesParams.ts";
 export * from "./getApiV1DataProjectsByProjectKeySessionsParams.ts";
