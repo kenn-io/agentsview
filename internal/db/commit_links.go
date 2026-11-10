@@ -182,47 +182,10 @@ func commitArgv(input string) (string, bool, bool) {
 	}
 	dir := ""
 	if len(args) > 0 && basename(args[0]) == "env" {
-		i := 1
-		for i < len(args) {
-			arg := args[i]
-			if arg == "-C" || arg == "--chdir" {
-				if i+1 >= len(args) {
-					return "", true, false
-				}
-				dir = args[i+1]
-				i += 2
-				continue
-			}
-			if strings.HasPrefix(arg, "-C") || strings.HasPrefix(arg, "--chdir=") {
-				dir = strings.TrimPrefix(strings.TrimPrefix(arg, "--chdir="), "-C")
-				i++
-				continue
-			}
-			if arg == "--" {
-				i++
-				break
-			}
-			if strings.Contains(arg, "=") && !strings.HasPrefix(arg, "-") {
-				i++
-				continue
-			}
-			if arg == "-i" || arg == "--ignore-environment" {
-				i++
-				continue
-			}
-			if arg == "-u" || arg == "--unset" {
-				i += 2
-				continue
-			}
-			if !strings.HasPrefix(arg, "-") {
-				break
-			}
+		var ok bool
+		if args, dir, ok = commitEnvArgs(args); !ok {
 			return "", true, false
 		}
-		if i > len(args) {
-			return "", true, false
-		}
-		args = args[i:]
 	}
 	if len(args) == 0 {
 		return "", true, false
@@ -253,6 +216,40 @@ func commitArgv(input string) (string, bool, bool) {
 		}
 	}
 	return prefix + strings.Join(args, " "), true, true
+}
+
+// commitEnvArgs strips env's options, returning the wrapped argv and any -C directory.
+func commitEnvArgs(args []string) ([]string, string, bool) {
+	dir := ""
+	i := 1
+	for i < len(args) {
+		arg := args[i]
+		switch {
+		case arg == "-C" || arg == "--chdir":
+			if i+1 >= len(args) {
+				return nil, "", false
+			}
+			dir = args[i+1]
+			i += 2
+		case strings.HasPrefix(arg, "-C") || strings.HasPrefix(arg, "--chdir="):
+			dir = strings.TrimPrefix(strings.TrimPrefix(arg, "--chdir="), "-C")
+			i++
+		case arg == "--":
+			return args[i+1:], dir, true
+		case strings.Contains(arg, "=") && !strings.HasPrefix(arg, "-"), arg == "-i", arg == "--ignore-environment":
+			i++
+		case arg == "-u" || arg == "--unset":
+			i += 2
+		case !strings.HasPrefix(arg, "-"):
+			return args[i:], dir, true
+		default:
+			return nil, "", false
+		}
+	}
+	if i > len(args) {
+		return nil, "", false
+	}
+	return args[i:], dir, true
 }
 
 func commitCommandText(input string) string {
