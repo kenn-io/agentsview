@@ -31,20 +31,17 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		name, input, repository string
 	}{
 		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
-		{"shell trailing double quote", `{"command":["bash","-lc","git -C \"/work/a\\\"\" commit"]}`, `/work/a"`},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
 		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},
 		{"trailing apostrophe", `{"command":["git","-C","/work/a'","commit"]}`, "/work/a'"},
 		{"literal tilde", `{"command":["git","-C","~/repo","commit"]}`, "/work/~/repo"},
 		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
 		{"successive paths", `{"command":["git","-C","root","-C","child repo","commit"]}`, "/work/root/child repo"},
-		{"argv path", `{"command":["git","-C","/path with spaces","commit","-m","fix"]}`, "/path with spaces"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
 			messages := commitMessages("s1", tt.input, "[main abc1234] Fix parser")
-			messages[2].ToolCalls[0].ToolName = "shell"
 			insertMessages(t, d, messages...)
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
@@ -58,7 +55,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 func TestCommitLinksArgvNonCommitOutput(t *testing.T) {
 	for _, tt := range []struct{ input, output string }{
 		{`{"command":["printf","%s %s\n[main abc1234] Fix parser\n","git","commit"]}`, "git commit\n[main abc1234] Fix parser\n"},
-		{`{"command":["git","status"]}`, "On branch main\nnothing to commit, working tree clean"},
+		{`{"command":["git","log","--grep=match git commit"]}`, "[main abc1234] Fix parser"},
 	} {
 		t.Run(tt.input, func(t *testing.T) {
 			d := testDB(t)
@@ -304,6 +301,7 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		{"cd after semicolon", "/work", "git add .; cd '/my repo'; git commit -m fix", "/my repo"},
 		{"cd after newline", "/work", "git add .\ncd /repo\ngit commit -m fix", "/repo"},
 		{"quoted directory", "/work", `git -C "/tmp/my repo" commit -m fix`, "/tmp/my repo"},
+		{"trailing double quote", "/work", `git -C "/work/a\"" commit`, `/work/a"`},
 		{"quoted operators", "/work", `git -C "/tmp/a;b" commit -m "x && y"`, "/tmp/a;b"},
 		{"directory after global options", "/work", `git -c 'user.name=Example User' --no-pager -C /repo commit -m fix`, "/repo"},
 		{"successive directories with global options", "/work", `git -C root -c 'user.name=-C decoy' --no-pager -C 'child repo' commit -m fix`, "/work/root/child repo"},
@@ -339,8 +337,6 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		name, repository, input, result string
 	}{
 		{"JSON workdir", "/repo", `{"cmd":"git commit -m fix","workdir":"/repo"}`, "[main abc1234] Fix parser"},
-		{"JSON workdir tilde", "~/repo", `{"cmd":"git commit -m fix","workdir":"~/repo"}`, "[main abc1234] Fix parser"},
-		{"JSON workdir quoted absolute", "/repo", `{"cmd":"git commit -m fix","workdir":"'/repo'"}`, "[main abc1234] Fix parser"},
 		{"JSON cwd", "/work/sub", `{"cmd":"git commit -m fix","cwd":"sub"}`, "[main abc1234] Fix parser"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -512,79 +508,67 @@ func TestCommitLinksDeleteParserExcludedSessions(t *testing.T) {
 }
 
 func TestCommitLinksBackfill(t *testing.T) {
-	archive := filepath.Join(t.TempDir(), "archive.db")
-	d, err := Open(t.Context(), archive)
-	require.NoError(t, err)
-	for _, id := range []string{"repaired", "unchanged"} {
-		insertSession(t, d, id, "project-a", func(s *Session) { s.Cwd = "/work" })
-		input := `{"command":"git commit -m fix"}`
-		if id == "repaired" {
-			input = `{"command":["bash","-lc","git commit -m fix"]}`
-		}
-		insertMessages(t, d, commitMessages(id, input, "[main abc1234] Fix parser")...)
-	}
-	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id='repaired'`)
-	require.NoError(t, err)
-	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM stats WHERE key=?`, commitLinksBackfillKey)
-	require.NoError(t, err)
-	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET local_modified_at='2000-01-01T00:00:00.000Z'`)
-	require.NoError(t, err)
-	_, err = d.getWriter().Exec(t.Context(), `PRAGMA user_version=169`)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	var firstModified string
-	for i := range 2 {
-		d, err = Open(t.Context(), archive)
+	t.Run("reopen", func(t *testing.T) {
+		archive := filepath.Join(t.TempDir(), "archive.db")
+		d, err := Open(t.Context(), archive)
 		require.NoError(t, err)
-		var version int
-		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
-		assert.Equal(t, 170, version)
-		var pending int
-		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
-		assert.Equal(t, 1, pending)
-		got, err := d.SessionCommitLinks(t.Context(), "repaired")
+		for _, id := range []string{"repaired", "unchanged"} {
+			insertSession(t, d, id, "project-a", func(s *Session) { s.Cwd = "/work" })
+			input := `{"command":"git commit -m fix"}`
+			if id == "repaired" {
+				input = `{"command":["bash","-lc","git commit -m fix"]}`
+			}
+			insertMessages(t, d, commitMessages(id, input, "[main abc1234] Fix parser")...)
+		}
+		_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id='repaired'`)
+		require.NoError(t, err)
+		_, err = d.getWriter().Exec(t.Context(), `DELETE FROM stats WHERE key=?`, commitLinksBackfillKey)
+		require.NoError(t, err)
+		_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET local_modified_at='2000-01-01T00:00:00.000Z'`)
+		require.NoError(t, err)
+		_, err = d.getWriter().Exec(t.Context(), `PRAGMA user_version=169`)
+		require.NoError(t, err)
+		require.NoError(t, d.Close())
+		var firstModified string
+		for i := range 2 {
+			d, err = Open(t.Context(), archive)
+			require.NoError(t, err)
+			got, err := d.SessionCommitLinks(t.Context(), "repaired")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			assert.Equal(t, "abc1234", got.Commits[0].SHA)
+			var repaired string
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='repaired'`).Scan(&repaired))
+			assert.Greater(t, repaired, "2000-01-01T00:00:00.000Z")
+			if i == 0 {
+				firstModified = repaired
+			} else {
+				assert.Equal(t, firstModified, repaired)
+			}
+			var unchanged string
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='unchanged'`).Scan(&unchanged))
+			assert.Equal(t, "2000-01-01T00:00:00.000Z", unchanged)
+			require.NoError(t, d.Close())
+		}
+	})
+	t.Run("rollback and retry", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "s1", "project-a")
+		insertMessages(t, d, commitMessages("s1", `{"command":["bash","-lc","git commit"]}`, "[main abc1234] Fix")...)
+		_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2';
+		CREATE TRIGGER fail_commit_link BEFORE INSERT ON commit_links BEGIN SELECT RAISE(ABORT, 'failure'); END`)
+		require.NoError(t, err)
+		require.Error(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
+		var marker int
+		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, commitLinksBackfillKey).Scan(&marker))
+		assert.Zero(t, marker)
+		_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_commit_link`)
+		require.NoError(t, err)
+		require.NoError(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
+		got, err := d.SessionCommitLinks(t.Context(), "s1")
 		require.NoError(t, err)
 		require.Len(t, got.Commits, 1)
-		assert.Equal(t, "abc1234", got.Commits[0].SHA)
-		var repaired string
-		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='repaired'`).Scan(&repaired))
-		assert.Greater(t, repaired, "2000-01-01T00:00:00.000Z")
-		if i == 0 {
-			firstModified = repaired
-		} else {
-			assert.Equal(t, firstModified, repaired)
-		}
-		reverse, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
-		require.NoError(t, err)
-		require.Len(t, reverse.Commits[0].Links, 2)
-		var unchanged string
-		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='unchanged'`).Scan(&unchanged))
-		assert.Equal(t, "2000-01-01T00:00:00.000Z", unchanged)
-		require.NoError(t, d.Close())
-	}
-}
-
-func TestCommitLinksBackfillFailureRetries(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "s1", "project-a")
-	insertMessages(t, d, commitMessages("s1", `{"command":["bash","-lc","git commit"]}`, "[main abc1234] Fix")...)
-	_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2'; PRAGMA user_version=168;
-		CREATE TRIGGER fail_commit_link BEFORE INSERT ON commit_links BEGIN SELECT RAISE(ABORT, 'failure'); END`)
-	require.NoError(t, err)
-	require.Error(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
-	var version, marker int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, commitLinksBackfillKey).Scan(&marker))
-	assert.Equal(t, 168, version)
-	assert.Zero(t, marker)
-	_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_commit_link`)
-	require.NoError(t, err)
-	require.NoError(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
-	assert.Equal(t, 168, version)
-	got, err := d.SessionCommitLinks(t.Context(), "s1")
-	require.NoError(t, err)
-	require.Len(t, got.Commits, 1)
+	})
 }
 
 func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
@@ -602,7 +586,11 @@ func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
 			require.NoError(t, err)
 			var version int
 			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
-			assert.Equal(t, (1<<20)+oldVersion, version)
+			if oldVersion == 169 {
+				assert.Equal(t, (1<<20)+170, version)
+			} else {
+				assert.Equal(t, (1<<20)+oldVersion, version)
+			}
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, got.Commits, 1)

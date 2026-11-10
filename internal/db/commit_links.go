@@ -197,7 +197,11 @@ func commitArgv(input string) (string, bool) {
 	for i, arg := range args {
 		args[i] = word(arg)
 	}
-	return strings.Join(args, " "), true
+	command := strings.Join(args, " ")
+	if match := commitInvocationRE.FindStringIndex(command); match == nil || match[0] != 0 {
+		return "", true
+	}
+	return command, true
 }
 
 func commitCommandText(input string) string {
@@ -617,6 +621,16 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {
 		return err
+	}
+	version, archiveOnly, err := readUserVersion(ctx, tx)
+	if err != nil {
+		return err
+	}
+	// Older archives must retain their version until the preservation rebuild.
+	if archiveOnly && version == 169 {
+		if err := advanceDataVersion(ctx, tx, dataVersion); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

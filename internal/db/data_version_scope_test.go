@@ -29,11 +29,11 @@ func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
 		ScopedDataVersionProviders(158, 160))
 }
 
-// Version 134 reshapes Codex session IDs, so it must rebuild every provider.
 func TestCommitLinkUpgradeScope(t *testing.T) {
 	assert.Equal(t, []parser.AgentType{parser.AgentCodex}, ScopedDataVersionProviders(169, 170))
 }
 
+// Version 134 reshapes Codex session IDs, so it must rebuild every provider.
 func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 	assert.Nil(t, ScopedDataVersionProviders(133, 134))
 }
