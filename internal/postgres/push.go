@@ -1639,6 +1639,7 @@ func (s *Sync) retireSourceArchiveMetadata(
 			"source_project_identity_observations",
 			"source_session_project_identity_snapshots",
 			"source_worktree_project_mappings",
+			"retained_commit_links",
 		} {
 			if _, err := tx.ExecContext(ctx,
 				"DELETE FROM "+table+" WHERE source_archive_id = $1",

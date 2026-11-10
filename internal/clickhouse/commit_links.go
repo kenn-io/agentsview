@@ -34,22 +34,11 @@ func (s *Sync) replaceRetainedCommitLinks(ctx context.Context, version uint64) e
 	}
 	var block [][]any
 	for _, r := range rows {
-		block = append(block, append([]any{s.archiveID}, commitLinkRow(r, true, version)...))
+		link := commitLinkRow(r, true, version)
+		block = append(block, append(append([]any{s.archiveID}, link[:len(link)-2]...), version))
 	}
 	if err := insertRows(ctx, s.conn, "retained_commit_links", block); err != nil {
 		return err
-	}
-	// Adopt only keys this archive has published, after the copy is durable.
-	legacy := `retained AND push_version < ? AND (session_id,sha) IN (SELECT session_id,sha FROM retained_commit_links WHERE source_archive_id = ? AND push_version >= ? SETTINGS final = 0)`
-	legacyArgs := []any{version, s.archiveID, version}
-	var legacyCount uint64
-	if err := s.conn.QueryRowContext(ctx, `SELECT count() FROM commit_links WHERE `+legacy, legacyArgs...).Scan(&legacyCount); err != nil {
-		return err
-	}
-	if legacyCount > 0 {
-		if _, err := s.conn.ExecContext(ctx, `DELETE FROM commit_links WHERE `+legacy, legacyArgs...); err != nil {
-			return err
-		}
 	}
 	predicate := `source_archive_id = ? AND push_version < ? AND (source_archive_id,sha,session_id) NOT IN (SELECT source_archive_id,sha,session_id FROM retained_commit_links WHERE source_archive_id = ? AND push_version >= ? SETTINGS final = 0)`
 	args := []any{s.archiveID, version, s.archiveID, version}

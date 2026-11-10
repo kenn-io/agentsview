@@ -14,16 +14,16 @@ type CommitLinkQuerier interface {
 }
 
 func readCommitLinks(ctx context.Context, q CommitLinkQuerier, retained bool, where string, args ...any) ([]db.CommitLink, error) {
-	source := `SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained, '' AS source_archive_id, 0 AS priority FROM commit_links`
+	source := `SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained, '' AS source_archive_id, CASE WHEN retained THEN 2 ELSE 0 END AS priority FROM commit_links`
 	if retained {
-		source += ` UNION ALL SELECT *, 1 AS priority FROM (SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained,source_archive_id FROM retained_commit_links) owned`
+		source += ` UNION ALL SELECT *, 1 AS priority FROM (SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,TRUE AS retained,source_archive_id FROM retained_commit_links) owned`
 	}
 	rows, err := q.QueryContext(ctx, `SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,missing,turn_ordinal,turn_text FROM (
  SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,
  (COALESCE(s.id,'')='' OR s.deleted_at IS NOT NULL) AS missing,l.turn_ordinal,l.turn_text,
  ROW_NUMBER() OVER (PARTITION BY l.session_id,l.sha ORDER BY l.priority,l.source_archive_id) AS rank
  FROM (`+source+`) l LEFT JOIN sessions s ON s.id=l.session_id
- WHERE (l.retained OR COALESCE(s.id,'')<>'') AND (l.priority=0 OR COALESCE(s.id,'')='') AND (`+where+`)
+ WHERE (l.retained OR COALESCE(s.id,'')<>'') AND (NOT l.retained OR COALESCE(s.id,'')='') AND (`+where+`)
  ) ranked WHERE rank=1 ORDER BY session_id,message_ordinal,committed_at,call_index,sha`, args...)
 	if err != nil {
 		return nil, err
@@ -93,13 +93,17 @@ func ScopedRetainedCommitLinks(ctx context.Context, local *db.DB, projects, excl
 	if err != nil {
 		return nil, err
 	}
+	return filterRetainedCommitLinks(rows, projects, exclude), nil
+}
+
+func filterRetainedCommitLinks(rows []db.CommitLinkRow, projects, exclude []string) []db.CommitLinkRow {
 	out := make([]db.CommitLinkRow, 0, len(rows))
 	for _, r := range rows {
 		if db.ProjectMatchesPushScope(r.Project, projects, exclude) {
 			out = append(out, r)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // RetainedCommitLinks refreshes only this archive's absent sessions. Stored
@@ -142,11 +146,10 @@ func RetainedCommitLinks(ctx context.Context, local *db.DB, q CommitLinkQuerier,
 	}
 	ids = slices.DeleteFunc(ids, func(id string) bool { return live[id] })
 	out := []db.CommitLinkRow{}
-	for _, r := range retained {
-		if live[r.SessionID] || !db.ProjectMatchesPushScope(r.Project, projects, exclude) {
-			continue
+	for _, r := range filterRetainedCommitLinks(retained, projects, exclude) {
+		if !live[r.SessionID] {
+			out = append(out, r)
 		}
-		out = append(out, r)
 	}
 	return ids, out, nil
 }

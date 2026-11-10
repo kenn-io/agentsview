@@ -13,7 +13,6 @@ The latest release is
 
 - Commit lookups keep live prompts and retained links from other archives when
   an archive pushes or narrows its contents.
-
 - Antigravity app and IDE sessions now show their project and working directory
   instead of all landing in one unlabeled project. AgentsView reads each
   conversation's workspace folder from Antigravity's

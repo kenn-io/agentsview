@@ -570,7 +570,7 @@ var mirrorTables = []tableSpec{
 			col("branch", tString), col("subject", tString), col("repository", tString),
 			col("message_ordinal", tInt), col("call_index", tInt), col("tool_use_id", tString),
 			col("committed_at", tString), col("turn_ordinal", tNullInt), col("turn_text", tString),
-			col("project", tString), col("retained", tBool),
+			col("project", tString),
 		},
 		orderBy: []string{"source_archive_id", "sha", "session_id"},
 	},

@@ -1,6 +1,7 @@
 package dbtest
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -178,27 +179,27 @@ func RebuildCommitArchive(t *testing.T, source *db.DB, policy config.ArchiveCont
 	return rebuilt
 }
 
-func AssertRebuiltCommitLinks(t *testing.T, reader db.CommitLinkReader) {
+func AssertSharedCommitLinks(t *testing.T, reader db.CommitLinkReader, shared int, distinct ...string) {
 	t.Helper()
-	for _, tc := range []struct {
-		id, sha string
-		want    bool
-	}{
-		{"archive-a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false},
-		{"archive-b", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true},
-	} {
-		links, err := reader.SessionCommitLinks(t.Context(), tc.id)
-		require.NoError(t, err)
-		matches, err := reader.CommitSessionLinks(t.Context(), []string{tc.sha})
-		require.NoError(t, err)
-		if tc.want {
-			require.Len(t, links.Commits, 1)
-			assert.Equal(t, tc.sha, links.Commits[0].SHA)
-			require.Len(t, matches.Commits[0].Links, 1)
-			assert.Equal(t, tc.id, matches.Commits[0].Links[0].SessionID)
+	links, err := reader.SessionCommitLinks(t.Context(), "shared")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, shared)
+	matches, err := reader.CommitSessionLinks(t.Context(), []string{strings.Repeat("a", 40), strings.Repeat("c", 40), strings.Repeat("d", 40)})
+	require.NoError(t, err)
+	require.Len(t, matches.Commits[0].Links, shared)
+	links, err = reader.SessionCommitLinks(t.Context(), "distinct")
+	require.NoError(t, err)
+	var shas []string
+	for _, link := range links.Commits {
+		shas = append(shas, link.SHA)
+	}
+	assert.ElementsMatch(t, distinct, shas)
+	for _, match := range matches.Commits[1:] {
+		if slices.Contains(distinct, match.SHA) {
+			require.Len(t, match.Links, 1)
+			assert.Equal(t, "distinct", match.Links[0].SessionID)
 		} else {
-			assert.Empty(t, links.Commits)
-			assert.Empty(t, matches.Commits[0].Links)
+			assert.Empty(t, match.Links)
 		}
 	}
 }
