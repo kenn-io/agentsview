@@ -306,7 +306,7 @@ pre.unknown-xml-block {
 /* Mark tag (search highlights) */
 mark {
   background: var(--accent-amber);
-  color: var(--text-primary);
+  color: var(--accent-amber-foreground);
   border-radius: 2px;
   padding: 0 2px;
 }
