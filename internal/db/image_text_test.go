@@ -288,19 +288,20 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 		require.NoError(t, dst.BackfillImageTextOccurrences(ctx))
 		require.NoError(t, dst.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
 		require.Equal(t, 2, count)
+		t.Run("legacy archive without image cache", func(t *testing.T) {
+			source := filepath.Join(t.TempDir(), "legacy.db")
+			legacy, err := sql.Open(sqliteArchiveDriverName, makeDSN(source, false))
+			require.NoError(t, err)
+			_, err = legacy.ExecContext(t.Context(), `CREATE TABLE legacy (id INTEGER)`)
+			require.NoError(t, err)
+			require.NoError(t, legacy.Close())
+			dst := testDB(t)
+			require.NoError(t, dst.CopyImageTextFrom(t.Context(), source))
+		})
 	})
 
 	t.Run("shared writes", imageTextSharedAcrossSessionWrites)
-	t.Run("legacy archive without image cache", func(t *testing.T) {
-		source := filepath.Join(t.TempDir(), "legacy.db")
-		legacy, err := sql.Open(sqliteArchiveDriverName, makeDSN(source, false))
-		require.NoError(t, err)
-		_, err = legacy.ExecContext(t.Context(), `CREATE TABLE legacy (id INTEGER)`)
-		require.NoError(t, err)
-		require.NoError(t, legacy.Close())
-		dst := testDB(t)
-		require.NoError(t, dst.CopyImageTextFrom(t.Context(), source))
-	})
+
 }
 
 func imageTextSharedAcrossSessionWrites(t *testing.T) {
@@ -438,6 +439,9 @@ func TestImageTextSearchContent(t *testing.T) {
 	require.NoError(t, err)
 	text := "invoice 42\n-----BEGIN RSA PRIVATE KEY-----\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\nMIIBSECRETKEYMATERIAL0123456789ABCDEF\n-----END RSA PRIVATE KEY-----"
 	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, text, false))
+	results, err := d.Search(ctx, SearchFilter{Query: "invoice 42"})
+	require.NoError(t, err)
+	require.Len(t, results.Results, 1)
 	for _, mode := range []string{"substring", "regex"} {
 		filter := ContentSearchFilter{Pattern: "invoice 42", Mode: mode, Sources: []string{"tool_result"}, Scope: "subordinate", IncludeOneShot: true, IncludeAutomated: true}
 		page, err := d.SearchContent(ctx, filter)
@@ -532,6 +536,9 @@ func TestImageTextSurvivesMetadataOnlyReplacement(t *testing.T) {
 			content := testInlineImageContent()
 			messages := []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: content, ResultEvents: []ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "completed", Content: content}}}}}}
 			require.NoError(t, d.InsertMessages(ctx, messages))
+			// Keep newer tool rows in another session so replacement cannot reuse their IDs.
+			insertSession(t, d, "other", "demo")
+			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "other", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "other", ResultContent: "other", ResultEvents: []ToolResultEvent{{ToolUseID: "other", Content: "other"}}}}}}))
 			identity, err := ocr.NewIdentity("test", "model", "revision")
 			require.NoError(t, err)
 			require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "needle image", false))

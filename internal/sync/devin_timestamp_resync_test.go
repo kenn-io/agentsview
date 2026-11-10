@@ -126,7 +126,7 @@ const staleStartedAt = "1970-01-20T16:13:20Z"
 func staleUserVersion(demandResync bool) int {
 	if demandResync {
 		version := db.CurrentDataVersion() - 1
-		for len(db.ScopedDataVersionProviders(version, db.CurrentDataVersion())) > 0 {
+		for db.ScopedDataVersionProviders(version, db.CurrentDataVersion()) != nil {
 			version--
 		}
 		return version

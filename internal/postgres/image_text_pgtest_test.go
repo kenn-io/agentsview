@@ -119,6 +119,16 @@ func TestPGImageTextPushAndSearch(t *testing.T) {
 	push()
 	assert.Equal(t, before, published())
 	assert.True(t, updatedAtStale(), "an unchanged push must not rewrite image text")
+	// A non-image change pushes the session while leaving its image rows intact.
+	var beforeCTID, afterCTID string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT ctid::text FROM image_text WHERE session_id='shot'`).Scan(&beforeCTID))
+	name := "renamed"
+	require.NoError(t, local.RenameSession(ctx, "shot", &name))
+	push()
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT ctid::text FROM image_text WHERE session_id='shot'`).Scan(&afterCTID))
+	assert.Equal(t, before, published())
+	assert.Equal(t, beforeCTID, afterCTID)
+	assert.False(t, updatedAtStale())
 
 	// A new processor replaces the old one's row and metadata.
 	require.NoError(t, local.SaveImageText(ctx, hash, ocr.Identity{Fingerprint: "proc-b", Provider: "glm-ocr", Model: "glm-ocr-2", Revision: "r2"}, "invoice 4827 total", false))

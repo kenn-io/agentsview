@@ -859,9 +859,11 @@ func (db *DB) regexCandidateRows(
 	}
 	if hasSource(f, "tool_result") {
 		branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, prefilterClause("c.text"), true)...)
-		for range 2 {
-			args = append(args, scopeArgs...)
+		args = append(args, scopeArgs...)
+		if lit != "" {
+			addLike()
 		}
+		args = append(args, scopeArgs...)
 	}
 	if len(branches) == 0 {
 		// Return an empty result set.

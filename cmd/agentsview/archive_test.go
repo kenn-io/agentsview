@@ -137,6 +137,14 @@ func TestArchiveExtractCaptureAfterRestore(t *testing.T) {
 
 // Exercise the commands people use to leave a machine behind. Both original
 // source directories and the first archive are gone before restored reparsing.
+func staleFullRebuildVersion() int {
+	version := db.CurrentDataVersion() - 1
+	for db.ScopedDataVersionProviders(version, db.CurrentDataVersion()) != nil {
+		version--
+	}
+	return version
+}
+
 func TestArchiveMoveAndReparse(t *testing.T) {
 	ctx := t.Context()
 	dataDir := testDataDir(t)
@@ -200,7 +208,7 @@ func TestArchiveMoveAndReparse(t *testing.T) {
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
-	_, err = raw.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", db.CurrentDataVersion()-1))
+	_, err = raw.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", staleFullRebuildVersion()))
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	closed := filepath.Join(t.TempDir(), "capture")
@@ -442,7 +450,7 @@ func TestArchiveRestorePreservesCodexSharedPath(t *testing.T) {
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", db.CurrentDataVersion()-1))
+	_, err = raw.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", staleFullRebuildVersion()))
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	backup := filepath.Join(t.TempDir(), "backup")

@@ -1084,19 +1084,21 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 	})
 }
 
-func TestUsageArchiveRefusesDerivedText(t *testing.T) {
+func TestTranscriptArchiveRefusesImageText(t *testing.T) {
 	database := testDB(t)
-	database.SetArchiveContent(config.ArchiveContentUsage)
-
 	database.SetArchiveContent(config.ArchiveContentTranscripts)
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
 	require.ErrorIs(t, database.SaveImageText(t.Context(), "hash", identity, "text", false), ErrArchiveContentExcluded)
 	require.ErrorIs(t, database.SaveImageText(t.Context(), "hash", identity, "", true), ErrArchiveContentExcluded)
 	require.ErrorIs(t, database.CopyImageTextFrom(t.Context(), database.Path()), ErrArchiveContentExcluded)
+}
+
+func TestUsageArchiveRefusesDerivedText(t *testing.T) {
+	database := testDB(t)
 	database.SetArchiveContent(config.ArchiveContentUsage)
 
-	_, err = database.InsertInsight(t.Context(), Insight{
+	_, err := database.InsertInsight(t.Context(), Insight{
 		Type: "daily", DateFrom: "2026-08-31", DateTo: "2026-08-31",
 		Agent: "claude", Content: "summary quoting transcript text",
 	})
