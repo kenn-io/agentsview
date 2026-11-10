@@ -8,6 +8,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -590,6 +591,65 @@ func TestPushPricesCursorUsageAddedLater(t *testing.T) {
 	assertDailyUsageParity(t, local, store)
 	stats := dailyUsageGroupRowStats(t, store, db.UsageFilter{Timezone: "UTC"})
 	assert.Equal(t, 1, stats.explicit)
+}
+
+// Each pricing scope finds the inputs whose key has no record under the
+// digest being priced, and only those: a record under another digest does
+// not count.
+func TestUnpricedUsageFindsKeysWithoutRecordsUnderTheDigest(t *testing.T) {
+	t.Parallel()
+	store, syncer, _ := newUsagePriceStore(t)
+	ctx := t.Context()
+	pricer, err := syncer.newUsagePricer(ctx)
+	require.NoError(t, err)
+	unpriced := func(scope usagePriceScope, digest string) []string {
+		t.Helper()
+		var keys []string
+		require.NoError(t, syncer.forEachUnpricedUsageBatch(ctx, scope, digest,
+			func(inputs []chUsagePriceInput) error {
+				for _, in := range inputs {
+					keys = append(keys, in.priceKey)
+				}
+				return nil
+			}))
+		return keys
+	}
+	session := usagePriceScope{sessionIDs: []string{usagePriceRoundID}}
+	cursor := usagePriceScope{cursorOnly: true}
+	whole := usagePriceScope{}
+	before := map[string][]string{}
+	for name, scope := range map[string]usagePriceScope{"session": session, "cursor": cursor, "whole": whole} {
+		before[name] = unpriced(scope, pricer.digest)
+	}
+	// A digest without records leaves every key of a scope unpriced.
+	sessionKey := unpriced(session, "digest-without-records")[0]
+	cursorKey := unpriced(cursor, "digest-without-records")[0]
+	require.NotContains(t, before["session"], sessionKey)
+	require.NotContains(t, before["cursor"], cursorKey)
+
+	// Move the two keys' records to another digest.
+	_, err = store.conn.ExecContext(ctx, `INSERT INTO usage_event_prices
+		(pricing_digest, price_key, priced, push_version)
+		SELECT 'another-digest', price_key, 1, 1 FROM usage_event_prices
+		WHERE pricing_digest = ? AND price_key IN (?, ?)`, pricer.digest, sessionKey, cursorKey)
+	require.NoError(t, err)
+	_, err = store.conn.ExecContext(ctx, `ALTER TABLE usage_event_prices DELETE
+		WHERE pricing_digest = ? AND price_key IN (?, ?) SETTINGS mutations_sync = 2`,
+		pricer.digest, sessionKey, cursorKey)
+	require.NoError(t, err)
+	var moved int
+	require.NoError(t, store.conn.QueryRowContext(ctx,
+		"SELECT count() FROM usage_event_prices WHERE pricing_digest = 'another-digest'").Scan(&moved))
+	require.Equal(t, 2, moved)
+
+	assert.ElementsMatch(t, slices.Concat(before["session"], []string{sessionKey}),
+		unpriced(session, pricer.digest))
+	assert.ElementsMatch(t, slices.Concat(before["cursor"], []string{cursorKey}),
+		unpriced(cursor, pricer.digest))
+	assert.ElementsMatch(t, slices.Concat(before["whole"], []string{sessionKey, cursorKey}),
+		unpriced(whole, pricer.digest))
+	assert.NotContains(t, unpriced(session, "another-digest"), sessionKey)
+	assert.NotContains(t, unpriced(cursor, "another-digest"), cursorKey)
 }
 
 // Serve installs custom rates after it opens the store. The background
